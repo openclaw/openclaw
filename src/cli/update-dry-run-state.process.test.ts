@@ -280,6 +280,7 @@ channel("sqlite.db.query").subscribe(({ database }) => {
       );
       expect(result.code, result.stderr).toBe(0);
       expect(result.stdout).toContain("Would refuse update:");
+      expect(result.stderr).toContain("best-effort read ignored unparseable config:");
       if (json) {
         const preview = JSON.parse(result.stdout);
         expect(preview).toMatchObject({

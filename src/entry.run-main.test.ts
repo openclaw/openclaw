@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
 import { ExpectedCliError } from "./cli/failure-output.js";
 import { runMainOrRootHelp } from "./entry.js";
+import { loggingState } from "./logging/state.js";
 import type { PluginRuntime } from "./plugin-sdk/runtime-store.js";
 import { buildPluginApi } from "./plugins/api-builder.js";
 import { instrumentPluginInstanceApi } from "./plugins/api-facades.js";
@@ -20,7 +21,11 @@ describe("entry run-main boundary", () => {
   beforeEach(() => {
     previousExitCode = process.exitCode;
     process.exitCode = undefined;
-    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Console capture retains the terminal sink across CLI calls in this process.
+    errorSpy = vi
+      .spyOn(loggingState.rawConsole ?? console, "error")
+      .mockClear()
+      .mockImplementation(() => {});
   });
   afterEach(async () => {
     vi.doUnmock("./cli/run-main.js");
@@ -125,7 +130,7 @@ it.each([
       "src/shared/detached-async-context.ts",
       "src/shared/global-singleton.ts",
       "src/cli/dotenv.ts",
-      "src/logging.ts",
+      "src/logging/console.ts",
       "src/cli/failure-output.ts",
       "src/cli/json-output-mode.ts",
       "src/logging/json-console-line.ts",

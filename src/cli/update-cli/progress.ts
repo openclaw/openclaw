@@ -23,7 +23,11 @@ import {
 import { isFailedUpdateStep, projectUpdateRunResultSteps } from "../../infra/update-run-step.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
-import { formatJsonConsoleLine, getConsoleSettings } from "../../logging/console.js";
+import {
+  formatJsonConsoleLine,
+  getConsoleSettings,
+  writeRootConsoleLine,
+} from "../../logging/console.js";
 import { isLogLevelEnabled } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateCommandOptions } from "./shared.js";
@@ -393,13 +397,18 @@ export async function prepareResult(
       });
       return;
     }
-    defaultRuntime.log("");
-    defaultRuntime.log(theme.heading(outputReport.headline));
+    const log = (line: string) => {
+      if (reportHints.writeArtifacts !== false || !writeRootConsoleLine("log", line)) {
+        defaultRuntime.log(line);
+      }
+    };
+    log("");
+    log(theme.heading(outputReport.headline));
     if (reportPath) {
-      defaultRuntime.log(`Report: ${reportPath}`);
+      log(`Report: ${reportPath}`);
     }
     for (const line of outputReport.lines) {
-      defaultRuntime.log(line);
+      log(line);
     }
   };
 }

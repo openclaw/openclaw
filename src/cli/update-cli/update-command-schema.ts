@@ -19,6 +19,7 @@ import type { UpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { prepareGitCandidateNodeRuntime } from "../../infra/update-runner-git-node-preflight.js";
+import { writeRootConsoleLine } from "../../logging/console.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import { UPDATE_GLOBAL_PERMISSION_REASON } from "../../shared/update-outcome.js";
@@ -218,31 +219,36 @@ export async function previewUpdateCommand(params: {
     if (opts.json) {
       defaultRuntime.writeJson(preview);
     } else {
-      defaultRuntime.log(theme.heading("Update dry-run"));
-      defaultRuntime.log(theme.muted("No changes were applied."));
-      defaultRuntime.log("");
-      defaultRuntime.log(`  Root: ${theme.muted(preview.root)}`);
-      defaultRuntime.log(`  Install kind: ${theme.muted(preview.installKind)}`);
-      defaultRuntime.log(`  Mode: ${theme.muted(preview.mode)}`);
-      defaultRuntime.log(`  Channel: ${theme.muted(preview.effectiveChannel)}`);
-      defaultRuntime.log(`  Tag/spec: ${theme.muted(preview.tag)}`);
+      const log = (line: string) => {
+        if (!params.malformedConfig || !writeRootConsoleLine("log", line)) {
+          defaultRuntime.log(line);
+        }
+      };
+      log(theme.heading("Update dry-run"));
+      log(theme.muted("No changes were applied."));
+      log("");
+      log(`  Root: ${theme.muted(preview.root)}`);
+      log(`  Install kind: ${theme.muted(preview.installKind)}`);
+      log(`  Mode: ${theme.muted(preview.mode)}`);
+      log(`  Channel: ${theme.muted(preview.effectiveChannel)}`);
+      log(`  Tag/spec: ${theme.muted(preview.tag)}`);
       if (preview.currentVersion) {
-        defaultRuntime.log(`  Current version: ${theme.muted(preview.currentVersion)}`);
+        log(`  Current version: ${theme.muted(preview.currentVersion)}`);
       }
       if (preview.targetVersion) {
-        defaultRuntime.log(`  Target version: ${theme.muted(preview.targetVersion)}`);
+        log(`  Target version: ${theme.muted(preview.targetVersion)}`);
       } else if (preview.targetVersionReason) {
-        defaultRuntime.log(`  Target version: unresolved (${preview.targetVersionReason})`);
+        log(`  Target version: unresolved (${preview.targetVersionReason})`);
       }
       if (preview.downgradeRisk) {
-        defaultRuntime.log(theme.warn("  Downgrade confirmation would be required in a real run."));
+        log(theme.warn("  Downgrade confirmation would be required in a real run."));
       }
 
       const printSection = (heading: string, lines: string[], format = (line: string) => line) => {
-        defaultRuntime.log("");
-        defaultRuntime.log(theme.heading(heading));
+        log("");
+        log(theme.heading(heading));
         for (const line of lines) {
-          defaultRuntime.log(`  - ${format(line)}`);
+          log(`  - ${format(line)}`);
         }
       };
       printSection("Planned actions:", preview.actions);

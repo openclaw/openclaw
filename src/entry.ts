@@ -320,13 +320,13 @@ export async function tryHandlePrecomputedCommandHelpFastPath(argv: string[]): P
 async function prepareCliFailureHandler(argv: string[], commandStarted: () => boolean) {
   const [
     { loadCliDotEnvForEarlyDiagnostic },
-    { enableConsoleCapture },
+    { enableConsoleCapture, writeRootConsoleLine },
     { formatCliFailureLines, formatCliJsonFailure },
     { isJsonOutputModeActive },
     configureTrace,
   ] = await Promise.all([
     import("./cli/dotenv.js"),
-    import("./logging.js"),
+    import("./logging/console.js"),
     import("./cli/failure-output.js"),
     import("./cli/json-output-mode.js"),
     prepareGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace),
@@ -343,7 +343,11 @@ async function prepareCliFailureHandler(argv: string[], commandStarted: () => bo
       error,
       argv,
     })) {
-      console.error(line);
+      // A failed command may never have acquired state ownership. Rendering its
+      // terminal diagnostic must not admit a file sink into the rejected profile.
+      if (!writeRootConsoleLine("error", line)) {
+        console.error(line);
+      }
     }
     process.exitCode = 1;
   };

@@ -1,0 +1,2 @@
+6
+# Real CLI malformed-preview diagnostics and retained terminal output sink.

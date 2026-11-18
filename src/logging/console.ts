@@ -219,7 +219,7 @@ function writeFormattedConsoleOutput(params: {
 }
 
 /** Writes a root logger line to the pre-capture console sink without re-entering file capture. */
-export function writeRootConsoleLine(method: "log" | "error", line: string): boolean {
+export function writeRootConsoleLine(method: "log" | "warn" | "error", line: string): boolean {
   const rawConsole = loggingState.rawConsole;
   if (!rawConsole) {
     return false;
@@ -227,7 +227,7 @@ export function writeRootConsoleLine(method: "log" | "error", line: string): boo
   if (shouldSuppressConsoleMessage(line)) {
     return true;
   }
-  const level = method === "error" ? "error" : "info";
+  const level = method === "log" ? "info" : method;
   writeFormattedConsoleOutput({
     level,
     args: [line],

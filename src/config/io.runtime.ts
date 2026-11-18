@@ -1,9 +1,11 @@
 import fs from "node:fs";
+import { format } from "node:util";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.contract.js";
 import { withLeasePinnedDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { loadDotEnvAsync } from "../infra/dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
+import { writeRootConsoleLine } from "../logging/console.js";
 import {
   cloneEnvWithPlatformSemantics,
   createConfigRuntimeEnvBase,
@@ -301,7 +303,19 @@ export async function readBestEffortConfigSnapshot(options?: {
 }
 
 export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
-  return await createConfigIO().readSourceConfigBestEffort();
+  // Source-only routing/status reads precede state admission. Diagnostics belong
+  // on the console, not in a file sink inside the profile being inspected.
+  const diagnostic = (method: "warn" | "error", args: unknown[]) => {
+    if (!writeRootConsoleLine(method, format(...args))) {
+      console[method](...args);
+    }
+  };
+  return await createConfigIO({
+    logger: {
+      warn: (...args) => diagnostic("warn", args),
+      error: (...args) => diagnostic("error", args),
+    },
+  }).readSourceConfigBestEffort();
 }
 
 export async function readConfigFileSnapshot(
