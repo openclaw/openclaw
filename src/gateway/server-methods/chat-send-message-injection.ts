@@ -323,7 +323,11 @@ export function createChatSendMessageInjectionStarter(params: {
           ...(!isProgressCardRefreshInputProvenance(ctx.InputProvenance) && debounceMs !== undefined
             ? { debounceMs }
             : {}),
-          taskSuggestionDeliveryMode: supportsTaskSuggestions ? "gateway" : undefined,
+          // A prepared same-requester join keeps the incumbent's negotiated tool
+          // surface, so this connection's capability must not retarget it.
+          ...(preparedJoin
+            ? {}
+            : { taskSuggestionDeliveryMode: supportsTaskSuggestions ? "gateway" : undefined }),
           userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
         },
       });
