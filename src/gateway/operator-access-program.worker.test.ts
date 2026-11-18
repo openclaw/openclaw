@@ -121,11 +121,12 @@ it.each<{
         try {
           cfg = config([], scopes);
           publishOperatorRoleConfigChange(context);
-          expect(execution.signal.aborted).toBe(true);
-          expect(execution.assertCurrent).toThrow();
-          expect(channel.assertCurrent).toThrow();
+          expect(execution.signal.aborted).toBe(false);
+          expect(execution.assertCurrent).not.toThrow();
+          expect(channel.assertCurrent).not.toThrow();
+          expect(captured.authority.reauthorize).toThrow();
           cfg = config(grants, scopes);
-          expect(execution.assertCurrent).toThrow();
+          expect(execution.assertCurrent).not.toThrow();
         } finally {
           execution.release();
         }
