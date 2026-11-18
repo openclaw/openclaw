@@ -265,6 +265,10 @@ describe("CodexAppServerEventProjector terminal errors", () => {
         { source: "remote" },
         "Update the Codex app-server this Gateway connects to, then restart it.",
       ],
+      [
+        { source: "desktop" },
+        "Update the ChatGPT desktop app, which provides this Codex, then restart the Gateway.",
+      ],
     ] as const) {
       expect(
         resolveCodexPromptError(source, {
