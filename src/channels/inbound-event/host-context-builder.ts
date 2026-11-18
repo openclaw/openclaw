@@ -164,10 +164,17 @@ export function createHostChannelInboundEventContextBuilder<
             });
           }
           const authority = batch.at(-1)?.commandOwnerAuthority;
-          if (!authority?.source || !authority.isCurrent(gateway.getRuntimeConfig())) {
+          if (
+            !authority?.source ||
+            built.SenderId !== principal.senderId ||
+            (built.AccountId ?? DEFAULT_ACCOUNT_ID) !== principal.accountId ||
+            built.OriginatingChannel !== principal.channelId ||
+            !authority.isCurrent(gateway.getRuntimeConfig())
+          ) {
             return;
           }
           bindCommandOwnerAuthority(built, {
+            channelPrincipal: principal,
             recoveryReference: authority.recoveryReference,
             isCurrent: () =>
               owner.isLive() &&

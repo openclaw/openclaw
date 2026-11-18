@@ -1,9 +1,12 @@
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { CommandOwnerReference } from "../state/user-channel-authorization-reference.js";
+import type { UserChannelIdentity } from "../state/user-profiles.types.js";
 
 const COMMAND_OWNER_AUTHORITY = Symbol("openclaw.commandOwnerAuthority");
 type CommandOwnerAuthority = Readonly<{
   isCurrent: () => boolean;
+  /** Exact native identity accepted by host ingress, never a delivery projection. */
+  channelPrincipal?: Readonly<UserChannelIdentity>;
   recoveryReference?: CommandOwnerReference;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** The requester's own live check for work that outlives this source occurrence. */
@@ -25,6 +28,8 @@ export function bindCommandOwnerAuthority(context: object, authority: CommandOwn
     authority.recoveryReference && Object.freeze({ ...authority.recoveryReference });
   const capability = {
     recoveryReference,
+    channelPrincipal:
+      authority.channelPrincipal && Object.freeze({ ...authority.channelPrincipal }),
     operatorAuthority,
     successor: authority.successor,
     isCurrent: checkCurrent,
