@@ -936,16 +936,17 @@ describe("scheduled authenticated operator source", () => {
         fixture.setConfig(widened);
         publish();
         expectCurrent(restored.authority);
+        expect(restored.authority.reauthorize).not.toThrow();
         // A later publication applies to the next restoration, even with the same config object.
         widened.gateway!.roles!.definitions.operator!.scopes = ["operator.read"];
         publish();
         expect(restored.authority.signal?.aborted).toBe(false);
         expectCurrent(restored.authority);
-        await expect(fixture.restore()).rejects.toThrow("source policy changed");
         expect(expectDefined(restored.authority.reauthorize, "queued-start admission")).toThrow(
           "source policy changed",
         );
         expectCurrent(restored.authority);
+        await expect(fixture.restore()).rejects.toThrow("source policy changed");
         fixture.setConfig(cfg);
         publish();
         expectCurrent(restored.authority);

@@ -680,7 +680,7 @@ function enqueueSessionEventAttempt(
             // A stale-policy rejection before adoption also ends as abandonment;
             // only abandonment without that rejection (Stop, cleanup) is terminal.
             abandoned ||= !configPolicy.changed;
-            failure ??= "Session event was abandoned before execution";
+            genericFailure ??= "Session event was abandoned before execution";
           },
           onSettled: () => {
             if (deferred) {
