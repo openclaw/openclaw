@@ -39,6 +39,7 @@ type WebPushSendResult = {
 };
 
 const log = createSubsystemLogger("gateway/web-push");
+const vapidHeaders = new Map<string, { Authorization: string }>();
 
 const LEGACY_WEB_PUSH_PATHS = ["push/web-push-subscriptions.json", "push/vapid-keys.json"] as const;
 
@@ -194,7 +195,6 @@ export async function prepareWebPushNotificationSender(
   assertLegacyWebPushMigrationComplete(baseDir);
   const vapidKeys = await resolveVapidKeys(baseDir);
   const webPush = await loadWebPushRuntime();
-  webPush.setVapidDetails(vapidKeys.subject, vapidKeys.publicKey, vapidKeys.privateKey);
   return async (params) => {
     const { subscriptions, payload, deliveryOptions } = params;
     if (subscriptions.length === 0) {
@@ -219,11 +219,32 @@ export async function prepareWebPushNotificationSender(
             const { icon: _icon, ...withoutIcon } = payload;
             encodedPayload = JSON.stringify(withoutIcon);
           }
-          const result = await webPush.sendNotification(
-            pushSubscription,
-            encodedPayload,
-            deliveryOptions,
-          );
+          // Refresh hourly, with 11–12 hours remaining for push-service clock skew.
+          const expiration = (Math.floor(Date.now() / 3_600_000) + 12) * 3_600;
+          const audience = new URL(subscription.endpoint).origin;
+          const cacheKey = JSON.stringify([audience, vapidKeys, expiration]);
+          let headers = vapidHeaders.get(cacheKey);
+          if (!headers) {
+            headers = webPush.getVapidHeaders(
+              audience,
+              vapidKeys.subject,
+              vapidKeys.publicKey,
+              vapidKeys.privateKey,
+              "aes128gcm",
+              expiration,
+            );
+            // Bound identities, origins and expired buckets without a maintenance timer.
+            if (vapidHeaders.size >= 64) {
+              vapidHeaders.delete(
+                expectDefined(vapidHeaders.keys().next().value, "VAPID cache key"),
+              );
+            }
+            vapidHeaders.set(cacheKey, headers);
+          }
+          const result = await webPush.sendNotification(pushSubscription, encodedPayload, {
+            ...deliveryOptions,
+            headers,
+          });
           return {
             ok: true,
             subscriptionId: subscription.subscriptionId,

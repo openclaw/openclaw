@@ -21,7 +21,19 @@
               "properties": {
                 "email": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
                 "planType": { "$ref": "#/definitions/PlanType" },
-                "type": { "enum": ["chatgpt"], "title": "ChatgptAccountType", "type": "string" }
+                "type": { "enum": ["chatgpt"], "title": "ChatgptAccountType", "type": "string" },
+                "workspaceName": {
+                  "anyOf": [
+                    {
+                      "description": "Display name of the selected ChatGPT workspace, when available.",
+                      "type": "string"
+                    },
+                    {
+                      "description": "Display name of the selected ChatGPT workspace, when available.",
+                      "type": "null"
+                    }
+                  ]
+                }
               },
               "required": ["email", "planType", "type"],
               "title": "ChatgptAccount",
@@ -38,6 +50,15 @@
               },
               "required": ["type"],
               "title": "AmazonBedrockAccount",
+              "type": "object"
+            },
+            {
+              "description": "Google Cloud Vertex AI with externally managed credentials.",
+              "properties": {
+                "type": { "enum": ["gcp"], "title": "GcpAccountType", "type": "string" }
+              },
+              "required": ["type"],
+              "title": "GcpAccount",
               "type": "object"
             }
           ]
@@ -72,6 +93,30 @@
           "type": "object"
         },
         "AgentMessageDelivery": { "enum": ["async"], "type": "string" },
+        "AgentMessageDisplay": {
+          "description": "A presentation instruction for Chat to apply to this answer when recovering history.",
+          "properties": {
+            "action": {
+              "description": "Unknown actions must be left for the producing client to handle.",
+              "type": "string"
+            },
+            "blockType": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+            "checkTrustedContacts": { "anyOf": [{ "type": "boolean" }, { "type": "null" }] },
+            "cyberTrustedAccess": { "anyOf": [{ "type": "boolean" }, { "type": "null" }] }
+          },
+          "required": ["action"],
+          "type": "object"
+        },
+        "AgentMessageModeration": {
+          "properties": {
+            "display": {
+              "anyOf": [{ "$ref": "#/definitions/AgentMessageDisplay" }, { "type": "null" }]
+            },
+            "moderated": { "type": "boolean" }
+          },
+          "required": ["moderated"],
+          "type": "object"
+        },
         "AgentPath": { "type": "string" },
         "ApprovalsReviewer": {
           "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `auto_review` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request. The legacy value `guardian_subagent` is accepted for compatibility.",
@@ -227,6 +272,8 @@
                 "rateLimitExceeded",
                 "flexUnavailable",
                 "serverOverloaded",
+                "modelNotFound",
+                "policyCapacityUnavailable",
                 "cyberPolicy",
                 "misalignmentPolicyViolation",
                 "tooManyDenials",
@@ -237,6 +284,11 @@
                 "sandboxError",
                 "other"
               ],
+              "type": "string"
+            },
+            {
+              "description": "The workspace's inference hook explicitly denied this request.",
+              "enum": ["inferenceHookDenied"],
               "type": "string"
             },
             { "anyOf": [{ "type": "string" }, { "type": "object" }] }
@@ -586,15 +638,29 @@
               "type": "object"
             },
             {
+              "anyOf": [
+                {
+                  "properties": { "audio_url": { "type": "string" } },
+                  "required": ["audio_url"],
+                  "title": "AudioUrlFunctionCallOutputContentItem",
+                  "type": "object"
+                },
+                {
+                  "properties": { "file_id": { "type": "string" } },
+                  "required": ["file_id"],
+                  "title": "FileIdFunctionCallOutputContentItem",
+                  "type": "object"
+                }
+              ],
+              "description": "Inline audio data or an uploaded file loaded by the Responses API.",
               "properties": {
-                "audio_url": { "type": "string" },
                 "type": {
                   "enum": ["input_audio"],
                   "title": "InputAudioFunctionCallOutputContentItemType",
                   "type": "string"
                 }
               },
-              "required": ["audio_url", "type"],
+              "required": ["type"],
               "title": "InputAudioFunctionCallOutputContentItem",
               "type": "object"
             },
@@ -1239,6 +1305,18 @@
                 }
               ]
             },
+            "attachedToThreadId": {
+              "anyOf": [
+                {
+                  "description": "Parent that owns this persisted attached thread, independent of fork or spawn lineage.",
+                  "type": "string"
+                },
+                {
+                  "description": "Parent that owns this persisted attached thread, independent of fork or spawn lineage.",
+                  "type": "null"
+                }
+              ]
+            },
             "canAcceptDirectInput": {
               "anyOf": [
                 {
@@ -1497,6 +1575,7 @@
         "ThreadHistoryMode": { "enum": ["legacy", "paginated"], "type": "string" },
         "ThreadId": { "type": "string" },
         "ThreadItem": {
+          "description": "A thread item and its recorded lifecycle times. The payload stays flat on the wire.",
           "oneOf": [
             {
               "properties": {
@@ -1539,6 +1618,10 @@
                 "id": { "type": "string" },
                 "memoryCitation": {
                   "anyOf": [{ "$ref": "#/definitions/MemoryCitation" }, { "type": "null" }],
+                  "default": null
+                },
+                "moderation": {
+                  "anyOf": [{ "$ref": "#/definitions/AgentMessageModeration" }, { "type": "null" }],
                   "default": null
                 },
                 "phase": {
@@ -2022,6 +2105,20 @@
                   "anyOf": [{ "$ref": "#/definitions/ImageGenerationFailure" }, { "type": "null" }],
                   "default": null
                 },
+                "generationId": {
+                  "anyOf": [
+                    {
+                      "default": null,
+                      "description": "Image generation identifier for the generated image, when provided by the image backend.",
+                      "type": "string"
+                    },
+                    {
+                      "default": null,
+                      "description": "Image generation identifier for the generated image, when provided by the image backend.",
+                      "type": "null"
+                    }
+                  ]
+                },
                 "id": { "type": "string" },
                 "inputImages": {
                   "description": "Observed local inputs for a completed generation, absent on older items.",
@@ -2090,7 +2187,42 @@
               "title": "ContextCompactionThreadItem",
               "type": "object"
             }
-          ]
+          ],
+          "properties": {
+            "completedAtMs": {
+              "anyOf": [
+                {
+                  "default": null,
+                  "description": "Unix timestamp in milliseconds when the item completed, if recorded.",
+                  "format": "int64",
+                  "type": "integer"
+                },
+                {
+                  "default": null,
+                  "description": "Unix timestamp in milliseconds when the item completed, if recorded.",
+                  "format": "int64",
+                  "type": "null"
+                }
+              ]
+            },
+            "startedAtMs": {
+              "anyOf": [
+                {
+                  "default": null,
+                  "description": "Unix timestamp in milliseconds when the item started, if recorded.",
+                  "format": "int64",
+                  "type": "integer"
+                },
+                {
+                  "default": null,
+                  "description": "Unix timestamp in milliseconds when the item started, if recorded.",
+                  "format": "int64",
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "type": "object"
         },
         "ThreadSection": {
           "description": "An independently persisted, user-visible thread section.",
@@ -2359,11 +2491,24 @@
               "type": "object"
             },
             {
+              "anyOf": [
+                {
+                  "properties": { "url": { "type": "string" } },
+                  "required": ["url"],
+                  "title": "UrlUserInput",
+                  "type": "object"
+                },
+                {
+                  "properties": { "fileId": { "type": "string" } },
+                  "required": ["fileId"],
+                  "title": "FileIdUserInput",
+                  "type": "object"
+                }
+              ],
               "properties": {
-                "type": { "enum": ["audio"], "title": "AudioUserInputType", "type": "string" },
-                "url": { "type": "string" }
+                "type": { "enum": ["audio"], "title": "AudioUserInputType", "type": "string" }
               },
-              "required": ["type", "url"],
+              "required": ["type"],
               "title": "AudioUserInput",
               "type": "object"
             },

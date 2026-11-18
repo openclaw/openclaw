@@ -6,7 +6,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createComposerContainer,
   createComposerProps,
@@ -34,11 +34,11 @@ afterEach(() => {
 describe.each([false, true])("chat run activity (recovery ready: %s)", (recoveryScopeReady) => {
   it.each([
     {
-      name: "shows a completed parent waiting on its child roster",
+      name: "does not make a completed parent wait merely because children are active",
       selectedKey: "agent:main:main",
       parentActive: false,
       // Until its own child query answers, preserve the generic recovery status.
-      expectWorking: recoveryScopeReady,
+      expectWorking: false,
     },
     {
       name: "shows activity on the visible child itself",
@@ -52,7 +52,7 @@ describe.each([false, true])("chat run activity (recovery ready: %s)", (recovery
       parentActive: true,
       expectWorking: true,
     },
-  ])("$name", ({ selectedKey, parentActive, expectWorking }) => {
+  ])("$name", async ({ selectedKey, parentActive, expectWorking }) => {
     const parentKey = "agent:main:main";
     const childKey = "agent:main:subagent:attachment-fix";
     const parent = {
@@ -90,16 +90,24 @@ describe.each([false, true])("chat run activity (recovery ready: %s)", (recovery
     pane.render();
 
     const container = createApplicationContextProvider(context);
+    // Exercise the cold transcript's task yield without depending on machine load.
+    let renderTime = performance.now();
+    const renderClock = vi.spyOn(performance, "now").mockImplementation(() => (renderTime += 20));
     renderChatPropsInto(container, expectDefined(pane.chatProps, "chat props"), context);
+    renderClock.mockRestore();
 
-    expect(pane.chatProps?.canAbort).toBe(true);
-    expect(
-      container.querySelector(
-        ".chat-working-indicator:not(.chat-working-indicator--subagents) .chat-reading-indicator",
-      ) !== null,
-    ).toBe(expectWorking);
-    expect(container.querySelector(".chat-working-indicator--subagents")).toBeNull();
-    expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
+    await waitForSolid(() => {
+      expect(container.querySelector(".chat-thread-inner")).not.toBeNull();
+      expect(container.querySelector(".chat-conversation-loading")).toBeNull();
+      expect(pane.chatProps?.canAbort).toBe(true);
+      expect(
+        container.querySelector(
+          ".chat-working-indicator:not(.chat-working-indicator--subagents) .chat-reading-indicator",
+        ) !== null,
+      ).toBe(expectWorking);
+      expect(container.querySelector(".chat-working-indicator--subagents")).toBeNull();
+      expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
+    });
   });
 });
 
@@ -169,9 +177,11 @@ describe("composer run status", () => {
         expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
       };
       await draw([], false);
-      expect(
-        container.querySelector(".chat-working-indicator .chat-reading-indicator"),
-      ).not.toBeNull();
+      await waitForSolid(() =>
+        expect(container.querySelector(".chat-working-indicator")?.textContent).toContain(
+          "Wait for subagents",
+        ),
+      );
       await draw([child]);
       await vi.dynamicImportSettled();
       flush();
@@ -184,29 +194,15 @@ describe("composer run status", () => {
       expect(container.querySelector(".chat-working-indicator .chat-reading-indicator")).toBeNull();
       expect(container.querySelector(".chat-subagent-activity")).toBeNull();
       expect(container.querySelector("openclaw-working-phrase")).toBeNull();
-      // A handoff's wait names the session it waits on in place of a running count.
-      const wait = () =>
-        container.querySelector(".chat-subagent-wait")?.textContent?.replace(/\s+/gu, " ").trim();
-      expect(wait()).toBe("Waiting on Backend implementation · 1m 5s");
-      expect(container.querySelector(".chat-working-indicator__subagents")).toBeNull();
-      const timer = container.querySelector(".chat-working-indicator openclaw-elapsed-time");
-      expect(timer?.textContent).toBe("1m 5s");
-
+      const wait = () => container.querySelector(".chat-working-indicator__status")?.textContent;
+      expect(wait()).toBe("Wait for subagents");
+      expect(container.querySelector(".chat-working-indicator openclaw-elapsed-time")).toBeNull();
       await draw([
         child,
         { ...child, key: "agent:main:subagent:frontend", label: "Frontend implementation" },
       ]);
-      expect(
-        container
-          .querySelector(".chat-subagent-wait button[aria-expanded]")
-          ?.textContent?.replace(/\s+/gu, " ")
-          .trim(),
-      ).toBe("Waiting on 2 sessions · 1m 5s");
-      expect(
-        container.querySelectorAll(".chat-working-indicator openclaw-elapsed-time"),
-      ).toHaveLength(1);
-      expect(container.querySelector(".chat-subagent-activity")).toBeNull();
-
+      expect(wait()).toBe("Wait for subagents");
+      expect(container.textContent).not.toContain("Frontend implementation");
       await draw([{ ...child, hasActiveRun: false }]);
       expect(container.querySelector(".chat-subagent-activity")).toBeNull();
       expect(container.querySelector(".chat-subagent-wait")).toBeNull();
@@ -244,7 +240,7 @@ describe("composer run status", () => {
 });
 
 describe("resumed handoff list", () => {
-  it("re-renders a settled row when a listed child's name or attention changes", () => {
+  it("re-renders a settled row when a listed child's name or attention changes", async () => {
     const parent: GatewaySessionRow = { key: "agent:main:parent", kind: "direct", endedAt: 4_100 };
     const child: GatewaySessionRow = {
       key: "agent:main:subagent:docs",
@@ -280,7 +276,7 @@ describe("resumed handoff list", () => {
     pane.render();
     const container = createApplicationContextProvider(context);
     // Each draw passes the same transcript, so only the roster can refresh the row.
-    const draw = (row: GatewaySessionRow, session = parent) => {
+    const draw = async (row: GatewaySessionRow, session = parent) => {
       const props = { selectedSession: session, messages, subagentSessions: [row] };
       const chatProps = expectDefined(pane.chatProps, "chat props");
       renderChatPropsInto(
@@ -290,22 +286,27 @@ describe("resumed handoff list", () => {
       );
       flush();
       const collapsed = ".chat-handoff-resume button[aria-expanded=false]";
+      await waitForSolid(() =>
+        expect(container.querySelector(".chat-handoff-resume")).not.toBeNull(),
+      );
       container.querySelector<HTMLButtonElement>(collapsed)?.click();
       flush();
       const rows = container.querySelectorAll(".chat-handoff-resume li");
       return [...rows].map((item) => item.textContent?.replace(/\s+/gu, " ").trim());
     };
-    expect(draw(child)).toEqual(["Docs Done"]);
+    expect(await draw(child)).toEqual(["Docs Done"]);
     const renamed = { ...child, label: "Docs and changelog" };
-    expect(draw(renamed)).toEqual(["Docs and changelog Done"]);
+    expect(await draw(renamed)).toEqual(["Docs and changelog Done"]);
     const working = { ...parent, startedAt: 4_200 };
-    const pausedRows = draw({ ...renamed, subagentRunState: "paused" }, working);
+    const pausedRows = await draw({ ...renamed, subagentRunState: "paused" }, working);
     expect(pausedRows).toEqual(["Docs and changelog Paused"]);
     const agentStatus = {
       note: "Pick a release note",
       attention: "hand" as const,
       expiresAt: 9e15,
     };
-    expect(draw({ ...renamed, agentStatus })).toEqual(["Docs and changelog Needs your input"]);
+    expect(await draw({ ...renamed, agentStatus })).toEqual([
+      "Docs and changelog Needs your input",
+    ]);
   });
 });

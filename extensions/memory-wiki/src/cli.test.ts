@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
+import { AsyncWorkScope } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatGptImportResult, ChatGptRollbackResult } from "./chatgpt-import.js";
@@ -323,7 +324,7 @@ describe("memory-wiki cli", () => {
     expect(await read("syntheses/good.md")).toBe(before);
   });
 
-  it("forwards --agent through every bridge Gateway call", async () => {
+  it("forwards --agent through every bridge Gateway call and stops interrupted reads", async () => {
     const { config } = await createCliVault({
       config: {
         vaultMode: "bridge",
@@ -333,20 +334,29 @@ describe("memory-wiki cli", () => {
     });
     const appConfig = { agents: { entries: { support: {}, marketing: {} } } };
     const status = createGatewayStatus(config);
-    const report: MemoryWikiDoctorReport = { healthy: true, warningCount: 0, status, fixes: [] };
-    gatewayCall
-      .mockResolvedValueOnce(status)
-      .mockResolvedValueOnce(report)
-      .mockResolvedValueOnce(emptyBridgeImport);
-    for (const command of [["status"], ["doctor"], ["bridge", "import"]]) {
-      await runWiki(config, ["--agent", "marketing", ...command, "--json"], appConfig);
+    const report: MemoryWikiDoctorReport = { healthy: false, warningCount: 1, status, fixes: [] };
+    gatewayCall.mockResolvedValueOnce(emptyBridgeImport);
+    await runWiki(config, ["--agent", "marketing", "bridge", "import", "--json"], appConfig);
+    for (const command of ["status", "doctor"]) {
+      const work = new AsyncWorkScope();
+      // The read settles only after Ctrl+C starts closing the command.
+      gatewayCall.mockImplementationOnce(async () => {
+        work.beginClose();
+        return command === "status" ? status : report;
+      });
+      const args = ["--agent", "marketing", command, "--json"];
+      await expect(work.run(() => runWiki(config, args, appConfig))).resolves.toBe("");
     }
 
-    expect(gatewayCall.mock.calls.map(([method, , params]) => [method, params])).toEqual([
-      ["wiki.status", { agentId: "marketing", statusMode: "snapshot" }],
-      ["wiki.doctor", { agentId: "marketing", statusMode: "snapshot" }],
-      ["wiki.bridge.import", { agentId: "marketing" }],
+    const signal = expect.objectContaining({ aborted: true });
+    const options = { timeout: "30000" };
+    const snapshotParams = { agentId: "marketing", statusMode: "snapshot" };
+    expect(gatewayCall.mock.calls).toEqual([
+      ["wiki.bridge.import", options, { agentId: "marketing" }, { progress: false }],
+      ["wiki.status", options, snapshotParams, { progress: false, signal }],
+      ["wiki.doctor", options, snapshotParams, { progress: false, signal }],
     ]);
+    expect(process.exitCode).toBeUndefined();
   });
 
   it("registers OKF import and searches imported concepts", async () => {
@@ -555,19 +565,11 @@ describe("memory-wiki cli", () => {
     ) as { importedCount: number };
 
     expect(activeResult.importedCount).toBe(1);
-    expect(gatewayCall).toHaveBeenCalledWith(
-      "wiki.bridge.import",
-      { timeout: "30000" },
-      undefined,
-      { progress: false },
-    );
+    expect(gatewayCall.mock.calls[0]?.[2]).toBeUndefined();
 
     gatewayCall.mockClear();
     const disabled = await createCliVault({
-      config: {
-        vaultMode: "bridge",
-        bridge: { enabled: false },
-      },
+      config: { vaultMode: "bridge", bridge: { enabled: false } },
     });
 
     const disabledResult = JSON.parse(

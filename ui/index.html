@@ -111,6 +111,25 @@
             }
           }
           var s = raw ? JSON.parse(raw) : null;
+          // A hint only: startup still admits the account and exact snapshot.
+          var bootScope =
+            (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host + bootBase;
+          if (
+            bootRoute === "chat" &&
+            localStorage.getItem("openclaw.control.bootRecord.v1:" + bootScope)
+          ) {
+            document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
+            var warmDeadline = performance.now() + 450;
+            // Check wall time before paint; a delayed frame's animation timestamp can be stale.
+            function expireWarmFrame() {
+              if (document.documentElement.getAttribute("data-openclaw-warm-frame") !== "holding")
+                return;
+              if (performance.now() >= warmDeadline)
+                document.documentElement.setAttribute("data-openclaw-warm-frame", "fallback");
+              else requestAnimationFrame(expireWarmFrame);
+            }
+            requestAnimationFrame(expireWarmFrame);
+          }
           if (s && typeof s.navWidth === "number" && s.navWidth >= 240 && s.navWidth <= 400) {
             document.documentElement.style.setProperty(
               "--openclaw-boot-nav-width",
@@ -282,6 +301,14 @@
         min-height: 100%;
         background: inherit;
         color-scheme: inherit;
+      }
+
+      html[data-openclaw-warm-frame="holding"],
+      html[data-openclaw-warm-frame="holding"] body {
+        background: transparent !important;
+      }
+      html[data-openclaw-warm-frame="holding"] body {
+        opacity: 0;
       }
 
       /* Critical loading layout lives here so HTML and the Solid fallback share
@@ -584,20 +611,20 @@
           padding-inline: 16px;
         }
 
-        @container chat-composer (max-width: 560px) {
-          html[data-openclaw-boot-chat]:not(
-              .openclaw-native-macos,
-              .openclaw-native-nav,
-              .openclaw-native-web-chrome
-            )
-            :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
-            .loading-skeleton:has(#openclaw-boot-composer:focus)
-            > .loading-skeleton__messages:not(.loading-skeleton__content) {
-            /* Decorative messages yield space to the focused composer in a short pane. */
-            min-height: 0;
-            overflow: hidden;
-          }
+        html[data-openclaw-boot-chat]:not(
+            .openclaw-native-macos,
+            .openclaw-native-nav,
+            .openclaw-native-web-chrome
+          )
+          :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+          .loading-skeleton:has(#openclaw-boot-composer:focus)
+          > .loading-skeleton__messages:not(.loading-skeleton__content) {
+          /* Decorative messages yield space to the focused composer in a short pane. */
+          min-height: 0;
+          overflow: hidden;
+        }
 
+        @container chat-composer (max-width: 560px) {
           html[data-openclaw-boot-chat]:not(
               .openclaw-native-macos,
               .openclaw-native-nav,
@@ -606,12 +633,9 @@
             :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
             .loading-skeleton:has(#openclaw-boot-composer:focus, .loading-skeleton__content)
             .loading-skeleton__composer:has(> #openclaw-boot-composer) {
-            /* The live landscape frame keeps its cap when pane height is scarce. */
-            max-height: min(36vh, 164px);
+            /* Match the native mobile editor's three-line cap and footer. */
+            min-height: 112px;
             padding: 6px 0 48px;
-            overflow-x: hidden;
-            overflow-y: auto;
-            overscroll-behavior: contain;
           }
 
           html[data-openclaw-boot-chat]:not(
@@ -623,8 +647,8 @@
             .loading-skeleton:has(#openclaw-boot-composer:focus, .loading-skeleton__content)
             .loading-skeleton__composer
             > #openclaw-boot-composer {
-            min-height: 48px;
-            max-height: 56px;
+            min-height: 32px;
+            max-height: calc(3lh + 12px);
             padding: 6px 14px;
             overflow-y: auto;
           }
@@ -653,8 +677,8 @@
             .loading-skeleton:has(#openclaw-boot-composer:focus, .loading-skeleton__content)
             .loading-skeleton__composer
             > #openclaw-boot-composer {
-            min-height: 48px;
-            max-height: 56px;
+            min-height: 32px;
+            max-height: calc(3lh + 12px);
             padding: 10px 12px;
             overflow-y: auto;
           }
@@ -2099,7 +2123,7 @@
                   </g>
                 </g></svg
             ></span>
-            <h1 id="openclaw-mount-fallback-title">Control UI didn’t start</h1>
+            <h1 id="openclaw-mount-fallback-title">OpenClaw didn’t start</h1>
             <p id="openclaw-mount-fallback-summary">
               The page loaded, but the app didn’t start. Trying again automatically.
             </p>
@@ -2268,8 +2292,8 @@
         function showFallback() {
           if (bootSettled) return;
           title.textContent = documentLoaded
-            ? "Control UI didn’t start"
-            : "Control UI is still loading";
+            ? "OpenClaw didn’t start"
+            : "OpenClaw is still loading";
           fallback.setAttribute("role", documentLoaded ? "alert" : "status");
           setSummary(documentLoaded ? failureSummary : "The app is still downloading.");
           if (documentLoaded) retryCurrentDocument();
@@ -2356,7 +2380,7 @@
     </script>
     <script data-cfasync="false" nomodule>
       document.body.innerHTML =
-        '<main style="padding:24px;color:#f4f4f5"><h1>This browser is not supported</h1><p>Open the Control UI in an up-to-date browser, or update your system WebView.</p></main>';
+        '<main style="padding:24px;color:#f4f4f5"><h1>This browser is not supported</h1><p>Open OpenClaw in an up-to-date browser, or update your system WebView.</p></main>';
     </script>
     <script data-cfasync="false" type="module" src="/src/main.ts"></script>
   </body>

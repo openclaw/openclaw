@@ -34,3 +34,19 @@ it.each(["migration", "admission"])("restores the Gateway after a %s refusal", a
     await maintenance?.release();
   }
 });
+
+it("explains launcher overrides before refusing foreign-service maintenance", async () => {
+  boundary.stop.mockResolvedValue({
+    stopped: false,
+    inspected: true,
+    runtimeInspected: true,
+    running: true,
+    serviceUpdateVerdict: { kind: "foreign" },
+  });
+  const refusal = await begin().catch((error: unknown) => error);
+  expect(String(refusal)).toContain("operator-owned launcher override");
+  expect(String(refusal)).toContain("systemctl cat");
+  expect(String(refusal)).not.toContain("then run openclaw doctor --fix from that installation");
+  expect(boundary.repair).not.toHaveBeenCalled();
+  expect(boundary.restart).not.toHaveBeenCalled();
+});

@@ -165,3 +165,10 @@ omitting that field skips permission reconciliation and understates owner cost.
 Initial list rows stay canonical. Parsing, row reconstruction and synchronous
 owner timings exclude socket delivery, sidebar and Sessions-page projections,
 and Solid/DOM work. These diagnostics cannot replace browser acceptance.
+
+For native keyboard correctness during the full foreground stream, use
+`--steps event-load-end,event-load-pageup`. These separate, untimed fixtures
+release half of the 200 tool results through typing, then overlap the remaining
+results with real keyboard input. End must hold the completed transcript's bottom;
+PageUp must hold its visible message anchor. Both also verify result order,
+Latest, and retained tool results after the stream settles.

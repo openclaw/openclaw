@@ -82,7 +82,8 @@ export function setJsonlOcPath(ast: JsonlAst, path: OcPath, newValue: JsoncValue
     `oc://${path.file}/L${target.line}`,
     editPath.map(String),
   );
-  const start = sourceLineOffset(ast.raw, target.line) + bomLength + node.offset;
+  // JSONL records are separated by LF; CR may be whitespace inside a record.
+  const start = sourceLineOffset(ast.raw, target.line, /\n/g) + bomLength + node.offset;
   // Replace only the selected source token. Re-rendering parsed siblings rounds
   // large integers and removes comments, escapes, and record separators.
   const raw = ast.raw.slice(0, start) + replacement + ast.raw.slice(start + node.length);

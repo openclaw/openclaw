@@ -26,6 +26,13 @@ mode expects a plugin to register. Part of the
 
 In `"cli-metadata"` and `"setup-only"` modes, accessing a runtime capability throws an error naming the plugin and mode. Defer runtime access out of `register()` or declare root commands in the manifest's `cliCommands` so CLI metadata can be collected without executing the plugin.
 
+A pending plugin state migration withholds both normal and `"cli-metadata"`
+entrypoints. Explicit recovery commands can use a separately declared
+[Doctor recovery CLI subtree](/plugins/manifest/surfaces#explicit-recovery-cli-subtrees).
+Its `registerRecoveryCli` export receives a mounted Commander subtree and narrow
+Doctor state context, without runtime activation. Registration only installs
+handlers; recovery requires its explicit command action and plugin-owned consent.
+
 `defineChannelPluginEntry` handles this split automatically. If you use
 `definePluginEntry` directly for a channel, check mode yourself and remember
 `"tool-discovery"` skips channel registration:

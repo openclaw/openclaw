@@ -15,7 +15,7 @@ import { inspectPreparedDoctorRehearsal } from "./doctor-update-rehearsal-invent
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
-it("admits real producer plugin host, dependency and basename links without traversing the candidate", async () => {
+it("normalizes external data before real producer Doctor admission without new authority", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (source) => {
     const root = dirs.make("rehearsal-plugin-source-");
     const candidate = path.join(root, "candidate");
@@ -25,6 +25,12 @@ it("admits real producer plugin host, dependency and basename links without trav
     await fs.mkdir(candidate);
     await materializeUpdateCandidateStateWorker(candidate);
     await fs.mkdir(plugin);
+    const assetsRoot = path.join(root, "external-assets");
+    await fs.mkdir(assetsRoot);
+    await writeFixtureJson(path.join(assetsRoot, "package.json"), { name: "external-assets" });
+    const asset = path.join(assetsRoot, "config.txt");
+    await fs.writeFile(asset, "producer-owned external configuration");
+    await fs.symlink(asset, path.join(plugin, "config.txt"));
     await fs.symlink(plugin, locator, "dir");
     await fs.mkdir(path.join(modules, "dependency"), { recursive: true });
     await fs.writeFile(path.join(candidate, "retained.txt"), "candidate is not migration data");
@@ -65,6 +71,12 @@ it("admits real producer plugin host, dependency and basename links without trav
       expect(
         (await fs.lstat(path.join(await fs.realpath(alias), "node_modules"))).isSymbolicLink(),
       ).toBe(true);
+      const normalizedAsset = path.join(await fs.realpath(alias), "config.txt");
+      expect((await fs.lstat(normalizedAsset)).isFile()).toBe(true);
+      expect(await fs.readFile(normalizedAsset, "utf8")).toBe(
+        "producer-owned external configuration",
+      );
+      expect(await fs.readFile(asset, "utf8")).toBe("producer-owned external configuration");
       const host = rehearsal.pluginCodeLinks!.find((fact) => fact.target?.path === candidate)!;
       expect(host).toBeDefined();
       const admitted = await inspectPreparedDoctorRehearsal(params);

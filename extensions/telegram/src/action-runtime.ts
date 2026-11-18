@@ -22,10 +22,10 @@ import {
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createTelegramActionGate, resolveTelegramPollActionGateState } from "./accounts.js";
 import { TELEGRAM_MESSAGE_ACTION_MAP } from "./action-names.js";
 import {
+  normalizeTelegramDeliveryPin,
   readTelegramChatId,
   readTelegramForumTopicIconColor,
   readTelegramMessageEffectId,
@@ -57,6 +57,7 @@ import { rejectTelegramNativeButtonParams } from "./native-button-params.js";
 import { resolveTelegramPollVisibility } from "./poll-visibility.js";
 import { renderTelegramAccountProgressDraftPreview } from "./progress-draft-preview.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
+import { resolveTelegramRichMessages } from "./rich-messages-config.js";
 import {
   createForumTopicTelegram,
   deleteMessageTelegram,
@@ -72,6 +73,7 @@ import { TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST } from "./status-reaction-varian
 import { getCacheStats, searchStickers } from "./sticker-cache.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 import { resolveTelegramToken } from "./token.js";
+import { buildTelegramConversationId, resolveTelegramTargetThread } from "./topic-conversation.js";
 import { resolveTelegramTopicNameCacheScope, updateTopicName } from "./topic-name-cache.js";
 
 const TELEGRAM_EMOJI_LIST_LIMIT = 100;
@@ -106,32 +108,13 @@ function normalizeTelegramActionName(action: string): TelegramActionName {
 
 function formatTelegramDeliveryTarget(to: string, messageThreadId?: number | null): string {
   const parsed = parseTelegramTarget(to);
-  const directTopicId = parsed.directMessagesTopicId;
-  if (directTopicId != null) {
-    return `${parsed.chatId}:direct-topic:${directTopicId}`;
-  }
-  const topicId = messageThreadId ?? parsed.messageThreadId;
-  if (topicId == null) {
-    return to;
-  }
-  return `${parsed.chatId}:topic:${topicId}`;
-}
-
-function normalizeTelegramDeliveryPin(params: Record<string, unknown>) {
-  const delivery = asOptionalRecord(params.delivery);
-  const pin = delivery ? delivery.pin : params.pin === true ? true : undefined;
-  if (pin === true) {
-    return { enabled: true } as const;
-  }
-  const raw = asOptionalRecord(pin);
-  if (raw?.enabled !== true) {
-    return undefined;
-  }
-  return {
-    enabled: true,
-    ...(raw.notify === true ? { notify: true } : {}),
-    ...(raw.required === true ? { required: true } : {}),
-  } as const;
+  const thread = resolveTelegramTargetThread({
+    ...parsed,
+    messageThreadId: messageThreadId ?? parsed.messageThreadId,
+  });
+  return thread.scope === "none"
+    ? to
+    : buildTelegramConversationId({ chatId: parsed.chatId, thread });
 }
 
 export async function handleTelegramAction(
@@ -190,6 +173,7 @@ export async function handleTelegramAction(
   const resolveButtons = (to: string, presentation?: MessagePresentation) =>
     resolveTelegramButtonsFromParams(params, presentation, {
       allowWebAppButtons: resolveTelegramTargetChatType(to) === "direct",
+      supportsDisabled: resolveTelegramRichMessages({ cfg, accountId }),
       onDroppedControl: (control) => droppedControls.push(control),
     });
   const requireInlineButtonsScope = () => {
@@ -619,7 +603,14 @@ export async function handleTelegramAction(
       });
       content = progressPreview.text;
     }
-    const buttons = resolveButtons(chatId ?? "");
+    // A keyboard of only unsupported disabled controls becomes an empty keyboard, so
+    // the edit still retires the previous buttons instead of failing.
+    const buttons =
+      resolveButtons(chatId ?? "") ??
+      (droppedControls.length > 0 &&
+      droppedControls.every((control) => control.reason === "disabled_unsupported")
+        ? []
+        : undefined);
     if (droppedControls.length > 0) {
       if (caption != null) {
         caption = appendTelegramDroppedControlFallback(caption, droppedControls);

@@ -296,8 +296,9 @@ it.each(["consumer", "context engine"])(
         await consumer!.close(cleanup);
       }
       expect(cleanup).toHaveBeenCalledOnce();
+      // A released scope stops routing, so the retired instance refuses the ordinary call.
       expect(() => run(() => value.read())).toThrow(
-        scope ? "invocation scope is closed" : "consumer is closed",
+        scope ? "reloaded or disabled" : "consumer is closed",
       );
       await timeout.settled;
       expect(fs.existsSync(value.filename)).toBe(false);

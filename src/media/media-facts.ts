@@ -11,7 +11,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { cloneTranscriptEnvelope } from "../config/sessions/transcript-json.js";
+import { cloneTranscriptEnvelope } from "../shared/transcript-payload-ownership.js";
 import type { PromptImageOrderEntry } from "./prompt-image-order.js";
 
 /** One ordered runtime attachment; array position is its alignment identity. */
@@ -29,6 +29,8 @@ export type MediaFact = {
   height?: number;
   transcribed?: boolean;
   messageId?: string;
+  /** Supplemental quote provenance; absent on current-message media. */
+  source?: "quote";
   workspaceDir?: string;
   /** Internal proof that this exact fact was covered by a legacy staged projection. */
   staged?: boolean;
@@ -398,6 +400,7 @@ function normalizeMediaFact<TInput extends MediaFactInput>(
     ...(height ? { height } : {}),
     transcribed: input.transcribed === true || defaults.transcribed?.(input, index) === true,
     messageId: normalizeOptionalString(input.messageId) ?? defaults.messageId,
+    ...(input.source === "quote" ? { source: "quote" } : {}),
     ...(workspaceDir ? { workspaceDir } : {}),
     ...(input.staged === true ? { staged: true } : {}),
     ...(input.hydrationSuppressed === true ? { hydrationSuppressed: true } : {}),

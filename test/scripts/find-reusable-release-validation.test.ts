@@ -1,7 +1,7 @@
 // Covers policy selection layered on the strict normalized release evidence
 // produced by release-ci-summary.mjs. Topology validation belongs there.
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
@@ -15,7 +15,6 @@ const tempDirs = createTempDirTracker();
 const sharedTempDirs = createTempDirTracker();
 
 const REPOSITORY = "openclaw/openclaw";
-const PRODUCER_SHA = "0".repeat(40);
 const VERIFIER_SHA = "c".repeat(40);
 const DEFAULT_INPUTS = {
   provider: "openai",
@@ -90,8 +89,9 @@ interface NormalizedEvidence {
   current: ParentTuple;
   directRoot: boolean;
   evidenceReuse: Record<string, unknown> | null;
+  qualification: { kind: string };
   qualificationAdmission?: {
-    request?: { candidateSha: string; qualificationSha: string };
+    request: { candidateSha: string; qualificationSha: string };
     coverage: { children: { key: string }[] };
   };
   manifest: Record<string, unknown>;
@@ -216,12 +216,11 @@ function normalizedEvidence(options: {
   trustedWorkflowRef?: string;
 }): NormalizedEvidence {
   const runId = options.runId ?? "111";
-  const producerSha = options.producerSha ?? PRODUCER_SHA;
+  const producerSha = options.producerSha ?? VERIFIER_SHA;
   const releaseProfile = options.releaseProfile ?? "full";
   const soak = options.soak ?? true;
-  const workflowRef = options.workflowRef ?? "main";
+  const workflowRef = options.workflowRef ?? `release-ci/${producerSha.slice(0, 12)}-122`;
   const workflowFullRef = `refs/heads/${workflowRef}`;
-  const shaPinned = workflowRef.startsWith("release-ci/");
   const trustedWorkflowRef = options.trustedWorkflowRef ?? "main";
   const protectedTagRoute = trustedWorkflowRef.startsWith("release-publish/");
   const trustedWorkflowFullRef = protectedTagRoute
@@ -284,20 +283,14 @@ function normalizedEvidence(options: {
     status: "completed",
     targetSha: options.targetSha,
     url: `https://example.test/runs/${runId}`,
-    producerOnTrustedMainLineage: !protectedTagRoute,
+    producerOnTrustedMainLineage: false,
     workflowFullRef,
     workflowPath: ".github/workflows/full-release-validation.yml",
     workflowQualifiedPath: `.github/workflows/full-release-validation.yml@${workflowFullRef}`,
     workflowRef,
-    workflowRefProof: protectedTagRoute
-      ? "manifest-v3-protected-tag-exact-sha"
-      : shaPinned
-        ? "manifest-v3-sha-pinned-main-ancestry"
-        : "manifest-v3-branch",
+    workflowRefProof: "candidate-owned-admission-v1",
     workflowRefType: "branch",
-    workflowRunPath: shaPinned
-      ? `.github/workflows/full-release-validation.yml@${workflowFullRef}`
-      : ".github/workflows/full-release-validation.yml",
+    workflowRunPath: `.github/workflows/full-release-validation.yml@${workflowFullRef}`,
     workflowSha: producerSha,
   };
   const roles = [
@@ -390,6 +383,11 @@ function normalizedEvidence(options: {
     current: structuredClone(root),
     directRoot: true,
     evidenceReuse: null,
+    qualification: { kind: "direct" },
+    qualificationAdmission: {
+      request: { candidateSha: options.targetSha, qualificationSha: producerSha },
+      coverage: { children: children.map(({ role }) => ({ key: role })) },
+    },
     manifest,
     releaseProfile,
     repository: REPOSITORY,
@@ -397,7 +395,7 @@ function normalizedEvidence(options: {
     root,
     runReleaseSoak: soak,
     schema: "openclaw.release-validation-evidence/v4",
-    producerOnTrustedMainLineage: !protectedTagRoute,
+    producerOnTrustedMainLineage: false,
     trustedWorkflowFullRef,
     trustedWorkflowRef,
     valid: true,
@@ -544,6 +542,14 @@ function runResolver(args: {
   workflowSha?: string;
 }) {
   const verifierSha = args.verifierSha ?? VERIFIER_SHA;
+  const workflowSha = args.workflowSha ?? verifierSha;
+  const workflowRef = args.workflowRef ?? "release-ci/" + workflowSha.slice(0, 12) + "-123";
+  const qualificationAdmission = Object.hasOwn(args, "qualificationAdmission")
+    ? args.qualificationAdmission
+    : { workflowSha: verifierSha, artifactId: 789 };
+  const qualificationInputs = Object.hasOwn(args, "qualificationInputs")
+    ? args.qualificationInputs
+    : { ref: args.targetSha, expected_sha: args.targetSha };
   const trustedWorkflowRef = args.trustedWorkflowRef ?? "main";
   const trustedWorkflowFullRef =
     args.trustedWorkflowFullRef ??
@@ -595,11 +601,11 @@ function runResolver(args: {
       "--target-sha",
       args.targetSha,
       "--workflow-sha",
-      args.workflowSha ?? verifierSha,
+      workflowSha,
       "--verifier-source-sha",
       verifierSha,
       "--workflow-ref",
-      args.workflowRef ?? "main",
+      workflowRef,
       "--trusted-workflow-ref",
       trustedWorkflowRef,
       "--trusted-workflow-full-ref",
@@ -616,12 +622,12 @@ function runResolver(args: {
       REPOSITORY,
       "--repo-dir",
       args.repoDir,
-      ...(args.qualificationAdmission
+      ...(qualificationAdmission
         ? [
             "--qualification-admission-json",
-            JSON.stringify(args.qualificationAdmission),
+            JSON.stringify(qualificationAdmission),
             "--qualification-inputs-json",
-            JSON.stringify(args.qualificationInputs),
+            JSON.stringify(qualificationInputs),
           ]
         : []),
     ],
@@ -641,13 +647,13 @@ function runResolver(args: {
           runReleaseSoak: args.runReleaseSoak ?? "true",
           validationInputs: args.inputs === undefined ? DEFAULT_INPUTS : args.inputs,
         }),
-        FAKE_QUALIFICATION_REUSE: args.qualificationAdmission
+        FAKE_QUALIFICATION_REUSE: qualificationAdmission
           ? JSON.stringify({
-              candidateSha: args.workflowSha ?? verifierSha,
-              qualificationSha: args.workflowSha ?? verifierSha,
-              workflowRef: args.workflowRef ?? "main",
-              descriptor: args.qualificationAdmission,
-              inputs: args.qualificationInputs,
+              candidateSha: args.targetSha,
+              qualificationSha: workflowSha,
+              workflowRef,
+              descriptor: qualificationAdmission,
+              inputs: qualificationInputs,
             })
           : "",
         FAKE_VERIFIER_SHA: verifierSha,
@@ -684,33 +690,24 @@ function parseOutput(output: string): Record<string, string> {
   );
 }
 
-function admit(record: NormalizedEvidence, sha: string) {
-  record.producerOnTrustedMainLineage = false;
-  for (const parent of [record.current, record.root]) {
-    parent.producerOnTrustedMainLineage = false;
-    parent.workflowRefProof = "candidate-owned-admission-v1";
-  }
-  record.qualificationAdmission = {
-    request: { candidateSha: sha, qualificationSha: sha },
-    coverage: { children: record.children.map(({ role }) => ({ key: role })) },
-  };
-}
-
 describe("scripts/github/find-reusable-release-validation.sh", () => {
-  it.each(["main", `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`])(
-    "selects candidate-owned evidence through admitted P on %s",
-    (trustedWorkflowRef) => {
+  it.each([
+    { trustedWorkflowRef: "main", independent: true },
+    { trustedWorkflowRef: `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`, independent: false },
+  ])(
+    "selects candidate-owned evidence through admitted P on $trustedWorkflowRef (independent Q: $independent)",
+    ({ trustedWorkflowRef, independent }) => {
       const { priorSha } = getSharedRepo();
+      const qualificationSha = independent ? "d".repeat(40) : priorSha;
       const record = normalizedEvidence({
         targetSha: priorSha,
-        producerSha: priorSha,
-        workflowRef: `release-ci/${priorSha.slice(0, 12)}-122`,
+        producerSha: qualificationSha,
+        workflowRef: `release-ci/${qualificationSha.slice(0, 12)}-122`,
         trustedWorkflowRef,
       });
-      admit(record, priorSha);
       const options = {
-        workflowSha: priorSha,
-        workflowRef: `release-ci/${priorSha.slice(0, 12)}-123`,
+        workflowSha: qualificationSha,
+        workflowRef: `release-ci/${qualificationSha.slice(0, 12)}-123`,
         trustedWorkflowRef,
         qualificationAdmission: { workflowSha: VERIFIER_SHA, artifactId: 789 },
         qualificationInputs: { ref: priorSha, expected_sha: priorSha },
@@ -718,13 +715,6 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       const result = resolveEvidence(record, options);
       expect(result.status).toBe(0);
       expect(parseOutput(result.stdout)).toMatchObject({ reuse: "true", evidence_run_id: "111" });
-
-      const missingAdmission = resolveEvidence(record, {
-        ...options,
-        qualificationAdmission: undefined,
-        qualificationInputs: undefined,
-      });
-      expect(parseOutput(missingAdmission.stdout)).toMatchObject({ reuse: "false" });
     },
   );
 
@@ -751,7 +741,6 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
         validationInputs: { ...DEFAULT_INPUTS, targetVersion: "2026.7.1" },
         workflowRef: `release-ci/${priorSha.slice(0, 12)}-122`,
       });
-      admit(record, priorSha);
       const result = resolveEvidence(record, {
         compareBaseSha: priorSha,
         compareFiles: changedPaths,
@@ -769,93 +758,13 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     },
   );
 
-  it("reuses strict direct-root evidence produced by a canonical SHA-pinned run", () => {
+  it("rejects reuse without current qualification admission", () => {
     const { priorSha } = getSharedRepo();
-    const producerSha = "d".repeat(40);
-    const producerRef = `release-ci/${producerSha.slice(0, 12)}-122`;
-    const record = normalizedEvidence({
-      producerSha,
-      targetSha: priorSha,
-      workflowRef: producerRef,
-    });
-
+    const record = normalizedEvidence({ targetSha: priorSha });
     const result = resolveEvidence(record, {
-      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
+      qualificationAdmission: undefined,
+      qualificationInputs: undefined,
     });
-
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({
-      evidence_run_id: "111",
-      reuse: "true",
-    });
-  });
-
-  it("reuses strict evidence from the protected tooling tag", () => {
-    const { priorSha } = getSharedRepo();
-    const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
-    const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
-    const record = normalizedEvidence({
-      producerSha: VERIFIER_SHA,
-      targetSha: priorSha,
-      trustedWorkflowRef,
-      workflowRef: producerRef,
-    });
-    const result = resolveEvidence(record, {
-      trustedWorkflowRef,
-      verifierOnMain: false,
-      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
-    });
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({ evidence_run_id: "111", reuse: "true" });
-  });
-
-  it("reuses strict evidence produced by an ancestor of the protected tooling tag", () => {
-    const { priorSha } = getSharedRepo();
-    const producerSha = "d".repeat(40);
-    const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
-    const producerRef = `release-ci/${producerSha.slice(0, 12)}-122`;
-    const record = normalizedEvidence({
-      producerSha,
-      targetSha: priorSha,
-      trustedWorkflowRef,
-      workflowRef: producerRef,
-    });
-    record.current.workflowRefProof = "manifest-v3-protected-tag-tooling-lineage";
-    record.root.workflowRefProof = "manifest-v3-protected-tag-tooling-lineage";
-
-    const result = resolveEvidence(record, {
-      trustedWorkflowRef,
-      verifierOnMain: false,
-      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
-    });
-
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({
-      evidence_run_id: "111",
-      reuse: "true",
-    });
-  });
-
-  it("rejects unrecognized protected tooling proof", () => {
-    const workflowRefProof = "manifest-v3-protected-tag-diverged";
-    const { priorSha } = getSharedRepo();
-    const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
-    const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
-    const record = normalizedEvidence({
-      producerSha: VERIFIER_SHA,
-      targetSha: priorSha,
-      trustedWorkflowRef,
-      workflowRef: producerRef,
-    });
-    record.current.workflowRefProof = workflowRefProof;
-    record.root.workflowRefProof = workflowRefProof;
-
-    const result = resolveEvidence(record, {
-      trustedWorkflowRef,
-      verifierOnMain: false,
-      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
-    });
-
     expect(result.status).toBe(0);
     expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
   });
@@ -974,15 +883,43 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       },
     },
     {
+      label: "receipt recovery rather than direct admission",
+      mutate(record: NormalizedEvidence) {
+        record.qualification.kind = "recovery";
+      },
+    },
+    {
+      label: "missing authenticated admission",
+      mutate(record: NormalizedEvidence) {
+        delete record.qualificationAdmission;
+      },
+    },
+    {
+      label: "candidate admission mismatch",
+      mutate(record: NormalizedEvidence) {
+        expectDefined(record.qualificationAdmission, "candidate admission").request.candidateSha =
+          "a".repeat(40);
+      },
+    },
+    {
+      label: "qualification admission mismatch",
+      mutate(record: NormalizedEvidence) {
+        expectDefined(
+          record.qualificationAdmission,
+          "candidate admission",
+        ).request.qualificationSha = "b".repeat(40);
+      },
+    },
+    {
       label: "untrusted producer ref",
       mutate(record: NormalizedEvidence) {
         record.trustedWorkflowRef = "release/2026.7.1";
       },
     },
     {
-      label: "missing trusted-main lineage proof",
+      label: "historical producer lineage claim",
       mutate(record: NormalizedEvidence) {
-        record.producerOnTrustedMainLineage = false;
+        record.producerOnTrustedMainLineage = true;
       },
     },
     {
@@ -1216,10 +1153,5 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       reuse: "false",
       reuse_reason: "target version metadata is inconsistent",
     });
-  });
-
-  it("rewrites inherited v3 producer identity to the current immutable workflow SHA", () => {
-    const workflow = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
-    expect(workflow).toMatch(/--arg workflowSha "\$GITHUB_SHA"[\s\S]*workflowSha: \$workflowSha/u);
   });
 });

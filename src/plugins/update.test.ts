@@ -620,33 +620,6 @@ function updatePlugin(
   return updateNpmInstalledPlugins({ config, pluginIds: [pluginId], ...params });
 }
 
-function createDuplicateQqbotConfig(
-  params: {
-    canonicalInstallPath?: string;
-  } = {},
-): OpenClawConfig {
-  const qqbot = {
-    source: "npm",
-    spec: "@openclaw/qqbot@1.9.0",
-    resolvedName: "@openclaw/qqbot",
-    resolvedSpec: "@openclaw/qqbot@1.9.0",
-    installPath: "/tmp/openclaw-qqbot-legacy",
-  } satisfies PluginInstallRecord;
-  const canonical = {
-    source: "npm",
-    spec: "@tencent-connect/openclaw-qqbot@2.0.1",
-    resolvedName: "@tencent-connect/openclaw-qqbot",
-    resolvedSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
-    installPath: params.canonicalInstallPath ?? "/tmp/openclaw-qqbot-canonical",
-  } satisfies PluginInstallRecord;
-  return {
-    plugins: {
-      entries: { qqbot: { enabled: true } },
-      installs: { qqbot, "openclaw-qqbot": canonical },
-    },
-  };
-}
-
 describe("updateNpmInstalledPlugins", () => {
   beforeEach(() => {
     installPluginFromNpmSpecMock.mockReset();
@@ -1090,6 +1063,13 @@ describe("updateNpmInstalledPlugins", () => {
   afterEach(() => {
     capabilityConsentMode.real = false;
     vi.unstubAllEnvs();
+  });
+
+  it("starts no plugin update once interrupted", async () => {
+    const config = createNpmInstallConfig("demo", "@acme/demo", "/tmp/demo");
+    const result = await updateNpmInstalledPlugins({ config, signal: AbortSignal.abort() });
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ config, changed: false, outcomes: [] });
   });
 
   it("does not treat inherited prototype names as install records", async () => {
@@ -2668,8 +2648,25 @@ describe("updateNpmInstalledPlugins", () => {
               },
             )
           : undefined;
-    const config = createDuplicateQqbotConfig({ canonicalInstallPath });
-    const plugins = expectDefined(config.plugins, "duplicate config fixture");
+    const qqbot = {
+      source: "npm",
+      spec: "@openclaw/qqbot@1.9.0",
+      resolvedName: "@openclaw/qqbot",
+      resolvedSpec: "@openclaw/qqbot@1.9.0",
+      installPath: "/tmp/openclaw-qqbot-legacy",
+    } satisfies PluginInstallRecord;
+    const canonical = {
+      source: "npm",
+      spec: "@tencent-connect/openclaw-qqbot@2.0.1",
+      resolvedName: "@tencent-connect/openclaw-qqbot",
+      resolvedSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
+      installPath: canonicalInstallPath ?? "/tmp/openclaw-qqbot-canonical",
+    } satisfies PluginInstallRecord;
+    const plugins: NonNullable<OpenClawConfig["plugins"]> = {
+      entries: { qqbot: { enabled: true } },
+      installs: { qqbot, "openclaw-qqbot": canonical },
+    };
+    const config: OpenClawConfig = { plugins };
     if (outcome === "updated") {
       plugins.slots = { contextEngine: "qqbot" };
       mockNpmViewMetadata({ name: "@tencent-connect/openclaw-qqbot", version: "2.0.1" });

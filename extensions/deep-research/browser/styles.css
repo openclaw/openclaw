@@ -147,6 +147,11 @@
 .deep-research-report {
   white-space: pre-wrap;
   line-height: 1.65;
+  /* Report prose keeps macOS stem darkening: the Control UI's app-wide
+     antialiased smoothing renders long-form reading text thin. Pane chrome
+     keeps the app-wide smoothing. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 .deep-research-report .deep-research-citation {
   padding: 0 4px;

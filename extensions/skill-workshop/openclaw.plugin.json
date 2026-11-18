@@ -25,7 +25,7 @@
     },
     "autonomous.channelNotices": {
       "label": "Skill Workshop Channel Notices",
-      "help": "Post background review notices to channel conversations, except Slack, with an Undo button (default: false); the Control UI shows that message as plain text. When disabled, notices appear only as the Learned row in the Control UI chat. Saying \"undo\" works either way."
+      "help": "Post background review notices to channel conversations, except Slack, with an Undo button (default: false); the web app shows that message as plain text. When disabled, notices appear only as the Learned row in the web app chat. Saying \"undo\" works either way."
     },
     "maxSkillBytes": {
       "label": "Maximum Workshop Skill Size",

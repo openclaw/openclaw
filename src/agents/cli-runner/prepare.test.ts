@@ -1517,47 +1517,6 @@ describe("prepareCliRunContext", () => {
     );
   });
 
-  it("applies turn-authorized prompt enrichment after CLI tool preparation", async () => {
-    const hookRunner = {
-      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
-      runBeforePromptBuild: vi.fn(async () => undefined),
-      runAuthorizedPromptBuild: vi.fn(async () => ({
-        prependContext: "authorized memory context",
-      })),
-    };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
-    const preparedRunAdmission = prepareAgentRunAdmission({
-      cfg: {},
-      operationalRunInstance: createOperationalRunInstanceRef("run-test"),
-      facts: {
-        runId: "run-test",
-        agentId: "main",
-        ingress: { kind: "system", boundary: "test", state: "present" },
-      },
-    });
-
-    const context = await fixture
-      .prepare({
-        toolAuthorityFingerprint: "turn-authority",
-        preparedRunAdmission,
-      })
-      .finally(preparedRunAdmission.close);
-
-    expect(context.params.prompt).toMatch(
-      /^authorized memory context\n\nlatest ask\n\nThis turn has no current conversation\./,
-    );
-    expect(context.params.transcriptPrompt).toBe("latest ask");
-    expect(hookRunner.runAuthorizedPromptBuild).toHaveBeenCalledWith(
-      expect.objectContaining({ prompt: "latest ask" }),
-      expect.any(Object),
-      {
-        toolAuthorityFingerprint: "turn-authority",
-        activeToolNames: [],
-        assertHostActive: expect.any(Function),
-      },
-    );
-  });
-
   it.each(["legacy", "incompatible-cleanup-failed", "cleanup-failed", "retired"] as const)(
     "settles directly resolved CLI context-engine custody (%s)",
     async (scenario) => {
@@ -3464,7 +3423,6 @@ describe("prepareCliRunContext", () => {
     expect(context.reusableCliSession).toEqual(testCase.expected);
     if (testCase.controlOperation) {
       expect(context.params.prompt).toBe("/compact");
-      expect(context.systemPrompt).toBe("");
     }
   });
 

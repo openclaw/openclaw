@@ -155,7 +155,7 @@ describe("ConfigPage model catalog lifecycle", () => {
         "manage plugins link",
       );
       await waitForSolid(() => expect(pluginRequests).toBe(1));
-      await waitForSolid(() => expect(section.textContent).toContain("Loading…"));
+      await waitForSolid(() => expect(section.querySelector('[aria-busy="true"]')).not.toBeNull());
 
       first.reject(new Error("catalog unavailable"));
       await waitForSolid(() =>

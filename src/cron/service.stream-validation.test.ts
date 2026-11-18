@@ -388,7 +388,7 @@ describe("cron stream trigger composition", () => {
         expect(alert?.channel).toBe("telegram");
         expect(alert?.to).toBe("19098680");
         expect(alert?.payload).toEqual({
-          text: 'Automation "failing stream payload" failed 1 times\nCheck automation history for details.',
+          text: 'Automation "failing stream payload" failed\nCheck automation history for details.',
         });
         expect(
           (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id)?.state

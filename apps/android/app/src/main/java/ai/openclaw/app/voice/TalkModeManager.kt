@@ -444,7 +444,7 @@ class TalkModeManager internal constructor(
       microphoneGeneration.incrementAndGet()
       if (!_isEnabled.value) return
       if (muted) {
-        if (nativeMuteCompletion != null) return
+        if (nativeMuteCompletion != null || pttReleaseCompletion != null) return
         val pttCaptureId = activePttCaptureId
         val nativeRecognizer = recognizer?.takeIf { realtimeSessionId == null && _isListening.value && pttCaptureId == null }
         if (nativeRecognizer != null) {
@@ -455,7 +455,6 @@ class TalkModeManager internal constructor(
         retireRecognizer()
         if (pttCaptureId != null) {
           closePushToTalkRung()
-          pttReleaseCompletion?.complete(Unit)
           gatewayWorkScope.launch { endPushToTalk(pttCaptureId) }
           return
         }
