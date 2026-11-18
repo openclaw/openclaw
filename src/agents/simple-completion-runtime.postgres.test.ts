@@ -133,17 +133,9 @@ module.exports = {
         expect(() => assertEngineStoreExecutionAllowed()).toThrow(
           "PostgreSQL connections must run in a worker",
         );
-        const deniedCalls: string[] = [];
-        using _guard = vi
+        using guard = vi
           .spyOn(databaseAdmission, "assertEngineStoreExecutionAllowed")
-          .mockImplementation(() => {
-            try {
-              assertEngineStoreExecutionAllowed();
-            } catch (error) {
-              deniedCalls.push(String(error));
-              throw error;
-            }
-          });
+          .mockImplementation(assertEngineStoreExecutionAllowed);
         const statements = channel("openclaw.database.statement");
         const hostStatements: unknown[] = [];
         const observe = (message: unknown) => {
@@ -179,7 +171,7 @@ module.exports = {
             await acquired[Symbol.asyncDispose]();
             await expect(complete()).rejects.toThrow("Prepared completion model has been released");
             expect(authorizations).toEqual(["Bearer fixture-completion-key"]);
-            expect(deniedCalls).toEqual([]);
+            expect(guard.mock.results.filter(({ type }) => type === "throw")).toEqual([]);
             expect(hostStatements).toEqual([]);
           } finally {
             await acquired[Symbol.asyncDispose]();
