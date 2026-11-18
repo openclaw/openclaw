@@ -45,7 +45,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanupDirectories) =>
 const leaseId = "cbx_resume_fixture";
 const readText = (...parts: string[]) => fs.readFileSync(path.join(...parts), "utf8");
 
-async function createResumeTest(version: string, signal: AbortSignal) {
+async function createResumeTest(version: string, signal: AbortSignal, desktop = false) {
   const home = fs.realpathSync(tempDirs.make("crabbox-resume-"));
   const stateDir = path.join(home, ".openclaw/cloud-workers", leaseId);
   const runtimeRoot = path.join(home, ".openclaw-worker/node-runtimes");
@@ -65,16 +65,47 @@ async function createResumeTest(version: string, signal: AbortSignal) {
     }
     await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow("ESRCH"));
   };
+  const desktopEnv = {
+    DISPLAY: ":99",
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/fixture/bus",
+    XDG_RUNTIME_DIR: "/run/fixture",
+  };
+  if (desktop) {
+    fs.mkdirSync(path.join(home, "proc/123"), { recursive: true });
+    fs.writeFileSync(path.join(home, "desktop.env"), "CRABBOX_DESKTOP_ENV=xfce\nDISPLAY=:99\n");
+    fs.writeFileSync(
+      path.join(home, "proc/123/environ"),
+      Object.entries(desktopEnv)
+        .map(([key, value]) => key + "=" + value)
+        .join("\0") + "\0",
+    );
+    fs.writeFileSync(path.join(home, "pgrep"), "#!/bin/sh\necho 123\n", { mode: 0o700 });
+  }
   const guest = async (source: string, env: NodeJS.ProcessEnv = {}, profile?: string) => {
     const child = spawn("/bin/sh", [], {
-      env: { HOME: home, PATH: process.env.PATH, ...env },
+      env: {
+        HOME: home,
+        PATH: process.env.PATH,
+        ...(desktop
+          ? {
+              DISPLAY: ":0",
+              DBUS_SESSION_BUS_ADDRESS: "wrong-login-bus",
+              XDG_RUNTIME_DIR: "/run/wrong",
+            }
+          : {}),
+        ...env,
+      },
       signal,
       stdio: "pipe",
     });
     const output: Buffer[] = [];
     child.stdout.on("data", (chunk: Buffer) => output.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => output.push(chunk));
-    child.stdin.end((profile ? `set -a; . ${JSON.stringify(profile)}; set +a\n` : "") + source);
+    const script = source
+      .replaceAll("/var/lib/crabbox/desktop.env", path.join(home, "desktop.env"))
+      .replaceAll("/proc/$process_pid/environ", home + "/proc/$process_pid/environ")
+      .replaceAll("pgrep -u", path.join(home, "pgrep") + " -u");
+    child.stdin.end((profile ? `set -a; . ${JSON.stringify(profile)}; set +a\n` : "") + script);
     const [code] = await once(child, "close");
     return commandResult({ code, stdout: Buffer.concat(output).toString("utf8") });
   };
@@ -144,6 +175,7 @@ async function createResumeTest(version: string, signal: AbortSignal) {
   };
   const setup = createCrabboxNodeEnrollmentSetup({
     leaseId,
+    desktop,
     enrollment: {
       mode: "connect",
       setupCode: "synthetic-enrollment-credential",
@@ -182,11 +214,15 @@ async function createResumeTest(version: string, signal: AbortSignal) {
 // Real installer, identity probes, process receipts and shipped IPC launcher; only
 // Crabbox's external transport and Gateway artifact bytes are local fixtures.
 describe.skipIf(process.platform !== "linux")("same-node runtime refresh", () => {
-  it.for(["2026.8.1", "2026.8.2"])(
-    "installs fresh resume grants for %s without changing enrollment or workspace",
-    async (version, { signal }) => {
+  it.for([
+    { version: "2026.8.1", desktop: false },
+    { version: "2026.8.2", desktop: false },
+    { version: "2026.8.1", desktop: true },
+    { version: "2026.8.2", desktop: true },
+  ])(
+    "installs fresh resume grants without changing enrollment or workspace: %j",
+    async ({ version, desktop }, { signal }) => {
       const {
-        home,
         stateDir,
         runtimeRoot,
         packageRoot,
@@ -197,7 +233,7 @@ describe.skipIf(process.platform !== "linux")("same-node runtime refresh", () =>
         nodeBootstrap,
         runtime,
         downloads,
-      } = await createResumeTest(version, signal);
+      } = await createResumeTest(version, signal, desktop);
       const initialPid = readText(pidFile);
       const activation = readText(stateDir, "activation.jsonl");
       const savedSetup = readText(stateDir, "setup-code");
@@ -221,7 +257,7 @@ describe.skipIf(process.platform !== "linux")("same-node runtime refresh", () =>
       });
       const request = {
         leaseId,
-        profile: { provider: "aws", ttl: "24h", idleTimeout: "60m" },
+        profile: { provider: "aws", ttl: "24h", idleTimeout: "60m", desktop },
         deviceId: "device-test",
         platform: "linux",
         signal,
@@ -236,6 +272,13 @@ describe.skipIf(process.platform !== "linux")("same-node runtime refresh", () =>
       expect(launch.cli).toBe(path.join(packageRoot(nodeBootstrap.sha256), "openclaw.mjs"));
       expect(launch.args.slice(0, 4)).toEqual(["node", "run", "--resume-device", "device-test"]);
       expectPrivate(launch);
+      if (desktop) {
+        expect(launch.environment).toEqual({
+          DISPLAY: ":99",
+          DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/fixture/bus",
+          XDG_RUNTIME_DIR: "/run/fixture",
+        });
+      }
       expect(readText(stateDir, "saved-device")).toBe("device-test");
       expect(readText(stateDir, "setup-code")).toBe(savedSetup);
       expect(readText(sentinel)).toBe("uncommitted workspace stays here");
@@ -248,13 +291,14 @@ describe.skipIf(process.platform !== "linux")("same-node runtime refresh", () =>
       const upgradedPid = readText(pidFile);
       await resume(request);
       expect(readText(pidFile)).toBe(upgradedPid);
-      await resume({
+      const retainedRequest = {
         ...request,
-        retainedRuntimeOnly: true,
+        retainedRuntimeOnly: true as const,
         nodeBootstrapSha256: "0".repeat(64),
         openclawVersion: "future-version",
         runtime: { ...runtime, nodeBootstrap: { ...nodeBootstrap, sha256: "0".repeat(64) } },
-      });
+      };
+      await resume(retainedRequest);
       expect(readText(pidFile)).toBe(upgradedPid);
       expect(downloads).toHaveLength(3);
       await stop();
@@ -263,8 +307,12 @@ describe.skipIf(process.platform !== "linux")("same-node runtime refresh", () =>
       const canonical = path.join(runtimeRoot, "retained-runtime");
       fs.renameSync(digestPath, canonical);
       fs.symlinkSync(canonical, digestPath);
-      const saved = createNodeResumeFixture({ home, leaseId, nodeBootstrap: old, signal });
-      expect(saved.resume().status).toBe(0);
+      await resume({
+        ...request,
+        runtime: undefined,
+        nodeBootstrapSha256: old.sha256,
+        openclawVersion: old.openclawVersion,
+      });
       expect(await readLaunch(stateDir, receipts, signal)).toMatchObject({
         cli: path.join(canonical, "node_modules/openclaw/openclaw.mjs"),
       });
@@ -273,8 +321,15 @@ describe.skipIf(process.platform !== "linux")("same-node runtime refresh", () =>
       expect(readText(pidFile)).toBe(aliasedPid);
       expect(downloads).toHaveLength(3);
       await stop();
-      await resume({ ...request, retainedRuntimeOnly: true, openclawVersion: "future-version" });
-      await readLaunch(stateDir, receipts, signal);
+      await resume(retainedRequest);
+      const retainedLaunch = await readLaunch(stateDir, receipts, signal);
+      if (desktop) {
+        expect(retainedLaunch.environment).toEqual({
+          DISPLAY: ":99",
+          DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/fixture/bus",
+          XDG_RUNTIME_DIR: "/run/fixture",
+        });
+      }
       expect(fs.realpathSync(path.join(stateDir, "runtime"))).toBe(canonical);
       expect(readText(sentinel)).toBe("uncommitted workspace stays here");
       expect(downloads).toHaveLength(3);

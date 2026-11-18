@@ -29,8 +29,8 @@ export function createCrabboxNodeResumer(options: {
     };
     assertCurrent();
     const profile = parseCrabboxProfile(request.profile);
-    // Desktop launchers own their session environment and process receipts.
-    if (request.platform !== "linux" || profile.desktop) {
+    // Native macOS and Windows launchers retain their platform process owners.
+    if (request.platform !== "linux") {
       return;
     }
     assertCrabboxLeaseId(request.leaseId);
@@ -57,6 +57,7 @@ export function createCrabboxNodeResumer(options: {
               command: createCrabboxNodeResumeScript(
                 request,
                 phase === "inspect" ? "inspect" : "launch",
+                profile.desktop,
               ),
               forwardedEnv: undefined,
             };
