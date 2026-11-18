@@ -24,19 +24,40 @@ function resolveUpdateRecoveryTerminalOutcome(
   return undefined;
 }
 
+function unreadableCapture(directory: string, error: string) {
+  return {
+    directory,
+    status: "unreadable" as const,
+    nextAction:
+      "Preserve this capture and current state; inspect with openclaw update status --json before manual recovery.",
+    message: `Update capture at ${directory} is unreadable: ${error}. Retained files are unverified evidence for manual inspection.`,
+  };
+}
+
 /** Backup-local pending markers cannot override the update's durable terminal result. */
 export async function inspectUpdateRecoveryBackups(readRun = getUpdateRunAsync) {
   const evidence = await readUpdateRecoveryBackups();
-  const snapshots = evidence.filter((entry) => entry.kind === "sealed");
-  const forwardResolved = new Set<string>();
-  for (const { ref } of snapshots) {
-    if (await hasUpdateRecoveryForwardResolution(ref)) {
-      forwardResolved.add(ref.manifestSha256);
-    }
-  }
   const classified = await Promise.all(
-    snapshots.map(async ({ ref, manifest, outcome }) => {
-      if (forwardResolved.has(ref.manifestSha256)) {
+    evidence.map(async (entry) => {
+      if (entry.kind === "unreadable") {
+        return unreadableCapture(entry.directory, entry.error);
+      }
+      if (entry.kind === "incomplete") {
+        return {
+          directory: entry.directory,
+          status: "incomplete" as const,
+          nextAction: "openclaw update status --json",
+          message: `Update capture at ${entry.directory} is incomplete: no sealed manifest is available. Retained files are unverified evidence for manual inspection.`,
+        };
+      }
+      const { ref, manifest, outcome } = entry;
+      let forwardResolved: boolean;
+      try {
+        forwardResolved = await hasUpdateRecoveryForwardResolution(ref);
+      } catch (error) {
+        return unreadableCapture(ref.directory, formatErrorMessage(error));
+      }
+      if (forwardResolved) {
         return {
           ref,
           runId: manifest.runId,
@@ -97,12 +118,12 @@ export async function inspectUpdateRecoveryBackups(readRun = getUpdateRunAsync) 
   // Completed captures cannot compete with a failed capture for recovery. Count
   // only after all outcomes are known; unreadable and manual evidence stays conservative.
   const competing = classified.filter((entry) =>
-    entry.unchanged !== undefined
+    entry.status === undefined
       ? !entry.terminalOutcome && !entry.unchanged
-      : entry.status !== "forward-resolved",
+      : entry.status !== "forward-resolved" && entry.status !== "incomplete",
   );
   const inspected = classified.map((entry) => {
-    if (entry.unchanged === undefined) {
+    if (entry.status !== undefined) {
       return entry;
     }
     const { ref, manifest, outcome, terminalOutcome, unchanged } = entry;
@@ -134,15 +155,5 @@ export async function inspectUpdateRecoveryBackups(readRun = getUpdateRunAsync) 
       message: `Update recovery set ${ref.manifestPath}: ${reason}. ${status === "unresolved" ? `Retained original state requires manual inspection. ${nextAction}` : unchanged ? `Nothing needs recovery; retire it with \`${nextAction}\`.` : `Automatic restoration is refused; inspect with \`${nextAction}\`.`}${status === "ambiguous" ? " Resolve the recorded outcome before attempting recovery." : ""}`,
     };
   });
-  return [
-    ...inspected,
-    ...evidence
-      .filter((entry) => entry.kind === "incomplete")
-      .map(({ directory }) => ({
-        directory,
-        status: "incomplete" as const,
-        nextAction: "openclaw update status --json",
-        message: `Update capture at ${directory} is incomplete: no sealed manifest is available. Retained files are unverified evidence for manual inspection.`,
-      })),
-  ];
+  return inspected;
 }
