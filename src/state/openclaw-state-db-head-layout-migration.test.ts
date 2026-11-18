@@ -148,6 +148,7 @@ it.each(["runtime", "doctor"] as const)(
           "github_repository_publication_requests",
           "session_state_heads",
           "session_repository_workspaces",
+          "worker_session_placements",
           "worker_workspace_pending_results",
           "worker_environments",
           "acp_replay_events",
@@ -189,6 +190,7 @@ it.each(["runtime", "doctor"] as const)(
         db.prepare("SELECT wr FROM pragma_table_list WHERE name = 'session_state_heads'").get(),
       ).toEqual({ wr: 1 });
       expect(heads(db)).toEqual(before);
+      expect(db.prepare("SELECT * FROM worker_session_placements").all()).toEqual([]);
       expect(
         db.prepare("SELECT name FROM sqlite_schema WHERE name = 'local_head_updated'").get(),
       ).toEqual({ name: "local_head_updated" });
