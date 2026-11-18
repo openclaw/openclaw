@@ -45,12 +45,14 @@ extension OnboardingView {
 
     func maybeInstallCLI(for pageIndex: Int) {
         guard self.requiresLocalCLI else { return }
-        if pageIndex == cliPageIndex, cliExecutableReady {
+        // The AI page runs setup in the background; the CLI page only shows it after a failure.
+        let onSetupPage = pageIndex == cliPageIndex || pageIndex == aiPageIndex
+        if onSetupPage, cliExecutableReady {
             self.startExistingCLIActivationIfNeeded()
             return
         }
         guard Self.shouldAutoInstallCLI(
-            onCLIPage: pageIndex == cliPageIndex,
+            onCLIPage: onSetupPage,
             visible: onboardingVisible,
             statusKnown: cliStatusKnown,
             executableReady: cliExecutableReady,
@@ -230,6 +232,7 @@ extension OnboardingView {
     }
 
     private func finishCLIInstallProgress() {
+        if !self.cliInstalled { self.cliSetupFailed = true }
         self.installingCLI = false
         self.cliInstallPhase = .idle
         OnboardingController.shared.setWindowCloseEnabled(true)
@@ -265,6 +268,7 @@ extension OnboardingView {
         guard GatewayProcessManager.shared.installation == .managed else {
             self.cliStatusKnown = true
             self.cliStatus = GatewayProcessManager.Installation.ownershipFailure
+            self.cliSetupFailed = true
             return
         }
         let status = await CLIInstaller.status()

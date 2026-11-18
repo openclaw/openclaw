@@ -120,9 +120,11 @@ any local process connect; use it only on a fully trusted machine.
 </Step>
 <Step title="Prepare the local runtime">
 <a id="cli" />
-Wait for **Getting things ready** to finish. This step appears only when local
-runtime setup is needed. Connecting to an independently managed Gateway skips
-installation without taking over its CLI or service. See
+When local runtime setup is needed, it runs while you pick your AI: the bottom
+of the window shows **Setting up OpenClaw on this Mac…** until it finishes. If
+it fails, **Getting things ready** opens with the reason and **Try again**.
+Connecting to an independently managed Gateway skips installation without
+taking over its CLI or service. See
 [Gateway on macOS](/platforms/mac/bundled-gateway#automatic-setup) for runtime details.
 
 macOS may offer to install Command Line Tools when OpenClaw initializes Git in

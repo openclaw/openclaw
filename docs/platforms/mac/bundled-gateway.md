@@ -25,8 +25,8 @@ On a fresh local setup with no configuration or saved connections, opening the
 app shows **Setting up OpenClaw on this Mac**. The app prepares its runtime,
 starts the Gateway, and opens automatic setup in the dashboard.
 
-- Choose **Set up manually** to use native setup. Its **Getting things ready**
-  page prepares the same runtime when needed.
+- Native setup prepares the same runtime while you pick your AI. Its
+  **Getting things ready** page opens only when that setup fails.
 - Existing configurations keep their connection.
 - Setup needs no runtime download, Terminal, Homebrew, or administrator access.
   Connecting an AI provider may still need internet access.

@@ -62,6 +62,11 @@ extension OnboardingView {
             self.preservePageAfterCLIReadiness(wasInstalled: previous)
             self.updateMonitoring(for: self.activePageIndex)
         }
+        .onChange(of: cliSetupFailed) { _, failed in
+            // A failed background setup brings its progress page forward with the retry.
+            guard failed, let page = pageOrder.firstIndex(of: cliPageIndex) else { return }
+            withAnimation { self.currentPage = page }
+        }
         .onChange(of: GatewayProcessManager.shared.status) { _, status in
             self.reviseCLIActivationFailureIfGatewayReady(status)
         }
@@ -351,39 +356,15 @@ extension OnboardingView {
 
             Spacer()
 
-            HStack(spacing: 0) {
-                ForEach(0..<self.pageCount, id: \.self) { index in
-                    let isInstallLocked = (self.installingCLI || self.updatingGatewayHosting || self.aiSetup.isBusy) &&
-                        index != self.currentPage
-                    let isConnectionLocked = self.isConnectionSelectionBlocking &&
-                        index > (connectionLockIndex ?? 0)
-                    let isCLILocked = cliLockIndex != nil && !self.cliInstalled && index > (cliLockIndex ?? 0)
-                    // Dots must honor the same setup gate as Next: no jumping
-                    // past the AI page before a candidate passed its live test.
-                    let isAILocked = aiLockIndex != nil &&
-                        self.state.connectionMode != .unconfigured &&
-                        !self.aiSetup.connected &&
-                        index > (aiLockIndex ?? 0)
-                    let isFindLocked = findLockIndex != nil &&
-                        (!self.canAdvanceFromFind || !remoteGatewayDecision.canAdvance) &&
-                        index > (findLockIndex ?? 0)
-                    let isLocked = isInstallLocked || isConnectionLocked || isFindLocked || isCLILocked || isAILocked
-                    Button {
-                        withAnimation { self.currentPage = index }
-                    } label: {
-                        Circle()
-                            .fill(index == self.currentPage ? Color.accentColor : Color.gray.opacity(0.3))
-                            .frame(width: 8, height: 8)
-                            .frame(width: 28, height: 28)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(self.navigationTitle(for: self.pageOrder[index]))
-                    .accessibilityAddTraits(index == self.currentPage ? .isSelected : [])
-                    .help(self.navigationTitle(for: self.pageOrder[index]))
-                    .disabled(isLocked)
-                    .opacity(isLocked ? 0.3 : 1)
-                }
+            if self.activePageIndex == self.aiPageIndex, self.requiresLocalCLI {
+                self.macSetupStatus
+            } else {
+                self.pageDots(
+                    connectionLockIndex: connectionLockIndex,
+                    findLockIndex: findLockIndex,
+                    cliLockIndex: cliLockIndex,
+                    aiLockIndex: aiLockIndex,
+                    remoteGatewayDecision: remoteGatewayDecision)
             }
 
             Spacer()
@@ -400,6 +381,67 @@ extension OnboardingView {
         .padding(.horizontal, 28)
         .padding(.bottom, 13)
         .frame(minHeight: 60, alignment: .bottom)
+    }
+
+    private func pageDots(
+        connectionLockIndex: Int?,
+        findLockIndex: Int?,
+        cliLockIndex: Int?,
+        aiLockIndex: Int?,
+        remoteGatewayDecision: RemoteGatewayAdvanceDecision) -> some View
+    {
+        HStack(spacing: 0) {
+            ForEach(0..<self.pageCount, id: \.self) { index in
+                let isInstallLocked = (self.installingCLI || self.updatingGatewayHosting || self.aiSetup.isBusy) &&
+                    index != self.currentPage
+                let isConnectionLocked = self.isConnectionSelectionBlocking &&
+                    index > (connectionLockIndex ?? 0)
+                let isCLILocked = cliLockIndex != nil && !self.cliInstalled && index > (cliLockIndex ?? 0)
+                // Dots must honor the same setup gate as Next: no jumping
+                // past the AI page before a candidate passed its live test.
+                let isAILocked = aiLockIndex != nil &&
+                    self.state.connectionMode != .unconfigured &&
+                    !self.aiSetup.connected &&
+                    index > (aiLockIndex ?? 0)
+                let isFindLocked = findLockIndex != nil &&
+                    (!self.canAdvanceFromFind || !remoteGatewayDecision.canAdvance) &&
+                    index > (findLockIndex ?? 0)
+                let isLocked = isInstallLocked || isConnectionLocked || isFindLocked || isCLILocked || isAILocked
+                Button {
+                    withAnimation { self.currentPage = index }
+                } label: {
+                    Circle()
+                        .fill(index == self.currentPage ? Color.accentColor : Color.gray.opacity(0.3))
+                        .frame(width: 8, height: 8)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(self.navigationTitle(for: self.pageOrder[index]))
+                .accessibilityAddTraits(index == self.currentPage ? .isSelected : [])
+                .help(self.navigationTitle(for: self.pageOrder[index]))
+                .disabled(isLocked)
+                .opacity(isLocked ? 0.3 : 1)
+            }
+        }
+    }
+
+    /// Mac setup runs while the user picks an AI; one line reports it until it is done.
+    private var macSetupStatus: some View {
+        HStack(spacing: 8) {
+            if self.cliInstalled {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Text("OpenClaw is set up on this Mac")
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Setting up OpenClaw on this Mac…")
+            }
+        }
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .combine)
     }
 
     private func navigationTitle(for pageIndex: Int) -> LocalizedStringKey {

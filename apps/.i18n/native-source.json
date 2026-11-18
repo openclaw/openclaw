@@ -2028,6 +2028,8 @@
     {"path":"apps/macos/Sources/OpenClaw/OnboardingView+Layout.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.411cfcaa490a8fb6","source":"Authenticate with your Gateway"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingView+Layout.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.587ef8721c9620e2","source":"Connect your AI"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingView+Layout.swift","kind":"ui-call","surface":"apple","id":"native.apple.9c60d46ba33836b2","source":"Back"},
+    {"path":"apps/macos/Sources/OpenClaw/OnboardingView+Layout.swift","kind":"ui-call","surface":"apple","id":"native.apple.b6d0b764cb04df8b","source":"OpenClaw is set up on this Mac"},
+    {"path":"apps/macos/Sources/OpenClaw/OnboardingView+Layout.swift","kind":"ui-call","surface":"apple","id":"native.apple.20de9c5432248a9a","source":"Setting up OpenClaw on this Mac…"},
     {"path":"apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift","kind":"ui-call","surface":"apple","id":"native.apple.58c648321c0a4a26","source":"Allow Always"},
     {"path":"apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift","kind":"ui-call","surface":"apple","id":"native.apple.c2a09cabe64e2ad2","source":"Allow Once"},
     {"path":"apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift","kind":"ui-call","surface":"apple","id":"native.apple.addaba7d7374d016","source":"Cancel"},

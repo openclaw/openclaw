@@ -169,7 +169,8 @@ struct OnboardingViewSmokeTests {
 
             #expect(!view.cliInstalled)
             // A fresh install's Get started means this Mac, so it skips the hosting choice (1).
-            let localOrder = (requiresSetup ? [0, 1, 2, 3, 5, 9] : [0, 1, 3, 5, 9])
+            // Mac setup runs behind the AI page; its own page (2) appears only after a failed attempt.
+            let localOrder = [0, 1, 3, 5, 9]
                 .filter { scenario != "fresh-recommended" || $0 != 1 }
             // Remote setup visits the remote connection page (4) before AI setup.
             let expectedOrder = scenario == "remote" ? [0, 1, 4, 3, 9] : localOrder

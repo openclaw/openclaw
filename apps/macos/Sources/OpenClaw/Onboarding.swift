@@ -667,6 +667,8 @@ struct OnboardingView: View {
     @State var monitoringDiscovery = false
     @State var cliExecutableReady = false
     @State var cliInstalled = false
+    /// Mac setup runs behind the AI picker; its progress page appears only once an attempt fails.
+    @State var cliSetupFailed = false
     @State var cliStatusKnown = false
     @State var onboardingVisible = false
     @State var cliInstallLocation: String?
@@ -761,9 +763,13 @@ struct OnboardingView: View {
         if self.finishState.connectionCompletion != nil { return [0, 1, 4, 9] }
         return Self.pageOrder(
             for: self.selectedConnectionMode,
-            requiresCLIInstall: self.requiresLocalCLI && !self.cliInstalled,
+            requiresCLIInstall: self.showsCLIPage(installed: self.cliInstalled),
             joinedClaw: self.primaryIsJoinedClaw,
             hostingChoice: self.hostingChoiceShown)
+    }
+
+    func showsCLIPage(installed: Bool) -> Bool {
+        self.requiresLocalCLI && !installed && self.cliSetupFailed
     }
 
     var primaryIsJoinedClaw: Bool {
@@ -797,7 +803,7 @@ struct OnboardingView: View {
     func preservePageAfterCLIReadiness(wasInstalled: Bool) {
         let previous = Self.pageOrder(
             for: self.selectedConnectionMode,
-            requiresCLIInstall: self.requiresLocalCLI && !wasInstalled,
+            requiresCLIInstall: self.showsCLIPage(installed: wasInstalled),
             hostingChoice: self.hostingChoiceShown)
         self.currentPage = Self.pageCursor(preserving: self.requestedPage, from: previous, to: self.pageOrder)
     }
