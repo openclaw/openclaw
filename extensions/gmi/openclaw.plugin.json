@@ -8,6 +8,11 @@
   },
   "enabledByDefault": true,
   "providers": ["gmi", "gmi-cloud", "gmicloud"],
+  "providerNames": {
+    "gmi": "GMI Cloud",
+    "gmi-cloud": "GMI Cloud",
+    "gmicloud": "GMI Cloud"
+  },
   "providerAuthAliases": {
     "gmi-cloud": "gmi",
     "gmicloud": "gmi"

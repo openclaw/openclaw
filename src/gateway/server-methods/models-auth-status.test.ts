@@ -970,6 +970,24 @@ describe("models.authStatus", () => {
     expect(authScope.profileIds).toEqual(["opencode-go:default"]);
   });
 
+  it("names a provider from its plugin manifest instead of echoing the id", async () => {
+    setPreparedMetadataSnapshot(
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "lmstudio",
+            origin: "bundled",
+            providers: ["lmstudio"],
+            providerNames: { lmstudio: "LM Studio" },
+          },
+        ],
+      }),
+    );
+    mockHealthProvider({ provider: "lmstudio", status: "static", profiles: [] });
+
+    expect((await readAuthStatus()).providers[0]?.displayName).toBe("LM Studio");
+  });
+
   it("still returns providers when usage fetch fails", async () => {
     mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
     mocks.loadProviderUsageSummary.mockRejectedValue(new Error("timeout"));

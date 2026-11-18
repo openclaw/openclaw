@@ -13,6 +13,14 @@
     "qwen-token-plan",
     "bailian-token-plan"
   ],
+  "providerNames": {
+    "qwen": "Qwen Cloud",
+    "qwencloud": "Qwen Cloud",
+    "modelstudio": "Qwen Cloud",
+    "dashscope": "Qwen Cloud",
+    "qwen-token-plan": "Qwen Token Plan",
+    "bailian-token-plan": "Alibaba Token Plan"
+  },
   "providerEndpoints": [
     {
       "endpointClass": "modelstudio-native",

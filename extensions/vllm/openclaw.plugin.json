@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["vllm"],
+  "providerNames": {
+    "vllm": "vLLM"
+  },
   "modelCatalog": {
     "discovery": {
       "vllm": "refreshable"

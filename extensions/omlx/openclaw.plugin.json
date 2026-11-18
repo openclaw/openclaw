@@ -4,6 +4,9 @@
   "activation": { "onStartup": false },
   "enabledByDefault": true,
   "providers": ["omlx"],
+  "providerNames": {
+    "omlx": "oMLX"
+  },
   "providerCatalogEntry": "./provider-discovery.ts",
   "modelCatalog": { "discovery": { "omlx": "refreshable" } },
   "providerRequest": {

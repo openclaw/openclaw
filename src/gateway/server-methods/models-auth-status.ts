@@ -25,6 +25,10 @@ import {
 import { refreshRuntimeAuthProfileStoreSources } from "../../agents/auth-profiles/runtime-snapshots.js";
 import type { RuntimeAuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import {
+  resolveProviderDisplayName,
+  type ProviderDisplayNameSources,
+} from "../../agents/provider-display-name.js";
 import { signInNeedsApiKeyForVoice } from "../../agents/voice-sign-in-policy.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
@@ -112,9 +116,9 @@ function buildExpiry(
   return { at: normalizedExpiresAt, remainingMs, label: formatRemainingShort(remainingMs) };
 }
 
-function providerDisplayName(provider: string): string {
+function providerDisplayName(provider: string, sources: ProviderDisplayNameSources): string {
   const usageId = resolveUsageProviderId(provider);
-  return (usageId && providerUsageLabel(usageId)) || provider;
+  return (usageId && providerUsageLabel(usageId)) || resolveProviderDisplayName(provider, sources);
 }
 
 type ModelAuthStatusRollup = Pick<AuthProviderHealth, "status" | "expiresAt" | "remainingMs">;
@@ -393,6 +397,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         return;
       }
       cfg = preparedSnapshot.config;
+      const nameSources = { config: cfg, owners: preparedSnapshot.metadataSnapshot.owners };
       const { agentId, agentDir } = preparedSnapshot;
       const store: RuntimeAuthProfileStore = preparedSnapshot.authStore;
       const {
@@ -470,7 +475,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         providers.push({
           provider: prov.provider,
           authProvider: authProviderKey,
-          displayName: providerDisplayName(prov.provider),
+          displayName: providerDisplayName(prov.provider, nameSources),
           status:
             apiKey && !hasRefreshableProfile && rollup.status === "missing"
               ? "static"
@@ -556,7 +561,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         } else {
           providers.push({
             provider,
-            displayName: providerDisplayName(provider),
+            displayName: providerDisplayName(provider, nameSources),
             status: "ok",
             profiles: [],
             nativeAuth: mode.display,

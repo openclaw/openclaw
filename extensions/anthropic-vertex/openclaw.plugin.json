@@ -8,6 +8,9 @@
   },
   "enabledByDefault": true,
   "providers": ["anthropic-vertex"],
+  "providerNames": {
+    "anthropic-vertex": "Anthropic Vertex"
+  },
   "providerCatalogEntry": "./provider-discovery.ts",
   "syntheticAuthRefs": ["anthropic-vertex"],
   "nonSecretAuthMarkers": ["gcp-vertex-credentials"],

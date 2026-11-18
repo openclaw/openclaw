@@ -11,6 +11,10 @@
     "volcengine",
     "volcengine-plan"
   ],
+  "providerNames": {
+    "volcengine": "Volcengine",
+    "volcengine-plan": "Volcengine Plan"
+  },
   "setup": {
     "providers": [
       {

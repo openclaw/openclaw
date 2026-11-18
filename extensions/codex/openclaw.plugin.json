@@ -2,6 +2,9 @@
   "id": "codex",
   "categories": ["agent-runtimes"],
   "providers": ["codex"],
+  "providerNames": {
+    "codex": "Codex"
+  },
   "syntheticAuthRefs": ["codex"],
   "providerCatalogEntry": "./provider-discovery.ts",
   "backupResources": [

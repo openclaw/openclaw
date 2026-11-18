@@ -10,6 +10,9 @@
   "providers": [
     "particle"
   ],
+  "providerNames": {
+    "particle": "Particle"
+  },
   "providerEndpoints": [
     {
       "endpointClass": "particle-native",

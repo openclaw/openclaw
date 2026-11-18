@@ -9,6 +9,10 @@
   },
   "enabledByDefault": true,
   "providers": ["ollama", "ollama-cloud"],
+  "providerNames": {
+    "ollama": "Ollama",
+    "ollama-cloud": "Ollama Cloud"
+  },
   "providerCatalogEntry": "./provider-discovery.ts",
   "providerRequest": {
     "providers": {

@@ -12,6 +12,9 @@
   "providers": [
     "abliteration"
   ],
+  "providerNames": {
+    "abliteration": "Abliteration"
+  },
   "setup": {
     "providers": [
       {

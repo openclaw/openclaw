@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["fireworks"],
+  "providerNames": {
+    "fireworks": "Fireworks"
+  },
   "setup": {
     "providers": [
       {

@@ -7,6 +7,10 @@
   "enabledByDefault": true,
   "providerCatalogEntry": "./provider-discovery.ts",
   "providers": ["byteplus", "byteplus-plan"],
+  "providerNames": {
+    "byteplus": "BytePlus",
+    "byteplus-plan": "BytePlus Plan"
+  },
   "setup": {
     "providers": [
       {

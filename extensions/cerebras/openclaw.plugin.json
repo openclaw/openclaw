@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["cerebras"],
+  "providerNames": {
+    "cerebras": "Cerebras"
+  },
   "modelPricing": {
     "providers": {
       "cerebras": { "cerebras": { "provider": "cerebras" } }

@@ -9,6 +9,9 @@
   "providers": [
     "moonshot"
   ],
+  "providerNames": {
+    "moonshot": "Moonshot AI"
+  },
   "providerAuthAliases": {
     "moonshotai": "moonshot",
     "moonshot-ai": "moonshot"

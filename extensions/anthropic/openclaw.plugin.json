@@ -21,6 +21,10 @@
   },
   "enabledByDefault": true,
   "providers": ["anthropic"],
+  "providerNames": {
+    "anthropic": "Anthropic",
+    "claude-cli": "Claude CLI"
+  },
   "providerUsageAuthEnvVars": {
     "anthropic": ["ANTHROPIC_ADMIN_KEY", "ANTHROPIC_ADMIN_API_KEY"]
   },

@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["litellm"],
+  "providerNames": {
+    "litellm": "LiteLLM"
+  },
   "modelCatalog": {
     "discovery": {
       "litellm": "runtime"

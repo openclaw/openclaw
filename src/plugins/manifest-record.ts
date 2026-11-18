@@ -385,6 +385,7 @@ export function buildPluginManifestRecord(params: {
     channels: params.manifest.channels ?? [],
     channelAccountKeyPolicies: params.manifest.channelAccountKeyPolicies,
     providers: params.manifest.providers ?? [],
+    providerNames: params.manifest.providerNames,
     managesOwnAvailability: params.manifest.managesOwnAvailability,
     providerDiscoverySource: resolveCatalogEntry("providerCatalogEntry"),
     capabilityCatalogSource:

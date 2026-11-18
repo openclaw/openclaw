@@ -42,6 +42,9 @@
     }
   },
   "providers": ["amazon-bedrock-mantle"],
+  "providerNames": {
+    "amazon-bedrock-mantle": "Amazon Bedrock Mantle"
+  },
   "modelCatalog": {
     "discovery": {
       "amazon-bedrock-mantle": "refreshable"

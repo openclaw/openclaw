@@ -11,6 +11,9 @@
   "providers": [
     "baseten"
   ],
+  "providerNames": {
+    "baseten": "Baseten"
+  },
   "providerRequest": {
     "providers": {
       "baseten": {

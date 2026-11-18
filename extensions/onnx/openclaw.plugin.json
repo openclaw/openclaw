@@ -204,6 +204,9 @@
   "providers": [
     "onnx"
   ],
+  "providerNames": {
+    "onnx": "ONNX"
+  },
   "nonSecretAuthMarkers": [
     "onnx-local"
   ]

@@ -102,6 +102,9 @@
   "providers": [
     "typesafe"
   ],
+  "providerNames": {
+    "typesafe": "TypeSafe AI"
+  },
   "modelCatalog": {
     "providers": {
       "typesafe": {

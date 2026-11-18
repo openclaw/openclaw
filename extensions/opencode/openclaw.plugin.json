@@ -5,6 +5,9 @@
   "providerCatalogEntry": "./provider-discovery.ts",
   "enabledByDefault": true,
   "providers": ["opencode"],
+  "providerNames": {
+    "opencode": "OpenCode Zen"
+  },
   "providerEndpoints": [
     {
       "endpointClass": "opencode-native",

@@ -8,6 +8,10 @@
   "enabledByDefault": true,
   "legacyPluginIds": ["minimax-portal-auth"],
   "providers": ["minimax", "minimax-portal"],
+  "providerNames": {
+    "minimax": "MiniMax",
+    "minimax-portal": "MiniMax Portal"
+  },
   "modelCatalog": {
     "discovery": {
       "minimax": "runtime",

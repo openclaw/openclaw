@@ -53,6 +53,8 @@ export type PluginMetadataSnapshotOwnerMaps = {
   providerEndpoints?: readonly PluginManifestProviderEndpoint[];
   providerRequests?: ReadonlyMap<string, PluginManifestProviderRequestProvider>;
   providersManagingOwnAvailability?: ReadonlySet<string>;
+  /** Manifest display name per provider id a plugin declares; the first declaring plugin wins. */
+  providerNames?: ReadonlyMap<string, string>;
 };
 
 type PluginMetadataSnapshotMetrics = {

@@ -7,6 +7,9 @@
   "enabledByDefault": true,
   "managesOwnAvailability": true,
   "providers": ["kilocode"],
+  "providerNames": {
+    "kilocode": "Kilo Gateway"
+  },
   "modelPricing": {
     "providers": {
       "kilocode": {

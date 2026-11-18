@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["cloudflare-ai-gateway"],
+  "providerNames": {
+    "cloudflare-ai-gateway": "Cloudflare AI Gateway"
+  },
   "modelPricing": {
     "providers": {
       "cloudflare-ai-gateway": {

@@ -11,6 +11,9 @@
   },
   "enabledByDefault": true,
   "providers": ["longcat"],
+  "providerNames": {
+    "longcat": "LongCat"
+  },
   "providerRequest": {
     "providers": {
       "longcat": {

@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["copilot-proxy"],
+  "providerNames": {
+    "copilot-proxy": "Copilot Proxy"
+  },
   "autoEnableWhenConfiguredProviders": ["copilot-proxy"],
   "providerAuthChoices": [
     {

@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["requesty"],
+  "providerNames": {
+    "requesty": "Requesty"
+  },
   "setup": {
     "providers": [
       {

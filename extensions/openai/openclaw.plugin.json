@@ -17,6 +17,9 @@
   },
   "enabledByDefault": true,
   "providers": ["openai"],
+  "providerNames": {
+    "openai": "OpenAI"
+  },
   "providerUsageAuthEnvVars": {
     "openai": ["OPENAI_ADMIN_KEY"]
   },

@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["chutes"],
+  "providerNames": {
+    "chutes": "Chutes"
+  },
   "modelPricing": {
     "providers": {
       "chutes": { "chutes": { "provider": "chutes" } }

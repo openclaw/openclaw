@@ -12,6 +12,9 @@
   "providers": [
     "levanto"
   ],
+  "providerNames": {
+    "levanto": "Levanto Sage"
+  },
   "contracts": {
     "decisionProviders": [
       "levanto"

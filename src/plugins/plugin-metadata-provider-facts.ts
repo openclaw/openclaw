@@ -165,9 +165,25 @@ export function buildPluginMetadataProviderFacts(
     ]),
   );
   const providerAuthContributions: PluginProviderAuthContribution[] = [];
+  const providerNames = new Map<string, string>();
   const providersManagingOwnAvailability = new Set<string>();
   const selectedProviders = new Set<string>();
   for (const plugin of plugins) {
+    // A plugin names only the ids it declares, so one plugin cannot rename another's provider.
+    const declared = new Set(
+      [
+        ...plugin.providers,
+        ...plugin.cliBackends,
+        ...Object.keys(plugin.modelCatalog?.providers ?? {}),
+        ...(plugin.contracts?.decisionProviders ?? []),
+      ].map(normalizeProviderId),
+    );
+    for (const [rawProvider, name] of Object.entries(plugin.providerNames ?? {})) {
+      const provider = normalizeProviderId(rawProvider);
+      if (declared.has(provider) && !providerNames.has(provider)) {
+        providerNames.set(provider, name);
+      }
+    }
     if (enabledPluginIds?.has(plugin.id)) {
       for (const rawProvider of plugin.providers) {
         const provider = normalizeProviderId(rawProvider);
@@ -204,6 +220,7 @@ export function buildPluginMetadataProviderFacts(
     providerEndpoints,
     providerRequests,
     providerAuthContributions,
+    providerNames,
     providersManagingOwnAvailability,
     modelIdNormalizationPolicies: collectManifestModelIdNormalizationPolicies(plugins),
     providerAuthAliases: buildPluginMetadataProviderAuthAliases(plugins),

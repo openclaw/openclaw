@@ -7,6 +7,9 @@
   },
   "enabledByDefault": true,
   "providers": ["vydra"],
+  "providerNames": {
+    "vydra": "Vydra"
+  },
   "setup": {
     "providers": [
       {

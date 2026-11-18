@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["synthetic"],
+  "providerNames": {
+    "synthetic": "Synthetic"
+  },
   "modelCatalog": {
     "discovery": {
       "synthetic": "refreshable"

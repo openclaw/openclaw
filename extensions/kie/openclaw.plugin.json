@@ -48,6 +48,9 @@
   "providers": [
     "kie"
   ],
+  "providerNames": {
+    "kie": "Kie AI"
+  },
   "videoGenerationProviderMetadata": {
     "kie": {
       "authSignals": [

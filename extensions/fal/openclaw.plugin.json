@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["fal"],
+  "providerNames": {
+    "fal": "fal"
+  },
   "setup": {
     "providers": [
       {

@@ -7,6 +7,9 @@
   },
   "enabledByDefault": true,
   "providers": ["mistral"],
+  "providerNames": {
+    "mistral": "Mistral"
+  },
   "providerEndpoints": [
     {
       "endpointClass": "mistral-public",

@@ -65,7 +65,6 @@ import {
   type ResolvedRequestAuth,
 } from "./model-registry-sources.js";
 import type { ProviderConfigInput } from "./provider-config.js";
-import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
 
 export type { ProviderConfigInput } from "./provider-config.js";
 export type { ResolvedRequestAuth } from "./model-registry-sources.js";
@@ -684,19 +683,6 @@ export class ModelRegistry {
     }
 
     return { configured: true, source: "models_json_key" };
-  }
-
-  getProviderDisplayName(provider: string): string {
-    const registeredProvider = this.registeredProviders.get(provider);
-    const oauthProvider = this.authStorage.getOAuthProviders().find((p) => p.id === provider);
-
-    return (
-      registeredProvider?.name ??
-      registeredProvider?.oauth?.name ??
-      oauthProvider?.name ??
-      BUILT_IN_PROVIDER_DISPLAY_NAMES[provider] ??
-      provider
-    );
   }
 
   async getApiKeyForProvider(provider: string): Promise<string | undefined> {

@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["together"],
+  "providerNames": {
+    "together": "Together AI"
+  },
   "providerRequest": {
     "providers": {
       "together": {

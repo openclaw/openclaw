@@ -1,4 +1,6 @@
 import { takeGraphemes } from "../lib/graphemes.ts";
+// Bundled plugin manifests own these names; regenerate with `pnpm ui:provider-names:gen`.
+import BUNDLED_PROVIDER_NAMES from "./provider-names.generated.json" with { type: "json" };
 
 const PROVIDER_ICON_NAMES = new Set([
   "abacus",
@@ -123,48 +125,12 @@ const PROVIDER_ICON_ALIASES: Readonly<Record<string, string>> = {
   "z-ai": "zai",
 };
 
-// Brand display names for provider ids whose title-cased id reads wrong.
-const PROVIDER_DISPLAY_LABELS: Readonly<Record<string, string>> = {
+// ACP harness ids whose agent is not named like the provider that shares its id.
+const ACP_HARNESS_LABELS: Readonly<Record<string, string>> = {
   "acp-copilot": "GitHub Copilot CLI",
   "acp-kilocode": "Kilo Code (ACP)",
+  "acp-opencode": "OpenCode (ACP)",
   "acp-qwen": "Qwen Code (ACP)",
-  anthropic: "Anthropic",
-  byteplus: "BytePlus",
-  "byteplus-plan": "BytePlus Plan",
-  "claude-cli": "Claude CLI",
-  clawrouter: "ClawRouter",
-  deepinfra: "DeepInfra",
-  deepseek: "DeepSeek",
-  fal: "fal",
-  "github-copilot": "GitHub Copilot",
-  google: "Google",
-  "google-gemini-cli": "Gemini CLI",
-  "google-vertex": "Google Vertex AI",
-  huggingface: "Hugging Face",
-  kie: "Kie AI",
-  "liquid-ai": "Liquid AI",
-  litellm: "LiteLLM",
-  "llama-cpp": "llama.cpp",
-  lmstudio: "LM Studio",
-  longcat: "LongCat",
-  minimax: "MiniMax",
-  "minimax-portal": "MiniMax Portal",
-  moonshot: "Moonshot AI",
-  novita: "NovitaAI",
-  nvidia: "NVIDIA",
-  onnx: "ONNX",
-  openai: "OpenAI",
-  opencode: "OpenCode",
-  "opencode-go": "OpenCode Go",
-  openrouter: "OpenRouter",
-  qwen: "Qwen Cloud",
-  sglang: "SGLang",
-  "tencent-tokenhub": "Tencent TokenHub",
-  "tencent-tokenplan": "Tencent TokenPlan",
-  typesafe: "TypeSafe AI",
-  vllm: "vLLM",
-  xai: "xAI",
-  zai: "Z.AI",
 };
 
 // ACPX native harnesses publish their catalogs under `acp-<agent>` provider ids.
@@ -192,8 +158,11 @@ export function providerDisplayLabel(
   if (presentation?.providerName) {
     return presentation.providerName;
   }
-  if (Object.hasOwn(PROVIDER_DISPLAY_LABELS, provider)) {
-    return PROVIDER_DISPLAY_LABELS[provider]!;
+  const names: Readonly<Record<string, string>> = BUNDLED_PROVIDER_NAMES;
+  for (const table of [names, ACP_HARNESS_LABELS]) {
+    if (Object.hasOwn(table, provider)) {
+      return table[provider]!;
+    }
   }
   const acpAgent = ACP_HARNESS_PROVIDER.exec(provider)?.[1];
   return acpAgent ? `${providerDisplayLabel(acpAgent)} (ACP)` : formatRawProviderLabel(provider);

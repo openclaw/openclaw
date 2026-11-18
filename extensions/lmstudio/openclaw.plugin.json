@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["lmstudio"],
+  "providerNames": {
+    "lmstudio": "LM Studio"
+  },
   "providerCatalogEntry": "./provider-discovery.ts",
   "modelCatalog": {
     "discovery": {

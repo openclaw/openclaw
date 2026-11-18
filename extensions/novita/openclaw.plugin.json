@@ -6,6 +6,11 @@
   },
   "enabledByDefault": true,
   "providers": ["novita", "novita-ai", "novitaai"],
+  "providerNames": {
+    "novita": "NovitaAI",
+    "novita-ai": "NovitaAI",
+    "novitaai": "NovitaAI"
+  },
   "contracts": {
     "videoGenerationProviders": ["novita"]
   },

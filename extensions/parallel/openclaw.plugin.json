@@ -71,6 +71,9 @@
   "providers": [
     "parallel"
   ],
+  "providerNames": {
+    "parallel": "Parallel"
+  },
   "providerEndpoints": [
     {
       "endpointClass": "parallel-native",
