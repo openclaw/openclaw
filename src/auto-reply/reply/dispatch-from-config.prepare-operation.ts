@@ -14,6 +14,7 @@ import {
 } from "../../plugins/conversation-binding.js";
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveCommandAuthorizationAsync } from "../command-auth.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
@@ -34,6 +35,7 @@ import {
 } from "./dispatch-from-config.transcript.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
+import { waitForReplyBarrierSettlement } from "./reply-run-registry.state.js";
 import { extractShortModelName } from "./response-prefix-template.js";
 import { assertPreparedConversationBindingRouteCurrent } from "./session-conversation-binding.js";
 
@@ -70,6 +72,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
   if (!fastAbortResolver || !formatAbortReplyTextResolver) {
     throw new Error("abort runtime unavailable");
   }
+  const admissionTicket = params.replyOptions?.[REPLY_ADMISSION_TICKET];
   const finishFastCommand = async (fast: {
     payload?: ReplyPayload;
     reason: "fast_abort" | "before_dispatch_handled";
@@ -145,9 +148,27 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
         const sent = turnLedger.sendQueued("final", fast.payload);
         queuedFinal = sent.queued;
         if (sent.queued && sent.outcome) {
+          // The ticket already covers Stop's cancellation. Keep it past dispatch
+          // return until the direct acknowledgement is delivered and mirrored.
+          const stopSettlement =
+            fast.reason === "fast_abort" && metadata && admissionTicket
+              ? createDeferredCore()
+              : undefined;
+          if (stopSettlement) {
+            admissionTicket?.holdUntil(
+              waitForReplyBarrierSettlement(
+                stopSettlement.promise,
+                dispatcher.resolveFollowupAdmissionBarrierTimeoutPolicy?.(),
+              ),
+            );
+          }
           registerReplyDispatcherSettledTask(dispatcher, async () => {
-            if ((await sent.outcome) === "delivered") {
-              await mirrorDeliveredReplyToTranscript({ metadata: delivered(), cfg });
+            try {
+              if ((await sent.outcome) === "delivered") {
+                await mirrorDeliveredReplyToTranscript({ metadata: delivered(), cfg });
+              }
+            } finally {
+              stopSettlement?.resolve();
             }
           });
         }
@@ -208,7 +229,6 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
   }
   // Own the session before plugin-bound handlers or message hooks can perform
   // work. Fast abort, fast approval, and inbound dedupe remain ahead of this gate.
-  const admissionTicket = params.replyOptions?.[REPLY_ADMISSION_TICKET];
   if (
     !state.activeRunSafeCommandTurn &&
     admissionTicket &&

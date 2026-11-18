@@ -5,7 +5,10 @@ import {
 } from "../../shared/keyed-fifo-lease.js";
 
 export const REPLY_ADMISSION_TICKET = Symbol("openclaw.replyAdmissionTicket");
-type ReplyAdmissionTicket = KeyedFifoLease;
+type ReplyAdmissionTicket = KeyedFifoLease & {
+  /** Keep this source's existing place until its bounded settlement finishes. */
+  holdUntil(settled: Promise<void>): void;
+};
 export type ReplyOptionsWithAdmissionTicket = {
   [REPLY_ADMISSION_TICKET]?: ReplyAdmissionTicket;
 };
@@ -18,5 +21,30 @@ const replyAdmissionTickets = createKeyedFifoLeaseRegistry(
 export function reserveReplyAdmissionTicket(
   sessionKeys: ReadonlyArray<string | undefined>,
 ): ReplyAdmissionTicket | undefined {
-  return replyAdmissionTickets.reserve(normalizeStringifiedEntries(sessionKeys));
+  const lease = replyAdmissionTickets.reserve(normalizeStringifiedEntries(sessionKeys));
+  if (!lease) {
+    return undefined;
+  }
+  let hold: Promise<void> | undefined;
+  let released = false;
+  return {
+    wait: (signal) => lease.wait(signal),
+    holdUntil(settled) {
+      if (!released) {
+        hold ??= settled;
+      }
+    },
+    release() {
+      if (released) {
+        return;
+      }
+      released = true;
+      if (hold) {
+        const release = () => lease.release();
+        void hold.then(release, release);
+      } else {
+        lease.release();
+      }
+    },
+  };
 }
