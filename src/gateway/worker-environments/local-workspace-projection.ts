@@ -421,10 +421,18 @@ async function probeUnchangedLocalWorkspace(
   targets: readonly ("canonical" | "projection")[],
   markProbe?: (target: "canonical" | "projection") => void,
 ) {
+  const row = store.get();
+  if (
+    !row ||
+    row.session_id !== owner.sessionId ||
+    row.lifecycle_revision !== owner.lifecycleRevision
+  ) {
+    return undefined;
+  }
   return await projectionOperations(
     owner,
     store,
-    store.get(),
+    row,
     await localWorkspaceProjectionPath(owner),
   ).probeUnchanged(targets, markProbe);
 }

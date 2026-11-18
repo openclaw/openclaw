@@ -156,7 +156,7 @@ import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { createConnection } from "node:net";
-import { loadavg } from "node:os";
+import { homedir, loadavg } from "node:os";
 import path from "node:path";
 import { monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
@@ -1342,6 +1342,8 @@ process.env = createGatewayBenchEnv(path.join(output, "home"), configPath, {
   startupTrace: false,
   caseEnv: {
     ...(dockerHost ? { DOCKER_HOST: dockerHost } : {}),
+    // Native controls must inspect the same rootless engine as the fixture guest.
+    ...(nativeTurns ? { HOME: homedir() } : {}),
     OPENCLAW_STATE_DIR: path.join(output, "state"),
     OPENCLAW_SKIP_CHANNELS: "1",
     DEVELOPER_DIR: "/Applications/Xcode.app/Contents/Developer",
@@ -1758,6 +1760,7 @@ measurement: try {
           guestName,
           "--user",
           `${process.getuid()}:${process.getgid()}`,
+          "--userns=keep-id",
           "--network",
           "none",
           "--cap-drop",
@@ -1970,6 +1973,10 @@ measurement: try {
         const ended = performance.now();
         const usedCpu = process.cpuUsage(commandCpu);
         const paused = pauseDurationsMs.slice(beforePauses);
+        assert(
+          !nativeTurns || paused.length > 0,
+          "Native reconcile must pause its registered guest",
+        );
         finalizations.push({
           changed: true,
           durationMs: ended - began,

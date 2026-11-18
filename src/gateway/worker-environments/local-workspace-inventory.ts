@@ -50,8 +50,6 @@ export function createLocalWorkspaceManifestReader(params: {
     if (
       !row?.baseline_ref ||
       !row.tree_root_digest ||
-      row.session_id !== params.owner.sessionId ||
-      row.lifecycle_revision !== params.owner.lifecycleRevision ||
       row.pending_ref ||
       row.journal_json ||
       row.paused_runtimes_json
