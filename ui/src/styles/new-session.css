@@ -1076,7 +1076,7 @@ span.new-session-page__select {
 /* Keep the keyboard's visible canvas separate from its panned layout extent. */
 :root[data-shell-keyboard] .new-session-page__scroll {
   /* Even a roomy keyboard canvas needs space for the identity, tray, and Send. */
-  --new-session-draft-height-limit: max(48px, 25cqh);
+  --new-session-draft-height-limit: 25cqh;
 
   container: new-session / size;
   max-height: var(--shell-visible-height);
@@ -1115,13 +1115,9 @@ span.new-session-page__select {
     min-height: 0;
   }
 
-  .new-session-page__composer .agent-chat__composer-combobox {
-    min-height: 0;
-  }
-
   .new-session-page__composer .new-session-page__message {
     min-height: 48px;
-    max-height: min(10lh, max(48px, 25cqh));
+    max-height: min(10lh, 25cqh);
   }
 
   .new-session-page .agent-chat__welcome-identity {

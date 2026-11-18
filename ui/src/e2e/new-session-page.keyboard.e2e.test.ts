@@ -77,12 +77,15 @@ suite.define(() => {
     // Exercise the roomy layout just above its 500px breakpoint as well as at 600px.
     for (const height of [501, 600]) {
       const offsetTop = 874 - height;
-      await page.evaluate(({ height, offsetTop }) => {
-        for (const [key, value] of Object.entries({ height, offsetTop })) {
-          Object.defineProperty(window.visualViewport!, key, { configurable: true, value });
-        }
-        window.visualViewport!.dispatchEvent(new Event("resize"));
-      }, { height, offsetTop });
+      await page.evaluate(
+        (dimensions) => {
+          for (const [key, value] of Object.entries(dimensions)) {
+            Object.defineProperty(window.visualViewport!, key, { configurable: true, value });
+          }
+          window.visualViewport!.dispatchEvent(new Event("resize"));
+        },
+        { height, offsetTop },
+      );
       await editor.fill("A longer first prompt.\n".repeat(20));
       await waitForLayoutSettled(page, ".new-session-page__composer");
       expect((await editor.boundingBox())!.height).toBeGreaterThan(48);
