@@ -133,7 +133,6 @@ async function executeProbe({ ctx }: HeadlessParams, condition = false) {
 }
 
 it("borrows the current Gateway plugins for detached conditions before and after reload", async () => {
-  vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
   const loadGateway = async (cfg: OpenClawConfig) => {
     const input = { config: cfg, workspaceDir: state.workspaceDir };
     const metadata = loadPluginMetadataSnapshot(input);
@@ -158,21 +157,28 @@ it("borrows the current Gateway plugins for detached conditions before and after
       loadPluginRegistry: loadPreparedInboundPluginRegistry,
       runHeadless: (params) => executeProbe(params, true),
     });
-  const expectGeneration = (runtime: Runtime, generation: number) =>
-    expect(
-      runInDetachedAsyncContext(() =>
-        runScheduled(() =>
-          runtime.evaluateTrigger({
-            ...invocation("detached-condition", "main", ["cold_probe"]),
-            script: "return { fire: true }",
-          }),
+  const expectGeneration = async (runtime: Runtime, generation: number) => {
+    // Freeze only evaluation budgets; Gateway startup needs the broker's readiness retry timers.
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    try {
+      await expect(
+        runInDetachedAsyncContext(() =>
+          runScheduled(() =>
+            runtime.evaluateTrigger({
+              ...invocation("detached-condition", "main", ["cold_probe"]),
+              script: "return { fire: true }",
+            }),
+          ),
         ),
-      ),
-    ).resolves.toMatchObject({
-      kind: "evaluated",
-      fire: true,
-      state: { state: { artifact: "built", generation, calls: 1 } },
-    });
+      ).resolves.toMatchObject({
+        kind: "evaluated",
+        fire: true,
+        state: { state: { artifact: "built", generation, calls: 1 } },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  };
   try {
     const runtime = createRuntime(config);
     await expectGeneration(runtime, 1);
