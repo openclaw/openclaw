@@ -442,7 +442,13 @@ it("preflights activation backup separately from candidate copy capacity", async
     }
   }
   await expect(fs.stat(backupDirectory)).rejects.toMatchObject({ code: "ENOENT" });
-  expect(await readFiles(f.files)).toEqual(before);
+  // Compare bytes directly; deep equality enumerates every byte in these large buffers.
+  const after = await readFiles(f.files);
+  expect(after).toHaveLength(before.length);
+  for (const [index, bytes] of after.entries()) {
+    expect(bytes).toHaveLength(before[index]!.length);
+    expect(bytes.equals(before[index]!)).toBe(true);
+  }
 });
 
 it("copies and verifies both databases within capacity despite a sub-floor caller timeout", async () => {

@@ -1,0 +1,2 @@
+2
+# Await lazy search readiness before reply navigation assertions under fake timers.

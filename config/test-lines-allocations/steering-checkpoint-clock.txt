@@ -1,0 +1,2 @@
+# Observe the real worker checkpoint before advancing the steering delivery clock.
+15

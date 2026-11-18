@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { renameSync, writeFileSync } from "node:fs";
 import { writeFile, readFile, rm, rename } from "node:fs/promises";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
 import type { VaultAccess } from "./access.js";
@@ -266,6 +267,48 @@ it("cross-process publishers fence competing edits and never lose the winner", a
   expect(winner.state).toBe("published");
   const current = (await f.service.record({ id: created.id }, f.owner)).record;
   expect(current!.hash).toBe(winner.hash);
+  expect(current!.revision).toBe(2);
+});
+
+it("a scan overtaken by publication cannot record a false deletion", async () => {
+  const f = await fixture();
+  const created = await f.service.save_page(draft(), f.owner);
+  const original = (await f.service.record({ id: created.id }, f.owner)).record;
+  const input = edit(original, { body: "Published winner" });
+  const writer = new KnowledgeStorage(f.config, f.store, (stage) => {
+    if (stage === "after-accept") {
+      throw new Error("pause accepted publication");
+    }
+  });
+  class InterleavedStorage extends KnowledgeStorage {
+    beforeObserve?: () => void;
+    protected override transaction<T>(label: string, run: (db: DatabaseSync) => T): T {
+      if (label === "knowledge.observe") {
+        this.beforeObserve?.();
+      }
+      return super.transaction(label, run);
+    }
+  }
+  const reader = new InterleavedStorage(f.config, f.store);
+  const full = path.join(f.root, "private", created.path);
+  const displaced = full + ".displaced";
+  await expect(
+    reader.run(f.access(), async (vault) => {
+      await expect(writer.save(input, f.access(), "agent")).rejects.toThrow(
+        "pause accepted publication",
+      );
+      // Reproduce the scan seeing a publisher's displacement, then waiting for
+      // that publisher's SQLite transaction before recording its observation.
+      await rename(full, displaced);
+      reader.beforeObserve = () => {
+        renameSync(displaced, full);
+        writer.resume(f.access(), input.requestId);
+      };
+      return vault.scan();
+    }),
+  ).rejects.toThrow(/identity|unavailable/);
+  const current = (await f.service.record({ id: created.id }, f.owner)).record;
+  expect(current!.body).toBe("Published winner");
   expect(current!.revision).toBe(2);
 });
 

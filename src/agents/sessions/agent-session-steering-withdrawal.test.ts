@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { bindMessageInjectionAdmission } from "../../auto-reply/reply/message-injection-authority.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../sessions/session-controller.contracts.js";
@@ -11,6 +11,7 @@ import { testing } from "../../sessions/session-controller.test-support.js";
 import { extractFirstTextBlock } from "../../shared/chat-message-content.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
+import * as codeModeExecutor from "../code-mode-executor.js";
 import { applyCodeModeCatalog } from "../code-mode.js";
 import {
   createCodeModeHarness,
@@ -107,6 +108,18 @@ it.each(["single cell", "separate cells"] as const)(
     const release = [createDeferredCore(), createDeferredCore()];
     const accepted = createDeferredCore();
     let polls = 0;
+    const parked = createDeferredCore();
+    const execute = codeModeExecutor.runCodeModeExecutor;
+    const execution = vi
+      .spyOn(codeModeExecutor, "runCodeModeExecutor")
+      .mockImplementation(async (...args) => {
+        const result = await execute(...args);
+        if (result.status === "waiting" && polls === 2) {
+          parked.resolve();
+        }
+        return result;
+      });
+    onTestFinished(() => execution.mockRestore());
     const poll = pluginToolWithExecute("poll_work", "Poll synthetic work", async () => {
       const index = polls++;
       if (index > 1) {
@@ -194,6 +207,8 @@ it.each(["single cell", "separate cells"] as const)(
       release[0]!.resolve();
       await awaitGateBeforeSettlement(started[1]!.promise, active, "Second poll never started");
       if (polling === "single cell") {
+        // Do not advance the worker checkpoint watchdog along with the delivery deadline.
+        await awaitGateBeforeSettlement(parked.promise, active, "Second poll never parked");
         // Nested poll completion is not a native agent-loop checkpoint. The actual
         // default delivery deadline withdraws input while the same cell continues.
         expect(requests).toBe(1);

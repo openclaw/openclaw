@@ -1,0 +1,2 @@
+# Keep the auth deadline clock independent of tsx disk-cache maintenance immediates.
+1

@@ -419,6 +419,8 @@ it.each([
   toggleTranscriptSearch(props.paneId);
   rerender();
   transcript.start();
+  // The lazy search chunk loads on the real module queue, not the flash timer clock.
+  await vi.dynamicImportSettled();
   const input = await waitForSolid(
     () => requireElement(searchContainer, "input") as HTMLInputElement,
   );

@@ -192,7 +192,8 @@ it.each(["credential resolution", "runtime auth exchange", "AWS runtime auth exc
 it.each([false, true])(
   "settles slow runtime auth inside the budget (cancelled: %s)",
   async (cancelled) => {
-    vi.useFakeTimers();
+    // Keep tsx disk-cache maintenance immediates outside the auth deadline clock.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     onTestFinished(() => {
       vi.useRealTimers();
     });
