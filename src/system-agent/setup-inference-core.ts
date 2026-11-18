@@ -145,6 +145,7 @@ export type SetupInferenceStatus = "ok" | SetupInferenceFailureStatus;
 
 export type ActivateSetupInferenceResult =
   | (Extract<VerifySetupInferenceResult, { ok: true }> & {
+      /** The summary first; later lines are notices (audit or context-window warnings). */
       lines: string[];
       modelName?: string;
       gatewayRestartRequired?: true;

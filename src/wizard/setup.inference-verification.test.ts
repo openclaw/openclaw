@@ -180,7 +180,10 @@ describe("offerLiveModelVerification", () => {
     );
     await expect(run()).resolves.toMatchObject({ verified: true, modelRef: "local/nemo" });
     expect(mocks.verify).toHaveBeenCalledWith(expect.objectContaining({ candidateSetup: true }));
-    expect(prompter.note).toHaveBeenCalledWith(expect.stringContaining(warning), expect.any(String));
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining(warning),
+      expect.any(String),
+    );
   });
 
   it("reports when a repair candidate persisted its verified config", async () => {

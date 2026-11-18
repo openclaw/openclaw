@@ -495,6 +495,10 @@ async function verifyAndActivateCandidate(
   if (evidence.failure) {
     return failure(evidence.failure);
   }
+  if (evidence.warning && params.prompter) {
+    await params.prompter.note(evidence.warning, "Context window");
+    throwIfSetupInferenceCancelled(params);
+  }
   const savedCredential = staged.authProfileId
     ? (await loadAuthProfileStoreWithoutExternalProfilesAsync(ctx.agentDir)).profiles[
         staged.authProfileId
@@ -702,6 +706,6 @@ async function verifyAndActivateCandidate(
     ...(modelName ? { modelName } : {}),
     ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
     latencyMs: verification.latencyMs,
-    lines: evidence.warning ? [...lines, evidence.warning] : lines,
+    lines: evidence.warning && !params.prompter ? [...lines, evidence.warning] : lines,
   };
 }

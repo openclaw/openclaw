@@ -53,6 +53,34 @@ it.each([
   },
 );
 
+it.each([
+  [["Inference verified: local/nemo"], undefined],
+  [
+    [
+      "Inference verified: local/nemo",
+      "local/nemo has an effective context window of 8192 tokens.",
+    ],
+    "local/nemo has an effective context window of 8192 tokens.",
+  ],
+])("shows activation notices with a successful key (%j)", async (lines, warning) => {
+  const { context } = createHarness("main");
+  const request = createGatewayRequestMock(async () => ({
+    ok: true,
+    modelRef: "local/nemo",
+    lines,
+  }));
+  const result = await activateAddedKey({
+    context,
+    client: createTestGatewayClient(request),
+    agentId: "main",
+    profileId: "local:manual-api-key",
+    provider: "local",
+  });
+  expect(result.message.kind).toBe("success");
+  expect(result.message.warning).toBe(warning);
+  expect(result.model).toMatchObject({ provider: "local", id: "nemo" });
+});
+
 it("retains the diagnostic when activation cannot be checked", async () => {
   const { context } = createHarness("main");
   const client = createTestGatewayClient(async () => {
