@@ -161,6 +161,17 @@ function sources(secondDate = "2026-02-01") {
   ];
 }
 
+it("aggregates all supplied rows before selecting the page", () => {
+  const result = overview(sources(), { offset: 1, limit: 1, sort: "recent" });
+  expect(result.sessions).toMatchObject([{ key: "family", usage: { totalTokens: 30 } }]);
+  expect(result.totals).toMatchObject({
+    totalTokens: 60,
+    totalCost: 6,
+    missingCostEntries: 3,
+    missingCostByModel: { "provider::a/model": 2, "provider/a::model": 1 },
+  });
+});
+
 it("keeps excluded days' costs and providers in the calendar while summaries follow selection", () => {
   const result = overview(sources("2026-02-03"), {
     selectedDays: ["2026-02-01"],

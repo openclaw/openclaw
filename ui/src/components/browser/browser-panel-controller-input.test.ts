@@ -637,6 +637,31 @@ describe("BrowserPanel capture and input ownership", () => {
     },
   );
 
+  it("reconciles the selected address from the captured history document", async () => {
+    vi.useFakeTimers();
+    stubScreenshotMedia();
+    const currentUrl = "https://example.test/current";
+    const previousUrl = "https://example.test/previous";
+    const { controller } = scenario("tab-a", currentUrl, {
+      "/act": (envelope) => {
+        const fn = typeof envelope.body?.fn === "string" ? envelope.body.fn : "";
+        return fn.includes("history.go") ? { result: true } : metrics(previousUrl, "Previous");
+      },
+      "/screenshot": () => ({ path: "/fresh.png", targetId: "raw-a", url: previousUrl }),
+    });
+    controller.tabs = [remoteTab("tab-a", "raw-a", "Current", currentUrl)];
+
+    controller.goHistory(-1);
+    await flushBrowserResponses();
+    await vi.advanceTimersByTimeAsync(350);
+    await flushBrowserResponses();
+    await vi.runAllTimersAsync();
+    await flushBrowserResponses();
+
+    expect(controller.tabs.find((tab) => tab.id === "tab-a")?.url).toBe(previousUrl);
+    expect(controller.urlDraft).toBe(previousUrl);
+  });
+
   it("scrolls at the remote point under the wheel pointer", async () => {
     vi.useFakeTimers();
     const scroll = vi.fn();
