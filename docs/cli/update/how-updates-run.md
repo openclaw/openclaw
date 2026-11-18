@@ -1565,6 +1565,37 @@ the sentinel.
   </Step>
 </Steps>
 
+### Git checkouts that run from releases
+
+On macOS and Linux, a Git checkout whose Gateway service the update owns runs from
+releases instead of being rebuilt in place. Each release is a detached worktree of the
+checkout under `<stateDir>/git-install/releases/`, and the link
+`<stateDir>/git-install/lib/node_modules/openclaw` names the selected one. An update
+builds the target as a new release, switches the link, and arms a trial in
+`releases/.trial`. The service starts through `<stateDir>/git-install/openclaw-launcher.mjs`,
+which switches the link back to the trial's previous release after two failed starts.
+The trial ends once the Gateway on the new release is ready.
+
+The link alone does not show what serves. An update can fail after the link switched
+but before any Gateway started the new release. That leaves the link on a release that
+never served, with its trial still armed. The next plain `openclaw update` builds on the
+trial's previous release, the one that last served:
+
+- If the target is the release the link already names, the update reuses it and finishes
+  its activation: it restarts the Gateway into it, verifies it, and ends the trial.
+- If the target is newer, the link goes back to the serving release, the new release goes
+  on trial with the serving release as its fallback, and the superseded release is
+  removed. A release the launcher already started, or that a process still holds, is
+  kept for the normal release collection instead.
+- If the serving release is the target, the link goes back to it and the update reports
+  that the installation is current.
+
+A trial's fallback is therefore always a release that served, and the serving release is
+never removed while it is a fallback. The update result includes a
+`git-release-placement` note that names both releases and says what the update did. This
+runs in the installed updater, the checkout's own build. An updater built before this
+change still treats the link's release as the serving one.
+
 ## Plugin sync details
 
 On stable updates, a configured OpenClaw-owned official plugin with no install

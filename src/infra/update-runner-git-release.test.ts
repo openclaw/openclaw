@@ -17,6 +17,8 @@ const target = vi.hoisted(() => ({
   runningRoot: "",
   /** The commit the update selects; defaults to the checkout's HEAD. */
   revision: undefined as string | undefined,
+  /** Candidate builds the target selection started. */
+  builds: 0,
 }));
 // mock-isolation: the build runs as a fixture; the real preflight would install and compile a checkout.
 vi.mock("./update-runner-git-preflight.js", () => ({
@@ -50,12 +52,16 @@ vi.mock("./update-runner-git-target.js", async (importOriginal) => ({
     beforeRuntimeVerified: boolean;
     release: { prefix: string; worktreeDir: string };
     retainCleanup: (cleanup: () => Promise<boolean>) => boolean;
+    beforeCandidate: (revision: string) => Promise<void>;
   }) => {
     target.beforeRuntimeVerified.push(params.beforeRuntimeVerified);
     const revision = target.revision ?? params.beforeSha;
     if (params.beforeRuntimeVerified && revision === params.beforeSha) {
       return { status: "skipped", reason: "already-current" };
     }
+    // Admission runs before the candidate's worktree, install and build.
+    await params.beforeCandidate(revision);
+    target.builds += 1;
     await git(params.gitRoot, "worktree", "add", "--detach", params.release.worktreeDir, revision);
     // The caller removes a build it does not place, as with the real preflight.
     params.retainCleanup(async () => {
@@ -91,6 +97,7 @@ afterEach(async () => {
   target.runtimeVerified = false;
   target.runningRoot = "";
   target.revision = undefined;
+  target.builds = 0;
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
@@ -262,8 +269,9 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
    * The install an update leaves when it fails after the link switched but before any
    * Gateway started the new release: the link names release 2.0.0, which never served,
    * and `.trial` is armed with `attempts: 0` and falls back to 1.0.0, which serves.
+   * With `pending`, a `--no-restart` update left 2.0.0 for the next service start instead.
    */
-  async function halfSwitchedInstall() {
+  async function halfSwitchedInstall(left: { pending?: boolean } = {}) {
     target.runtimeVerified = true;
     const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "git-release-left-")));
     roots.push(dir);
@@ -297,7 +305,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     const serving = await place("1.0.0");
     await publishGitRelease({ prefix, releaseRoot: serving, trial: false });
     const unserved = await place("2.0.0");
-    await publishGitRelease({ prefix, releaseRoot: unserved, trial: true });
+    await publishGitRelease({ prefix, releaseRoot: unserved, trial: true, ...left });
     const trialFile = path.join(prefix, PACKAGE_RELEASES_DIR, GIT_RELEASE_TRIAL);
     const resolveLink = (link: string) => fs.realpath(path.resolve(path.dirname(slot), link));
     const releaseVersion = async (root: string) =>
@@ -350,6 +358,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
       startGateway: () =>
         spawnSync(process.execPath, [path.join(prefix, GIT_RELEASE_LAUNCHER), "gateway"], {
           encoding: "utf8",
+          timeout: 30_000,
         }),
     };
   }
@@ -357,6 +366,9 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
 
   it("finishes activating a placed release that never served instead of reporting it current", async () => {
     const install = await halfSwitchedInstall();
+    // The fallback was deselected days ago; age alone must not remove it.
+    const old = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    await fs.utimes(path.resolve(install.serving, "../../.."), old, old);
 
     const result = await install.update(install.commits["2.0.0"]!);
 
@@ -364,12 +376,17 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     expect(result.before).toMatchObject({ sha: install.commits["1.0.0"], version: "1.0.0" });
     expect(result.after).toMatchObject({ sha: install.commits["2.0.0"], version: "2.0.0" });
     // The placed release is reused, not rebuilt, and its trial still falls back to 1.0.0.
+    expect(target.builds).toBe(0);
     expect(await fs.realpath(install.slot)).toBe(install.unserved);
     expect(await install.releaseCount()).toBe(2);
     expect(await install.readTrial()).toEqual({
       target: install.unserved,
       previous: install.serving,
     });
+    const note = result.steps.find((entry) => entry.name === "git-release-placement");
+    expect(note?.advisory?.message).toBe(
+      `Release ${path.basename(path.resolve(install.unserved, "../../.."))} was placed by an earlier update and has not passed its trial. Release ${path.basename(path.resolve(install.serving, "../../.."))} last passed a trial and stays the fallback. It is the target, so this update finishes activating it instead of rebuilding it.`,
+    );
   });
 
   // The launcher runs under Node; Bun does not run it.
@@ -377,11 +394,6 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     "falls back to the serving release and discards a superseded release that never served",
     async () => {
       const install = await halfSwitchedInstall();
-      // Both were deselected days ago; age alone must not remove the fallback.
-      const old = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
-      for (const root of [install.serving, install.unserved]) {
-        await fs.utimes(path.resolve(root, "../../.."), old, old);
-      }
 
       const result = await install.update(install.commits["3.0.0"]!);
 
@@ -405,6 +417,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
   it.each([
     [
       "started by the launcher",
+      "1.0.0",
       async (install: HalfSwitchedInstall) => {
         const trial = JSON.parse(await fs.readFile(install.trialFile, "utf8")) as object;
         await fs.writeFile(install.trialFile, JSON.stringify({ ...trial, attempts: 1 }));
@@ -413,21 +426,37 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     ],
     [
       "leased by a running process",
+      "2.0.0",
       async (install: HalfSwitchedInstall) => acquirePackageReleaseLease(install.unserved),
     ],
-  ])("keeps a superseded release that was %s", async (_label, mark) => {
+  ])("keeps a superseded release that was %s", async (_label, serving, mark) => {
     const install = await halfSwitchedInstall();
     const release = await mark(install);
     try {
       const result = await install.update(install.commits["3.0.0"]!);
 
       expect(result.status, JSON.stringify(result.steps)).toBe("ok");
+      // A process running from it means it serves; a counted start alone does not.
+      expect(result.before).toMatchObject({ version: serving });
       // It may have served, so its files stay; it never becomes the fallback either.
       await expect(fs.access(install.unserved)).resolves.toBeUndefined();
       expect(await install.readTrial()).toMatchObject({ previous: install.serving });
     } finally {
       release();
     }
+  });
+
+  it("discards a release a --no-restart update left for the next start once superseded", async () => {
+    const install = await halfSwitchedInstall({ pending: true });
+
+    const result = await install.update(install.commits["3.0.0"]!);
+
+    expect(result.status, JSON.stringify(result.steps)).toBe("ok");
+    expect(await install.readTrial()).toEqual({
+      target: await fs.realpath(install.slot),
+      previous: install.serving,
+    });
+    await expect(fs.access(install.unserved)).rejects.toThrow();
   });
 
   it("puts the link back on the serving release when that release is the target", async () => {
