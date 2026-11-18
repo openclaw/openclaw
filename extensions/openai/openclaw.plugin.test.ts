@@ -128,7 +128,8 @@ it("labels and orders OpenAI authentication choices", () => {
   for (const id of ["openai", "openai-device-code"]) {
     expect(choice(id)).not.toHaveProperty("assistantVisibility");
   }
-  expect(choice("openai-device-code")?.onboardingFeatured).toBe(true);
+  expect(choice("openai-token-sharing")?.onboardingFeatured).toBe(true);
+  expect(choice("openai-device-code")?.onboardingFeatured).not.toBe(true);
   expect(choice("openai")?.onboardingFeatured).not.toBe(true);
   expect(choices.find((entry) => entry.provider === "openai" && entry.method === "api-key")).toBe(
     choice("openai-api-key"),
@@ -137,7 +138,7 @@ it("labels and orders OpenAI authentication choices", () => {
     choices
       .toSorted((a, b) => (a.assistantPriority ?? 0) - (b.assistantPriority ?? 0))
       .map((entry) => entry.choiceId),
-  ).toEqual(["openai-device-code", "openai", "openai-token-sharing", "openai-api-key"]);
+  ).toEqual(["openai-token-sharing", "openai-device-code", "openai", "openai-api-key"]);
 });
 
 it("keeps Spark suppression conditional on direct OpenAI API rows", () => {

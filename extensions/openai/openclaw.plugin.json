@@ -516,8 +516,7 @@
       "assistantPriority": -40,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "Codex login, Sign in with ChatGPT, or API key",
-      "onboardingFeatured": true
+      "groupHint": "Codex login, Sign in with ChatGPT, or API key"
     },
     {
       "provider": "openai",
@@ -529,10 +528,11 @@
       "choiceLabel": "Sign in with ChatGPT",
       "choiceHint": "Use your ChatGPT plan for eligible Responses API requests",
       "docsUrl": "https://docs.openclaw.ai/providers/openai/authentication",
-      "assistantPriority": 0,
+      "assistantPriority": -50,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "Codex login, Sign in with ChatGPT, or API key"
+      "groupHint": "Codex login, Sign in with ChatGPT, or API key",
+      "onboardingFeatured": true
     },
     {
       "provider": "openai",

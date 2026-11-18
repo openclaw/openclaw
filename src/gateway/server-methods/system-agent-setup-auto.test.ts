@@ -91,6 +91,14 @@ const chatGptSignIn = {
   brandId: "openai",
   label: "ChatGPT",
   kind: "device-code" as const,
+  featured: false,
+};
+// OpenAI lists Sign in with ChatGPT first; Codex setup must still offer Codex login.
+const siwcSignIn = {
+  id: "openai-token-sharing",
+  brandId: "openai",
+  label: "Sign in with ChatGPT",
+  kind: "oauth" as const,
   featured: true,
 };
 const separateSignIn = { authOptionId: chatGptSignIn.id, label: chatGptSignIn.label };
@@ -101,7 +109,7 @@ function detection(
 ): SetupInferenceDetection {
   return {
     candidates,
-    authOptions: [chatGptSignIn],
+    authOptions: [siwcSignIn, chatGptSignIn],
     manualProviders: [],
     recommendedInstalls: [],
     unavailableCandidates: [],
@@ -374,8 +382,8 @@ describe("Gateway automatic inference setup", () => {
               id: "openai-codex",
               brandId: "openai",
               label: "ChatGPT",
-              kind: "oauth",
-              featured: true,
+              kind: "device-code",
+              featured: false,
             },
           ],
         }),

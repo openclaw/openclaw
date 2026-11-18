@@ -18,6 +18,10 @@ Choose your OpenAI authentication method based on the access you need:
 - **API key:** use OpenAI Platform models with your project's permissions and
   API billing.
 
+Setup lists Sign in with ChatGPT first. Codex login stays available under the
+other sign-in options, and choosing the Codex runtime during setup still signs
+in with Codex login.
+
 ## Compare capabilities
 
 |                                                        | Sign in with ChatGPT                                      | Codex login (browser OAuth or device code)                  | OpenAI Platform API key                                    |

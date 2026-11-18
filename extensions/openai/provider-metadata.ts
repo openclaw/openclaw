@@ -46,7 +46,6 @@ export function createOpenAIProviderMetadata(): ProviderPlugin {
           wizard: {
             choiceId: "openai-device-code",
             assistantPriority: -40,
-            onboardingFeatured: true,
           },
         },
         {
@@ -54,9 +53,12 @@ export function createOpenAIProviderMetadata(): ProviderPlugin {
           kind: "oauth",
           label: "Sign in with ChatGPT",
           hint: "Use your ChatGPT plan for eligible Responses API requests",
+          // New setups offer Sign in with ChatGPT first: it reaches the public
+          // Responses API, not the Codex backend. Codex login stays available.
           wizard: {
             choiceId: "openai-token-sharing",
-            assistantPriority: 0,
+            assistantPriority: -50,
+            onboardingFeatured: true,
           },
         },
         {

@@ -184,6 +184,16 @@ export function listSetupInferenceAuthOptions(
   });
 }
 
+/**
+ * The OpenAI sign-in a native Codex setup starts. OpenAI lists Sign in with
+ * ChatGPT first for new setups; choosing Codex still signs in with Codex login.
+ */
+export function findCodexSignInOption<T extends Pick<SetupInferenceAuthOption, "brandId" | "kind">>(
+  options: readonly T[],
+): T | undefined {
+  return options.find((option) => option.brandId === "openai" && option.kind === "device-code");
+}
+
 export function listSetupInferenceEnableOptions(
   choices: readonly ProviderAuthChoiceMetadata[],
 ): SetupInferenceAuthOption[] {

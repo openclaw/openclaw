@@ -22,7 +22,10 @@ import type { RuntimeEnv } from "../runtime.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { createQuickstartNotePrompter } from "./setup-apply.js";
-import { listSetupInferenceAuthOptions } from "./setup-inference-auth-options.js";
+import {
+  findCodexSignInOption,
+  listSetupInferenceAuthOptions,
+} from "./setup-inference-auth-options.js";
 import {
   SetupInferenceActivationIndeterminateError,
   throwIfSetupInferenceCancelled,
@@ -276,7 +279,9 @@ export async function stageCodexCandidate(
         (choice) =>
           choice.brandId === "openai" && (choice.kind === "oauth" || choice.kind === "device-code"),
       );
-      const choice = options.find((option) => option.id === ctx.params.authChoice) ?? options[0];
+      const choice =
+        options.find((option) => option.id === ctx.params.authChoice) ??
+        findCodexSignInOption(options);
       if (!choice) {
         return {
           error:
