@@ -226,7 +226,6 @@ extensions/workboard/src/lifecycle-sync.ts	8
 extensions/workboard/src/session-link.ts	2
 extensions/workboard/src/sessions-board.ts	7
 extensions/workboard/src/store-card-helpers.ts	7
-extensions/workboard/src/store-evidence.ts	4
 extensions/workboard/src/store-notifications.ts	2
 extensions/workboard/src/store-workflow.ts	1
 extensions/workboard/src/store.ts	20
