@@ -149,6 +149,9 @@ export async function runLocalWorkspaceProjection<T>(
           diagnostics,
         )
       : undefined;
+  if (options.reason === "checkpoint") {
+    await operations.prehash();
+  }
   await pause();
   let accepted = false;
   try {

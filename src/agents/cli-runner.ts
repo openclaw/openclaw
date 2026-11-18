@@ -80,6 +80,18 @@ import {
 
 const log = createSubsystemLogger("agents/cli-runner");
 
+// A turn that ends without a final answer cannot authorize replaying the tool effects it completed.
+function stopFallbackAfterToolEffects(
+  error: unknown,
+  output: Pick<CliOutput, "toolSummary" | "acceptedSessionSpawns">,
+): void {
+  const completedToolEffects =
+    (output.toolSummary?.calls ?? 0) > 0 || hasAcceptedSessionSpawn(output.acceptedSessionSpawns);
+  if (completedToolEffects && error instanceof Error) {
+    recordModelFallbackStop(error);
+  }
+}
+
 /** Checks whether a Claude CLI session binding has reached its transcript file. */
 export async function isCliBindingFlushed(
   sessionId: string | undefined,
@@ -410,6 +422,7 @@ async function runPreparedCliAgentOwned(
     ).catch(async (error: unknown) => {
       const refused = readCliStreamRefusalOutput(error);
       if (refused) {
+        stopFallbackAfterToolEffects(error, refused);
         await persistStoppedFirstCliSession(error, refused, cliSessionIdToUse);
       }
       throw error;
@@ -464,13 +477,7 @@ async function runPreparedCliAgentOwned(
         "empty_response",
         cliFailoverContext,
       );
-      if (
-        (output.toolSummary?.calls ?? 0) > 0 ||
-        hasAcceptedSessionSpawn(output.acceptedSessionSpawns)
-      ) {
-        // Missing a final answer cannot authorize replaying completed tool effects.
-        recordModelFallbackStop(error);
-      }
+      stopFallbackAfterToolEffects(error, output);
       throw attachCliMessagingDeliveryEvidence(error, output);
     }
     const assistantTexts = assistantText ? [assistantText] : [];
@@ -591,7 +598,9 @@ async function runPreparedCliAgentOwned(
           // Dispatch owns source-reply transcript mirrors and their idempotency keys.
           // Persisting them here would duplicate the same visible assistant reply.
           text: sourceReplyWasDelivered ? "" : (nativeFinal?.text ?? output.text),
-          ...(nativeFinal ? { nativeIdentity: nativeFinal.identity } : {}),
+          ...(nativeFinal
+            ? { nativeIdentity: nativeFinal.identity, interimReplies: output.interimNativeReplies }
+            : {}),
           modelId: context.modelId,
           usage: pricedUsage.usage,
           stopReason: resolveCliAssistantStopReason(output),

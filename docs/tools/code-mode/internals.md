@@ -69,6 +69,14 @@ has a hook wrapper. The reply watchdog honors the deadline published by the
 tool's execution owner, so a silent command can reach its own exec timeout and
 return its error to guest code without losing the reply at the quiet-tool window.
 
+When the reply watchdog stops a turn during a bridge wait, the Code Mode
+`exec` or `wait` entry in `pendingTools` includes `awaiting`: at most three
+outstanding bridge operations, each with `kind: "bridge"`, the fixed bridge
+`method`, `deadlineAtMs` (or `null` when unpublished), and `elapsedMs`.
+This diagnostic reads the cell's existing pending frontier and execution-owner
+deadlines. It records no arguments, results, paths, or guest content and does
+not change watchdog timing.
+
 Completed nested calls persist as bounded display-only activity, retaining
 their original parent and invocation ids across history reloads. Provider replay
 contains only the actual model calls; child activity adds no synthetic model turns.

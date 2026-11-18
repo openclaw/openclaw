@@ -20,7 +20,7 @@ import type { ReplyPayload } from "../types.js";
 import { isBangCommandInput } from "./bash-command-input.js";
 import { buildDisabledCommandReply } from "./command-gates.js";
 import { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
-import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { stripMentions } from "./mentions.js";
 import type { resolveElevatedPermissions } from "./reply-elevated.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
@@ -146,9 +146,9 @@ export async function handleBashChatCommand(params: {
     };
   }
 
-  const stripped = stripStructuralPrefixes(params.ctx.commandText ?? "");
+  const raw = params.ctx.commandText ?? "";
   const rawBody = (
-    params.isGroup ? stripMentions(stripped, params.ctx, params.cfg, agentId) : stripped
+    params.isGroup ? stripMentions(raw, params.ctx, params.cfg, agentId) : raw
   ).trim();
   const request = parseBashRequest(rawBody);
   if (!request) {
