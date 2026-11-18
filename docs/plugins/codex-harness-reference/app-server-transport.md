@@ -29,8 +29,10 @@ when you intentionally want a different executable.
 ### Newer installed Codex
 
 New OpenAI models can require a newer Codex version than your OpenClaw release
-bundles. For example, GPT-6.2 requires Codex `0.166.0` or newer; the current
-`0.169.0` bundle already meets that minimum.
+bundles. For GPT-6.2, [the issue report](https://github.com/openclaw/openclaw/issues/200972)
+cites Codex `0.166.0` as the minimum. Its successful test used `0.169.1`,
+so it does not establish the exact minimum. The current `0.169.0` bundle
+exceeds the reported minimum.
 
 To get a newer compatible Codex between OpenClaw releases, install it on the
 Gateway host:

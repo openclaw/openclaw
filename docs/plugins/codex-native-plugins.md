@@ -56,8 +56,9 @@ explicit invalidation, and failed-catalog handling remain unchanged.
   OpenClaw visualizations use the `show_widget` tool on supported surfaces.
 
 New OpenAI models can require a newer Codex version than your OpenClaw release
-bundles. GPT-6.2 requires Codex `0.166.0` or newer, which the current `0.169.0`
-bundle already satisfies. For upgrades between OpenClaw releases, follow
+bundles. The reporter-supplied minimum for GPT-6.2 is Codex `0.166.0`,
+which the current `0.169.0` bundle exceeds. For the evidence limits and
+upgrades between OpenClaw releases, see
 [Newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
 With a ChatGPT/Codex login, select the **Codex** runtime for your session.
 Installing Codex alone does not fix automatic routing or grant model access.

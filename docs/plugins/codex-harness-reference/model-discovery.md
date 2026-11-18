@@ -23,8 +23,8 @@ be account-scoped. Use `/codex models` on a running gateway to see the live
 catalog for that harness and account.
 
 New OpenAI models can require a newer Codex version than your OpenClaw release
-bundles. For example, GPT-6.2 requires Codex `0.166.0` or newer. For upgrades
-between OpenClaw releases, follow
+bundles. The reporter-supplied minimum for GPT-6.2 is Codex `0.166.0`.
+For the evidence limits and upgrades between OpenClaw releases, see
 [Newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
 With a ChatGPT/Codex login, select the **Codex** runtime for your session.
 Installing Codex alone does not fix automatic routing or grant account access
@@ -129,7 +129,7 @@ response remains authoritative even if it contains no visible models; HTTP
 
 <Note>
 The current bundled harness is `@openai/codex` `0.169.0`, which already meets
-the GPT-6.2 minimum version. The table below is a historical snapshot, not the
+the reported GPT-6.2 minimum version. The table below is a historical snapshot, not the
 current catalog: a `model/list` check against `0.162.1` in an isolated,
 unauthenticated Codex home returned these visible bundled catalog entries on
 October 18, 2026:
