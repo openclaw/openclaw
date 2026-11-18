@@ -254,7 +254,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
   return record ? { record, backend } : undefined;
 }
 
-/** The caller holds allocation before projection custody, matching removal's lock order. */
+/** The caller holds worktree mutation before projection custody, matching removal's lock order. */
 export async function cloneLocalWorkspaceTemplate(
   params: LocalWorkspaceTemplateParams & { branch: string; destination: string },
 ): Promise<boolean> {
