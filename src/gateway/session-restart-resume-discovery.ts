@@ -1,9 +1,14 @@
 import { getSubagentRunsForRequesterSession } from "../agents/subagents/registry/subagent-registry-memory.js";
+import type { resolveSessionYieldWait } from "../agents/subagents/registry/subagent-registry-read.js";
 import { readSessionEntrySummariesInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { listOrphanedSessionPendingInputTargets } from "../config/sessions/session-pending-input-withdrawal.js";
+import { isRestartResumeMarkerOutOfScope } from "../config/sessions/session-restart-resume-scope.js";
+import type { restartResumeSkipReason } from "../config/sessions/session-run-lifecycle-projection.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
 import { listConfiguredSessionStoreAgentIds } from "../config/sessions/targets-configured-agents.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
+import { hasAgentRunContextExecutionOwner } from "../infra/agent-run-registry.js";
 import type { GatewayRestartResumeWindow } from "../infra/gateway-boot-lifecycle.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -130,4 +135,60 @@ export async function prepareRestartStores(
     prepared.push(store);
   }
   return prepared;
+}
+
+// Old shutdown bumped updatedAt, but abandoned cycles can survive for weeks. Limit adoption
+// to six hours before process start; longer stops lose this one-time upgrade resume.
+// Remove this bridge once stable includes the graceful-restart redesign (#185730).
+const LEGACY_RESTART_RESUME_WINDOW_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * What a startup session resumes under: its shutdown marker, a parked yield, a run orphaned
+ * in a recorded crash window, or a recent legacy cycle. A shutdown marker from another restart
+ * resume scope was ended by the supervisor (for example by an explicit stop): it is `stale`,
+ * cleared without resuming, and the session's queued input ends.
+ */
+export function resolveStartupRestartMarker(
+  selected: InternalSessionEntry,
+  sameRunAsSnapshot: boolean,
+  {
+    parked,
+    skip,
+    windows,
+  }: {
+    parked: ReturnType<typeof resolveSessionYieldWait>;
+    skip: ReturnType<typeof restartResumeSkipReason>;
+    windows: PreparedRestartStore["windows"];
+  },
+) {
+  const orphanedRun =
+    (!parked || parked === "resume") &&
+    selected.lifecycleRunId &&
+    sameRunAsSnapshot &&
+    selected.status === undefined &&
+    !skip &&
+    !hasAgentRunContextExecutionOwner(selected.lifecycleRunId) &&
+    (!selected.activeWriterRunId || !hasAgentRunContextExecutionOwner(selected.activeWriterRunId))
+      ? selected.lifecycleRunId
+      : undefined;
+  const stale = isRestartResumeMarkerOutOfScope(selected.resumeAfterRestart);
+  const marker: InternalSessionEntry["resumeAfterRestart"] = stale
+    ? undefined
+    : (selected.resumeAfterRestart ??
+      (parked ||
+      (orphanedRun &&
+        windows?.some(
+          (window) =>
+            selected.startedAt !== undefined &&
+            selected.startedAt >= window.startedAt &&
+            selected.startedAt < window.endedAt,
+        )) ||
+      (selected.mainRestartRecovery &&
+        selected.abortedLastRun === true &&
+        selected.status === "interrupted" &&
+        selected.updatedAt <= performance.timeOrigin &&
+        selected.updatedAt >= performance.timeOrigin - LEGACY_RESTART_RESUME_WINDOW_MS)
+        ? {}
+        : undefined));
+  return { orphanedRun, stale, marker };
 }

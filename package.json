@@ -1867,6 +1867,7 @@
     "check:host-env-policy:swift": "node --import ./scripts/tsx.mjs scripts/generate-host-env-security-policy-swift.mts --check",
     "check:import-cycles": "node --import ./scripts/tsx.mjs scripts/check-import-cycles.ts",
     "check:line-cap-ratchet": "node scripts/check-line-cap-ratchet.mjs",
+    "check:lifetime-check-ratchet": "node --import ./scripts/tsx.mjs scripts/check-lifetime-check-ratchet.mts",
     "check:max-lines-ratchet": "node --import ./scripts/tsx.mjs scripts/check-max-lines-ratchet.mts",
     "check:madge-import-cycles": "node --import ./scripts/tsx.mjs scripts/check-madge-import-cycles.ts",
     "check:media-download-helpers": "node --import ./scripts/tsx.mjs scripts/check-media-download-helper-roundtrip.mts",
