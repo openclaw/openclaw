@@ -323,7 +323,13 @@ async function main([artifacts, prefix, tarball, configPath, summary, selectedCu
       db
         .prepare("SELECT run_id, trigger, status, reason, steps_json FROM update_runs")
         .all()
-        .map((row) => ({ ...row, steps: JSON.parse(row.steps_json), steps_json: undefined })),
+        .map(({ run_id, trigger, status, reason, steps_json }) => ({
+          run_id,
+          trigger,
+          status,
+          reason,
+          steps: JSON.parse(steps_json),
+        })),
     );
   const killedTarget = path.join(artifacts, "killed-update.tgz");
   const killedDoctor = path.join(artifacts, "killed-update.doctor");
