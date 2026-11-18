@@ -18,8 +18,8 @@ type SpawnNodeEvalOptions = Omit<NonNullable<Parameters<typeof spawnSync>[2]>, "
     encoding?: BufferEncoding;
   };
 
-export function resolveTestNodeExecPath(): string {
-  const nodePath = resolveNodeRuntimeExecutable();
+export function resolveTestNodeExecPath(env?: NodeJS.ProcessEnv): string {
+  const nodePath = resolveNodeRuntimeExecutable({ env });
   if (nodePath) {
     return nodePath;
   }
@@ -39,7 +39,7 @@ export function createNodeEvalArgs(source: string, options: NodeEvalArgsOptions 
 export function execNodeEvalSync(source: string, options: ExecNodeEvalOptions = {}): string {
   const { execArgv, evalFlag, imports, ...execOptions } = options;
   return execFileSync(
-    resolveTestNodeExecPath(),
+    resolveTestNodeExecPath(execOptions.env),
     createNodeEvalArgs(source, { execArgv, evalFlag, imports }),
     {
       cwd: process.cwd(),
@@ -55,7 +55,7 @@ export function spawnNodeEvalSync(
 ): SpawnSyncReturns<string> {
   const { execArgv, evalFlag, imports, ...spawnOptions } = options;
   return spawnSync(
-    resolveTestNodeExecPath(),
+    resolveTestNodeExecPath(spawnOptions.env),
     createNodeEvalArgs(source, { execArgv, evalFlag, imports }),
     {
       cwd: process.cwd(),

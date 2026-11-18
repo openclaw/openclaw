@@ -17,7 +17,13 @@
  * --heap-mib retains numeric arrays across collections to exercise a large old heap.
  * --shutdown-baseline pins server-run-shutdown.ts; --cancel-dependent holds subagent
  * settlement until received-work cancellation, under --shutdown-budget-ms (default 85000).
+ * --workspace uses real event and reply admission plus workspace preparation, replacing only
+ * model dispatch with immediate completion. Supply --handoff-baseline and optionally
+ * --handoff-candidate; --workspace-ready measures already-ready sessions separately.
  * This is owner proof, not model cancellation or a complete Gateway shutdown.
+ * --yield-read-baseline compares retired child completion sources (requires --resume --markers
+ * --baseline-resumes 1). Four roots include message waits, a nested wait, a completed child,
+ * and a child on another agent. Baseline parks three; candidate must resume all four.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -29,6 +35,7 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import type { SubagentRunRecord } from "../../src/agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
@@ -52,14 +59,21 @@ const { values } = parseArgs({
     "cancel-dependent": { type: "boolean" },
     "shutdown-budget-ms": { type: "string", default: "85000" },
     "baseline-resumes": { type: "string", default: "4" },
+    workspace: { type: "boolean" },
+    "workspace-ready": { type: "boolean" },
+    "handoff-baseline": { type: "string" },
+    "handoff-candidate": { type: "string" },
+    "yield-read-baseline": { type: "string" },
   },
 });
 assert(values.root && values.baseline && values.output && global.gc);
 assert(!existsSync(values.output), "Refusing to overwrite evidence");
 assert(!values.markers || values.resume, "--markers requires --resume");
+assert(!values.workspace || (values.resume && values.markers && values["handoff-baseline"]));
 assert(!values.mark || !values.resume, "--mark and --resume are separate workloads");
 assert(!values["shutdown-baseline"] || values.mark, "--shutdown-baseline requires --mark");
 assert(!values["cancel-dependent"] || values["shutdown-baseline"]);
+assert(!values["yield-read-baseline"] || (values.resume && values.markers && !values.workspace));
 const shutdownBudgetMs = parseStrictIntegerOption({
   raw: values["shutdown-budget-ms"],
   label: "--shutdown-budget-ms",
@@ -139,6 +153,22 @@ if (values.control) {
   sources[1] = sources[0]!;
 }
 const urls = sources.map((_, arm) => `${canonical}?restart-measure=${arm}`);
+const yieldReadCanonical = new URL(
+  "../../src/agents/subagents/registry/subagent-registry-read.ts",
+  import.meta.url,
+).href;
+const yieldReadSources = values["yield-read-baseline"]
+  ? [
+      readFileSync(values["yield-read-baseline"], "utf8"),
+      readFileSync(new URL(yieldReadCanonical), "utf8"),
+    ]
+  : [];
+if (values.control && yieldReadSources.length) {
+  yieldReadSources[1] = yieldReadSources[0]!;
+}
+const yieldReadUrls = yieldReadSources.map(
+  (_, arm) => `${yieldReadCanonical}?restart-measure=${arm}`,
+);
 const shutdownCanonical = new URL("../../src/gateway/server-run-shutdown.ts", import.meta.url).href;
 const shutdownSources = values["shutdown-baseline"]
   ? [
@@ -153,18 +183,103 @@ const shutdownUrls = shutdownSources.map((_, arm) => `${shutdownCanonical}?resta
 const loaded = new Set<string>();
 const handoff = new URL("../../src/auto-reply/reply/session-event-handoff.ts", import.meta.url);
 const countedHandoff = `${handoff.href}?restart-resume-measure`;
+const handoffSources = values.workspace
+  ? [
+      readFileSync(values["handoff-baseline"]!, "utf8"),
+      readFileSync(values["handoff-candidate"] ?? handoff, "utf8"),
+    ]
+  : [];
+if (values.control && handoffSources.length) {
+  handoffSources[1] = handoffSources[0]!;
+}
+const handoffUrls = handoffSources.map((_, arm) => `${handoff.href}?workspace-measure=${arm}`);
+const measuredDispatch = new URL(
+  "../../src/auto-reply/dispatch.ts?workspace-measure",
+  import.meta.url,
+).href;
 registerHooks({
   resolve(specifier, context, nextResolve) {
+    if (
+      yieldReadUrls.length &&
+      urls.includes(context.parentURL ?? "") &&
+      specifier.endsWith("subagent-registry-read.js")
+    ) {
+      return { url: yieldReadUrls[urls.indexOf(context.parentURL!)]!, shortCircuit: true };
+    }
     if (
       values.resume &&
       urls.includes(context.parentURL ?? "") &&
       specifier.endsWith("session-event-handoff.js")
     ) {
-      return { url: countedHandoff, shortCircuit: true };
+      return {
+        url: handoffUrls[urls.indexOf(context.parentURL!)] ?? countedHandoff,
+        shortCircuit: true,
+      };
+    }
+    if (handoffUrls.includes(context.parentURL ?? "") && specifier === "../dispatch.js") {
+      return { url: measuredDispatch, shortCircuit: true };
     }
     return nextResolve(specifier, context);
   },
   load(url, context, nextLoad) {
+    const yieldReadArm = yieldReadUrls.indexOf(url);
+    if (yieldReadArm >= 0) {
+      return {
+        format: "module",
+        source: stripTypeScriptTypes(yieldReadSources[yieldReadArm]!),
+        shortCircuit: true,
+      };
+    }
+    if (url === measuredDispatch) {
+      return {
+        format: "module",
+        shortCircuit: true,
+        source: `
+          import { channel } from "node:diagnostics_channel";
+          import { admitReplyTurn } from "./reply/reply-turn-admission.ts";
+          export async function dispatchInboundMessageWithRoutedChannelDispatcher(params) {
+            const options = params.replyOptions;
+            const event = options.internalEventExecution;
+            const admission = await admitReplyTurn({
+              agentId: params.ctx.AgentId, sessionKey: params.ctx.SessionKey,
+              sessionId: options.expectedExistingSessionId,
+              expectedSessionId: options.expectedExistingSessionId,
+              storePath: params.cfg.session.store, kind: "visible", resetTriggered: false,
+              upstreamAbortSignal: options.abortSignal, assertRequestCurrent: event.assertCurrent,
+            });
+            if (admission.status !== "owned") throw admission.error ?? new Error(admission.reason);
+            try {
+              options.onReplyOperationAdmitted(admission.operation);
+              await event.beforeStart();
+              event.onStarted();
+              channel("openclaw.perf.restart-resume-admission").publish(params.ctx.SessionKey);
+              return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+            } finally { admission.operation.complete(); }
+          }`,
+      };
+    }
+    const handoffArm = handoffUrls.indexOf(url);
+    if (handoffArm >= 0) {
+      return {
+        format: "module",
+        shortCircuit: true,
+        source:
+          stripTypeScriptTypes(
+            handoffSources[handoffArm]!.replace(
+              "export function enqueueSessionEventForHost(",
+              "function enqueueSessionEventForHost(",
+            ),
+          ) +
+          `
+          import { channel as workspaceMeasureChannel } from "node:diagnostics_channel";
+          export function measuredEnqueue(text, options) {
+            const receipt = enqueueSessionEventForHost(text, options);
+            workspaceMeasureChannel("openclaw.perf.restart-resume-receipt").publish(receipt);
+            return receipt;
+          }
+          export { measuredEnqueue as enqueueSessionEventForHost };`,
+      };
+    }
     const shutdownArm = shutdownUrls.indexOf(url);
     if (shutdownArm >= 0) {
       return {
@@ -237,7 +352,16 @@ const { runWithProcessCleanupBudget } =
 const { setRuntimeConfigSnapshot } = await import("../../src/config/runtime-snapshot.js");
 setRuntimeConfigSnapshot(cfg);
 const signal = new AbortController().signal;
-const context = { getRuntimeConfig: () => cfg };
+const makeContext = () => {
+  const context = {
+    getRuntimeConfig: () => cfg,
+    getSessionEventSubscriberConnIds: () => new Set<string>(),
+    resolveGatewayContext: () => context,
+  };
+  return context;
+};
+const context = makeContext();
+const warnings: string[] = [];
 const input = {
   context,
   signal,
@@ -246,7 +370,11 @@ const input = {
   assertCurrent() {},
   log: {
     warn(message: string) {
-      throw new Error(message);
+      if (values.workspace || yieldReadSources.length) {
+        warnings.push(message);
+      } else {
+        throw new Error(message);
+      }
     },
   },
 };
@@ -263,6 +391,61 @@ const seededRows = agent
     entry: JSON.parse(String(row.entry_json)),
   }));
 const predecessor = { startedAt: Date.now() - 60_000, endedAt: Date.now() };
+const { subagentRuns } =
+  await import("../../src/agents/subagents/registry/subagent-registry-memory.js");
+if (yieldReadSources.length) {
+  for (const [index, { sessionKey, entry }] of seededRows.slice(0, 4).entries()) {
+    const childId = `synthetic-child-${index}`;
+    const childAgentId = index === 3 ? "other" : "main";
+    const child = {
+      runId: childId,
+      childSessionKey: `agent:${childAgentId}:subagent:${childId}`,
+      childAgentId,
+      childSessionIdentity: { sessionId: childId, lifecycleRevision: childId },
+      requesterSessionKey: sessionKey,
+      requesterAgentId: "main",
+      requesterDisplayKey: sessionKey,
+      completionRequesterSessionId: entry.sessionId,
+      completionRequesterLifecycleRevision: `synthetic-yield-${index}`,
+      task: "Synthetic retained child",
+      cleanup: "keep",
+      createdAt: predecessor.startedAt,
+      expectsCompletionMessage: true,
+      execution: { status: "terminal", endedAt: predecessor.endedAt - 1 },
+      pauseReason: index === 2 ? undefined : "sessions_yield",
+      waitForMessage: index === 1 || index === 2 ? undefined : true,
+      completion: { required: true },
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 0,
+        requesterYieldBatch: true,
+        requesterRunId: `synthetic-interrupted-${index}`,
+        batchRunIds: [childId],
+      },
+    } satisfies SubagentRunRecord;
+    subagentRuns.set(childId, child);
+    if (index === 1) {
+      const grandchild: SubagentRunRecord = {
+        ...child,
+        runId: "synthetic-grandchild",
+        childSessionKey: "agent:main:subagent:grandchild",
+        requesterSessionKey: child.childSessionKey,
+        completionRequesterSessionId: childId,
+        completionRequesterLifecycleRevision: childId,
+        waitForMessage: true,
+        requesterSettleWake: {
+          ...child.requesterSettleWake,
+          requesterRunId: childId,
+          batchRunIds: ["synthetic-grandchild"],
+        },
+      };
+      subagentRuns.set(grandchild.runId, grandchild);
+      subagentRuns.retireCompletionAuthority(grandchild);
+    } else {
+      subagentRuns.retireCompletionAuthority(child);
+    }
+  }
+}
 const registry = await import("../../src/infra/agent-run-registry.js");
 const claims = values.mark
   ? seededRows.map(({ sessionKey, entry }, index) => {
@@ -292,6 +475,8 @@ const seedMarkers = () =>
     },
     { agentId: "main" },
   );
+let workspaceBinding: import("../../src/config/sessions/types.js").SessionEntry["worktree"] =
+  seededRows[0]?.entry.worktree;
 const seedResume = () => {
   // Include the candidate's durable acknowledgement; fixture writes stay outside timing.
   writeConfigMachineState("gateway.restartRecovery", { main: [predecessor] });
@@ -301,9 +486,25 @@ const seedResume = () => {
       for (const [index, row] of seededRows.entries()) {
         writeSessionEntry(owned, row.sessionKey, {
           ...row.entry,
+          ...(values.workspace
+            ? { pendingWorktree: undefined, pendingProjectGitUrl: undefined }
+            : {}),
+          ...(values.workspace && index === 0 && !values["workspace-ready"]
+            ? {
+                worktree: workspaceBinding,
+                pendingWorktree: {
+                  workspace: path.join(root, "workspace"),
+                  titleSource: "",
+                  name: "resume-workspace-measure",
+                },
+              }
+            : {}),
           status: undefined,
           abortedLastRun: false,
-          endedAt: undefined,
+          endedAt: yieldReadSources.length && index < 4 ? predecessor.endedAt - 1 : undefined,
+          ...(yieldReadSources.length && index < 4
+            ? { lifecycleRevision: `synthetic-yield-${index}` }
+            : {}),
           lastRunId: undefined,
           lifecycleRunId: `synthetic-interrupted-${index}`,
           activeWriterRunId: `synthetic-interrupted-${index}`,
@@ -317,8 +518,16 @@ const seedResume = () => {
   );
 };
 let admissions = 0;
+const admissionOrder: string[] = [];
+const receipts: Array<Promise<unknown>> = [];
+const receiptDiagnostics = channel("openclaw.perf.restart-resume-receipt");
+const onReceipt = (receipt: unknown) => {
+  receipts.push((receipt as { settled: Promise<unknown> }).settled);
+};
+receiptDiagnostics.subscribe(onReceipt);
 const admissionDiagnostics = channel("openclaw.perf.restart-resume-admission");
-const onAdmission = () => {
+const onAdmission = (key: unknown) => {
+  admissionOrder.push(String(key));
   admissions++;
 };
 admissionDiagnostics.subscribe(onAdmission);
@@ -371,14 +580,26 @@ const measureOwner = async (arm: number) => {
     await owners[arm]!.resumeMarkedSessions({
       ...input,
       context: {
-        getRuntimeConfig: () => cfg,
+        ...makeContext(),
         // Supply both owner contracts when comparing a saved pre-ledger implementation.
         restartResumeWindow: predecessor,
         restartResumeWindows: { main: [predecessor] },
       },
     });
+    if (values.workspace) {
+      await Promise.all(receipts.splice(0));
+    }
   } else {
     assert.equal(typeof (await owners[arm]!.prepareAgentRestartRecovery(input)), "function");
+  }
+};
+const retainWorkspaceBinding = () => {
+  if (values.workspace) {
+    const entry = readExactSessionEntryRow(
+      agent.openOpenClawAgentDatabase({ agentId: "main" }),
+      seededRows[0]!.sessionKey,
+    )?.entry;
+    workspaceBinding = entry?.worktree ?? workspaceBinding;
   }
 };
 const inspector = new Session();
@@ -416,13 +637,17 @@ try {
   const coldStarted = performance.now();
   await measureOwner(0);
   const coldMs = performance.now() - coldStarted;
+  retainWorkspaceBinding();
   if (values.resume) {
     seedResume();
   }
   if (values.mark) {
     seedMarkers();
   }
+  const coldCandidateStarted = performance.now();
   await measureOwner(1);
+  const coldCandidateMs = performance.now() - coldCandidateStarted;
+  retainWorkspaceBinding();
   if (values.allocation) {
     inspector.connect();
   }
@@ -436,6 +661,7 @@ try {
       let workerTasks = 0;
       const hostLoad = loadavg();
       const admissionsBefore = admissions;
+      const orderBefore = admissionOrder.length;
       for (let iteration = 0; iteration < iterations; iteration++) {
         if (values.resume) {
           seedResume();
@@ -467,6 +693,7 @@ try {
             (await inspector.post("HeapProfiler.stopSampling")).profile.head,
           );
         }
+        retainWorkspaceBinding();
         if (values.resume && arm === 1 && !values.control) {
           assert.equal(readConfigMachineState("gateway.restartRecovery"), undefined);
         }
@@ -496,7 +723,16 @@ try {
       if (values.resume) {
         const expectedResumes = arm === 0 || values.control ? baselineResumes : 4;
         assert.equal(resumedPerCall, expectedResumes);
-        assert.equal(settledStaleRuns, 12 - expectedResumes);
+        assert.equal(
+          settledStaleRuns,
+          values.workspace || yieldReadSources.length ? 8 : 12 - expectedResumes,
+        );
+        if (values.workspace) {
+          assert.deepEqual(
+            admissionOrder.slice(orderBefore).slice(-expectedResumes),
+            seededRows.slice(4 - expectedResumes, 4).map((row) => row.sessionKey),
+          );
+        }
       }
       samples.push({
         pair,
@@ -507,6 +743,7 @@ try {
         sampledBytes: values.allocation ? sampledBytes / iterations : undefined,
         historyWorkerTasksPerPreparation: workerTasks / iterations,
         resumedPerCall: values.resume ? resumedPerCall : undefined,
+        admissionOrder: values.workspace ? admissionOrder.slice(orderBefore) : undefined,
         markedPerCall: values.mark ? 60 : undefined,
         shutdownTimings: shutdownTimings.slice(),
         settledStaleRuns,
@@ -520,9 +757,20 @@ try {
       {
         scope: values.mark
           ? "Exported shutdown marker persistence; 60 live run-registry owners; real SQLite writes; no model cancellation or complete Gateway shutdown"
-          : values.resume
-            ? "Exported restart selection and terminal settlement; real SQLite reads/writes; model admission counted only"
-            : "Exported restart preparation; real SQLite worker reads; no resume admission",
+          : values.workspace
+            ? "Exported restart recovery through real session-event/reply admission and managed-workspace binding; immediate synthetic model completion; no Gateway transport or model execution"
+            : values.resume
+              ? "Exported restart selection and terminal settlement; real SQLite reads/writes; model admission counted only"
+              : "Exported restart preparation; real SQLite worker reads; no resume admission",
+        workspace: values.workspace ?? false,
+        workspaceReady: values["workspace-ready"] ?? false,
+        handoffSourceHashes: handoffSources.map((source) =>
+          createHash("sha256").update(source).digest("hex"),
+        ),
+        warnings: values.workspace || yieldReadSources.length ? warnings : undefined,
+        yieldReadSourceHashes: yieldReadSources.map((source) =>
+          createHash("sha256").update(source).digest("hex"),
+        ),
         markers: values.markers ?? false,
         node: process.version,
         mode: values.allocation ? "allocation" : "timing",
@@ -536,6 +784,7 @@ try {
         retainedHeapUsed,
         baselineResumes,
         coldFirstArmMs: coldMs,
+        coldSecondArmMs: coldCandidateMs,
         fixture,
         sourceHashes: sources.map((source) => createHash("sha256").update(source).digest("hex")),
         shutdownSourceHashes: shutdownSources.map((source) =>
@@ -555,6 +804,7 @@ try {
   }
   taskDiagnostics.unsubscribe(onTask);
   admissionDiagnostics.unsubscribe(onAdmission);
+  receiptDiagnostics.unsubscribe(onReceipt);
   inspector.disconnect();
   await agent.closeOpenClawAgentDatabasesAsync();
   await state.closeOpenClawStateDatabaseAsync();

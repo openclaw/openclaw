@@ -2,6 +2,35 @@ import { describe, expect, it } from "vitest";
 import { AgentsSchema } from "./zod-schema.agents.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
+describe("agent recommended prompts", () => {
+  it("shares plugin whitespace and Unicode limits", () => {
+    const recommendedPrompts = ["  Brief\n me  ", "🦞".repeat(128)];
+    expect(AgentsSchema.parse({ entries: { briefing: { recommendedPrompts } } })).toMatchObject({
+      entries: { briefing: { recommendedPrompts: ["Brief me", "🦞".repeat(128)] } },
+    });
+  });
+  it.each([undefined, [], ["Brief me", "Set up a repository"]])(
+    "accepts optional starters %j",
+    (recommendedPrompts) => {
+      const result = AgentsSchema.safeParse({
+        entries: { briefing: { description: "Follows repositories.", recommendedPrompts } },
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data).toMatchObject({ entries: { briefing: { recommendedPrompts } } });
+      }
+    },
+  );
+  it.each(["Brief me", [""], ["   "], [12], ["a", "b", "c", "d"], ["x".repeat(129)]])(
+    "rejects invalid starters %j",
+    (recommendedPrompts) => {
+      expect(
+        AgentsSchema.safeParse({ entries: { briefing: { recommendedPrompts } } }).success,
+      ).toBe(false);
+    },
+  );
+});
+
 describe("workspace file modes", () => {
   it.each(["0600", "0620", "0640", "0660"])("accepts %s at either scope", (mode) => {
     expect(
@@ -27,6 +56,31 @@ describe("workspace file modes", () => {
       }
     },
   );
+});
+
+describe("delegated persistent change approval", () => {
+  it.each([true, false, undefined])(
+    "preserves %s at global and agent scope",
+    (autoApproveChanges) => {
+      const openclaw = autoApproveChanges === undefined ? {} : { autoApproveChanges };
+      const config = {
+        tools: { openclaw },
+        agents: { entries: { main: { tools: { openclaw } } } },
+      };
+      const result = OpenClawSchema.safeParse(config);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.tools?.openclaw).toEqual(openclaw);
+        expect(result.data.agents?.entries?.main?.tools?.openclaw).toEqual(openclaw);
+      }
+    },
+  );
+
+  it.each(["true", 1, null])("rejects non-boolean authorization %j", (autoApproveChanges) => {
+    const tools = { openclaw: { autoApproveChanges } };
+    expect(OpenClawSchema.safeParse({ tools }).success).toBe(false);
+    expect(AgentsSchema.safeParse({ entries: { main: { tools } } }).success).toBe(false);
+  });
 });
 
 describe("agent roster ownership", () => {

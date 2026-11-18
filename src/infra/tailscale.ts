@@ -230,6 +230,7 @@ async function startTailscaleRouteOwner(
   let failure: Error | undefined;
   let stopFailure: Error | undefined;
   let cliCode: number | null | undefined;
+  let diagnosis: Promise<void> | undefined;
   const { promise: exited, resolve: resolveExit } = createDeferredCore<string>();
 
   let startupDeadlineExpired = false;
@@ -284,17 +285,28 @@ async function startTailscaleRouteOwner(
           }
         });
         worker.once("close", (code, exitSignal) => {
-          failure = runtimeFailure() ?? failure;
           active = false;
           const reason = exitSignal ? `signal ${exitSignal}` : `code ${code ?? "unknown"}`;
+          diagnosis = runtimeFailure()
+            .catch((error: unknown) =>
+              failure
+                ? new AggregateError([failure, error], "Tailscale runtime diagnosis failed", {
+                    cause: failure,
+                  })
+                : toErrorObject(error, "Tailscale runtime diagnosis failed"),
+            )
+            .then((runtimeError) => {
+              failure = runtimeError ?? failure;
+              if (!ready) {
+                reject(
+                  failure ?? new Error(`Tailscale route owner exited before readiness (${reason})`),
+                );
+              }
+            });
+          // Physical completion ends cleanup escalation even while diagnosis waits on I/O.
           resolveExit(
             `worker ${reason}${cliCode !== undefined ? `; CLI code ${cliCode ?? "unknown"}` : ""}`,
           );
-          if (!ready) {
-            reject(
-              failure ?? new Error(`Tailscale route owner exited before readiness (${reason})`),
-            );
-          }
         });
       }),
     TAILSCALE_ROUTE_START_TIMEOUT_MS,
@@ -348,6 +360,7 @@ async function startTailscaleRouteOwner(
         { cause: cleanupError },
       );
     }
+    await diagnosis;
     signal?.throwIfAborted();
     throw failure ?? error;
   }

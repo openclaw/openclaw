@@ -12,6 +12,7 @@ import { createStatfsFixture } from "../infra/disk-space.test-support.js";
 import { isBetaTag } from "../infra/update-channels.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../version.js";
 import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import * as assert from "./update-cli-assertions.test-support.js";
@@ -260,6 +261,21 @@ export function createUpdateCliFixture(fixtureOptions: { databaseEngines?: strin
       overrides: Partial<Parameters<typeof update.completePostCorePluginUpdate>[0]> = {},
     ) => update.completePostCorePluginUpdate(configs.createChangedPostCoreUpdateOptions(overrides)),
     createCaseDir,
+    /** The completion child runs only when the installed launcher exists. */
+    mockCompletionCacheRefresh: (result: Parameters<typeof createCommandResult>[0]) => {
+      const pathExists = mocks.pathExists.getMockImplementation();
+      mocks.pathExists.mockImplementation(
+        async (candidate: string) =>
+          candidate.endsWith("openclaw.mjs") || Boolean(await pathExists?.(candidate)),
+      );
+      const run = assert.requireValue(
+        vi.mocked(update.runCommandWithTimeout).getMockImplementation(),
+        "command fixture",
+      );
+      vi.mocked(update.runCommandWithTimeout).mockImplementation(async (argv, options) =>
+        argv[2] === "completion" ? createCommandResult(result) : run(argv, options),
+      );
+    },
     expectFailedManagedGitRestart: (message: string) => {
       const logs = assert.getLogOutput();
       expect(mocks.serviceStop).toHaveBeenCalledTimes(1);
@@ -303,15 +319,6 @@ export function createUpdateCliFixture(fixtureOptions: { databaseEngines?: strin
         expectDefined(process.env.HOME, "isolated test home"),
         profile === "default" ? ".openclaw" : `.openclaw-${profile}`,
       ),
-    reportCandidateSteps: async <T extends { steps: UpdateRunResult["steps"] }>(
-      options: { onStep?: (step: UpdateRunResult["steps"][number]) => void | Promise<void> },
-      result: T,
-    ): Promise<T> => {
-      for (const step of result.steps) {
-        await options.onStep?.(step);
-      }
-      return result;
-    },
     runControlPlaneUpdate: async (params: {
       meta: Record<string, unknown>;
       options: Parameters<typeof update.updateCommand>[0];
@@ -350,12 +357,17 @@ export function createUpdateCliFixture(fixtureOptions: { databaseEngines?: strin
     runRestartFallbackScenario: async (params: { daemonInstall: "ok" | "fail" }) => {
       mockOwnedGitService();
       const entrypoint = path.join(process.cwd(), "dist", "index.js");
-      update.mockGitUpdateAfterMutation(update.makeOkUpdateResult({ root: process.cwd() }));
+      update.mockGitUpdateAfterMutation(
+        update.makeOkUpdateResult({ root: process.cwd(), after: { version: VERSION } }),
+        false,
+        { databaseEngines: ["sqlite", "postgres"] },
+      );
       vi.mocked(update.resolveGatewayInstallEntrypoint).mockResolvedValue(entrypoint);
       if (params.daemonInstall === "fail") {
         mockGatewayInstallFailure(entrypoint);
       }
       mocks.serviceLoaded.mockResolvedValue(true);
+      mockGatewayHealth(VERSION, "updated-gateway");
 
       await update.updateCommand({});
 

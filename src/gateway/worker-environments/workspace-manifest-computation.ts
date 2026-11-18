@@ -8,6 +8,7 @@ import type { WorkspaceNode, WorkspacePreflightInput } from "./workspace-manifes
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
+  WorkerWorkspaceReconciliationJournal,
 } from "./workspace-manifest.js";
 import type {
   StagedWorkerWorkspaceInventory,
@@ -37,6 +38,12 @@ type WorkspaceManifestSnapshot = Awaited<ReturnType<typeof readActualWorkspaceMa
 type WorkspaceManifestCapture = Omit<WorkspaceManifestSnapshot, "rawManifest">;
 
 export type WorkspaceManifestValueInputs = {
+  "workspace.manifest.template": {
+    root: string;
+    baseCommit: string;
+    buildCacheInputs: string[];
+    previous?: { rawManifest: string; manifestRef: string; changedPaths: string[] };
+  };
   "workspace.manifest.capture": {
     root: string;
     baseCommit: string | null;
@@ -48,6 +55,7 @@ export type WorkspaceManifestValueInputs = {
   };
   "workspace.manifest.snapshot": WorkspaceManifestValueInputs["workspace.manifest.capture"];
   "workspace.manifest.document": WorkspaceManifestValueInputs["workspace.manifest.capture"];
+  "workspace.manifest.initial": WorkspaceManifestValueInputs["workspace.manifest.capture"];
   "workspace.manifest.reference": WorkspaceManifestValueInputs["workspace.manifest.capture"];
   "workspace.manifest.file": {
     path: string;
@@ -77,6 +85,7 @@ export type WorkspaceManifestValueInputs = {
     stagingRoot: string;
     baseEntries: WorkerWorkspaceManifestEntry[];
     appliedEntries: WorkerWorkspaceManifestEntry[];
+    publicationCopy?: boolean;
   };
   "workspace.reconcile.preflight": WorkspacePreflightInput & {
     root: string;
@@ -109,13 +118,18 @@ export type WorkspaceStageInput<Raw = Uint8Array<ArrayBuffer>> = WorkspaceStageI
   buildCacheInputs?: string[];
   gitHistory?: WorkerWorkspaceGitHistory;
   parentCommit?: string;
+  blobsOnly?: true;
 };
 
 export type WorkspaceManifestValueOutputs = {
+  "workspace.manifest.template": Omit<WorkspaceManifestSnapshot, "manifest">;
   "workspace.manifest.capture": WorkspaceComputationHashResult<WorkspaceManifestCapture>;
   "workspace.manifest.snapshot": WorkspaceComputationHashResult<WorkspaceManifestSnapshot>;
   "workspace.manifest.document": WorkspaceComputationHashResult<
     Omit<WorkspaceManifestSnapshot, "manifest">
+  >;
+  "workspace.manifest.initial": WorkspaceComputationHashResult<
+    Omit<WorkspaceManifestSnapshot, "manifest"> & { projectionFingerprints: Uint8Array | null }
   >;
   "workspace.manifest.reference": WorkspaceComputationHashResult<string>;
   "workspace.manifest.file": WorkspaceComputationHashResult<
@@ -129,6 +143,7 @@ export type WorkspaceManifestValueOutputs = {
     patch: Uint8Array<ArrayBuffer>;
     baseTree: string;
     basePack: Uint8Array<ArrayBuffer>;
+    publicationPack?: Uint8Array<ArrayBuffer>;
     basePackSha256: string;
   };
   "workspace.reconcile.preflight": WorkspaceComputationHashResult<{
@@ -138,100 +153,140 @@ export type WorkspaceManifestValueOutputs = {
   }>;
 };
 
+export type WorkspaceReconciliationOperations = {
+  "workspace.reconcile.ownership": {
+    input: {
+      root: string;
+      stagedInputDirectories: Set<string>;
+      candidates: { path: string; directory: string; changesMarker: boolean; isNew: boolean }[];
+    };
+    output: void;
+  };
+  "workspace.reconcile.apply": {
+    input: {
+      root: string;
+      directories: { retained: string[]; removed: string[] };
+      appliedEntries: WorkerWorkspaceManifestEntry[];
+      buildCacheInputs?: Set<string>;
+      patchPath: string;
+    };
+    output: void;
+  };
+  "workspace.reconcile.recover": {
+    input: {
+      root: string;
+      journal: Omit<WorkerWorkspaceReconciliationJournal, "basePack">;
+      basePackPath: string;
+      buildCacheInputs?: string[];
+    };
+    output: void;
+  };
+  "workspace.reconcile.temporary": { input: { prefix: string }; output: string };
+};
+
+export type WorkspaceReconciliationCommand = {
+  [K in keyof WorkspaceReconciliationOperations]: {
+    type: K;
+    input: WorkspaceReconciliationOperations[K]["input"];
+  };
+}[keyof WorkspaceReconciliationOperations];
+
 export type WorkspaceManifestComputationOperations = {
   [Type in keyof WorkspaceManifestValueInputs]: {
     input: { payload: Uint8Array<ArrayBuffer> };
     output: WorkspaceManifestValueOutputs[Type];
   };
-} & {
-  "workspace.reconcile.diff": {
-    input: { root: string; baseTree: string; currentTree: string };
-    output: Uint8Array<ArrayBuffer>;
-  };
-  "workspace.manifest.local": {
-    input: { owner: string };
-    output: LocalWorkspaceManifestValue;
-  };
-  "workspace.manifest.base-refresh": {
-    input: {
-      beforeRoot: string;
-      afterRoot: string;
-      baseCommit: string;
-      baseRaw: Uint8Array<ArrayBuffer>;
-      baseRef: string;
-      buildCacheInputs: string[];
-      action: "refresh_base" | "prepare_pr";
-      hashes?: WorkspaceComputationHashes;
+} & WorkspaceReconciliationOperations & {
+    "workspace.reconcile.diff": {
+      input: { root: string; baseTree: string; currentTree: string };
+      output: Uint8Array<ArrayBuffer>;
     };
-    output: WorkspaceComputationHashResult<{
-      rawManifest: string;
-      manifestRef: string;
-      buildCacheInputs: string[];
-    }>;
-  };
-  "workspace.manifest.equal": {
-    input: {
-      baseRaw: Uint8Array<ArrayBuffer>;
-      baseRef: string;
-      currentRaw: Uint8Array<ArrayBuffer>;
-      currentRef: string;
-      buildCacheInputs?: string[];
+    "workspace.manifest.local": {
+      input: { owner: string };
+      output: LocalWorkspaceManifestValue;
     };
-    output: boolean;
-  };
-  "workspace.manifest.remote-capture": {
-    input: {
-      argv: string[];
-      home: string;
-      memo?: string;
-      maxHashMemoBytes: number;
+    "workspace.manifest.base-refresh": {
+      input: {
+        root: string;
+        beforeTree: string;
+        afterTree: string;
+        temporaryRoot: string;
+        baseCommit: string;
+        baseRaw: Uint8Array<ArrayBuffer>;
+        baseRef: string;
+        buildCacheInputs: string[];
+        action: "refresh_base" | "prepare_pr";
+        hashes?: WorkspaceComputationHashes;
+      };
+      output: WorkspaceComputationHashResult<{
+        rawManifest: string;
+        manifestRef: string;
+        buildCacheInputs: string[];
+      }>;
     };
-    output: string;
-  };
-  "workspace.manifest.parse": {
-    input: { raw: Uint8Array<ArrayBuffer>; expectedRef?: string };
-    output: { manifest: WorkerWorkspaceManifest; manifestRef: string };
-  };
-  "workspace.manifest.paths": {
-    input: { raw: Uint8Array<ArrayBuffer>; expectedRef: string; buildCacheInputs: string[] };
-    output: Set<string>;
-  };
-  "workspace.manifest.pair": {
-    input: {
-      buildCacheInputs?: string[];
-      baseRaw: Uint8Array<ArrayBuffer>;
-      baseRef: string;
-      currentRaw: Uint8Array<ArrayBuffer>;
-      currentRef: string;
+    "workspace.manifest.equal": {
+      input: {
+        baseRaw: Uint8Array<ArrayBuffer>;
+        baseRef: string;
+        currentRaw: Uint8Array<ArrayBuffer>;
+        currentRef: string;
+        buildCacheInputs?: string[];
+      };
+      output: boolean;
     };
-    output: {
-      base: WorkerWorkspaceManifest;
-      current: WorkerWorkspaceManifest;
-      changed: boolean;
-      entries: WorkerWorkspaceManifestEntry[];
-      paths: string[];
+    "workspace.manifest.remote-capture": {
+      input: {
+        argv: string[];
+        home: string;
+        memo?: string;
+        maxHashMemoBytes: number;
+      };
+      output: string;
+    };
+    "workspace.manifest.parse": {
+      input: { raw: Uint8Array<ArrayBuffer>; expectedRef?: string };
+      output: { manifest: WorkerWorkspaceManifest; manifestRef: string };
+    };
+    "workspace.manifest.paths": {
+      input: { raw: Uint8Array<ArrayBuffer>; expectedRef: string; buildCacheInputs: string[] };
+      output: Set<string>;
+    };
+    "workspace.manifest.pair": {
+      input: {
+        buildCacheInputs?: string[];
+        baseRaw: Uint8Array<ArrayBuffer>;
+        baseRef: string;
+        currentRaw: Uint8Array<ArrayBuffer>;
+        currentRef: string;
+      };
+      output: {
+        base: WorkerWorkspaceManifest;
+        current: WorkerWorkspaceManifest;
+        changed: boolean;
+        entries: WorkerWorkspaceManifestEntry[];
+        paths: string[];
+      };
+    };
+    "workspace.manifest.staged": {
+      input: {
+        root: string;
+        ref: string;
+        buildCacheInputs?: string[];
+        stagingRoot?: string;
+        verifyContents?: boolean;
+        reconciliation?: { baseManifestRef: string; alreadyAccepted?: boolean };
+      };
+      output: StagedWorkerWorkspaceInventory;
+    };
+    "workspace.manifest.result": {
+      input: WorkspaceManifestComputationOperations["workspace.manifest.staged"]["input"];
+      output: StagedWorkerWorkspaceResult;
+    };
+    "workspace.manifest.stage-input": {
+      input: WorkspaceStageInput;
+      output: null;
     };
   };
-  "workspace.manifest.staged": {
-    input: {
-      root: string;
-      ref: string;
-      buildCacheInputs?: string[];
-      stagingRoot?: string;
-      verifyContents?: boolean;
-      reconciliation?: { baseManifestRef: string; alreadyAccepted?: boolean };
-    };
-    output: StagedWorkerWorkspaceInventory;
-  };
-  "workspace.manifest.result": {
-    input: WorkspaceManifestComputationOperations["workspace.manifest.staged"]["input"];
-    output: StagedWorkerWorkspaceResult;
-  };
-  "workspace.manifest.stage-input": {
-    input: WorkspaceStageInput;
-    output: null;
-  };
-};
 
 export type WorkspaceManifestComputationCommand = {
   [K in keyof WorkspaceManifestComputationOperations]: {

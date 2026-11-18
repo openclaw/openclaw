@@ -14,7 +14,7 @@ import {
   textOf,
   type TestUsagePage,
 } from "./usage-page.test-support.ts";
-import { texts } from "./view-render.test-support.ts";
+import { openUsageFilter, texts } from "./view-render.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
 beforeEach(() => {
@@ -205,7 +205,8 @@ it("retains the accepted heatmap while editing a query draft", async () => {
   const cells = [...page.querySelectorAll(".usage-heatmap__cell")];
   expect(cells.length).toBeGreaterThan(62);
   const requests = request.mock.calls.length;
-  const input = page.querySelector<HTMLInputElement>(".usage-query-input")!;
+  openUsageFilter(page);
+  const input = page.querySelector<HTMLInputElement>(".usage-filter-menu__query input")!;
   input.value = "model:example";
   input.dispatchEvent(new Event("input", { bubbles: true }));
   await page.updateComplete;

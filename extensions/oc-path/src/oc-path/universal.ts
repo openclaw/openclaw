@@ -408,7 +408,10 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): OcAst {
     if (info.marker !== "+") {
       throw new OcPathEditError("not-writable", "md file-level insertion uses bare `+`");
     }
-    const gap = ast.raw.replace(/^\uFEFF/, "").length > 0 && !/\n\r?\n$/.test(ast.raw) ? "\n" : "";
+    const gap =
+      ast.raw.replace(/^\uFEFF/, "").length > 0 && !ast.raw.replace(/\r\n?/g, "\n").endsWith("\n\n")
+        ? "\n"
+        : "";
     return insertMdSource(ast, ast.raw.length, `${gap}## ${value}`, (shifted, line) => ({
       ...shifted,
       blocks: [
@@ -493,6 +496,7 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): OcAst {
                   text: value,
                   slug: slugify(kv?.key ?? value),
                   line,
+                  textLine: line,
                   ...(kv === undefined ? {} : { kv }),
                 },
               ],

@@ -1,2 +1,0 @@
-84
-# OpenClaw ID version negotiation: the Gateway-signed snapshot advertises accepted versions, selectVersion picks the highest shared one, edited or replayed lists never reach the client, and malformed lists are refused.

@@ -10,6 +10,7 @@ import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { pluginInstallOperations } from "../../plugins/install-progress.ts";
 import {
   createInspectResult,
   createPluginCapabilities,
@@ -216,18 +217,20 @@ describe("ClawHub chat recommendations", () => {
     let notifyLocale: Parameters<typeof i18n.subscribe>[0] | undefined;
     let translated = false;
     vi.spyOn(i18n, "t").mockImplementation((key, params) =>
-      translated && key === "common.dismiss" ? "Ausblenden" : translate(key, params),
+      translated && key === "pluginsPage.install" ? "Installieren" : translate(key, params),
     );
     vi.spyOn(i18n, "subscribe").mockImplementation((listener) => {
       notifyLocale = listener;
       return subscribe(listener);
     });
     const { card, request } = mount(async () => detail(false));
-    await waitForSolid(() => expect(part(card, "dismiss")?.textContent?.trim()).toBe("Dismiss"));
+    await waitForSolid(() => expect(part(card, "install")?.textContent?.trim()).toBe("Install"));
     const reads = request.mock.calls.length;
     translated = true;
     notifyLocale!(i18n.getLocale());
-    await waitForSolid(() => expect(part(card, "dismiss")?.textContent?.trim()).toBe("Ausblenden"));
+    await waitForSolid(() =>
+      expect(part(card, "install")?.textContent?.trim()).toBe("Installieren"),
+    );
     expect(request).toHaveBeenCalledTimes(reads);
   });
 
@@ -241,7 +244,7 @@ describe("ClawHub chat recommendations", () => {
     await vi.waitFor(() => expect(part(card, "icon svg")).not.toBeNull());
     expect(card.querySelector("img, .skeleton")).toBeNull();
     expect(iconFetch.plugin).not.toHaveBeenCalled();
-    expect(part(card, "dismiss")?.textContent?.trim()).toBe("Dismiss");
+    expect(part(card, "dismiss")).toBeNull();
     part(card, "listing")!.click();
     expect(context.navigate).toHaveBeenLastCalledWith("plugins", {
       pathname: `/plugins/${recommendation.id}`,
@@ -269,7 +272,9 @@ describe("ClawHub chat recommendations", () => {
     const { card, context, request, harness, client } = mount(async (method) =>
       method === "plugins.inspect"
         ? createInspectResult({ mcpAuth: [{ serverName: "whatsapp", state }] })
-        : detail(true, {}, { pluginId: "whatsapp" }),
+        : method === "mcp.authLogin"
+          ? { done: true, status: "done" }
+          : detail(true, {}, { pluginId: "whatsapp" }),
     );
     // Without the sign-in method there is nowhere to send the operator.
     await vi.waitFor(() => expect(part(card, "installed")?.textContent).toContain("Installed"));
@@ -278,36 +283,87 @@ describe("ClawHub chat recommendations", () => {
     const hello = gatewayHelloForMethods(["plugins.inspect", "mcp.authLogin"]);
     harness.emit(client, false);
     harness.emit(client, true, { hello });
-    await vi.waitFor(() => expect(part(card, "sign-in")?.textContent?.trim()).toBe("Sign in"));
+    await vi.waitFor(() => expect(part(card, "sign-in")?.textContent?.trim()).toBe("Connect"));
     expect(request).toHaveBeenCalledWith(
       "plugins.inspect",
       { pluginId: "whatsapp" },
       expect.anything(),
     );
-    expect(part(card, "installed")).toBeNull();
+    expect(part(card, "status")?.textContent).toContain("Installed · Sign in needed");
     part(card, "sign-in")!.click();
-    expect(context.navigate).toHaveBeenLastCalledWith("plugins", {
-      pathname: `/plugins/${recommendation.id}`,
-      search: "",
-    });
+    await waitForSolid(() =>
+      expect(request).toHaveBeenCalledWith(
+        "mcp.authLogin",
+        expect.objectContaining({ serverName: "whatsapp", sessionId: expect.any(String) }),
+        expect.anything(),
+      ),
+    );
+    expect(context.navigate).not.toHaveBeenCalled();
 
     state = "authorized";
     harness.emit(client, false);
     harness.emit(client, true, { hello });
-    await vi.waitFor(() => expect(part(card, "installed")?.textContent).toContain("Installed"));
+    await vi.waitFor(() => expect(part(card, "installed")?.textContent).toContain("Connected"));
     expect(part(card, "sign-in")).toBeNull();
   });
 
-  it("rechecks official status before offering installation from an old card", async () => {
-    const result = detail(false, { official: false });
-    const { card, context } = mount(async () => result);
-    await vi.waitFor(() => expect(part(card, "install")?.textContent?.trim()).toBe("View details"));
-    expect(card.querySelector(".plugin-official-badge")).toBeNull();
-    part(card, "install")!.click();
-    expect(context.navigate).toHaveBeenLastCalledWith("plugins", {
-      pathname: `/plugins/${recommendation.id}`,
-      search: "",
+  it.each(["install", "unavailable"])(
+    "only offers community installation when the catalog allows it (%s)",
+    async (action) => {
+      const result = detail(false, { official: false });
+      result.plugin.local.action = action;
+      const { card, context, request } = mount(async () => result);
+      await vi.waitFor(() =>
+        expect(part(card, action === "install" ? "install" : "status")?.textContent?.trim()).toBe(
+          action === "install" ? "Install" : "Unavailable",
+        ),
+      );
+      expect(part(card, "status")?.textContent?.trim()).toBe(
+        action === "install" ? "Ready to install" : "Unavailable",
+      );
+      expect(card.querySelector(".plugin-official-badge")).toBeNull();
+      expect(part(card, "dismiss")).toBeNull();
+      if (action === "install") {
+        part(card, "install")!.click();
+      } else {
+        expect(part(card, "install")).toBeNull();
+        part(card, "details")!.click();
+      }
+      expect(context.navigate).toHaveBeenLastCalledWith("plugins", {
+        pathname: `/plugins/${recommendation.id}`,
+        search: action === "install" ? "?action=install" : "",
+      });
+      expect(request.mock.calls.some(([method]) => method === "plugins.install")).toBe(false);
+    },
+  );
+
+  it("supersedes a finished install failure when authoritative catalog state recovers elsewhere", async () => {
+    let installed = false;
+    const failure = new Error("Connection lost before the installation receipt");
+    const { card, context, client, harness } = mount(async (method) => {
+      if (method === "plugins.install") {
+        throw failure;
+      }
+      return detail(installed);
     });
+    await waitForSolid(() => expect(part(card, "install")).not.toBeNull());
+    const installations = pluginInstallOperations(context.gateway);
+    await expect(
+      installations.run(
+        client,
+        { source: "npm", spec: "calendar" },
+        "install:" + recommendation.id,
+      ),
+    ).rejects.toBe(failure);
+    await waitForSolid(() =>
+      expect(part(card, "status")?.textContent).toBe("Installation status unknown"),
+    );
+    installed = true;
+    harness.publishPlugins();
+    await waitForSolid(() => expect(part(card, "status")?.textContent).toBe("Installed"));
+    expect(part(card, "retry")).toBeNull();
+    expect(part(card, "manage")?.textContent).toBe("Manage");
+    expect(installations.progress.has("install:" + recommendation.id)).toBe(false);
   });
 
   it.each(["connection", "plugin generation"] as const)(
@@ -320,7 +376,8 @@ describe("ClawHub chat recommendations", () => {
       );
       await vi.waitFor(() => expect(request).toHaveBeenCalled());
       expect(card.querySelector(".skeleton")).not.toBeNull();
-      expect(card.textContent).not.toContain("Checking installation");
+      expect(part(card, "status")?.textContent).toContain("Checking installation");
+      expect(part(card, "status .btn__spinner")).not.toBeNull();
       if (boundary === "connection") {
         const next = createClient(async () => detail(false));
         harness.emit(next.client, true);
@@ -369,7 +426,7 @@ describe("ClawHub chat recommendations", () => {
     expect(iconFetch.catalog).toHaveBeenCalledOnce();
 
     response = retry.promise;
-    part(card, "dismiss")!.click();
+    part(card, "retry")!.click();
     await vi.advanceTimersByTimeAsync(0);
     expect(part(card, "status-skeleton")).not.toBeNull();
     expect(part(card, "dismiss")).toBeNull();
@@ -386,8 +443,7 @@ describe("ClawHub chat recommendations", () => {
     expect(card.querySelector("img")).toBe(image);
     expect(image.hidden).toBe(false);
     expect(iconFetch.catalog).toHaveBeenCalledOnce();
-    part(card, "dismiss")!.click();
-    await vi.waitFor(() => expect(card.querySelector(".chat-clawhub-card")).toBeNull());
+    expect(part(card, "dismiss")).toBeNull();
   });
 
   it.each(["before", "after"] as const)(
@@ -553,6 +609,10 @@ describe("ClawHub chat recommendations", () => {
     expect(normalizeMessage({ role: "assistant", content: [recommendation] }).content).toEqual([
       recommendation,
     ]);
+    const community = { ...recommendation, official: false };
+    expect(normalizeMessage({ role: "assistant", content: [community] }).content).toEqual([
+      community,
+    ]);
     expect(normalizeMessage({ role: "user", content: [recommendation] }).content).toEqual([]);
     expect(
       normalizeMessage({ role: "assistant", content: [{ ...recommendation, installed: "yes" }] })
@@ -605,6 +665,15 @@ describe("ClawHub chat recommendations", () => {
       expect(context.navigate).toHaveBeenCalledWith("skills", {
         search: "?clawhub=%40openclaw%2Fcalendar&agent=research",
       });
+      if (!installed) {
+        expect(part(card, "dismiss")).toBeNull();
+        expect(part(card, "install")?.textContent?.trim()).toBe("Install");
+        vi.mocked(context.navigate).mockClear();
+        part(card, "install")!.click();
+        expect(context.navigate).toHaveBeenCalledWith("skills", {
+          search: "?clawhub=%40openclaw%2Fcalendar&agent=research",
+        });
+      }
     },
   );
 });

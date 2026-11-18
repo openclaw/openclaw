@@ -27,6 +27,9 @@ Windows Gateway. On Linux, it:
   OpenClaw Bun fork, without requiring a global CLI install; release builds
   install their matching stable version, while development builds use
   Development for automatic setup
+- exposes a qualified app-managed local CLI in new terminals before baseline or
+  Gateway service setup, preserving existing terminal selections and profiles;
+  a terminal PATH error leaves the CLI installed and reports the incomplete step
 - attaches to a healthy Gateway before attempting service changes
 - delegates install, start, stop, and restart operations to the CLI-managed systemd user service
 - discovers nearby Bonjour Gateways and opens each Control UI in a route-scoped window, so several

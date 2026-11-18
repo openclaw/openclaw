@@ -1,6 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "../infra/errors.js";
-import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
+import {
+  readSqliteDatabaseCleanClose,
+  readSqliteDatabaseCleanCloseRefusal,
+} from "../infra/sqlite-database-admission.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
@@ -12,7 +15,10 @@ import type {
 } from "./agent-deletion-journal.types.js";
 import { readAgentDatabasePreflightTargets } from "./openclaw-agent-db-registry.read.js";
 import { describeDeferredStateSchemaPublication } from "./openclaw-database-preflight.messages.js";
-import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
+import type {
+  AgentDatabasePreflightStats,
+  OpenClawDatabaseSchemaPreflight,
+} from "./openclaw-database-preflight.types.js";
 import {
   getStateRuntimeSchemaAdmission,
   getStateSchemaVersionAdmission,
@@ -48,6 +54,7 @@ export type StateSchemaInspection = {
     stateIntegrityCheckCount: number;
     stateIntegrityMs: number;
     stateSealCount: number;
+    stateIntegrityReason?: AgentDatabasePreflightStats["stateIntegrityReason"];
   };
 };
 
@@ -66,7 +73,7 @@ export function inspectStateDatabaseSchema(
       admitSqliteSchema(database);
       cleanClose = getStateRuntimeSchemaAdmission(database)?.startupReady === true;
     }
-    const metrics = input.requireStartupMigrationReadiness
+    const metrics: StateSchemaInspection["startupMetrics"] = input.requireStartupMigrationReadiness
       ? (inspection.startupMetrics = {
           stateIntegrityCheckCount: 0,
           stateIntegrityMs: 0,
@@ -125,6 +132,10 @@ export function inspectStateDatabaseSchema(
       const integrityStartedAt = performance.now();
       if (metrics) {
         metrics.stateIntegrityCheckCount++;
+        metrics.stateIntegrityReason =
+          input.purpose === "maintenance"
+            ? "maintenance"
+            : (readSqliteDatabaseCleanCloseRefusal(database) ?? "startup-not-ready");
       }
       assertSqliteIntegrity(
         database,

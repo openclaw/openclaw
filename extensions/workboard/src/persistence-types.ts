@@ -91,6 +91,9 @@ export type WorkboardCardStatsAggregate = {
   oldestReadyAt: number | undefined;
 };
 
+/** Claim succeeds only while `ownerId` holds fewer than `limit` running or claimed cards. */
+export type WorkboardOwnerSlot = { ownerId: string; now: number; limit: number };
+
 export type WorkboardOwnerClaimResult = "updated" | "conflict" | "owner_busy";
 
 export type WorkboardCardReadScope =
@@ -127,8 +130,7 @@ export type WorkboardCardStore = Omit<WorkboardKeyedStore, "entries"> & {
     key: string,
     value: PersistedWorkboardCard,
     expectedUpdatedAt: number,
-    ownerId: string,
-    now: number,
+    ownerSlot: WorkboardOwnerSlot,
   ): Promise<WorkboardOwnerClaimResult>;
   listCardStatuses(ids: readonly string[]): Promise<Array<{ id: string; status: string }>>;
   listBoardAggregates(): Promise<WorkboardBoardCardAggregate[]>;

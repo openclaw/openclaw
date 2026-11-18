@@ -95,13 +95,7 @@ async function expectDenied(control: Locator, gateway: MockGatewayControls, meth
 
 async function expectAgentCreationDenied(page: Page, gateway: MockGatewayControls) {
   const createAgent = page.getByRole("button", { name: "New agent", exact: true });
-  await expect.poll(() => createAgent.isDisabled()).toBe(true);
-  expect(await createAgent.getAttribute("title")).toContain(
-    "You need admin access to set up OpenClaw.",
-  );
-  const url = page.url();
-  await createAgent.click({ force: true });
-  expect(page.url()).toBe(url);
+  expect(await createAgent.count()).toBe(0);
   expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
 }
 
@@ -194,8 +188,7 @@ suite.define(() => {
       await page.locator("#agents-tab-overview").click();
       await page.locator(".agents-page-menu__trigger").click();
       const setDefault = page.getByRole("menuitem", { name: "Set default", exact: true });
-      await expect.poll(() => setDefault.isDisabled()).toBe(true);
-      await setDefault.click({ force: true });
+      expect(await setDefault.count()).toBe(0);
       await page.keyboard.press("Escape");
       await expectAgentCreationDenied(page, gateway);
 
@@ -293,8 +286,7 @@ suite.define(() => {
       await selectAgent(page.locator(".settings-sidebar__agent openclaw-agent-select"), "Reviewer");
       await page.locator(".agents-page-menu__trigger").click();
       const setDefault = page.getByRole("menuitem", { name: "Set default", exact: true });
-      await expect.poll(() => setDefault.isDisabled()).toBe(true);
-      await setDefault.click({ force: true });
+      expect(await setDefault.count()).toBe(0);
       await page.keyboard.press("Escape");
       await expectAgentCreationDenied(page, gateway);
 

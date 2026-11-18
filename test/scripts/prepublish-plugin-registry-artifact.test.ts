@@ -38,6 +38,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   SOURCE_SHA,
   createRegistrySource,
+  commitRegistrySource,
   VERSION,
   registryFixture,
   sha256,
@@ -95,7 +96,7 @@ function crossOsTuple(paths: ReturnType<typeof fixture>) {
   };
 }
 
-function cliFixture(packageNames = [PACKAGE_NAME], combinedBuild = false) {
+function cliFixture(packageNames = [PACKAGE_NAME], combinedBuild: boolean | "batch" = false) {
   return createRegistrySource(
     registryTempDirs.make("openclaw-prepublish-plugin-cli-"),
     packageNames,
@@ -164,6 +165,54 @@ describe("prepublish plugin registry artifact", () => {
     const loaded = await import(`data:text/javascript;base64,${runtime.toString("base64")}`);
     expect(loaded.message).toBe("built before packing");
     expect(sourceMetadata(packageDir)).toEqual(original);
+  });
+
+  it("builds distinct runtimes in bounded serial batches and restores each source", async () => {
+    const names = ["alpha", "beta", "gamma", "delta", "epsilon"].map((id) => `@openclaw/${id}`);
+    const source = cliFixture(names, "batch");
+    const directories = names.map((name) =>
+      path.join(source.repoRoot, "extensions", name.split("/")[1]!),
+    );
+    directories.forEach((directory, index) => {
+      writeFileSync(
+        path.join(directory, "index.ts"),
+        `export const message: string = ${JSON.stringify(names[index])};\n`,
+      );
+    });
+    source.sourceSha = commitRegistrySource(source.repoRoot);
+    const originals = directories.map(sourceMetadata);
+    const result = createRegistry(source, { requiredPackages: names });
+    expect(result.manifest.packages.map(({ name }) => name)).toEqual(names.toSorted());
+    for (const entry of result.manifest.packages) {
+      const tarball = path.join(source.repoRoot, "artifact", entry.tarball);
+      const runtime = execFileSync("tar", ["-xOf", tarball, "package/dist/index.js"]);
+      const loaded = await import(`data:text/javascript;base64,${runtime.toString("base64")}`);
+      expect(loaded.message).toBe(entry.name);
+    }
+    expect(directories.map(sourceMetadata)).toEqual(originals);
+    expect(
+      readFileSync(path.join(source.repoRoot, ".build-processes"), "utf8").trim().split("\n"),
+    ).toHaveLength(2);
+  });
+
+  it("stops a batch at a failed build without packing later plugins or publishing a manifest", () => {
+    const names = ["alpha", "beta", "gamma"].map((id) => `@openclaw/${id}`);
+    const source = cliFixture(names, "batch");
+    const directories = names.map((name) =>
+      path.join(source.repoRoot, "extensions", name.split("/")[1]!),
+    );
+    writeFileSync(
+      path.join(directories[1]!, "index.ts"),
+      'export { missing } from "./missing.ts";\n',
+    );
+    source.sourceSha = commitRegistrySource(source.repoRoot);
+    const originals = directories.map(sourceMetadata);
+    expect(() => createRegistry(source, { requiredPackages: names })).toThrow();
+    expect(readdirSync(path.join(source.repoRoot, "artifact"))).toEqual([
+      `openclaw-alpha-${VERSION}.tgz`,
+    ]);
+    expect(existsSync(path.join(directories[2]!, "dist/index.js"))).toBe(false);
+    expect(directories.map(sourceMetadata)).toEqual(originals);
   });
 
   it.each(["build", "pack"])(

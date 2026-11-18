@@ -73,18 +73,19 @@ const dotenvState = vi.hoisted(() => {
   };
 });
 
-vi.mock("node:fs", async () => {
-  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-  type ExistsSyncPath = Parameters<typeof actual.existsSync>[0];
-  return {
-    ...actual,
-    existsSync: vi.fn((target: ExistsSyncPath) => {
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = {
+    existsSync: vi.fn((target: Parameters<typeof actual.existsSync>[0]) => {
       if (typeof target === "string" && target.endsWith(".env")) {
         return fileState.hasCliDotEnv;
       }
       return actual.existsSync(target);
     }),
   };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 
 vi.mock("./dotenv.js", () => ({
@@ -123,6 +124,7 @@ describe("runCli environment and passive startup", () => {
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_CONFIG_PATH",
     "OPENCLAW_CONTAINER",
+    "OPENCLAW_CLI_CONTAINER_BYPASS",
     "OPENCLAW_GATEWAY_PORT",
     "OPENCLAW_GATEWAY_URL",
     "OPENCLAW_GATEWAY_TOKEN",
@@ -277,6 +279,13 @@ describe("runCli environment and passive startup", () => {
     expect(dotenvState.loadDotEnv).toHaveBeenCalledBefore(startup.prepareDatabase);
     expect(dotenvState.state.profileAtDotenvLoad).toBe("rawdog");
     expect(process.env.OPENCLAW_PROFILE).toBe("rawdog");
+  });
+
+  it("leaves a profile-prefixed pairing code to the container's own CLI", async () => {
+    // Bypass stops before docker/podman; the host must not select the code's profile first.
+    setTestEnvValue("OPENCLAW_CLI_CONTAINER_BYPASS", "1");
+    await runCli(["node", "openclaw", "--container", "demo", "pair", "work:ABCD-EFGH"]);
+    expect(process.env.OPENCLAW_PROFILE).toBeUndefined();
   });
 
   it("rejects --container combined with interleaved --dev", async () => {

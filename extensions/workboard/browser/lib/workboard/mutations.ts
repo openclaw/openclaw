@@ -33,7 +33,13 @@ import type {
 function normalizeDispatchSummary(value: unknown): WorkboardDispatchSummary {
   const countArray = (key: string) =>
     isRecord(value) && Array.isArray(value[key]) ? value[key].length : 0;
+  const failure =
+    isRecord(value) && Array.isArray(value.startFailures) ? value.startFailures[0] : undefined;
   return {
+    firstFailure:
+      isRecord(failure) && typeof failure.title === "string" && typeof failure.error === "string"
+        ? `${failure.title}: ${failure.error}`
+        : null,
     started: countArray("started"),
     failures: countArray("startFailures"),
     promoted: countArray("promoted"),

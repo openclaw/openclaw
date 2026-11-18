@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { existsSync, linkSync, renameSync, writeFileSync } from "node:fs";
+import { Session } from "node:inspector/promises";
+import { constants, PerformanceObserver } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { parentPort, threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Generated } from "kysely";
+import { flushGcSamples } from "./gc-observer.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
@@ -20,6 +23,8 @@ import {
 } from "./sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import { withStateDatabaseSchemaMaintenance } from "./state-database-maintenance.js";
+
+declare const Bun: { gc(full: boolean): number };
 
 let pendingCloses = 0;
 type ReplyOwnership = { kind: string; before: number; after: number };
@@ -75,6 +80,7 @@ export type FixtureOperations = {
   "database.domain.execute": Operation<{ command: DomainCommand }, Receipt>;
   read: Operation<undefined, string[]>;
   takeReplyOwnership: Operation<undefined, ReplyOwnership[]>;
+  collectGarbage: Operation<undefined, undefined>;
   commitThenExit: Operation<Value, never>;
   commitWithoutReceipt: Operation<Value & { mode: "native" | "schema-maintenance" }, never>;
   commitUnserializable: Operation<Value, symbol>;
@@ -179,6 +185,35 @@ function createFixtureBackend(
       ? { [SQLITE_WORKER_CLOSE_RECEIPT]: () => retirementReceipt }
       : {}),
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
+      if (commandType === "collectGarbage") {
+        return (async () => {
+          if (process.versions.bun) {
+            Bun.gc(true);
+            return;
+          }
+          const session = new Session();
+          session.connect();
+          const observed = new Promise<void>((resolve) => {
+            const observer = new PerformanceObserver((list) => {
+              for (const entry of list.getEntries()) {
+                if (
+                  "detail" in entry &&
+                  isRecord(entry.detail) &&
+                  entry.detail.kind === constants.NODE_PERFORMANCE_GC_MAJOR
+                ) {
+                  observer.disconnect();
+                  resolve();
+                }
+              }
+            });
+            observer.observe({ entryTypes: ["gc"] });
+          });
+          await session.post("HeapProfiler.collectGarbage");
+          await observed;
+          flushGcSamples();
+          session.disconnect();
+        })();
+      }
       if (input?.type !== "prepare" || commandType !== "append" || prepared) {
         return undefined;
       }
@@ -194,6 +229,9 @@ function createFixtureBackend(
       });
     },
     execute(command) {
+      if (command.type === "collectGarbage") {
+        return undefined;
+      }
       if (command.type === "takeReplyOwnership") {
         return replyOwnership.splice(0);
       }

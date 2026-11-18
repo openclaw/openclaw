@@ -94,11 +94,17 @@ for (let index = 0; index < sessions; index++) {
     execution: { status: "terminal", startedAt: 1, endedAt: 2, outcome: { status: "ok" } },
   });
 }
-const metadata = createSessionRowProjectionContext({
-  snapshotIdentity: () => runs,
-  runs: (ids) => (ids ? new Map([...runs].filter(([id]) => ids.has(id))) : runs),
-  prepare: async () => {},
-});
+const metadata = createSessionRowProjectionContext(
+  {
+    snapshotIdentity: () => runs,
+    runs: (ids) => (ids ? new Map([...runs].filter(([id]) => ids.has(id))) : runs),
+    prepare: async () => {},
+  },
+  {
+    state: () => ({ cfg, epoch: 0, disposed: false }),
+    prepareRegistry: () => undefined,
+  },
+);
 const cfg: OpenClawConfig = {
   agents: { entries: { main: {} } },
   session: { mainKey: "main" },

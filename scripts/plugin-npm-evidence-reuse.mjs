@@ -52,6 +52,7 @@ export async function loadNpmEvidenceReplay({
   archivePath,
   client,
   fetchImpl,
+  shareAcquisitionReads = false,
 }) {
   const current = await client.getRun(binding.childRunId);
   if (
@@ -105,13 +106,13 @@ export async function loadNpmEvidenceReplay({
     maxEntryBytes: () => MAX_REPLAY_BYTES,
     maxExpandedBytes: MAX_REPLAY_BYTES,
   });
-  const replay = createReleaseEvidenceReplay(
-    binding,
-    JSON.parse(files.get(NPM_EVIDENCE_FILE).toString("utf8")),
-  );
+  const payload = JSON.parse(files.get(NPM_EVIDENCE_FILE).toString("utf8"));
+  const replay = createReleaseEvidenceReplay(binding, payload, { shareAcquisitionReads });
   replay.observeRun("actions/runs/" + binding.childRunId, current);
   replay.observeArchive(artifactId, metadata);
   // Reuse on disk is content-only: every invocation still authenticates metadata,
   // current attempt and the successful trusted preview job above.
-  return replay;
+  // The successful exact trusted preview, not a caller-created replay object,
+  // authenticates this owner-produced graph projection.
+  return Object.assign(replay, { authenticatedPreparedEvidence: payload.preparedEvidence });
 }

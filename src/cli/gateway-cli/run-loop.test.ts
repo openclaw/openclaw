@@ -15,6 +15,7 @@ import {
   registerGracefulGatewayShutdownTests,
   registerShutdownCompletionTests,
 } from "./run-loop-shutdown-completion.test-support.js";
+import { registerGatewayStartupSignalTests } from "./run-loop-startup-signals.test-support.js";
 import { registerGatewayStartupFailureTests } from "./run-loop-startup.test-support.js";
 import { registerHostedUpdateStopTests } from "./run-loop-stop.test-support.js";
 import { registerUpdateRespawnTests } from "./run-loop-update-respawn.test-support.js";
@@ -299,6 +300,7 @@ describe("runGatewayLoop", () => {
   });
 
   registerGatewayStartupFailureTests(mocks.gatewayLog, fixtures);
+  registerGatewayStartupSignalTests(fixtures);
 
   registerGracefulGatewayShutdownTests(fixtures);
 
@@ -820,8 +822,7 @@ describe("runGatewayLoop", () => {
 
       await mocks.withRunningGateway(async ({ captureSignal, start, exited }) => {
         captureSignal("SIGUSR2")();
-        await waitForLoopTurn();
-        await waitForLoopTurn();
+        await waitForCalls(start, 2);
 
         expect(mocks.abortPendingChannelReloads).toHaveBeenCalledOnce();
         expect(mocks.consumeGatewayRestartAuthorization).toHaveBeenCalledOnce();
@@ -1092,7 +1093,7 @@ describe("runGatewayLoop", () => {
     await mocks.withRunningGateway(
       async ({ captureSignal, start, exited }) => {
         captureSignal("SIGUSR2")();
-        await waitForLoopTurn();
+        await waitForCalls(start, 2);
 
         expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledWith(
           expect.objectContaining({ port: 18789, probeHosts: ["10.0.0.25"] }),

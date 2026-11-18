@@ -37,6 +37,18 @@ export type ParsedTranscriptEntry = {
   toolResultCounts: { total: number; errors: number };
 };
 
+/**
+ * Canonical latency inputs for one full transcript scan.
+ *
+ * `userTimestamps` names each billed reply's own user turn, so a displaced path
+ * measures inside itself. `activeUserTimestamp` is the continuation cursor the
+ * next append-only scan measures its first reply against.
+ */
+export type UsageRollupTiming = {
+  userTimestamps: ReadonlyMap<ParsedTranscriptEntry, number>;
+  activeUserTimestamp?: number;
+};
+
 export type CostUsageTotals = {
   input: number;
   output: number;
@@ -50,6 +62,11 @@ export type CostUsageTotals = {
   cacheReadCost: number;
   cacheWriteCost: number;
   missingCostEntries: number;
+  /**
+   * Input tokens of calls whose provider reported no cache read/write split. Their
+   * cache use is unknown, so cache hit rates leave them out instead of counting misses.
+   */
+  cacheUnmeasuredInput: number;
   /** Missing-cost entry counts keyed by the raw `provider/model` attribution. */
   missingCostByModel?: Record<string, number>;
 };
