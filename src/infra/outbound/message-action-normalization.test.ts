@@ -49,6 +49,7 @@ describe("normalizeMessageActionInput", () => {
   it.each<[Input, Record<string, unknown>, string[]]>([
     [makeInput("send", { target: "  channel:C1  " }), { to: "channel:C1" }, []],
     [makeInput("channel-info", { target: "  C123  " }), { channelId: "C123" }, []],
+    [makeInput("dice", { target: "@testchannel" }), { to: "@testchannel" }, ["channelId"]],
     [
       makeInput("send", { target: "channel:C1", to: "legacy", channelId: "legacy-channel" }),
       { target: "channel:C1", to: "channel:C1" },

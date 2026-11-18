@@ -17,6 +17,7 @@ describe("actionRequiresTarget", () => {
   it.each([
     ["send", true],
     ["channel-info", true],
+    ["dice", true],
     ["broadcast", false],
     ["search", false],
     ["conversation-open", false],

@@ -165,6 +165,19 @@ it("keeps a non-send action outside transcript ownership", async () => {
   expect(transcriptMocks.append).not.toHaveBeenCalled();
 });
 
+// Unlike the action above, a roll is a current-source delivery, yet it still owns no transcript:
+// the send text it carries reaches no recipient.
+it("keeps a dice delivery out of the transcript while it carries ignored send text", async () => {
+  const params = source("testchat", "direct:user-1", {
+    action: "dice",
+    actionParams: { to: "direct:user-1", message: "You rolled a six" },
+    deliveredPayload: { ok: true, messageId: "dice-1" },
+  });
+  expect(isDeliveredCurrentSourceReply(params)).toBe(true);
+  await expect(mirrorDeliveredSourceReplyToTranscript(params)).resolves.toBe(false);
+  expect(transcriptMocks.append).not.toHaveBeenCalled();
+});
+
 it.each([
   ["topic reply", { ...topic, deliveredPayload: topicDelivery }, "topic reply"],
   [

@@ -319,6 +319,7 @@ describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
     message: "reply",
   };
   const poll = { action: "poll", pollQuestion: "Preferred default?", pollOption: ["a", "b"] };
+  const dice = { action: "dice", to: "direct:user-1", diceEmoji: "\u{1F3B2}" };
   const receipt = { ok: true, messageId: "imessage-853" };
   const sent = { deliveryStatus: "sent" };
   const confirmed = (fields: Record<string, unknown>) => ({
@@ -329,6 +330,9 @@ describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
   it.each<Case>([
     ["confirmed poll", poll, confirmed({ ok: true, pollId: "poll-1" }), true],
     ["unconfirmed poll", poll, { details: { ok: true, pollId: "poll-1" } }, false],
+    // A roll is outside the reply-action names; only the producer's recorded route accepts it.
+    ["confirmed dice", dice, confirmed({ ok: true }), true],
+    ["unconfirmed dice", { ...dice, to: "direct:someone-else" }, { details: { ok: true } }, false],
     ["implicit send", send, sent, true, { deliveryConfirmed: true }],
     [
       "unverified target",
