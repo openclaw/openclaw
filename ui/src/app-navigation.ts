@@ -1,6 +1,11 @@
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 import { parseSidebarSessionReference } from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.ts";
-import { pluginTabForLocation, type PluginTab, type RouteId } from "./app-route-paths.ts";
+import {
+  pluginTabForLocation,
+  type PluginTab,
+  type RouteId,
+  isSessionRouteId,
+} from "./app-route-paths.ts";
 import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
@@ -42,6 +47,25 @@ export function isPluginsHubRoute(routeId: NavigationRouteId): boolean {
   );
 }
 
+/**
+ * Plugin pages the Users section lists under Activity instead of the "more" menu: OpenClaw
+ * ID remote access manages who can reach this claw.
+ */
+export const USERS_SECTION_PLUGIN_PAGES: ReadonlySet<string> = new Set([
+  "openclaw-id-access/access",
+]);
+
+/** Every view the sidebar beside the rail can show; its boot snapshot saves each of them. */
+export const SIDEBAR_NAVIGATION_VIEWS = [
+  "dashboards",
+  "automations",
+  "customize",
+  "sessions",
+  "online",
+  "plugin",
+] as const;
+export type SidebarNavigationView = (typeof SIDEBAR_NAVIGATION_VIEWS)[number];
+
 /** Section pages own a sidebar of their own; other pages run full width. */
 export function sidebarSectionForRoute(
   route: NavigationRouteId,
@@ -53,6 +77,39 @@ export function sidebarSectionForRoute(
       : route === "activity"
         ? "online"
         : undefined;
+}
+
+/**
+ * The sidebar a page shows, decided by the page alone: its section's list, the Sessions list
+ * beside conversations, or none, leaving only the rail. The open plugin page's key places
+ * plugin pages that belong to a section; a plugin page whose navigation item has children
+ * (Workboard and its boards) lists them in a plugin sidebar.
+ */
+export function sidebarViewForPage(
+  route: NavigationRouteId,
+  pluginKey?: string,
+  pluginSection = false,
+): ReturnType<typeof sidebarSectionForRoute> | "sessions" | "plugin" {
+  const section =
+    sidebarSectionForRoute(route) ??
+    (route === "plugin" && pluginKey && USERS_SECTION_PLUGIN_PAGES.has(pluginKey)
+      ? "online"
+      : undefined);
+  if (section) {
+    return section;
+  }
+  if (pluginSection) {
+    return "plugin";
+  }
+  // Systems lists its machines in the Sessions view of the sidebar; the Sessions page sits
+  // beside the Sessions list it expands. A terminal is a conversation opened from that list.
+  return isSessionRouteId(route) ||
+    route === "new-session" ||
+    route === "terminal" ||
+    route === "systems" ||
+    isSessionsHubRoute(route)
+    ? "sessions"
+    : undefined;
 }
 
 // Worktrees renders as a tab of the Sessions hub; the sidebar highlights the

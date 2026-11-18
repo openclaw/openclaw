@@ -65,7 +65,7 @@ it.each(["chat.history", "chat.startup"] as const)(
         expect(readUserTurnRequesterOrigin(recorder)).toMatchObject(requesterOrigin);
         expect(persisted?.message["__openclaw"]?.requesterOrigin).toMatchObject(requesterOrigin);
       } finally {
-        recorder.finishPendingInput?.("interrupted");
+        recorder.finishPendingInput?.("interrupted", "failed");
         await recorder.waitForPendingInputSettlement?.();
       }
     });

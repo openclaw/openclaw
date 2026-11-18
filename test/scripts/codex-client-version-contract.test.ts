@@ -1,11 +1,15 @@
-// Codex Client Version Contract tests: ChatGPT model discovery reports the
-// version of the Codex binary that runs turns (#113615).
+// Codex Client Version Contract tests: ChatGPT subscription model discovery never
+// lists as a Codex older than the one OpenClaw ships.
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const CODEX_PACKAGE_JSON_URL = new URL("../../extensions/codex/package.json", import.meta.url);
-const OPENAI_PROVIDER_URL = new URL("../../extensions/openai/base-url.ts", import.meta.url);
-const OPENAI_CODEX_CLIENT_VERSION_PATTERN = /^const OPENAI_CODEX_CLIENT_VERSION = "([^"]+)";$/mu;
+const OPENAI_CLIENT_VERSION_URL = new URL(
+  "../../extensions/openai/codex-client-version.ts",
+  import.meta.url,
+);
+const OPENAI_CODEX_CLIENT_VERSION_FLOOR_PATTERN =
+  /^export const OPENAI_CODEX_CLIENT_VERSION_FLOOR = "([^"]+)";$/mu;
 
 function readManagedCodexVersion(): string {
   const packageJson = JSON.parse(fs.readFileSync(CODEX_PACKAGE_JSON_URL, "utf8")) as {
@@ -18,17 +22,17 @@ function readManagedCodexVersion(): string {
   return version;
 }
 
-function readOpenAICodexClientVersion(): string {
-  const providerSource = fs.readFileSync(OPENAI_PROVIDER_URL, "utf8");
-  const version = OPENAI_CODEX_CLIENT_VERSION_PATTERN.exec(providerSource)?.[1];
+function readOpenAICodexClientVersionFloor(): string {
+  const source = fs.readFileSync(OPENAI_CLIENT_VERSION_URL, "utf8");
+  const version = OPENAI_CODEX_CLIENT_VERSION_FLOOR_PATTERN.exec(source)?.[1];
   if (!version) {
-    throw new Error("extensions/openai/base-url.ts must declare the Codex client version");
+    throw new Error("extensions/openai/codex-client-version.ts must declare the Codex floor");
   }
   return version;
 }
 
 describe("Codex client version contract", () => {
-  it("matches OpenAI model discovery to the managed Codex package", () => {
-    expect(readOpenAICodexClientVersion()).toBe(readManagedCodexVersion());
+  it("floors OpenAI subscription discovery at the managed Codex package", () => {
+    expect(readOpenAICodexClientVersionFloor()).toBe(readManagedCodexVersion());
   });
 });

@@ -1,4 +1,5 @@
 import { isStateDatabaseMaintenanceContention } from "../infra/gateway-state-owner-record.js";
+import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -48,8 +49,8 @@ export function createOpenClawStateLeaseCleanup(params: {
         throw error;
       }));
   };
-  // Another process's offline maintenance is brief; an unreleased lease would otherwise
-  // block every later acquirer, including this process, until its stored expiry.
+  // Another process's offline maintenance or write transaction is brief; an unreleased lease
+  // would otherwise block every later acquirer, including this process, until its stored expiry.
   // finish() is idempotent, and release still targets only this owner's lease row.
   const retryContendedCleanup = (error: unknown, retries: number) => {
     const deadline = params.retryDeadline?.();
@@ -57,7 +58,7 @@ export function createOpenClawStateLeaseCleanup(params: {
       complete ||
       deadline === undefined ||
       Date.now() >= deadline ||
-      !isStateDatabaseMaintenanceContention(error)
+      !(isStateDatabaseMaintenanceContention(error) || isSqliteLockError(error))
     ) {
       return;
     }

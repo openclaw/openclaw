@@ -327,7 +327,7 @@ it("retains a failed publication without a captured tree when PR discovery is un
 });
 
 it.each([false, true])(
-  "reconciles published coverage with current read authority (revoked=%s)",
+  "finishes admitted coverage reads across disconnect (disconnected=%s)",
   async (revoked) => {
     await withReadFixture(async (fixture) => {
       const snapshot = {
@@ -367,10 +367,9 @@ it.each([false, true])(
         (await isSuperseded(snapshot)) ? null : receipt,
       );
       const respond = await fixture.options();
+      expectPartialReply(respond, { latestShared: null });
       if (revoked) {
-        expectFailure(respond);
-      } else {
-        expectPartialReply(respond, { latestShared: null });
+        expectFailure(await fixture.options());
       }
       expect(covered).toHaveBeenCalledWith(snapshot, expect.any(Function));
       expect(fixture.pullRequests.read).toHaveBeenCalledWith(
@@ -493,9 +492,9 @@ it.each([
     "github-generation",
     "github-account",
   ].map((change) => ({ change, phase: "personal" })),
-  // Both authority owners must also run after the later shared read.
+  // Credential selection stays fenced even when the later shared read yields.
   ...["connection", "github-generation"].map((change) => ({ change, phase: "shared" })),
-])("rechecks $change authority after a pending $phase read", async ({ change, phase }) => {
+])("keeps $change owner binding through $phase reads", async ({ change, phase }) => {
   await withPersonalReadFixture(async (fixture) => {
     const owner = ownerOf(fixture);
     const hasGitHubConnection = change.startsWith("github-");
@@ -555,8 +554,12 @@ it.each([
 
         expect(respond).toHaveBeenCalledOnce();
         expect(fixture.personalConnectionStatus).toHaveBeenCalledOnce();
+        expect(fixture.personalConnectionStatus.mock.calls[0]?.[0].owner).toBe(owner);
         if (
           change === "unchanged" ||
+          change === "scope" ||
+          change === "connection" ||
+          change === "profile" ||
           change === "github-unchanged" ||
           change === "github-unavailable"
         ) {

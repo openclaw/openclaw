@@ -401,6 +401,21 @@ async function prepareTarget(
       .getByRole("button", { name: "Pages", exact: true })
       .click();
   }
+  if (scenario.routeId === "sessions") {
+    // Historical bundles list Sessions in Pages; current bundles open it from its sidebar.
+    await page.locator(".sidebar-pages:visible").waitFor();
+    if ((await target.count()) === 0) {
+      await page.keyboard.press("Escape");
+      const filter = page.locator(".sidebar-session-toolbar .sidebar-session-sort");
+      if (!(await filter.isVisible())) {
+        await page.locator('.sidebar-rail [data-navigation-view="sessions"]').click();
+      }
+      await filter.click();
+      const sessions = page.locator('.sidebar-session-filter-footer[href$="/sessions"]');
+      await sessions.waitFor({ state: "visible" });
+      return { scenario, target: sessions };
+    }
+  }
   await target.waitFor({ state: "visible" });
   return { scenario, target };
 }

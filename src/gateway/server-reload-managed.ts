@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
 import { clearRetiredMcpOAuth } from "../agents/mcp-config-mutation.js";
 import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
@@ -10,7 +9,6 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime-state.js";
-import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { resetSkillSnapshotConfigFingerprintCache } from "../skills/runtime/snapshot-config-fingerprint.js";
 import { invalidateConfigGetResponseCache } from "./config-get-response.js";
 import {
@@ -48,9 +46,6 @@ import {
 export function startManagedGatewayConfigReloader(
   params: ManagedGatewayConfigReloaderParams,
 ): ManagedGatewayConfigReloaderHandle {
-  // Keep this Gateway's owners across deferred writes. A module snapshot would
-  // retain the first Gateway's closed SDK host after an in-process restart.
-  const runInGatewayReloadContext = AsyncLocalStorage.snapshot();
   const lifecycle = new AbortController();
   if (params.minimalTestGateway) {
     return {
@@ -356,25 +351,19 @@ export function startManagedGatewayConfigReloader(
       ? { prepareConfigCandidate: params.prepareConfigCandidate }
       : {}),
     runTransaction: (run) =>
-      runInGatewayReloadContext(() =>
-        runOutsideAsyncWorkScope(() =>
-          runOutsideGatewayRootWorkAdmission(() =>
-            runWithGatewayIndependentRootWorkAdmission(
-              run,
-              "reload:config",
-              lifecycle.signal,
-            ).catch((error: unknown) => {
-              // Only the admission wait wraps this stop reason; retain admitted work failures.
-              if (
-                lifecycle.signal.reason instanceof GatewayConfigReloadSupersededError &&
-                error instanceof Error &&
-                error.cause === lifecycle.signal.reason
-              ) {
-                throw lifecycle.signal.reason;
-              }
-              throw error;
-            }),
-          ),
+      runOutsideGatewayRootWorkAdmission(() =>
+        runWithGatewayIndependentRootWorkAdmission(run, "reload:config", lifecycle.signal).catch(
+          (error: unknown) => {
+            // Only the admission wait wraps this stop reason; retain admitted work failures.
+            if (
+              lifecycle.signal.reason instanceof GatewayConfigReloadSupersededError &&
+              error instanceof Error &&
+              error.cause === lifecycle.signal.reason
+            ) {
+              throw lifecycle.signal.reason;
+            }
+            throw error;
+          },
         ),
       ),
     readSnapshot: params.readSnapshot,

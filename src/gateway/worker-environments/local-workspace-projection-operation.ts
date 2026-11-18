@@ -4,6 +4,7 @@ import type {
 } from "../../agents/sandbox/local-workspace-quiescence.js";
 import type { LocalWorkspacePausePhase } from "../../agents/sandbox/types.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { localWorkspaceProjectionPath } from "./local-workspace-checkout.js";
 import {
@@ -35,6 +36,9 @@ export async function runLocalWorkspaceProjection<T>(
     onPhase?: (phase: LocalWorkspacePausePhase | "capturePreparation") => void;
   } = {},
 ) {
+  using phases = observeDiagnosticsTimelinePhases(
+    "attempt.setup.sandbox.workspace_selection.projection.operation",
+  );
   owner.assertCurrent();
   options.onPhase?.("operation");
   let previous = store.get();
@@ -82,6 +86,7 @@ export async function runLocalWorkspaceProjection<T>(
         }
       : undefined,
     options.reason,
+    (phase) => markPhase(phase),
   );
   if (previous) {
     operations.current();
@@ -96,6 +101,7 @@ export async function runLocalWorkspaceProjection<T>(
   };
   let quiescence: Awaited<ReturnType<typeof quiesceLocalWorkspace>> | undefined;
   const markPhase = (phase: LocalWorkspacePausePhase) => {
+    phases.mark(`attempt.setup.sandbox.workspace_selection.projection.${phase}`);
     quiescence?.markPhase(phase);
     options.onPhase?.(phase);
   };
@@ -149,6 +155,9 @@ export async function runLocalWorkspaceProjection<T>(
           diagnostics,
         )
       : undefined;
+  if (options.reason === "checkpoint") {
+    await operations.prehash();
+  }
   await pause();
   let accepted = false;
   try {

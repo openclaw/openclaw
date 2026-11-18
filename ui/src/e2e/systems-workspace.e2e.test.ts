@@ -219,9 +219,8 @@ suite.define(() => {
             .locator("main.content")
             .evaluate((element) => getComputedStyle(element).paddingInline);
         expect(await inset()).toBe("0px");
-        // Activity left the drawer on Users; its avatar switches back to Sessions.
+        // New session shows the Sessions drawer; tapping its avatar there would open the agent menu.
         await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
-        await page.locator('[data-navigation-view="sessions"]').click();
         await page.locator('.sidebar-recent-session[data-session-key="agent:main:task-0"]').click();
         await page.locator(".chat-thread").waitFor();
         expect(await inset()).toBe("0px");

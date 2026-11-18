@@ -211,6 +211,12 @@ export function wrapStreamFnWithProviderPromptState(params: {
   state: ProviderPromptState;
   effectiveContextTokenBudget: number;
   recordEvent?: (type: string, data?: Record<string, unknown>) => void;
+  transformPayload?: (
+    payload: unknown,
+    model: Model,
+    context: Parameters<StreamFn>[1],
+    options: Parameters<StreamFn>[2],
+  ) => Promise<unknown>;
   /** Last edit before the body is recorded and sent; a session fork replays its parent here. */
   finalizePayload?: (payload: Record<string, unknown>) => void;
 }): StreamFn {
@@ -223,16 +229,26 @@ export function wrapStreamFnWithProviderPromptState(params: {
       ...options,
       onPayload: async (payload, payloadModel) => {
         const replacement = await originalOnPayload?.(payload, payloadModel);
-        const finalPayload = replacement === undefined ? payload : replacement;
-        if (finalPayload && typeof finalPayload === "object" && !Array.isArray(finalPayload)) {
-          // SAFETY: the guard above admits only a plain, non-array request object.
-          params.finalizePayload?.(finalPayload as Record<string, unknown>);
+        const preparedPayload = replacement === undefined ? payload : replacement;
+        if (
+          preparedPayload &&
+          typeof preparedPayload === "object" &&
+          !Array.isArray(preparedPayload)
+        ) {
+          // SAFETY: the guard admits a non-array request object. Replay before final policy.
+          params.finalizePayload?.(preparedPayload as Record<string, unknown>);
           // Shallow: transports reassign top-level fields after the hook; items stay shared.
-          preparedRequests.set(params.state, { model: payloadModel, body: { ...finalPayload } });
+          preparedRequests.set(params.state, { model: payloadModel, body: { ...preparedPayload } });
         }
+        // Encoding transports may still alter the payload after onPayload.
+        // Their final gate runs at encode; other transports gate here.
         if (modelRequestBodyState(observedOptions).enabled) {
-          return finalPayload;
+          return preparedPayload;
         }
+        const finalPayload = params.transformPayload
+          ? await params.transformPayload(preparedPayload, payloadModel, context, options)
+          : preparedPayload;
+        options?.signal?.throwIfAborted();
         await recordProviderPrompt({
           state: params.state,
           model: payloadModel,
@@ -274,12 +290,21 @@ export function wrapStreamFnWithProviderPromptState(params: {
         await options?.onResponse?.(response, responseModel);
       },
     };
-    markModelPayloadObserver(observedOptions.onPayload!, originalOnPayload);
+    markModelPayloadObserver(
+      observedOptions.onPayload!,
+      originalOnPayload,
+      () => !params.transformPayload,
+    );
+    modelRequestBodyState(observedOptions).hasFinalPolicy = Boolean(params.transformPayload);
     modelRequestBodyState(observedOptions).encode = async (payload) => {
+      const finalPayload = params.transformPayload
+        ? await params.transformPayload(payload, model, context, options)
+        : payload;
+      options?.signal?.throwIfAborted();
       const encoded = await recordProviderPrompt({
         state: params.state,
         model,
-        payload,
+        payload: finalPayload,
         signal: options?.signal,
         effectiveContextTokenBudget: params.effectiveContextTokenBudget,
         encode: true,

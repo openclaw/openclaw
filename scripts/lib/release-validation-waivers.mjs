@@ -49,6 +49,21 @@ const EXTENDED_1033_MOBILE_JOBS = new Map([
 /** @type {import("./release-validation-waivers.mjs").ReleaseValidationWaiver[]} */
 const RELEASE_VALIDATION_WAIVERS = [
   {
+    targetVersion: "2026.11.6",
+    childRole: "productPerformance",
+    jobName: "Kova mock provider performance",
+    reason:
+      "Dallin Romney explicitly authorized the 2026.11.6 Kova waiver on " +
+      "2026-11-18 at 06:30 UTC while requiring continued cold-turn investigation. " +
+      "The prior cold-turn comparison showed a 13341 ms median versus 6515 ms " +
+      "on 2026.11.5; transient noise or a causal regression is not established. " +
+      "This release-wide grant accepts only the named Kova threshold failures, " +
+      "not evidence of a fix or non-regression. Preserve raw measurements and " +
+      "required execution; no threshold changes or not-run exemption. Other " +
+      "jobs, missing or cancelled evidence, build/setup, crashes, correctness, " +
+      "isolation, data integrity, install/update and publication gates remain blocking.",
+  },
+  {
     targetVersion: "2026.10.33",
     childRole: "releaseChecksCandidate",
     jobName: "Run package acceptance / Telegram package acceptance / Run package Telegram E2E",

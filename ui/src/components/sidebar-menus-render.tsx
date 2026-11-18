@@ -37,6 +37,7 @@ import {
   runControlUiPluginAction,
 } from "../plugins/control-ui-actions.ts";
 import { renderSidebarAgentMenu as SidebarAgentMenu } from "./app-sidebar-agent-menu.tsx";
+import { renderSidebarAutomationsFilterMenuForMenus } from "./app-sidebar-automations-filter.tsx";
 import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-dropdown.tsx";
 import { renderSidebarIdentityMenu as SidebarIdentityMenu } from "./app-sidebar-identity-menu.tsx";
 import { renderSidebarPeopleFilterMenuForMenus } from "./app-sidebar-people-filter-menu.tsx";
@@ -586,6 +587,9 @@ function renderSidebarMenus(
     </Show>,
     <Show when={projected.peopleFilterMenuPosition} keyed>
       {(menu) => renderSidebarPeopleFilterMenuForMenus(projected, view, menu)}
+    </Show>,
+    <Show when={projected.automationsFilterMenuPosition}>
+      {renderSidebarAutomationsFilterMenuForMenus(projected, view)}
     </Show>,
     <Show when={projected.catalogViewMenuPosition} keyed>
       {(menu) => renderSidebarCatalogViewMenuForMenus(projected, view, menu)}
