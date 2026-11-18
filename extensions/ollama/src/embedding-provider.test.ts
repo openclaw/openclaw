@@ -184,10 +184,6 @@ describe("ollama embedding provider", () => {
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expectEmbeddingFetch(`${LOCAL_HOST}/api/embed`, {}, ["a", "bb", "ccc"]);
-    expect(fetchMock.mock.calls[0]?.[0]).toMatchObject({
-      policy: { allowedOrigins: [LOCAL_HOST] },
-      configuredLocalOriginBaseUrl: LOCAL_HOST,
-    });
   });
 
   it("reports actionable embed errors for a missing model", async () => {

@@ -10,6 +10,17 @@ import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js"
 import { createOllamaEmbeddingProvider } from "./embedding-provider.js";
 import { ollamaMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:dns/promises")>();
+  return {
+    ...actual,
+    lookup: (...args: Parameters<typeof actual.lookup>) =>
+      args[0].endsWith(".ollama.test")
+        ? Promise.resolve([{ address: "127.0.0.1", family: 4 }])
+        : actual.lookup(...args),
+  };
+});
+
 type OllamaRequest = {
   method: string | undefined;
   url: string | undefined;
@@ -33,7 +44,11 @@ function mixPercentEscapeCase(value: string): string {
 }
 
 async function startOllamaServer(
-  respond: (request: OllamaRequest) => { status: number; body: string },
+  respond: (request: OllamaRequest) => {
+    status: number;
+    body: string;
+    headers?: Record<string, string>;
+  },
 ): Promise<OllamaServer> {
   const requests: OllamaRequest[] = [];
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -50,7 +65,7 @@ async function startOllamaServer(
       };
       requests.push(request);
       const response = respond(request);
-      res.writeHead(response.status, { "content-type": "application/json" });
+      res.writeHead(response.status, { "content-type": "application/json", ...response.headers });
       res.end(response.body);
     })();
   });
@@ -107,6 +122,51 @@ describe("Ollama embedding provider real transport", () => {
     vi.unstubAllEnvs();
     const pending = servers.splice(0);
     await Promise.all(pending.map((server) => server.close()));
+  });
+
+  it.each([false, true])(
+    "embeds through a configured local hostname, override=%s",
+    async (override) => {
+      const server = await startOllamaServer(() => ({
+        status: 200,
+        body: JSON.stringify({ models: [], embeddings: [[1, 0]] }),
+      }));
+      const baseUrl = server.baseUrl.replace("127.0.0.1", "configured.ollama.test");
+      const { provider } = await ollamaMemoryEmbeddingProviderAdapter.create({
+        provider: "ollama",
+        model: "test-embedding",
+        fallback: "none",
+        config: { models: { providers: { ollama: { baseUrl, models: [] } } } },
+        remote: override ? { baseUrl } : undefined,
+      });
+      if (!provider) {
+        throw new Error("Expected fixture embedding provider");
+      }
+      await expect(provider.embed("hello", { inputType: "query" })).resolves.toEqual([1, 0]);
+      expect(server.requests.map((request) => request.url)).toEqual(["/api/tags", "/api/embed"]);
+    },
+  );
+
+  it.each([false, true])("blocks an unrelated private hostname, redirect=%s", async (redirect) => {
+    const target = await startOllamaServer(() => ({
+      status: 200,
+      body: JSON.stringify({ embeddings: [[1, 0]] }),
+    }));
+    const targetUrl = target.baseUrl.replace("127.0.0.1", "unrelated.ollama.test");
+    const source = await startOllamaServer(() => ({
+      status: 307,
+      body: "",
+      headers: { location: `${targetUrl}/api/embed` },
+    }));
+    const baseUrl = source.baseUrl.replace("127.0.0.1", "configured.ollama.test");
+    const { provider } = await createOllamaEmbeddingProvider({
+      ...createOptions(baseUrl),
+      config: { models: { providers: { ollama: { baseUrl, models: [] } } } },
+      remote: redirect ? undefined : { baseUrl: targetUrl },
+    });
+    await expect(provider.embed("hello", { inputType: "query" })).rejects.toThrow(/Blocked/);
+    expect(target.requests).toEqual([]);
+    expect(source.requests).toHaveLength(redirect ? 1 : 0);
   });
 
   it("separates alias caches by model digest while preserving embedding-only endpoints", async () => {
