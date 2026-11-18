@@ -53,10 +53,13 @@ import {
 import { assertPluginStateRetention } from "../../plugins/doctor-migration-resources.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../plugins/installed-plugin-index-record-reader.js";
 import { resolveLegacyInstalledPluginIndexStorePath } from "../../plugins/installed-plugin-index-store-path.js";
+import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { parsePackageOpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
+import { installCliSignalExitHandlers, registerSignalExitGate } from "../signal-exit-barrier.js";
 import {
   captureTargetDatabaseSchemaContext,
   checkTargetDatabaseSchemasForContexts,
@@ -474,9 +477,25 @@ export async function updateAdmitCommand(contextPath?: string): Promise<void> {
     if (!context) {
       throw new Error("Candidate admission context is invalid.");
     }
-    const verdict = await inspectUpdateAdmission(context);
-    defaultRuntime.writeJson(verdict);
-    process.exitCode = verdict.verdict === "admit" ? 0 : 3;
+    // Admission bypasses ordinary CLI startup and carries no updater authority.
+    // Its own download children must still drain before a supervisor terminates it.
+    const stopped = new AbortController();
+    const finished = createDeferredCore();
+    const releaseSignals = installCliSignalExitHandlers();
+    const releaseGate = registerSignalExitGate(finished.promise, () => stopped.abort());
+    try {
+      const verdict = await withCommandProcessScope(
+        () => inspectUpdateAdmission(context),
+        stopped.signal,
+      );
+      stopped.signal.throwIfAborted();
+      defaultRuntime.writeJson(verdict);
+      process.exitCode = verdict.verdict === "admit" ? 0 : 3;
+    } finally {
+      releaseGate();
+      finished.resolve();
+      releaseSignals();
+    }
   } catch (error) {
     defaultRuntime.error(
       redactSupportDiagnosticLine(error instanceof Error ? error.message : String(error), {

@@ -26,7 +26,7 @@ afterEach(async () => {
   await tempDirs.cleanup();
 });
 
-it.each(["unchanged", "changed", "cache-evicted"] as const)(
+it.each(["unchanged", "changed", "cache-evicted", "env-only-cache"] as const)(
   "prefetches without activation and preserves normal installation when %s",
   { timeout: 120_000 },
   async (scenario) => {
@@ -35,9 +35,12 @@ it.each(["unchanged", "changed", "cache-evicted"] as const)(
     const pluginId = "prefetch-fixture";
     const marker = path.join(root, "executed");
     const cache = path.join(root, "cache");
+    const home = path.join(root, "home");
+    await fs.mkdir(home);
+    vi.stubEnv("HOME", home);
     const userconfig = path.join(root, "user.npmrc");
     const globalconfig = path.join(root, "global.npmrc");
-    await fs.writeFile(userconfig, `cache=${cache}\n`);
+    await fs.writeFile(userconfig, scenario === "env-only-cache" ? "" : `cache=${cache}\n`);
     await fs.writeFile(globalconfig, "");
     for (const [key, value] of Object.entries({ cache, userconfig, globalconfig })) {
       vi.stubEnv(`npm_config_${key}`, value);
@@ -55,7 +58,11 @@ it.each(["unchanged", "changed", "cache-evicted"] as const)(
     ]);
     // Packing fixture sources can seed npm's content cache. Start the transport
     // observation cold so a later version cannot be satisfied by fixture setup.
-    await fs.rm(cache, { recursive: true, force: true });
+    await Promise.all(
+      [cache, path.join(home, ".npm")].map((directory) =>
+        fs.rm(directory, { recursive: true, force: true }),
+      ),
+    );
     const registry = await startStaticRegistry(
       [{ packageName: name, latest: "2.0.0", versions }],
       servers,
@@ -128,7 +135,7 @@ it.each(["unchanged", "changed", "cache-evicted"] as const)(
       version: scenario === "changed" ? "3.0.0" : "2.0.0",
       npmResolution: { integrity: selected.integrity },
     });
-    expect(archiveRequests).toBe(scenario === "unchanged" ? 1 : 2);
+    expect(archiveRequests).toBe(scenario === "changed" || scenario === "cache-evicted" ? 2 : 1);
     expect(await fs.stat(marker).catch(() => null)).toBeNull();
   },
 );
