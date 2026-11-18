@@ -12,9 +12,9 @@ class GatewayIdentifyLimiter {
       if (waitMs <= 0) {
         break;
       }
-      const { promise, resolve } = Promise.withResolvers<void>();
-      setTimeout(resolve, waitMs).unref();
-      await promise;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, waitMs).unref();
+      });
     }
     if (identify()) {
       this.nextAllowedAt = performance.now() + IDENTIFY_WINDOW_MS;
