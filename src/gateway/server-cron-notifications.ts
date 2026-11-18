@@ -633,7 +633,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
   const webhookToken = normalizeOptionalString(params.webhookToken);
   const redactedWebhookEvent = redactCommandCronEventForExternalDelivery(params.evt, params.job);
   const completionSummary =
-    params.job?.payload.kind === "script"
+    params.job?.payload.kind === "none"
       ? normalizeOptionalString(redactedWebhookEvent.summary)
       : params.evt.summary;
   const completionWebhookUrl = resolveCronCompletionWebhook(params.job?.delivery);

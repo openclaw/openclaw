@@ -15,7 +15,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
 import { isCronExecutionIdle } from "../cron/execution-idle.js";
-import { cronScriptFailureMetadata } from "../cron/script-failure.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
 import { createCronScriptRuntime } from "../cron/trigger-script.js";
@@ -348,7 +347,7 @@ export function buildGatewayCronService(params: {
     hostExecutionDisabled,
     listConfiguredChannels: () => listConfiguredMessageChannels(getRuntimeConfig()),
     admitScheduledOccurrence: ({ job }) => admitGatewayCronOccurrence(job, resolveCronAgent),
-    ...(scriptRuntime ? { evaluateCronTrigger: scriptRuntime.evaluateTrigger } : {}),
+    ...(scriptRuntime ? { evaluateCronCheck: scriptRuntime.evaluateCheck } : {}),
     ...(defaultAgentId ? { defaultAgentId } : {}),
     resolveDefaultAgentId: () => tryResolveAmbientOwnerAgentId(getRuntimeConfig()),
     resolveSessionEventTarget: resolveCronTarget,
@@ -423,55 +422,20 @@ export function buildGatewayCronService(params: {
         ssrfPolicy: webhookSsrfPolicy,
       });
     },
-    runScriptJob: async (request) => {
-      const { job, abortSignal, deliveryAttemptFence } = request;
-      if (!scriptRuntime || job.payload.kind !== "script") {
-        return {
-          status: "error",
-          error: "cron script payload executor is unavailable",
-          ...cronScriptFailureMetadata("payload", "runtime_unavailable"),
-        };
-      }
-      const execution = await scriptRuntime.executePayload(request);
-      if (execution.kind === "error") {
-        return {
-          status: "error",
-          error: `cron script payload failed (${execution.code}): ${execution.error}`,
-          ...cronScriptFailureMetadata("payload", execution.code),
-        };
-      }
-      if (execution.nextCheck && !job.pacing) {
-        return {
-          status: "error",
-          error: "cron script payload returned nextCheck, but this job has no pacing bounds",
-          ...cronScriptFailureMetadata("payload", "invalid_input"),
-        };
-      }
-
-      const preparedNotify = prepareAgentRunTerminalReply({ rawText: execution.notify });
-      const notify = preparedNotify.text.trim() ? preparedNotify.text : undefined;
-      const base = {
-        status: "ok" as const,
-        notify,
-        wake: execution.wake,
-        stateChanged: execution.stateChanged,
-        ...(execution.stateChanged ? { state: execution.state } : {}),
-        nextCheck: execution.nextCheck,
-      };
-      const completion = await finalizeCronCompletionAnnouncement({
+    deliverCheckPost: async ({ job, message, abortSignal, deliveryAttemptFence }) => {
+      const prepared = prepareAgentRunTerminalReply({ rawText: message });
+      return await finalizeCronCompletionAnnouncement({
         deliveryAttemptFence,
         job,
-        text: job.sessionTarget === "main" ? undefined : notify,
-        suppressionReason:
-          preparedNotify.terminalReply.disposition === "silent" ? "silent" : undefined,
+        text: prepared.text,
+        suppressionReason: prepared.terminalReply.disposition === "silent" ? "silent" : undefined,
         runStartedAtMs: job.state.runningAtMs,
         abortSignal,
         deps: params.deps,
         resolveCronAgent,
         logger: cronLogger,
-        label: "script payload",
+        label: "check",
       });
-      return { ...base, ...completion };
     },
     cleanupTimedOutAgentRun: async ({ job, execution }) => {
       if (!execution?.sessionId) {

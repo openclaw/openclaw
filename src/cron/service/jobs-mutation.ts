@@ -79,9 +79,7 @@ export function finalizeUpdatedJob(params: {
   // rotate it in the same write that changes the public job definition.
   reconcileCronSourceIdentity(job, nextJob, params.streamRestartExhaustedRequested);
 
-  const previousScript = job.payload.kind === "script" ? job.payload.script : undefined;
-  const nextScript = nextJob.payload.kind === "script" ? nextJob.payload.script : undefined;
-  if (!isDeepStrictEqual(job.trigger, nextJob.trigger) || previousScript !== nextScript) {
+  if (!isDeepStrictEqual(job.check, nextJob.check)) {
     // Trigger and payload scripts share one durable state slot. Exact persisted
     // definitions own it, matching in-flight ownership; explicit replacements win.
     for (const field of [

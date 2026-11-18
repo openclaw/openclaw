@@ -33,16 +33,15 @@ const enCron = {
       scheduleAtInvalid: "Enter a valid date and time.",
       everyAmountInvalid: "Interval must be greater than 0.",
       triggerIntervalTooShort:
-        "Set an interval of at least 30 seconds for condition-triggered automations.",
+        "Set an interval of at least 30 seconds for a check with an agent prompt.",
       cronExprRequired: "Cron expression is required.",
       cronExprInvalid: "Enter 5 fields like 0 9 * * * or 6 fields like 0 0 9 * * *.",
       cronTzInvalid: "Enter a valid IANA timezone, such as America/New_York.",
       staggerAmountInvalid: "Stagger must be greater than 0.",
-      triggerScriptRequired: "Trigger script is required when the condition trigger is enabled.",
-      triggerScriptPayloadUnsupported:
-        "Script payloads cannot use condition triggers because both own the same saved state.",
+      triggerScriptRequired: "Enter a script for this check.",
+      checkPayloadUnsupported: "Checks can use an agent prompt, but not a command or system event.",
       triggerScheduleUnsupported:
-        "Condition triggers require an interval, cron, or stream schedule.",
+        "Checks with an agent prompt require an interval, cron, or stream schedule.",
       systemTextRequired: "System text is required.",
       agentMessageRequired: "Agent message is required.",
       timeoutInvalid: "If set, timeout must be 0 or greater (0 disables this timeout).",
@@ -230,7 +229,9 @@ const enCron = {
       blockDirect: "Block",
       action: "Action",
       command: "Command",
-      script: "Script",
+      checkOnly: "Check only (no agent prompt)",
+      checkOnlyHelp:
+        "Edit the check under Advanced. It can post to your delivery destination without starting an agent turn.",
       readOnlyPayloadHelp:
         "This task was created outside the app. You can’t edit its contents here, but saving other changes keeps them.",
       systemEvent: "Post to main session",
@@ -259,18 +260,18 @@ const enCron = {
       toHelp: "A chat ID, phone number, or user ID. Leave blank to use the channel’s default.",
       advanced: "Advanced",
       advancedTask: "Task",
-      advancedConditions: "Conditions",
+      advancedConditions: "Check",
       advancedTiming: "Timing",
       advancedResults: "Results",
-      conditionTrigger: "Check a condition first",
+      conditionTrigger: "Run a model-free check",
       conditionTriggerHelp:
-        "Before each scheduled run, a script checks something without using the model. The task runs only when it says so.",
-      triggerConfigured: "Trigger configured",
-      triggerScript: "Trigger script",
+        "A script runs on the schedule without using a model. It can stay quiet, post a message, or run the agent prompt.",
+      triggerConfigured: "Check configured",
+      triggerScript: "Check script",
       triggerScriptHelp:
-        "Return json({ fire: true }) to start the task. It can also return a message and saved state. Uses this automation’s tool permissions. Limits: 30 seconds, 5 tool calls, 16 KB of state.",
+        'Return { state } to stay quiet, { post: "message" } to deliver a message, or { wake: "message" } to append it to the agent prompt. Read the previous state as check.state.',
       triggerOnce: "Turn off after the first successful run",
-      triggerOnceHelp: "A match alone doesn’t count. The task it starts must finish successfully.",
+      triggerOnceHelp: "Quiet checks do not count. A post or agent turn must finish successfully.",
       triggerDisabled: "Condition checks are turned off for this Gateway (cron.triggers.enabled).",
       triggerDisabledConfigured:
         "Condition checks are turned off for this Gateway. The saved check stays until you clear it.",

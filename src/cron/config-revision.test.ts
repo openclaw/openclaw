@@ -99,7 +99,7 @@ it("matches SQLite normalization across optional fields, schedules, payloads, tr
       schedule: { kind: "cron", expr: "0 9 * * *", tz: "" },
       payload: { kind: "agentTurn", message, toolsAllowIsDefault: true },
       failureAlert: {},
-      trigger: { script: "json({ fire: true })", once: true },
+      check: { script: "json({ wake: '' })", once: true },
     }),
     makeJob({
       id: "windows-env-key-order",

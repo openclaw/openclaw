@@ -284,18 +284,18 @@ function runBatch(
 
 describe("cron stream trigger composition", () => {
   it("drops a fire:false batch and persists gate state", async () => {
-    const evaluateCronTrigger = vi.fn(async () => ({
+    const evaluateCronCheck = vi.fn(async () => ({
       kind: "evaluated" as const,
-      fire: false,
+      action: "quiet",
       state: { seen: true },
     }));
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     await withStream(
-      { trigger: { script: "json({ fire: true })" } },
-      { evaluateCronTrigger, runIsolatedAgentJob },
+      { check: { script: "json({ wake: '' })" } },
+      { evaluateCronCheck, runIsolatedAgentJob },
       async (cron, job) => {
         await runBatch(cron, job, "quiet batch");
-        expect(evaluateCronTrigger).toHaveBeenCalledWith(
+        expect(evaluateCronCheck).toHaveBeenCalledWith(
           expect.objectContaining({ streamBatch: "quiet batch" }),
         );
         expect(cron.getJob(job.id)?.state.triggerState).toEqual({ seen: true });
@@ -305,19 +305,19 @@ describe("cron stream trigger composition", () => {
   });
 
   it("composes a final batch and rotates source identity when a once trigger disables the stream", async () => {
-    const evaluateCronTrigger = vi.fn(async () => ({
+    const evaluateCronCheck = vi.fn(async () => ({
       kind: "evaluated" as const,
-      fire: true,
+      action: "wake",
       message: "gate message",
       state: { seen: true },
     }));
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     await withStream(
-      { trigger: { script: "json({ fire: true })" } },
-      { evaluateCronTrigger, runIsolatedAgentJob },
+      { check: { script: "json({ wake: '' })" } },
+      { evaluateCronCheck, runIsolatedAgentJob },
       async (cron, job) => {
         const configured = await cron.update(job.id, {
-          trigger: { script: "json({ fire: true })", once: true },
+          check: { script: "json({ wake: '' })", once: true },
         });
         const identity = configured.state.streamSourceIdentity;
         expect(identity).toEqual(expect.any(String));

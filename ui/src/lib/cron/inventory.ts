@@ -339,7 +339,7 @@ function inventoryQuery(params: CronListParams) {
     includeDeliveryPreviews: params.compact ? false : (params.includeDeliveryPreviews ?? true),
     query: params.query?.trim() || undefined,
     scheduleKind: params.scheduleKind ?? "all",
-    trigger: params.trigger ?? "all",
+    check: params.check ?? "all",
     sortBy: "name" as const,
     sortDir: "asc" as const,
     lastRunStatus: "all" as const,

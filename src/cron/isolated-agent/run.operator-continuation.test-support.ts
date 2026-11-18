@@ -21,11 +21,11 @@ export function createOperatorContinuationService(params: {
   resolveGatewayContext: () => GatewayRequestContext;
   runIsolated: typeof runCronIsolatedAgentTurn;
   onEvent: CronServiceDeps["onEvent"];
-  evaluateCronTrigger?: CronServiceDeps["evaluateCronTrigger"];
+  evaluateCronCheck?: CronServiceDeps["evaluateCronCheck"];
 }) {
   return createCronServiceWithStateForTest({
     onEvent: params.onEvent,
-    evaluateCronTrigger: params.evaluateCronTrigger,
+    evaluateCronCheck: params.evaluateCronCheck,
     scheduler: createTestGatewayScheduler(params.clock),
     nowMs: params.clock.now,
     storePath: path.join(params.stateDir, "cron", "jobs.json"),

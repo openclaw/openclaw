@@ -77,23 +77,12 @@ import {
   resolveCronScheduledToolPolicy,
   type CronScheduledToolCallerOrigin,
 } from "./scheduled-tool-policy.js";
-import {
-  DEFAULT_CRON_SCRIPT_TIMEOUT_SECONDS,
-  DEFAULT_CRON_SCRIPT_TOOL_BUDGET,
-  MAX_CRON_SCRIPT_TIMEOUT_SECONDS,
-  MAX_CRON_SCRIPT_TOOL_BUDGET,
-} from "./script-payload.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { observePrAutoFix, prAutoFixFailureCode } from "./session-pr-auto-fix.js";
 import { resolveCronAuthenticatedChannelRequester } from "./tools-allow-provenance.js";
 import { cronScriptReferencesMcp } from "./tools-allow.js";
 import { acquireCronScriptMcpTools, type CronScriptMcpTools } from "./trigger-script-mcp.js";
-import {
-  parseScriptPayloadResult,
-  parseTriggerResult,
-  scriptFailure,
-  type CronScriptPayloadExecutionResult,
-} from "./trigger-script-result.js";
+import { parseCheckResult, scriptFailure } from "./trigger-script-result.js";
 import { createCronTriggerRuntimeLifetime } from "./trigger-script-runtime-lifetime.js";
 import type {
   CronToolsAllowExecTarget,
@@ -138,7 +127,7 @@ type PreparedTriggerRuntime = {
   scheduledToolPolicy: ScheduledToolPolicyContext | undefined;
 };
 
-type CronScriptInvocation = Parameters<NonNullable<CronServiceDeps["evaluateCronTrigger"]>>[0];
+type CronScriptInvocation = Parameters<NonNullable<CronServiceDeps["evaluateCronCheck"]>>[0];
 
 type PrepareTriggerRuntime = (params: {
   runtimeConfig: OpenClawConfig;
@@ -360,7 +349,7 @@ function triggerStateNamespace(state: unknown, streamBatch?: string): CodeModeNa
   }
   return {
     id: "cron:trigger",
-    globalName: "trigger",
+    globalName: "check",
     scope: {
       kind: "object",
       entries,
@@ -695,39 +684,15 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
 export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
   const run = createCronCodeModeRunner(deps);
   return {
-    evaluateTrigger: async (params: CronScriptInvocation): Promise<CronTriggerEvaluationResult> => {
+    evaluateCheck: async (params: CronScriptInvocation): Promise<CronTriggerEvaluationResult> => {
       const outcome = await run({
         ...params,
-        wallClockMs: HEADLESS_TRIGGER_WALL_CLOCK_MS,
-        maxToolCalls: HEADLESS_TRIGGER_TOOL_BUDGET,
-        label: "cron trigger evaluation",
+        wallClockMs:
+          (params.job.check?.timeoutSeconds ?? HEADLESS_TRIGGER_WALL_CLOCK_MS / 1000) * 1000,
+        maxToolCalls: params.job.check?.toolBudget ?? HEADLESS_TRIGGER_TOOL_BUDGET,
+        label: "cron check",
       });
-      return outcome.kind === "completed" ? parseTriggerResult(outcome.result) : outcome;
-    },
-    executePayload: async (
-      params: Parameters<NonNullable<CronServiceDeps["runScriptJob"]>>[0],
-    ): Promise<CronScriptPayloadExecutionResult> => {
-      const payload = params.job.payload;
-      if (payload.kind !== "script") {
-        return scriptFailure("cron script payload executor is unavailable", "runtime_unavailable");
-      }
-      const timeoutSeconds = Math.min(
-        MAX_CRON_SCRIPT_TIMEOUT_SECONDS,
-        Math.max(1, Math.floor(payload.timeoutSeconds ?? DEFAULT_CRON_SCRIPT_TIMEOUT_SECONDS)),
-      );
-      const toolBudget = Math.min(
-        MAX_CRON_SCRIPT_TOOL_BUDGET,
-        Math.max(1, Math.floor(payload.toolBudget ?? DEFAULT_CRON_SCRIPT_TOOL_BUDGET)),
-      );
-      const outcome = await run({
-        ...params,
-        script: payload.script,
-        state: params.job.state.triggerState,
-        wallClockMs: timeoutSeconds * 1000,
-        maxToolCalls: toolBudget,
-        label: "cron script payload",
-      });
-      return outcome.kind === "completed" ? parseScriptPayloadResult(outcome.result) : outcome;
+      return outcome.kind === "completed" ? parseCheckResult(outcome.result) : outcome;
     },
   };
 }

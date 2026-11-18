@@ -96,12 +96,12 @@ function ownedDeclaration(
 it("rejects malformed declared triggers without changing persisted jobs", async () => {
   const { cron } = await setup();
   const rejectsTrigger = () =>
-    expect(cron.add(declaration({ trigger: { script: "const x = ;" } }))).rejects.toThrow(
+    expect(cron.add(declaration({ check: { script: "const x = ;" } }))).rejects.toThrow(
       "cron trigger script has a syntax error: Unexpected token (line 1, column 10)",
     );
   await rejectsTrigger();
   expect(await cron.list()).toEqual([]);
-  const validTrigger = { script: "return { fire: true }" };
+  const validTrigger = { script: "return { wake: '' }" };
   const created = await add(cron, declaration({ trigger: validTrigger }));
   await rejectsTrigger();
   expect(await cron.readJob(created.id)).toMatchObject({ trigger: validTrigger });
@@ -392,14 +392,14 @@ it("rejects concurrent stale-owner updates across service instances sharing SQLi
   expect((await second.readJob(created.id))?.state).toMatchObject(retiredTriggerState);
   const [replacement, stale] = await Promise.allSettled([
     first.update(created.id, {
-      trigger: { script: 'return "replacement"' },
+      check: { script: 'return "replacement"' },
       state: replacementState,
     }),
     second.updateWithPrecondition(
       created.id,
       {
         displayName: "Stale owner",
-        trigger: { script: 'return "obsolete"' },
+        check: { script: 'return "obsolete"' },
         state: { triggerState: { owner: "obsolete" }, triggerEvalCount: 99 },
       },
       guard(staleRevision),
@@ -413,7 +413,7 @@ it("rejects concurrent stale-owner updates across service instances sharing SQLi
     undefined,
     undefined,
   ]);
-  expect(persisted?.trigger).toEqual({ script: 'return "replacement"' });
+  expect(persisted?.check).toEqual({ script: 'return "replacement"' });
   await second.updateWithPrecondition(
     created.id,
     { displayName: "Current owner" },

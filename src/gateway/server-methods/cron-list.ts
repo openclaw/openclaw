@@ -57,7 +57,7 @@ export const cronListHandler = createPreparedReadHandler((options) => {
           enabled: p.enabled,
           scheduleKind: p.scheduleKind,
           lastRunStatus: p.lastRunStatus,
-          trigger: p.trigger,
+          check: p.check,
           sortBy: p.sortBy,
           sortDir: p.sortDir,
           // Owners retain visibility when execution is retargeted to another agent.

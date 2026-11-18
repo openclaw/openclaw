@@ -34,7 +34,7 @@ exits with status 130 or 143, respectively.
 An `add` or `edit` mutation already sent to the Gateway still waits for its
 receipt during cleanup and reports any failure; interrupting does not undo it.
 
-File inputs for `--script`, `--trigger-script`, and `scratch --file` must be regular files; symbolic links to regular files are supported. FIFOs and other special files are rejected without waiting for input. To pipe content, use `-` to read from stdin instead.
+File inputs for `--check-script`, and `scratch --file` must be regular files; symbolic links to regular files are supported. FIFOs and other special files are rejected without waiting for input. To pipe content, use `-` to read from stdin instead.
 
 ## Create jobs quickly
 
@@ -52,7 +52,7 @@ Set `--timeout-seconds 0` on `add`/`create` or `edit` to disable the scheduler's
 wall-clock ceiling. Omitting the flag on creation keeps the default timeout;
 omitting it on edit leaves the stored timeout unchanged. Agent/provider timeouts,
 startup watchdogs, and command-runner limits still apply. System-event jobs reject
-`--timeout-seconds`; script jobs use `--script-timeout-seconds` instead.
+`--timeout-seconds`; check scripts use `--check-timeout-seconds` and `--check-tool-budget`.
 
 Use `--webhook <url>` when the job should POST the finished payload instead of delivering to a chat target:
 
@@ -313,7 +313,7 @@ openclaw automations run <job-id>
 openclaw automations runs <job-id> --run-id <run-id>
 ```
 
-A forced run skips the job's `trigger.script` condition gate and executes the payload directly. An `agentTurn` payload therefore wakes the model even if the gate would return `fire: false`. The `automations` tool also skips the gate when called with `action: "run", runMode: "force"`; its default `runMode` is `"due"`.
+A forced run skips the job's `check.script` when an agent prompt is configured and executes the payload directly. An `agentTurn` payload therefore wakes the model even if the check would stay quiet. The `automations` tool also skips the gate when called with `action: "run", runMode: "force"`; its default `runMode` is `"due"`.
 
 Add `--wait` when a script should block until that exact queued run records a terminal status:
 
@@ -326,7 +326,7 @@ With `--wait`, the CLI calls `cron.run` first, then polls the durable `cron.runs
 Interrupting the CLI stops waiting for the result. The queued run continues in the Gateway.
 
 <Note>
-Use `--due` to test the condition gate when the job is currently due, or wait for its scheduled evaluation. Unlike a forced run, `--due` honors `trigger.script`; it does not make a job due early. If `--due --wait` does not enqueue a run, the command returns the normal non-run response instead of polling. An enqueued run skipped by the gate exits non-zero with `--wait`.
+Use `--due` to test the condition gate when the job is currently due, or wait for its scheduled evaluation. Unlike a forced run, `--due` honors `check.script`; it does not make a job due early. If `--due --wait` does not enqueue a run, the command returns the normal non-run response instead of polling. An enqueued run skipped by the gate exits non-zero with `--wait`.
 </Note>
 
 ## Models
@@ -524,7 +524,7 @@ Unicode forms as the same text without rewriting stored metadata. The Gateway fi
 before paging; the CLI reads every bounded matching page with the same query. It
 combines with `--all`, `--agent`, and either text or `--json`
 output. Omitting the flag or passing only whitespace keeps the existing listing.
-This searches job metadata, not message or script payloads; use `automations runs
+This searches job metadata, not prompts or check source; use `automations runs
 <job-id> --query <text>` to search run summaries and errors instead.
 
 The human-readable Agent ID column shows the effective owner. JSON list rows preserve the declared `agentId` and include `effectiveAgentId`, which is `null` when ownership is unresolved.

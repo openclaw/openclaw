@@ -35,7 +35,7 @@ import {
   stripLegacyTopLevelFields,
 } from "./payload-migration.js";
 import { migrateScheduledToolPolicy } from "./scheduled-tool-policy-migration.js";
-import { migrateLegacyCronTriggerScript } from "./trigger-script-migration.js";
+import { retireCronScriptJob } from "./trigger-script-migration.js";
 
 type CronStoreIssueKey =
   | "jobId"
@@ -99,8 +99,8 @@ type NormalizeCronStoreJobsResult = {
   issues: CronStoreIssues;
   unresolvedAgentTurnCommandPromptJobs: string[];
   unresolvedAgentTurnShellToolPromptJobs: string[];
-  legacyTriggerScriptJobs: string[];
-  unsupportedLegacyTriggerScriptJobs: string[];
+  convertedCheckJobs: string[];
+  pausedCheckJobs: string[];
   unsupportedDeliveryModeJobs: string[];
   legacyScheduledToolPolicyJobs: string[];
   invalidScheduledToolPolicyJobs: string[];
@@ -165,8 +165,8 @@ export function normalizeStoredCronJobs(
   const issues: CronStoreIssues = {};
   const unresolvedAgentTurnCommandPromptJobs: string[] = [];
   const unresolvedAgentTurnShellToolPromptJobs: string[] = [];
-  const legacyTriggerScriptJobs: string[] = [];
-  const unsupportedLegacyTriggerScriptJobs: string[] = [];
+  const convertedCheckJobs: string[] = [];
+  const pausedCheckJobs: string[] = [];
   const unsupportedDeliveryModeJobs: string[] = [];
   const legacyGatewayExecJobs: string[] = [];
   const legacyScheduledToolPolicyJobs: string[] = [];
@@ -230,20 +230,13 @@ export function normalizeStoredCronJobs(
     }
 
     const jobName = name ?? normalizeOptionalString(raw.id);
-    const trigger = raw.trigger;
-    if (isRecord(trigger) && typeof trigger.script === "string") {
-      const migration = migrateLegacyCronTriggerScript(trigger.script);
-      const id = normalizeOptionalString(raw.id);
-      const jobIdentity = name && id && name !== id ? `${name} (${id})` : jobName;
-      if (migration.kind === "supported") {
-        trigger.script = migration.script;
-        mutated = true;
-        if (jobIdentity) {
-          legacyTriggerScriptJobs.push(jobIdentity);
-        }
-      } else if (migration.kind === "unsupported" && jobIdentity) {
-        unsupportedLegacyTriggerScriptJobs.push(jobIdentity);
-      }
+    const checkMigration = retireCronScriptJob(raw);
+    if (checkMigration) {
+      mutated = true;
+      const jobIdentity =
+        name && raw.id && name !== raw.id ? `${name} (${raw.id})` : (jobName ?? "<unnamed>");
+      if (checkMigration.paused) pausedCheckJobs.push(`${jobIdentity}: ${checkMigration.paused}`);
+      else convertedCheckJobs.push(jobIdentity);
     }
 
     setField(raw, "description", normalizeOptionalString(raw.description));
@@ -541,8 +534,8 @@ export function normalizeStoredCronJobs(
     issues,
     unresolvedAgentTurnCommandPromptJobs,
     unresolvedAgentTurnShellToolPromptJobs,
-    legacyTriggerScriptJobs,
-    unsupportedLegacyTriggerScriptJobs,
+    convertedCheckJobs,
+    pausedCheckJobs,
     unsupportedDeliveryModeJobs,
     legacyScheduledToolPolicyJobs,
     invalidScheduledToolPolicyJobs,

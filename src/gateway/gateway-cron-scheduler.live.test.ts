@@ -131,7 +131,7 @@ describeLive("cron scheduling through an isolated Gateway", () => {
           [
             "const startedAtMs = Date.now();",
             "await new Promise(resolve => setTimeout(resolve, (450 - Date.now() % 1000 + 1000) % 1000));",
-            "json({ fire: false, state: { count: (trigger.state?.count ?? 0) + 1, startedAtMs } });",
+            "json({ state: { count: (check.state?.count ?? 0) + 1, startedAtMs } });",
           ].join("\n"),
         );
         const watcher = await cliJson<CronJob>(instance, [
@@ -246,7 +246,7 @@ describeLive("cron scheduling through an isolated Gateway", () => {
 
         const scriptPath = path.join(workspace, "capture-stream.js");
         const pidPath = path.join(workspace, "source.pid");
-        await fs.writeFile(scriptPath, "json({ state: { batch: trigger.streamBatch } });\n");
+        await fs.writeFile(scriptPath, "json({ state: { batch: check.streamBatch } });\n");
         const source = [
           `require('node:fs').writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));`,
           "console.log('build-start ' + 'x'.repeat(3000) + ' build-complete');",

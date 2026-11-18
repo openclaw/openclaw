@@ -122,7 +122,7 @@ export function SidebarAutomations(props: {
         (job) =>
           (filter.scheduleKind === "all" || job.scheduleKind === filter.scheduleKind) &&
           (filter.lastRun === "all" || (job.lastRunStatus ?? "unknown") === filter.lastRun) &&
-          (filter.trigger === "all" || (filter.trigger === "conditional") === Boolean(job.trigger)),
+          (filter.trigger === "all" || (filter.trigger === "conditional") === Boolean(job.check)),
       )
       .toSorted((left, right) => {
         if (filter.sort === "name") {

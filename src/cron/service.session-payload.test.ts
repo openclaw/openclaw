@@ -367,16 +367,16 @@ describe("unstarted scheduled admission", () => {
         summary: "Already spent occurrence",
       };
       const run = vi.fn(async () => result);
-      const evaluate = vi.fn(async () => ({ kind: "evaluated" as const, fire: true }));
+      const evaluate = vi.fn(async () => ({ kind: "evaluated" as const, action: "wake" }));
       const { cron, tick } = await service({
         runSessionEvent: run,
         runIsolatedAgentJob: run,
-        evaluateCronTrigger: evaluate,
+        evaluateCronCheck: evaluate,
       });
       const job = await cron.add(
         jobInput({
           name: `Retain ${effect} evidence`,
-          ...(effect === "trigger" ? { trigger: { script: "json({fire:true})" } } : {}),
+          ...(effect === "trigger" ? { check: { script: "json({wake: ''})" } } : {}),
           payload: { kind: "agentTurn", message: "Do not replay started work" },
         }),
       );

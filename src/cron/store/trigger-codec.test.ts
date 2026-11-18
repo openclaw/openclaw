@@ -20,7 +20,7 @@ describe("cron trigger SQLite codec", () => {
       createdAtMs: 1,
       updatedAtMs: 2,
       schedule: { kind: "every", everyMs: 30_000 },
-      trigger: { script: "json({ fire: false })", once: false },
+      check: { script: "json({ })", once: false },
       sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "changed" },
@@ -38,7 +38,7 @@ describe("cron trigger SQLite codec", () => {
       replaceCronRows(handle.db, "test", { version: 1, jobs: [{ ...job, state: {} }] });
       updateCronRuntimeRows(handle.db, "test", { version: 1, jobs: [job] });
       const [decoded] = loadedCronStoreFromRows(loadCronRows(handle.db, "test")).store.jobs;
-      expect(decoded?.trigger).toEqual(job.trigger);
+      expect(decoded?.check).toEqual(job.check);
       expect(decoded?.state).toEqual(job.state);
     } finally {
       handle.walMaintenance.close();

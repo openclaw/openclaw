@@ -244,12 +244,12 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       : undefined;
     const failureAlert = buildFailureAlert(form, sourceJob?.failureAlert, Boolean(editingJob));
     const triggerScript = form.triggerScript.trim();
-    const trigger = form.triggerEnabled
-      ? editingJob?.trigger?.script === triggerScript &&
-        (editingJob.trigger.once === true) === form.triggerOnce
+    const check = form.triggerEnabled
+      ? editingJob?.check?.script === triggerScript &&
+        (editingJob.check.once === true) === form.triggerOnce
         ? undefined
-        : { script: triggerScript, once: form.triggerOnce }
-      : editingJob?.trigger
+        : { ...sourceJob?.check, script: triggerScript, once: form.triggerOnce }
+      : editingJob?.check
         ? null
         : undefined;
     const agentId = form.clearAgent ? null : form.agentId.trim();
@@ -266,7 +266,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
         : {}),
       sessionTarget: form.sessionTarget,
       wakeMode: form.wakeMode,
-      trigger,
+      check,
       activeHours: form.activeHoursEnabled
         ? {
             start: form.activeHoursStart,

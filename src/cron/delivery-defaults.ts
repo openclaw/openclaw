@@ -159,7 +159,7 @@ export function shouldDefaultCronDeliveryToAnnounce(params: {
   if (
     params.payloadKind !== "agentTurn" &&
     params.payloadKind !== "command" &&
-    params.payloadKind !== "script"
+    params.payloadKind !== "none"
   ) {
     return false;
   }

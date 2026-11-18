@@ -91,7 +91,7 @@ function compactCronListJob(job: CronJob): CronCompactJob {
     ...(job.schedule.kind === "at" || job.schedule.kind === "every" || job.schedule.kind === "cron"
       ? { schedule: job.schedule }
       : {}),
-    trigger: job.trigger ? true : undefined,
+    check: job.check ? true : undefined,
     lastRunAt: timestampMsToIsoString(job.state.lastRunAtMs) ?? null,
     lastRunAtMs: job.state.lastRunAtMs ?? null,
     lastDurationMs: job.state.lastDurationMs,

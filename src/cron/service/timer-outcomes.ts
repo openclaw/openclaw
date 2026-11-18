@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
@@ -7,7 +8,7 @@ import { isPluginCommandCronJob } from "../plugin-command-schedule.js";
 import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run-diagnostics.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import type { CronRunFinalizationOutcome } from "../store/runtime-worker.types.js";
-import type { CronJob, CronRunStatus, CronStoredJob, CronTriggerEvalOutcome } from "../types.js";
+import type { CronJob, CronStoredJob, CronTriggerEvalOutcome } from "../types.js";
 import {
   autoDisableCronJob,
   maybeAutoDisableCronJobAfterRunFailure,
@@ -68,8 +69,7 @@ function resolveCronRunTriggerOwnership(params: {
   activeJobMarker?: Pick<CronActiveJobMarker, "triggerMutated">;
 }): CronTriggerOwnership {
   return params.activeJobMarker?.triggerMutated === true ||
-    params.admittedJob.trigger?.script !== params.currentJob.trigger?.script ||
-    params.admittedJob.trigger?.once !== params.currentJob.trigger?.once
+    !isDeepStrictEqual(params.admittedJob.check, params.currentJob.check)
     ? "stale"
     : "current";
 }
@@ -567,7 +567,7 @@ export function applyJobResult(
       // The operator trigger floor is a safety policy and outranks a job-local
       // pacing bound. Non-trigger jobs retain the exact pacing clamp contract.
       const nextRunAtMs = scheduleNextRun(
-        job.trigger
+        job.check && job.payload.kind === "agentTurn"
           ? Math.max(
               pacedNextRunAtMs ?? Number.NaN,
               result.endedAt + Math.max(MIN_REFIRE_GAP_MS, resolveCronTriggerMinIntervalMs()),
@@ -588,7 +588,10 @@ export function applyJobResult(
         // would otherwise refire sooner after a successful payload run.
         const minNext =
           result.endedAt +
-          Math.max(MIN_REFIRE_GAP_MS, job.trigger ? resolveCronTriggerMinIntervalMs() : 0);
+          Math.max(
+            MIN_REFIRE_GAP_MS,
+            job.check && job.payload.kind === "agentTurn" ? resolveCronTriggerMinIntervalMs() : 0,
+          );
         job.state.nextRunAtMs = resolveCronNextRunWithLowerBound({
           state,
           job,
@@ -598,7 +601,7 @@ export function applyJobResult(
         });
       } else {
         const triggerNext =
-          naturalNext !== undefined && job.trigger
+          naturalNext !== undefined && job.check && job.payload.kind === "agentTurn"
             ? Math.max(naturalNext, result.endedAt + resolveCronTriggerMinIntervalMs())
             : naturalNext;
         job.state.nextRunAtMs = triggerNext;
@@ -614,28 +617,16 @@ export function applyJobResult(
   return finish();
 }
 
-/** Commits payload-script state only after the complete cron run succeeds. */
-export function applyScriptRunResult(
-  job: CronJob,
-  result: { status: CronRunStatus; scriptStateChanged?: boolean; scriptState?: unknown },
-  opts?: { triggerOwnership?: CronTriggerOwnership },
-): void {
-  if (
-    opts?.triggerOwnership !== "stale" &&
-    result.status === "ok" &&
-    result.scriptStateChanged === true
-  ) {
-    // Trigger and payload scripts share frozen trigger.state. The payload's
-    // final state wins only after trigger evaluation and payload execution succeed.
-    job.state.triggerState = result.scriptState;
-  }
-}
-
 /** Applies a quiet trigger tick without mutating normal run-history state. */
 export function applyTriggerNoFireResult(
   state: CronJobPolicyContext,
   job: CronJob,
-  result: { startedAt: number; endedAt: number; triggerEval: CronTriggerEvalOutcome },
+  result: {
+    startedAt: number;
+    endedAt: number;
+    triggerEval: CronTriggerEvalOutcome;
+    nextCheck?: CronRunFinalizationOutcome["nextCheck"];
+  },
   opts: {
     scheduleMode?: "advance" | "immediate-preserve" | "stale-preserve";
     triggerOwnership?: CronTriggerOwnership;
@@ -677,7 +668,15 @@ export function applyTriggerNoFireResult(
   try {
     // Job-level computation keeps per-job cron staggering intact on quiet
     // ticks; raw schedule math would collapse watchers onto exact boundaries.
-    const naturalNext = computeJobNextRunAtMs(job, result.endedAt);
+    const pacedNext =
+      result.nextCheck && job.pacing && opts.triggerOwnership !== "stale"
+        ? resolvePacedNextRunAtMs({
+            nowMs: result.endedAt,
+            delayMs: result.nextCheck.delayMs,
+            pacing: job.pacing,
+          })
+        : undefined;
+    const naturalNext = pacedNext ?? computeJobNextRunAtMs(job, result.endedAt);
     const floorMs = Math.max(MIN_REFIRE_GAP_MS, resolveCronTriggerMinIntervalMs());
     // Quiet ticks still advance the schedule; the floor prevents scripts from
     // becoming a headless hot loop even when cron resolves inside the window.
@@ -690,6 +689,7 @@ export function applyTriggerNoFireResult(
           naturalNext === undefined ? undefined : Math.max(naturalNext, result.endedAt + floorMs),
         deferredNotifications: opts.deferredNotifications,
       });
+      if (pacedNext !== undefined) job.state.pacedNextRunAtMs = job.state.nextRunAtMs;
     }
   } catch (err) {
     recordScheduleComputeError({
@@ -730,7 +730,12 @@ export function applyOutcomeToAuthoritativeJob(
         activeJobMarker: result.activeJobMarker,
       });
 
-  if (result.status === "ok" && result.triggerEval && !result.triggerEval.fired) {
+  if (
+    result.status === "ok" &&
+    result.job.payload.kind !== "none" &&
+    result.triggerEval &&
+    !result.triggerEval.fired
+  ) {
     // Quiet trigger ticks intentionally emit no finished event: run history,
     // plugin hooks, and completion notifications represent payload runs only.
     applyTriggerNoFireResult(
@@ -740,6 +745,7 @@ export function applyOutcomeToAuthoritativeJob(
         startedAt: result.startedAt,
         endedAt: result.endedAt,
         triggerEval: result.triggerEval,
+        nextCheck: result.nextCheck,
       },
       {
         scheduleMode:
@@ -755,11 +761,6 @@ export function applyOutcomeToAuthoritativeJob(
     if (!opts.request) {
       job.state.startupCatchupAtMs = undefined;
     }
-    if (!opts.request && scheduleOwnership === "current") {
-      // Quiet ticks consume their old pacing slot. Only an in-flight schedule
-      // edit owns a replacement override that must survive finalization.
-      job.state.pacedNextRunAtMs = undefined;
-    }
     return false;
   }
 
@@ -772,7 +773,6 @@ export function applyOutcomeToAuthoritativeJob(
     deferredNotifications: opts.deferredNotifications,
   });
   applyTriggerRunResult(job, result, { scheduleOwnership, triggerOwnership });
-  applyScriptRunResult(job, result, { triggerOwnership });
   if (opts.request) {
     if (job.schedule.kind === "stream") {
       job.state.nextRunAtMs = undefined;

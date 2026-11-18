@@ -82,7 +82,7 @@ export function applyTriggerRunResult(
   if (
     opts?.scheduleOwnership !== "stale" &&
     result.triggerEval.fired &&
-    job.trigger?.once === true &&
+    job.check?.once === true &&
     result.status === "ok"
   ) {
     if (job.schedule.kind === "stream") {

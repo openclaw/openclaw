@@ -249,11 +249,7 @@ export function Advanced(
                 <input
                   id={inputIdForField("payloadKind")}
                   class="settings-input"
-                  value={
-                    props.form.payloadKind === "script"
-                      ? t("cron.form.script")
-                      : t("cron.form.command")
-                  }
+                  value={t("cron.form.command")}
                   readonly
                 />
               }
@@ -266,6 +262,9 @@ export function Advanced(
               options={[
                 { value: "systemEvent", label: t("cron.form.systemEvent") },
                 { value: "agentTurn", label: t("cron.form.agentTurn") },
+                ...(props.status?.triggersEnabled || props.form.payloadKind === "none"
+                  ? [{ value: "none", label: t("cron.form.checkOnly") }]
+                  : []),
               ]}
             />
           )}
@@ -389,16 +388,17 @@ export function Advanced(
   );
 }
 function TriggerRows(props: CronProps) {
-  const scriptPayload = () => props.form.payloadKind === "script";
+  const unsupportedPayload = () =>
+    props.form.payloadKind === "command" || props.form.payloadKind === "systemEvent";
   return (
     <>
-      {!scriptPayload() && props.status === null ? undefined : props.status?.triggersEnabled !==
-          true || scriptPayload() ? (
+      {!unsupportedPayload() && props.status === null ? undefined : props.status
+          ?.triggersEnabled !== true || unsupportedPayload() ? (
         <SettingsRow
           title={t("cron.form.conditionTrigger")}
           description={
-            scriptPayload()
-              ? t("cron.errors.triggerScriptPayloadUnsupported")
+            unsupportedPayload()
+              ? t("cron.errors.checkPayloadUnsupported")
               : props.form.triggerEnabled
                 ? t("cron.form.triggerDisabledConfigured")
                 : t("cron.form.triggerDisabled")

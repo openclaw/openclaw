@@ -142,7 +142,7 @@ export type CronServiceDeps = {
    * harnesses), every run's context is a `fail` result.
    */
   admitScheduledOccurrence?: (params: { job: CronStoredJob }) => Promise<ScheduledOccurrence>;
-  evaluateCronTrigger?: (params: {
+  evaluateCronCheck?: (params: {
     occurrence: ScheduledOccurrence;
     deliveryAttemptFence: CronCompletionDeliveryFence | null;
     job: CronStoredJob;
@@ -285,23 +285,12 @@ export type CronServiceDeps = {
     job: CronStoredJob;
     abortSignal?: AbortSignal;
   }) => Promise<CronRunOutcome & CronRunDeliveryResult>;
-  runScriptJob?: (params: {
-    occurrence: ScheduledOccurrence;
+  deliverCheckPost?: (params: {
     deliveryAttemptFence: CronCompletionDeliveryFence | null;
     job: CronStoredJob;
-    streamBatch?: string;
+    message: string;
     abortSignal?: AbortSignal;
-    executionIdentity?: CronExecutionIdentityAdmission;
-  }) => Promise<
-    CronRunOutcome &
-      CronRunDeliveryResult & {
-        notify?: string;
-        wake?: "now" | "next-heartbeat";
-        stateChanged?: boolean;
-        state?: unknown;
-        nextCheck?: CronNextCheckProposal;
-      }
-  >;
+  }) => Promise<CronRunDeliveryResult>;
   /** Deliver a primary cron webhook before the run outcome is finalized. */
   sendCronWebhook?: (params: {
     job: CronJob;
@@ -444,10 +433,9 @@ export function describeCronHostExecutionRestriction(
   if (
     hostExecutionDisabled &&
     (job.payload.kind === "command" ||
-      job.payload.kind === "script" ||
       job.schedule.kind === "on-exit" ||
       (job.schedule.kind === "stream" && !job.streamSandbox) ||
-      job.trigger)
+      job.check)
   ) {
     return CRON_HOST_EXECUTION_DISABLED_MESSAGE;
   }

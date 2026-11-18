@@ -148,7 +148,7 @@ async function withWebchatTool(
               sessionTarget: target,
               schedule: { kind: "every", everyMs: 60_000 },
               payload: { kind: "agentTurn", message: "Report the condition result." },
-              trigger: { script: "return { fire: false };", once: true },
+              check: { script: "return { };", once: true },
               ...(delivery ? { delivery } : {}),
             },
           });
@@ -174,7 +174,7 @@ describe("WebChat automation creation through the tool and Gateway", () => {
           name: "basketball-reminder",
           enabled: false,
           schedule: { kind: "at", at, everyMs: 1, anchorMs: 0, expr: "", tz: "", staggerMs: 0 },
-          trigger: { script: "return { fire: true };", once: true },
+          check: { script: "return { wake: '' };", once: true },
           payload: {
             kind: "systemEvent",
             text: "Reminder: play basketball!",
@@ -278,7 +278,7 @@ describe("WebChat automation creation through the tool and Gateway", () => {
           enabled: false,
           delivery: delivery ?? { mode: "announce" },
           payload: expect.objectContaining({ kind: "agentTurn", toolsAllow: ["read"] }),
-          trigger: { script: "return { fire: false };", once: true },
+          check: { script: "return { };", once: true },
         }),
       ]);
     }, storedContext);

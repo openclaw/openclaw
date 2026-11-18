@@ -21,8 +21,8 @@ export function buildCronFailureRepairBrief(params: {
       ? payload.message
       : payload.kind === "systemEvent"
         ? payload.text
-        : payload.kind === "script"
-          ? payload.script
+        : payload.kind === "none"
+          ? (job.check?.script ?? "")
           : "";
   const error = [params.errorReason ? `cause: ${params.errorReason}` : "", params.error?.trim()]
     .filter(Boolean)

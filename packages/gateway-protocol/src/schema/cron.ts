@@ -9,7 +9,6 @@ import {
   MAX_DATE_TIMESTAMP_MS,
   cronAgentTurnPayloadSchema,
   cronCommandPayloadSchema,
-  cronScriptPayloadSchema,
 } from "./cron-shared.js";
 import { FailoverReasonSchema } from "./failover-reason.js";
 import { ChatHistoryActivitySchema } from "./logs-chat.js";
@@ -184,10 +183,12 @@ const CronScheduleSchema = Type.Union([
   }),
 ]);
 
-/** Headless condition script evaluated before a recurring cron payload runs. */
-const CronTriggerSchema = closedObject({
+/** Model-free check evaluated before any optional agent turn. */
+const CronCheckSchema = closedObject({
   script: Type.String({ minLength: 1, maxLength: 65_536 }),
   once: Type.Optional(Type.Boolean()),
+  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 900 })),
+  toolBudget: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
 });
 
 /** Optional dynamic-cadence bounds stored with a cron job. */
@@ -227,10 +228,10 @@ const CronCommandPayloadSchema = cronCommandPayloadSchema({
   timeoutSeconds: Type.Number({ minimum: 0 }),
   toolsAllow: Type.Array(Type.String()),
 });
-const CronScriptPayloadSchema = cronScriptPayloadSchema({
-  script: Type.String({ minLength: 1, maxLength: 65_536 }),
-  timeoutSeconds: Type.Number({ minimum: 1 }),
-  toolsAllow: Type.Array(Type.String()),
+const CronNoTurnPayloadSchema = closedObject({
+  kind: Type.Literal("none"),
+  toolsAllow: Type.Optional(Type.Array(Type.String())),
+  toolsAllowIsDefault: Type.Optional(Type.Boolean()),
 });
 
 /** Full cron payload for new jobs. */
@@ -238,7 +239,7 @@ const CronPayloadSchema = Type.Union([
   CronSystemEventPayloadSchema,
   CronAgentTurnPayloadSchema,
   CronCommandPayloadSchema,
-  CronScriptPayloadSchema,
+  CronNoTurnPayloadSchema,
 ]);
 
 /** Partial cron payload for job updates. */
@@ -262,10 +263,9 @@ const CronPayloadPatchSchema = Type.Union([
     timeoutSeconds: Type.Union([Type.Number({ minimum: 0 }), Type.Null()]),
     toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
   }),
-  cronScriptPayloadSchema({
-    script: Type.Optional(Type.String({ minLength: 1, maxLength: 65_536 })),
-    timeoutSeconds: Type.Union([Type.Number({ minimum: 1 }), Type.Null()]),
-    toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
+  closedObject({
+    ...CronNoTurnPayloadSchema.properties,
+    toolsAllow: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
   }),
 ]);
 
@@ -538,7 +538,7 @@ export const CronJobSchema = closedObject({
   activeHours: Type.Optional(CronActiveHoursSchema),
   idleOnly: Type.Optional(Type.Boolean()),
   cyberAccessProgram: Type.Optional(CyberAccessProgramSchema),
-  trigger: Type.Optional(CronTriggerSchema),
+  check: Type.Optional(CronCheckSchema),
   sessionTarget: CronSessionTargetSchema,
   wakeMode: CronWakeModeSchema,
   payload: CronPayloadSchema,
@@ -569,7 +569,7 @@ export const CronListParamsSchema = closedObject({
   enabled: Type.Optional(CronJobsEnabledFilterSchema),
   scheduleKind: Type.Optional(CronJobsScheduleKindFilterSchema),
   lastRunStatus: Type.Optional(CronJobsLastRunStatusFilterSchema),
-  trigger: Type.Optional(CronJobsTriggerFilterSchema),
+  check: Type.Optional(CronJobsTriggerFilterSchema),
   sortBy: Type.Optional(CronJobsSortBySchema),
   sortDir: Type.Optional(CronSortDirSchema),
   agentId: Type.Optional(NonEmptyString),
@@ -627,7 +627,7 @@ export const CronAddParamsSchema = closedObject({
   activeHours: Type.Optional(CronActiveHoursSchema),
   idleOnly: Type.Optional(Type.Boolean()),
   cyberAccessProgram: Type.Optional(CyberAccessProgramSchema),
-  trigger: Type.Optional(CronTriggerSchema),
+  check: Type.Optional(CronCheckSchema),
   sessionTarget: CronSessionTargetSchema,
   wakeMode: CronWakeModeSchema,
   payload: CronPayloadSchema,
@@ -674,7 +674,7 @@ const CronJobPatchSchema = closedObject({
   activeHours: Type.Optional(Type.Union([CronActiveHoursSchema, Type.Null()])),
   idleOnly: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
   cyberAccessProgram: Type.Optional(Type.Union([CyberAccessProgramSchema, Type.Null()])),
-  trigger: Type.Optional(Type.Union([CronTriggerSchema, Type.Null()])),
+  check: Type.Optional(Type.Union([CronCheckSchema, Type.Null()])),
   sessionTarget: Type.Optional(CronSessionTargetSchema),
   wakeMode: Type.Optional(CronWakeModeSchema),
   payload: Type.Optional(CronPayloadPatchSchema),

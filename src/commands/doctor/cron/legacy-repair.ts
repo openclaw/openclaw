@@ -154,7 +154,9 @@ export async function loadLegacyCronRepairState(params: {
       projectedOwnersByJobId.set(jobId, { kind: "explicit", agentId });
     }
   }
-  const invalidConfigRows: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
+  const invalidConfigRows = loaded.invalidConfigRows.filter(
+    (row) => row.reason !== "legacy-check-repair-required",
+  );
   const currentJobs =
     loaded.configJobs.length > 0
       ? loaded.configJobs.map((job, index) =>
@@ -164,6 +166,11 @@ export async function loadLegacyCronRepairState(params: {
           }),
         )
       : (loaded.store.jobs as unknown as Array<Record<string, unknown>>);
+  for (const row of loaded.invalidConfigRows) {
+    if (row.reason === "legacy-check-repair-required" && row.job) {
+      currentJobs.push(mergeRuntimeEntryIntoConfigJob({ job: row.job, runtimeEntry: row }));
+    }
+  }
   for (const job of currentJobs) {
     const jobId = normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
     const sqlOwner = jobId ? sqlOwners.get(jobId) : undefined;
@@ -257,12 +264,6 @@ export async function applyLegacyCronStoreRepair(params: {
           shouldMigrateCodexRuntimePolicyTarget: (target) =>
             !blockedRuntimePolicyTargets.has(cronCodexRuntimePolicyTargetKey(target)),
         });
-  warnings.push(
-    ...normalized.unsupportedLegacyTriggerScriptJobs.map(
-      (job) =>
-        `Cron trigger script for ${job} uses legacy Code Mode APIs that cannot be safely converted; inspect the automation and update its trigger script manually to use direct tool calls.`,
-    ),
-  );
   warnings.push(
     ...normalized.unsupportedDeliveryModeJobs.map(
       (job) =>
@@ -438,11 +439,15 @@ export async function applyLegacyCronStoreRepair(params: {
   if (storeChanged) {
     changes.push(`Cron store normalized at ${shortenHomePath(state.storePath)}.`);
   }
-  if (normalized.legacyTriggerScriptJobs.length > 0) {
-    changes.push(
-      `Rewrote ${pluralize(normalized.legacyTriggerScriptJobs.length, "legacy cron trigger script")} to direct tool calls: ${normalized.legacyTriggerScriptJobs.join(", ")}.`,
-    );
-  }
+  changes.push(
+    ...normalized.convertedCheckJobs.map((job) => `Converted automation ${job} to a check script.`),
+  );
+  warnings.push(
+    ...normalized.pausedCheckJobs.map(
+      (job) =>
+        `Paused automation ${job}. Recover its original definition from the Doctor backup, edit the check, then re-enable it.`,
+    ),
+  );
 
   return {
     changes,

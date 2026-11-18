@@ -146,7 +146,10 @@ export async function finalizeCompletedCronRunOutcomes(
           continue;
         }
         finalized.push(outcome);
-        const quietTrigger = outcome.status === "ok" && outcome.triggerEval?.fired === false;
+        const quietTrigger =
+          outcome.status === "ok" &&
+          outcome.job.payload.kind !== "none" &&
+          outcome.triggerEval?.fired === false;
         if (!quietTrigger || outcome.request?.runId) {
           let eventContext = cronFailureNotificationEventContext(outcome.failureNotificationDetail);
           if (quietTrigger) {

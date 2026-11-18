@@ -43,7 +43,7 @@ import {
   requireCronJobId,
 } from "./shared.js";
 import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
-import { readCronPayloadScript, readCronTriggerScript } from "./trigger-options.js";
+import { readCronCheckScript } from "./trigger-options.js";
 
 const assignIf = (
   target: Record<string, unknown>,
@@ -100,7 +100,7 @@ export function registerCronEditCommand(cron: Command) {
       .option("--clear-active-hours", "Remove the entire execution window", false)
       .option("--clear-access", "Remove the per-job Access selection", false)
       .option("--clear-idle-only", "Remove the per-job idle-only policy", false)
-      .option("--clear-trigger", "Remove the condition trigger", false)
+      .option("--clear-check", "Remove the check", false)
       .option(
         "--clear-thinking",
         "Remove the per-job thinking override (restore normal cron thinking precedence)",
@@ -144,9 +144,6 @@ export function registerCronEditCommand(cron: Command) {
           if (opts.clearTools && opts.tools !== undefined) {
             throw new CronCliError("Use --tools or --clear-tools, not both");
           }
-          if (typeof opts.script === "string" && !readNonBlankString(opts.script)) {
-            throw new CronCliError("--script must not be blank");
-          }
           if (typeof opts.command === "string" && !readNonBlankString(opts.command)) {
             throw new CronCliError("--command must not be blank");
           }
@@ -172,13 +169,11 @@ export function registerCronEditCommand(cron: Command) {
           }
           const initialPayloadKind = opts.systemEvent
             ? "systemEvent"
-            : typeof opts.script === "string"
-              ? "script"
-              : opts.command || opts.commandArgv
-                ? "command"
-                : opts.message
-                  ? "agentTurn"
-                  : undefined;
+            : opts.command || opts.commandArgv
+              ? "command"
+              : opts.message
+                ? "agentTurn"
+                : undefined;
           if (sessionTarget && initialPayloadKind) {
             await assertCronCliJobSpec({ sessionTarget, payload: { kind: initialPayloadKind } });
           }
@@ -193,7 +188,7 @@ export function registerCronEditCommand(cron: Command) {
             hasExplicitChatDelivery
           ) {
             throw new CronCliError(
-              "--channel, --to, --account, and --thread-id require an agentTurn job or a non-main command or script job with delivery.",
+              "--channel, --to, --account, and --thread-id require an agentTurn job or a non-main command or check job with delivery.",
             );
           }
           const webhookUrl =
@@ -212,17 +207,34 @@ export function registerCronEditCommand(cron: Command) {
           if (deliveryModeFlagCount > 1) {
             throw new CronCliError("Choose at most one of --announce, --no-deliver, or --webhook.");
           }
-          const triggerScriptPath = readNonBlankString(opts.triggerScript);
-          if (typeof opts.triggerScript === "string" && !triggerScriptPath) {
-            throw new CronCliError("--trigger-script must not be blank");
+          const checkScriptPath =
+            typeof opts.checkScript === "string" && opts.checkScript.trim()
+              ? opts.checkScript
+              : undefined;
+          if (typeof opts.checkScript === "string" && !checkScriptPath) {
+            throw new CronCliError("--check-script must not be blank");
           }
-          if (opts.clearTrigger && (triggerScriptPath || opts.triggerOnce)) {
-            throw new CronCliError("Use --clear-trigger or trigger options, not both");
+          const checkTimeoutSeconds = parseCronIntegerOption(
+            opts.checkTimeoutSeconds,
+            "--check-timeout-seconds",
+          );
+          const checkToolBudget = parseCronIntegerOption(
+            opts.checkToolBudget,
+            "--check-tool-budget",
+          );
+          if (
+            opts.clearCheck &&
+            (checkScriptPath ||
+              opts.checkOnce ||
+              checkTimeoutSeconds !== undefined ||
+              checkToolBudget !== undefined)
+          ) {
+            throw new CronCliError("Use --clear-check or check options, not both");
           }
           // Local input errors must not depend on Gateway availability, even when
           // another edit field needs the existing job.
-          const triggerScript = triggerScriptPath
-            ? await readCronTriggerScript(triggerScriptPath)
+          const checkScript = checkScriptPath
+            ? await readCronCheckScript(checkScriptPath)
             : undefined;
           const patch: Record<string, unknown> = await resolveCronExecutionPolicyOptions(
             opts,
@@ -295,23 +307,25 @@ export function registerCronEditCommand(cron: Command) {
               ...(pacingMax ? { max: pacingMax } : {}),
             };
           }
-          if (opts.clearTrigger) {
-            patch.trigger = null;
-          } else if (triggerScript !== undefined) {
+          if (opts.clearCheck) {
+            patch.check = null;
+          } else if (
+            checkScript !== undefined ||
+            opts.checkOnce ||
+            checkTimeoutSeconds !== undefined ||
+            checkToolBudget !== undefined
+          ) {
             const existing = await readExistingCronJob();
-            patch.trigger = {
-              ...existing.trigger,
-              script: triggerScript,
-              ...(opts.triggerOnce ? { once: true } : {}),
+            const script = checkScript ?? existing.check?.script;
+            if (!script)
+              throw new CronCliError("Check options require an existing check or --check-script");
+            patch.check = {
+              ...existing.check,
+              script,
+              ...(opts.checkOnce ? { once: true } : {}),
+              ...(checkTimeoutSeconds !== undefined ? { timeoutSeconds: checkTimeoutSeconds } : {}),
+              ...(checkToolBudget !== undefined ? { toolBudget: checkToolBudget } : {}),
             };
-          } else if (opts.triggerOnce) {
-            const existing = await readExistingCronJob();
-            if (!existing.trigger) {
-              throw new CronCliError(
-                "--trigger-once requires an existing trigger or --trigger-script",
-              );
-            }
-            patch.trigger = { ...existing.trigger, once: true };
           }
 
           const scheduleRequest = resolveCronEditScheduleRequest(opts);
@@ -358,7 +372,6 @@ export function registerCronEditCommand(cron: Command) {
           const deliveryPolicy = parseCronDeliveryPolicyOptions(opts);
           const hasDeliveryPolicy = Object.keys(deliveryPolicy).length > 0;
           const hasSystemEventPatch = typeof opts.systemEvent === "string";
-          const scriptPath = readNonBlankString(opts.script);
           const commandShell = readNonBlankString(opts.command);
           const commandArgv = parseCronCommandArgv(opts.commandArgv);
           const commandEnv = parseCronCommandEnv(opts.commandEnv);
@@ -391,15 +404,6 @@ export function registerCronEditCommand(cron: Command) {
           const hasTimeoutSeconds = timeoutSeconds !== undefined;
           const noOutputTimeoutSeconds = parseCronNoOutputTimeoutOption(opts);
           const outputMaxBytes = parseCronIntegerOption(opts.outputMaxBytes, "--output-max-bytes");
-          const scriptTimeoutSeconds = parseCronIntegerOption(
-            opts.scriptTimeoutSeconds,
-            "--script-timeout-seconds",
-          );
-          const scriptToolBudget = parseCronIntegerOption(
-            opts.scriptToolBudget,
-            "--script-tool-budget",
-          );
-
           const hasDeliveryModeFlag =
             opts.announce || typeof opts.deliver === "boolean" || hasWebhookDelivery;
           const threadId = parseCronThreadIdOption(opts.threadId);
@@ -453,13 +457,6 @@ export function registerCronEditCommand(cron: Command) {
             typeof opts.lightContext === "boolean" ||
             typeof opts.skipIfScratchEmpty === "boolean" ||
             typeof opts.includeReasoning === "boolean";
-          const hasScriptSpecificPayloadField =
-            Boolean(scriptPath) ||
-            scriptTimeoutSeconds !== undefined ||
-            scriptToolBudget !== undefined;
-          if (hasTimeoutSeconds && hasScriptSpecificPayloadField) {
-            assertCronTimeoutSupported("script");
-          }
           if (hasTimeoutSeconds && hasSystemEventPatch) {
             assertCronTimeoutSupported("systemEvent");
           }
@@ -468,7 +465,6 @@ export function registerCronEditCommand(cron: Command) {
               ["systemEvent", hasSystemEventPatch],
               ["agentTurn", hasAgentTurnSpecificPayloadField],
               ["command", hasCommandSpecificPayloadField],
-              ["script", hasScriptSpecificPayloadField],
             ] as const
           )
             .filter(([, requested]) => requested)
@@ -540,13 +536,8 @@ export function registerCronEditCommand(cron: Command) {
               const stored = existing?.kind === "command" ? Object.keys(existing.env ?? {}) : [];
               droppedEnvKeys = stored.filter((key) => !Object.hasOwn(commandEnv, key));
             }
-          } else if (payloadKind === "script") {
-            payload = { kind: "script" };
-            if (scriptPath) {
-              payload.script = await readCronPayloadScript(scriptPath);
-            }
-            assignIf(payload, "timeoutSeconds", scriptTimeoutSeconds);
-            assignIf(payload, "toolBudget", scriptToolBudget);
+          } else if (payloadKind === "none") {
+            payload = { kind: "none" };
           }
           if (payload) {
             if (opts.clearTools) {

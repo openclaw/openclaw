@@ -32,6 +32,12 @@ export function normalizeCronFormState(
   changed: Partial<CronFormState> = {},
 ): CronFormState {
   let normalized = form;
+  if (changed.payloadKind === "none" && !form.triggerEnabled) {
+    normalized = { ...normalized, triggerEnabled: true };
+  }
+  if (changed.triggerEnabled === false && normalized.payloadKind === "none") {
+    normalized = { ...normalized, payloadKind: "agentTurn" };
+  }
   if (!form.payloadLocked && form.payloadKind === "systemEvent" && form.sessionTarget !== "main") {
     normalized =
       changed.sessionTarget !== undefined
@@ -41,6 +47,7 @@ export function normalizeCronFormState(
   if (
     normalized.deliveryMode !== "announce" ||
     normalized.payloadKind === "agentTurn" ||
+    normalized.payloadKind === "none" ||
     (normalized.sessionTarget !== "main" && normalized.payloadLocked)
   ) {
     return normalized;
@@ -87,7 +94,11 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
     const everyMs = parseCronDurationMs(form.everyAmount, form.everyUnit);
     if (everyMs === undefined) {
       errors.everyAmount = "cron.errors.everyAmountInvalid";
-    } else if (form.triggerEnabled && everyMs < resolveCronTriggerMinIntervalMs()) {
+    } else if (
+      form.triggerEnabled &&
+      form.payloadKind === "agentTurn" &&
+      everyMs < resolveCronTriggerMinIntervalMs()
+    ) {
       errors.everyAmount = "cron.errors.triggerIntervalTooShort";
     }
   } else if (form.scheduleKind === "cron") {
@@ -109,9 +120,10 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
     }
   }
   if (form.triggerEnabled) {
-    if (form.payloadKind === "script") {
-      errors.triggerScript = "cron.errors.triggerScriptPayloadUnsupported";
+    if (form.payloadKind !== "none" && form.payloadKind !== "agentTurn") {
+      errors.triggerScript = "cron.errors.checkPayloadUnsupported";
     } else if (
+      form.payloadKind === "agentTurn" &&
       form.scheduleKind !== "every" &&
       form.scheduleKind !== "cron" &&
       form.scheduleKind !== "stream"
@@ -121,7 +133,7 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       errors.triggerScript = "cron.errors.triggerScriptRequired";
     }
   }
-  if (!form.payloadLocked && !form.payloadText.trim()) {
+  if (!form.payloadLocked && form.payloadKind !== "none" && !form.payloadText.trim()) {
     errors.payloadText =
       form.payloadKind === "systemEvent"
         ? "cron.errors.systemTextRequired"
@@ -182,7 +194,7 @@ export function hasCronFormErrors(errors: CronFieldErrors): boolean {
 }
 
 export function isReadOnlyCronPayload(payload: CronPayload | null): boolean {
-  return payload?.kind === "command" || payload?.kind === "script";
+  return payload?.kind === "command";
 }
 
 export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
@@ -223,9 +235,9 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
       job.delivery && job.delivery.mode !== "webhook" ? (job.delivery.target ?? "") : "",
     deliveryDirectPolicy:
       job.delivery && job.delivery.mode !== "webhook" ? (job.delivery.directPolicy ?? "") : "",
-    triggerEnabled: job.trigger !== undefined,
-    triggerScript: job.trigger?.script ?? "",
-    triggerOnce: job.trigger?.once === true,
+    triggerEnabled: job.check !== undefined,
+    triggerScript: job.check?.script ?? "",
+    triggerOnce: job.check?.once === true,
     sessionTarget: job.sessionTarget,
     wakeMode: job.wakeMode,
     payloadKind: payload.kind,
@@ -237,9 +249,7 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
           ? payload.message
           : payload.kind === "command"
             ? payload.argv.join(" ")
-            : payload.kind === "script"
-              ? payload.script
-              : "",
+            : "",
     payloadModel: agentTurn?.model ?? "",
     payloadThinking: agentTurn?.thinking ?? "",
     payloadLightContext: agentTurn?.lightContext === true,

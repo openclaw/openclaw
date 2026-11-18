@@ -435,7 +435,7 @@ suite.define(() => {
           id,
           patch: {
             schedule: { kind: "every", everyMs: 30_000, anchorMs: triggerAnchorMs },
-            trigger: { script: "return { fire: false };" },
+            check: { script: "return { };" },
           },
         });
         expect(due.state.nextRunAtMs).toEqual(expect.any(Number));

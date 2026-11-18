@@ -15,7 +15,7 @@ import type { CronJobCreate } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-trigger-eval-" });
 
-type Evaluator = NonNullable<CronServiceDeps["evaluateCronTrigger"]>;
+type Evaluator = NonNullable<CronServiceDeps["evaluateCronCheck"]>;
 type CronEventContext = Parameters<NonNullable<CronServiceDeps["onEvent"]>>[1];
 
 function evaluated(fire: boolean, extra: { state?: unknown; message?: string } = {}) {
@@ -27,7 +27,7 @@ function watcher(overrides: Partial<CronJobCreate> = {}): CronJobCreate {
     name: "watcher",
     enabled: true,
     schedule: { kind: "cron", expr: "* * * * * *", staggerMs: 0 },
-    trigger: { script: "json({ fire: false })" },
+    check: { script: "json({ })" },
     sessionTarget: "isolated",
     wakeMode: "now",
     payload: { kind: "agentTurn", message: "base message" },
@@ -60,7 +60,7 @@ function expectUnevaluated(job: ReturnType<CronService["getJob"]>) {
 
 async function createHarness(
   params: {
-    evaluateCronTrigger?: Evaluator;
+    evaluateCronCheck?: Evaluator;
     runIsolatedAgentJob?: CronServiceDeps["runIsolatedAgentJob"];
     runScriptJob?: CronServiceDeps["runScriptJob"];
     sendCronWebhook?: CronServiceDeps["sendCronWebhook"];
@@ -257,7 +257,7 @@ async function pendingEvaluation(overrides: Partial<CronJobCreate>) {
   const started = createDeferred<AbortSignal>();
   const evaluation = createDeferred<Awaited<ReturnType<Evaluator>>>();
   const h = await createHarness({
-    evaluateCronTrigger: ({ abortSignal }) => {
+    evaluateCronCheck: ({ abortSignal }) => {
       if (!abortSignal) {
         throw new Error("expected condition cancellation signal");
       }
@@ -277,7 +277,7 @@ async function pendingEvaluation(overrides: Partial<CronJobCreate>) {
 async function pendingWatcher(overrides: Partial<CronJobCreate>) {
   const started = createDeferred();
   const completion = createDeferred();
-  const evaluateCronTrigger = vi.fn(async () =>
+  const evaluateCronCheck = vi.fn(async () =>
     evaluated(true, { state: { owner: "completed evaluation" } }),
   );
   const script = overrides.payload?.kind === "script";
@@ -289,13 +289,11 @@ async function pendingWatcher(overrides: Partial<CronJobCreate>) {
       : { status: "ok" as const, summary: "done" };
   });
   const h = await createHarness(
-    script
-      ? { runScriptJob: runPayload }
-      : { evaluateCronTrigger, runIsolatedAgentJob: runPayload },
+    script ? { runScriptJob: runPayload } : { evaluateCronCheck, runIsolatedAgentJob: runPayload },
   );
   const job = await h.cron.add(
     watcher({
-      trigger: { script: "fire", once: true },
+      check: { script: "fire", once: true },
       delivery: { mode: "none" },
       state: { triggerState: { owner: "original" } },
       ...overrides,
@@ -307,7 +305,7 @@ async function pendingWatcher(overrides: Partial<CronJobCreate>) {
     await run.catch(() => undefined);
     expect(runPayload).toHaveBeenCalledOnce();
     if (!script) {
-      expect(evaluateCronTrigger).toHaveBeenCalledOnce();
+      expect(evaluateCronCheck).toHaveBeenCalledOnce();
     }
   });
   await started.promise;
@@ -361,12 +359,12 @@ describe("cron trigger evaluation", () => {
 
   it("persists quiet evaluations and fires replacement triggers with fresh state", async () => {
     const replacementScript = 'return "replacement"';
-    const evaluateCronTrigger = vi.fn(async (params: Parameters<Evaluator>[0]) =>
+    const evaluateCronCheck = vi.fn(async (params: Parameters<Evaluator>[0]) =>
       evaluated(params.script === replacementScript && params.state === undefined, {
         state: { status: "green" },
       }),
     );
-    const h = await createHarness({ evaluateCronTrigger });
+    const h = await createHarness({ evaluateCronCheck });
     const job = await h.cron.add(watcher());
     const dueAt = job.state.nextRunAtMs!;
     h.events.length = 0;
@@ -386,9 +384,9 @@ describe("cron trigger evaluation", () => {
     expect(h.events.map((event) => event.action)).toEqual(["started", "scheduled"]);
     expectScheduled(h, job.id, persisted?.state.nextRunAtMs);
     expect(readHistory(h.storePath, job.id)).toEqual([]);
-    await h.cron.update(job.id, { trigger: { script: replacementScript } });
+    await h.cron.update(job.id, { check: { script: replacementScript } });
     expect(await runWhenDue(h.cron, job.id)).toEqual({ ok: true, ran: true });
-    expect(evaluateCronTrigger).toHaveBeenLastCalledWith(
+    expect(evaluateCronCheck).toHaveBeenLastCalledWith(
       expect.objectContaining({ script: replacementScript, state: undefined }),
     );
     expect(h.runIsolatedAgentJob).toHaveBeenCalledOnce();
@@ -397,7 +395,7 @@ describe("cron trigger evaluation", () => {
 
   it("appends the fired trigger message to the main payload and history", async () => {
     const h = await createHarness({
-      evaluateCronTrigger: async () =>
+      evaluateCronCheck: async () =>
         evaluated(true, { message: "CI became red", state: { status: "red" } }),
     });
     const job = await h.cron.add(
@@ -427,7 +425,7 @@ describe("cron trigger evaluation", () => {
   it("backs off evaluator errors without reporting webhook delivery or publishing private failure details", async () => {
     const sendCronWebhook = vi.fn();
     const h = await createHarness({
-      evaluateCronTrigger: async () => ({
+      evaluateCronCheck: async () => ({
         kind: "error",
         code: "timeout",
         error: "deadline exceeded",
@@ -474,13 +472,13 @@ describe("cron trigger evaluation", () => {
 
   it("keeps a once trigger armed after malformed evaluator output", async () => {
     const h = await createHarness({
-      evaluateCronTrigger: async () => ({
+      evaluateCronCheck: async () => ({
         kind: "error",
         code: "internal_error",
         error: "cron trigger script must return an object with boolean fire",
       }),
     });
-    const job = await h.cron.add(watcher({ trigger: { script: "return malformed", once: true } }));
+    const job = await h.cron.add(watcher({ check: { script: "return malformed", once: true } }));
     const dueAt = job.state.nextRunAtMs!;
 
     await runWhenDue(h.cron, job.id);
@@ -532,7 +530,7 @@ describe("cron trigger evaluation", () => {
         expect(readHistory(h.storePath, jobId)[0]?.nextRunAtMs).toBeUndefined();
         const updated = await h.cron.update(jobId, {
           agentId: "beta",
-          trigger: { script: "replacement", once: true },
+          check: { script: "replacement", once: true },
           state: { triggerState: { owner: "later edit" } },
         });
         expect(updated.enabled).toBe(true);
@@ -543,7 +541,7 @@ describe("cron trigger evaluation", () => {
     expect(stored).toMatchObject({
       enabled: true,
       agentId: "beta",
-      trigger: { script: "replacement", once: true },
+      check: { script: "replacement", once: true },
       state: { triggerState: { owner: "later edit" }, nextRunAtMs: expect.any(Number) },
     });
     expectUnevaluated(stored);
@@ -562,7 +560,7 @@ describe("cron trigger evaluation", () => {
       const { h, jobId } = pending;
       if (field === "trigger") {
         await h.cron.update(jobId, {
-          trigger: { script: "return replacement", once: true },
+          check: { script: "return replacement", once: true },
           state: { triggerState: { owner: "latest edit" } },
         });
         await h.cron.update(jobId, { trigger: originalTrigger });
@@ -584,7 +582,7 @@ describe("cron trigger evaluation", () => {
         expect(stored?.payload).toMatchObject(originalPayload);
         expect((await readStoredJob(h.storePath, jobId))?.state.triggerState).toBeUndefined();
       } else {
-        expect(stored?.trigger).toEqual(originalTrigger);
+        expect(stored?.check).toEqual(originalTrigger);
         expectUnevaluated(stored);
       }
     },
@@ -592,16 +590,16 @@ describe("cron trigger evaluation", () => {
 
   it("preserves a replacement committed during a suspended quiet evaluation", async () => {
     const { h, jobId, run, resolve } = await pendingEvaluation({
-      trigger: { script: 'return "old"' },
+      check: { script: 'return "old"' },
     });
     await h.cron.update(jobId, {
-      trigger: { script: 'return "replacement"' },
+      check: { script: 'return "replacement"' },
       state: { triggerState: { owner: "latest edit" } },
     });
     resolve(evaluated(false, { state: { owner: "obsolete" } }));
     expect(await run).toEqual({ ok: true, ran: true });
     const stored = h.cron.getJob(jobId);
-    expect(stored?.trigger).toEqual({ script: 'return "replacement"' });
+    expect(stored?.check).toEqual({ script: 'return "replacement"' });
     expect(stored?.state.triggerState).toEqual({ owner: "latest edit" });
     expect(stored?.state.lastTriggerEvalAtMs).toBeUndefined();
     expect(stored?.state.nextRunAtMs).toEqual(expect.any(Number));
@@ -621,7 +619,7 @@ describe("cron trigger evaluation", () => {
 
 describe("cron trigger startup", () => {
   it("evaluates a condition added before the scheduler starts instead of deferring it as missed work", async () => {
-    const evaluateCronTrigger = vi.fn<Evaluator>(async () => evaluated(false));
+    const evaluateCronCheck = vi.fn<Evaluator>(async () => evaluated(false));
     const { storePath } = await makeStorePath();
     const cron = new CronService({
       scheduler: createTestGatewayScheduler(),
@@ -632,7 +630,7 @@ describe("cron trigger startup", () => {
       log: logger,
       enqueueSystemEvent: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      evaluateCronTrigger,
+      evaluateCronCheck,
     });
     try {
       // The Gateway accepts cron.add while its scheduler start is still pending.
@@ -641,7 +639,7 @@ describe("cron trigger startup", () => {
       );
       vi.setSystemTime(job.state.nextRunAtMs! + 5_000);
       await cron.start();
-      await vi.waitFor(() => expect(evaluateCronTrigger).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(evaluateCronCheck).toHaveBeenCalledOnce());
       expect(cron.getJob(job.id)?.state).toMatchObject({ triggerEvalCount: 1 });
     } finally {
       cron.stop();
@@ -653,7 +651,7 @@ describe("cron trigger startup", () => {
 describe("cron webhook optional output", () => {
   installHarnessCleanup();
   it("does not deliver an admission deferral after a trigger fires", async () => {
-    const evaluateCronTrigger = vi.fn(async () => evaluated(true));
+    const evaluateCronCheck = vi.fn(async () => evaluated(true));
     const runIsolatedAgentJob = vi.fn(async () => ({
       status: "skipped" as const,
       summary: "Automation admission deferred by its current window or foreground activity",
@@ -665,7 +663,7 @@ describe("cron webhook optional output", () => {
     }));
     const sendCronWebhook = vi.fn(async () => ({ status: "delivered" as const }));
     const h = await createHarness({
-      evaluateCronTrigger,
+      evaluateCronCheck,
       runIsolatedAgentJob,
       sendCronWebhook,
     });
@@ -675,7 +673,7 @@ describe("cron webhook optional output", () => {
 
     await runWhenDue(h.cron, job.id);
 
-    expect(evaluateCronTrigger).toHaveBeenCalledOnce();
+    expect(evaluateCronCheck).toHaveBeenCalledOnce();
     expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
     expect(sendCronWebhook).not.toHaveBeenCalled();
     expect(h.events.find((event) => event.action === "finished")).toMatchObject({
@@ -694,7 +692,7 @@ describe("cron webhook optional output", () => {
       status: "delivered",
     }));
     const h = await createHarness({
-      evaluateCronTrigger: async () => evaluated(true),
+      evaluateCronCheck: async () => evaluated(true),
       runIsolatedAgentJob: async () => outcome,
       sendCronWebhook,
     });
@@ -783,7 +781,7 @@ async function createCadence(result: () => Awaited<ReturnType<Evaluator>>) {
     return result();
   });
   return {
-    h: await createHarness({ evaluateCronTrigger: evaluate, cronConfig: undefined }),
+    h: await createHarness({ evaluateCronCheck: evaluate, cronConfig: undefined }),
     evaluate,
   };
 }
@@ -889,7 +887,7 @@ describe("cron trigger cadence", () => {
     const evaluate = vi.fn(async () => evaluated(false));
     const h = await createHarness({
       storePath,
-      evaluateCronTrigger: evaluate,
+      evaluateCronCheck: evaluate,
       cronConfig: undefined,
     });
     expect(evaluate).not.toHaveBeenCalled();

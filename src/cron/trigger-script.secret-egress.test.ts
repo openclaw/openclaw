@@ -39,11 +39,11 @@ it("revokes proxy grants after cold and warm trigger commands in a fresh agent",
   const admitted: admission.AdmittedRunContext[] = [];
   for (let index = 0; index < 2; index += 1) {
     await expect(
-      runtime.evaluateTrigger({
+      runtime.evaluateCheck({
         jobId: "fresh-agent-check",
         agentId: "probe",
         script:
-          'const result = await exec({ command: "printf cron-egress-ok" }); if (!JSON.stringify(result).includes("cron-egress-ok")) throw new Error("Command output missing"); return { fire: false };',
+          'const result = await exec({ command: "printf cron-egress-ok" }); if (!JSON.stringify(result).includes("cron-egress-ok")) throw new Error("Command output missing"); return { };',
         state: null,
         toolsAllow: ["exec", "process"],
         scheduledToolPolicy: { version: 1, mode: "trusted" } as const,
@@ -53,7 +53,7 @@ it("revokes proxy grants after cold and warm trigger commands in a fresh agent",
           onPostAdmission: (context) => void admitted.push(context),
         },
       }),
-    ).resolves.toEqual({ kind: "evaluated", fire: false });
+    ).resolves.toEqual({ kind: "evaluated", action: "quiet" });
     expect(admitted).toHaveLength(index + 1);
     expect(admission.getAdmittedRunDelegatedAuthority(admitted[index]!)).toBeUndefined();
     expect(registrations).toHaveBeenCalledTimes(index + 1);

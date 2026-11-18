@@ -48,11 +48,11 @@ const CRON_SELF_ACTIONS = ["status", "list", "get", "remove", "runs"] as const;
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "stream", "event"] as const;
 // When cron.triggers.enabled is explicitly false, the scheduler rejects
-// stream schedules, script payloads, and condition triggers, so the
+// stream schedules, automation checks, so the
 // model-facing schema must not advertise them.
 const CRON_SCHEDULE_KINDS_TRIGGERS_DISABLED = ["at", "every", "cron"] as const;
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
-const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script"] as const;
+const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "none"] as const;
 const CRON_PAYLOAD_KINDS_TRIGGERS_DISABLED = ["systemEvent", "agentTurn"] as const;
 const CRON_DELIVERY_MODES = ["none", "announce", "webhook"] as const;
 const CRON_RUN_MODES = ["due", "force"] as const;
@@ -66,7 +66,7 @@ type CronToolSchemaOptions = {
   nextCheckEnabled?: boolean;
   /**
    * Whether cron.triggers.enabled is on for this deployment. When false, the
-   * trigger-gated surfaces (job trigger, script payloads, stream
+   * trigger-gated surfaces (automation checks, stream
    * schedules) are omitted from the advertised schema so models cannot be
    * tempted into calls the scheduler always rejects. Defaults to true so
    * config-less callers keep the full surface.
@@ -220,11 +220,6 @@ function createCronPayloadSchema(params: {
               ),
             }
           : {}),
-        ...(params.triggersEnabled
-          ? {
-              script: Type.Optional(Type.String({ description: "Headless code-mode script" })),
-            }
-          : {}),
         model: nullableStringSchema("Model override, or null to clear"),
         thinking: Type.Optional(Type.String({ description: "Thinking override" })),
         timeoutSeconds: Type.Optional(
@@ -233,13 +228,6 @@ function createCronPayloadSchema(params: {
               "Timeout seconds; null restores the default on update (omission preserves it)",
           }),
         ),
-        ...(params.triggersEnabled
-          ? {
-              toolBudget: optionalPositiveIntegerSchema({
-                description: "Maximum script tool calls",
-              }),
-            }
-          : {}),
         lightContext: Type.Optional(
           Type.Boolean({
             description: "Lightweight bootstrap context (skip full workspace context)",
@@ -260,15 +248,17 @@ function createCronPayloadSchema(params: {
   );
 }
 
-function createCronTriggerSchema(): TSchema {
-  const trigger = Type.Object(
+function createCronCheckSchema(): TSchema {
+  const check = Type.Object(
     {
       script: Type.String({ minLength: 1, maxLength: 65_536 }),
       once: Type.Optional(Type.Boolean()),
+      timeoutSeconds: optionalPositiveIntegerSchema({ maximum: 900 }),
+      toolBudget: optionalPositiveIntegerSchema({ maximum: 200 }),
     },
     { additionalProperties: false },
   );
-  return Type.Optional(Type.Union([trigger, Type.Null()]));
+  return Type.Optional(Type.Union([check, Type.Null()]));
 }
 
 function createCronDeliverySchema(): TSchema {
@@ -444,7 +434,7 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
               "True waits for agent-wide quiet, including other cron jobs and foreground sessions, not just the target session; continuations may defer indefinitely on busy shared agents. False/unset uses normal admission; null clears.",
           }),
         ),
-        ...(triggersEnabled ? { trigger: createCronTriggerSchema() } : {}),
+        ...(triggersEnabled ? { check: createCronCheckSchema() } : {}),
         sessionTarget: Type.Optional(
           Type.String({
             description: "main | isolated | current (agentTurn default) | session:<id>",

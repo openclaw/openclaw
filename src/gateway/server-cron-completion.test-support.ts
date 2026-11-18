@@ -61,7 +61,10 @@ export function registerGatewayCronCompletionTests<
                   kind: "command",
                   argv: [process.execPath, "-e", "process.stdout.write('scheduled result')"],
                 }
-              : { kind: "script", script: "return { notify: 'scheduled result' };" },
+              : { kind: "none" },
+          ...(kind === "script"
+            ? { check: { script: "return { post: 'scheduled result' };" } }
+            : {}),
           deleteAfterRun: true,
           delivery: { mode: "announce", channel: "telegram", to: "123" },
         });

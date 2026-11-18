@@ -1,8 +1,8 @@
 ---
 doc-schema-version: 1
-summary: "Payload kinds, agent-turn flags, command and script payloads, and session execution styles"
+summary: "Payload kinds, agent-turn flags, command payloads and model-free checks, and session execution styles"
 read_when:
-  - Choosing a system-event, agent-turn, command, or script payload
+  - Choosing a system-event, agent-turn, command payload, or model-free check
   - Setting a per-job model, thinking level, or tool policy
   - Deciding between main, current, isolated, and custom sessions
 title: "Automation payloads"
@@ -73,7 +73,7 @@ list. This includes Codex app tools that the creator runtime cannot carry. Use a
 tool name and runtime, or explicitly remove the unavailable entry.
 `automations edit --clear-tools` restores `*`. Existing jobs that predate an
 explicit tool policy retain their current behavior until their tool policy is explicitly
-edited or the job is recreated. Agent-created script payloads, condition triggers, and jobs
+edited or the job is recreated. Agent-created model-free checks, and jobs
 whose creator captured Codex app authority store the creating turn's tools instead: scripts
 reach MCP only through servers their list names, and app authority is bound to that list.
 
@@ -432,44 +432,11 @@ Delivered text is derived from process output: non-empty stdout wins; if stdout 
 
 When the run deadline stops a command, run history retains its captured output and command timeout reason after bounded process cleanup. Completion delivery does not start after that deadline.
 
-### Script payloads
+<a id="script-payloads" />
 
-Script payloads run headlessly in the same code-mode executor as trigger scripts, without starting a conversational agent turn. They are available by default; setting `cron.triggers.enabled: false` disables creation and execution of script payloads together with condition-trigger scripts and stream schedules. Script jobs support only `main` and `isolated` session targets.
+### Model-free checks
 
-Scripts get only self-scoped `automations` actions (status, list, get, remove, runs, and next_check), with no add, update, run, or wake. To resume a conversation later, schedule an `agentTurn` instead.
-
-```bash
-openclaw automations create "0 * * * *" \
-  --name "Hourly queue check" \
-  --script ./automation/check-queue.js \
-  --script-timeout-seconds 300 \
-  --script-tool-budget 50 \
-  --session isolated \
-  --announce
-```
-
-Use `--script <file|->` to read JavaScript from a file or stdin. The CLI preserves leading and trailing spaces in file paths; quote the path as one shell argument. The timeout defaults to 300 seconds and is capped at 900; the tool budget defaults to 50 calls and is capped at 200. These payload budgets are separate from the smaller trigger-gate evaluation budgets.
-
-Script payloads can call configured MCP server tools as `MCP.<server>.<tool>({ ...input })`, like interactive Code Mode. MCP is opt-in per server: name each server in the job's `toolsAllow` (`--tools`) with an exact tool such as `wispr-flow__search_meetings` or a server-scoped glob such as `wispr-flow__*`. A wildcard `*`, a missing `toolsAllow`, a glob without a server prefix, or a script that never mentions `MCP` starts no server. Within a named server, the owning agent's tool policy still applies. Each run starts its own runtime for the named servers, counts connection time against the script timeout and each call against the tool budget, and retires the runtime when the run ends. A named server that fails to start is absent from `MCP`; if the script then fails, the run error ends with `MCP server "<name>" is unavailable: <reason>`. See [Event triggers](/automation/cron-jobs/schedules#event-triggers-condition-watchers) for the shared details.
-
-The script may return an object with these optional fields:
-
-- `notify`: Text delivered through the job's `announce`, `webhook`, or `none` delivery mode. If omitted, nothing is delivered. For a `main` job, the text becomes a system event.
-- `wake`: `"now"` requests immediate session processing of `notify` (or a compact completion event). The legacy `"next-heartbeat"` value assigns the notice to an eligible scheduled automation; a missing target is reported.
-- `state`: JSON state, capped at 16 KB and persisted only after a successful run. The next run receives a frozen copy as `trigger.state`, matching trigger scripts. Because that namespace has one persisted owner, a script payload cannot be combined with a condition trigger on the same job.
-- `nextCheck`: A duration such as `"15m"`. It is valid only for jobs with pacing enabled and uses the same pacing clamp as agent-turn proposals.
-
-Throws, timeouts, exhausted tool budgets, invalid results, and `nextCheck` without pacing are normal automation run errors: they enter run history, backoff, and failure-alert handling without persisting returned state.
-
-Plugin reloads invalidate cached script preparation. If a plugin retires during setup,
-OpenClaw refreshes the tools once before starting the script, within the original
-deadline. A failure after the script starts never triggers this setup retry.
-If the refresh fails, run history and failure alerts explain that automatic setup
-recovery failed and the script did not run.
-
-Changing a running job's script payload or saved state protects that edit from
-the old script's returned state, including when completion is recovered after a
-Gateway restart. The completed run still retains its history.
+Use a [check](/automation/cron-jobs/schedules#model-free-checks) when an automation can decide what to do without a model. Configure an agent-turn payload only if the check should be able to wake the agent. With no prompt, the API uses `payload: { kind: "none" }` and requires a check. Shell command payloads remain separate and cannot be combined with a check.
 
 ## Authoring recurring jobs
 
@@ -486,12 +453,12 @@ judgment and move the repeatable parts into code:
   instead of asking the model to discover them.
 - Cap `toolsAllow` to the tools the run actually needs.
 - When a script can decide there is nothing to do, use a condition trigger, a
-  [command payload](#command-payloads), or a [script payload](#script-payloads) so
+  [command payload](#command-payloads), or a [model-free check](#model-free-checks) so
   quiet fires skip the model. Scripts can call a configured MCP server only when
   `toolsAllow` names it (`<server>__<tool>` or `<server>__*`). Triggers and script
   payloads are unavailable when `cron.triggers.enabled` is `false`.
 - When a run fails, make it fail instead of posting the error yourself: throw from
-  trigger or script payload JavaScript, or exit non-zero from a command payload. A
+  check JavaScript, or exit non-zero from a command payload. A
   script that returns an error field still succeeds. The scheduler owns failure
   accounting: only the
   [failure alert](/automation/cron-jobs/delivery#failure-notifications) waits for
@@ -519,7 +486,7 @@ only when it needs Codex app access. See
 | Current session | `current`           | Child run of the creating conversation | Context-aware recurring work    |
 | Custom session  | `session:custom-id` | Persistent named session               | Workflows that build on history |
 
-Agent-turn jobs default to the creating conversation when the create request carries session context. Callers without a session key, including CLI and API callers that do not supply one, fall back to `isolated`. System events default to `main`; command and script payloads still default to `isolated`.
+Agent-turn jobs default to the creating conversation when the create request carries session context. Callers without a session key, including CLI and API callers that do not supply one, fall back to `isolated`. System events default to `main`; command payloads and model-free checks still default to `isolated`.
 
 With `announce`, agent, command, and script results belong to the chat or topic that receives them. A different delivery destination gets the result instead of the creating conversation; without an external route, the creating conversation receives it. An isolated run still does not read that conversation's history. See [Automation delivery](/automation/cron-jobs/delivery) for generation checks and duplicate prevention.
 

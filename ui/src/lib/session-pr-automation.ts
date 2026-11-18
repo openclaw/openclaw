@@ -95,7 +95,7 @@ export async function setCiAutomationEnabled(
       patch: {
         enabled,
         ...(enabled && option === "autoFix"
-          ? { trigger: ciAutomationJobSpec(target, option).trigger }
+          ? { check: ciAutomationJobSpec(target, option).check }
           : {}),
       },
     });

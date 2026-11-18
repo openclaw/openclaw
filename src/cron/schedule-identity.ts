@@ -4,6 +4,7 @@ import {
   asSafeIntegerInRange,
   parseStrictFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   readNonBlankString,
@@ -134,7 +135,8 @@ export function tryCronScheduleIdentity(job: CronScheduleIdentityInput): string 
     enabled: typeof job.enabled === "boolean" ? job.enabled : true,
     schedule: schedule.kind === "event" ? JSON.parse(stableStringify(schedule)) : schedule,
     pacing,
-    hasTrigger: job.trigger !== undefined && job.trigger !== null,
+    hasTrigger:
+      job.check !== undefined && job.check !== null && asRecord(job.payload).kind !== "none",
     ...(streamSandbox ? { streamSandbox } : {}),
   });
 }

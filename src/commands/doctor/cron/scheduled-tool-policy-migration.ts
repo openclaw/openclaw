@@ -21,7 +21,7 @@ export function migrateScheduledToolPolicy(
   raw: Record<string, unknown>,
 ): ScheduledToolPolicyMigrationResult {
   const payload = readRecord(raw.payload);
-  if (!cronJobUsesToolRuntime({ payload, trigger: readRecord(raw.trigger) })) {
+  if (!cronJobUsesToolRuntime({ payload, check: readRecord(raw.check) })) {
     // Retained account restrictions are dormant until the job uses tools again.
     return { mutated: false, status: "not-applicable" };
   }

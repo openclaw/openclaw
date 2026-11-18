@@ -30,7 +30,7 @@ export function declarativeFields(job: CronStoredJob, includeEnabled: boolean) {
     activeHours: job.activeHours,
     idleOnly: job.idleOnly,
     cyberAccessProgram: job.cyberAccessProgram,
-    trigger: job.trigger,
+    check: job.check,
     payload: job.payload,
     scheduledToolPolicy: job.scheduledToolPolicy,
     toolsAllowProvenance: job.toolsAllowProvenance,

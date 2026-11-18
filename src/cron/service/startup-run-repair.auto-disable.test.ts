@@ -98,7 +98,7 @@ it.each([
 it("buffers quiet-trigger repair notifications until the recovery commit", () => {
   const { state, job, deferredNotifications, restore } = repairFixture({
     schedule: { kind: "cron", expr: "invalid" },
-    trigger: { script: "return false" },
+    check: { script: "return false" },
     state: {
       nextRunAtMs: runningAtMs,
       runningAtMs,

@@ -158,7 +158,7 @@ it.each([
         runHeadless: async ({ ctx }) => {
           const tools = new ToolSearchRuntime(ctx, resolveToolSearchConfig(ctx.runtimeConfig));
           await tools.callValue("probe", {});
-          return { status: "completed", value: { fire: false }, output: [], toolCallCount: 1 };
+          return { status: "completed", value: {}, output: [], toolCallCount: 1 };
         },
       });
       const cron = new CronService({
@@ -171,7 +171,7 @@ it.each([
         enqueueSystemEvent: () => {},
         admitScheduledOccurrence: ({ job }) =>
           admitScheduledOccurrence({ cfg: config, job, agentId: "main", trigger: "cron" }),
-        evaluateCronTrigger: runtime.evaluateTrigger,
+        evaluateCronCheck: runtime.evaluateCheck,
         runIsolatedAgentJob: payload,
       });
       fixture.context.cron = cron;
@@ -185,7 +185,7 @@ it.each([
             sessionTarget: target,
             wakeMode: "now",
             payload: { kind: "agentTurn", message: "Must not run", toolsAllow: ["probe"] },
-            trigger: { script: "return {fire:false}" },
+            check: { script: "return {}" },
             owner: { agentId: "main", sessionKey: fixture.target.sessionKey, accountId: "default" },
           },
           {

@@ -45,10 +45,8 @@ export async function persistUpdatedJob(params: {
   resolveCronJobEffectiveAgentId(nextJob, defaultAgentId);
 
   const triggerStateChanged =
-    !isDeepStrictEqual(previousJob.trigger, nextJob.trigger) ||
-    !isDeepStrictEqual(previousJob.state.triggerState, nextJob.state.triggerState) ||
-    ((previousJob.payload.kind === "script" || nextJob.payload.kind === "script") &&
-      !isDeepStrictEqual(previousJob.payload, nextJob.payload));
+    !isDeepStrictEqual(previousJob.check, nextJob.check) ||
+    !isDeepStrictEqual(previousJob.state.triggerState, nextJob.state.triggerState);
   const scheduleChanged = !cronSchedulingInputsEqual(previousJob, nextJob);
   const messageActionAuthorityChanged =
     (isJobEnabled(previousJob) && !isJobEnabled(nextJob)) ||

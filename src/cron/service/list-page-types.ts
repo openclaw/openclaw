@@ -16,7 +16,7 @@ export type CronListPageOptions = {
   enabled?: "all" | "enabled" | "disabled";
   scheduleKind?: "all" | "at" | "every" | "cron" | "on-exit" | "stream" | "event";
   lastRunStatus?: "all" | CronRunStatus | "unknown";
-  trigger?: "all" | "conditional" | "unconditional";
+  check?: "all" | "conditional" | "unconditional";
   sortBy?: CronJobsSortBy;
   sortDir?: CronSortDir;
   agentId?: string;

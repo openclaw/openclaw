@@ -58,7 +58,7 @@ export type CronCompactJob = Pick<
     nextRunAtMs: number | null;
     scheduleKind: CronJob["schedule"]["kind"];
     schedule?: Extract<CronJob["schedule"], { kind: "at" | "every" | "cron" }>;
-    trigger?: true;
+    check?: true;
     lastRunAt: string | null;
     lastRunAtMs: number | null;
     lastRunStatus: NonNullable<CronJob["state"]["lastRunStatus"]> | null;

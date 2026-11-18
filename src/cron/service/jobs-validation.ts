@@ -77,7 +77,7 @@ export async function resolveConfiguredChannelsForValidation(
   }
 }
 
-function assertCronScriptSyntax(script: string, subject: "script payload" | "trigger script") {
+function assertCronScriptSyntax(script: string, subject: "check script") {
   if (!script.trim()) {
     throw new Error(`cron ${subject} must not be empty`);
   }
@@ -107,22 +107,18 @@ export function assertSupportedJobSpec(
     job.sessionTarget === "main" &&
     job.payload.kind !== "systemEvent" &&
     job.payload.kind !== "agentTurn" &&
-    job.payload.kind !== "script"
+    job.payload.kind !== "none"
   ) {
     throw new Error(
-      'cron sessionTarget "main" requires payload.kind="systemEvent", "agentTurn", or "script"',
+      'cron sessionTarget "main" requires payload.kind="systemEvent", "agentTurn", or "none"',
     );
   }
   if (
-    job.payload.kind === "script" &&
-    job.sessionTarget !== "main" &&
-    job.sessionTarget !== "isolated"
+    isConversationTarget &&
+    job.payload.kind !== "agentTurn" &&
+    job.payload.kind !== "command" &&
+    job.payload.kind !== "none"
   ) {
-    throw new Error(
-      `cron sessionTarget "${job.sessionTarget}" cannot run script payloads: scripts run headless and support only "main" or "isolated"; to run a turn in an existing conversation use payload {kind:"agentTurn",message} with sessionTarget "session:<key>"`,
-    );
-  }
-  if (isConversationTarget && job.payload.kind !== "agentTurn" && job.payload.kind !== "command") {
     throw new Error(
       `cron sessionTarget "${job.sessionTarget}" cannot run ${job.payload.kind}: systemEvent only runs in the main session; for sessionTarget "${job.sessionTarget}" use payload {kind:"agentTurn",message}`,
     );
@@ -131,65 +127,60 @@ export function assertSupportedJobSpec(
     job.sessionTarget === "isolated" &&
     job.payload.kind !== "agentTurn" &&
     job.payload.kind !== "command" &&
-    job.payload.kind !== "script"
+    job.payload.kind !== "none"
   ) {
     throw new Error(
-      'cron sessionTarget "isolated" requires payload.kind="agentTurn", "command", or "script"',
+      'cron sessionTarget "isolated" requires payload.kind="agentTurn", "command", or "none"',
     );
   }
 }
 
-export function assertScriptPayloadSupport(
-  job: Pick<CronJob, "payload" | "trigger">,
-  opts?: { cronConfig?: CronConfig; requireEnabled?: boolean; validateSyntax?: boolean },
+export function assertCheckSupport(
+  job: Pick<CronJob, "schedule" | "check" | "payload">,
+  opts?: { cronConfig?: CronConfig; validateAuthoredCheck?: boolean },
 ) {
-  if (job.payload.kind !== "script") {
+  if (!job.check) {
+    if (job.payload.kind === "none") throw new Error('cron payload.kind="none" requires a check');
     return;
   }
-  if (opts?.validateSyntax !== false) {
-    assertCronScriptSyntax(job.payload.script, "script payload");
-  } else if (!job.payload.script.trim()) {
-    throw new Error("cron script payload must not be empty");
-  }
-  if (job.trigger) {
-    // Both script kinds expose trigger.state, so composing them would give one
-    // persisted state slot two owners and make the next trigger run ambiguous.
-    throw new Error("cron script payloads cannot be combined with a condition trigger");
-  }
-  if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled === false) {
+  if (job.payload.kind !== "none" && job.payload.kind !== "agentTurn") {
     throw new Error(
-      "cron script payloads are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true to allow unattended scripts",
+      "cron checks can only be combined with an agent prompt, not a command or system event",
     );
   }
-}
-
-export function assertTriggerSupport(
-  job: Pick<CronJob, "schedule" | "trigger">,
-  opts?: { cronConfig?: CronConfig; validateAuthoredTrigger?: boolean },
-) {
-  if (!job.trigger) {
-    return;
+  for (const [name, value, max] of [
+    ["timeoutSeconds", job.check.timeoutSeconds, 900],
+    ["toolBudget", job.check.toolBudget, 200],
+  ] as const) {
+    if (value !== undefined && (!Number.isInteger(value) || value < 1 || value > max)) {
+      throw new Error(`cron check ${name} must be an integer between 1 and ${max}`);
+    }
   }
-  if (opts?.validateAuthoredTrigger && opts.cronConfig?.triggers?.enabled === false) {
+  if (opts?.validateAuthoredCheck && opts.cronConfig?.triggers?.enabled === false) {
     throw new Error(
-      "cron triggers are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",
+      "cron checks are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",
     );
   }
   if (
+    job.payload.kind === "agentTurn" &&
     job.schedule.kind !== "every" &&
     job.schedule.kind !== "cron" &&
     job.schedule.kind !== "stream"
   ) {
     throw new Error(
-      `cron triggers require an every, cron, or stream schedule; schedule.kind="${job.schedule.kind}" cannot include trigger. Remove trigger for a one-time reminder, or use a recurring every/cron schedule. No changes were saved. Retry with corrected arguments; do not report success unless the retry succeeds. If you cannot retry, tell the user the reminder was not saved.`,
+      `cron checks with an agent prompt require an every, cron, or stream schedule; schedule.kind="${job.schedule.kind}" cannot include a check with an agent prompt. Remove the check for a one-time reminder, or use a recurring every/cron schedule. No changes were saved. Retry with corrected arguments; do not report success unless the retry succeeds. If you cannot retry, tell the user the reminder was not saved.`,
     );
   }
   const minIntervalMs = resolveCronTriggerMinIntervalMs();
-  if (job.schedule.kind === "every" && job.schedule.everyMs < minIntervalMs) {
-    throw new Error(`cron trigger every interval must be at least ${minIntervalMs}ms`);
+  if (
+    job.payload.kind === "agentTurn" &&
+    job.schedule.kind === "every" &&
+    job.schedule.everyMs < minIntervalMs
+  ) {
+    throw new Error(`cron check every interval must be at least ${minIntervalMs}ms`);
   }
-  if (opts?.validateAuthoredTrigger) {
-    assertCronScriptSyntax(job.trigger.script, "trigger script");
+  if (opts?.validateAuthoredCheck) {
+    assertCronScriptSyntax(job.check.script, "check script");
   }
 }
 

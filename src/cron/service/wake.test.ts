@@ -72,7 +72,7 @@ describe("wake (cron timer)", () => {
   );
 
   it.each<Partial<CronJob>>([
-    { trigger: { script: "return false" }, activeHours: restrictedHours },
+    { check: { script: "return false" }, activeHours: restrictedHours },
     { schedule: oneShot },
     { schedule: oneShot, activeHours: { start: "00:00", end: "24:00", timezone: "UTC" } },
   ])("defers to the matching scheduled receiver (%j)", async (overrides) => {

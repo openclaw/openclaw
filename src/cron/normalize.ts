@@ -162,16 +162,6 @@ function coerceSchedule(schedule: UnknownRecord) {
   return { ...next };
 }
 
-function coerceTrigger(trigger: UnknownRecord): UnknownRecord {
-  const input = snapshotOwnCronRecord(trigger);
-  const script = typeof input.script === "string" ? input.script.trim() : "";
-  const once = parseBoolean(input.once);
-  return {
-    script,
-    ...(once !== undefined ? { once } : {}),
-  };
-}
-
 function coerceDelivery(delivery: UnknownRecord) {
   const next = snapshotOwnCronRecord(delivery);
   const parsed = parseDeliveryInput(next);
@@ -395,11 +385,11 @@ export function normalizeCronJobInput(
     next.payload = normalizeCronPayload(base.payload);
   }
 
-  if ("trigger" in base && base.trigger !== null) {
-    if (isRecord(base.trigger)) {
-      next.trigger = coerceTrigger(base.trigger);
+  if ("check" in base && base.check !== null) {
+    if (isRecord(base.check)) {
+      next.check = snapshotOwnCronRecord(base.check);
     } else {
-      delete next.trigger;
+      delete next.check;
     }
   }
 
@@ -440,7 +430,7 @@ export function normalizeCronJobInput(
         next.sessionTarget = "main";
       } else if (kind === "agentTurn") {
         next.sessionTarget = "current";
-      } else if (kind === "command" || kind === "script") {
+      } else if (kind === "command" || kind === "none") {
         next.sessionTarget = "isolated";
       }
     }
