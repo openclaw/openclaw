@@ -1356,7 +1356,6 @@ const enSettings = {
   },
   updates: {
     device: {
-      title: "This Mac",
       version: "App version",
       versionBuild: "{version} (build {build})",
       automatic: "Check for updates automatically",
@@ -1447,10 +1446,8 @@ const enSettings = {
       attemptedAt: "Attempted",
       beforeUpdate: "Before update",
       afterAttempt: "After attempt",
-      attemptInstallKind: "Attempt install type",
       attemptReason: "Reason code",
       failedStep: "Failure details",
-      viewDetails: "View details",
       recoveryActions: "Recovery",
       diagnoseFailure: "Diagnose update",
       checkStatus: "Check status",
@@ -1467,7 +1464,6 @@ const enSettings = {
       reportError: "Couldn’t prepare or submit the report. Check its status before trying again.",
       openIssue: "Open GitHub issue",
       openPrefilledIssue: "Open prefilled issue",
-      savedReport: "Saved report",
       troubleshoot: "Troubleshoot updates",
       cliFallback: "CLI fallback",
       showCliFallback: "Show terminal commands",
