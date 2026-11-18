@@ -417,7 +417,7 @@ export async function hasAllGuildPermissionsDiscord(
 
 export async function fetchChannelPermissionsDiscord(
   channelId: string,
-  opts: DiscordReactOpts,
+  opts: DiscordReactOpts & { includeMessagePolicyContext?: boolean },
 ): Promise<DiscordPermissionsSummary> {
   opts.signal?.throwIfAborted();
   const rest = resolveDiscordRest(opts);
@@ -456,15 +456,21 @@ export async function fetchChannelPermissionsDiscord(
   return {
     channelId,
     guildId,
-    channelName: "name" in channel ? (channel.name ?? undefined) : undefined,
-    guildName: guild.name,
-    parentId: isDiscordThreadChannelType(channelType) ? permissionChannel.id : undefined,
-    parentName:
-      isDiscordThreadChannelType(channelType) && "name" in permissionChannel
-        ? (permissionChannel.name ?? undefined)
-        : undefined,
-    threadOwnerId: "owner_id" in channel ? channel.owner_id : undefined,
-    botId,
+    // Operator diagnostics need these facts; ordinary permission reads retain
+    // their existing public response instead of exposing diagnostic context.
+    ...(opts.includeMessagePolicyContext
+      ? {
+          channelName: "name" in channel ? (channel.name ?? undefined) : undefined,
+          guildName: guild.name,
+          parentId: isDiscordThreadChannelType(channelType) ? permissionChannel.id : undefined,
+          parentName:
+            isDiscordThreadChannelType(channelType) && "name" in permissionChannel
+              ? (permissionChannel.name ?? undefined)
+              : undefined,
+          threadOwnerId: "owner_id" in channel ? channel.owner_id : undefined,
+          botId,
+        }
+      : {}),
     permissions: bitfieldToPermissions(permissions),
     raw: permissions.toString(),
     isDm: false,

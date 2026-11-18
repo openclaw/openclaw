@@ -413,6 +413,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
                 new Error(`Capabilities diagnostic timed out after ${timeoutMs}ms`),
               run: async (signal) =>
                 await sendModule.fetchChannelPermissionsDiscord(parsedTarget.id, {
+                  includeMessagePolicyContext: true,
                   cfg: statusCfg,
                   token,
                   accountId: account.accountId ?? undefined,
