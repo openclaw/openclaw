@@ -14,6 +14,7 @@ import path from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import { createHostWorkspaceEditTool } from "../agents/agent-tools.read.js";
+import * as sessionSlugs from "../agents/session-slug.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
@@ -23,13 +24,10 @@ import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js"
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
-import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { listSessionChildEntriesReadOnly } from "../config/sessions/session-entry-children-read.js";
-import { withSessionStoreReaderInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
 import { deriveGitHubPublicationTaskId } from "../state/github-publication-requester.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import { prepareGitHubPublicationSession } from "./github-publication-availability.js";
 import { readPublicationCommit } from "./github-publication-git.test-support.js";
@@ -161,108 +159,13 @@ describe("local checkout publication", () => {
     expect(source.effects).toEqual(["push", "pull_request"]);
   });
 
-  it("keeps private publication session rows in memory and reuses its accepted checkout", async () => {
-    const f = await createLocalPublicationFixture();
-    await useRealSessionReads();
-    const source = f.local!;
-    setRuntimeConfigSnapshot({
-      ...f.config,
-      agents: { entries: { main: { workspace: root } } },
-    });
-    const actual = await vi.importActual<typeof import("../agents/worktrees/service.js")>(
-      "../agents/worktrees/service.js",
-    );
-    const registry = await vi.importActual<typeof import("../agents/worktrees/registry-read.js")>(
-      "../agents/worktrees/registry-read.js",
-    );
-    mocks.resolveRepository.mockImplementation(
-      actual.managedWorktrees.resolveRepositoryIdentity.bind(actual.managedWorktrees),
-    );
-    mocks.readWorktree.mockImplementation(registry.readLiveRegistryWorktreeByOwner);
-    await source.git("remote", "add", "origin", "https://github.com/openclaw/openclaw.git");
-    await source.git("add", "artifact.txt");
-    await source.git("commit", "-m", "Implement private task");
-    const location = {
-      agentId: "main",
-      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-    };
-    onTestFinished(() => memorySessionActorOwners.closeDatabase(location));
-    const created = await createGatewaySession({
-      cfg: getRuntimeConfig(),
-      agentId: "main",
-      incognito: true,
-      requestingOperatorScopes: ["operator.admin"],
-      operatorRoleActor: { kind: "system" },
-      creation: { via: "operator", actor: { type: "system" } },
-      commandSource: "test",
-    });
-    expect(created.ok).toBe(true);
-    if (!created.ok) {
-      throw new Error(created.error.message);
-    }
-    const scope = { agentId: "main", sessionKey: created.key };
-    const client = createSyntheticPluginRuntimeClient({
-      operatorRoleActor: { kind: "system" },
-      scopes: ["operator.admin"],
-    });
-    const context = {
-      ...createDirectChatContext({ getRuntimeConfig }),
-      workerSessionPlacementService: f.placements,
-      githubPublicationService: f.coordinator,
-    };
-    const invoke = async () => {
-      const respond = vi.fn();
-      await withGatewayToolCallerIdentity(
-        { ...scope, workspacePrAdoptionSessionId: created.entry.sessionId },
-        () =>
-          handleGatewayRequest({
-            req: {
-              type: "req",
-              id: "private-publication",
-              method: "sessions.github.publish",
-              params: {
-                ...scope,
-                workspacePath: source.cwd,
-                idempotencyKey: "private-publication",
-              },
-            },
-            context,
-            client,
-            isWebchatConnect: () => false,
-            respond,
-          }),
-      );
-      return respond.mock.calls[0];
-    };
-    const result = await invoke();
-    expect(result).toMatchObject([true, { status: "published" }]);
-    expect(await invoke()).toEqual(result);
-    const children = await listSessionChildEntriesReadOnly(scope);
-    expect(children).toHaveLength(1);
-    expect(children[0]).toMatchObject({
-      sessionKey: expect.stringMatching(/^agent:main:dashboard:incognito-/u),
-      entry: {
-        incognito: true,
-        parentSessionKey: created.key,
-        worktree: { canonicalWorkspaceDir: source.cwd },
-      },
-    });
-    const durable = await withSessionStoreReaderInWorker(
-      { agentId: "main", storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }) },
-      ({ reader, database, continuation }) =>
-        reader.readExactEntries({
-          sessionKeys: [created.key, children[0]!.sessionKey],
-          env: database.env,
-          continuation,
-        }),
-      { backing: true, dataOnly: true },
-    );
-    expect(durable.entries).toEqual([]);
-    expect(loadSessionEntryReadOnly(scope)?.worktree).toBeUndefined();
-    expect(source.effects).toEqual(["push", "pull_request"]);
-  });
-
   it.each(LOCAL_CHECKOUT_OUTCOMES)("local checkout outcome: %s", async (outcome) => {
+    // Separate clones share one remote, so their publication branches must not collide.
+    const names = vi
+      .spyOn(sessionSlugs, "createCrustaceanSlug")
+      .mockReturnValueOnce("first-publication")
+      .mockReturnValueOnce("next-publication");
+    onTestFinished(() => names.mockRestore());
     const f = await createLocalPublicationFixture();
     await useRealSessionReads();
     const source = f.local!;

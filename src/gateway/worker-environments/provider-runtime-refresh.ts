@@ -194,6 +194,19 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
     let runtime: WorkerNodeRuntimePreparation | undefined;
     let retainedCleanupOnly = false;
     let open = true;
+    const releasePreparation = () => {
+      const preparedRuntime = runtime;
+      const preparedAuthority = authority;
+      runtime = undefined;
+      authority = undefined;
+      try {
+        if (preparedRuntime) {
+          options.closeNodeRuntime?.(preparedRuntime);
+        }
+      } finally {
+        preparedAuthority?.release();
+      }
+    };
     const assertCurrent = () => {
       signal.throwIfAborted();
       request.assertCurrent();
@@ -210,6 +223,15 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
         current.attachedSessionIds[0] !== record.attachedSessionIds[0]
       ) {
         throw serviceError("invalid_state", "Worker node recovery owner changed");
+      }
+    };
+    const assertPreparationCurrent = () => {
+      try {
+        assertCurrent();
+      } catch (error) {
+        // The provider handler may receive preparation after the caller's timeout cleanup.
+        releasePreparation();
+        throw error;
       }
     };
     const lease = {
@@ -250,7 +272,7 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
               idleOnly: true,
               ...(record.retention ? { allowRetainedCleanup: true as const } : {}),
             });
-            assertCurrent();
+            assertPreparationCurrent();
             retainedCleanupOnly = Boolean(authority.retainedCleanupOnly || authority.reclaimResult);
             if (!retainedCleanupOnly) {
               if (!options.prepareNodeRuntime) {
@@ -265,7 +287,7 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
                 throw new Error("Node runtime upgrade requires a bundle artifact");
               }
               runtime = await options.prepareNodeRuntime(record, bundle, signal, assertCurrent);
-              assertCurrent();
+              assertPreparationCurrent();
             }
           }
           await resume({
@@ -286,15 +308,9 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
       );
       return retainedCleanupOnly ? { retainedCleanupOnly: true as const } : undefined;
     } finally {
-      // Timeout closes this invocation, while callProvider retains unsettled work.
+      // Release acquired preparation even if the provider never settles; its queue slot stays held.
       open = false;
-      try {
-        if (runtime) {
-          options.closeNodeRuntime?.(runtime);
-        }
-      } finally {
-        authority?.release();
-      }
+      releasePreparation();
     }
   };
   const resumeNode: typeof resumeNodeInOperation = (environmentId, request) =>

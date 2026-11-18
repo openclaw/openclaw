@@ -641,11 +641,11 @@ describe("Gateway steer FIFO", () => {
         {
           withSteeringTools: true,
           steeringGateMode: mode,
-          observeSteering: preflight ? steerMarker : undefined,
+          observeSteering: steerMarker,
         },
       );
-      const steeringTools = fixture.steeringTools;
-      if (!steeringTools) {
+      const { steeringTools, steeringAdmission } = fixture;
+      if (!steeringTools || !steeringAdmission) {
         throw new Error("steering tool fixture was not configured");
       }
       const first = await sendHeldTurn(fixture, !preflight);
@@ -663,7 +663,11 @@ describe("Gateway steer FIFO", () => {
           const steerResult = await directChat(fixture, steerMarker, steerRunId, "steer");
           expect(steerResult).toMatchObject({ runId: steerRunId, status: "started" });
           expect(fixture.modelServer.requests).toHaveLength(1);
-          await setImmediate();
+          await vi.waitFor(
+            async () =>
+              expect(await readTrace(steeringAdmission.receiptPath)).toContain(steerMarker),
+            WAIT_OPTS,
+          );
           expect(fixture.chatFinalRunIds).not.toContain(steerRunId);
         }
       } finally {

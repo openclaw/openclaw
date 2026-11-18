@@ -360,6 +360,7 @@ export async function withGatewaySessionStoreTarget<T>(
   );
   const preparedInventory = await prepareSessionStoreCandidatesInWorker({
     inventory: true,
+    captureIdentity: false,
     ...capturedInventory,
   });
   if (!preparedInventory.inventory) {

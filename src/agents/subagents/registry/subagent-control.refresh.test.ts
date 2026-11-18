@@ -273,11 +273,11 @@ it("retains a captured child prefix when the next child's session preparation fa
   ] as const) {
     enqueueControlRun(groupId, runId, [active], start);
   }
-  const prepare = generations.prepareSessionGenerationFacts;
+  const prepare = generations.prepareLeaseFacts;
   let capturedFirst = false;
   let failedReads = 0;
   const failure = "next child session preparation unavailable";
-  vi.spyOn(generations, "prepareSessionGenerationFacts").mockImplementation(async (input) => {
+  vi.spyOn(generations, "prepareLeaseFacts").mockImplementation(async (input) => {
     if (capturedFirst && input.sessionKey === secondKey && failedReads === 0) {
       failedReads += 1;
       throw new Error(failure);
@@ -366,29 +366,27 @@ it.each([
       expect(await startQueuedSubagentRun("g")).toBe(true);
     });
     const startFailure = vi.fn(() => true);
-    const prepare = generations.prepareSessionGenerationFacts;
+    const prepare = generations.prepareLeaseFacts;
     let armed = false;
     let reads = 0;
     let failedReads = 0;
     const failure = "transient ancestor identity facts unavailable";
-    const reader = vi
-      .spyOn(generations, "prepareSessionGenerationFacts")
-      .mockImplementation(async (input) => {
-        const generation = await prepare(input);
-        return {
-          ...generation,
-          assertCurrent() {
-            generation.assertCurrent();
-            if (armed && input.sessionKey === aKey) {
-              reads += 1;
-              if (reads === faultAt) {
-                failedReads += 1;
-                throw new Error(failure);
-              }
+    const reader = vi.spyOn(generations, "prepareLeaseFacts").mockImplementation(async (input) => {
+      const generation = await prepare(input);
+      return {
+        ...generation,
+        assertCurrent() {
+          generation.assertCurrent();
+          if (armed && input.sessionKey === aKey) {
+            reads += 1;
+            if (reads === faultAt) {
+              failedReads += 1;
+              throw new Error(failure);
             }
-          },
-        };
-      });
+          }
+        },
+      };
+    });
     const grandchildCancelled = createDeferred();
     const stopObserving = subscribeSubagentRunChanges("projection", ({ runIds }) => {
       if (

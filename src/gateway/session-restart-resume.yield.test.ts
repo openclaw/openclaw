@@ -5,6 +5,7 @@ import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { appendTranscriptMessage } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
@@ -34,7 +35,10 @@ it.for([
       sessionKey: "agent:main:dashboard:parked-root",
       sessionId: "parked-root",
     };
-    const runId = "parked-root-run";
+    const runId =
+      source === "message"
+        ? `announce:requester-settle:main:${target.sessionKey}:parked-child-run`
+        : "parked-root-run";
     const lifecycleRevision = "parked-root-revision";
     replaceSessionEntrySync(target, {
       sessionId: target.sessionId,
@@ -42,6 +46,17 @@ it.for([
       activeWriterRunId: runId,
       updatedAt: 100,
     });
+    if (source === "message") {
+      await appendTranscriptMessage(target, {
+        message: {
+          role: "user",
+          content: "Captured child result",
+          timestamp: 90,
+          idempotencyKey: `${runId}:user`,
+          provenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+        },
+      });
+    }
     for (const event of [
       { ts: 100, data: { phase: "start", startedAt: 100 } },
       {
@@ -141,9 +156,7 @@ it.for([
     });
     try {
       await persistRunningSessionsForRestart({ cfg });
-      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
-        queuedInputIds: [],
-      });
+      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({});
       for (let boot = 0; boot < 2; boot++) {
         const warn = vi.fn();
         await resumeMarkedSessions({

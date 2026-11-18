@@ -205,7 +205,7 @@ suite.define(() => {
         }
         await navigate(shared.key);
         await expectChatAuthority(false);
-        const create = page.locator(".sidebar-rail .sidebar-new-session");
+        const create = page.locator(".sidebar-session-toolbar .sidebar-new-session");
         expect(await create.isDisabled()).toBe(!canOrganize);
         if (!canOrganize) {
           await create.click({ force: true });

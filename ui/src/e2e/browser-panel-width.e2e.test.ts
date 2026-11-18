@@ -57,7 +57,25 @@ suite.define(() => {
           if (paneWidth > 1_600) {
             expect((await composer.boundingBox())!.width).toBeCloseTo(initialChatWidth, 0);
           }
-          await page.screenshot({ path: path.join(suite.artifactDir, `browser-${width}.png`) });
+          const address = browser.getByRole("textbox", { name: "Page address" });
+          await address.fill("https://example.com/docs");
+          await address.blur();
+          expect(await address.getAttribute("title")).toBeNull();
+          await address.hover();
+          await page.screenshot({
+            path: path.join(suite.artifactDir, `browser-${width}.png`),
+            animations: "disabled",
+          });
+          const toolbarTop = (await browser.locator(".bp-toolbar").boundingBox())!.y;
+          expect.soft((await address.boundingBox())!.y - toolbarTop).toBeGreaterThanOrEqual(8);
+          expect
+            .soft(
+              await page
+                .locator("openclaw-tooltip")
+                .filter({ hasText: "https://example.com/docs" })
+                .count(),
+            )
+            .toBe(0);
           const divider = page.getByRole("separator", { name: "Resize side panel" });
           const defaultWidth = await browserWidth();
           await divider.focus();

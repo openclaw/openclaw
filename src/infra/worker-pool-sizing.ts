@@ -1,4 +1,6 @@
 import { availableParallelism } from "node:os";
+import type { DatabaseEngineSelection } from "./database-engine/types.js";
+import { readProcessAvailableMemoryBytes } from "./host-memory.js";
 
 export type WorkerPoolClass = "reader" | "file-reader" | "compute" | "writer" | "singleton";
 
@@ -26,12 +28,25 @@ export function resolveSqliteBrokerWorkerCount(): number {
 // History and search retain the same bounded isolate budget as other readers.
 export const SESSION_TRANSCRIPT_FOREGROUND_WORKERS = resolveWorkerPoolSize("reader");
 
+// PostgreSQL history readers spend most of a request blocked on bridge replies, so CPU count
+// understates useful concurrency. Each reader retains at most two idle backends.
+const POSTGRES_SESSION_HISTORY_WORKERS = 4;
+
+export function resolveSessionHistoryWorkerCount(
+  selection: DatabaseEngineSelection | undefined,
+): number {
+  if (selection?.effectiveEngines.agent !== "postgres") {
+    return resolveWorkerPoolSize("reader");
+  }
+  return Math.min(POSTGRES_SESSION_HISTORY_WORKERS, 2 * resolveWorkerComputeLimit());
+}
+
 export function resolveUpdateHashWorkerCount(): number {
   // Bun/Linux reports host memory rather than the process's cgroup allowance.
   if (process.versions.bun && process.platform === "linux") {
     return 0;
   }
-  const available = process.availableMemory();
+  const available = readProcessAvailableMemoryBytes();
   if (!Number.isSafeInteger(available) || available <= 0) {
     return 0;
   }

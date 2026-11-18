@@ -141,6 +141,7 @@ export function parseOpenAIResponsesWebSocketServerError(cause: unknown) {
     isResponsesServiceTierRejection(details) ||
     details.code === "websocket_connection_limit_reached" ||
     details.code === "invalid_encrypted_content" ||
+    details.code === "item_conflict" ||
     details.code === "thinking_signature_invalid"
       ? OpenAIResponsesWebSocketSafeRetryError
       : OpenAIResponsesWebSocketServerError;
@@ -190,6 +191,7 @@ export type ResponsesPromptObservation = {
     | "initial"
     | "reasoning-stripped"
     | "compaction-stripped"
+    | "items-reanchored"
     | "continuation-rejected";
   promptSource: "instructions" | "input.developer" | "input.system" | "missing";
   expectedChars: number;

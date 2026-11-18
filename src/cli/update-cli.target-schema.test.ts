@@ -391,7 +391,7 @@ describe("update-cli", () => {
     runtimeRecovery.stubNodeRuntime();
     // This case specifies a non-container system runtime, independent of the test host.
     runtimeRecovery.mockNonContainerSystemRuntime();
-    const root = await mockPackageInstallAtCaseDir("openclaw-runtime-target");
+    await mockPackageInstallAtCaseDir("openclaw-runtime-target");
     vi.mocked(cli.fetchNpmPackageTargetStatus)
       .mockResolvedValueOnce(packageTargetStatus({ nodeEngine: ">=999.0.0" }))
       .mockResolvedValue(packageTargetStatus({ nodeEngine: ">=22.19.0" }));
@@ -403,14 +403,16 @@ describe("update-cli", () => {
 
     expect(packageInstall()?.[0]).toBeUndefined();
     expect(cli.listUpdateRuns({ limit: 1 })[0]?.reason).toBe("preflight-node-runtime-incompatible");
+    // The terminal shows one instruction; the saved report keeps the full diagnostic.
     expect(runtime.log).toHaveBeenCalledWith(
-      `Failing check node-runtime (node-runtime-preflight); key engines.node: Required: openclaw@9999.0.0 Node >=999.0.0; detected: Node ${process.versions.node} at ${process.execPath}
-Failing check node-runtime (node-runtime-preflight); key engines.node: Update install root: ${await fs.realpath(root)}
-Failing check node-runtime (node-runtime-preflight); key engines.node: Update binary: ${path.join(root, "openclaw.mjs")}
-Failing check node-runtime (node-runtime-preflight); key engines.node: Gateway install root: unresolved
-Failing check node-runtime (node-runtime-preflight); key engines.node: ${runtimeRecovery.expectedPlainRecovery("9999.0.0", "999.0.0", "absent", undefined, root)}
-Updater Node ${process.versions.node} at ${process.execPath}.
-PATH Node: not found.`,
+      expect.stringContaining(
+        `Update refused: openclaw@9999.0.0 needs Node >=999.0.0, but this updater runs Node ${process.versions.node} at ${process.execPath}.`,
+      ),
+    );
+    // The owner's recovery steps stay visible beneath the refusal line.
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringMatching(/^\d+\. /u));
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      expect.stringContaining("Failing check node-runtime"),
     );
     expect(cli.fetchNpmPackageTargetStatus).toHaveBeenCalledOnce();
   });

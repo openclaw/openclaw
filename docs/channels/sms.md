@@ -348,7 +348,7 @@ The generated media URL is a bearer capability that expires after 10 minutes. Tr
 
 Outbound OpenClaw deliveries attach one media item. OpenClaw caps JPEG, JPG, PNG, and GIF attachments at 5,000,000 bytes; other supported media types are capped at 500,000 bytes. `application/vcard` attachments must be media-only; Twilio does not accept them with a caption. Destination carriers may enforce smaller limits or reject unsupported formats. Twilio must be able to fetch the generated URL without HTTP authentication, so `publicWebhookUrl` cannot contain embedded userinfo; query-based reverse-proxy tokens are preserved.
 
-For incoming MMS, OpenClaw processes at most 10 attachments and downloads at most 5 MiB total. Any additional or unavailable attachments produce a visible unavailable-media notice instead of discarding the signed message or silently delivering an empty turn. Downloads happen only after sender authorization, with Twilio authentication and an `api.twilio.com` host restriction.
+For incoming MMS, OpenClaw processes at most 10 attachments and downloads at most 5 MiB total. Any additional or unavailable attachments produce a visible unavailable-media notice instead of discarding the signed message or silently delivering an empty turn. Downloads happen only after sender authorization, with Twilio authentication and a host restriction: the media URL must be on `api.twilio.com`, and its redirect may only go to Twilio's MMS CDN at `mms.twiliocdn.com`, which does not receive the Twilio credentials.
 
 ### Delivery status
 

@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
+import { makeAssistantMessage } from "../../packages/agent-core/src/agent-loop.test-support.js";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -172,15 +173,22 @@ it("keeps one execution allowance across event-driven required waits", async () 
   let waits = 0;
   observeSettlement(() => parked[waits++]?.resolve());
   let settled = false;
-  const execution = fixture.exec
-    .execute("required-budget", {
-      awaitResults: true,
-      code: "const a = await required_step({}); const b = await required_step({}); return [a,b];",
-    })
-    .then((result) => {
-      settled = true;
-      return result;
-    });
+  const args = {
+    awaitResults: true,
+    code: "const a = await required_step({}); const b = await required_step({}); return [a,b];",
+  };
+  const hasPending = vi.fn(() => true);
+  const execution = runWithAgentToolExecutionContext(
+    {
+      assistantMessage: makeAssistantMessage([]),
+      toolCall: { type: "toolCall", name: "exec", id: "required-budget", arguments: args },
+      pendingInput: { hasPending, subscribe: () => () => {} },
+    },
+    () => fixture.exec.execute("required-budget", args),
+  ).then((result) => {
+    settled = true;
+    return result;
+  });
   try {
     for (let index = 0; index < 2; index++) {
       await parked[index]!.promise;
@@ -191,6 +199,8 @@ it("keeps one execution allowance across event-driven required waits", async () 
       releases[index]!.resolve();
     }
     expectCompleted(resultDetails(await execution), [{ index: 0 }, { index: 1 }]);
+    // A pending correction never turns this non-shell action into a detachable wait.
+    expect(hasPending).toHaveBeenCalled();
     expect(grants).toEqual([1_000, 900, 800]);
     expect(waits).toBe(2);
     expect(target.execute).toHaveBeenCalledTimes(2);

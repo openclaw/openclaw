@@ -37,16 +37,16 @@ import {
   ScopedMigrationSnapshotUnsupportedError,
   type ScopedMigrationInspection,
 } from "../infra/sqlite-migration-scoped-snapshot.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import { hashPublishedFileSync } from "../infra/sqlite-snapshot-file.js";
 import type { PublishedSqliteFileGuard } from "../infra/sqlite-snapshot.types.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import type { MigrationMessages } from "../infra/state-migrations.types.js";
 import {
   getDoctorMigrationFullBackup,
-  hasUpdateDoctorMigrationCapture,
   recordDoctorMigrationFullBackup,
 } from "../infra/update-doctor-migration-attribution.js";
+import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-context.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";

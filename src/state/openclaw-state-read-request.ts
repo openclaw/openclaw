@@ -1,4 +1,8 @@
+import type { DatabaseEngineSelection } from "../infra/database-engine/types.js";
 import type { OpenClawStateReadRequest } from "./openclaw-state-read.types.js";
+
+// Boot selections are frozen; offline porting can update its task-scoped holder.
+const engineSelectionBytes = new WeakMap<DatabaseEngineSelection, number>();
 
 // eslint-disable-next-line no-control-regex -- JSON escapes every C0 control character.
 const jsonEscapes = /["\\\u0000-\u001f\ud800-\udfff]/u;
@@ -61,9 +65,17 @@ function commandBytes(value: unknown, rawStrings = false): number {
 }
 
 export function requestBytes(request: OpenClawStateReadRequest): number {
+  const selection = request.context.databaseEngineSelection;
+  let selectionBytes = selection && engineSelectionBytes.get(selection);
+  if (selectionBytes === undefined) {
+    selectionBytes = commandBytes(selection);
+    if (selection && Object.isFrozen(selection)) {
+      engineSelectionBytes.set(selection, selectionBytes);
+    }
+  }
   return (
     commandBytes(request.command) +
-    commandBytes(request.context.databaseEngineSelection) +
+    selectionBytes +
     commandBytes(request.context.environment, true) +
     commandBytes(
       [

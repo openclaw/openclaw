@@ -34,10 +34,7 @@ import type { AgentPromptSurfaceKind } from "../plugins/types.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import type { BootstrapMode } from "./bootstrap-mode.js";
-import {
-  buildFullBootstrapPromptLines,
-  buildLimitedBootstrapPromptLines,
-} from "./bootstrap-prompt.js";
+import { buildBootstrapSystemPromptSection } from "./bootstrap-prompt.js";
 import { buildSubagentPromptGuidance } from "./delegation-guidance.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
 import type {
@@ -286,6 +283,7 @@ export function buildAgentSystemPrompt(params: {
   modelAliasLines?: string[];
   contextFiles?: EmbeddedContextFile[];
   bootstrapMode?: BootstrapMode;
+  bootstrapCompleted?: boolean;
   bootstrapTruncationNotice?: string;
   skillsPrompt?: string;
   /** Records the catalog selected by the renderer without changing prompt bytes. */
@@ -538,27 +536,11 @@ export function buildAgentSystemPrompt(params: {
   );
   // Cache keys and bootstrap checks retain the original ordered file objects.
   const contextFiles = preparedContextFiles.map(({ file }) => file);
-  const bootstrapSystemPromptSections: string[] = [];
-  if (params.bootstrapMode && params.bootstrapMode !== "none") {
-    bootstrapSystemPromptSections.push(
-      "## Bootstrap Pending",
-      ...(params.bootstrapMode === "limited"
-        ? buildLimitedBootstrapPromptLines({
-            introLine: "Bootstrap pending; this run cannot safely finish full BOOTSTRAP.md.",
-            nextStepLine:
-              "Next: primary interactive run with normal workspace access, or user deletes workspace BOOTSTRAP.md after completion.",
-          })
-        : buildFullBootstrapPromptLines({
-            readLine:
-              params.bootstrapMode === "full" &&
-              contextFiles.some((file) => isBootstrapContextFile(file.path))
-                ? "BOOTSTRAP.md below; follow before normal reply."
-                : "Read workspace BOOTSTRAP.md; follow before normal reply.",
-            firstReplyLine: "First visible reply must follow BOOTSTRAP.md; no generic greeting.",
-          })),
-      "",
-    );
-  }
+  const bootstrapSystemPromptSections = buildBootstrapSystemPromptSection({
+    bootstrapMode: params.bootstrapMode,
+    bootstrapCompleted: params.bootstrapCompleted,
+    bootstrapContextInjected: contextFiles.some((file) => isBootstrapContextFile(file.path)),
+  });
   const bootstrapTruncationNotice = params.bootstrapTruncationNotice?.trim();
   if (bootstrapTruncationNotice) {
     bootstrapSystemPromptSections.push(

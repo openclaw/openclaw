@@ -55,12 +55,15 @@ export async function withWorktreeAllocationLease<T>(
   params: WorktreeLeaseParams,
   run: (guard: WorktreeAllocationGuard) => Promise<T>,
 ): Promise<T> {
+  if (params.id && !params.workerAuthority?.leaseSet?.mutationWorktreeIds?.includes(params.id)) {
+    return withWorktreeMutationLease({ ...params, id: params.id }, (checkout) =>
+      withWorktreeAllocationLease({ ...params, ...checkout, id: undefined }, run),
+    );
+  }
   return await withWorktreeLease(params, WORKTREE_CREATE_LEASE_SCOPE, "capacity", (guard) =>
     timeWorktreePreparationPhase("reservation", async () => {
       await recoverPendingWorktrees(params.env, guard.workerAuthority);
-      return params.id
-        ? withWorktreeMutationLease({ ...params, ...guard, id: params.id }, run)
-        : run(guard);
+      return run(guard);
     }),
   );
 }
@@ -246,6 +249,7 @@ async function withWorktreeLease<T>(
                 ]),
               ],
               assertCurrent: () => {
+                assertOwned();
                 captured.admission.assertCurrent();
                 signal.throwIfAborted();
                 (params.workerAuthority

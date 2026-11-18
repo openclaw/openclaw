@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../../src/gateway/control-ui-bootstrap-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { startOpenClawIdFeatureLifetime } from "../../lib/openclaw-id/feature-lifetime.ts";
 import type { OwnerApprovalRequest } from "../../lib/openclaw-id/owner-approval.ts";
@@ -19,6 +20,7 @@ const fixture = vi.hoisted(() => ({
   expired: false,
   uncertain: false,
   tools: undefined as OwnerApprovalRequest["tools"],
+  member: undefined as OwnerApprovalRequest["member"],
   listeners: new Set<() => void>(),
   decide: vi.fn(),
 }));
@@ -33,6 +35,7 @@ vi.mock("../../lib/openclaw-id/owner-approval-lifetime.ts", () => ({
           id: "request",
           label: "Firefox on Linux",
           tools: fixture.tools,
+          member: fixture.member,
           code: fixture.code,
           busy: fixture.uncertain,
           expired: fixture.expired,
@@ -54,12 +57,15 @@ vi.mock("../../lib/openclaw-id/owner-approval-lifetime.ts", () => ({
 }));
 afterEach(async () => {
   cleanupSolid();
+  document.documentElement.removeAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE);
+  window.history.replaceState(null, "", "/");
   document.body.innerHTML = "";
   fixture.listeners.clear();
   fixture.code = undefined;
   fixture.expired = false;
   fixture.uncertain = false;
   fixture.tools = undefined;
+  fixture.member = undefined;
   fixture.decide.mockReset();
 });
 
@@ -104,12 +110,36 @@ describe("local owner matching-number dialog", () => {
     });
     expect(document.querySelector<HTMLInputElement>('input[type="number"]')!.value).toBe("");
     approve().click();
-    expect(fixture.decide).toHaveBeenCalledWith("request", true, null);
+    expect(fixture.decide).toHaveBeenCalledWith("request", true, null, "");
     [...document.querySelectorAll("button")]
       .find((button) => button.getAttribute("aria-label") === "Close")!
       .click();
     await done;
   });
+  it.each(["", "/settings"])(
+    "links an uncertain member approval inside mount %s to Access",
+    async (basePath) => {
+      document.documentElement.setAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE, basePath);
+      window.history.replaceState(null, "", `${basePath}/new`);
+      fixture.member = { name: "Alice", email: "alice@example.test", location: null };
+      fixture.uncertain = true;
+      const onDevices = vi.fn();
+      const done = showOwnerApprovalDialog({ client: {} as GatewayBrowserClient, onDevices });
+      await vi.waitFor(() =>
+        expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+          "In Access, check Alice’s device list",
+        ),
+      );
+      const link = document.querySelector<HTMLAnchorElement>("a.btn.primary")!;
+      expect(link.getAttribute("href")).toBe(
+        `${basePath}/plugin?plugin=openclaw-id-access&id=access`,
+      );
+      expect(link.textContent).toBe("Member devices in Access");
+      expect(onDevices).not.toHaveBeenCalled();
+      document.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click();
+      await done;
+    },
+  );
   it("removes confirmation for expired or uncertain requests and opens Your devices", async () => {
     fixture.code = "482917";
     const request = vi.fn(async (method: string) =>

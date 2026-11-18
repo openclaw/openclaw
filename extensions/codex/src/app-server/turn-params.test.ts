@@ -307,7 +307,6 @@ describe("Codex app-server turn params", () => {
           headers: {},
         },
         codeModeOnly: false,
-        loopDetectionPreToolUseRelay: true,
         requestTimeoutMs: 60_000,
         approvalPolicy: "on-request" as const,
         approvalsReviewer: "guardian_subagent" as const,

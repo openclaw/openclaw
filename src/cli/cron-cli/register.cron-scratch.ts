@@ -9,12 +9,7 @@ import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { CronCliError } from "./cron-cli-error.js";
 import { createCronOutputCommand } from "./output-mode.js";
-import {
-  callCronReadFromCli,
-  handleCronCliError,
-  printCronJson,
-  requireCronJobId,
-} from "./shared.js";
+import { handleCronCliError, printCronJson, requireCronJobId } from "./shared.js";
 import { readCronScratchContent } from "./trigger-options.js";
 
 export function registerCronScratchCommand(cron: Command) {
@@ -48,7 +43,7 @@ export function registerCronScratchCommand(cron: Command) {
               ? parseStrictNonNegativeInteger(opts.expectedRevision)
               : undefined;
           if (expectedRevision === undefined) {
-            const current = (await callCronReadFromCli("cron.scratch.get", opts, {
+            const current = (await callGatewayFromCli("cron.scratch.get", opts, {
               id,
             })) as CronScratchGetResult;
             if (mutations === 0) {

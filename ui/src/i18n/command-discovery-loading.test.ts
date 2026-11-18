@@ -49,7 +49,7 @@ describe("command discovery English loading", () => {
   it.each<[key: string, expected: string, load: () => Promise<unknown>]>([
     [
       "sessionsView.transcriptSearchTitle",
-      "Search transcripts",
+      "Search chats",
       () => import("../pages/sessions/view.tsx"),
     ],
     ["chat.commands.menu", "Slash commands", () => import("../lib/chat/commands.ts")],

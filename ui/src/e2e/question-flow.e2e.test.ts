@@ -250,6 +250,76 @@ suite.define(() => {
     context = undefined;
   });
 
+  it.each(["own", "child"] as const)(
+    "supersedes a pending %s question only after a new prompt sends",
+    async (source) => {
+      const childKey = "agent:main:dashboard:superseded-question";
+      const { gateway, page } = await openQuestionPage(undefined, false, [
+        { key: childKey, kind: "direct", parentSessionKey: questionSessionKey, updatedAt: 1 },
+      ]);
+      const request = {
+        ...questionRecord("superseded-manual-step", {
+          questionId: "required_action",
+          header: "Manual step",
+          question: "The browser needs a manual step. Complete it before continuing.",
+          options: [{ label: "Ready to recheck" }, { label: "Stop this task" }],
+          isOther: false,
+        }),
+        sessionKey: source === "child" ? childKey : questionSessionKey,
+      };
+      await gateway.emitGatewayEvent("question.requested", {
+        ...questionRecord("unrelated-question"),
+        sessionKey: "agent:main:unrelated",
+      });
+      const panel = await showQuestion(page, gateway, request);
+      const composer = page.locator(composerSelector);
+      await composer.fill("   ");
+      await composer.press("Enter");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+      await composer.fill("Use the supported browser workflow instead.");
+      await gateway.deferNext("chat.send");
+      await button(page, "Send message").click();
+      const sent = await gateway.waitForRequest("chat.send");
+      expect(sent.params).toMatchObject({
+        sessionKey: questionSessionKey,
+        message: "Use the supported browser workflow instead.",
+      });
+      expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+      await panel.waitFor();
+      const next = questionRecord("replacement-question", {
+        question: "Which replacement workflow should I use?",
+      });
+      await gateway.emitGatewayEvent("question.requested", next);
+      await gateway.setMethodResponse("question.resolve", { status: "cancelled" });
+      await gateway.resolveDeferred("chat.send", { status: "started", runId: "replacement-run" });
+      await expectResolution(gateway, { id: request.id, cancel: true });
+      await expectCount(panel, 0);
+      await panelFor(page, next.questions[0]!.question).waitFor();
+      expect(await gateway.getRequests("question.resolve")).toHaveLength(1);
+      if (source === "own") {
+        await page.locator(".chat-question-summary").filter({ hasText: "Skipped" }).waitFor();
+      }
+    },
+  );
+
+  it("retains the question when a new prompt fails to send", async () => {
+    const { gateway, page } = await openQuestionPage();
+    const panel = await showQuestion(page, gateway, questionRecord("failed-send-question"));
+    await gateway.setMethodResponse("chat.send", {
+      __mockError: { code: "INVALID_REQUEST", message: "Synthetic prompt rejection" },
+    });
+    await page.locator(composerSelector).fill("Use a different approach.");
+    await button(page, "Send message").click();
+    await gateway.waitForRequest("chat.send");
+    await page
+      .locator('.chat-send-status[data-send-state="failed"]')
+      .getByText("Not sent", { exact: true })
+      .waitFor();
+    await panel.waitFor();
+    expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+  });
+
   it("reveals sidebar attention on touch without navigating or closing the drawer", async () => {
     const { gateway, page } = await openQuestionPage({ width: 390, height: 844 }, true);
     const request = questionRecord("sidebar-touch-question", { isOther: false });

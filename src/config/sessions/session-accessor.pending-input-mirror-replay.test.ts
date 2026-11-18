@@ -23,7 +23,7 @@ const fixture = useTempSessionsFixture("pending-input-mirror-replay-");
 const receipts: SessionPendingInputReceipt[] = [];
 afterEach(async () => {
   for (const receipt of receipts.splice(0)) {
-    receipt.finish("interrupted");
+    receipt.finish("interrupted", "failed");
     await receipt.settled?.();
   }
   await closeOpenClawAgentDatabasesAsync();
@@ -81,7 +81,7 @@ async function commitMirroredInput() {
     expectDefined(recorder.getPersistedMessage?.(), "native prompt"),
   );
   const transcript = await loadTranscriptEvents(scope);
-  recorder.finishPendingInput?.("interrupted");
+  recorder.finishPendingInput?.("interrupted", "failed");
   await closeOpenClawAgentDatabasesAsync();
   rotateAgentEventLifecycleGeneration();
   const replay = async (message: PersistedUserTurnMessage = original) => {
@@ -119,7 +119,7 @@ it("replays a committed native prompt without duplicating the mirrored input", a
   const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
   await expect(receipt.completeAsync!(outcome)).resolves.toEqual(outcome);
   expect(await loadTranscriptEvents(scope)).toEqual(transcript);
-  receipt.finish("interrupted");
+  receipt.finish("interrupted", "failed");
   await receipt.settled?.();
   expect(await readForeign()).toEqual(new Map());
 });

@@ -36,6 +36,10 @@ import type {
   SessionActorPhase,
   SessionActorPhaseResults,
 } from "./session-actor-contract.js";
+import {
+  restoreSessionActorCommittedOutcome,
+  type SessionActorEntryReference,
+} from "./session-actor-receipt.js";
 import { createSessionActorWorker } from "./session-actor.worker.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { commitSessionEntryPatch } from "./session-entry-patch.worker.js";
@@ -104,6 +108,7 @@ export function createSessionActorWorkerFixture<Database extends OpenClawAgentDa
     transactions: number;
   } = { transactions: 0 };
   let commitFacts: unknown;
+  let admissionReference: SessionActorEntryReference | undefined;
   let transferredOutcome: unknown;
   let outcomeTransfer: ReturnType<typeof createSqliteWorkerTransferCollector> | undefined;
   let lastReply: SessionActorOperations["session.actor.patch"]["output"] | undefined;
@@ -112,6 +117,14 @@ export function createSessionActorWorkerFixture<Database extends OpenClawAgentDa
     options: { agentId: "main", path: database.path },
     admit(stage, facts) {
       hooks.admit?.(stage, facts);
+      if (
+        stage === "transaction" &&
+        isRecord(facts) &&
+        isRecord(facts.snapshot) &&
+        "writeToken" in facts.snapshot
+      ) {
+        admissionReference = structuredClone(facts.snapshot) as SessionActorEntryReference;
+      }
       if (
         isRecord(facts) &&
         isRecord(facts.publication) &&
@@ -177,6 +190,7 @@ export function createSessionActorWorkerFixture<Database extends OpenClawAgentDa
     },
     mutate(command: Mutation): Outcome {
       commitFacts = undefined;
+      admissionReference = undefined;
       transferredOutcome = undefined;
       outcomeTransfer = createSqliteWorkerTransferCollector("outcome", (value) => {
         transferredOutcome = value;
@@ -198,7 +212,13 @@ export function createSessionActorWorkerFixture<Database extends OpenClawAgentDa
         "Actor acknowledgement has no native committed outcome",
       );
       // The worker's native receipt is the typed outcome; the command reply carries only failure.
-      const committed = evidence as Extract<Outcome, { kind: "committed" }>;
+      let committed = evidence as Extract<Outcome, { kind: "committed" }>;
+      if (admissionReference) {
+        committed = restoreSessionActorCommittedOutcome(
+          structuredClone(committed),
+          admissionReference,
+        );
+      }
       return value.failure ? { ...committed, failure: value.failure } : committed;
     },
     reply: () => lastReply,

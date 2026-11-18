@@ -201,7 +201,19 @@ only once nothing uses it. For environment storage, use
 `config set-ref <path> env <ENV_VAR>`.
 `set default model <provider/model>` still live-tests the route before saving it.
 
-Plugin installation keeps its source restrictions. Plugin uninstall refuses a
+Plugin installation accepts ClawHub, npm, bundled/official, and remote `git:`
+sources. A regular agent can complete the request from Telegram or another
+messaging channel without enabling `/plugins` or opening a terminal. Non-ClawHub
+sources require explicit source acknowledgement in the requesting chat. If the
+plugin needs capability consent, OpenClaw presents the declared capabilities
+as a separate exact approval before installing and applying the runtime. Source
+approval does not accept capabilities. Approving capabilities grants conversation
+access only when the plugin declares `contracts.conversationAccess`; otherwise it
+remains a separate `plugins.entries.<id>.hooks.allowConversationAccess` config
+change. Local files and marketplace sources are not accepted by
+`plugin_install`; task-authored archives use `plugin_activate_artifact`.
+
+Plugin uninstall refuses a
 plugin that backs the active inference route; exit OpenClaw and run
 `openclaw plugins uninstall <id>` from a terminal.
 
