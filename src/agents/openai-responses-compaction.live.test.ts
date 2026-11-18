@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AssistantMessage } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import OpenAI from "openai";
 import { expect, it } from "vitest";
 import { Agent } from "../../packages/agent-core/src/agent.js";
@@ -100,7 +101,8 @@ live(
         expect(conflict).toBe(attempt === 1);
       }
       expect(storedIds).toHaveLength(1);
-      for (let reload = 0; reload < 2; reload++) {
+      for (let reload = 0; reload < 3; reload++) {
+        const forceStoredReplay = reload === 2;
         cleanupSessionResources();
         const agent = new Agent({
           initialState: {
@@ -111,10 +113,31 @@ live(
           sessionId,
           transport: "sse",
           getApiKey: () => apiKey,
-          streamFn: createOpenAIResponsesContextManagementWrapper(
-            createOpenAIResponsesTransportStreamFn(),
-            undefined,
-          ),
+          streamFn: forceStoredReplay
+            ? (selectedModel, context, options) =>
+                createOpenAIResponsesTransportStreamFn()(selectedModel, context, {
+                  ...options,
+                  // A later payload hook must not undo stateless checkpoint replay.
+                  // Reusing this stored checkpoint otherwise fails after streaming output.
+                  onPayload: (payload) => {
+                    if (!isRecord(payload) || !Array.isArray(payload.input)) {
+                      throw new Error("Expected a Responses input");
+                    }
+                    return {
+                      ...payload,
+                      store: true,
+                      input: payload.input.map((item: unknown) =>
+                        isRecord(item) && item.type === "compaction"
+                          ? { ...item, id: checkpoint.id }
+                          : item,
+                      ),
+                    };
+                  },
+                })
+            : createOpenAIResponsesContextManagementWrapper(
+                createOpenAIResponsesTransportStreamFn(),
+                undefined,
+              ),
         });
         const requests: Array<Record<string, unknown>> = [];
         const originalHost = getAiTransportHost();

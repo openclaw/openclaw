@@ -7,7 +7,6 @@ import {
 import type { CanvasDocumentViewResult } from "@openclaw/gateway-protocol";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorReadAccess, hasOperatorSelfReadAccess } from "../app/operator-access.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
@@ -24,6 +23,7 @@ import {
 } from "../lib/widget-sandbox-host.ts";
 import { registerWidgetThemeFrame, postWidgetTheme } from "../lib/widget-theme.ts";
 import { forwardChatWheelToTranscript } from "../pages/chat/chat-scroll-input.ts";
+import { isCanvasWidgetLoadRetryEvent } from "./canvas-widget-view-events.ts";
 import type { CanvasWidgetViewProps } from "./canvas-widget-view.types.ts";
 import { allowWidgetPrompt, dispatchWidgetPrompt } from "./mcp-app-security.ts";
 
@@ -36,24 +36,6 @@ type CanvasWidgetViewBinding = {
   sessionKey: string;
   operatorRead: boolean;
 };
-
-function isCanvasWidgetLoadRetryEvent(
-  event: GatewayEventFrame,
-  binding: CanvasWidgetViewBinding,
-): boolean {
-  const payload = asOptionalRecord(event.payload);
-  if (binding.operatorRead || payload?.sessionKey !== binding.sessionKey) {
-    return false;
-  }
-  const message = asOptionalRecord(payload.message);
-  return (
-    (event.event === "session.message" &&
-      message?.role === "toolResult" &&
-      message.toolName === "show_widget") ||
-    (event.event === "chat" &&
-      (payload.state === "final" || payload.state === "aborted" || payload.state === "error"))
-  );
-}
 
 const pendingViews = new WeakMap<
   WidgetClient,
@@ -438,7 +420,8 @@ export function createCanvasWidget(
           (previous.html !== view.html ||
             previous.sandboxUrl !== view.sandboxUrl ||
             previous.sandboxPort !== view.sandboxPort ||
-            previous.sandboxOrigin !== view.sandboxOrigin)
+            previous.sandboxOrigin !== view.sandboxOrigin ||
+            previous.sandboxShellHtml !== view.sandboxShellHtml)
         ) {
           props.onHeightChange?.(null, true);
           clearSandbox();
@@ -514,6 +497,7 @@ export function createCanvasWidget(
       frame,
       sandboxOrigin,
       sandboxUrl: frame.src,
+      sandboxShellHtml: view.sandboxShellHtml,
       documentKey: `${binding.docId}\0${binding.generation}`,
       loadDocument: async () => view.html,
       onLoaded: () => {

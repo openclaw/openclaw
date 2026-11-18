@@ -103,13 +103,11 @@ describe("worker bundle archive", () => {
       const probe = `
       import assert from "node:assert/strict";
       import fs from "node:fs";
-      import { syncBuiltinESMExports } from "node:module";
       const createReadStream = fs.createReadStream;
       let input;
       // Exercise header-boundary cancellation without a transfer-sized fixture.
       fs.createReadStream = (file, options) =>
         (input = createReadStream(file, { ...options, highWaterMark: 1024 }));
-      syncBuiltinESMExports();
       const { readWorkerBundleArchiveManifest } = await import(${JSON.stringify(archiveUrl.href)});
       await assert.rejects(
         readWorkerBundleArchiveManifest(process.argv[1], ${JSON.stringify(scenarioLimits)}),

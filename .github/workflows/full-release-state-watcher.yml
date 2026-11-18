@@ -91,6 +91,7 @@ jobs:
       performance_conclusion: ${{ steps.state.outputs.productPerformance_conclusion }}
     steps:
       - name: Checkout release state tooling
+        if: ${{ inputs.qualification_workflow_sha == '' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}

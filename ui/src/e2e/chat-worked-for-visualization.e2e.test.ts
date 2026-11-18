@@ -115,9 +115,10 @@ suite.define(() => {
               : {}),
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          const inspectedImages = page.getByRole("button", { name: "Viewed image", exact: true });
           if (source === "live") {
             await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
-            await page.getByText("after.png", { exact: false }).waitFor();
+            await inspectedImages.nth(1).waitFor();
             expect(await page.locator(".chat-work-group").count()).toBe(0);
             const finalMessage = messages.at(-1)!;
             await gateway.setHistoryMessages(messages);
@@ -167,15 +168,13 @@ suite.define(() => {
             }
             expect(await work.count()).toBe(1);
             expect(await work.getAttribute("aria-expanded")).toBe("false");
-            expect(await page.getByText("before.png", { exact: false }).isVisible()).toBe(false);
-            expect(await page.getByText("after.png", { exact: false }).isVisible()).toBe(false);
+            expect(await inspectedImages.count()).toBe(0);
             expect(await page.locator(".chat-thread img.chat-message-image").count()).toBe(1);
             await work.click();
             await waitForChatScrollIdle(page);
             expect(await work.getAttribute("aria-expanded")).toBe("true");
             await page.getByText("Published the preview update.", { exact: true }).waitFor();
-            expect(await page.getByText("before.png", { exact: false }).isVisible()).toBe(true);
-            expect(await page.getByText("after.png", { exact: false }).isVisible()).toBe(true);
+            expect(await inspectedImages.count()).toBe(2);
             expect(await answer.isVisible()).toBe(true);
             await work.click();
             await waitForChatScrollIdle(page);

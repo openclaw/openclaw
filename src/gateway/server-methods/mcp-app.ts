@@ -28,6 +28,7 @@ import {
 } from "../mcp-app-operations.js";
 import { createMcpAppStandaloneTicket } from "../mcp-app-standalone.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
+import { resolveSandboxView } from "../sandbox-view.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
@@ -273,9 +274,6 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
         if (sandboxPort === undefined) {
           throw new Error("MCP App sandbox listener is unavailable; restart the Gateway");
         }
-        const ingress = client?.remoteControlUiIngress;
-        const configuredOrigin =
-          ingress?.sandboxOrigin ?? context.getRuntimeConfig().mcp?.apps?.sandboxOrigin;
         let standalone: ReturnType<typeof createMcpAppStandaloneTicket> = undefined;
         try {
           standalone = createMcpAppStandaloneTicket({
@@ -306,11 +304,12 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
             icons: [...(tool?.appExtensions?.icons ?? []), ...(server?.icons ?? [])],
             ...(plugin?.iconPath ? { pluginId: plugin.id } : {}),
           },
-          sandboxUrl: ingress
-            ? new URL(buildMcpAppSandboxPath(view.csp), ingress.sandboxOrigin).href
-            : buildMcpAppSandboxPath(view.csp),
+          ...resolveSandboxView(
+            buildMcpAppSandboxPath(view.csp),
+            client,
+            context.getRuntimeConfig().mcp?.apps?.sandboxOrigin,
+          ),
           sandboxPort,
-          ...(configuredOrigin ? { sandboxOrigin: new URL(configuredOrigin).origin } : {}),
           html: view.html,
           ...(view.csp ? { csp: view.csp } : {}),
           toolInput: view.toolInput,

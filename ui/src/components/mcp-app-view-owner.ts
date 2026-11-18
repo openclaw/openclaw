@@ -467,6 +467,7 @@ export function createMcpAppView(
           translate("mcpApp.errors.invalidSandboxUrl"),
         ),
         addCleanup,
+        payload.sandboxShellHtml,
       );
       signal.throwIfAborted();
       if (!iframe.contentWindow) {

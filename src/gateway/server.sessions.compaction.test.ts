@@ -963,7 +963,7 @@ test("sessions.compact maxLines does not interrupt an active run when no transcr
 
     expect(compacted.ok).toBe(true);
     expect(compacted.payload?.compacted).toBe(false);
-    expect(compacted.payload?.reason).toBe("no transcript");
+    expect(compacted.payload?.reason).toBe("No chat history to compact.");
     expect(operation.abortSignal.aborted).toBe(false);
     expect(isSessionControllerWorkActive(scope.storePath, [scope.sessionId])).toBe(true);
     expect(embeddedRunMock.abortCalls).toEqual([]);

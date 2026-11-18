@@ -5,6 +5,7 @@ import {
   hasLiveDeliveryQueueClaim,
   type DeliveryQueueEntryState,
 } from "./delivery-queue-sqlite.types.js";
+import { FINAL_TEXT_RECOVERY_MAX_ATTEMPTS } from "./outbound/delivery-queue-types.js";
 import { generateSecureUuid } from "./secure-random.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
@@ -157,6 +158,11 @@ export function claimDeliveryQueueEntryPlatformSendInDatabase(
         platformSendAttemptId: undefined,
         platformSendStartedAt: undefined,
         recoveryState: "producer_claimed",
+        // The replay of an unconfirmed final text keeps its two-attempt ceiling even after a
+        // later proven-unsent failure clears the unconfirmed state.
+        ...(reconciledForReplay && params.allowUnknownSendReplay === true
+          ? { maxRetries: Math.min(entry.maxRetries ?? Infinity, FINAL_TEXT_RECOVERY_MAX_ATTEMPTS) }
+          : {}),
       };
     },
   )

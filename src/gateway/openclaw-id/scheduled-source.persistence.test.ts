@@ -7,6 +7,7 @@ import { captureScheduledOperatorSource } from "../../agents/operator-run-recove
 import { ToolSearchRuntime } from "../../agents/tool-search-runtime.js";
 import { resolveToolSearchConfig } from "../../agents/tool-search.js";
 import { jsonResult } from "../../agents/tools/common.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { admitScheduledOccurrence } from "../../cron/execution-context-admission.js";
 import { readScheduledSenderBit } from "../../cron/execution-context-registry.js";
@@ -28,6 +29,7 @@ import {
   createContext,
   createOperatorClient,
 } from "../server-plugin-in-process-dispatch.test-support.js";
+import { MEMBER_ROLE_PRESETS } from "./member-role-presets.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
@@ -68,6 +70,9 @@ it.each([
     const editor = "editor" in scenario ? scenario.editor : undefined;
     const originalRevoked = "originalRevoked" in scenario && scenario.originalRevoked;
     await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+      setRuntimeConfigSnapshot({
+        gateway: { roles: { definitions: MEMBER_ROLE_PRESETS } },
+      });
       const profile =
         kind === "owner"
           ? await ensureCanonicalGatewayOwnerProfile("Synthetic owner")
@@ -298,14 +303,13 @@ function expectCurrent(authority: AdmittedRunOperatorAuthority) {
   expect(authority.signal?.aborted).toBe(false);
   expect(authority.assertCurrent).not.toThrow();
 }
-function expectRevoked(authority: AdmittedRunOperatorAuthority) {
-  expect(authority.assertCurrent).toThrow();
-  expect(authority.signal?.aborted).toBe(true);
-}
 it.each(["member", "owner"] as const)(
-  "recovers a serialized OCID %s source without replacing membership with profile authority",
+  "recovers a serialized OCID %s source, retaining admitted work but checking membership on fresh starts",
   async (kind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+      setRuntimeConfigSnapshot({
+        gateway: { roles: { definitions: MEMBER_ROLE_PRESETS } },
+      });
       const profile =
         kind === "owner"
           ? await ensureCanonicalGatewayOwnerProfile("Synthetic owner")
@@ -375,9 +379,10 @@ it.each(["member", "owner"] as const)(
             );
           }
           const original = structuredClone(current);
-          // The lookup's lifecycle event also cancels retained work before another tool call.
+          // Losing the lookup refuses fresh work without canceling this admitted run.
           setOpenClawIdTunnelPrincipalLookup(undefined);
-          expectRevoked(restored.authority);
+          expectCurrent(restored.authority);
+          expect(restored.authority.reauthorize).toThrow();
           await expect(fixture.restore()).rejects.toThrow();
           setOpenClawIdTunnelPrincipalLookup(() => current);
           for (const authority of [
@@ -387,13 +392,18 @@ it.each(["member", "owner"] as const)(
           ]) {
             current = { ...original, authority };
             await expect(fixture.restore()).rejects.toThrow();
+            expect(restored.authority.reauthorize).toThrow();
+            expectCurrent(restored.authority);
           }
           if (original.kind === "member") {
             current = { ...original, role: "viewer" };
             await expect(fixture.restore()).rejects.toThrow();
+            expect(restored.authority.reauthorize).toThrow();
+            expectCurrent(restored.authority);
           }
           current = original;
-          expectRevoked(restored.authority);
+          expectCurrent(restored.authority);
+          expect(restored.authority.reauthorize).not.toThrow();
           const reloaded = await fixture.restore();
           try {
             expectCurrent(reloaded.authority);
@@ -403,6 +413,9 @@ it.each(["member", "owner"] as const)(
         } finally {
           restored.release();
         }
+        expect(restored.authority.assertCurrent).toThrow(
+          "Restart recovery operator authority is no longer active.",
+        );
       } finally {
         setOpenClawIdTunnelPrincipalLookup(undefined);
       }
@@ -412,6 +425,9 @@ it.each(["member", "owner"] as const)(
 
 it("keeps owner-only standing within the retained scope and fences control edits to it", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+    setRuntimeConfigSnapshot({
+      gateway: { roles: { definitions: MEMBER_ROLE_PRESETS } },
+    });
     const device: OpenClawIdTunnelPrincipal = {
       kind: "owner",
       peerKey: `iroh:${"ce".repeat(32)}`,

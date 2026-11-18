@@ -8,13 +8,8 @@ const agentSessionMocks = vi.hoisted(() => ({
   generateSummary: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/agent-sessions", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-sessions")>()),
-  generateSummary: agentSessionMocks.generateSummary,
-}));
-
-vi.mock("./sessions/index.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./sessions/index.js")>()),
+vi.mock("./sessions/compaction/compaction.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./sessions/compaction/compaction.js")>()),
   generateSummary: agentSessionMocks.generateSummary,
 }));
 

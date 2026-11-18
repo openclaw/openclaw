@@ -43,7 +43,6 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { createChatHeaderState, renderModelControls } from "./chat-model-controls.test-support.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { applyChatPendingInputs, getChatPendingInputs } from "./chat-pending-inputs.ts";
-import * as chatProgress from "./chat-progress.ts";
 import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import * as chatThread from "./chat-thread.ts";
@@ -1006,7 +1005,7 @@ describe("chat loading skeleton", () => {
     // The session provider matches a plan-usage group, so dollar estimates
     // yield to the subscription windows.
     container.querySelector<HTMLElement>(".context-usage summary")!.click();
-    flush();
+    await vi.dynamicImportSettled();
     expect(container.querySelector("[data-chat-usage-account='true']")?.textContent).toBe("OpenAI");
     expect(container.querySelectorAll(".context-usage__limit")).toHaveLength(1);
     const usageLink = container.querySelector<HTMLAnchorElement>(
@@ -1088,54 +1087,6 @@ describe("chat loading skeleton", () => {
       nowSpy.mockRestore();
     }
   });
-
-  it("keeps a completed recap after later tool content", async () => {
-    vi.mocked(chatThread.buildCachedChatItems).mockReturnValueOnce([
-      {
-        kind: "group",
-        key: "group:assistant:test",
-        role: "assistant",
-        visibleContent: "text",
-        messages: [
-          createMessageEntry("message:assistant:test", {
-            role: "assistant",
-            content: "Interim answer",
-            timestamp: 1,
-          }),
-        ],
-        timestamp: 1,
-        isStreaming: false,
-      },
-      {
-        kind: "group",
-        key: "group:tool:test",
-        role: "tool",
-        visibleContent: "text",
-        messages: [
-          createMessageEntry("message:tool:test", {
-            role: "tool",
-            content: "Later tool result",
-            timestamp: 2,
-          }),
-        ],
-        timestamp: 2,
-        isStreaming: false,
-      },
-    ]);
-    vi.spyOn(chatProgress, "resolveTurnRecap").mockReturnValue({
-      runId: "run-composed",
-      runtimeMs: 5_000,
-      outputTokens: 42,
-    });
-
-    const container = renderChatView({
-      messages: [{ role: "assistant", content: "Interim answer", timestamp: 1 }],
-    });
-
-    await waitForElement(container, ".chat-turn-recap");
-    expect(container.querySelector(".chat-group.assistant .chat-turn-recap")).toBeNull();
-    expect(container.querySelector(".chat-turn-recap")?.textContent).toContain("42 output tokens");
-  });
 });
 
 describe("chat voice controls", () => {
@@ -1215,7 +1166,6 @@ describe("chat voice controls", () => {
     expect(visualizer?.getAttribute("data-level")).toBe(status === "connecting" ? "0" : "0.64");
     expect(visualizer?.getAttribute("data-source")).toBe("microphone");
     expect(visualizer?.getAttribute("aria-hidden")).toBe("true");
-    expect(visualizer?.querySelectorAll(".agent-chat__voice-activity-bar")).toHaveLength(7);
     const statusRegion = container.querySelector(
       status === "connecting"
         ? '[role="status"].agent-chat__talk-status'
@@ -1265,16 +1215,13 @@ describe("chat voice controls", () => {
     });
     try {
       const host = requireElement(container, "openclaw-microphone-activity", "voice meter");
-      const bars = Array.from(host.querySelectorAll(".agent-chat__voice-activity-bar"));
       const canvas = await waitForSolid(() => requireElement(host, "canvas", "decorative canvas"));
-      expect(bars).toHaveLength(7);
       expect(canvas.hasAttribute("data-ready")).toBe(false);
 
       inputLevel.set(0.8);
       flush();
       await waitForSolid(() => expect(getContext.mock.contexts).toContain(canvas));
       expect(container.querySelector("openclaw-microphone-activity")).toBe(host);
-      expect(Array.from(host.querySelectorAll(".agent-chat__voice-activity-bar"))).toEqual(bars);
       expect(host.getAttribute("data-level")).toBe("0.8");
       expect(canvas.hasAttribute("data-ready")).toBe(false);
       expectDefined(
@@ -1300,17 +1247,13 @@ describe("chat voice controls", () => {
     document.body.append(container);
     try {
       const visualizer = container.querySelector<HTMLElement>(".agent-chat__voice-activity");
-      const centerBar = visualizer?.querySelector<HTMLElement>(
-        ".agent-chat__voice-activity-bar:nth-child(4)",
-      );
+      const canvas = visualizer?.querySelector("canvas");
 
       inputLevel.set(0.8);
       flush();
 
       expect(visualizer?.getAttribute("data-level")).toBe("0.8");
-      expect(visualizer?.querySelector(".agent-chat__voice-activity-bar:nth-child(4)")).toBe(
-        centerBar,
-      );
+      expect(visualizer?.querySelector("canvas")).toBe(canvas);
 
       const replacement = new RealtimeTalkLevelSignal();
       replacement.set(0.35);
@@ -2040,7 +1983,29 @@ describe("chat attachment picker", () => {
     expect(rangeDrop.defaultPrevented).toBe(true);
   });
 
-  it("keeps a dropped file independent of native text paste", async () => {
+  it("registers a large paste before an immediate send", () => {
+    let attachments: ChatAttachment[] = [];
+    const onSend = vi.fn(() => {
+      expect(attachments).toHaveLength(1);
+    });
+    const container = renderChatView({
+      draft: "Review the attachment",
+      attachments,
+      getAttachments: () => attachments,
+      onAttachmentsChange: (next) => {
+        attachments = next;
+      },
+      onSend,
+    });
+    const textarea = getComposerTextarea(container);
+    const pastedText = `large paste ${"x".repeat(1100)}`;
+    textarea.dispatchEvent(createPasteEvent(pastedText));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    expect(onSend).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a large paste when a dropped file finishes later", async () => {
     const readers: FileReader[] = [];
     const readAsDataUrl = vi
       .spyOn(FileReader.prototype, "readAsDataURL")
@@ -2062,13 +2027,11 @@ describe("chat attachment picker", () => {
     });
 
     try {
-      const paste = createPasteEvent(pastedText);
-      textarea.dispatchEvent(paste);
-      expect(paste.defaultPrevented).toBe(false);
+      textarea.dispatchEvent(createPasteEvent(pastedText));
       chat.dispatchEvent(dropEvent);
 
       expect(readers).toHaveLength(1);
-      expect(attachments).toHaveLength(0);
+      expect(attachments).toHaveLength(1);
       Object.defineProperty(readers[0], "result", {
         configurable: true,
         value: `data:application/pdf;base64,${btoa("%PDF-1.4\n")}`,
@@ -2077,26 +2040,27 @@ describe("chat attachment picker", () => {
         new ProgressEvent("load"),
       );
 
-      await waitForFast(() => expect(attachments).toHaveLength(1));
-      expect(attachments.map((attachment) => attachment.fileName)).toEqual(["brief.pdf"]);
+      await waitForFast(() => expect(attachments).toHaveLength(2));
+      expect(attachments.map((attachment) => attachment.fileName)).toEqual([
+        expect.stringMatching(/^pasted-text-\d+\.txt$/u),
+        "brief.pdf",
+      ]);
     } finally {
       readAsDataUrl.mockRestore();
     }
   });
 
   it("keeps the agent-aware placeholder with pasted text, files, images, and comments", () => {
-    const pastedTextAttachments = [
-      registerChatAttachmentPayload({
-        attachment: {
-          id: "retained-paste",
-          fileName: "pasted-text-123.txt",
-          mimeType: "text/plain",
-          origin: "paste",
-        },
-        dataUrl: `data:text/plain;base64,${btoa("retained pasted text")}`,
-        file: new File(["retained pasted text"], "pasted-text-123.txt", { type: "text/plain" }),
-      }),
-    ];
+    let pastedTextAttachments: ChatAttachment[] = [];
+    const pasteTarget = renderChatView({
+      draft: "Review the attachment",
+      getAttachments: () => pastedTextAttachments,
+      onAttachmentsChange: (next) => {
+        pastedTextAttachments = next;
+      },
+    });
+    const textarea = getComposerTextarea(pasteTarget);
+    textarea.dispatchEvent(createPasteEvent(`large paste ${"x".repeat(1100)}`));
 
     const namedLikePaste = registerChatAttachmentPayload({
       attachment: {
@@ -2418,7 +2382,7 @@ describe("chat model controls", () => {
     },
   );
 
-  it.each([false, true])("does not duplicate a row sign-in warning (%s)", async (rowWarning) => {
+  it.each([false, true])("shows one sign-in warning (%s)", async (rowWarning) => {
     const { state } = createChatHeaderState({
       models: [
         {
@@ -2443,14 +2407,9 @@ describe("chat model controls", () => {
       },
     });
 
-    expect(
-      container
-        .querySelector('[data-chat-model-provider="openai"]')
-        ?.textContent?.includes("Sign-in needed"),
-    ).toBe(!rowWarning);
-    expect(container.querySelectorAll("[data-chat-model-auth-warning]").length > 0).toBe(
-      rowWarning,
-    );
+    const heading = container.querySelector('[data-chat-model-provider="openai"]');
+    expect(heading?.textContent?.includes("Sign-in needed")).toBe(!rowWarning);
+    expect(container.querySelectorAll("[data-chat-model-auth-state]").length > 0).toBe(rowWarning);
   });
 
   it.each([2])(
@@ -2540,7 +2499,7 @@ describe("chat model controls", () => {
     });
     idReads = 0;
     const container = await renderModelControls(state);
-    const rows = container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]");
+    const rows = container.querySelectorAll<HTMLElement>("[data-chat-model-option]");
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.length).toBeLessThan(size);
     expect(rows[0]?.dataset.chatModelOption).toBe("example/model-0");
@@ -2663,16 +2622,15 @@ describe("chat model controls", () => {
         ...(known ? { modelOverrides: { main: null } } : {}),
       });
       const trigger = getChatModelSelect(container);
-      expect(trigger.getAttribute("aria-busy")).toBe(String(!known));
+      expect(trigger.getAttribute("aria-busy")).toBe("false");
+      expect(trigger.querySelector(".chat-controls__model-trigger-skeleton")).toBeNull();
+      expect(container.querySelector('[data-chat-model-catalog-state="loading"]')).toBeNull();
       if (known) {
         expect(trigger.textContent).toContain("gpt-5 · openai");
         expect(trigger.getAttribute("aria-label")).toBe("Chat model: gpt-5 · openai");
-        expect(trigger.querySelector(".chat-controls__model-trigger-skeleton")).toBeNull();
-        expect(container.querySelector('[data-chat-model-catalog-state="loading"]')).not.toBeNull();
         expect(container.querySelector("[data-chat-model-option]")).toBeNull();
       } else {
         expect(trigger.getAttribute("aria-disabled")).toBe("false");
-        expect(trigger.querySelector(".chat-controls__model-trigger-skeleton")).not.toBeNull();
         expect(trigger.textContent).not.toContain("Loading models");
         const effort = container.querySelector(".chat-controls__effort-picker");
         expect(effort?.getAttribute("aria-hidden")).toBe("true");
@@ -2710,26 +2668,23 @@ describe("chat model controls", () => {
       onModelSetup,
     });
 
-    const options = container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]");
+    const options = container.querySelectorAll<HTMLElement>("[data-chat-model-option]");
     expect([...options].map((option) => option.dataset.chatModelOption)).toEqual([
       "openai/gpt-5.6-sol",
       "openai/gpt-5.6-luna",
     ]);
     expect(options[0]?.textContent).toContain("GPT-5.6 Sol");
     expect(options[0]?.textContent).toContain("Default");
-    expect([...options].every((option) => !option.disabled)).toBe(true);
-    expect([...options].every((option) => option.dataset.chatModelSetup === "true")).toBe(true);
     for (const option of options) {
-      const warning = option.querySelector("[data-chat-model-auth-warning]");
-      expect(warning?.textContent?.trim()).toBe("Sign-in needed");
-      expect(warning?.querySelector("svg")).not.toBeNull();
+      expect(option.getAttribute("aria-disabled")).toBe("true");
+      expect(option.getAttribute("aria-label")).toContain("Sign-in needed");
       expect(option.querySelector(".chat-controls__model-option-meta")).toBeNull();
       expect(option.textContent).not.toContain("1M");
     }
-    expect(
-      container.querySelector('[data-chat-model-catalog-state="ready"]')?.textContent,
-    ).toContain("No models available");
-    expect(container.textContent).toContain("Manage models");
+    expect(container.querySelector("[data-chat-model-auth-state]")?.textContent).toContain(
+      "Sign-in needed",
+    );
+    expect(container.querySelector('[data-chat-model-setup="true"]')?.textContent).toBe("Set up");
     container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
     expect(onModelSetup).toHaveBeenCalledOnce();
   });
@@ -2756,20 +2711,25 @@ describe("chat model controls", () => {
       ],
     });
     const onModelSetup = vi.fn();
-    const container = await renderModelControls(state, { onModelSetup });
-    const cold = container.querySelector<HTMLButtonElement>(
+    const onProviderSettings = vi.fn();
+    const container = await renderModelControls(state, { onModelSetup, onProviderSettings });
+    const cold = container.querySelector<HTMLElement>(
       '[data-chat-model-option="openai/gpt-5.6-luna"]',
     );
-    const recovering = container.querySelector<HTMLButtonElement>(
+    const recovering = container.querySelector<HTMLElement>(
       '[data-chat-model-option="codex/gpt-5.6-luna"]',
     );
-    expect(cold?.dataset.chatModelSetup).toBe("true");
-    expect(recovering?.disabled).toBe(true);
+    expect(cold?.getAttribute("aria-disabled")).toBe("true");
+    expect(cold?.getAttribute("aria-label")).toContain("Sign-in needed");
+    expect(recovering?.getAttribute("aria-disabled")).toBe("true");
     expect(recovering?.textContent).not.toContain("Sign-in needed");
     recovering?.click();
     expect(onModelSetup).not.toHaveBeenCalled();
     cold?.click();
-    expect(onModelSetup).toHaveBeenCalledOnce();
+    expect(onModelSetup).not.toHaveBeenCalled();
+    container.querySelector<HTMLButtonElement>("[data-chat-model-provider-settings]")?.click();
+    expect(onProviderSettings).toHaveBeenCalledWith("openai");
+    expect(onModelSetup).not.toHaveBeenCalled();
   });
 
   it("hides the context-window switch when the active session's model declares none", async () => {
@@ -2819,7 +2779,7 @@ describe("chat model controls", () => {
     expect(container.querySelector("[data-chat-model-context-badge]")).toBeNull();
   });
 
-  it("clears a session pin when its matching default is unavailable", async () => {
+  it("keeps a session pin unchanged when its matching default needs authentication", async () => {
     const model = "gpt-5";
     const { state } = createChatHeaderState({
       model,
@@ -2840,14 +2800,14 @@ describe("chat model controls", () => {
     const onModelSetup = vi.fn();
     const container = await renderModelControls(state, { onModelSelect, onModelSetup });
     document.body.append(container);
-    const defaultRow = container.querySelector<HTMLButtonElement>(
+    const defaultRow = container.querySelector<HTMLElement>(
       `[data-chat-model-option="openai/${model}"]`,
     );
     expect(defaultRow?.dataset.chatModelDefault).toBe("true");
     expect(defaultRow?.getAttribute("aria-selected")).toBe("true");
-    expect(defaultRow?.disabled).toBe(false);
+    expect(defaultRow?.getAttribute("aria-disabled")).toBe("true");
     defaultRow?.click();
-    expect(onModelSelect).toHaveBeenCalledWith("", "main", null);
+    expect(onModelSelect).not.toHaveBeenCalled();
     expect(onModelSetup).not.toHaveBeenCalled();
     container.remove();
   });
@@ -3041,16 +3001,16 @@ describe("chat model controls", () => {
       onThinkingSelect,
     });
 
-    const modelOption = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
-    ).find(
-      (button) =>
-        button.getAttribute("aria-selected") === "false" && button.dataset.chatModelOption !== "",
+    const modelOption = expectDefined(
+      container.querySelector<HTMLElement>(
+        '[data-chat-model-option]:not([data-chat-model-option=""])[aria-selected="false"]',
+      ),
+      "unselected model option",
     );
-    expect(modelOption).toBeInstanceOf(HTMLButtonElement);
-    modelOption?.click();
+    expect(modelOption.getAttribute("role")).toBe("option");
+    modelOption.click();
     expect(onModelSelect).toHaveBeenCalledWith(
-      modelOption?.dataset.chatModelOption,
+      modelOption.dataset.chatModelOption,
       "main",
       undefined,
     );

@@ -20,9 +20,11 @@ function luminance(color: RenderedColor) {
 suite.define(() => {
   it("keeps the new-session action readable through hover and press", async () => {
     const { page } = await openThemedChat("claw", "light");
+    // The filled New session action is the tablet header's; the sidebar's and the phone pill's
+    // are plain.
+    await page.setViewportSize({ width: 820, height: 900 });
     await page.goto(suite.server.baseUrl + "chat");
-    const action = page.locator(".sidebar-rail__create .sidebar-new-session");
-    await expect.poll(() => action.isVisible()).toBe(true);
+    const action = page.locator(".header-new-session");
     await page.addStyleTag({ content: "* { transition: none !important; }" });
     for (const accent of ["#707070", "#ffff00", "#080808", "#fafafa"]) {
       await page.evaluate(
@@ -57,6 +59,9 @@ suite.define(() => {
       expect(microphoneColors.actual, accent + " microphone ink").toEqual(
         microphoneColors.expected,
       );
+      await page.goto(suite.server.baseUrl + "sessions");
+      await expect.poll(() => action.isVisible()).toBe(true);
+      await page.addStyleTag({ content: "* { transition: none !important; }" });
       let restingForeground: RenderedColor | undefined;
       for (const state of ["normal", "hover", "active"]) {
         await page.mouse.move(0, 0);
@@ -91,10 +96,6 @@ suite.define(() => {
       await page.keyboard.press("Tab");
       await action.focus();
       const rawFocus = await action.evaluate((element) => {
-        const rail = element.closest(".sidebar-rail");
-        if (!rail) {
-          throw new Error("Expected the primary action inside the sidebar rail");
-        }
         const style = getComputedStyle(element);
         if (!element.matches(":focus-visible") || Number.parseFloat(style.outlineWidth) < 2) {
           throw new Error("Expected a visible keyboard focus outline");
@@ -102,16 +103,17 @@ suite.define(() => {
         return {
           foreground: style.outlineColor,
           background: style.backgroundColor,
-          surface: getComputedStyle(rail).backgroundColor,
         };
       });
       const focus = await page.evaluate(resolveRenderedColors, rawFocus);
-      for (const background of [focus.background!, focus.surface!]) {
+      // The header action insets its outline, so it only crosses the action's own fill.
+      for (const background of [focus.background!]) {
         const [low, high] = [luminance(background), luminance(focus.foreground!)].toSorted(
           (a, b) => a - b,
         );
         expect((high! + 0.05) / (low! + 0.05), accent + " inset focus").toBeGreaterThanOrEqual(3);
       }
+      await page.goto(suite.server.baseUrl + "chat");
     }
   });
   it("preserves authored primary and send ink through a custom-accent reset", async () => {
@@ -190,10 +192,7 @@ suite.define(() => {
       },
     });
     await page.goto(suite.server.baseUrl + "chat");
-    const actions = [
-      page.locator(".sidebar-rail__create .sidebar-new-session"),
-      page.locator(".chat-send-btn--send").first(),
-    ];
+    const actions = [page.locator(".chat-send-btn--send").first()];
     await expect
       .poll(() =>
         page.evaluate(() =>
@@ -204,9 +203,8 @@ suite.define(() => {
     await page
       .locator(".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea")
       .fill("Review this draft.");
-    await expect.poll(() => actions[1]!.isEnabled()).toBe(true);
-    await capture(actions[0]!, "new-session.png");
-    await capture(actions[1]!, "send.png");
+    await expect.poll(() => actions[0]!.isEnabled()).toBe(true);
+    await capture(actions[0]!, "send.png");
     for (const action of actions) {
       expect(
         await action.evaluate((element) => ({

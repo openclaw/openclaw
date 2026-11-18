@@ -245,9 +245,11 @@ test("users.prefs rejects mixed-person synthetic turn calls before reading or wr
     using read = vi.spyOn(preferences, "getCanonicalUserPreferences");
     using write = vi.spyOn(preferences, "setCanonicalUserPreferences");
     await withGatewayPersonalToolUser(ownerId, async () => {
-      await expect(request("users.prefs.get")).rejects.toThrow(/own Control UI turn/i);
+      await expect(request("users.prefs.get")).rejects.toThrow(
+        /Ask again yourself with a new message in the OpenClaw app/i,
+      );
       await expect(request("users.prefs.set", { entries: { "ui.theme": "dark" } })).rejects.toThrow(
-        /own Control UI turn/i,
+        /Ask again yourself with a new message in the OpenClaw app/i,
       );
     });
     expect(read).not.toHaveBeenCalled();
@@ -291,7 +293,14 @@ test.each(["read", "write"] as const)(
         outcome,
       );
       expect(await outcome).toMatchObject([
-        { status: "rejected", reason: { message: expect.stringMatching(/own Control UI turn/i) } },
+        {
+          status: "rejected",
+          reason: {
+            message: expect.stringMatching(
+              /Ask again yourself with a new message in the OpenClaw app/i,
+            ),
+          },
+        },
       ]);
       expect(await readPreferences(ownerId)).toMatchObject({ entries: { "ui.theme": "claw" } });
     });

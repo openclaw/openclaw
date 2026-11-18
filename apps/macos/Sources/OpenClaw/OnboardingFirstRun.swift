@@ -12,14 +12,18 @@ enum OnboardingFirstRun {
         onboardingSeen: Bool,
         onboardingVersion: Int,
         joinedClaw: Bool = false,
+        removedClaw: Bool = false,
         markComplete: () -> Void,
         show: () -> Void,
-        openDashboard: () -> Void = {})
+        openDashboard: () -> Void = {},
+        showRemoval: () -> Void = {})
     {
         // A Mac whose primary is its OpenClaw ID claw has nothing to set up here: the claw owns AI
         // and Gateway setup, which a member key cannot run. An unfinished first run (such as a join
         // interrupted before completion) finishes into the claw's dashboard.
-        if joinedClaw {
+        if connectionMode == .unconfigured, removedClaw {
+            showRemoval()
+        } else if joinedClaw {
             if !onboardingSeen {
                 markComplete()
                 openDashboard()

@@ -158,6 +158,29 @@ it("reuses a sealed standalone baseline only while the complete source is unchan
   );
 });
 
+it("captures declared SQLite sidecar roots through their database image and reuses it", async () => {
+  const f = await fixture();
+  // Mirrors memory-core's legacy index declarations: the database plus every sidecar suffix.
+  const legacy = path.join(f.stateDir, "memory", "main.sqlite");
+  await fs.mkdir(path.dirname(legacy));
+  {
+    using db = new DatabaseSync(legacy);
+    db.exec("CREATE TABLE chunks (id INTEGER PRIMARY KEY); INSERT INTO chunks VALUES (1)");
+  }
+  const sidecars = ["-wal", "-shm", "-journal"].map((suffix) => `${legacy}${suffix}`);
+  f.resources.push(
+    { path: legacy, kind: "file" },
+    ...sidecars.map((sidecar) => ({ path: sidecar, kind: "file" as const })),
+  );
+  const first = await f.capture();
+  expect(first).toHaveLength(1);
+  const { ref } = await f.capturedFile(legacy, true);
+  const manifest = parseUpdateRecoveryBackupManifest(await fs.readFile(ref.manifestPath, "utf8"));
+  expect(manifest.roots).toContain(legacy);
+  expect(manifest.roots.filter((root) => sidecars.includes(root))).toEqual([]);
+  expect(await f.capture(), "an unchanged sidecar declaration reuses the baseline").toEqual(first);
+});
+
 it("rejects an ineligible retained capture before verifying its payloads", async () => {
   const f = await fixture();
   await f.capture();

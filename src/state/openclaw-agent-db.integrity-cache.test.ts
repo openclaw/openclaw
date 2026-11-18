@@ -103,6 +103,10 @@ it.each([false, true])("defers seal-less Doctor reopens (pinned WAL: %s)", async
         reader.prepare("SELECT * FROM auth_profile_state").all();
         first.db.exec("INSERT INTO auth_profile_state VALUES ('pinned', '{}', 1)");
       }
+      const walBytes = pinned ? fs.statSync(`${first.path}-wal`).size : undefined;
+      if (pinned) {
+        expect(walBytes).toBeGreaterThan(0);
+      }
       closeCachedOpenClawAgentDatabase(first);
       expect(readSqliteDatabaseCleanClose(first.path)).toBe(false);
       expect(readSqliteDatabaseIntegrityVerification(first.path)).toBeUndefined();
@@ -119,7 +123,15 @@ it.each([false, true])("defers seal-less Doctor reopens (pinned WAL: %s)", async
       expect(diagnostics.every((record) => record.integrityCheckSyncMs === undefined)).toBe(true);
       expect(logger.info).toHaveBeenCalledWith(
         `agent database clean-close receipt: ${pinned ? "checkpoint-incomplete" : "verification-missing"}; agent=doctor`,
-        expect.anything(),
+        pinned
+          ? expect.objectContaining({
+              checkpoint: expect.objectContaining({
+                alreadyClosed: false,
+                pathCurrent: true,
+                walBytes,
+              }),
+            })
+          : expect.anything(),
       );
     });
   } finally {

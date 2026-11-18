@@ -9,6 +9,92 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI model and effort controls" });
 
 suite.define(() => {
+  it.each(["chat", "new"])(
+    "opens setup directly from an empty automatic-account model control in /%s",
+    async (route) => {
+      await suite.withPage({ viewport: { width: 1240, height: 794 } }, async ({ page }) => {
+        await installMockGateway(page, {
+          // A configured default keeps /new on its composer; without one it already
+          // shows the full-page model setup action rather than a model picker.
+          agentModel: route === "new" ? "example/model-a" : null,
+          models: [],
+          presenceUsers: [{ id: "synthetic-operator", self: true }],
+          methodResponses: {
+            "models.list": {
+              models: [],
+              accountSelection: { kind: "automatic", label: "Automatic account selection" },
+            },
+          },
+        });
+        await page.goto(new URL(route, suite.server.baseUrl).href);
+        const composer = page.locator(".agent-chat__input").first();
+        const setup = composer.getByRole("button", { name: "Set up a model", exact: true });
+        await setup.waitFor();
+        expect(await composer.locator(".chat-controls__model-picker").count()).toBe(0);
+        if (route === "chat") {
+          await setup.click();
+        } else {
+          await setup.press("Enter");
+        }
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
+        await page.getByRole("dialog", { name: "Add an account", exact: true }).waitFor();
+      });
+    },
+  );
+
+  it.each(
+    ["chat", "new"].flatMap((route) => [false, true].map((restricted) => ({ route, restricted }))),
+  )(
+    "does not declare a pending model catalog empty in /$route (restricted=$restricted)",
+    async ({ route, restricted }) => {
+      await suite.withPage(
+        { viewport: { width: 1280, height: 900 }, locale: "en-US" },
+        async ({ page }) => {
+          const model = {
+            id: "model-a",
+            name: "Example Model",
+            provider: "example",
+            contextWindow: 128_000,
+          };
+          const modelSelectionPolicy = restricted ? { restricted: true } : undefined;
+          const emptyLabel = restricted
+            ? "No models are permitted by your admin."
+            : "No models available";
+          const gateway = await installMockGateway(page, {
+            agentModel: "example/model-a",
+            models: [],
+            sessionInfo: { model: "model-a", modelProvider: "example" },
+            methodResponses: {
+              "models.list": { models: [], pendingProviders: ["example"], modelSelectionPolicy },
+            },
+          });
+          await page.goto(new URL(route, suite.server.baseUrl).href);
+          const trigger = page.locator("[data-chat-model-select]").first();
+          await trigger.waitFor();
+          await trigger.click();
+          const picker = page.locator(".chat-controls__model-picker[open]").first();
+          await picker.locator("[data-chat-model-search]").waitFor();
+          const prematureLabel = await trigger.textContent();
+          await gateway.setMethodResponse("models.list", { models: [model], modelSelectionPolicy });
+          await gateway.emitGatewayEvent("chat.metadata.changed", {});
+          await picker.locator('[data-chat-model-option="example/model-a"]').waitFor();
+          await gateway.setMethodResponse("models.list", { models: [], modelSelectionPolicy });
+          await gateway.emitGatewayEvent("chat.metadata.changed", {});
+          if (restricted) {
+            await expect.poll(() => trigger.textContent()).toContain(emptyLabel);
+          } else {
+            await page
+              .locator(".agent-chat__input")
+              .first()
+              .getByRole("button", { name: "Set up a model", exact: true })
+              .waitFor();
+            expect(await picker.count()).toBe(0);
+          }
+          expect(prematureLabel).not.toContain(emptyLabel);
+        },
+      );
+    },
+  );
   it("hides the routed-model suffix and standard-only speed controls without changing the route", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const id = "anthropic/claude-opus-5-5";
@@ -100,41 +186,16 @@ suite.define(() => {
       await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(9);
       expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
       const refresh = picker.locator(".chat-controls__model-search-wrap [data-chat-model-refresh]");
-      expect(await refresh.textContent()).toContain("Refreshing models for Example…");
-      expect(await refresh.getAttribute("role")).toBe("status");
-      expect(await refresh.locator(".btn__spinner").isVisible()).toBe(true);
+      expect(await refresh.count()).toBe(0);
+      const search = picker.locator("[data-chat-model-search]");
+      // Shortcuts activate after the cold panel loads and stay live when it reopens.
+      await trigger.press("/");
+      expect(await search.evaluate((input) => input === document.activeElement)).toBe(true);
       const requestsBeforeReopen = (await gateway.getRequests("models.list")).length;
       await trigger.click();
       await trigger.click();
       expect((await gateway.getRequests("models.list")).length).toBe(requestsBeforeReopen);
-      const refreshDetails = refresh.getByRole("button");
-      const openRefreshTooltip = refresh.locator("openclaw-tooltip[open]");
-      await refreshDetails.waitFor({ state: "visible" });
-      // The popup's opening scale animation can move this small target away
-      // from a stationary pointer before the tooltip's hover delay completes.
-      await picker.locator("[data-anchored-overlay]").evaluate(async (surface) => {
-        await Promise.all(surface.getAnimations().map((animation) => animation.finished));
-      });
-      await refreshDetails.hover();
-      await expect
-        .poll(() => openRefreshTooltip.locator(".tooltip-content").textContent())
-        .toBe("Refreshing models for Example…");
-      const search = picker.locator("[data-chat-model-search]");
-      await search.click();
-      await search.press("Tab");
-      expect(await refreshDetails.evaluate((button) => button === document.activeElement)).toBe(
-        true,
-      );
-      await refreshDetails.press("Enter");
-      await expect.poll(() => openRefreshTooltip.count()).toBe(1);
-      await refreshDetails.press("Escape");
-      await expect.poll(() => openRefreshTooltip.count()).toBe(0);
-      expect(await picker.getAttribute("open")).not.toBeNull();
-      await search.click();
-      await refreshDetails.tap();
-      await expect.poll(() => openRefreshTooltip.count()).toBe(1);
-      await search.click();
-      await expect.poll(() => openRefreshTooltip.count()).toBe(0);
+      await trigger.press("/");
       expect(await search.evaluate((input) => input === document.activeElement)).toBe(true);
       await search.pressSequentially("Model 0999");
       expect(await search.inputValue()).toBe("Model 0999");
@@ -149,18 +210,10 @@ suite.define(() => {
       expect(await search.inputValue()).toBe("Model 0999");
       await expect.poll(() => result.isVisible()).toBe(true);
       expect(await picker.locator("[data-chat-model-option]:visible").count()).toBe(1);
-      expect(
-        await refresh
-          .locator(".btn__spinner")
-          .evaluate((node) => getComputedStyle(node).animationName),
-      ).toBe("none");
       for (const request of await gateway.getRequests("models.list")) {
         expect(request.params).not.toHaveProperty("refresh", true);
       }
-      await refreshDetails.focus();
-      expect(await refreshDetails.evaluate((button) => button === document.activeElement)).toBe(
-        true,
-      );
+      await search.focus();
       await gateway.setMethodResponse("models.list", { models });
       await gateway.emitGatewayEvent("chat.metadata.changed", {});
       await expect.poll(() => refresh.count()).toBe(0);
@@ -170,7 +223,7 @@ suite.define(() => {
       expect(await result.getAttribute("data-chat-model-highlighted")).not.toBeNull();
       expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
       expect(await picker.getAttribute("open")).not.toBeNull();
-      await result.click();
+      await trigger.press("1");
       await expect.poll(() => trigger.textContent()).toContain("Model 0999");
       expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
         expectedSessionId: "session:agent:main:main",
@@ -182,9 +235,13 @@ suite.define(() => {
         await sessions.click();
       }
       await expect.poll(() => sessions.getAttribute("aria-pressed")).toBe("true");
+      const collapse = page
+        .locator("openclaw-app-sidebar")
+        .getByRole("button", { name: "Collapse sidebar", exact: true });
       const toggleSidebar = async () => {
         for (const pressed of ["false", "true"]) {
-          await sessions.click();
+          // Sessions reopens a collapsed panel; the panel header collapses it.
+          await (pressed === "false" ? collapse : sessions).click();
           await expect.poll(() => sessions.getAttribute("aria-pressed")).toBe(pressed);
           await page.locator(".shell").evaluate(async (shell) => {
             await new Promise<void>((resolve) => {
@@ -597,6 +654,8 @@ suite.define(() => {
           await expect
             .poll(() => menu.getByRole("option", { name: new RegExp(longName) }).count())
             .toBe(1);
+          // Escape clears a search query before it dismisses the picker.
+          await menu.locator("[data-chat-model-search]").fill("");
           await page.keyboard.press("Escape");
           await expect
             .poll(() => model.evaluate((node) => node === document.activeElement))

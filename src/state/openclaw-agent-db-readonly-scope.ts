@@ -43,6 +43,7 @@ type ReadScopeTarget = {
   agentId: string;
   path: string;
   validation?: OpenClawAgentDatabaseReadValidation;
+  assertSourceCurrent?: () => void;
 };
 type SnapshotHold = { database?: OpenClawAgentReadOnlyDatabaseHandle; end?: () => void };
 const readOnlyScope = new AsyncLocalStorage<OpenClawAgentDatabaseReadOnlyScope>();
@@ -264,6 +265,7 @@ export class OpenClawAgentDatabaseReadOnlyScope {
   }
 
   retain(options: OpenClawAgentDatabaseOptions) {
+    this.target?.assertSourceCurrent?.();
     const opened =
       this.database?.db.isOpen && this.database.db.isTransaction
         ? openOpenClawAgentDatabaseReadOnly(options)
@@ -294,6 +296,7 @@ export class OpenClawAgentDatabaseReadOnlyScope {
     options: OpenClawAgentDatabaseOptions,
     behavior: OpenClawAgentDatabaseReadOnlyBehavior = {},
   ): OpenClawAgentDatabaseReadOnlyResult<T> {
+    this.target?.assertSourceCurrent?.();
     const hold = this.snapshotHold;
     if (
       this.database?.db.isOpen &&

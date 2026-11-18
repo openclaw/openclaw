@@ -32,7 +32,7 @@ import {
   normalizeForwardedContext,
   resolveTelegramNonTextBody,
   resolveTelegramPrimaryMedia,
-  resolveTelegramRichMessageBody,
+  resolveTelegramRichMessagePlaceholder,
   resolveTelegramTextContent,
   type TelegramForwardedContext,
   type TelegramMediaKind,
@@ -504,7 +504,8 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   const safeReplyText = replyTextParts?.text ?? "";
   let filteredReplyText = false;
   if (!body && replyLike) {
-    const replyBody = safeReplyText.trim() || resolveTelegramRichMessageBody(replyLike) || "";
+    const replyBody =
+      safeReplyText.trim() || resolveTelegramRichMessagePlaceholder(replyLike) || "";
     filteredReplyText = hadUnsafeTelegramText(rawReplyText, replyBody);
     body = replyBody;
     if (!body) {

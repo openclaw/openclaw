@@ -1,21 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { URL } from "node:url";
-import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "@openclaw/fs-safe/advanced";
-import { isWindowsDrivePath } from "@openclaw/fs-safe/archive";
-import { detectMime } from "@openclaw/media-core/mime";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { Static, TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { resolveRootPath } from "../infra/boundary-path.js";
 import { toErrorObject } from "../infra/errors.js";
 import { findExistingAncestor, root as fsRoot, FsSafeError } from "../infra/fs-safe.js";
-import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
-import {
-  classifyMediaReferenceSource,
-  normalizeMediaReferenceSource,
-  resolveMediaReferenceSandboxPath,
-} from "../media/media-reference.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { clampNumber } from "../utils.js";
 import {
@@ -30,6 +20,11 @@ import {
   normalizeFileToolPathParamsFromKeys,
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
+import {
+  createFsAccessError,
+  createSandboxMutationOperations,
+  createSandboxReadOperations,
+} from "./agent-tools.read.operations.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import {
   type ApplyPatchContainmentSource,
@@ -39,17 +34,19 @@ import {
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { writeHostFile } from "./host-file-write.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
-import { assertNewMemoryFlushContent } from "./memory-flush-content.js";
 import {
   type MemoryWriteProvenanceObserver,
   withMemoryWriteProvenance,
 } from "./memory-write-provenance.js";
-import { resolveSandboxPathMapping, toRelativeWorkspacePath } from "./path-policy.js";
+import {
+  mapContainerPathToWorkspaceRoot,
+  resolveContainerPathCandidate,
+  resolveSandboxPathMapping,
+  toRelativeWorkspacePath,
+} from "./path-policy.js";
 import type { AgentTool, AgentToolResult } from "./runtime/index.js";
-import { assertSandboxPath, normalizeFileReferencePrefix } from "./sandbox-paths.js";
-import { resolveSandboxFileMutationQueueKey } from "./sandbox/file-mutation-identity.js";
+import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import { withFileMutationQueueKeyResolution } from "./sessions/tools/file-mutation-queue.js";
 import {
   createEditTool,
   createReadTool,
@@ -440,250 +437,6 @@ function normalizeReadResultDetails(
   return { ...result, details: { kind: "text", content: displayText } };
 }
 
-function resolveContainerPathCandidate(filePath: string): string {
-  let candidate = normalizeFileReferencePrefix(filePath);
-  if (/^file:\/\//i.test(candidate)) {
-    const localFilePath = trySafeFileURLToPath(candidate);
-    if (localFilePath) {
-      candidate = localFilePath;
-    } else {
-      // Windows rejects posix-style file:///workspace/... in fileURLToPath; map via URL pathname
-      // when it clearly refers to the container workdir (same idea as sandbox-paths).
-      let parsed: URL;
-      try {
-        parsed = new URL(candidate);
-      } catch {
-        return filePath;
-      }
-      if (parsed.protocol !== "file:") {
-        return filePath;
-      }
-      const host = parsed.hostname.trim().toLowerCase();
-      if (host && host !== "localhost") {
-        return filePath;
-      }
-      if (hasEncodedFileUrlSeparator(parsed.pathname)) {
-        return filePath;
-      }
-      let normalizedPathname: string;
-      try {
-        normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
-      } catch {
-        return filePath;
-      }
-      candidate = normalizedPathname;
-    }
-  }
-  return candidate;
-}
-
-function mapContainerPathToWorkspaceRoot(params: {
-  filePath: string;
-  root: string;
-  containerWorkdir?: string;
-}): string {
-  const candidate = resolveContainerPathCandidate(params.filePath);
-  const mapped = params.containerWorkdir
-    ? resolveSandboxPathMapping(
-        [{ hostRoot: params.root, containerRoot: params.containerWorkdir }],
-        candidate,
-      )
-    : null;
-  return mapped?.hostPath ?? candidate;
-}
-
-function resolveToolPathAgainstWorkspaceRoot(params: {
-  filePath: string;
-  root: string;
-  containerWorkdir?: string;
-}): string {
-  const mapped = mapContainerPathToWorkspaceRoot(params);
-  const candidate = normalizeFileReferencePrefix(mapped);
-  if (isWindowsDrivePath(candidate)) {
-    return path.win32.normalize(candidate);
-  }
-  if (path.isAbsolute(candidate)) {
-    return path.resolve(candidate);
-  }
-  return path.resolve(params.root, candidate || ".");
-}
-
-type MemoryFlushAppendOnlyWriteOptions = {
-  root: string;
-  relativePath: string;
-  memoryWriteProvenance?: MemoryWriteProvenanceObserver;
-  containerWorkdir?: string;
-  sandbox?: {
-    root: string;
-    bridge: SandboxFsBridge;
-  };
-};
-
-async function readOptionalUtf8File(params: {
-  absolutePath: string;
-  relativePath: string;
-  sandbox?: MemoryFlushAppendOnlyWriteOptions["sandbox"];
-  signal?: AbortSignal;
-}): Promise<string> {
-  try {
-    if (params.sandbox) {
-      const stat = await params.sandbox.bridge.stat({
-        filePath: params.relativePath,
-        cwd: params.sandbox.root,
-        signal: params.signal,
-      });
-      if (!stat) {
-        return "";
-      }
-      const buffer = await params.sandbox.bridge.readFile({
-        filePath: params.relativePath,
-        cwd: params.sandbox.root,
-        signal: params.signal,
-      });
-      return buffer.toString("utf-8");
-    }
-    return await fs.readFile(params.absolutePath, "utf-8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
-      return "";
-    }
-    throw error;
-  }
-}
-
-async function appendMemoryFlushContent(params: {
-  absolutePath: string;
-  root: string;
-  relativePath: string;
-  content: string;
-  sandbox?: MemoryFlushAppendOnlyWriteOptions["sandbox"];
-  signal?: AbortSignal;
-  assertCurrent: ReturnType<typeof captureAgentToolSourceExecutionGuard>;
-}) {
-  await runWithAgentToolSourceExecutionScope(params.assertCurrent, async () => {
-    const sandbox = params.sandbox;
-    if (!sandbox) {
-      const root = await fsRoot(params.root);
-      params.assertCurrent();
-      await root.append(params.relativePath, params.content, {
-        mkdir: true,
-        prependNewlineIfNeeded: true,
-        assertBeforeMutation: params.assertCurrent,
-      });
-      return;
-    }
-    // Share write/edit ordering; the bridge has no cross-process append primitive.
-    const queueKey = resolveSandboxFileMutationQueueKey({
-      ...sandbox,
-      filePath: params.absolutePath,
-      cwd: sandbox.root,
-      signal: params.signal,
-    });
-    await withFileMutationQueueKeyResolution(queueKey, async () => {
-      const existing = await readOptionalUtf8File(params);
-      const separator =
-        existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n")
-          ? "\n"
-          : "";
-      params.assertCurrent();
-      await sandbox.bridge.writeFile({
-        filePath: params.relativePath,
-        cwd: sandbox.root,
-        data: `${existing}${separator}${params.content}`,
-        mkdir: true,
-        signal: params.signal,
-      });
-    });
-  });
-}
-
-/** Restrict a write tool to appending memory-flush content to one path. */
-export function wrapToolMemoryFlushAppendOnlyWrite(
-  tool: AnyAgentTool,
-  options: MemoryFlushAppendOnlyWriteOptions,
-): AnyAgentTool {
-  const allowedAbsolutePath = path.resolve(options.root, options.relativePath);
-  return {
-    ...tool,
-    description: `Append new memory notes to ${options.relativePath}; creates parent directories. The content is appended verbatim. Send only new text, never existing entries or a rewritten file.`,
-    execute: async (toolCallId, args, signal, onUpdate) => {
-      const assertCurrent = captureAgentToolSourceExecutionGuard(signal);
-      const record = getToolParamsRecord(args);
-      const normalizedRecord = record
-        ? await normalizeFileToolPathParamsFromKeys(
-            record,
-            ["path"],
-            options.root,
-            options.sandbox?.bridge,
-          )
-        : undefined;
-      assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.write, tool.name);
-      const filePath =
-        typeof normalizedRecord?.path === "string" && normalizedRecord.path.trim()
-          ? normalizedRecord.path
-          : undefined;
-      const content = typeof record?.content === "string" ? record.content : undefined;
-      if (!filePath || content === undefined) {
-        return tool.execute(toolCallId, args, signal, onUpdate);
-      }
-
-      const resolvedPath = resolveToolPathAgainstWorkspaceRoot({
-        filePath,
-        root: options.root,
-        containerWorkdir: options.containerWorkdir,
-      });
-      if (filePath.startsWith("@") || resolvedPath !== allowedAbsolutePath) {
-        throw new Error(
-          `Memory flush writes are restricted to ${options.relativePath}; use that path only.`,
-        );
-      }
-
-      const contentBefore = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-        const previousContent = await readOptionalUtf8File({
-          absolutePath: allowedAbsolutePath,
-          relativePath: options.relativePath,
-          sandbox: options.sandbox,
-          signal,
-        });
-        assertCurrent();
-        return previousContent;
-      });
-      assertNewMemoryFlushContent(contentBefore, content);
-      const separator =
-        contentBefore.length > 0 && !contentBefore.endsWith("\n") && !content.startsWith("\n")
-          ? "\n"
-          : "";
-      const commit = () =>
-        appendMemoryFlushContent({
-          absolutePath: allowedAbsolutePath,
-          root: options.root,
-          relativePath: options.relativePath,
-          content,
-          sandbox: options.sandbox,
-          signal,
-          assertCurrent,
-        });
-      const memoryWriteProvenance = options.memoryWriteProvenance;
-      if (memoryWriteProvenance && (await memoryWriteProvenance.classifies(allowedAbsolutePath))) {
-        await memoryWriteProvenance.write({
-          absolutePath: allowedAbsolutePath,
-          contentBefore,
-          contentAfter: `${contentBefore}${separator}${content}`,
-          commit,
-        });
-      } else {
-        await commit();
-      }
-      // This wrapper inherits the write tool's output schema, so report only
-      // the authoritative `changed`; deriving `created` before append is racy.
-      return {
-        content: [{ type: "text", text: `Appended content to ${options.relativePath}.` }],
-        details: { changed: true },
-      };
-    },
-  };
-}
-
 async function assertSandboxPathWithinAnyRoot(params: {
   cwd?: string;
   filePath: string;
@@ -834,6 +587,22 @@ type SandboxToolParams = {
   modelHasVision?: boolean;
 };
 
+function withSandboxToolAbortSignal<TDetails>(
+  tool: AnyAgentTool<TDetails>,
+  runSignal?: AbortSignal,
+): AnyAgentTool<TDetails> {
+  return {
+    ...tool,
+    execute: (id, args, signal, onUpdate) =>
+      tool.execute(
+        id,
+        args,
+        runSignal && signal ? AbortSignal.any([runSignal, signal]) : (signal ?? runSignal),
+        onUpdate,
+      ),
+  };
+}
+
 /** Preserve the sandbox namespace before session tools use host path resolution. */
 export function wrapSandboxFileToolPath(
   tool: AnyAgentTool,
@@ -877,12 +646,15 @@ export function createSandboxedReadTool(params: SandboxToolParams) {
       modelHasVision: params.modelHasVision,
     }),
   );
-  return createOpenClawReadTool(base, {
-    modelContextWindowTokens: params.modelContextWindowTokens,
-    imageSanitization: params.imageSanitization,
-    cwd: params.root,
-    bridge: params.bridge,
-  });
+  return withSandboxToolAbortSignal(
+    createOpenClawReadTool(base, {
+      modelContextWindowTokens: params.modelContextWindowTokens,
+      imageSanitization: params.imageSanitization,
+      cwd: params.root,
+      bridge: params.bridge,
+    }),
+    params.abortSignal,
+  );
 }
 
 export function createSandboxedWriteTool(params: SandboxToolParams) {
@@ -891,9 +663,9 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
       operations: createSandboxMutationOperations(params),
     }),
   );
-  return wrapToolParamValidation(
-    wrapSandboxFileToolPath(base, params),
-    REQUIRED_PARAM_GROUPS.write,
+  return withSandboxToolAbortSignal(
+    wrapToolParamValidation(wrapSandboxFileToolPath(base, params), REQUIRED_PARAM_GROUPS.write),
+    params.abortSignal,
   );
 }
 
@@ -903,7 +675,10 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
       operations: createSandboxMutationOperations(params),
     }),
   );
-  return wrapToolParamValidation(wrapSandboxFileToolPath(base, params), REQUIRED_PARAM_GROUPS.edit);
+  return withSandboxToolAbortSignal(
+    wrapToolParamValidation(wrapSandboxFileToolPath(base, params), REQUIRED_PARAM_GROUPS.edit),
+    params.abortSignal,
+  );
 }
 
 type HostWorkspaceMutationOptions = {
@@ -1113,79 +888,6 @@ export function wrapReadToolWithSkillContent(
   };
 }
 
-function createSandboxReadOperations(params: SandboxToolParams) {
-  return {
-    resolveQueueKey: (absolutePath: string, signal?: AbortSignal) =>
-      resolveSandboxFileQueueKey(params, absolutePath, signal),
-    resolvePath: (filePath: string) => {
-      const normalizedMediaSource = normalizeMediaReferenceSource(filePath);
-      if (classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl) {
-        return resolveMediaReferenceSandboxPath(normalizedMediaSource, "media/inbound").resolved;
-      }
-      return resolveContainerPathCandidate(filePath);
-    },
-    decodeText: ({ buffer, absolutePath }: { buffer: Buffer; absolutePath: string }) =>
-      params.bridge.resolvePath({ filePath: absolutePath, cwd: params.root }).hostPath
-        ? decodeWindowsTextFileBuffer({ buffer })
-        : decodeWindowsTextFileBuffer({ buffer, platform: "linux" }),
-    readFile: (absolutePath: string) =>
-      params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
-    access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
-    detectImageMimeType: async (absolutePath: string, buffer: Buffer) => {
-      const mime = await detectMime({ buffer, filePath: absolutePath });
-      return mime?.startsWith("image/") ? mime : undefined;
-    },
-  } as const;
-}
-
-function createSandboxMutationOperations(params: SandboxToolParams) {
-  return withMemoryWriteProvenance(
-    {
-      resolveQueueKey: (absolutePath: string, signal?: AbortSignal) =>
-        resolveSandboxFileQueueKey(params, absolutePath, signal),
-      writeFile: async (absolutePath: string, content: string) => {
-        await params.bridge.writeFile({
-          filePath: absolutePath,
-          cwd: params.root,
-          data: content,
-          mkdir: true,
-          signal: params.abortSignal,
-        });
-      },
-      readFile: (absolutePath: string) =>
-        params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
-      statFile: (absolutePath: string) =>
-        params.bridge.stat({ filePath: absolutePath, cwd: params.root }),
-      access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
-    } as const,
-    params.memoryWriteProvenance,
-  );
-}
-
-async function resolveSandboxFileQueueKey(
-  params: SandboxToolParams,
-  absolutePath: string,
-  signal?: AbortSignal,
-) {
-  return await resolveSandboxFileMutationQueueKey({
-    bridge: params.bridge,
-    root: params.root,
-    filePath: absolutePath,
-    cwd: params.root,
-    signal,
-  });
-}
-
-async function assertSandboxFileExists(params: SandboxToolParams, absolutePath: string) {
-  const stat = await params.bridge.stat({ filePath: absolutePath, cwd: params.root });
-  if (!stat) {
-    throw createFsAccessError("ENOENT", absolutePath);
-  }
-  if (stat.type === "directory") {
-    throw createFsAccessError("EISDIR", absolutePath);
-  }
-}
-
 function resolveHostPath(filePath: string): string {
   return path.resolve(expandOsHomePrefix(filePath));
 }
@@ -1350,9 +1052,4 @@ function createHostMutationOperations(
   );
 }
 
-function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoException {
-  const error = new Error(`Sandbox FS error (${code}): ${filePath}`) as NodeJS.ErrnoException;
-  error.code = code;
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

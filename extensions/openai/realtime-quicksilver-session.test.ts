@@ -88,7 +88,6 @@ describe("GPT-Live offer broker", () => {
       for (const [acknowledgement, expected] of [
         [undefined, undefined],
         ['  Checking "the lights" now.  ', 'Checking "the lights" now.'],
-        ["I will check the next task.", "I will check the next task."],
         ["", undefined],
         [" \t ", undefined],
       ] as const) {

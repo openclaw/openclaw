@@ -32,13 +32,7 @@ to choose the appropriate access method.
 
 ## Talk acknowledgment
 
-For GPT-Live Talk sessions with Gateway-owned agent delegation, set
-`talk.realtime.providers.openai.acknowledgement` to a fixed launch phrase:
-
-```bash
-openclaw config set talk.realtime.providers.openai.acknowledgement "One moment."
-```
-
-An unset or blank value keeps the default natural acknowledgment. Start a new
-Talk session to use a changed phrase. See [Talk realtime sessions](https://docs.openclaw.ai/nodes/talk/realtime-sessions)
-for transport coverage, configuration reload behavior, and limitations.
+GPT-Live supports an optional fixed launch phrase via
+`talk.realtime.providers.openai.acknowledgement`; unset or blank retains natural
+wording. See [Talk realtime sessions](https://docs.openclaw.ai/nodes/talk/realtime-sessions)
+for configuration and scope.

@@ -510,14 +510,19 @@ it("scopes relative metadata roots to the current working directory", () => {
   });
   const firstDirectory = file("first");
   const secondDirectory = file("second");
-  const cwd = vi.spyOn(process, "cwd").mockReturnValue(firstDirectory);
-  const first = readFile("plugin", "package.json");
-  cwd.mockReturnValue(secondDirectory);
-  const second = readFile("plugin", "package.json");
-  expect(first.ok && first.contents.toString()).toBe('{"name":"first"}');
-  expect(second.ok && second.contents.toString()).toBe('{"name":"second"}');
-  cwd.mockReturnValue(firstDirectory);
-  expect(readFile("plugin", "package.json")).toBe(first);
+  const originalCwd = process.cwd();
+  process.chdir(firstDirectory);
+  try {
+    const first = readFile("plugin", "package.json");
+    process.chdir(secondDirectory);
+    const second = readFile("plugin", "package.json");
+    expect(first.ok && first.contents.toString()).toBe('{"name":"first"}');
+    expect(second.ok && second.contents.toString()).toBe('{"name":"second"}');
+    process.chdir(firstDirectory);
+    expect(readFile("plugin", "package.json")).toBe(first);
+  } finally {
+    process.chdir(originalCwd);
+  }
 });
 
 it("keeps checked source aliases authoritative within their explicit cache generation", () => {

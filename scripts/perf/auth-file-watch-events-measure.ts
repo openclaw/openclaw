@@ -58,7 +58,7 @@ const ownerUrl = values.owner
   ? pathToFileURL(path.resolve(values.owner)).href
   : new URL("../../src/agents/auth-profiles/file-state.ts", import.meta.url).href;
 const {
-  captureAuthProfileFileIdentity,
+  captureAuthProfileFileIdentityAsync,
   authProfileFileChanges,
 }: typeof import("../../src/agents/auth-profiles/file-state.js") = await import(ownerUrl);
 const { closeOpenClawStateDatabaseAsync } =
@@ -95,7 +95,7 @@ try {
     for (let identity = 0; identity < identities; identity++) {
       const databasePath = path.join(directory, `database-${identity}.sqlite`);
       fs.writeFileSync(databasePath, "synthetic identity fixture");
-      captureAuthProfileFileIdentity(databasePath).assertCurrent();
+      (await captureAuthProfileFileIdentityAsync(databasePath)).assertCurrent();
     }
   }
 } finally {

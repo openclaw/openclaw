@@ -108,6 +108,7 @@ export function PluginArtTile(props: ArtTileProps): JSX.Element {
     currentImage().state.status === "failed" ? undefined : currentImage().state.source;
   const pending = () =>
     source() ? currentImage().state.status === "loading" : Boolean(props.loading);
+  // Compact prompt icons keep their CSS surface; full art tiles own their gradient.
   const className = () => props.class ?? "plugins-tile";
   const settle = (url: string, status: "ready" | "failed") => {
     const image = currentImage();
@@ -150,10 +151,11 @@ export function PluginArtTile(props: ArtTileProps): JSX.Element {
         <span
           class={[className(), `${className()}--fallback`]}
           data-plugin-icon-id={slug()}
-          style={{
-            "--plugins-art-a": gradient()[0],
-            "--plugins-art-b": gradient()[1],
-          }}
+          style={
+            className() === "plugins-tile"
+              ? { background: `linear-gradient(135deg, ${gradient()[0]}, ${gradient()[1]})` }
+              : undefined
+          }
           aria-hidden="true"
         >
           {monogram() ? <span>{monogram()}</span> : <Icon name="plug" />}

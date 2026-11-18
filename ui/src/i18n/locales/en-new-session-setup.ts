@@ -28,7 +28,6 @@ const enNewSessionSetup = {
     requiredWorkerUnavailable: runtime.requiredWorkerUnavailable,
     requiredWorkerChanged: runtime.requiredWorkerChanged,
     title: en.newSession.title,
-    hint: en.newSession.hint,
     environments: "Devices",
     gateway: "This computer",
     cloudWorkerMachine: "{profile} · {machine}",
@@ -143,16 +142,16 @@ const enNewSessionSetup = {
     worktreeName: "Name",
     worktreeNamePlaceholder: "From session title",
     worktreeBranchNote: "Creates branch {branch} in a separate checkout.",
-    worktreeBranchFromTitleNote: "Uses the session title if blank.",
     worktreeNameInvalid: "Use lowercase letters, digits, and dashes.",
     draft: "Draft",
     draftDescription: "Keep this session to yourself until you publish it",
     draftUnavailable:
       "Draft creation is disabled. Your message and attachments have been kept. Turn off Draft to create a Shared session, or ask an administrator to enable Draft creation.",
-    messagePlaceholder: "What should this session work on?",
+    messagePlaceholder: "Ask me anything, or hand me something to do",
     dictate: "Dictate",
     readingAttachment: "Reading attachment",
     start: "Start session",
+    backgroundSend: "Background",
     created: "Session created",
     startInTerminal: "Start in terminal",
     nativeTerminalHint:
@@ -162,7 +161,7 @@ const enNewSessionSetup = {
     chooseNativeHost: "Choose a device for the native CLI",
     nativeHostsUnavailable:
       "No native CLI is available. Install it on this computer or connect a device with CLI access, then reconnect to the Gateway.",
-    nativeTerminalPrompt: "Optional initial prompt for the native CLI",
+    nativeTerminalPrompt: "What should the CLI agent do first? (optional)",
     terminalNodeFolder: "Existing absolute folder on this device",
     terminalAttachmentsUnsupported:
       "Remove attachments before starting a native CLI. Add files from the terminal after it opens.",
@@ -200,7 +199,7 @@ const enNewSessionSetup = {
     searchProjects: "Search projects",
     githubProjects: "GitHub",
     githubTokenHint:
-      "No GitHub account is configured for the Control UI or Gateway. Only public GitHub results are shown.",
+      "No GitHub account is configured for the web app or Gateway. Only public GitHub results are shown.",
     cloneProject: "Clone",
     recentFolders: "Recent",
     what: "What",

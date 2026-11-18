@@ -76,6 +76,8 @@ const enModelControls = {
       searchModels: "Search models",
       noMatchingModels: "No models match your search",
       runsOn: "Runs on",
+      cooldown: "Cooldown {time}",
+      cooldownStatus: "Cooling down",
       configureModels: "Configure models",
       selectionScopeSessionLabel: "This session",
       selectionScopeAgentLabel: "Agent default",

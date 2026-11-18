@@ -242,7 +242,7 @@ function parseBackupManifestPostgresAnchors(value: unknown): BackupManifestPostg
       typeof anchor.storeId !== "string" ||
       !anchor.storeId.trim() ||
       typeof anchor.namespace !== "string" ||
-      !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(anchor.namespace)
+      !/^[a-zA-Z_][a-zA-Z0-9_-]*$/.test(anchor.namespace)
     ) {
       throw new Error("Backup manifest contains an invalid PostgreSQL anchor.");
     }

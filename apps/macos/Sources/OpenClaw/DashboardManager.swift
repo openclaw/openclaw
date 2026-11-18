@@ -336,9 +336,9 @@ final class DashboardManager {
             guard self.endpointGeneration == generation else { return }
             for controller in currentControllers() {
                 controller.showFailure(
-                    title: "Dashboard unavailable",
+                    title: "OpenClaw unavailable",
                     message: error.localizedDescription,
-                    detail: "Reconnect to the Gateway to verify its dashboard sign-in address.",
+                    detail: "Reconnect to the Gateway to verify its sign-in address.",
                     present: false)
             }
             return
@@ -382,6 +382,7 @@ final class DashboardManager {
     }
 
     private func replaceWithRouteFailure(_ current: DashboardWindowController) {
+        if self.showRemovalIfNeeded(in: current, present: false) { return }
         guard current.currentURL != Self.failureURL || current.auth.hasCredential else { return }
         let replacement = self.replaceWindowController(
             current,
@@ -394,7 +395,7 @@ final class DashboardManager {
             target: .primary,
             present: false)
         replacement?.showFailure(
-            title: "Dashboard reconnecting",
+            title: "Reconnecting",
             message: "The selected Gateway changed.",
             detail: "Waiting for a fresh authenticated connection.",
             present: false,
@@ -630,7 +631,7 @@ final class DashboardManager {
             return .success(())
         } catch {
             if reportErrors, isCurrent(), !(error is CancellationError) {
-                self.presentGatewayError(error, title: "Could Not Open Dashboard", over: currentSource()?.window)
+                self.presentGatewayError(error, title: "Could Not Open OpenClaw", over: currentSource()?.window)
             }
             return .failure(error)
         }
@@ -655,6 +656,7 @@ final class DashboardManager {
         // Keep observing while the failure page is up so a recovered tunnel
         // swaps the window back to the live dashboard.
         self.observeEndpointChanges()
+        if self.showRemovalIfNeeded(in: controller, present: true) { return }
         controller.showFailure(title: copy.title, message: copy.message, detail: copy.detail)
     }
 

@@ -19,9 +19,12 @@ export {
   stripCompactionReplayCheckpointInPlace,
 } from "./provider-compaction-checkpoint.js";
 
-export { CompactionReplayRefreshRequiredError } from "./openai-responses-compaction-replay.js";
+export {
+  CompactionReplayRefreshRequiredError,
+  readOpenAIResponsesItemRecoveryAnchor,
+} from "./openai-responses-compaction-replay.js";
 
-type ReplayIdentity = { sessionId?: string; authProfileId?: string; enabled?: boolean };
+type ReplayIdentity = { sessionId?: string; enabled?: boolean };
 type ReplayMessage = { role: string };
 type ReplayPressureEstimator = {
   text(value: string): number;
@@ -62,7 +65,9 @@ function resolveCompactionSource<T extends ReplayMessage>(
   const selected = (() => {
     if (OPENAI_RESPONSES_APIS.has(model.api)) {
       const responses = resolveNewestOpenAIResponsesCompactionReplay(assistants, model, identity);
-      return responses ? { family: "responses" as const, ...responses } : undefined;
+      return responses && responses.mode !== "item-recovery"
+        ? { family: "responses" as const, ...responses }
+        : undefined;
     }
     if (identity.enabled !== true) {
       return undefined;

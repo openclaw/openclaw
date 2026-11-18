@@ -1,3 +1,5 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
 import { readToolResultStatus, resolveToolResultFailureKind } from "./tool-result-error.js";
 
 export const TOOL_USAGE_HALF_LIFE_MS = 14 * 24 * 60 * 60 * 1000;
@@ -78,7 +80,36 @@ export function isToolUsageWrapper(name: string): boolean {
   return wrappers.has(name);
 }
 
-/** Names resolve only when unique; exact catalog IDs never depend on catalog order. */
+const MCP_TOOL_USAGE_ID_RE = /^mcp:([A-Za-z0-9_-]{1,64}):([A-Za-z0-9_-]{1,128})$/u;
+
+/** The bare tool name of a self-describing `mcp:<server>:<tool>` catalog ID. */
+export function readMcpToolUsageIdName(id: string): string | undefined {
+  return MCP_TOOL_USAGE_ID_RE.exec(id)?.[2];
+}
+
+/**
+ * History records MCP calls by bare name; the result's `mcpServer` detail, set by
+ * OpenClaw's MCP runtime, names the server. Accepted edge case: a server whose
+ * safe name needed a collision suffix does not match and stays uncounted.
+ */
+function resolveMcpToolUsageId(name: string, result: unknown): string | undefined {
+  const details = asOptionalRecord(asOptionalRecord(result)?.details);
+  if (typeof details?.mcpServer !== "string") {
+    return undefined;
+  }
+  const server = sanitizeServerName(details.mcpServer, new Set());
+  const id = `mcp:${server}:${name}`;
+  return name.startsWith(`${server}${TOOL_NAME_SEPARATOR}`) && MCP_TOOL_USAGE_ID_RE.test(id)
+    ? id
+    : undefined;
+}
+
+/**
+ * Names resolve only when unique; exact catalog IDs never depend on catalog order.
+ * Exact MCP IDs name their own server, so they resolve without a live MCP catalog.
+ * A bare name resolves from its MCP result evidence; when that evidence contradicts
+ * a catalog owner of the same name, the call stays uncounted.
+ */
 export function createToolUsageCatalogResolver(catalog: readonly ToolUsageCatalogEntry[]) {
   const ids = new Set<string>();
   const names = new Map<string, string | null>();
@@ -86,7 +117,7 @@ export function createToolUsageCatalogResolver(catalog: readonly ToolUsageCatalo
     if (isToolUsageWrapper(entry.name)) {
       continue;
     }
-    const eligible = entry.id.startsWith("openclaw:");
+    const eligible = entry.id.startsWith("openclaw:") || entry.id.startsWith("mcp:");
     if (eligible) {
       ids.add(entry.id);
     }
@@ -95,6 +126,15 @@ export function createToolUsageCatalogResolver(catalog: readonly ToolUsageCatalo
       !eligible || (names.has(entry.name) && names.get(entry.name) !== entry.id) ? null : entry.id,
     );
   }
-  return (idOrName: string): string | undefined =>
-    ids.has(idOrName) ? idOrName : (names.get(idOrName) ?? undefined);
+  return (idOrName: string, result?: unknown): string | undefined => {
+    if (ids.has(idOrName) || readMcpToolUsageIdName(idOrName) !== undefined) {
+      return idOrName;
+    }
+    const mcpId = resolveMcpToolUsageId(idOrName, result);
+    if (!names.has(idOrName)) {
+      return mcpId;
+    }
+    const known = names.get(idOrName) ?? undefined;
+    return mcpId && known !== mcpId ? undefined : known;
+  };
 }

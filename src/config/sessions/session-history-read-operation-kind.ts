@@ -1,6 +1,8 @@
 import type { SessionTranscriptWorkerInput } from "./session-transcript-worker.types.js";
 
 const historyReadKinds = [
+  "transcript-facts-discover",
+  "transcript-facts-probe",
   "agent-tool-usage",
   "agent-tool-usage-import",
   "trajectory-events",

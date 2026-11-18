@@ -11,6 +11,11 @@ extension OnboardingView {
         return task
     }
 
+    func beginOpenClawIDSignIn() {
+        self.openClawID.begin(.connect)
+        self.showOpenClawID = true
+    }
+
     func selectLocalGateway() {
         if state.connectionMode != .local {
             resetGatewayBoundAIState()

@@ -130,7 +130,7 @@ it("preserves model-unavailable guidance from the canonical reason", () => {
   expect(classifyProviderRequestFacets({ message })).toBeNull();
   expect(classifyReplyRequest({ message })).toMatchObject({
     code: "provider_model_unavailable",
-    userMessage: expect.stringContaining("Choose another model in the Control UI"),
+    userMessage: expect.stringContaining("Choose another model in the OpenClaw app"),
   });
 });
 

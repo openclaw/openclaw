@@ -1,11 +1,13 @@
 // Real watch owner on a synthetic workspace; bundle owner + helper siblings first.
 // node --expose-gc directory-watch-main-thread-measure.mjs --root /fixture --seed
 // node --expose-gc directory-watch-main-thread-measure.mjs --root /fixture \
-//   --owner /candidate/directory-watch-host.mjs --hosted [--allocations]
+//   --owner /candidate/directory-watch-host.mjs --hosted [--counts | --allocations]
 // Bundle all three src/infra/directory-watch-{host,host.worker,parent.worker}.ts
 // entrypoints with esbuild --bundle --platform=node --format=esm and
 // --out-extension:.js=.mjs --outdir=<owner-directory> on each pinned revision.
 // --interval-ms 1000 gives a 60-second event window; default 0 measures a burst.
+// Run counts, timing (default), and sampled allocation in separate processes.
+// Only counts mode patches fs; timing and allocation restore spawn after warmup.
 // Warm helper admission and 60 actual file edits. Counts are JS fs API calls,
 // including Node's Linux recursive fallback, not direct-native system calls.
 // The fixture has 62,000 files / 1.116 GB; 1,350 are under 135 skill directories.
@@ -25,6 +27,7 @@ const { values } = parseArgs({
     owner: { type: "string" },
     seed: { type: "boolean" },
     hosted: { type: "boolean" },
+    counts: { type: "boolean" },
     allocations: { type: "boolean" },
     events: { type: "string", default: "60" },
     "interval-ms": { type: "string", default: "0" },
@@ -58,6 +61,8 @@ if (values.seed) {
   process.exit(0);
 }
 assert(values.owner && global.gc);
+assert(!(values.counts && values.allocations), "Choose counts or allocation mode, not both");
+const mode = values.counts ? "counts" : values.allocations ? "allocation" : "timing";
 assert.equal(
   process.platform,
   "linux",
@@ -73,7 +78,6 @@ childProcess.spawn = (...args) => {
   return child;
 };
 syncBuiltinESMExports();
-const { watchDirectory } = await import(pathToFileURL(path.resolve(values.owner)).href);
 const keeper = setTimeout(
   () => {
     throw new Error("Watch measurement deadline exceeded");
@@ -81,9 +85,17 @@ const keeper = setTimeout(
   30000 + Number(values.events) * intervalMs,
 );
 const anchorReady = Promise.withResolvers();
-const anchor = watchDirectory(path.join(root, "anchor"), () => anchorReady.resolve());
-if (values.hosted) {
-  await anchorReady.promise;
+let watchDirectory;
+let anchor;
+try {
+  ({ watchDirectory } = await import(pathToFileURL(path.resolve(values.owner)).href));
+  anchor = watchDirectory(path.join(root, "anchor"), () => anchorReady.resolve());
+  if (values.hosted) {
+    await anchorReady.promise;
+  }
+} finally {
+  childProcess.spawn = spawn;
+  syncBuiltinESMExports();
 }
 const readChildCpu = async () => {
   let ticks = 0;
@@ -96,119 +108,137 @@ const readChildCpu = async () => {
   return ticks * 10; // Linux fixture CLK_TCK is 100, verified with getconf.
 };
 const counters = {};
-for (const name of [
-  "accessSync",
-  "existsSync",
-  "statSync",
-  "lstatSync",
-  "fstatSync",
-  "readdirSync",
-  "openSync",
-  "closeSync",
-  "readFileSync",
-  "readlinkSync",
-  "realpathSync",
-]) {
-  const original = fs[name];
-  const wrapped = (...args) => {
-    counters[name] = (counters[name] ?? 0) + 1;
-    return original(...args);
-  };
-  if (original.native) {
-    wrapped.native = (...args) => {
-      counters[`${name}.native`] = (counters[`${name}.native`] ?? 0) + 1;
-      return original.native(...args);
+const originalFs = new Map();
+if (values.counts) {
+  for (const name of [
+    "accessSync",
+    "existsSync",
+    "statSync",
+    "lstatSync",
+    "fstatSync",
+    "readdirSync",
+    "openSync",
+    "closeSync",
+    "readFileSync",
+    "readlinkSync",
+    "realpathSync",
+  ]) {
+    const original = fs[name];
+    originalFs.set(name, original);
+    const wrapped = (...args) => {
+      counters[name] = (counters[name] ?? 0) + 1;
+      return original(...args);
     };
+    if (original.native) {
+      wrapped.native = (...args) => {
+        counters[`${name}.native`] = (counters[`${name}.native`] ?? 0) + 1;
+        return original.native(...args);
+      };
+    }
+    fs[name] = wrapped;
   }
-  fs[name] = wrapped;
+  syncBuiltinESMExports();
 }
-syncBuiltinESMExports();
-const inspector = new Session();
-inspector.connect();
-const sum = (n) => n.selfSize + n.children.reduce((total, child) => total + sum(child), 0);
-global.gc();
-if (values.allocations) {
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 512,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
-}
-const ready = Promise.withResolvers();
-let event;
-const baselineChildCpu = values.hosted ? await readChildCpu() : 0;
-const startCpu = process.threadCpuUsage(),
-  start = performance.now();
-const watch = watchDirectory(
-  skills,
-  (kind, filename) => {
-    if (filename === undefined) {
-      ready.resolve();
-    }
-    if (event && filename === event.filename) {
-      event.resolve();
-    }
-  },
-  true,
-);
-const dispatchMs = performance.now() - start;
-const dispatchCpu = process.threadCpuUsage(startCpu);
-if (values.hosted) {
-  await ready.promise;
-}
-const admissionMs = performance.now() - start;
-const admissionCpu = process.threadCpuUsage(startCpu);
-const admissionCalls = { ...counters };
-for (const key of Object.keys(counters)) {
-  delete counters[key];
-}
-const eventCpu = process.threadCpuUsage(),
-  eventStart = performance.now();
-for (let i = 0; i < Number(values.events); i++) {
-  if (intervalMs) {
-    await delay(Math.max(0, (i + 1) * intervalMs - (performance.now() - eventStart)));
+const inspector = values.allocations ? new Session() : undefined;
+inspector?.connect();
+let watch;
+let output;
+try {
+  const sum = (n) => n.selfSize + n.children.reduce((total, child) => total + sum(child), 0);
+  global.gc();
+  if (inspector) {
+    await inspector.post("HeapProfiler.startSampling", {
+      samplingInterval: 512,
+      includeObjectsCollectedByMajorGC: true,
+      includeObjectsCollectedByMinorGC: true,
+    });
   }
-  const index = (i % 135) * 10;
-  const filename = path.join(`skill-${Math.floor(index / 10)}`, `file-${index}.txt`);
-  event = { ...Promise.withResolvers(), filename };
-  await fs.promises.appendFile(path.join(skills, filename), "x");
-  await event.promise;
-}
-const eventMs = performance.now() - eventStart;
-const eventCpuUsed = process.threadCpuUsage(eventCpu);
-const eventCalls = { ...counters };
-const allocated = values.allocations
-  ? sum((await inspector.post("HeapProfiler.stopSampling")).profile.head)
-  : null;
-const helperCpuMs = values.hosted ? (await readChildCpu()) - baselineChildCpu : null;
-const output = {
-  node: process.version,
-  platform: process.platform,
-  load: os.loadavg(),
-  hosted: Boolean(values.hosted),
-  events: Number(values.events),
-  admissionMs,
-  dispatchMs,
-  dispatchCpuMs: (dispatchCpu.user + dispatchCpu.system) / 1000,
-  admissionCpuMs: (admissionCpu.user + admissionCpu.system) / 1000,
-  admissionCalls,
-  eventMs,
-  eventCpuMs: (eventCpuUsed.user + eventCpuUsed.system) / 1000,
-  eventCalls,
-  allocated,
-  helperCpuMs,
-};
-watch.close();
-anchor.close();
-inspector.disconnect();
-for (const child of children) {
-  await new Promise((resolve) => {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      resolve();
-    } else {
-      child.once("exit", resolve);
+  const ready = Promise.withResolvers();
+  let event;
+  const baselineChildCpu = values.hosted && mode === "timing" ? await readChildCpu() : 0;
+  const startCpu = process.threadCpuUsage(),
+    start = performance.now();
+  watch = watchDirectory(
+    skills,
+    (kind, filename) => {
+      if (filename === undefined) {
+        ready.resolve();
+      }
+      if (event && filename === event.filename) {
+        event.resolve();
+      }
+    },
+    true,
+  );
+  const dispatchMs = performance.now() - start;
+  const dispatchCpu = process.threadCpuUsage(startCpu);
+  if (values.hosted) {
+    await ready.promise;
+  }
+  const admissionMs = performance.now() - start;
+  const admissionCpu = process.threadCpuUsage(startCpu);
+  const admissionCalls = { ...counters };
+  for (const key of Object.keys(counters)) {
+    delete counters[key];
+  }
+  const eventCpu = process.threadCpuUsage(),
+    eventStart = performance.now();
+  for (let i = 0; i < Number(values.events); i++) {
+    if (intervalMs) {
+      await delay(Math.max(0, (i + 1) * intervalMs - (performance.now() - eventStart)));
     }
-  });
+    const index = (i % 135) * 10;
+    const filename = path.join(`skill-${Math.floor(index / 10)}`, `file-${index}.txt`);
+    event = { ...Promise.withResolvers(), filename };
+    await fs.promises.appendFile(path.join(skills, filename), "x");
+    await event.promise;
+  }
+  const eventMs = performance.now() - eventStart;
+  const eventCpuUsed = process.threadCpuUsage(eventCpu);
+  const eventCalls = { ...counters };
+  const allocated = inspector
+    ? sum((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+    : null;
+  const helperCpuMs =
+    values.hosted && mode === "timing" ? (await readChildCpu()) - baselineChildCpu : null;
+  output = {
+    mode,
+    fsProbes: Boolean(values.counts),
+    node: process.version,
+    platform: process.platform,
+    load: os.loadavg(),
+    hosted: Boolean(values.hosted),
+    events: Number(values.events),
+    admissionMs: mode === "timing" ? admissionMs : null,
+    dispatchMs: mode === "timing" ? dispatchMs : null,
+    dispatchCpuMs: mode === "timing" ? (dispatchCpu.user + dispatchCpu.system) / 1000 : null,
+    admissionCpuMs: mode === "timing" ? (admissionCpu.user + admissionCpu.system) / 1000 : null,
+    admissionCalls: values.counts ? admissionCalls : null,
+    eventMs: mode === "allocation" ? null : eventMs,
+    eventCpuMs: mode === "timing" ? (eventCpuUsed.user + eventCpuUsed.system) / 1000 : null,
+    eventCalls: values.counts ? eventCalls : null,
+    allocated,
+    helperCpuMs,
+  };
+} finally {
+  for (const [name, original] of originalFs) {
+    fs[name] = original;
+  }
+  if (values.counts) {
+    syncBuiltinESMExports();
+  }
+  watch?.close();
+  anchor.close();
+  inspector?.disconnect();
+  for (const child of children) {
+    await new Promise((resolve) => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        resolve();
+      } else {
+        child.once("exit", resolve);
+      }
+    });
+  }
+  clearTimeout(keeper);
 }
-clearTimeout(keeper);
 console.log(JSON.stringify(output));

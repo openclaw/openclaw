@@ -6,7 +6,7 @@ import {
   resolveTelegramMessageThreadSpec,
   withResolvedTelegramForumFlag,
 } from "./bot/helpers.js";
-import { adoptTelegramDmTopicMessage, createTelegramDmTopicAdoptState } from "./dm-topic-adopt.js";
+import { adoptTelegramDmTopicUpdate, createTelegramDmTopicAdoptState } from "./dm-topic-adopt.js";
 
 describe("resolveTelegramMessageThreadSpec client-created DM topics", () => {
   const chat = { id: 1001, type: "private" };
@@ -25,9 +25,9 @@ describe("resolveTelegramMessageThreadSpec client-created DM topics", () => {
 
   it("keeps the adopted topic on normalized message copies but not in serialized JSON", () => {
     const state = createTelegramDmTopicAdoptState();
-    adoptTelegramDmTopicMessage(topicCreated, state);
+    adoptTelegramDmTopicUpdate({ message: topicCreated }, state);
     const message = rootMessage();
-    expect(adoptTelegramDmTopicMessage(message, state)).toBe(500);
+    expect(adoptTelegramDmTopicUpdate({ message }, state)).toBe(500);
     // Inbound normalization spreads a private message without `is_forum` into a copy.
     const normalized = withResolvedTelegramForumFlag(message, false);
     expect(normalized).not.toBe(message);

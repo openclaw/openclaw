@@ -8,7 +8,6 @@ import { Menu } from "./menu.tsx";
 import "../../styles.css";
 import "../../styles/session-menu.css";
 import "../../styles/command-palette.css";
-import "../../styles/chat/composer.css";
 import "../../styles/chat/side-panel.css";
 import "../kbd.css";
 
@@ -60,16 +59,10 @@ it.each([
         <div class="cmd-palette__create">
           <Kbd keys="⏎" />
         </div>
-        <div class="cmd-palette__footer">
-          <Kbd keys={["↑", "↓"]} />
-        </div>
         <div class="sidebar-region--desktop">
           <div class="side-panel-launcher__item">
             <Kbd keys="B" />
           </div>
-        </div>
-        <div class="chat-controls__model-option-action">
-          <Kbd keys="2" />
         </div>
       </>
     ));
@@ -85,12 +78,7 @@ it.each([
     expect(Number.parseFloat(reference.paddingInlineStart)).toBeGreaterThan(0);
     for (const badge of view.container.querySelectorAll("kbd")) {
       const style = getComputedStyle(badge);
-      if (badge.closest(".chat-controls__model-option-action")) {
-        // Model digits use a flat skin but keep the shared shortcut font owner.
-        expect(style.fontFamily).toBe(reference.fontFamily);
-      } else {
-        expect(skin(style), badge.outerHTML).toEqual(skin(reference));
-      }
+      expect(skin(style), badge.outerHTML).toEqual(skin(reference));
     }
     const hints = [...surface("badge-pattern").querySelectorAll("kbd")];
     const edge = dir === "rtl" ? "left" : "right";

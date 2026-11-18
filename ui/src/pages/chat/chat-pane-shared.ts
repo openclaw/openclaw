@@ -192,6 +192,42 @@ function openDropdownOwnsKey(root: HTMLElement, key: string): boolean {
   );
 }
 
+/**
+ * Escape anywhere in the visible pane stops its run, as it does in the composer.
+ * Callers listen on window, after the event bubbles past every element and document
+ * owner, so menus, fields, panels and replies keep Escape.
+ */
+export function stopChatRunFromEscape(
+  root: HTMLElement,
+  event: KeyboardEvent,
+  stopRun: (() => boolean) | null,
+): void {
+  const doc = root.ownerDocument;
+  const target = event.target;
+  if (
+    event.key !== "Escape" ||
+    event.defaultPrevented ||
+    event.isComposing ||
+    event.keyCode === 229 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.altKey ||
+    event.shiftKey ||
+    // A reload or a closed panel leaves focus on the page itself.
+    !(target === doc.body || (target instanceof Node && root.contains(target))) ||
+    openDropdownOwnsKey(root, event.key) ||
+    registryFor(doc).stack.length > 0 ||
+    keyboardEventPathHasInteractiveTarget(event) ||
+    root.closest("[inert]") ||
+    hasModalSurface(doc)
+  ) {
+    return;
+  }
+  if (stopRun?.()) {
+    event.preventDefault();
+  }
+}
+
 export function focusChatComposerFromKeydown(
   root: HTMLElement,
   event: KeyboardEvent,
