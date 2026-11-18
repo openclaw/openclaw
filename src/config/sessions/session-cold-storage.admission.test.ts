@@ -58,47 +58,52 @@ it("bounds restore reservations and lets a foreground writer finish before hot p
         ) {
           return originalWorker(params);
         }
-        let inAdmission: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
         return originalWorker({
           ...params,
           withWriteAdmission: (run, diagnostics, operation) =>
             params.withWriteAdmission(
               async (refusal) => {
-                inAdmission = AsyncLocalStorage.snapshot();
                 const started = performance.now();
                 try {
                   return await run(refusal);
                 } finally {
                   holds.push(performance.now() - started);
+                  if (
+                    writes.length === 0 &&
+                    readSessionColdTranscript(fixture.database(), historicalId) &&
+                    fixture
+                      .database()
+                      .prepare(
+                        "SELECT event_json IS NOT NULL OR event_zstd IS NOT NULL AS restored FROM transcript_events WHERE session_id=? AND seq=0",
+                      )
+                      .get(historicalId)?.restored === 1
+                  ) {
+                    const write = withOpenClawAgentDatabaseWrite(
+                      fixture.options,
+                      () => {
+                        foregroundSawCold = Boolean(
+                          readSessionColdTranscript(fixture.database(), historicalId),
+                        );
+                        const trace = createTrajectoryEvent({
+                          type: "restore-interleave",
+                          sessionId: currentId,
+                          seq: 0,
+                        });
+                        appendSqliteTrajectoryRuntimeEvents(
+                          { ...fixture.scope, sessionId: currentId },
+                          [trace],
+                        );
+                      },
+                      fixture.database(),
+                    );
+                    void write.catch(() => {});
+                    writes.push(write);
+                  }
                 }
               },
               diagnostics,
               operation,
             ),
-          onCommitRequest: () => {
-            inAdmission!(() => {
-              const write = withOpenClawAgentDatabaseWrite(
-                fixture.options,
-                () => {
-                  foregroundSawCold = Boolean(
-                    readSessionColdTranscript(fixture.database(), historicalId),
-                  );
-                  const trace = createTrajectoryEvent({
-                    type: "restore-interleave",
-                    sessionId: currentId,
-                    seq: 0,
-                  });
-                  appendSqliteTrajectoryRuntimeEvents({ ...fixture.scope, sessionId: currentId }, [
-                    trace,
-                  ]);
-                },
-                fixture.database(),
-              );
-              void write.catch(() => {});
-              writes.push(write);
-            });
-            params.onCommitRequest();
-          },
         });
       },
     );

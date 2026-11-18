@@ -461,8 +461,7 @@ export function mutateSessionColdTranscriptInWorker(
         });
         if (!result.restored) {
           result.restorePending = true;
-          onCommit(database, sourceValidation);
-          sourceGuard?.assertForeign();
+          // Provisional batches stay cold; the commit grant belongs to final publication.
           return result;
         }
         result.sessionKey = executeSqliteQueryTakeFirstSync(

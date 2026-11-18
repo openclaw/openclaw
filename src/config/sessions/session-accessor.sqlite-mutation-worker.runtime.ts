@@ -162,29 +162,25 @@ async function runColdMutationWorker(
   let result: SessionColdMutationResult;
   let validation: OpenClawAgentDatabaseValidation | undefined;
   let transactionDatabase: EngineConnection | undefined;
-  let accepted = false;
   const onCommit: Parameters<typeof mutateSessionColdTranscriptInWorker>[2] = (
     database,
     sourceValidation,
   ) => {
     transactionDatabase = database.db;
-    if (!accepted) {
-      // Native admission can service the grant before its message arrives.
-      for (const { index, matches } of data.sourceMatches ?? []) {
-        const match = sourceValidation?.conversationMatches.find((value) => value.index === index);
-        if (!match) {
-          throw new Error("Cold restoration omitted its source alternatives");
-        }
-        for (const alternative of match.alternatives) {
-          Atomics.store(matches, alternative + 1, 1);
-        }
-        Atomics.store(matches, 0, 1);
+    // Native admission can service the grant before its message arrives.
+    for (const { index, matches } of data.sourceMatches ?? []) {
+      const match = sourceValidation?.conversationMatches.find((value) => value.index === index);
+      if (!match) {
+        throw new Error("Cold restoration omitted its source alternatives");
       }
-      waitForSqliteReclamationCommit(commitGate, () =>
-        port.postMessage({ type: "commit-request", operationId }),
-      );
-      accepted = true;
+      for (const alternative of match.alternatives) {
+        Atomics.store(matches, alternative + 1, 1);
+      }
+      Atomics.store(matches, 0, 1);
     }
+    waitForSqliteReclamationCommit(commitGate, () =>
+      port.postMessage({ type: "commit-request", operationId }),
+    );
     assertPhysicalSource();
     assertSqliteReclamationAuthority(commitGate);
   };
