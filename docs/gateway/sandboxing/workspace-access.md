@@ -336,8 +336,11 @@ are unchanged and no recovery is pending, its runtimes keep running. Changed or
 interrupted checks return to paused reconciliation; file edits are never applied
 from the live check. Checkpoints after commands and file mutations use the same
 check for the guest workspace: commands that leave accepted files unchanged do
-not pause the sandbox. Changed command checkpoints pause until their files are
-stored in an immutable Git result, then resume before canonical publication.
+not pause the sandbox. Changed command checkpoints prepare file hashes and Git
+blobs while the guest runs, then pause to check the current file inventory and
+identities. Files changed again or too recent for safe reuse are hashed during
+that pause. The guest resumes once an immutable Git result owns the final capture,
+before canonical publication.
 They do not create disposable filesystem snapshots, avoiding snapshot creation
 and recursive retirement after each changed command. Pending recovery retains
 its consistency pause. A container pause does not flush application buffers;
