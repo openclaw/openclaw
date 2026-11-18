@@ -12,8 +12,7 @@ import {
   buildOpenAICodexLiveProviderConfig,
 } from "./test-support/live-catalog.test-support.js";
 
-// mock-isolation: these tests spy on global fetch for the model list; the npm Codex
-// version read is covered by openai-codex-discovery.test.ts.
+// mock-isolation: these tests spy on global fetch for the model list; the npm Codex version read is covered by openai-codex-discovery.test.ts.
 vi.mock("./codex-client-version.js", () => ({
   resolveOpenAICodexClientVersion: async () => "0.1.0",
 }));

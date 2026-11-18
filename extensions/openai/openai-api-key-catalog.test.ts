@@ -4,8 +4,7 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 import discoveryProvider from "./provider-discovery.js";
 import { resolveModelRoutes } from "./provider-policy-api.js";
 
-// mock-isolation: these tests count model-list requests; the npm Codex version read is
-// covered by openai-codex-discovery.test.ts.
+// mock-isolation: these tests count model-list requests; the npm Codex version read is covered by openai-codex-discovery.test.ts.
 vi.mock("./codex-client-version.js", () => ({
   resolveOpenAICodexClientVersion: async () => "0.1.0",
 }));

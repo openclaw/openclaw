@@ -18,8 +18,7 @@ import { registerOpenAIServiceTierCatalogTests } from "./test-support/model-serv
 import { registerOpenAIFailoverTests } from "./test-support/provider-failover.test-support.js";
 import { createOpenAIResponsesTestModel } from "./test-support/responses-model.test-support.js";
 
-// mock-isolation: these tests spy on global fetch for the model list; the npm Codex
-// version read is covered by openai-codex-discovery.test.ts.
+// mock-isolation: these tests spy on global fetch for the model list; the npm Codex version read is covered by openai-codex-discovery.test.ts.
 vi.mock("./codex-client-version.js", () => ({
   resolveOpenAICodexClientVersion: async () => "0.1.0",
 }));
