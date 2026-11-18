@@ -23,7 +23,7 @@ import {
 } from "../worker/node-bundle-install-protocol.js";
 import { sameWorkerBuild } from "../worker/worker-build-identity.js";
 import {
-  readReceipt,
+  readNodeWorkerBundleReceipt,
   validateInstalledBundle,
   verifyBundleArchive,
   publishExpandedBundle,
@@ -593,7 +593,7 @@ export class NodeWorkerBundleInstaller {
             prepared &&
             resolveNodeWorkerBundleDirectory(bundleDir, params.bundleHash) === prepared
           ) {
-            const receipt = await readReceipt(prepared);
+            const receipt = await readNodeWorkerBundleReceipt(prepared);
             if (this.#snapshotStartupOpen && receipt && sameWorkerBuild(receipt, fact.build)) {
               return { bundleHash: params.bundleHash, status: "installed" };
             }
@@ -603,7 +603,7 @@ export class NodeWorkerBundleInstaller {
         }
         this.invalidateSnapshotPreparation();
       }
-      const receipt = await readReceipt(bundleDir);
+      const receipt = await readNodeWorkerBundleReceipt(bundleDir);
       const installed =
         receipt?.bundleHash === params.bundleHash &&
         (await validateInstalledBundle(bundleDir, receipt));

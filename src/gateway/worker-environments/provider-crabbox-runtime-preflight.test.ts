@@ -34,6 +34,7 @@ import { createWorkerRuntimeRefreshWaiter } from "../server-worker-placement-run
 import { result as commandResult } from "./bootstrap.test-support.js";
 import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
 
 const CLASSLESS_PROFILE = {
@@ -195,7 +196,9 @@ describe("Crabbox runtime preflight cleanup", () => {
           }
           expect(options.killGraceMs).toBe(20_000);
           expect(options.timeoutMs).toBeGreaterThan(0);
-          expect(options.timeoutMs).toBeLessThanOrEqual(120_000);
+          // Recovery retains its two-minute lifecycle budget and the admitted
+          // runtime installer receives its separate fifteen-minute allowance.
+          expect(options.timeoutMs).toBeLessThanOrEqual(17 * 60_000);
           if (
             typeof options.input === "string" &&
             options.input.includes("CRABBOX_NODE_RESUME_INSPECT_SCRIPT")
@@ -207,6 +210,13 @@ describe("Crabbox runtime preflight cleanup", () => {
             if (authority === "cancelled") {
               controller.abort();
             }
+            return commandResult();
+          }
+          if (
+            typeof options.input === "string" &&
+            options.input.includes("CRABBOX_NODE_ENROLLMENT_SCRIPT")
+          ) {
+            expect(options.input).toContain("prepare-worker-bundle");
             return commandResult();
           }
           expect(options).toMatchObject({ input: expect.stringContaining("--resume-device") });
@@ -226,7 +236,12 @@ describe("Crabbox runtime preflight cleanup", () => {
           return commandResult();
         },
       );
-      const service = support.createService(await registerProvider());
+      const closeNodeRuntime = vi.fn();
+      const service = support.createService(await registerProvider(), {
+        placementStore: createWorkerSessionPlacementGate(placements),
+        prepareNodeRuntime: async () => support.NODE_RUNTIME_PREPARATION,
+        closeNodeRuntime,
+      });
       const waiter = createWorkerRuntimeRefreshWaiter({
         environments: service,
         isStopping: () => false,
@@ -246,12 +261,13 @@ describe("Crabbox runtime preflight cleanup", () => {
         if (authority === "allowed") {
           await waiting;
           expect(nodeWorkerSupervisorTransport.hasCurrentRunner("node-1")).toBe(true);
-          expect(calls).toEqual(["inspect", "run", "run"]);
+          expect(calls).toEqual(["inspect", "run", "run", "run"]);
         } else {
           await expect(waiting).rejects.toThrow();
           expect(nodeWorkerSupervisorTransport.hasCurrentRunner("node-1")).toBe(false);
           expect(calls).toEqual(["inspect", "run"]);
         }
+        expect(closeNodeRuntime).toHaveBeenCalledOnce();
         expect(store.get(environmentId)).toEqual(admittedEnvironment);
       } finally {
         nodeRegistry.unregister("resumed");
