@@ -64,10 +64,20 @@ export function coerceToolExecutionArguments(
     return args;
   }
   try {
-    return validateToolArguments(
+    const coerced = validateToolArguments(
       { name: tool.name, description: tool.description ?? "", parameters },
       { type: "toolCall", id: tool.name, name: tool.name, arguments: args },
     );
+    // Model-argument cloning omits host-only launch identity and other private custody.
+    return isRecord(coerced)
+      ? Object.defineProperties(
+          {},
+          {
+            ...Object.getOwnPropertyDescriptors(args),
+            ...Object.getOwnPropertyDescriptors(coerced),
+          },
+        )
+      : coerced;
   } catch {
     return args;
   }

@@ -368,6 +368,8 @@ describe("memory actor effect adapters", () => {
         toolOverrides: { webSearch: false },
       });
       expect(delivery.readSessionSettings()).toEqual({
+        sessionId: source.sessionId,
+        lifecycleRevision: undefined,
         permissionMode: "guarded",
         toolOverrides: { webSearch: false },
       });

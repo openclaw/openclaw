@@ -191,7 +191,7 @@ describe("MCP serving registration ownership", () => {
         expect(state.factories).toBe(1);
         expect(scheduler.signal.aborted).toBe(ownership === "standalone");
         expect(scheduler.nextWakeAtMs).toBe(
-          ownership === "standalone" ? null : clock.clock.now() + 30_000,
+          ownership === "standalone" ? null : clock.clock.now() + 1_000,
         );
       } finally {
         stopDiagnosticHeartbeat();

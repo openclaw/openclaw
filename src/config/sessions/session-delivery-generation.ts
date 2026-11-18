@@ -300,7 +300,11 @@ async function prepareSessionGenerationLease(
             databaseIdentity: source.identity.key,
             sessionKey: generation.sessionKey,
             entry: entry ? projectSessionSharingEntry(entry) : undefined,
-            followSessionKey: !generation.exactTranscript,
+            followSessionKey: generation.exactTranscript
+              ? undefined
+              : generation.lifecycleRevision === null
+                ? "lifecycle"
+                : "transcript",
           });
           releases.push(prepared.release);
           const nativeOptions = { ...read!.database, path: source.path };
