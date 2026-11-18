@@ -99,7 +99,7 @@ export async function runGatewayCloseSteps(params: {
       run: owner.sealAndJoinRegisteredSidecarStops,
       required: true,
     },
-    { name: "gateway close", run: params.close },
+    { name: "gateway close", run: params.close, required: true },
   ];
   // Collect owner failures, but never release dependencies beyond a failed required join.
   const errors: Error[] = [];

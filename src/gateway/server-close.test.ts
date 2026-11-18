@@ -248,7 +248,10 @@ describe("createGatewayCloseHandler", () => {
         await entered.promise;
         // Advance the owner's grace and both retained-work joins.
         await vi.advanceTimersByTimeAsync(15_000);
-        expect(isGatewayCleanupRetainedError(await closing)).toBe(true);
+        let settled = false;
+        void closing.then(() => { settled = true; });
+        await Promise.resolve();
+        expect(settled).toBe(false);
         expect(database.db.isOpen).toBe(true);
         expect(sdkDatabase.isOpen).toBe(true);
         expect(preparedDatabase.isOpen).toBe(true);
@@ -256,6 +259,7 @@ describe("createGatewayCloseHandler", () => {
         expect(sharedStateLifecycle.has("open")).toBe(true);
         release.resolve();
         await finished.promise;
+        expect(await closing).toBeUndefined();
         expect(failures).toEqual([]);
         expect(reads).toEqual([{ value: 1 }]);
       } finally {
