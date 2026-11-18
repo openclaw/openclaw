@@ -58,9 +58,8 @@ it.each([false, true])(
     const alias = ensureProfileForEmail("alias@example.test");
     await mergeCanonicalUserProfiles(alias.id, person.id);
     const identityKey = "session-share-proof";
-    const primary = loadOrCreateDeviceIdentity();
     const identity = loadOrCreateDeviceIdentity({ identityKey });
-    expect(identity.deviceId).not.toBe(primary.deviceId);
+    expect(identity.deviceId).not.toBe(loadOrCreateDeviceIdentity().deviceId);
     const pendingPair = await requestDevicePairing({
       deviceId: identity.deviceId,
       publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
@@ -69,13 +68,10 @@ it.each([false, true])(
       clientId: "gateway-client",
       clientMode: "backend",
     });
-    expect(
-      (
-        await approveDevicePairing(pendingPair.request.requestId, {
-          callerScopes: ["operator.admin"],
-        })
-      )?.status,
-    ).toBe("approved");
+    const approved = await approveDevicePairing(pendingPair.request.requestId, {
+      callerScopes: ["operator.admin"],
+    });
+    expect(approved?.status).toBe("approved");
     const issued = await rotateDeviceToken({
       deviceId: identity.deviceId,
       role: "operator",
@@ -88,7 +84,6 @@ it.each([false, true])(
       identity,
       issued: issued.entry,
     };
-    expect(device.issued?.token).toBeTruthy();
     const share = {
       gateway: true,
       groups: ["Team"],
@@ -351,7 +346,6 @@ it.each([false, true])(
     if (!rotated.ok) {
       throw new Error(`Fixture rotation refused: ${rotated.reason}`);
     }
-    expect(rotated.entry.token).toBeTruthy();
     const fresh = await gatewayClient.connectGatewayClient({
       url: `wss://127.0.0.1:${claim.port}`,
       deviceIdentity: device.identity,

@@ -57,7 +57,8 @@ export function registerSessionShareGatewayMethods(api: OpenClawPluginApi) {
           // Never propagate transcript paths, credentials, or raw source failures to the peer.
           request.respond(false, undefined, {
             code: "INVALID_REQUEST",
-            message: "Session Share request denied or source unavailable. Refresh the catalog.",
+            message:
+              "Session Share request denied or source unavailable. Refresh the catalog; if this persists, ask the source operator to inspect the session.",
           });
         }
       },
