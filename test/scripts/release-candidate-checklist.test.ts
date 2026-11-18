@@ -1320,6 +1320,7 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
           workflowSha,
           argv: [scenario === "child failure" ? "--fail" : "--help"],
           TRUSTED_TOOLING_SHA_ENV: "OPENCLAW_RELEASE_CANDIDATE_TRUSTED_TOOLING_SHA",
+          execFileSync,
           fetchTrustedWorkflowSha: () => (workflowSha ? latestToolingSha : trustedToolingSha),
           run: (command: string, args: string[], options: Parameters<typeof run>[2]) =>
             command === "pnpm" ? installs(command, args, options) : run(command, args, options),

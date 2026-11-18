@@ -36,6 +36,16 @@ export function gitIsAncestor(ancestor: string, target: string, cwd = process.cw
     return true;
   }
   if (result.status === 1) {
+    const shallow = execFileSync("git", ["rev-parse", "--is-shallow-repository"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+    if (shallow === "true") {
+      throw new Error(
+        `could not establish git ancestry ${ancestor}..${target}: repository is shallow; fetch complete history (git fetch --unshallow) and retry`,
+      );
+    }
     return false;
   }
   throw new Error(
