@@ -33,9 +33,26 @@ export function validateStableReleaseSource(value, targetSha, dispatchId) {
   return value;
 }
 
-export async function selectStableReleaseSource({ targetSha, dispatchId, request }) {
-  const release = await request(`${API}/releases/latest`);
-  if (release.draft !== false || release.prerelease !== false) {
+export async function selectStableReleaseSource({
+  targetSha,
+  dispatchId,
+  request,
+  tag = "",
+  sourceSha = "",
+}) {
+  if (tag || sourceSha) {
+    validateStableReleaseSource(
+      { schema: 1, targetSha, dispatchId, tag, sourceSha },
+      targetSha,
+      dispatchId,
+    );
+  }
+  const release = await request(`${API}/releases/${tag ? `tags/${tag}` : "latest"}`);
+  if (
+    release.draft !== false ||
+    release.prerelease !== false ||
+    (tag && release.tag_name !== tag)
+  ) {
     throw new Error("Client source requires a published stable repository release");
   }
   // Validate the tag before it becomes an API path. Do not use target_commitish:
@@ -52,6 +69,9 @@ export async function selectStableReleaseSource({ targetSha, dispatchId, request
   if (object?.type !== "commit") {
     throw new Error("Stable release tag must resolve to a commit");
   }
+  if (sourceSha && object.sha !== sourceSha) {
+    throw new Error("Published stable release no longer matches the frozen client SHA");
+  }
   return validateStableReleaseSource(
     { schema: 1, targetSha, dispatchId, tag: release.tag_name, sourceSha: object.sha },
     targetSha,
@@ -64,13 +84,17 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
     options: {
       output: { type: "string" },
       restore: { type: "boolean", default: false },
+      "verify-client": { type: "boolean", default: false },
     },
   });
-  if (!values.output) {
-    throw new Error("--output is required");
+  if ((!values.output && !values["verify-client"]) || (values.restore && values["verify-client"])) {
+    throw new Error("--output is required except for --verify-client; verification cannot restore");
   }
   const targetSha = process.env.TARGET_SHA;
-  const dispatchId = process.env.DISPATCH_ID;
+  const dispatchId = values["verify-client"] ? "native-client-preflight" : process.env.DISPATCH_ID;
+  if (values["verify-client"] && (!process.env.CLIENT_RELEASE_TAG || !process.env.CLIENT_SHA)) {
+    throw new Error("Client verification requires the frozen release tag and SHA");
+  }
   const selection = values.restore
     ? validateStableReleaseSource(
         JSON.parse(await readFile(values.output, "utf8")),
@@ -80,6 +104,9 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
     : await selectStableReleaseSource({
         targetSha,
         dispatchId,
+        ...(values["verify-client"]
+          ? { tag: process.env.CLIENT_RELEASE_TAG, sourceSha: process.env.CLIENT_SHA }
+          : {}),
         request: async (url) => {
           const token = process.env.GH_TOKEN;
           const response = await fetch(url, {
@@ -95,7 +122,7 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
           return response.json();
         },
       });
-  if (!values.restore) {
+  if (!values.restore && values.output) {
     await writeFile(values.output, JSON.stringify(selection, null, 2) + "\n");
   }
   if (process.env.GITHUB_OUTPUT) {

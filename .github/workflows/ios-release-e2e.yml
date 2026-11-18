@@ -106,6 +106,21 @@ jobs:
           test -f scripts/lib/ios-release-e2e-native.ts
           test -f test/helpers/openclaw-test-instance.ts
 
+      - name: Verify frozen published client before execution
+        id: stable-client
+        if: inputs.client_sha != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/stable-release-source.mjs --verify-client
+
+      - name: Prepare candidate Gateway toolchain
+        if: inputs.client_sha != ''
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.22.1"
+          install-bun: "false"
+          cache-mode: "off"
+
       - name: Checkout independent candidate Gateway
         if: inputs.client_sha != '' && inputs.target_sha != '' && inputs.target_sha != github.sha
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -118,18 +133,14 @@ jobs:
         if: inputs.client_sha != ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.client_sha }}
+          ref: ${{ steps.stable-client.outputs.sha }}
           fetch-tags: true
           path: .openclaw/tmp/stable-client
           persist-credentials: false
 
-      - name: Prepare candidate Gateway toolchain
+      - name: Verify checked-out stable client
         if: inputs.client_sha != ''
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: "24.22.1"
-          install-bun: "false"
-          cache-mode: "off"
+        run: test "$(git -C .openclaw/tmp/stable-client rev-parse HEAD)" = "$CLIENT_SHA"
 
       - name: Build candidate Gateway and prepare stable client dependencies
         if: inputs.client_sha != ''

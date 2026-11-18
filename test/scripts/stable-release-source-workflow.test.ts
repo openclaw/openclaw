@@ -42,6 +42,27 @@ describe("stable client compatibility release wiring", () => {
         });
         expect(result.status).toBe(status);
       }
+      const preflight = steps.findIndex((step: { id?: string }) => step.id === "stable-client");
+      const dependencies = steps.findIndex(
+        (step: { name?: string }) => step.name === "Prepare candidate Gateway toolchain",
+      );
+      expect(steps[preflight].run).toBe("node scripts/stable-release-source.mjs --verify-client");
+      expect(preflight).toBeLessThan(dependencies);
+      const identity = steps.findIndex(
+        (step: { name?: string }) => step.name === "Verify checked-out stable client",
+      );
+      expect(identity).toBeGreaterThan(dependencies);
+      expect(identity).toBeLessThan(
+        steps.findIndex(
+          (step: { name?: string }) =>
+            step.name === "Build candidate Gateway and prepare stable client dependencies",
+        ),
+      );
+      expect(dependencies).toBeLessThan(
+        steps.findIndex(
+          (step: { name?: string }) => step.name === "Checkout independent candidate Gateway",
+        ),
+      );
       expect(
         steps.find(
           (step: { name?: string }) => step.name === "Checkout independent candidate Gateway",
@@ -52,7 +73,7 @@ describe("stable client compatibility release wiring", () => {
           (step: { name?: string }) => step.name === "Checkout frozen stable client source",
         ).with,
       ).toMatchObject({
-        ref: "${{ inputs.client_sha }}",
+        ref: "${{ steps.stable-client.outputs.sha }}",
         path: ".openclaw/tmp/stable-client",
         "persist-credentials": false,
       });

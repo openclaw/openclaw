@@ -31,6 +31,11 @@ then dereferences its tag to an immutable commit. Both platform jobs use that
 same tag and SHA. A retained selection binds the client source to the candidate
 and dispatch ID; reruns restore it rather than selecting a newer release.
 Missing or expired rerun input fails and requires a new workflow run.
+Before installing dependencies, each native job verifies that the frozen tag is
+still a published stable release in the canonical repository and resolves to the
+selected SHA. A changed tag fails rather than silently selecting newer source.
+The checked-out client HEAD must match that verified SHA before its dependencies
+are executed.
 
 Each job separates these source identities:
 
