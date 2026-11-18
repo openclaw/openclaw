@@ -84,7 +84,6 @@ suite.define(() => {
       );
       const hiddenRun = sessionRow("agent:main:subagent:build-worker", "Build worker", now - 7, {
         spawnedBy: parentKey,
-        subagentRunState: "paused",
         backgroundProcessCount: 1,
       });
       const descendants = [...children, hiddenRun];
