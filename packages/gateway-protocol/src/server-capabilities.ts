@@ -26,6 +26,7 @@ export const GATEWAY_SERVER_CAPS = {
   NODE_WORKER_BUNDLE_RETENTION: "node-worker-bundle-retention-v1",
   NODE_WORKER_BUNDLE_STATUS: "node-worker-bundle-status-v1",
   NODE_WORKER_CAPTURED_EXEC_POLICY: "node-worker-captured-exec-policy",
+  NODE_WORKER_EXEC_MEMORY_BOUNDARY: "node-worker-exec-memory-boundary",
   NODE_WORKER_WORKSPACE_RESULT: "node-worker-workspace-result-v2",
   NODE_WORKER_WORKSPACE_QUIESCENCE: "node-worker-workspace-quiescence-v1",
   NODE_WORKER_DEVICE_FOLDERS: "node-worker-device-folders-v1",

@@ -93,6 +93,7 @@ const WorkerHost = z
       deviceFolders: z.literal(true).optional(),
       preparedWorkspace: z.literal(NODE_WORKER_PREPARED_WORKSPACE_VERSION).optional(),
       capturedExecPolicy: z.literal(true).optional(),
+      execMemoryBoundary: z.literal(true).optional(),
       workspaceResultVersion: z.literal(NODE_WORKSPACE_RESULT_VERSION).optional(),
       publicationIntegration: z.literal(1).optional(),
       workspaceQuiescence: z.literal(NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION).optional(),

@@ -1,10 +1,9 @@
 import { WorkerProviderError } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CrabboxMachineShape } from "./crabbox-worker-profile.js";
 
 // Pinned Crabbox 9930a6de: native Azure tiers include disk capacity; generic classes stay 2/4.
 // The public numeric summaries require integers. Fractional sizes remain exact in the labels.
-export const CRABBOX_SANDBOX_TYPES: readonly (CrabboxMachineShape & { tier: string })[] = [
+export const CRABBOX_SANDBOX_TYPES = [
   {
     class: "0.25cpu-0.5gib",
     tier: "xs",
@@ -58,7 +57,7 @@ export const CRABBOX_SANDBOX_TYPES: readonly (CrabboxMachineShape & { tier: stri
     memoryGb: 32,
     label: "3XL · 320 GiB disk",
   },
-];
+] as const;
 
 export function resolveCrabboxMachineType(value: string | undefined): string | undefined {
   const selected = value?.toLowerCase();

@@ -13,7 +13,7 @@ import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { watchHostExecMemory } from "../child-memory.js";
-import { applyAgentExecMemoryBudget, usesAgentExecHostMemoryBudget } from "../linux-exec-cgroup.js";
+import { applyAgentExecMemoryBudget } from "../linux-exec-cgroup.js";
 import { setProcessTimeout } from "../process-deadline.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
@@ -43,6 +43,8 @@ import type {
   StartingScope,
   TerminationReason,
 } from "./types.js";
+
+declare const WORKER_DEPLOY_BUILD: boolean;
 
 const loadSupervisorLogRuntime = createLazyRuntimeModule(
   () => import("./supervisor-log.runtime.js"),
@@ -152,7 +154,16 @@ export function createProcessSupervisor(): ProcessSupervisor & {
 
   const startRun = async (input: SpawnInput, owner: OwnedRun): Promise<ManagedRun> => {
     const external = input.cleanupOwnership === "external";
-    const hostExec = usesAgentExecHostMemoryBudget(input);
+    // A sealed provider Sandbox owns its limit; Gateway commands retain the host budget.
+    const hostExec =
+      process.platform === "linux" &&
+      input.executionIntent === "agent-tool" &&
+      !external &&
+      !(
+        typeof WORKER_DEPLOY_BUILD === "boolean" &&
+        WORKER_DEPLOY_BUILD &&
+        input.workerMemoryBoundary === "sandbox"
+      );
     const treeCleanupOwners = owner.cleanupOwners.filter((scope) =>
       requiresProcessTree(scope, external),
     );

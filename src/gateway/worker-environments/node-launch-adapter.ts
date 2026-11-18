@@ -470,6 +470,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     const restartSignal = getGatewayRestartDrainSignal();
     // The tunnel owns the prepared descriptor; only negotiated launch options change here.
     const originalInput = { ...request.input };
+    const execAuthority = request.input.descriptor.assignment.toolAuthority.exec;
     let input = originalInput;
     const stableRequest = { ...request, input };
     let expected = expectedIdentity(input);
@@ -538,6 +539,24 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
                       input.idleRetention = true;
                     } else {
                       delete input.idleRetention;
+                    }
+                    // Retained older supervisors parse exec fields strictly. Preserve their
+                    // host safeguard until the node host, not just its worker bundle, updates.
+                    if (execAuthority?.memoryBoundary) {
+                      const { memoryBoundary: _memoryBoundary, ...hostAuthority } = execAuthority;
+                      input.descriptor = {
+                        ...input.descriptor,
+                        assignment: {
+                          ...input.descriptor.assignment,
+                          toolAuthority: {
+                            ...input.descriptor.assignment.toolAuthority,
+                            exec:
+                              node.workerHost.execMemoryBoundary === true
+                                ? execAuthority
+                                : hostAuthority,
+                          },
+                        },
+                      };
                     }
                     expected = expectedIdentity(input);
                   },
