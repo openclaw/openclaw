@@ -1251,11 +1251,6 @@ const enSettings = {
     },
     add: {
       title: "Add provider",
-      subtitle: "Choose a provider and add an account with its API key.",
-      action: "Add provider",
-      none: "All known providers are already configured.",
-      provider: "Provider",
-      selectProvider: "Select a provider",
       save: "Save provider",
       saved: "Added {provider}",
       verified: "Added {provider}. Access verified.",
@@ -1275,7 +1270,6 @@ const enSettings = {
         "Runs short background tasks, such as titles, progress updates and summaries.",
       utilityHelpAutomatic:
         "Automatic uses the provider’s recommended small model; titles otherwise use the primary model.",
-      automatic: "Automatic (provider default)",
       automaticUnavailable: "No recommended small model",
       disabled: "Disabled",
       fallback: "Fallback model",
@@ -1289,8 +1283,6 @@ const enSettings = {
       moreFallbackOne: "1 more fallback after this one",
       moreFallbacks: "{count} more fallbacks after this one",
       selectModel: "Select a model",
-      discoveringMore: "Looking for more models in the background…",
-      savedDiscoveringMore: "Saved. Looking for more models in the background…",
       discoverFailed: "Couldn’t load more models. Try again.",
       discoverFailedFor: "Couldn’t load models from {providers}. Try again.",
       retryDiscover: "Retry",
@@ -1312,7 +1304,6 @@ const enSettings = {
         installed: "Installed",
         unverified: "Not verified",
         signIn: "Sign-in required",
-        discovering: "Discovering models…",
         modelsAvailable: "Models available",
       },
       unverifiedHint:
