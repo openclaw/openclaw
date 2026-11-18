@@ -11,6 +11,7 @@ import {
   resolveUpgradeSurvivorOpenClawCommand,
   runUpgradeSurvivorOpenClawStep,
 } from "../../scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
+import { AgentsSchema } from "../../src/config/zod-schema.agents.js";
 import { ModelsConfigSchema } from "../../src/config/zod-schema.core.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
@@ -270,6 +271,19 @@ esac
     expect(configValue(steps, "plugins").allow).toEqual(
       expect.arrayContaining(Object.keys(providers)),
     );
+  });
+
+  it("keeps old heartbeat disables but authors valid post-cutover rosters", () => {
+    const legacy = configValue(baselineSteps("base", "2026.11.4"), "agents");
+    expect(legacy.defaults.heartbeat).toEqual({ every: "0m" });
+    for (const version of ["2026.11.5-beta.1", "2026.11.5"]) {
+      for (const scenario of ["base", "recovery-cleanup"]) {
+        const agents = configValue(baselineSteps(scenario, version), "agents");
+        expect(agents.defaults.heartbeat).toBeUndefined();
+        expect(AgentsSchema.safeParse(agents).success).toBe(true);
+        expect(Object.keys(agents.entries)).toContain("ops");
+      }
+    }
   });
 
   it("uses password auth for mobile pairing reconnect coverage", () => {

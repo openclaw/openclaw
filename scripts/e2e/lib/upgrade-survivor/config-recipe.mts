@@ -277,6 +277,12 @@ function adaptStepForBaseline(step: ConfigStep, baselineVersion: string | null):
   }
   let value = JSON.parse(json);
   if (step.id === "agents") {
+    // Heartbeat config retired in 2026.11.5; older baselines retain the disabled
+    // heartbeat specimen so candidate Doctor still exercises its migration.
+    const heartbeatRetired = compareReleaseVersions(baselineVersion ?? "", "2026.11.5-beta.1");
+    if (heartbeatRetired !== null && heartbeatRetired >= 0) {
+      delete value.defaults.heartbeat;
+    }
     // Keyed rosters shipped before explicit ownership; those baselines still
     // require the legacy default marker.
     if (compareReleaseVersions(baselineVersion ?? "", "2026.8.1-beta.2") === -1) {
