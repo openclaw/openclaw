@@ -1126,10 +1126,14 @@ rejection guards, and Linux's embedded-library behavior. Production and shared
 helpers are unchanged. Mocked compilation and probing do not establish real
 SQLite capability qualification.
 
-A source-hook control loses both failed and unattempted roots and cannot retry.
-The shared owner preserves the same error, removes the healthy root, retains
-the failed root and removes it on retry. Actual registered Vitest-hook and
-clean-suite qualification are pending in the native PR workspace.
+Injection through the actual registered Vitest hook confirms that the original
+cleanup loses both failed and unattempted roots and cannot retry. The shared
+owner preserves the same error, removes the healthy root, retains the failed
+root and removes it on retry. Both injected runs intentionally report one
+teardown failure and four passing cases. Both clean runs pass all five cases.
+Temporary instrumentation was restored byte for byte. Scoped scripts-test
+typecheck, lint, formatting and both line-cap ratchets pass. Independent
+preservation and local ClawSweeper reviews found no actionable defects.
 
 ## Pending qualification and proof repairs
 
