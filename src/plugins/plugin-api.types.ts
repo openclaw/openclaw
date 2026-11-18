@@ -71,6 +71,7 @@ import type {
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
   OpenClawPluginServiceV2,
+  OpenClawPluginServiceV3,
   PluginInteractiveHandlerRegistration,
   PluginRegistrationMode,
   WidgetPresenter,
@@ -79,6 +80,7 @@ import type { UnifiedModelCatalogProviderPlugin } from "./provider-catalog.types
 import type { ProviderPlugin } from "./provider-plugin.types.js";
 import type {
   ContextEngineFactory,
+  LearnContribution,
   MemoryCorpusSupplement,
   MemoryPluginCapability,
   MemoryPromptSectionBuilder,
@@ -218,6 +220,11 @@ export type OpenClawPluginApi = {
   runtime: PluginRuntime;
   logger: PluginLogger;
   /**
+   * Plugin-owned metric families for diagnostics exporters (diagnostics-prometheus serves them).
+   * Requires plugins.entries.<id>.allowMetrics. Samples are dropped while no exporter listens.
+   */
+  metrics?: import("./plugin-metrics.js").PluginMetricsApi;
+  /**
    * Grouped facade over the existing flat session-related plugin API.
    * Flat methods remain supported for compatibility.
    */
@@ -317,7 +324,8 @@ export type OpenClawPluginApi = {
   registerService: {
     (service: OpenClawPluginService): void;
     (service: OpenClawPluginServiceV2): void;
-    (service: OpenClawPluginService | OpenClawPluginServiceV2): void;
+    (service: OpenClawPluginServiceV3): void;
+    (service: OpenClawPluginService | OpenClawPluginServiceV2 | OpenClawPluginServiceV3): void;
   };
   /** Register a local gateway discovery advertiser such as mDNS/Bonjour. */
   registerGatewayDiscoveryService: (service: OpenClawGatewayDiscoveryService) => void;
@@ -450,6 +458,8 @@ export type OpenClawPluginApi = {
   registerSessionSchedulerJob: OpenClawPluginSessionWorkflowApi["registerSessionSchedulerJob"];
   /** Register the active memory capability for this memory plugin (exclusive slot). */
   registerMemoryCapability: (capability: MemoryPluginCapability) => void;
+  /** Contribute a medium, guidance and subcommands to /learn turns (non-exclusive). */
+  registerLearnContribution: (contribution: LearnContribution) => void;
   /** Register an additive memory-adjacent prompt section (non-exclusive). */
   registerMemoryPromptSupplement: (builder: MemoryPromptSectionBuilder) => void;
   /** Register an async memory prompt preparation step (non-exclusive). */

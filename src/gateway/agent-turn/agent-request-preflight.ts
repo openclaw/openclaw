@@ -30,7 +30,7 @@ import {
   createAgentDatabaseAdmissionErrorShape,
   readAgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
-import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
+import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { resolveExpectedExistingSessionConstraint } from "../server-methods/agent-expected-session.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
@@ -73,8 +73,7 @@ export async function prepareAgentRequestPreflight(params: {
     normalizeOptionalString(request.agentId) ??
     tryResolveSessionCompatibilityOwnerAgentId(cfg, requestSessionKey);
   if (preparingAgentId) {
-    await waitForAgentInputAdmission(preparingAgentId, {
-      cfg,
+    await waitForAgentDatabaseWriteAdmission(preparingAgentId, {
       owner: params.context.resolveGatewayContext?.()?.agentDatabaseStartup,
     });
   }
@@ -176,7 +175,6 @@ export async function prepareAgentRequestPreflight(params: {
   }
   const allowModelOverride =
     hasGatewayAdminScope(params.client) || params.client?.internal?.allowModelOverride === true;
-  const canUseCronRunContinuation = params.client?.internal?.cronRunContinuation === true;
   const expectedSessionResult = resolveExpectedExistingSessionConstraint({
     canUseInternalRuntimeHandoff,
     expectedExistingSessionId: request.expectedExistingSessionId,
@@ -280,7 +278,6 @@ export async function prepareAgentRequestPreflight(params: {
     runId,
     allowModelOverride,
     canUseInternalRuntimeHandoff,
-    canUseCronRunContinuation,
     expectedSession: expectedSessionResult.constraint,
     expectedExistingSessionId: expectedSessionResult.constraint?.sessionId,
     providerOverride: allowModelOverride ? request.provider : undefined,

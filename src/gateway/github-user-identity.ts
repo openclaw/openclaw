@@ -47,6 +47,7 @@ const GITHUB_ETAG_MAX_LENGTH = 1_024;
 type ResolvedGitHubUserIdentity = { accountId: number; login: string; name?: string };
 type ResolvedCloudflareAccessIdentity =
   | { provider: "github"; accountId: number; initialDisplayName?: string }
+  | { provider: "onetimepin"; accountId?: undefined }
   | { provider: "oidc"; accountId?: number };
 type GitHubIdentityLookup = { identity: ResolvedGitHubUserIdentity; refreshed: boolean };
 type GitHubIdentityMetadataCache = {
@@ -169,6 +170,9 @@ async function fetchCloudflareAccessIdentity(
   }
   if (!isRecord(payload.idp)) {
     throw new Error("Cloudflare Access identity provider is invalid");
+  }
+  if (payload.idp.type === "onetimepin") {
+    return { provider: "onetimepin" };
   }
   if (payload.idp.type === "oidc") {
     const fields = Object.hasOwn(payload, "oidc_fields") ? payload.oidc_fields : payload.custom;
@@ -359,13 +363,13 @@ export function resolveTrustedEnterpriseGitHubAccountId(params: {
 
 /** Repository metadata is interpreted only by the explicitly selected integration. */
 export function resolveRepositoryConnectionIdentity(params: {
-  authResult: Pick<GatewayAuthResult, "ok" | "method" | "user">;
+  authResult: Pick<GatewayAuthResult, "ok" | "method" | "user" | "delegation">;
   authConfig?: GatewayAuthConfig;
   config?: OpenClawConfig;
   requestHeaders: IncomingHttpHeaders;
   assertCurrent: () => void;
 }): RepositoryConnectionIdentity | undefined {
-  if (!params.authResult.ok) {
+  if (!params.authResult.ok || params.authResult.delegation) {
     return undefined;
   }
   const integration = getRepositoryIntegration(params.config);
@@ -402,6 +406,9 @@ export function createAuthenticatedGitHubIdentitySync(params: {
   recordTiming?: (phase: GitHubIdentityPreparationTiming, startedAt: number) => void;
   repositoryIdentity?: RepositoryConnectionIdentity;
 }): AuthenticatedGitHubIdentitySync | undefined {
+  if (params.authResult.delegation) {
+    return undefined;
+  }
   const options = { assertCurrent: params.assertCurrent };
   const measure = <T>(phase: GitHubIdentityPreparationTiming, run: () => Promise<T>) => {
     if (!params.recordTiming) {

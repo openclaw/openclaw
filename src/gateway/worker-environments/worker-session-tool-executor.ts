@@ -78,7 +78,7 @@ type WorkerGatewayToolsDependencies = {
     typeof coordinateWorkerPlacementDispatch
   >["waitForInitialPlacement"];
   portals: WorkerPortalToolExecutorDependencies["portals"];
-  skillWorkshop?: AnyAgentTool;
+  skillLibrary?: AnyAgentTool;
   portalAvailable?: boolean;
   inheritedToolPolicySource?: "sender";
   inheritedToolDenylist?: string[];
@@ -683,13 +683,14 @@ export async function createWorkerGatewayTools(
   const adapterNames = new Set(adapters.map((tool) => tool.name));
   const runWithSource = createWorkerSessionToolSourceRunner(params);
   const retainWorkshopCall = createWorkerWorkshopCallRetention();
-  const tools = [...adapters, presence, ...(params.skillWorkshop ? [params.skillWorkshop] : [])];
+  const tools = [...adapters, presence, ...(params.skillLibrary ? [params.skillLibrary] : [])];
   const preparedTools = await (params.prepareTools?.(tools) ?? tools);
   capability.receiptAuthority();
   return preparedTools.map((tool) => {
     if (getAgentToolExecutionLocation(tool).kind === "placement" || adapterNames.has(tool.name)) {
       return tool;
     }
+    const isSkillAuthoringTool = tool.name === "skill_workshop" || tool.name === "skill_library";
     return authorizeTool(tool, (toolCallId, args, signal, onUpdate) => {
       const invoke = () =>
         runWithSource({
@@ -697,7 +698,7 @@ export async function createWorkerGatewayTools(
           request: {
             tool,
             toolName: tool.name,
-            ...(tool.name === "presence" || tool.name === "skill_workshop"
+            ...(tool.name === "presence" || isSkillAuthoringTool
               ? { approvalMode: "deny" as const }
               : {}),
             identity: params.identity,
@@ -706,9 +707,7 @@ export async function createWorkerGatewayTools(
             request: { toolCallId, arguments: args },
           },
         });
-      return tool.name === "skill_workshop"
-        ? retainWorkshopCall(toolCallId, args, invoke)
-        : invoke();
+      return isSkillAuthoringTool ? retainWorkshopCall(toolCallId, args, invoke) : invoke();
     });
   });
 }

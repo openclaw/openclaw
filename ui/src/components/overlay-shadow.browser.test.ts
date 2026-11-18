@@ -142,6 +142,8 @@ it.each(["pointerdown", "pointermove", "focusin"] as const)(
       },
     });
     await open(current.owner);
+    // Opening can emit ambient pointer/focus facts before the action under test.
+    received.length = 0;
     current.action.addEventListener(type, (event) => {
       received.push(["control", event.target]);
     });

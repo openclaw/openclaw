@@ -1008,34 +1008,37 @@ describe("Anthropic provider", () => {
     expect(first[0]).not.toHaveProperty("cache_control");
   });
 
-  it("keeps the relocatable marker out of native Anthropic system blocks", async () => {
-    // Native Anthropic relocates nothing, so the marker must not survive into
-    // the payload while the cache breakpoint still lands on the stable prefix.
-    const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
-      {},
-      { stopBeforeNetwork: true },
-      {
-        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Reactions guidance${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}Runtime: session=alpha${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`,
-        messages: [user("hello")],
-      },
-    );
-
-    expect(result.stopReason).toBe("error");
-    const system = (capturedPayload as { system?: unknown }).system;
-    const serialized = JSON.stringify(system);
-    expect(serialized).not.toContain("OPENCLAW-RELOCATABLE-BOUNDARY");
-    expect(serialized).not.toContain("OPENCLAW_CACHE_BOUNDARY");
-    expect(system).toEqual([
-      {
-        type: "text",
-        text: "Stable prefix",
-        cache_control: { type: "ephemeral" },
-      },
-      {
-        type: "text",
-        text: "Reactions guidance\nRuntime: session=alpha",
-      },
+  it("checkpoints the system text before the Runtime facts only on a session's opening request", async () => {
+    const systemPrompt = (session: string) =>
+      `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Reactions guidance${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}Runtime: session=${session}${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`;
+    const capture = async (session: string, messages: Context["messages"]) =>
+      (
+        await captureSimpleAnthropicPayload(
+          {},
+          { stopBeforeNetwork: true },
+          { systemPrompt: systemPrompt(session), messages },
+        )
+      ).payload as { system: unknown[]; messages: unknown[] };
+    const opening = await capture("alpha", [user("hello")]);
+    expect(opening.system).toEqual([
+      { type: "text", text: "Stable prefix", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "\nReactions guidance", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "\nRuntime: session=alpha" },
     ]);
+    const shared = opening.system[1] as { text: string };
+    const owned = opening.system[2] as { text: string };
+    expect(shared.text + owned.text).toBe("\nReactions guidance\nRuntime: session=alpha");
+    expect((opening.system as Array<{ text: string }>).map((block) => block.text).join("")).toBe(
+      "Stable prefix\nReactions guidance\nRuntime: session=alpha",
+    );
+    const another = await capture("beta", [user("hello")]);
+    expect(another.system.slice(0, 2)).toEqual(opening.system.slice(0, 2));
+    expect(another.system[2]).toEqual({ type: "text", text: "\nRuntime: session=beta" });
+    expect(JSON.stringify(opening.messages).split('"cache_control"')).toHaveLength(2);
+    const reply = makeAnthropicAssistantMessage([{ type: "text", text: "hi" }]);
+    const later = await capture("alpha", [user("hello"), reply, user("again")]);
+    expect(later.system[1]).toEqual({ type: "text", text: "\nReactions guidance" });
+    expect(JSON.stringify(later.messages).split('"cache_control"')).toHaveLength(3);
   });
 
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {

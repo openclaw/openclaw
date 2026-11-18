@@ -16,6 +16,7 @@ it("transfers Photon's owned PNG without copying either side of the BMP conversi
   const registration = vi.mocked(serveWorkerTasks<ImageProcessorReply>).mock.calls[0];
   assert(registration);
   const [handler, options] = registration;
+  assert(typeof handler === "function");
   const bmp = Uint8Array.from(
     Buffer.from(
       "Qk06AAAAAAAAADYAAAAoAAAAAQAAAAEAAAABABgAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAD/AA==",

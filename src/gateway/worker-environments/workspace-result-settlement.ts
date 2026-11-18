@@ -2,6 +2,8 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { assertRepositoryWorkspaceDiskIdentity } from "../../state/session-repository-workspaces.authority.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import type { RepositoryWorkspaceDiskAuthority } from "../../state/session-repository-workspaces.types.js";
+import { settleRepositoryDiskGatewayMove } from "./placement-dispatch-pending-move.js";
+import type { WorkerPlacementMoveIntent } from "./placement-move-intent.types.js";
 import type { PreparedWorkerWorkspaceRecovery } from "./placement-reclaim-contract.js";
 import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import type {
@@ -288,30 +290,42 @@ export async function recoverRepositoryDiskResult(params: {
   turnClaim: WorkerSessionTurnClaim;
   workspace: WorkerSessionWorkspace;
   assertCurrent: () => void;
-  hasPendingMove: boolean;
+  move?: WorkerPlacementMoveIntent;
+  currentWorkspace: WorkerSessionWorkspace;
 }): Promise<void> {
-  const {
-    deps,
-    placement,
-    pending,
-    authority,
-    turnClaim,
-    workspace,
-    assertCurrent,
-    hasPendingMove,
-  } = params;
+  const { deps, placement, pending, authority, turnClaim, workspace, assertCurrent, move } = params;
   const { environments, placements } = deps;
+  const gatewayMove =
+    move?.target.kind === "gateway" &&
+    !move.abandonSource &&
+    move.source.environmentId === placement.environmentId &&
+    move.source.ownerEpoch === placement.activeOwnerEpoch &&
+    move.source.generation + 1 === placement.generation &&
+    placement.state === "draining";
+  if (gatewayMove && pending.claimId === pending.runId && pending.claimId.startsWith("reclaim-")) {
+    await deps.workspaceOperations.run(authority.environmentId, () =>
+      settleRepositoryDiskGatewayMove({
+        deps,
+        placement,
+        turnClaim,
+        workspace: params.currentWorkspace,
+        assertCurrent,
+        recovering: true,
+      }),
+    );
+    return;
+  }
   const assertDiskCurrent = () => {
     assertCurrent();
     const environment = environments.get(authority.environmentId);
     const current = placements.preparedWorkspaceResultPlacement(turnClaim);
     assertRepositoryWorkspaceDiskIdentity(authority, environment);
     if (
-      current?.state !== "active" ||
+      (current?.state !== "active" && !(gatewayMove && current?.state === "draining")) ||
       current.generation !== placement.generation ||
       !isExactAttachedEnvironment(environment, current) ||
       !environment?.nodeDeviceId ||
-      hasPendingMove ||
+      (Boolean(move) && !gatewayMove) ||
       workspace.kind !== "repository" ||
       workspace.repository.workspaceId !== pending.repositoryWorkspaceId
     ) {
@@ -330,7 +344,9 @@ export async function recoverRepositoryDiskResult(params: {
     if (pending.workspaceAcceptedAtMs === null) {
       await placements.acceptWorkspaceResult(turnClaim, assertDiskCurrent);
     }
-    await placements.closeWorkerTurnToolState(turnClaim);
+    if (turnClaim.owner.kind === "worker") {
+      await placements.closeWorkerTurnToolState(turnClaim);
+    }
     assertDiskCurrent();
     await deps.publishAcceptedWorkspace?.(turnClaim);
     assertDiskCurrent();

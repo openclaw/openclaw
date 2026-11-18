@@ -7,6 +7,7 @@ import {
 } from "./kysely-sync.js";
 import { boundedUsageCacheColumn, usageCacheJsonText } from "./session-cost-usage-expressions.js";
 import {
+  LEGACY_USAGE_COST_PARTITION_SCOPE,
   USAGE_COST_PARTITION_SCOPE,
   usageCostPartitionKey,
   type UsageCostPartition,
@@ -27,7 +28,12 @@ import { withSqliteDatabaseWriteScope } from "./sqlite-database-admission.js";
 
 const LEGACY_CACHE_SCOPE = "session-cost-usage";
 const LEGACY_CACHE_KEY = "cache";
-const RETIRED_ROLLUP_SCOPES = ["session-cost-usage-rollup-v1", "session-cost-usage-rollup-v2"];
+// v1 projection partitions (2026.10.10 and earlier) are rebuilt as v2 from transcripts.
+const RETIRED_ROLLUP_SCOPES = [
+  "session-cost-usage-rollup-v1",
+  "session-cost-usage-rollup-v2",
+  LEGACY_USAGE_COST_PARTITION_SCOPE,
+];
 const ROLLUP_PRUNE_BATCH_SIZE = 32;
 
 type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;

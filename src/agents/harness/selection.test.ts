@@ -657,7 +657,7 @@ describe("runAgentHarnessAttempt", () => {
         await runAgentHarnessAttempt({ ...params, suppressNextUserMessagePersistence: true });
         expect(await loadTranscriptEvents(target)).toEqual(committed);
       } finally {
-        recorder.finishPendingInput?.("interrupted");
+        recorder.finishPendingInput?.("interrupted", "failed");
       }
     },
   );

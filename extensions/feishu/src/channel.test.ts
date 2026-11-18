@@ -290,10 +290,10 @@ const stickerCfg = config({
   actions: { sticker: true },
   stickerSets: {
     bot_work: {
-      file_work: ["Thumbs Up", "赞👍", "thumbs up again"],
+      file_work: ["Thumbs Up", "赞👍", "thumbs up again", "Müller wave"],
       file_wave: ["Wave.*", "你好👋"],
     },
-    bot_other: { file_other: ["赞👍"] },
+    bot_other: { file_other: ["赞👍", "Mu\u0308ller wave"] },
   },
   accounts: {
     work: { appId: "bot_work", appSecret: "secret_work" },
@@ -355,9 +355,9 @@ describe("Feishu stickers", () => {
     await expect(search({ query: "赞" }, accountId, localCfg)).rejects.toThrow("stickerSets");
   });
   it.each([
-    ["work", " thUMbs ", "file_work", "Thumbs Up"],
+    ["work", " mU\u0308LLER ", "file_work", "Müller wave"],
     ["renamed", "赞", "file_work", "赞👍"],
-    ["other", "赞", "file_other", "赞👍"],
+    ["other", "MÜLLER", "file_other", "Mu\u0308ller wave"],
   ])("searches the catalog owned by %s for %s", async (accountId, query, fileId, keyword) => {
     expect(details(await search({ query }, accountId))).toEqual({
       stickers: [{ fileId, keyword }],

@@ -3,10 +3,9 @@ import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose } from "../globals.js";
 import { transcodeAudioBuffer } from "../media/audio-transcode.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
-import type { TtsDirectiveOverrides } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable } from "./runtime-availability.js";
 import { normalizeSpeechText } from "./speech-text.js";
-import type { TtsResult, TtsSynthesisResult } from "./tts-runtime-types.js";
+import type { TtsDirectiveOverrides, TtsResult, TtsSynthesisResult } from "./tts-runtime-types.js";
 import {
   executeTtsProviderAttempts,
   sanitizeTtsErrorForLog,

@@ -210,7 +210,7 @@ describe("GitHub PR checks through the document loader", () => {
   );
 
   it("keeps refreshed failures over late reads, then recovers and expires them", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1000);
+    const now = vi.spyOn(performance, "now").mockReturnValue(1000);
     const deferred = createDeferred<Response>();
     const requested = createDeferred<void>();
     const read = reader(

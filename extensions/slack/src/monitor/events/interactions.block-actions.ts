@@ -73,9 +73,11 @@ async function respondEphemeral(
     return;
   }
   try {
+    // Without replace_original: false, Slack's response_url replaces the source message.
     await respond({
       text,
       response_type: "ephemeral",
+      replace_original: false,
     });
   } catch {
     // Best-effort feedback only.

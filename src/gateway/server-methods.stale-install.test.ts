@@ -83,5 +83,11 @@ it("returns a thrown pending admission as a retryable RPC response", async () =>
     pending: true,
   });
   const respond = await dispatchThrowingHandler(new AgentDatabaseAdmissionError(refusal));
-  expectUnavailable(respond, { details: refusal, retryable: true, retryAfterMs: 250 });
+  expectUnavailable(respond, {
+    details: refusal,
+    retryable: true,
+    retryAfterMs: 250,
+    message: expect.stringMatching(/waiting for capacity[\s\S]*Retry the request/),
+  });
+  expect(respond.mock.calls[0]![2].message).not.toMatch(/doctor --fix|stop the Gateway|restart/i);
 });

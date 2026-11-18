@@ -176,7 +176,8 @@ export async function closeAgentDatabaseNativeGeneration(params: {
   const { pathname, context, processOwner, opening, readOpenedStore, assertCleanupOwned } = params;
   const errors: unknown[] = [];
   try {
-    processOwner?.assertCurrent();
+    const assertCurrent = await processOwner?.prepareAccess();
+    assertCurrent?.();
   } catch (error) {
     // Ordinary admission may retire first; only physical ownership loss forbids lease settlement.
     if (processOwner?.signal.aborted) {

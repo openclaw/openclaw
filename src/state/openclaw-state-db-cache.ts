@@ -1,22 +1,15 @@
-import { existsSync } from "node:fs";
 import {
   assertStateDatabaseAccessAllowed,
   assertStateDatabaseReadAllowed,
+  type PreparedStateDatabaseReadAccess,
 } from "../infra/gateway-state-owner.js";
 import { registerNodeSqliteKyselyQueryErrorHandler } from "../infra/kysely-sync-cache-state.js";
-import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
+import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
-import {
-  isSqliteCorruptionError,
-  isSqliteLockError,
-  sqlitePrimaryResultCode,
-} from "../infra/sqlite-error-diagnostics.js";
-import {
-  createSqliteLifecycleAggregateError,
-  throwSqliteLifecycleErrors,
-} from "../infra/sqlite-lifecycle-errors.js";
+import { observeSqliteDatabaseAdmissionLocation } from "../infra/sqlite-database-admission.js";
+import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
-import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { readGlobalSingleton, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { OpenClawQuarantineReadCleanupError } from "./openclaw-quarantine-error.js";
@@ -26,7 +19,6 @@ import {
   getOpenClawDatabaseMaintenanceScope,
   isOpenClawDatabaseMaintenanceResourceOwned,
   observeOpenClawDatabaseMaintenanceResource,
-  type OpenClawDatabaseMaintenanceScope,
   type OpenClawStateDatabaseReadAdmission,
 } from "./openclaw-state-db-async-lifecycle.js";
 import {
@@ -38,23 +30,24 @@ import { createStateDatabaseCacheAdmission } from "./openclaw-state-db-cache.adm
 import { createStateDatabaseIdleRetirement } from "./openclaw-state-db-cache.idle.js";
 import type { StateDatabaseLifecycle } from "./openclaw-state-db-cache.types.js";
 import { createStateDatabaseWalOwner } from "./openclaw-state-db-cache.wal.js";
-import type {
-  OpenClawStateDatabase,
-  OpenClawStateDatabaseCloseOptions,
-  OpenClawStateDatabaseLifecycleEvent,
-  StateDatabaseHandle,
+import {
+  STATE_DATABASE_LIFECYCLE_KEY,
+  type OpenClawStateDatabase,
+  type OpenClawStateDatabaseCloseOptions,
+  type OpenClawStateDatabaseLifecycleEvent,
+  type StateDatabaseHandle,
 } from "./openclaw-state-db-contract.js";
 import {
   closeStateDatabaseHandle,
   readTrackedStateDatabaseIdentity,
 } from "./openclaw-state-db-handle.js";
 import { invalidateOpenClawStateRuntimeIntegrity } from "./openclaw-state-db-integrity-admission.js";
+import { retainSqliteDatabaseRemovalExclusion } from "./openclaw-state-db-removal-exclusion.js";
 import { assertExistingOpenClawStateSchemaCacheAdmission } from "./openclaw-state-db-schema-policy.js";
 import { openClawStateSnapshotOwners } from "./openclaw-state-db-snapshot-owner.js";
 import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
-const STATE_DATABASE_LIFECYCLE_KEY = Symbol.for("openclaw.stateDatabaseLifecycle");
 const stateDatabaseLifecycle = resolveGlobalSingleton<StateDatabaseLifecycle>(
   STATE_DATABASE_LIFECYCLE_KEY,
   () => ({
@@ -174,7 +167,7 @@ export function registerOpenClawStatePathCacheInvalidation<Key, Value extends { 
 
 function retainStateDatabaseClose(database: StateDatabaseHandle): void {
   retainedDatabaseHandles.set(database.db, database);
-  stateDatabaseLifecycle.unregisterRetainedExitClose ??= registerSqliteCacheExitClose(
+  stateDatabaseLifecycle.unregisterRetainedExitClose ??= registerProcessExitCleanup(
     closeOpenClawStateDatabase,
   );
 }
@@ -215,8 +208,8 @@ export const {
   borrowForRead: borrowOpenClawStateDatabaseForAsyncRead,
   retainForIndependentRead: retainOpenClawStateDatabaseForIndependentRead,
 } = createStateDatabaseRetainer(stateDatabaseLifecycle, {
-  assertOpen(pathname, ownership) {
-    assertOpenClawStateDatabaseOpenAllowed(pathname, ownership);
+  assertOpen(pathname, ownership, access) {
+    assertOpenClawStateDatabaseOpenAllowed(pathname, ownership, access);
     assertExistingOpenClawStateSchemaCacheAdmission(pathname, stateDatabaseLifecycle);
   },
   capture: (pathname) => asyncResources.capture(pathname),
@@ -433,11 +426,19 @@ export async function getOpenClawStateDatabaseTerminalFailureAsync(
 }
 
 /** Reject shared-state access after a process-local terminal failure. */
-function assertOpenClawStateDatabaseOpenAllowed(pathname: string, ownership?: "cached-read"): void {
+function assertOpenClawStateDatabaseOpenAllowed(
+  pathname: string,
+  ownership?: "cached-read",
+  access?: PreparedStateDatabaseReadAccess,
+): void {
   const resolvedPath = resolveDatabasePath({ path: pathname });
   const assertAllowed =
     ownership === "cached-read" ? assertStateDatabaseReadAllowed : assertStateDatabaseAccessAllowed;
-  assertAllowed(pathname);
+  if (ownership === "cached-read" && access) {
+    access.assertReadAllowed();
+  } else {
+    assertAllowed(pathname);
+  }
   const { identity } = asyncResources.capture(resolvedPath);
   const terminalFailure = terminalOpenLatch.get(resolvedPath);
   if (terminalFailure) {
@@ -606,6 +607,7 @@ export function publishOpenClawStateDatabaseWorkerAdmission(
   }
   asyncResources.publish(admission.databasePath, preparedIdentity);
   admission.assertCurrent();
+  observeSqliteDatabaseAdmissionLocation(admission.databasePath, admission.identity);
 }
 
 /** Drain worker resources before native checkpoint/close at one exact path. */
@@ -618,6 +620,14 @@ export function closeOpenClawStateDatabaseByPathAsync(
     await stopOpenClawStateDatabaseMaintenance(resolvedPath, identity);
     return retireOpenClawStateDatabaseHandles(resolvedPath, options, identity);
   });
+}
+
+/**
+ * Drain worker-held connections at one path while its native owner stays open.
+ * In WAL mode every idle connection holds a shared lock, so native exclusion needs this.
+ */
+export function closeOpenClawStateDatabaseWorkersByPathAsync(pathname: string): Promise<boolean> {
+  return asyncResources.close(resolveDatabasePath({ path: pathname }), () => false);
 }
 
 /** Orderly lifecycle close; synchronous close remains native/exit cleanup only. */
@@ -688,6 +698,12 @@ export const openClawStateDatabaseCache = {
   publishOpenClawStateDatabase,
   recordOpenClawStateDatabaseOpenFailure,
   recordOpenClawStateDatabaseLifecycleOpenError,
+  async reconcileFailedWorkerAdmission(
+    admission: OpenClawStateDatabaseReadAdmission,
+  ): Promise<void> {
+    await asyncResources.retireChangedAdmission(admission);
+    admission.assertCurrent();
+  },
   touchStateDatabase,
 };
 
@@ -727,70 +743,4 @@ export async function prepareOpenClawStateDatabaseRemoval(
       }
     },
   };
-}
-
-function retainSqliteDatabaseRemovalExclusion(
-  databasePath: string,
-  maintenance: OpenClawDatabaseMaintenanceScope,
-): void {
-  if (!existsSync(databasePath)) {
-    return;
-  }
-  const database = openNodeSqliteDatabase(resolveExistingSqliteFileUri(databasePath));
-  const close = () => {
-    if (!database.isOpen) {
-      return;
-    }
-    const errors: unknown[] = [];
-    try {
-      if (database.isTransaction) {
-        database.exec("ROLLBACK"); // sqlite-allow-raw -- Release the native removal exclusion before close.
-      }
-    } catch (error) {
-      errors.push(error);
-    }
-    try {
-      database.close();
-    } catch (error) {
-      errors.push(error);
-    }
-    throwSqliteLifecycleErrors(errors, "SQLite state removal exclusion cleanup failed.");
-  };
-  try {
-    // The maintenance owner drains this handle after state removal. A failed
-    // close retains both native custody and the external process owner.
-    maintenance.own(database, "shared-handles", close);
-    // Exclusive connection mode obtains the main-file lock even in WAL mode.
-    // Do not change journal_mode: a refused removal must preserve recovery bytes.
-    database.exec("PRAGMA busy_timeout = 0; PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE;"); // sqlite-allow-raw -- Native file-removal exclusion, without mutating journal mode.
-  } catch (error) {
-    try {
-      close();
-    } catch (cleanupError) {
-      throw createSqliteLifecycleAggregateError(
-        [error, cleanupError],
-        "SQLite state removal admission and cleanup both failed.",
-        error,
-      );
-    }
-    if (isSqliteLockError(error)) {
-      throw new Error(
-        "Cannot remove OpenClaw state directory while another SQLite connection is active",
-        {
-          cause: error,
-        },
-      );
-    }
-    const code = sqlitePrimaryResultCode(error);
-    // Explicit reset may remove corrupt state after process ownership is established.
-    if (code !== 11 && code !== 26) {
-      throw error;
-    }
-    return;
-  }
-  if (process.platform === "win32") {
-    // WinVFS denies FILE_SHARE_DELETE: any peer handle prevents unlink. Our
-    // own probe must close so removal can proceed when no peer remains.
-    close();
-  }
 }

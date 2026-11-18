@@ -111,6 +111,7 @@ type RealtimeVoiceAgentControlDeps = {
       isInboundUserMessage?: boolean;
       taskSuggestionDeliveryMode?: undefined;
       toolAuthorityOverlay?: ReplyToolAuthorityOverlay;
+      inputRequesterDeviceId?: string;
       userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
     },
   ) => Promise<RealtimeVoiceAgentQueueOutcome>;
@@ -145,6 +146,17 @@ export async function controlRealtimeVoiceAgentRun(
     recentEvents?: readonly TalkEvent[];
     /** Optional Gateway Stop override; otherwise cancel the captured exact run owner. */
     cancelRun?: (runId: string) => Promise<boolean>;
+  },
+  providedDeps?: RealtimeVoiceAgentControlDeps,
+): Promise<RealtimeVoiceAgentControlResult> {
+  return await controlTalkAgentRun(params, providedDeps);
+}
+
+/** Gateway Talk reads caller policy through the worker-backed session reader. */
+export async function controlTalkAgentRun(
+  params: Parameters<typeof controlRealtimeVoiceAgentRun>[0] & {
+    /** Takes precedence over getToolAuthorityOverlay. */
+    getToolAuthorityOverlayAsync?: () => Promise<ReplyToolAuthorityOverlay>;
   },
   providedDeps?: RealtimeVoiceAgentControlDeps,
 ): Promise<RealtimeVoiceAgentControlResult> {
@@ -255,7 +267,9 @@ export async function controlRealtimeVoiceAgentRun(
   }
   // Released dependency adapters may ignore optional preparation callbacks.
   const deferMessagePreparation = !providedDeps && Boolean(target || legacyOwner);
-  const toolAuthorityOverlay = params.getToolAuthorityOverlay?.();
+  const toolAuthorityOverlay = params.getToolAuthorityOverlayAsync
+    ? await params.getToolAuthorityOverlayAsync()
+    : params.getToolAuthorityOverlay?.();
   if (toolAuthorityOverlay && (mode === "cancel" || !deferMessagePreparation)) {
     await params.prepareToolAuthorityOverlay?.(toolAuthorityOverlay);
   }
@@ -310,17 +324,22 @@ export async function controlRealtimeVoiceAgentRun(
     debounceMs: 0,
     isInboundUserMessage: true,
     toolAuthorityOverlay,
+    // The prepared caller authority carries the paired device that spoke this input.
+    inputRequesterDeviceId: toolAuthorityOverlay?.approvalReviewerDeviceId,
     // Talk cannot present task suggestions, so spoken user input must not inherit
     // a capable TUI run's model-facing task tools.
     taskSuggestionDeliveryMode: undefined,
   };
   const steerText = deferMessagePreparation ? text : prepareMessage();
   const prepareCurrent = async () => {
-    const overlay = params.getToolAuthorityOverlay?.();
+    const overlay = params.getToolAuthorityOverlayAsync
+      ? await params.getToolAuthorityOverlayAsync()
+      : params.getToolAuthorityOverlay?.();
     if (overlay) {
       await params.prepareToolAuthorityOverlay?.(overlay);
     }
     options.toolAuthorityOverlay = overlay;
+    options.inputRequesterDeviceId = overlay?.approvalReviewerDeviceId;
   };
   const canInject = () => {
     options.toolAuthorityOverlay?.operatorAuthority?.assertCurrent();
@@ -336,8 +355,13 @@ export async function controlRealtimeVoiceAgentRun(
         }
       },
       compatAssertCurrent: () => {
-        const overlay = params.getToolAuthorityOverlay?.();
+        // An asynchronous reader cannot repeat its read here; check the overlay it
+        // prepared for this admission while assertCurrent rechecks live operator authority.
+        const overlay = params.getToolAuthorityOverlayAsync
+          ? options.toolAuthorityOverlay
+          : params.getToolAuthorityOverlay?.();
         options.toolAuthorityOverlay = overlay;
+        options.inputRequesterDeviceId = overlay?.approvalReviewerDeviceId;
         if (overlay && legacyOwner && !legacyOwner.matchesCaller(overlay)) {
           throw new Error("The original Talk caller authority no longer matches");
         }

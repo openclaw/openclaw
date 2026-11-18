@@ -37,7 +37,10 @@ function readUiCss(): string {
     "chat/sidebar-panels",
     "plugins",
   ];
-  return files.map((file) => readStyleSheet(`ui/src/styles/${file}.css`)).join("\n");
+  return [
+    ...files.map((file) => readStyleSheet(`ui/src/styles/${file}.css`)),
+    readStyleSheet("ui/src/pages/chat/components/chat-session-workspace-desktop.css"),
+  ].join("\n");
 }
 
 function readStyles(
@@ -84,12 +87,10 @@ function controlsHtml() {
       <div class="settings-row__control"><textarea class="settings-input">config textarea</textarea></div>
       <select class="settings-select"><option>settings select</option></select>
       <input class="usage-date-input" value="2026-05-31" />
-      <select class="usage-select"><option>usage select</option></select>
+      <label class="sessions-sort">
+        <span>Sort</span><select class="settings-select"><option>Recent</option></select>
+      </label>
       <input class="usage-query-input" value="usage query" />
-      <div class="usage-filters-inline">
-        <select><option>inline usage select</option></select>
-        <input type="text" value="inline usage input" />
-      </div>
       <div class="agent-chat__composer-combobox"><textarea>chat composer</textarea></div>
     </main>
   `;
@@ -149,6 +150,87 @@ afterAll(async () => {
 });
 
 describeBrowserLayout("form controls and app chrome styles", () => {
+  it("preserves shared field states and forced-colors focus indicators", async () => {
+    await withBrowserPage(desktopContext.newPage(), async (page) => {
+      await setFixture(
+        page,
+        `<main style="padding:24px;display:grid;gap:12px">
+          <label class="field"><span><input id="field" placeholder="Field" /></span></label>
+          <input id="usage" class="usage-query-input" placeholder="Usage query" />
+          <button id="agent" class="agent-select__trigger" type="button">Agent</button>
+          <button id="submenu" class="agent-select__trigger oc-menu-item" type="button" aria-expanded="true" tabindex="-1">Submenu</button>
+        </main>`,
+        'data-theme-mode="light" style="--field-border:#123456;--border-strong:#345678;--field-focus-border:#56789a;--muted:#789abc;--duration-fast:0s"',
+      );
+      const paint = (control: Locator) =>
+        control.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return {
+            border: style.borderTopColor,
+            opacity: style.opacity,
+            cursor: style.cursor,
+            focused: element.matches(":focus-visible"),
+            outline: [style.outlineStyle, style.outlineWidth, style.outlineOffset],
+          };
+        });
+      for (const id of ["field", "usage", "agent"]) {
+        const control = page.locator(`#${id}`);
+        await page.mouse.move(0, 0);
+        expect(await paint(control), `${id} resting`).toMatchObject({
+          border: "rgb(18, 52, 86)",
+          opacity: "1",
+        });
+        await control.hover();
+        expect((await paint(control)).border, `${id} hover`).toBe("rgb(52, 86, 120)");
+        await page.keyboard.press("Tab");
+        await control.focus();
+        expect(await paint(control), `${id} keyboard focus while hovered`).toMatchObject({
+          border: "rgb(86, 120, 154)",
+          focused: true,
+        });
+        expect((await paint(control)).outline[0], `${id} normal focus outline`).toBe("none");
+        await control.evaluate((element) => element.setAttribute("disabled", ""));
+        // Chromium blurs a newly disabled element at its next rendering update, not at once.
+        await expect
+          .poll(() => paint(control), { message: `${id} disabled while hovered` })
+          .toMatchObject({
+            border: "rgb(18, 52, 86)",
+            opacity: "0.5",
+            cursor: "not-allowed",
+          });
+        await control.evaluate((element) => element.removeAttribute("disabled"));
+      }
+      expect(
+        await page
+          .locator("#field")
+          .evaluate((element) => getComputedStyle(element, "::placeholder").color),
+      ).toBe("rgb(120, 154, 188)");
+
+      await page.mouse.move(0, 0);
+      const agent = page.locator("#agent");
+      await agent.evaluate((element) => element.setAttribute("aria-expanded", "true"));
+      await agent.hover();
+      expect((await paint(agent)).border, "expanded trigger resists hover").toBe(
+        "rgb(86, 120, 154)",
+      );
+      expect((await paint(page.locator("#submenu"))).border, "submenu keeps its own paint").toBe(
+        "rgb(18, 52, 86)",
+      );
+
+      await page.emulateMedia({ forcedColors: "active" });
+      await page.locator("#field").focus();
+      expect(
+        (await paint(page.locator("#field"))).outline,
+        "focused field in forced colors",
+      ).toEqual(["solid", "2px", "2px"]);
+      expect((await paint(agent)).outline, "expanded trigger in forced colors").toEqual([
+        "solid",
+        "2px",
+        "2px",
+      ]);
+    });
+  });
+
   it("removes the mask layer from layout when the value is revealed", async () => {
     await withBrowserPage(desktopContext.newPage(), async (page) => {
       await setFixture(
@@ -170,6 +252,29 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       expect(state).toEqual({ hidden: true, display: "none" });
     });
   });
+
+  it.each(["dark", "light"] as const)(
+    "drops the accent from a disabled primary in %s mode",
+    async (theme) => {
+      await withBrowserPage(desktopContext.newPage(), async (page) => {
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await setFixture(
+          page,
+          `<main style="padding: 24px">
+          <button class="btn" type="button" disabled>Neutral</button>
+          <button class="btn primary" type="button" disabled>Primary</button>
+        </main>`,
+          `data-theme="${theme}" data-theme-mode="${theme}"`,
+        );
+        const paint = (name: string) =>
+          page.getByRole("button", { name, exact: true }).evaluate((button) => {
+            const style = getComputedStyle(button);
+            return [style.backgroundColor, style.borderTopColor, style.color, style.opacity];
+          });
+        expect(await paint("Primary")).toEqual(await paint("Neutral"));
+      });
+    },
+  );
 
   it("keeps MCP remove glyphs proportionate to settings buttons", async () => {
     await withBrowserPage(desktopContext.newPage(), async (page) => {
@@ -384,7 +489,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
         );
 
       const desktop = await measure();
-      expect(desktop.map((row) => row.selectWidth)).toEqual([340, 340]);
+      expect(desktop.map((row) => row.selectWidth)).toEqual([220, 220]);
       expect(desktop.every((row) => row.selectTop === row.buttonTop)).toBe(true);
 
       await page.setViewportSize({ width: 390, height: 800 });
@@ -412,10 +517,8 @@ describeBrowserLayout("form controls and app chrome styles", () => {
         ".settings-row__control > textarea.settings-input",
         ".settings-select",
         ".usage-date-input",
-        ".usage-select",
+        ".sessions-sort select",
         ".usage-query-input",
-        '.usage-filters-inline input[type="text"]',
-        ".usage-filters-inline select",
         ".agent-chat__composer-combobox > textarea",
       ];
       expect(
@@ -426,8 +529,8 @@ describeBrowserLayout("form controls and app chrome styles", () => {
         expect(Number.parseFloat(size), selectors[index]).toBeGreaterThanOrEqual(16),
       );
 
-      // Both the .field-wrapped and bare settings selects draw the themed
-      // chevron; bare ones once fell back to the misaligned native arrow.
+      // The field-wrapped, bare and Usage sort settings selects all draw the
+      // themed chevron; bare ones once fell back to the misaligned native arrow.
       const selects = await page.locator("select.settings-select").evaluateAll((nodes) =>
         nodes.map((node) => {
           const style = getComputedStyle(node as HTMLElement);
@@ -441,7 +544,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
         }),
       );
 
-      expect(selects).toHaveLength(2);
+      expect(selects).toHaveLength(3);
       for (const select of selects) {
         expect(select).toMatchObject({
           appearance: "base-select",
@@ -486,14 +589,10 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       expect(
         await readStyles(
           page,
-          [
-            "#openclaw-mount-retry",
-            "#openclaw-mount-wait",
-            '.mount-fallback__panel a[href^="https://"]',
-          ],
+          ["#openclaw-mount-retry", '.mount-fallback__panel a[href^="https://"]'],
           "cursor",
         ),
-      ).toEqual(["default", "default", "pointer"]);
+      ).toEqual(["default", "pointer"]);
     });
   });
 
@@ -525,7 +624,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
               <span data-scale class="sidebar-agent-card__name">Agent</span>
               <span data-scale class="settings-sidebar__item-label">Settings</span>
               <span data-scale class="sidebar-file-view__path">workspace/file.ts</span>
-              <span data-scale class="chat-workspace-rail__file-badge">3 files</span>
+              <div class="workspace-desktop"><span data-scale class="workspace-desktop__filename">3 files</span></div>
               <span data-scale class="session-menu__shortcut">⌘K</span>
               <div class="file-view__search"><input data-scale data-baseline="12" value="query" /><span data-scale class="file-view__search-counter">1/2</span></div>
               <div class="sidebar-recent-session"><button class="sidebar-child-session-toggle"><span class="sidebar-child-session-toggle__count">100</span></button></div>
@@ -648,7 +747,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
           ],
           "userSelect",
         ),
-      ).toEqual(["none", "text", "auto", "text", "none", "none"]);
+      ).toEqual(["text", "text", "auto", "text", "none", "none"]);
       expect(
         await readStyles(
           page,

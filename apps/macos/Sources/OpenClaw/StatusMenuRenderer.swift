@@ -259,8 +259,10 @@ final class StatusMenuRenderer: NSObject {
 
     private func configureAction(_ item: NSMenuItem, action: StatusMenuDescriptor.Action) {
         let (title, symbol) = switch action {
+        case .openClawIDSignIn:
+            (String(localized: "Sign in with OpenClaw ID…"), "person.crop.circle")
         case .dashboard:
-            (String(localized: "Open Dashboard"), "gauge")
+            (String(localized: "Open OpenClaw"), "gauge")
         case .quickChat:
             (String(localized: "Quick Chat"), "text.bubble")
         case .talkMode:
@@ -283,6 +285,10 @@ final class StatusMenuRenderer: NSObject {
 
         self.configureNative(item, title: title, symbol: symbol, action: #selector(self.performAction(_:)))
         item.keyEquivalent = ""
+        if action == .dashboard {
+            item.isEnabled = self.state.connectionMode != .unconfigured ||
+                !DashboardManager.shared.gatewayEntries.isEmpty
+        }
 
         switch action {
         case .settings, .quit:
@@ -316,6 +322,8 @@ final class StatusMenuRenderer: NSObject {
         else { return }
 
         switch action {
+        case .openClawIDSignIn:
+            MacOpenClawIDSignInPresenter.shared.present()
         case .dashboard:
             AppNavigationActions.openDashboard()
         case .quickChat:

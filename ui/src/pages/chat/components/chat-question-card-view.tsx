@@ -1,5 +1,4 @@
 import { lazy, Show } from "solid-js";
-import { LoadingState } from "../../../components/solid/loading-state.tsx";
 import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-questions.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
@@ -34,7 +33,7 @@ function QuestionCardContents(props: { panel: QuestionPanelProps; host: HTMLElem
     <ChatImportBoundary
       identity={[props.panel.model.requestKey]}
       connected={() => props.host.isConnected}
-      fallback={() => <LoadingState />}
+      fallback={() => null}
       subtitle={t("chat.questions.eyebrow")}
     >
       <QuestionPanel props={props.panel} />

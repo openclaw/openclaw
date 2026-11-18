@@ -9,15 +9,34 @@ import { Icon } from "./solid/icon.tsx";
 const SettingsSidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
   export: "ShellSettingsSidebar",
 });
+const SettingsSaveStatus = lazy(() => import("./settings-sidebar-shell.tsx"), {
+  export: "ShellSettingsSaveStatus",
+});
 export type SettingsSidebarFallbackProps = Pick<
   SettingsSidebarProps,
   | "presentation"
   | "activeRouteId"
+  | "pluginTabs"
+  | "activePluginTab"
   | "connectionStatus"
   | "footerStatus"
   | "onExit"
+  | "onEscape"
   | "nativeDeviceSettings"
 > & { canAdmin: boolean };
+
+/** Feedback waits on the Settings chunk without ever holding the page. */
+export function LazySettingsSaveStatus(
+  props: Parameters<typeof import("./settings-sidebar-shell.tsx").ShellSettingsSaveStatus>[0],
+) {
+  return (
+    <Errored fallback={null}>
+      <Loading fallback={null}>
+        <SettingsSaveStatus host={props.host} />
+      </Loading>
+    </Errored>
+  );
+}
 
 export function LazySettingsSidebar(
   props: Parameters<typeof import("./settings-sidebar-shell.tsx").ShellSettingsSidebar>[0],
@@ -78,7 +97,8 @@ function SettingsSidebarFallback(props: {
             <h1 class="page-title">
               {props.sidebarProps.presentation === "embed-list"
                 ? t("nav.settings")
-                : titleForRoute(props.sidebarProps.activeRouteId, t)}
+                : (props.sidebarProps.activePluginTab?.label ??
+                  titleForRoute(props.sidebarProps.activeRouteId, t))}
             </h1>
             <p role={props.failed ? "alert" : "status"}>
               {t(props.failed ? "nav.settingsLoadFailed" : "common.loading")}
@@ -154,7 +174,13 @@ function SettingsSidebarSkeleton(props: SettingsSidebarFallbackProps) {
               <Show when={group.labelKey}>
                 <span class="skeleton settings-sidebar__loading-group-label" />
               </Show>
-              <For each={group.routes}>
+              <For
+                each={
+                  group.labelKey === "nav.settingsGroupAgents"
+                    ? [...group.routes, ...(props.pluginTabs ?? [])]
+                    : group.routes
+                }
+              >
                 {() => (
                   <span class="settings-sidebar__item settings-sidebar__loading-item">
                     <span class="skeleton settings-sidebar__loading-icon" />

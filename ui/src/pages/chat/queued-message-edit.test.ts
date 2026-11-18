@@ -32,7 +32,7 @@ import {
   steerQueuedChatMessage as steerQueued,
 } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
+import { chatOfflineQueueStorageError } from "./chat-send-support.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import {
   activeQueuedMessageEdit as activeEdit,
@@ -220,7 +220,7 @@ it.each(["move", "remove"])("retains edits after peer %s and navigation", async 
   expect(host.chatQueuedEdit?.source).toBe(captured);
   expect(storedOrder(host)).toEqual(expectedOrder);
   expect(host.chatQueuedEdit?.draftText).toBe("message 1, corrected");
-  expect(host.chatError).toContain("This queued message changed while you were editing.");
+  expect(host.chatError).toContain("The queued message changed.");
   expect(cancelEdit(host as never)).toBe(true);
   expect(storedOrder(host)).toEqual(expectedOrder);
 });
@@ -280,7 +280,7 @@ it("retains the source after a failed replacement write", async () => {
   expect(storedOrder(host)).toEqual(["message 1", "message 2", "message 3"]);
   expect(isEditing(host as never, "queued-2")).toBe(true);
   expect(host.chatQueuedEdit?.draftText).toBe("message 2, corrected");
-  expect(host.chatError).toContain("Your edit could not be saved in this browser.");
+  expect(host.chatError).toContain("Couldn’t save your edit.");
   vi.restoreAllMocks();
   await submitQueuedEdit(host);
   expect(storedOrder(host)).toEqual(["message 1", "message 2, corrected", "message 3"]);
@@ -328,14 +328,14 @@ it("clears reorder conflicts after editing ends", () => {
 it("preserves unrelated errors after a queue move", () => {
   const { host } = queueHost([{}, {}]);
   host.lastError = "History could not be refreshed";
-  host.chatError = OFFLINE_QUEUE_STORAGE_ERROR;
+  host.chatError = chatOfflineQueueStorageError();
 
   expect(moveQueued(host as never, "queued-2", "queued-1")).toBe("moved");
 
   expect(storedOrder(host)).toEqual(["message 2", "message 1"]);
   expect(host).toMatchObject({
     lastError: "History could not be refreshed",
-    chatError: OFFLINE_QUEUE_STORAGE_ERROR,
+    chatError: chatOfflineQueueStorageError(),
   });
 });
 

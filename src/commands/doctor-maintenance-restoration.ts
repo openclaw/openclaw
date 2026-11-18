@@ -453,6 +453,19 @@ export async function restoreDoctorGatewayService(params: {
       params.runtime.log(warning);
     }
     assertMaintenanceCurrent();
+    // A disabled Scheduled Task cannot run. Older releases disabled it on `gateway stop`;
+    // `gateway start` re-enables it, so leave that choice to the operator.
+    if (process.platform === "win32" && service.isEnabled) {
+      const readEnabled = service.isEnabled;
+      const enabled = await settle(() => readEnabled({ env: current?.env ?? serviceEnv }));
+      assertMaintenanceCurrent();
+      if (!enabled) {
+        const warning = `Gateway Scheduled Task is disabled, so Doctor left the Gateway stopped. Start it with \`${formatCliCommand("openclaw gateway start", serviceEnv)}\` (this re-enables the task), then check \`${formatCliCommand("openclaw gateway status --deep", serviceEnv)}\`.`;
+        warnings.push(warning);
+        params.runtime.log(warning);
+        return undefined;
+      }
+    }
     const restore = current && !inspectionFailure ? service.restart : service.start;
     await settle(async () => {
       await restore({

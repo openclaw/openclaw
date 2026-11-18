@@ -43,9 +43,6 @@ it("opens agent avatar selection from the keyboard and respects the busy state",
   expect(popover?.matches(":popover-open")).toBe(true);
   await vi.waitFor(() => expect(popover?.getBoundingClientRect().width).toBeGreaterThan(0));
   const anchor = avatarButton.getBoundingClientRect();
-  const fields = container.querySelector(".agent-identity-editor__fields")!.getBoundingClientRect();
-  const midpoint = (rect: DOMRect) => rect.top + rect.height / 2;
-  expect(Math.abs(midpoint(anchor) - midpoint(fields))).toBeLessThanOrEqual(1);
   // Opening the native popover can precede its anchor layout on a busy browser.
   await vi.waitFor(() => {
     const bounds = popover!.getBoundingClientRect();

@@ -62,7 +62,7 @@ export type SessionRowBadge = {
     | "gitPullRequestDraft"
     | "gitPullRequestClosed"
     | "alertTriangle"
-    | "pencil"
+    | "draft"
     | "globe";
   modifier: string;
   count?: number;
@@ -184,7 +184,7 @@ export function resolveSessionRowBadges(
   if (params.hasComposerDraft) {
     badges.push({
       label: translate("sessionsView.unsentDraft"),
-      icon: "pencil",
+      icon: "draft",
       modifier: "draft",
     });
   }

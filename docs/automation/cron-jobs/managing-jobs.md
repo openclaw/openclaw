@@ -11,7 +11,11 @@ sidebarTitle: "Manage jobs"
 
 Day-to-day operation of stored jobs: copy-ready CLI examples, the management commands, run history semantics, and the `cron.*` configuration keys. Part of the [Automations](/automation/cron-jobs) guide.
 
-Run links from automation messages and notifications open the exact recorded run, even when newer runs fill the first history page. Choose **Show all runs** to return to that automation's full history. Links with a reused session or start-time identity do not select an ambiguous run.
+In the Control UI, **Start now** starts an automation immediately. Open **Activity history** to review its activity. **Delete** removes the automation and stops future activity; the confirmation explains that this can’t be undone. An automation’s owner needs automation access to edit it. Admins can also edit it.
+
+Deleting a conversation does not remove its linked automations. Command automations can continue running after their creating conversation is deleted. The conversation's deletion confirmation warns that automations may continue; disable or remove them separately to stop future runs.
+
+Run links from automation messages and notifications open the exact recorded run, even when newer runs fill the first history page. Choose **Show all activity** to return to that automation's full history. Links with a reused session or start-time identity do not select an ambiguous run.
 
 ## CLI examples
 
@@ -103,9 +107,12 @@ An explicit permission edit still requires matching owner authority. Jobs whose
 stored identity cannot prove an account need authenticated administrator recovery;
 Doctor does not infer ownership from delivery settings or the current caller.
 
-Automations created before owner attribution have no recorded owner. Chat can
-still enable, disable, reschedule or remove them, but only a Gateway owner or an
-operator can change their prompt or tools.
+Automations created before owner attribution have no recorded owner. An
+authenticated administrator or configured channel owner can edit them through
+chat, including their prompt, model, and tool cap. Management keeps an
+operator automation’s execution authority and attribution; it does not adopt
+the administrator’s conversation as a new owner. Ordinary caller-scoped turns
+cannot edit ownerless operator automations.
 
 Operator-created automations that name an owner conversation run with operator
 authority. That conversation can list, enable, disable, reschedule, run
@@ -114,7 +121,7 @@ schedule or timing changes keep operator authority. Any other change
 from the owner conversation, such as the name, prompt, tools, trigger, delivery,
 failure alerts or session target, drops the job to that conversation's own authority. If its owner record has no account, those
 changes need a Gateway owner or an operator, or a new automation. Only a Gateway
-owner or an operator can write its scratch.
+owner, an operator or the automation's own runs can write its scratch.
 
 ```bash
 # List enabled jobs
@@ -163,7 +170,7 @@ Conversation automation views use the conversation's physical key and selected a
 
 Archiving a session (Control UI, or `sessions.patch { key, archived: true, expectedSessionId }` using the durable ID from `sessions.list`) disables every enabled automation job bound to that session: its isolated `cron:<jobId>` session, a `session:<key>` target, or a delivery/wake `sessionKey` lane. Restoring the session requires the same observed identity and does not re-enable those jobs; use `openclaw automations enable <jobId>`. Sessions with an enabled bound job show a clock badge in the Control UI sidebar. An agent's main session, including `global`, cannot be archived.
 
-Before archiving or deleting a session with an enabled bound job, the Control UI asks for confirmation. The dialog names the jobs that will pause and offers **Archive anyway** or **Delete anyway**; the warning appears even if you turned off delete confirmations. Archiving a nested session tree lists the jobs bound to any session in the tree. Sessions without a bound job archive and delete as before. The browser console records each warning as `[session-automation-confirm] <archive|delete> shown`, followed by `confirmed` or `cancelled`.
+Before archiving or deleting a session with an enabled bound job, the Control UI asks for confirmation. The dialog names linked jobs and offers **Archive anyway** or **Delete anyway**. For deletion, it warns that automations may keep running and should be disabled or removed separately. The warning appears even if you turned off delete confirmations. Archiving a nested session tree lists the jobs bound to any session in the tree. Sessions without a bound job archive and delete as before. The browser console records each warning as `[session-automation-confirm] <archive|delete> shown`, followed by `confirmed` or `cancelled`.
 
 `openclaw automations run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes; it polls the returned `runId` (default timeout `10m`, poll interval `2s`) and exits `0` only for `completionStatus: "succeeded"`. Failed or unknown completion and wait timeouts exit non-zero.
 
@@ -179,13 +186,27 @@ Once a successful one-shot consumes its scheduled occurrence, its finished event
 
 Control UI run history shows `OK · Error` or `OK · Unknown` when execution succeeded but whole-run completion failed or remains unknown. Its status filter still selects the execution status.
 
+A scheduled run can use the automations tool with `action: "runs"`, its own
+`jobId`, and optional `limit`, `offset`, or `runId` to read its job's recorded
+outcomes. This includes `deliveryStatus`, the recorded channel and target, and
+`delivery.receipts` with message IDs for confirmed scheduler announcements.
+Older records and providers that did not return message IDs may have only the
+status and target. The current run's automatic announcement happens after the
+agent finishes, so its receipt becomes available to later runs.
+
+This access follows the job identity bound to the active scheduled admission,
+including a scheduler-admitted restart continuation. It does not grant another
+job's history, channel history, or transcript access. A different delivery account
+does not change the job's identity. An admitted paced job or one-shot session
+continuation also retains `next_check`; a session key alone cannot restore it.
+
 Run-history search matches summaries, task names, and execution or delivery errors. You can search the delivery error shown on a run even when its execution status is `ok`.
 
 Run history shows a loading indicator while the selected history is unavailable. A failed request shows an error and a **Retry** button; previously loaded runs for the same selection remain visible. Empty-history guidance appears only after a successful request confirms there are no runs for the current selection and filters.
 
-After a temporary Gateway reconnect, Automations reopens the current selected job and run using fresh job data. Closing the panel or choosing another automation replaces that selection; reconnect does not replay a superseded link. **Show all runs** clears the linked-run selection across reconnects. Changing the Gateway identity or agent scope clears the selection.
+After a temporary Gateway reconnect, Automations reopens the current selected job and run using fresh job data. Closing the panel or choosing another automation replaces that selection; reconnect does not replay a superseded link. **Show all activity** clears the linked-run selection across reconnects. Changing the Gateway identity or agent scope clears the selection.
 
-Choose **View transcript** on a run to read that run’s recorded conversation, including earlier pages. Transcript selection stays bound to the recorded run when the scheduler reuses its session alias. Gateway clients use `cron.history` with a job `id` and an exact `runId` or `runAtMs`; the response contains `messages`, optional `activity`, and an opaque `nextCursor`. Missing or ambiguous run records remain unavailable rather than opening a different run. The selected run identifies its recorded conversation generation: isolated runs have a fresh generation, while custom sessions retain their shared conversation history across runs. Current job and session permissions apply to every page. Unavailable or inaccessible transcripts return a generic error without disclosing the selected session key.
+Gateway clients can read a run’s recorded conversation using `cron.history` with a job `id` and an exact `runId` or `runAtMs`; the response contains `messages`, optional `activity`, and an opaque `nextCursor`. Missing or ambiguous run records remain unavailable rather than opening a different run. The selected run identifies its recorded conversation generation: isolated runs have a fresh generation, while custom sessions retain their shared conversation history across runs. Current job and session permissions apply to every page. Unavailable or inaccessible transcripts return a generic error without disclosing the selected session key.
 
 Intentional silence (`NO_REPLY`), heartbeat acknowledgments, and channel reply transforms record `deliverySuppressionReason` without claiming delivery or triggering delivery-failure alerts. These successful non-outcomes and successful executions with explicit `delivery.bestEffort: true` delete one-shots normally. An empty model final is not intentional silence; exhausted recovery records a failed run rather than a synthetic successful `NO_REPLY`. A transport hook veto instead records a delivery error without an intentional-suppression reason. Active descendants without a final reply, stale interim output, and output emptied by TTS instead record a delivery error. Retained one-shot jobs do not automatically rerun; inspect their history and delivery outcome before retrying or removing them.
 
@@ -269,7 +290,7 @@ To block this execution path, start the Gateway with `OPENCLAW_DISABLE_CRON_HOST
 
 <AccordionGroup>
   <Accordion title="Retry behavior">
-    **One-shot retry**: transient errors (rate limit, overload, network, timeout, server error) use a built-in retry schedule. Permanent errors disable the job immediately.
+    **One-shot retry**: transient errors (rate limit, overload, network, timeout, server error) retry up to three times after 30 seconds, 60 seconds, and 5 minutes. Watchdog stalls and caller aborts use the same bounded policy; rate-limited model fallback exhaustion retains its provider classification. Explicit user cancellation, revoked authentication, invalid configuration, and missing targets do not retry. Permanent failures and exhausted retries disable the job with a visible notice. Gateway restart/drain interruptions retain the [restart recovery policy](/automation/cron-jobs/how-it-works#task-reconciliation).
 
     **Recurring retry**: consecutive execution errors back off on an extended schedule (30s, 60s, 5m, 15m, 60m). Backoff resets after the next successful run.
 

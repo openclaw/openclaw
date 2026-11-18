@@ -25,7 +25,7 @@ import {
   SYNC_REBUILD_MAX_ROWS,
 } from "../../config/sessions/session-transcript-index.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
-import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   captureOwnedTranscriptWriteAssertion,
@@ -82,7 +82,7 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
           throw new Error("Session transcript changed during suffix preparation");
         }
       };
-      const reader = prepareSessionManagerHydration(target, { lane: targetDiscoveryLane });
+      const reader = prepareSessionManagerHydration(target, { lane: sessionStoreLane });
       const { env: _env, ...scope } = withOwnedSessionTranscriptWriterFence(target);
       const { withSessionMetadataWorker } = await import("./session-manager-metadata-runtime.js");
       assertCurrent();
@@ -211,6 +211,10 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
           )
         : undefined;
     const persistedSuffixStartSeq = candidateSeq ?? this.persistedSuffixStartSeq;
+    this.ownTranscriptEntries([
+      ...this.fileEntries,
+      ...this.opaqueFileEntries.map((entry) => entry.record),
+    ]);
     const current = new SessionManagerSuffixPersistence(this.cwd, undefined, this.fileEntries);
     current.opaqueFileEntries = this.opaqueFileEntries.map((entry) => ({ ...entry }));
     current.buildIndex();
@@ -303,6 +307,10 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
     }
     const preparedEntries = [...retainedContextPrefix, ...expectedPersistedEntries];
     const prepared = new SessionManagerSuffixPersistence(this.cwd, undefined, preparedEntries);
+    prepared.ownTranscriptEntries([
+      ...prepared.fileEntries,
+      ...prepared.opaqueFileEntries.map((entry) => entry.record),
+    ]);
     const restoreOmittedParentAncestry = (
       source: SessionManagerSuffixPersistence,
       destination: SessionManagerSuffixPersistence,
@@ -455,6 +463,7 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
     const adoptPrepared = (version?: typeof this.transcriptVersion) => {
       // Publish the detached tree before later post-commit observers can append through this manager.
       this.fileEntries = prepared.fileEntries.map(restoreCustomData);
+      this.pendingWritableTranscriptEntries = prepared.pendingWritableTranscriptEntries;
       this.opaqueFileEntries = prepared.opaqueFileEntries;
       this.buildIndex();
       restoreOmittedParentAncestry(prepared, this);

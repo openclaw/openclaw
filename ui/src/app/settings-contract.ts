@@ -1,6 +1,8 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import {
   normalizeUiAppearancePreference,
+  UI_PREFERENCE_DEFAULTS,
   type TabIconPreference,
 } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import type { BoardSessionViews } from "../lib/board/settings.ts";
@@ -28,7 +30,10 @@ function normalizeChoice<T extends string>(
   return (value) => values.find((candidate) => candidate === value) ?? fallback;
 }
 
-export const normalizeChatSendShortcut = normalizeChoice(CHAT_SEND_SHORTCUTS, "enter");
+export const normalizeChatSendShortcut = normalizeChoice(
+  CHAT_SEND_SHORTCUTS,
+  UI_PREFERENCE_DEFAULTS.chatSendShortcut,
+);
 
 const CHAT_FOLLOW_UP_MODES = ["queue", "steer"] as const;
 export type ChatFollowUpMode = (typeof CHAT_FOLLOW_UP_MODES)[number];
@@ -43,6 +48,61 @@ const CATALOG_OPEN_TARGETS = ["viewer", "terminal"] as const;
 export type CatalogOpenTarget = (typeof CATALOG_OPEN_TARGETS)[number];
 
 export const normalizeCatalogOpenTarget = normalizeChoice(CATALOG_OPEN_TARGETS, "viewer");
+
+const DASHBOARDS_VIEWS = ["grid", "list"] as const;
+const DASHBOARDS_SORTS = ["updated", "title"] as const;
+const DASHBOARDS_GROUPS = ["none", "updated", "author"] as const;
+export type DashboardsDisplay = {
+  view: (typeof DASHBOARDS_VIEWS)[number];
+  sort: (typeof DASHBOARDS_SORTS)[number];
+  group: (typeof DASHBOARDS_GROUPS)[number];
+};
+export const DASHBOARDS_DISPLAY_DEFAULTS: DashboardsDisplay = {
+  view: "grid",
+  sort: "updated",
+  group: "none",
+};
+
+/** Browser-local gallery display; the defaults are not stored. */
+export function normalizeDashboardsDisplay(value: unknown): DashboardsDisplay | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const display: DashboardsDisplay = {
+    view: normalizeChoice(DASHBOARDS_VIEWS, "grid")(value.view),
+    sort: normalizeChoice(DASHBOARDS_SORTS, "updated")(value.sort),
+    group: normalizeChoice(DASHBOARDS_GROUPS, "none")(value.group),
+  };
+  return display.view === "grid" && display.sort === "updated" && display.group === "none"
+    ? undefined
+    : display;
+}
+
+const SESSION_FILES_VIEWS = ["list", "grid"] as const;
+const SESSION_FILES_SORTS = ["default", "date", "name", "type"] as const;
+export type SessionFilesDisplay = {
+  view: (typeof SESSION_FILES_VIEWS)[number];
+  sort: (typeof SESSION_FILES_SORTS)[number];
+};
+export const SESSION_FILES_DISPLAY_DEFAULTS: SessionFilesDisplay = {
+  view: "list",
+  sort: "default",
+};
+
+/** Browser-local Files panel display for session files and attachments; the defaults are not stored. */
+export function normalizeSessionFilesDisplay(value: unknown): SessionFilesDisplay | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const display: SessionFilesDisplay = {
+    view: normalizeChoice(SESSION_FILES_VIEWS, SESSION_FILES_DISPLAY_DEFAULTS.view)(value.view),
+    sort: normalizeChoice(SESSION_FILES_SORTS, SESSION_FILES_DISPLAY_DEFAULTS.sort)(value.sort),
+  };
+  return display.view === SESSION_FILES_DISPLAY_DEFAULTS.view &&
+    display.sort === SESSION_FILES_DISPLAY_DEFAULTS.sort
+    ? undefined
+    : display;
+}
 
 const CHAT_WORKSPACE_DOCKS = ["right", "bottom"] as const;
 type ChatWorkspaceDock = (typeof CHAT_WORKSPACE_DOCKS)[number];
@@ -106,14 +166,14 @@ export function normalizeTextScale(value: unknown): TextScaleStop {
 }
 
 export const UI_APPEARANCE_DEFAULTS = {
-  theme: "claw",
-  themeMode: "system",
+  theme: UI_PREFERENCE_DEFAULTS.theme,
+  themeMode: UI_PREFERENCE_DEFAULTS.themeMode,
   textScale: 100,
   sidebarLiveActivity: true,
   chatMessageMaxWidth: "48rem",
   chatShowTaskProgress: true,
   chatCollapseTaskProgress: false,
-  chatSendShortcut: "enter",
+  chatSendShortcut: UI_PREFERENCE_DEFAULTS.chatSendShortcut,
   catalogOpenTarget: "viewer",
   composerHoldToRecord: true,
   lobsterPetVisits: true,
@@ -141,6 +201,8 @@ export type UiSettings = {
   background?: BackgroundPreference;
   chatShowThinking: boolean;
   chatShowToolCalls: boolean;
+  // Browser-local opt-in; grouped command activity remains the default.
+  chatInlineCommands?: boolean;
   chatPersistCommentary?: boolean;
   // Browser-local composer visibility; saved progress and other placements are unchanged.
   chatShowTaskProgress?: boolean;
@@ -157,6 +219,8 @@ export type UiSettings = {
   chatSplitLayout?: ChatSplitLayout;
   chatWorkspaceDock?: ChatWorkspaceDock; // Session workspace rail dock edge (default "right")
   boardSessionViews?: BoardSessionViews; // Per-device active dashboard tab and dock state
+  dashboardsDisplay?: DashboardsDisplay; // Dashboards gallery view, ordering and grouping
+  sessionFilesDisplay?: SessionFilesDisplay; // Files panel session files view and ordering
   sidebarSessionLayouts?: SidebarSessionLayouts; // Sidebar columns and widths per session
   sidebarSessionActivePanels?: SidebarSessionActivePanels; // Collapsed active panel per session
   navCollapsed: boolean; // Collapsible sidebar state
@@ -183,6 +247,8 @@ export type UiSettings = {
   // so this stays out of the synced ui.prefs set in server-prefs-state.ts.
   sessionDeleteConfirm?: boolean;
   chatModelChangeConfirm?: boolean;
+  // Browser-local, Gateway-scoped acknowledgement; changed notices become visible again.
+  dismissedReadOnlyConfigNotice?: string;
   // Device-local opt-in: route eligible external links into the Gateway browser panel.
   openLinksInControlUiBrowser?: boolean;
   // Browser-local opt-in; absence preserves native panels and plugin readers.

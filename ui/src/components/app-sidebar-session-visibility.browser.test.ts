@@ -173,6 +173,7 @@ it.each([32, 44])(
       createGateway({} as GatewayBrowserClient),
       harness.sessions,
     );
+    sidebar.setSessionSortMode("created");
     const scroller = sizeSidebar(sidebar, 240);
     sidebar
       .querySelector<HTMLElement>(".sidebar-shell")!
@@ -229,7 +230,7 @@ it.each([32, 44])(
     )!;
     const anchorKey = anchor.dataset.sessionKey;
     const anchorOffset = anchor.getBoundingClientRect().top - viewportTop;
-    sidebar.navigationView = "pages";
+    sidebar.navigationView = "automations";
     await settleRoster(sidebar);
     sidebar.navigationView = "sessions";
     await settleRoster(sidebar);
@@ -262,6 +263,54 @@ it.each([32, 44])(
     expect(probe.activeObservers.size).toBe(1);
   },
 );
+
+it("omits offscreen categories while retaining selected rows across scrolling", async () => {
+  const harness = createSessionsHarness("main", []);
+  const state = runState(
+    (index) => ({ category: index < 10 ? "Near" : "Far", hasActiveRun: false, status: "done" }),
+    20,
+  );
+  state.groups = ["Near", "Far"];
+  state.sectionOrder = ["category:Near", "category:Far"];
+  const { sidebar } = await mountSidebar(
+    createGateway({} as GatewayBrowserClient),
+    harness.sessions,
+  );
+  sidebar.setSessionSortMode("created");
+  const scroller = sizeSidebar(sidebar, 240);
+  scroller.style.height = "180px";
+  sidebar.sessionsGrouping = "category";
+  harness.publishList(state);
+  await settleRoster(sidebar);
+  const row = (index: number) =>
+    sidebar.querySelector<HTMLElement>(`[data-session-key="agent:main:run-${index}"]`);
+  await waitForSolid(() => expect(row(0)).not.toBeNull());
+  const far = sidebar.querySelector<HTMLElement>('[data-session-section="category:Far"]')!;
+  expect(far.getBoundingClientRect().top).toBeGreaterThan(
+    scroller.getBoundingClientRect().bottom + 64,
+  );
+  expect(far.querySelector("[data-session-key]")).toBeNull();
+  const height = scroller.scrollHeight;
+  scroller.scrollTop = height;
+  scroller.dispatchEvent(new Event("scroll"));
+  await waitForSolid(() => expect(row(16)).not.toBeNull());
+  const selected = row(16)!;
+  sidebar.handleSessionRowClick(
+    new MouseEvent("click", { altKey: true }),
+    sidebar.findSidebarMenuSessionByKey("agent:main:run-16")!,
+  );
+  await waitForSolid(() =>
+    expect(selected.classList.contains("sidebar-recent-session--selected")).toBe(true),
+  );
+  scroller.scrollTop = 0;
+  scroller.dispatchEvent(new Event("scroll"));
+  await waitForSolid(() => {
+    expect(row(0)).not.toBeNull();
+    expect(row(16)).toBe(selected);
+    expect(far.querySelectorAll("[data-session-key]")).toHaveLength(1);
+    expect(scroller.scrollHeight).toBe(height);
+  });
+});
 
 it.each(["chip", "roster"] as const)(
   "preserves running animations through %s refreshes and retires their observations",
@@ -323,10 +372,10 @@ it.each(["chip", "roster"] as const)(
     for (let update = 1; update <= 3; update++) {
       const refreshed = {
         ...result,
-        sessions: roster.result!.sessions.map((row) =>
+        sessions: roster.result!.sessions.map((row, index) =>
           Object.assign({}, row, {
             label: row.label + " " + update,
-            updatedAt: 1000 + update,
+            updatedAt: 1000 + update + index,
             lastMessagePreview: "Progress update " + update,
           }),
         ),

@@ -439,22 +439,23 @@ export function copyProviderAcceptanceObserver<T extends object>(source: unknown
   return observer ? writeProviderAcceptanceObserver(target, observer) : target;
 }
 
-async function awaitProviderLifecycleCallback(
-  callback: (() => void | Promise<void>) | undefined,
+export async function awaitProviderLifecycleCallback<T>(
+  callback: (() => T | Promise<T>) | undefined,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<T | undefined> {
   if (signal?.aborted) {
     throw transportAbortError(signal);
   }
   if (!callback) {
-    return;
+    return undefined;
   }
   const callbackPromise = Promise.resolve().then(callback);
   getAiTransportHost().observePendingProviderWork?.(callbackPromise);
-  await racePromiseWithAbortSignal(callbackPromise, signal, transportAbortError);
+  const result = await racePromiseWithAbortSignal(callbackPromise, signal, transportAbortError);
   if (signal?.aborted) {
     throw transportAbortError(signal);
   }
+  return result;
 }
 
 function startProviderStreamCancellation(cancelStream: ProviderStreamCancel, error: unknown): void {

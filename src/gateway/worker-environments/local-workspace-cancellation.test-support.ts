@@ -98,11 +98,13 @@ async function proveQueuedLocalWorkspaceCheckpoint(
         run({
           ...store,
           manifest: async (...args) => {
-            void capture(...args);
             const result = await store.manifest(...args);
-            const afterScan = afterCapture;
-            afterCapture = undefined;
-            await afterScan?.();
+            if (result.kind === "scan" && !(args[1].kind === "scan" && args[1].prehash)) {
+              void capture(...args);
+              const afterScan = afterCapture;
+              afterCapture = undefined;
+              await afterScan?.();
+            }
             return result;
           },
         }),
@@ -525,7 +527,7 @@ export async function proveStoppedSandboxAuthority(
   });
 }
 
-/** Observe native contention without replacing the lease or preparation owner. */
+/** Observe workspace admission without replacing the lease or preparation owner. */
 async function proveAttemptPreparationWhileLeaseHeld(
   owner: LocalWorkspaceOwner,
   ending: "release" | "cancel",
@@ -534,12 +536,6 @@ async function proveAttemptPreparationWhileLeaseHeld(
     controller: AbortController,
   ) => Promise<{ workspaceDir: string; [Symbol.dispose](): void }>,
 ) {
-  const {
-    areDiagnosticsEnabledForProcess,
-    onInternalDiagnosticEvent,
-    setDiagnosticsEnabledForProcess,
-  } = await import("../../infra/diagnostic-events.js");
-  const { flushLogger, resetLogger, setLoggerOverride } = await import("../../logging/logger.js");
   const prepare = (controller: AbortController) =>
     prepareLocalSandboxWorkspace({
       cfg: { worktreeAcceleration: false },
@@ -559,27 +555,9 @@ async function proveAttemptPreparationWhileLeaseHeld(
   const reason = createAgentRunDirectAbortError();
   const entered = createDeferred();
   const release = createDeferred();
-  const waited = createDeferred<string>();
-  const diagnosticsEnabled = areDiagnosticsEnabledForProcess();
-  setDiagnosticsEnabledForProcess(true);
-  setLoggerOverride({
-    level: "warn",
-    consoleLevel: "silent",
-    file: path.join(path.dirname(owner.worktree.path), "preparation-wait.log"),
-  });
-  const unsubscribe = onInternalDiagnosticEvent(
-    (event) => {
-      if (
-        event.type === "log.record" &&
-        event.message.includes(
-          `Waiting for local sandbox workspace workspace.local-reconciliation/${owner.worktree.id} held by `,
-        )
-      ) {
-        waited.resolve(event.message);
-      }
-    },
-    { include: ["log.record"] },
-  );
+  const waited = createDeferred();
+  const withStore = workspaceStore.withLocalWorkspaceStore;
+  const admission = vi.spyOn(workspaceStore, "withLocalWorkspaceStore");
   type PreparationOutcome =
     | { kind: "returned"; value: Awaited<ReturnType<typeof prepareAttempt>> }
     | { kind: "rejected"; error: unknown };
@@ -605,6 +583,13 @@ async function proveAttemptPreparationWhileLeaseHeld(
       awaitGateBeforeSettlement(entered.promise, holder, "Holder settled before acquiring custody"),
       testSignal,
     );
+    admission.mockImplementation((params, run) => {
+      const pending = withStore(params, run);
+      if (params.worktreeId === owner.worktree.id) {
+        waited.resolve();
+      }
+      return pending;
+    });
     preparation = prepareAttempt(controller).then(
       (value) => ({ kind: "returned" as const, value }),
       (error: unknown) => ({ kind: "rejected" as const, error }),
@@ -613,7 +598,7 @@ async function proveAttemptPreparationWhileLeaseHeld(
       awaitGateBeforeSettlement(
         waited.promise,
         preparation,
-        "Preparation settled before its native held-lease observation",
+        "Preparation settled before workspace admission",
       ),
       testSignal,
     );
@@ -629,12 +614,8 @@ async function proveAttemptPreparationWhileLeaseHeld(
       if (afterRelease?.kind === "returned") {
         afterRelease.value?.[Symbol.dispose]();
       }
-      await flushLogger();
     } finally {
-      unsubscribe();
-      setLoggerOverride(null);
-      resetLogger();
-      setDiagnosticsEnabledForProcess(diagnosticsEnabled);
+      admission.mockRestore();
     }
   }
   expect(afterHolder?.kind).toBe("returned");

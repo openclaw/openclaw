@@ -2,7 +2,12 @@ import { createServer } from "node:http";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { ModelsListParams } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
+import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
 import * as tmpDirOwner from "../../infra/tmp-openclaw-dir.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
@@ -23,12 +28,15 @@ const modelRow = (provider: string, id: string) => expect.objectContaining({ pro
 const coordinatorRoots = createSuiteTempRootTracker({ prefix: "native-catalog-coordinator-" });
 beforeAll(() => coordinatorRoots.setup());
 beforeEach(async () => {
+  // Test RPC demand independently of the advisory default-model startup warmup.
+  vi.spyOn(preparedModelCatalog, "prewarmDefaultNativeModelCatalog").mockResolvedValue(undefined);
   // Auth refresh writes config; its handoff lease must not use the operator's coordinator.
   vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
     await coordinatorRoots.make("coordinator"),
   );
 });
 afterAll(async () => {
+  vi.mocked(preparedModelCatalog.prewarmDefaultNativeModelCatalog).mockRestore();
   vi.mocked(tmpDirOwner.resolvePreferredOpenClawTmpDir).mockRestore();
   await coordinatorRoots.cleanup();
 });
@@ -58,6 +66,8 @@ it.for([false, true])(
     let failedProviderCatalog = true;
     let nativeRequested = createDeferred();
     let nativeReleased = createDeferred();
+    const providerRequested = createDeferred();
+    const providerReleased = createDeferred();
     const nativeRow = (id: string, name: string) => ({
       provider,
       id,
@@ -90,7 +100,8 @@ it.for([false, true])(
         void nativeReleased.promise.then(() => response.end(JSON.stringify(nativeRows())));
       } else if (request.url === "/provider/models" || request.url === "/other/models") {
         if (failedProviderCatalog && request.url === "/provider/models") {
-          response.writeHead(503).end();
+          providerRequested.resolve();
+          void providerReleased.promise.then(() => response.writeHead(503).end());
           return;
         }
         response.end(JSON.stringify([{ id: "provider-account", name: "Provider account model" }]));
@@ -237,6 +248,9 @@ it.for([false, true])(
         expect(nativeRequests()).toHaveLength(0);
         const firstReads = await Promise.all([list(), list()]);
         await withinTest(nativeRequested.promise, signal);
+        if (!withProviderCredentials) {
+          await withinTest(providerRequested.promise, signal);
+        }
         const beforeReads = requests.length;
         // Ordinary and prepared-only reads return saved rows while discovery is held.
         const pending = [...firstReads, ...(await Promise.all([preparedList(), preparedList()]))];
@@ -251,16 +265,38 @@ it.for([false, true])(
         await published((result) => available(result) === true);
         expect((await list()).models).toContainEqual(model("harness-host-row"));
         if (!withProviderCredentials) {
-          // Cold startup discovers the full catalog, as an explicit refresh would.
+          // Native readiness can clear pendingProviders before full discovery publishes.
+          const firstPublication = createDeferred();
+          const discovery = published((result) => {
+            firstPublication.resolve();
+            return (
+              result.providerOutcomes?.some(
+                (outcome) => outcome.provider === provider && outcome.status === "unavailable",
+              ) === true
+            );
+          });
+          await withinTest(
+            awaitGateBeforeSettlement(
+              firstPublication.promise,
+              discovery,
+              "Catalog publication settled before its first read",
+            ),
+            signal,
+          );
+          providerReleased.resolve();
+          expect((await discovery).providerOutcomes ?? []).toContainEqual({
+            provider,
+            status: "unavailable",
+          });
           expect(requests.toSorted()).toEqual(["/native/models", "/provider/models"]);
-          // Gateway refresh can return a pending snapshot before discovery publishes.
-          const refresh = () =>
-            waitForCatalogPublication({
-              signal,
-              start: () => request({ view: "all", refresh: true }),
-              read: list,
-              ready: (result) => !result.pendingProviders?.includes(provider),
-            });
+          // Provider publication can clear pending before native discovery starts.
+          // Join this refresh's request before accepting its terminal publication.
+          const refresh = async () => {
+            nativeRequested = createDeferred();
+            await request({ view: "all", refresh: true });
+            await withinTest(nativeRequested.promise, signal);
+            return published((result) => !result.pendingProviders?.includes(provider));
+          };
           const unavailable = await refresh();
           expect(unavailable.refreshFailed).toBe(true);
           expect.soft(unavailable.models).toContainEqual(model("unconfigured-starter"));
@@ -336,9 +372,11 @@ it.for([false, true])(
         expect(requests).toHaveLength(settledRequests);
       } finally {
         nativeReleased.resolve();
+        providerReleased.resolve();
       }
     } finally {
       nativeReleased.resolve();
+      providerReleased.resolve();
     }
   },
 );

@@ -7,7 +7,7 @@ import * as diskSpace from "../infra/disk-space.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as sqliteIntegrity from "../infra/sqlite-integrity.js";
-import * as sqliteSnapshot from "../infra/sqlite-snapshot-source.js";
+import * as sqliteSnapshots from "../infra/sqlite-snapshot-source.js";
 import { configureSqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
@@ -151,10 +151,12 @@ it("converts legacy stores once, preserves canonical rowids/search, and enables 
       );
     const compactedFamily = physicalFamily();
     const log = vi.fn();
+    const snapshots = vi.spyOn(sqliteSnapshots, "prepareSqliteReadOnlyLocation");
     await expect(convert(state, { agents, log })).resolves.toEqual({ warnings: [] });
     expect(log).not.toHaveBeenCalled();
     expect(physicalFamily()).toEqual(compactedFamily);
     expect(fs.readFileSync(pg)).toEqual(pgBytes);
+    expect(snapshots).not.toHaveBeenCalled();
 
     const db = openNodeSqliteDatabase(shared);
     const maintenance = configureSqliteWalMaintenance(db, {
@@ -212,18 +214,11 @@ it.each([
           replaced = true;
         });
       };
-      const openReadOnly = sqliteSnapshot.openSqliteReadOnlyDatabase;
-      vi.spyOn(sqliteSnapshot, "openSqliteReadOnlyDatabase").mockImplementation(
-        (pathname, options) => {
-          const database = openReadOnly(pathname, options);
-          if (replaceAfter === "read" && pathname === shared && !replaced) {
-            replaceOnClose(database);
-          }
-          return database;
-        },
-      );
       vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((pathname, options) => {
         const database = open(pathname, options);
+        if (replaceAfter === "read" && options?.readOnly && !replaced) {
+          replaceOnClose(database);
+        }
         if (
           replaceAfter === "write" &&
           !options?.readOnly &&
@@ -254,6 +249,23 @@ it.each([
     });
   },
 );
+
+it("observes an incremental mode committed only in WAL without changing its source artifacts", async () => {
+  await withOpenClawTestState({ scenario: "external-service" }, async (state) => {
+    const { shared } = await seed(state);
+    using writer = openNodeSqliteDatabase(shared);
+    writer.exec("PRAGMA wal_autocheckpoint=0; PRAGMA auto_vacuum=INCREMENTAL; VACUUM;");
+    const files = [shared, `${shared}-wal`, `${shared}-shm`];
+    const before = files.map((file) => fs.readFileSync(file));
+    expect(before[0]!.readUInt32BE(52)).toBe(0);
+    expect(before[1]!.length).toBeGreaterThan(32);
+    expect(writer.prepare("PRAGMA auto_vacuum").get()?.auto_vacuum).toBe(2);
+    const log = vi.fn();
+    await expect(convert(state, { log })).resolves.toEqual({ warnings: [] });
+    expect(log).not.toHaveBeenCalled();
+    expect(files.map((file) => fs.readFileSync(file))).toEqual(before);
+  });
+});
 
 it.each(["low", "unknown"])(
   "defers optional conversion with %s capacity without rewriting data",

@@ -346,3 +346,46 @@ describe("OpenAI packaged onboarding skill", () => {
     }
   });
 });
+
+describe("bundle recommended prompt presentation", () => {
+  it.each(["codex", "agent"] as const)(
+    "normalizes %s author prompts without loading runtime",
+    (bundleFormat) => {
+      const presentation = {
+        interface: {
+          defaultPrompt: ["  Plan  my week.\nPrioritize.  ", "Compare.", "😀".repeat(128)],
+        },
+      };
+      const rootDir = fixture({
+        [bundleFormat === "codex"
+          ? CODEX_BUNDLE_MANIFEST_RELATIVE_PATH
+          : AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: {
+          name: "community-planner",
+          ...(bundleFormat === "agent"
+            ? { $schema: AGENT_BUNDLE_MANIFEST_SCHEMA, extensions: { "com.openai": presentation } }
+            : presentation),
+        },
+      });
+      const expected = ["Plan my week. Prioritize.", "Compare.", "😀".repeat(128)];
+      expect(expectLoadedManifest(rootDir, bundleFormat).recommendedPrompts).toEqual(expected);
+    },
+  );
+
+  it.each([
+    ["  Plan  my week.  ", ["Plan my week."]],
+    [["one", "two", "three", "four"], undefined],
+    [["valid", " "], undefined],
+    [["valid", "😀".repeat(129)], undefined],
+  ])(
+    "adapts legacy Codex prompt strings and ignores invalid lists whole: %j",
+    (defaultPrompt, expected) => {
+      const rootDir = fixture({
+        [CODEX_BUNDLE_MANIFEST_RELATIVE_PATH]: {
+          name: "community-planner",
+          interface: { defaultPrompt },
+        },
+      });
+      expect(expectLoadedManifest(rootDir, "codex").recommendedPrompts).toEqual(expected);
+    },
+  );
+});

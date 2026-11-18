@@ -38,7 +38,7 @@ function isBase64Signature(value: string): boolean {
       return false;
     }
     const encoded = buf.toString(isUrl ? "base64url" : "base64");
-    const normalize = (input: string) => input.replace(/=+$/g, "");
+    const normalize = (input: string) => input.replace(/[=]+$/g, "");
     return normalize(encoded) === normalize(compact);
   } catch {
     return false;

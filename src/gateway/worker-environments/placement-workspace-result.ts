@@ -3,11 +3,9 @@ import type { EngineConnection } from "../../infra/sql-connection.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { ensureRepositoryWorkspacePendingResultSchema } from "../../state/openclaw-state-db-schema-additive.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
-import {
-  assertRepositoryWorkspaceDiskIdentity,
-  requireRepositoryWorkspaceDiskAuthority,
-} from "../../state/session-repository-workspaces.authority.js";
+import { assertRepositoryWorkspaceDiskIdentity } from "../../state/session-repository-workspaces.authority.js";
 import { findSessionRepositoryWorkspaceInDatabase } from "../../state/session-repository-workspaces.kernel.js";
+import { readWorkerPlacementMovesReadOnly } from "./placement-move-row-codec.js";
 import {
   resolvePlacementTurnEnvironment,
   type WorkerSessionPlacementRecord,
@@ -17,45 +15,18 @@ import { fromRow, getRequired } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { publishPlacementWorkspaceResultState } from "./placement-turn-authority.js";
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
-import { matchesWorkspaceResultClaim } from "./placement-workspace-result-owner.js";
+import {
+  matchesWorkspaceResultClaim,
+  pendingResultFromRow,
+} from "./placement-workspace-result-owner.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 import { findWorkerEnvironment } from "./store-row-codec.js";
-export {
-  matchesWorkspaceResultClaim,
-  isCurrentWorkerWorkspacePendingResultOwner,
-} from "./placement-workspace-result-owner.js";
-
 type WorkspaceResultDatabase = Pick<
   StateDatabase,
   "worker_session_placements" | "worker_workspace_pending_results" | "session_repository_workspaces"
 >;
 
 const query = (db: EngineConnection) => getNodeSqliteKysely<WorkspaceResultDatabase>(db);
-
-export function pendingResultFromRow(
-  row: StateDatabase["worker_workspace_pending_results"],
-): WorkerWorkspacePendingResult {
-  return {
-    sessionId: row.session_id,
-    environmentId: row.environment_id,
-    ownerEpoch: row.owner_epoch,
-    placementGeneration: row.placement_generation,
-    claimId: row.claim_id,
-    runId: row.run_id,
-    gatewayInstanceId: row.gateway_instance_id,
-    recoveryRequestedAtMs: row.recovery_requested_at_ms,
-    workspaceAcceptedAtMs: row.workspace_accepted_at_ms,
-    stagedResultRef: row.staged_result_ref,
-    ...(row.repository_workspace_id ? { repositoryWorkspaceId: row.repository_workspace_id } : {}),
-    ...(row.repository_disk_authority_json !== null
-      ? {
-          repositoryDiskAuthority: requireRepositoryWorkspaceDiskAuthority(
-            JSON.parse(row.repository_disk_authority_json),
-          ),
-        }
-      : {}),
-  };
-}
 
 export async function findPendingWorkerWorkspaceResult(
   placements: {
@@ -275,13 +246,36 @@ export function recordStagedWorkerWorkspaceResult(
     ensureRepositoryWorkspacePendingResultSchema(db);
   }
   const { row: pending, placement } = assertPendingClaim(db, claim);
-  if (pending.repository_disk_authority_json !== null) {
-    throw new Error("A disk-authoritative result cannot stage a mirrored checkpoint");
+  const diskExport = pending.repository_disk_authority_json !== null;
+  if (diskExport) {
+    const move = readWorkerPlacementMovesReadOnly(db, [claim.sessionId]).get(claim.sessionId);
+    const repository = findSessionRepositoryWorkspaceInDatabase(db, placement);
+    if (
+      placement.state !== "draining" ||
+      move?.target.kind !== "gateway" ||
+      move.abandonSource ||
+      move.source.environmentId !== placement.environmentId ||
+      move.source.ownerEpoch !== placement.activeOwnerEpoch ||
+      move.source.generation + 1 !== placement.generation ||
+      claim.claimId !== claim.runId ||
+      !claim.claimId.startsWith("reclaim-") ||
+      !stagedResultRef.startsWith("refs/openclaw/worker-results/gateway-export-") ||
+      repositoryWorkspaceId !== pending.repository_workspace_id ||
+      repository?.workspaceId !== repositoryWorkspaceId ||
+      !repository.diskAuthority
+    ) {
+      throw new Error("A disk-authoritative result cannot stage a mirrored checkpoint");
+    }
+    assertRepositoryWorkspaceDiskIdentity(
+      repository.diskAuthority,
+      findWorkerEnvironment(db, placement.environmentId),
+    );
   }
   if (pending.workspace_accepted_at_ms !== null) {
     throw new Error(`Cannot restage accepted worker workspace result for ${claim.sessionId}`);
   }
   if (
+    !diskExport &&
     pending.staged_result_ref &&
     (pending.staged_result_ref !== stagedResultRef ||
       (pending.repository_workspace_id ?? undefined) !== repositoryWorkspaceId)

@@ -94,8 +94,8 @@ not need to add labels themselves.
 ## ClawSweeper
 
 ClawSweeper is the AI-assisted review and maintenance bot for OpenClaw
-repositories. It can review PRs, evaluate proof, leave durable review comments,
-and help maintainers with guarded repair or automerge flows.
+repositories. It can review PRs, evaluate proof, and leave durable review comments.
+Repair and automerge commands are retired.
 
 A positive ClawSweeper result is supporting evidence, not maintainer approval.
 Maintainers still decide whether and when a PR is ready to merge.
@@ -107,9 +107,16 @@ PR or adding a review request. Label updates after a ClawSweeper run can also
 take time.
 
 The initial automatic review runs once. Later pushes, description edits,
-and reopens do not start another review on their own. Maintainers can also queue
-review, repair, or automerge flows with labels or commands. When the selected
-route or a maintainer requires another hosted review, complete the branch,
+and reopens do not start another review on their own.
+
+A successful source-event workflow does not prove that a review started or covers
+the current head. Intake can return `deduped: true` with
+`dedupe_reason: review_request_required` after the automatic review allowance is
+consumed. That refusal occurs before allocating a new queue revision.
+Check for a separate active request instead of treating this response as a queued review.
+
+Maintainers can also request a review with commands. When the selected
+route, a maintainer, or the user requires another hosted review, complete the branch,
 PR description, and proof first. Request it with one new PR comment:
 
 ```text
@@ -120,6 +127,10 @@ PR authors can also use `@clawsweeper re-run`; users with repository write
 access can use either command on any open item. The plain
 `@clawsweeper review` command is maintainer-only. Be patient: asking again
 before the requested changes are present just adds queue noise.
+
+When the user explicitly requires hosted review, check that the resulting review
+covers the current head and PR description. Intake success alone does not satisfy
+that request. Otherwise, follow the native workflow's advisory ClawSweeper policy.
 
 When ClawSweeper leaves review conversations, treat them like normal review
 feedback and use the follow-up checklist below.
@@ -223,7 +234,7 @@ local investigation does not authorize a CI exception.
 ## When automation stays quiet
 
 Automation may stay quiet when a maintainer is already handling the item, a
-review or repair request is still queued, the event is routine, or the
+review request is still queued, the event is routine, or the
 ClawSweeper lane is not configured for the requested action.
 
 It may also avoid action when a trusted workflow would need to run untrusted

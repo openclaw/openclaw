@@ -557,8 +557,8 @@ it("separates immutable observation bytes from post-upload admission and ZIP dig
 });
 
 it.each([
-  ["2026-09-13T14:05:00.000Z", true],
-  ["2026-09-13T14:05:00.001Z", false],
+  ["2026-09-13T14:05:01.000Z", true],
+  ["2026-09-13T14:05:01.001Z", false],
   ["2026-09-13T13:59:59.999Z", false],
 ])("checks actual post-upload admission time %s (accepted=%s)", (time, accepted) => {
   const { source, observations, descriptor } = registryEvidence();
@@ -568,6 +568,16 @@ it.each([
   } else {
     expect(finalize).toThrow(/time|freshness/u);
   }
+});
+
+it("keeps collection and post-upload admission in separate bounded windows", () => {
+  const { source, observations, descriptor } = registryEvidence();
+  observations.collectionCompletedAt = "2026-09-13T14:05:00.000Z";
+  const admission = createAdmission(source, observations, descriptor, "2026-09-13T14:10:00.000Z");
+  expect(admission.binding.admittedAt).toBe("2026-09-13T14:10:00.000Z");
+  expect(() =>
+    createAdmission(source, observations, descriptor, "2026-09-13T14:10:00.001Z"),
+  ).toThrow(/freshness/u);
 });
 
 function retainedEvidenceFixture() {

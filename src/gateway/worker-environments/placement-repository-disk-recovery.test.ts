@@ -41,7 +41,7 @@ describe("repository disk authority and pending-result recovery", () => {
   support.setupWorkerEnvironmentServiceSuite();
   afterEach(() => vi.unstubAllEnvs());
 
-  async function fixture() {
+  async function fixture(executionMode: "worker-turn" | "remote-exec" = "worker-turn") {
     vi.stubEnv("OPENCLAW_STATE_DIR", support.testState.root);
     const database = support.testState.stateDb;
     const placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
@@ -63,7 +63,7 @@ describe("repository disk authority and pending-result recovery", () => {
       repository: (await repositories.get(repository.workspaceId))!,
     });
     const harness = await createHarness(database, placements, { resolveWorkspace });
-    const active = await harness.placements.seedActive(2);
+    const active = await harness.placements.seedActive(2, executionMode);
     assert(active.state === "active");
     harness.markEnvironmentNodeDeviceId("repository-node");
     const environments = await createWorkerEnvironmentStore({ database });
@@ -147,10 +147,18 @@ describe("repository disk authority and pending-result recovery", () => {
     expect(await f.repositories.get(bound.workspaceId)).toEqual(bound);
   });
 
-  it.each(["missing", "replacement", "cleanup-failure", "drained", "exact", "accepted"] as const)(
+  it.each([
+    "missing",
+    "replacement",
+    "cleanup-failure",
+    "drained",
+    "exact",
+    "accepted",
+    "local-restart",
+  ] as const)(
     "recovers the accepted disk result without replay or mirror restore: %s",
     async (condition) => {
-      const f = await fixture();
+      const f = await fixture(condition === "local-restart" ? "remote-exec" : "worker-turn");
       await f.bind();
       const claim = await f.placements.claimTurn(makeClaimInput(f.active, "disk-result"));
       await f.placements.markWorkspaceResultPending(claim);
@@ -207,6 +215,9 @@ describe("repository disk authority and pending-result recovery", () => {
         await f.placements.acceptWorkspaceResult(claim);
       }
       await f.placements.handoffWorkspaceResultRecovery(claim);
+      if (condition === "local-restart") {
+        await restarted.clearLocalTurnClaimsAfterRestartAsync();
+      }
       await f.harness.service.reconcileActive();
       if (condition === "cleanup-failure" || condition === "drained") {
         expect(f.harness.environments.stopTunnel).toHaveBeenCalledOnce();
@@ -215,7 +226,7 @@ describe("repository disk authority and pending-result recovery", () => {
       expect(f.harness.environments.reclaim).not.toHaveBeenCalled();
       expect(f.harness.environments.startTunnel).not.toHaveBeenCalled();
       expect(f.harness.environments.createWithRequest).not.toHaveBeenCalled();
-      if (condition === "exact" || condition === "accepted") {
+      if (condition === "exact" || condition === "accepted" || condition === "local-restart") {
         expect(await restarted.listPendingWorkspaceResultsAsync()).toEqual([]);
         expect((await restarted.getAsync(REQUEST.sessionId))?.turnClaim).toBeNull();
       } else {

@@ -261,20 +261,24 @@ it.each(["local", "shared"])(
       const createAdmission = admission.createSqliteWorkerOperationAdmission;
       let refused = false;
       using spy = vi.spyOn(admission, "createSqliteWorkerOperationAdmission");
-      spy.mockImplementation((admit, attachment) => {
+      spy.mockImplementation((admit, attachment, prepare) => {
         let updating = false;
-        return createAdmission((request, grant) => {
-          updating ||= isRecord(request.facts) && request.facts.kind === "auth-store-update";
-          if (updating && request.stage === "commit") {
-            admit(request, () => {
-              expect(authority.assertCurrent).toThrow(expect.objectContaining(unavailableCode));
-              refused = true;
-              throw new Error("fixture auth commit refused");
-            });
-          } else {
-            admit(request, grant);
-          }
-        }, attachment);
+        return createAdmission(
+          (request, grant) => {
+            updating ||= isRecord(request.facts) && request.facts.kind === "auth-store-update";
+            if (updating && request.stage === "commit") {
+              admit(request, () => {
+                expect(authority.assertCurrent).toThrow(expect.objectContaining(unavailableCode));
+                refused = true;
+                throw new Error("fixture auth commit refused");
+              });
+            } else {
+              admit(request, grant);
+            }
+          },
+          attachment,
+          prepare,
+        );
       });
       await expect(
         writeProfile(profileId, "replacement", profileId === "local" ? root.agentDir : undefined),

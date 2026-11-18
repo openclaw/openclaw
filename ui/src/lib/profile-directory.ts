@@ -20,11 +20,9 @@ export function profileDirectory(gateway: ApplicationGateway): ProfileDirectory 
   return directory;
 }
 
-/** Uploads and email-backed Gravatar both resolve through the versioned profile route. */
+/** The Gateway route alone decides upload, provider, host-photo and initials fallback. */
 export function profileAvatarUrl(profile: UserProfile | undefined): string | undefined {
-  return profile?.hasAvatar || profile?.emails.length
-    ? buildControlUiUserAvatarPath(profile.id, profile.updatedAt)
-    : undefined;
+  return profile ? buildControlUiUserAvatarPath(profile.id, profile.updatedAt) : undefined;
 }
 
 class ProfileDirectory {
@@ -108,7 +106,11 @@ class ProfileDirectory {
       profileAvatarUrl:
         identity.profileAvatarUrl?.trim() ||
         (self?.identity?.id === identity.identity.id ? self.avatarUrl : undefined) ||
-        profileAvatarUrl(this.get(identity.identity.id)),
+        profileAvatarUrl(this.get(identity.identity.id)) ||
+        // Restricted readers can render an explicitly identified person without enumerating profiles.
+        (!hasOperatorReadAccess(this.gateway.snapshot.hello?.auth ?? null)
+          ? buildControlUiUserAvatarPath(identity.identity.id)
+          : undefined),
     };
   }
 

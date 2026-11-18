@@ -39,8 +39,11 @@ describeLive("mistral plugin live", () => {
   }, 90_000);
 
   it("streams realtime STT through the registered transcription provider", async () => {
+    // The live key comes from the environment; no saved key is consulted.
     const provider = buildMistralRealtimeTranscriptionProvider({
       createRealtimeTranscriptionWebSocketSession,
+      isProviderAuthProfileConfiguredAsync: async () => false,
+      resolveProviderAuthProfileApiKey: async () => undefined,
     });
     const phrase = "Testing OpenClaw Mistral realtime transcription integration OK.";
     const speech = await synthesizeElevenLabsLiveSpeech({

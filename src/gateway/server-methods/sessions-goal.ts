@@ -191,6 +191,7 @@ async function handleSessionGoalMutation(
       assertCurrent();
     }
     const resumeAuthorization: SessionMutationAuthorization = {
+      retainForRun: authorization.authorization?.retainForRun,
       assertCurrent: source,
       assertTargetCurrent: source,
       takeRelease: () => {

@@ -34,6 +34,52 @@ async function observe(row = caption()) {
   return { row, page, first: pending(page) };
 }
 
+it("keeps recognition corrections in one pending turn until it completes", async () => {
+  const { row, page, first } = await observe(caption("we need fifteen volunteers"));
+  for (const text of [
+    "We need fifteen volunteers.",
+    "We need fifty volunteers.",
+    "We need about fifty volunteers.",
+    "We need fifty volunteers.",
+    "We need fifty volunteers. Please sign up.",
+  ]) {
+    page.advance(100);
+    revise(page, row, text);
+    expect(lines(page)).toEqual([]);
+    expect(pending(page)).toMatchObject({
+      text,
+      source: { id: first.source.id, finalized: false },
+    });
+  }
+  page.show([new CaptionNode("Bob\nI can help")]);
+  expect(lines(page).map((line) => [line.speaker, line.text, line.source?.finalized])).toEqual([
+    ["Alice", "We need fifty volunteers. Please sign up.", true],
+  ]);
+  expect(page.read(true).lines.map((line) => line.speaker)).toEqual(["Alice", "Bob"]);
+  row.textContent = "Alice\ngo go go";
+  page.show([row]);
+  revise(page, row, "go ask Bob");
+  const lastTurns = page.read(true).lines.slice(-2);
+  expect(lastTurns.map((line) => line.text)).toEqual(["go go go", "go ask Bob"]);
+});
+
+it("omits speakerless Meet notices while preserving participants saying those words", async () => {
+  const notices = [
+    "Bob joined",
+    "Bob has left the meeting.",
+    "Live captions are on.",
+    "Your microphone is muted",
+    "Jump to bottom",
+  ];
+  const page = createCaptionPage(notices.map((text) => new CaptionNode(text)));
+  await page.poll();
+  expect(page.read(true).lines).toEqual([]);
+  for (const text of notices) {
+    page.show([caption(text)]);
+    expect(onlyLine(page.read(true).lines.slice(-1))).toMatchObject({ speaker: "Alice", text });
+  }
+});
+
 it.each([
   ["Actually, wait for approval", undefined, undefined, false],
   [extended, undefined, undefined, true],

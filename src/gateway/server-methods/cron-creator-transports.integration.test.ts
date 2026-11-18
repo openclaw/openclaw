@@ -36,12 +36,20 @@ import {
   revokeMcpLoopbackClientGrant,
 } from "../mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../mcp-http.js";
+import { MEMBER_ROLE_PRESETS } from "../openclaw-id/member-role-presets.test-support.js";
+import {
+  setOpenClawIdTunnelPrincipalLookup,
+  type OpenClawIdTunnelPrincipal,
+} from "../openclaw-id/tunnel-principal.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { dispatchGatewayRequestInProcess } from "../server-in-process-dispatch.js";
 import { createOperatorClient } from "../server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
-import { resolveGatewayChatCronCreatorAuthorityAdmission } from "./cron-creator-authority-admission.js";
+import {
+  resolveGatewayChatCronCreatorAuthorityAdmission,
+  resolveGatewayTemplateSetupCronAuthorityAdmission,
+} from "./cron-creator-authority-admission.js";
 import {
   SESSION,
   CREATOR,
@@ -177,13 +185,45 @@ function addJob(
   });
 }
 
-it.each(["operator.cron", "operator.write"])(
-  "admits %s automation creation without owner authority",
-  async (scope) => {
+it.each([
+  { scope: "operator.cron", ocid: false, target: "current" },
+  { scope: "operator.write", ocid: false, target: "current" },
+  { scope: "operator.write", ocid: true, target: "isolated" },
+  { scope: "operator.write", ocid: true, target: "main" },
+])(
+  "admits $scope automation creation without owner authority (OCID=$ocid target=$target)",
+  async ({ scope, ocid, target }) => {
     const profile = ensureProfileForEmail("scoped-cron@example.test");
     const client = createOperatorClient({ profileId: profile.id, scopes: [scope] });
-    client.internal = { authenticatedOperator: true };
-    client.authPolicy = captureGatewayAuthPolicy(config, { role: "operator", authMethod: "token" });
+    const principal: OpenClawIdTunnelPrincipal = {
+      kind: "member",
+      peerKey: `iroh:${"ec".repeat(32)}`,
+      accountId: "script-creator",
+      role: "operator",
+      authority: { clawId: "creator-claw", rootPub: "creator-root", listedSeq: 1 },
+    };
+    if (ocid) {
+      config.gateway = {
+        ...config.gateway,
+        roles: {
+          ...config.gateway?.roles,
+          definitions: {
+            ...config.gateway?.roles?.definitions,
+            operator: structuredClone(MEMBER_ROLE_PRESETS.operator),
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(config);
+      setOpenClawIdTunnelPrincipalLookup(() => principal);
+    }
+    client.internal = {
+      authenticatedOperator: true,
+      ...(ocid ? { openclawIdPrincipal: principal } : {}),
+    };
+    client.authPolicy = captureGatewayAuthPolicy(config, {
+      role: "operator",
+      authMethod: ocid ? "trusted-proxy" : "token",
+    });
     const original = expectDefined(
       await captureGatewayOperatorRunAuthority({
         client,
@@ -214,24 +254,42 @@ it.each(["operator.cron", "operator.write"])(
                 senderIsOwner: false,
               });
               const result = await addJob(tools, "Restricted caller job", {
-                payload: { ...timedPayload },
+                ...(ocid ? { sessionTarget: target } : {}),
+                payload: ocid
+                  ? { kind: "script", script: "return {}", timeoutSeconds: 30 }
+                  : { ...timedPayload },
               });
               expect(result).toHaveProperty("details.id");
               const jobs = await fixture.read();
               expect(jobs).toMatchObject([
                 {
                   ...ownedJob,
-                  payload: { toolsAllow: ["*"], timeoutSeconds: 0 },
+                  payload: {
+                    toolsAllow: ocid ? [AUTOMATIONS_TOOL_NAME] : ["*"],
+                    timeoutSeconds: ocid ? 30 : 0,
+                  },
                 },
               ]);
-              expect(jobs[0]?.payload).not.toHaveProperty("toolsAllowIsDefault");
+              if (ocid) {
+                expect(jobs[0]?.payload).toHaveProperty("toolsAllowIsDefault", true);
+              } else {
+                expect(jobs[0]?.payload).not.toHaveProperty("toolsAllowIsDefault");
+              }
               expect(jobs[0]?.operatorSource?.source.snapshot.scopes).toEqual([scope]);
+              if (ocid) {
+                expect(jobs[0]?.operatorSource?.source.snapshot.openclawIdPrincipal).toEqual(
+                  principal,
+                );
+              }
             }),
             original.authority,
           ),
       );
     } finally {
       original.release();
+      if (ocid) {
+        setOpenClawIdTunnelPrincipalLookup(undefined);
+      }
     }
   },
 );
@@ -345,6 +403,7 @@ it.each([
   ["embedded", "local", "device"],
   ["embedded", "remote", "device"],
   ["embedded", "remote-chat", "device"],
+  ["embedded", "template-setup", "device"],
   ["embedded", "local", "skill selection"],
 ] as const)(
   "fences a real %s %s creator mutation on %s change while its run remains admitted",
@@ -360,21 +419,35 @@ it.each([
     client.internal = origin === "local" ? { isLocalClient: true } : { controlUiAdmin: true };
     const runId = `original-${transport}-creator`;
     const creatorAdmission = expectDefined(
-      origin === "remote-chat"
-        ? resolveGatewayChatCronCreatorAuthorityAdmission({
+      origin === "template-setup"
+        ? resolveGatewayTemplateSetupCronAuthorityAdmission({
             runId,
             resolvedSessionKey: SESSION,
             client,
             isCurrent: caller.isCurrent,
+            inputProvenance: { kind: "internal_system", sourceTool: "template_add_setup" },
             hasExplicitOrigin: false,
             hasRestoredCronContinuation: false,
-            isIncognito: false,
+            isIncognitoEntry: false,
             isReconnectResume: false,
-            isSystemGenerated: false,
+            isSystemGenerated: true,
             turnKind: "main",
-            isDirectExternalUser: true,
           })
-        : admission(runId, client, undefined, caller.isCurrent),
+        : origin === "remote-chat"
+          ? resolveGatewayChatCronCreatorAuthorityAdmission({
+              runId,
+              resolvedSessionKey: SESSION,
+              client,
+              isCurrent: caller.isCurrent,
+              hasExplicitOrigin: false,
+              hasRestoredCronContinuation: false,
+              isIncognito: false,
+              isReconnectResume: false,
+              isSystemGenerated: false,
+              turnKind: "main",
+              isDirectExternalUser: true,
+            })
+          : admission(runId, client, undefined, caller.isCurrent),
       "fresh operator admission",
     );
     let transportTools: CreatorTransportTools | undefined;
@@ -402,6 +475,9 @@ it.each([
           const invoke = (name: string) =>
             addJob(tools, name, {
               wakeMode: "next-heartbeat",
+              ...(origin === "template-setup"
+                ? { enabled: false, declarationKey: "template:main:status" }
+                : {}),
               payload: { ...timedPayload },
             });
 
@@ -424,6 +500,12 @@ it.each([
               },
             },
           ]);
+          if (origin === "template-setup") {
+            expect(before[0]).toMatchObject({
+              enabled: false,
+              declarationKey: "template:main:status",
+            });
+          }
           expect(before[0]?.payload).not.toHaveProperty("toolsAllowIsDefault");
           expect(before[0]?.runtimeAuthority).toBeUndefined();
           await fixture.rejectMutation(
@@ -475,6 +557,113 @@ it.each([
       } finally {
         caller.release();
       }
+    }
+  },
+);
+
+it.each(["admin", "caller", "non-admin", "revoked"] as const)(
+  "enforces native-app final-write authority: %s",
+  async (scenario) => {
+    const scope = scenario === "caller" ? "caller" : undefined;
+    const caller = captureGatewayDeviceRevocation(
+      fixture.context,
+      { deviceId: "native-admin-device", role: "operator" },
+      () => true,
+    );
+    config.tools = {
+      ...config.tools,
+      gatewayPolicy: {
+        allow: [AUTOMATIONS_TOOL_NAME],
+        actions: { [AUTOMATIONS_TOOL_NAME]: ["list", "get", "update"] },
+        automations: { scope },
+      },
+    };
+    setRuntimeConfigSnapshot(config);
+    const client = createOperatorClient({
+      profileId: CREATOR.id,
+      scopes: [scenario === "non-admin" ? "operator.write" : "operator.admin"],
+    });
+    client.connect.client = {
+      id: "openclaw-macos",
+      mode: "ui",
+      version: "test",
+      platform: "macOS",
+    };
+    client.internal = { authenticatedOperator: true };
+    const runId = "native-admin-management";
+    const creatorAdmission = resolveGatewayChatCronCreatorAuthorityAdmission({
+      runId,
+      resolvedSessionKey: SESSION,
+      client,
+      isCurrent: caller.isCurrent,
+      hasExplicitOrigin: false,
+      hasRestoredCronContinuation: false,
+      isIncognito: false,
+      isReconnectResume: false,
+      isSystemGenerated: false,
+      turnKind: "main",
+      isDirectExternalUser: true,
+    });
+    const foreign = await cronService.add({
+      name: "Foreign automation",
+      enabled: false,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "Original prompt", toolsAllow: [] },
+      owner: { agentId: "main", sessionKey: "agent:main:foreign", accountId: "other" },
+      delivery: { mode: "none" },
+    });
+    try {
+      await inRun(
+        runId,
+        creatorAdmission,
+        boundTo(fixture, async (_identity, admitted, creator) => {
+          const tools = await createCreatorTransportTools({
+            transport: "embedded",
+            config,
+            admitted,
+            creator,
+            senderIsOwner: false,
+          });
+          const inventory = await tools.invoke(AUTOMATIONS_TOOL_NAME, {
+            action: "list",
+            includeDisabled: true,
+          });
+          expect(inventory).toHaveProperty(
+            "details.scope",
+            scenario === "non-admin" ? "caller" : (scope ?? "gateway"),
+          );
+          const update = () =>
+            tools.invoke(AUTOMATIONS_TOOL_NAME, {
+              action: "update",
+              jobId: foreign.id,
+              job: { payload: { kind: "agentTurn", message: "Repaired prompt" } },
+            });
+          if (scope === "caller" || scenario === "non-admin") {
+            const before = await fixture.read();
+            await expect(update()).rejects.toThrow("not found");
+            expect(await fixture.read()).toEqual(before);
+            await expect(
+              tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "get", jobId: foreign.id }),
+            ).rejects.toThrow("not found");
+            return;
+          }
+          if (scenario === "revoked") {
+            await fixture.rejectMutation(update, /authority.*no longer active/i, () =>
+              invalidateGatewayDeviceRevocation(fixture.context, "native-admin-device", "operator"),
+            );
+            return;
+          }
+          await update();
+          expect(await fixture.read()).toMatchObject([
+            { id: foreign.id, payload: { message: "Repaired prompt" } },
+          ]);
+        }),
+      );
+    } finally {
+      fixture.release.resolve();
+      caller.release();
     }
   },
 );

@@ -171,7 +171,7 @@ function expectUpdateEnv(env: NodeJS.ProcessEnv) {
 
 const updateTimeout = () =>
   new Error(
-    "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-candidate.tgz --yes --json --no-restart --timeout 600",
+    "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-candidate.tgz --yes --json --no-restart --timeout 1200",
   );
 
 function expectPhases(
@@ -258,7 +258,12 @@ describe("cross-OS manual gateway lane evidence", () => {
     const longTemp = String.raw`C:\Users\runneradmin\AppData\Local\Temp`;
     vi.mocked(tmpdir).mockReturnValue(logsDir);
     windows();
-    const realpath = vi.spyOn(realpathSync, "native").mockReturnValue(longTemp);
+    const nativeRealpath = realpathSync.native;
+    const realpath = vi
+      .spyOn(realpathSync, "native")
+      .mockImplementation((path, options) =>
+        path === shortTemp ? longTemp : nativeRealpath(path, options),
+      );
     stubTemp(shortTemp);
 
     const result = await runUpgradeLane(upgradeParams());
@@ -273,16 +278,16 @@ describe("cross-OS manual gateway lane evidence", () => {
     expect(realpath).toHaveBeenCalledWith(shortTemp);
   });
 
-  it.runIf(process.platform !== "win32")(
-    "canonicalizes macOS temp paths before invoking the published updater",
-    async () => {
+  it.runIf(process.platform !== "win32").each(["darwin", "win32"] as const)(
+    "canonicalizes %s lane and temp paths before invoking the published updater",
+    async (platform) => {
       const createdPhysicalTemp = join(logsDir, "physical-temp");
       const aliasedTemp = join(logsDir, "aliased-temp");
       mkdirSync(createdPhysicalTemp);
       const physicalTemp = realpathSync.native(createdPhysicalTemp);
       symlinkSync(physicalTemp, aliasedTemp, process.platform === "win32" ? "junction" : "dir");
       vi.mocked(tmpdir).mockReturnValue(aliasedTemp);
-      vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+      vi.spyOn(process, "platform", "get").mockReturnValue(platform);
       stubTemp(aliasedTemp);
 
       const result = await runUpgradeLane(upgradeParams());
@@ -566,7 +571,7 @@ describe("cross-OS manual gateway lane evidence", () => {
       mocks.runCommand.mockImplementationOnce(realProcess.runCommand);
       mocks.runOpenClaw.mockImplementationOnce(realRuntime.runOpenClaw);
       const running = runUpgradeLane(upgradeParams());
-      await vi.advanceTimersByTimeAsync(1_320_000);
+      await vi.advanceTimersByTimeAsync(2_520_000);
       expect(spawnSync).toHaveBeenCalledWith(
         expect.stringMatching(/taskkill\.exe$/u),
         ["/PID", "4242", "/T", "/F"],

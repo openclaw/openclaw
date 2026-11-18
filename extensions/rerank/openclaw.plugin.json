@@ -1,0 +1,38 @@
+{
+  "id": "rerank",
+  "name": "Rerank",
+  "description": "Use any /rerank endpoint as a Decision model.",
+  "categories": [
+    "models"
+  ],
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": [
+    "rerank"
+  ],
+  "modelCatalog": {
+    "runtimeAugment": true
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "rerank",
+        "envVars": [
+          "RERANK_API_KEY"
+        ]
+      }
+    ]
+  },
+  "contracts": {
+    "decisionProviders": [
+      "rerank"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

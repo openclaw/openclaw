@@ -6,6 +6,7 @@ import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/k
 import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   getOrLoadSqliteDatabaseAdmissionForPath,
+  peekSqliteDatabaseAdmissionForPath,
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
@@ -23,8 +24,8 @@ const catalogReceipt: SqliteDatabaseAdmissionKey<object> = {
   read: (value) => (isRecord(value) ? value : undefined),
 };
 
-export function readRemoteModelCatalogReceipt(databasePath: string): object {
-  return getOrLoadSqliteDatabaseAdmissionForPath(databasePath, catalogReceipt, () => ({})) ?? {};
+export function readRemoteModelCatalogReceipt(databasePath: string): object | undefined {
+  return peekSqliteDatabaseAdmissionForPath(databasePath, catalogReceipt);
 }
 
 const ttsPathAdmission: SqliteDatabaseAdmissionKey<ConfigMachineStateRowAdmission> = {
@@ -59,7 +60,6 @@ export function publishConfigMachineStateRow(
   } else if (key === "authProfiles.store" || key === "authProfiles.state") {
     publishAuthProfileRowsChanged(database);
   } else if (
-    key === "modelCatalog.remote.v4" ||
     key === "modelCatalog.remote.v3" ||
     key === "modelCatalog.remote.v2" ||
     key === "modelCatalog.remote"
@@ -73,9 +73,11 @@ export function getTtsMachinePathAdmission(
   databasePath: string,
   load?: () => ConfigMachineStateRow | undefined,
 ): ConfigMachineStateRowAdmission | undefined {
-  return getOrLoadSqliteDatabaseAdmissionForPath(databasePath, ttsPathAdmission, () =>
-    load ? { row: load() } : undefined,
-  );
+  return load
+    ? getOrLoadSqliteDatabaseAdmissionForPath(databasePath, ttsPathAdmission, () => ({
+        row: load(),
+      }))
+    : peekSqliteDatabaseAdmissionForPath(databasePath, ttsPathAdmission);
 }
 
 export function normalizeConfigMachineStateKey(key: string): string {

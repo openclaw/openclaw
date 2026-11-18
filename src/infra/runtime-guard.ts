@@ -9,6 +9,7 @@ import {
 import {
   canRunOpenClawNodeDiagnostics,
   classifyUnsupportedNodeCommand,
+  emitNodeSecurityWarning,
   formatUnsupportedNodeDiagnosticWarning,
   isNodeVersionAtLeast,
   MINIMUM_BUN_VERSION,
@@ -163,6 +164,9 @@ export async function assertSupportedRuntime(
   const writeNotice = (message: string) =>
     providedRuntime ? providedRuntime.error(message) : process.stderr.write(`${message}\n`);
   if (runtimeSatisfies(details)) {
+    if (details.kind === "node" && emitDiagnosticWarning) {
+      emitNodeSecurityWarning(details.version, writeNotice);
+    }
     return;
   }
   // Only startup callers with a pre-dotenv snapshot may select another runtime.

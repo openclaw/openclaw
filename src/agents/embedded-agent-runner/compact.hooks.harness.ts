@@ -12,6 +12,7 @@ import {
   agentSessionSetContextReplacementHook,
 } from "../sessions/agent-session-compaction.js";
 import type { AgentSession } from "../sessions/agent-session.js";
+import { SettingsManager } from "../sessions/settings-manager.js";
 import type { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import {
   getMemoryProviderMock,
@@ -23,6 +24,7 @@ import {
 import {
   acquireCompactHooksPreparedModelRuntime,
   createCompactHooksResolvedModel,
+  createDefaultCompactionAuthStore,
   getCurrentPluginMetadataSnapshotMock,
   mockCompactHooksContextEngine,
   mockCompactHooksPluginMetadata,
@@ -34,6 +36,7 @@ import {
   mockCompactHooksSkills,
   mockCompactHooksTools,
 } from "./compact.hooks.tools.test-support.js";
+import { mockCompactionPreparation } from "./compact.preparation.test-support.js";
 import { createCompactionSessionManagerMock } from "./compact.session-manager.test-support.js";
 import type { resolveModelAsync } from "./model.js";
 import type { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
@@ -222,16 +225,16 @@ export const createAgentSessionMock = vi.fn(async (..._args: [unknown?, unknown?
 export const createOpenClawCodingToolsMock = vi.fn<typeof createOpenClawCodingToolsInternal>(
   () => [],
 );
-const buildEmbeddedExtensionFactoriesMock = vi.fn(() => []);
+export const buildEmbeddedExtensionFactoriesMock = vi.fn<
+  typeof import("./extensions.js").buildEmbeddedExtensionFactories
+>(() => []);
 export const resolveEffectiveCompactionModeMock = vi.fn(() => "default");
 const guardSessionManagerMock = vi.fn((sessionManager: Record<string, unknown>) => ({
   ...sessionManager,
   flushPendingToolResultsAsync: vi.fn(async () => undefined),
 }));
 const applyAgentCompactionSettingsFromConfigMock = vi.fn();
-const createPreparedEmbeddedAgentSettingsManagerMock = vi.fn(() => ({
-  getGlobalSettings: vi.fn(() => ({})),
-}));
+const createPreparedEmbeddedAgentSettingsManagerMock = vi.fn(() => SettingsManager.inMemory());
 const listRegisteredPluginAgentPromptGuidanceMock = vi.fn((params?: { surface?: string }) =>
   params?.surface === "subagent"
     ? ["Subagent compact command guidance."]
@@ -240,7 +243,7 @@ const listRegisteredPluginAgentPromptGuidanceMock = vi.fn((params?: { surface?: 
       : ["Main compact command guidance."],
 );
 export const buildConfiguredAgentSystemPromptMock = vi.fn<typeof buildConfiguredAgentSystemPrompt>(
-  () => "",
+  async () => "",
 );
 export const resolveSkillsPromptMock = vi.fn<
   typeof import("../../skills/loading/workspace-skill-prompt.js").resolveSkillsPrompt
@@ -271,19 +274,6 @@ export const resolveProviderEntryApiKeyProfileReferenceMock: Mock<() => unknown>
 const shouldPreferExplicitConfigApiKeyAuthMock = vi.fn(() => false);
 const registerProviderStreamForModelMock: Mock<(params?: unknown) => unknown> = vi.fn();
 export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: {} }));
-function createDefaultCompactionAuthStore(): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {
-      "openai:test": {
-        type: "api_key",
-        provider: "openai",
-        key: "test",
-      },
-    },
-    order: { openai: ["openai:test"] },
-  };
-}
 
 export const ensureAuthProfileStoreMock: Mock<() => AuthProfileStore> = vi.fn(
   createDefaultCompactionAuthStore,
@@ -488,9 +478,9 @@ export function resetCompactHooksHarnessMocks(workspaceDir: string, sessionId = 
   guardSessionManagerMock.mockReset();
   applyAgentCompactionSettingsFromConfigMock.mockReset();
   createPreparedEmbeddedAgentSettingsManagerMock.mockReset();
-  createPreparedEmbeddedAgentSettingsManagerMock.mockReturnValue({
-    getGlobalSettings: vi.fn(() => ({})),
-  });
+  createPreparedEmbeddedAgentSettingsManagerMock.mockImplementation(() =>
+    SettingsManager.inMemory(),
+  );
 }
 
 export async function loadCompactHooksHarness(options: { durableSession?: boolean } = {}): Promise<{
@@ -504,7 +494,8 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     vi.doUnmock("./server-endpoint-compaction.js");
     vi.doUnmock("../sessions/model-registry-runtime.js");
     vi.doUnmock("../sessions/resource-loader.js");
-    vi.doUnmock("../sessions/index.js");
+    vi.doUnmock("../sessions/session-manager.js");
+    vi.doUnmock("../sessions/compaction/compaction.js");
     vi.doUnmock("../sessions/sdk.js");
     vi.doUnmock("../session-tool-result-guard-wrapper.js");
     vi.doUnmock("../agent-settings.js");
@@ -601,13 +592,12 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
       },
     }));
 
-    vi.doMock("../sessions/index.js", () => ({
-      AuthStorage: function AuthStorage() {},
-      ModelRegistry: function ModelRegistry() {},
+    vi.doMock("../sessions/session-manager.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../sessions/session-manager.js")>()),
       SessionManager: createCompactionSessionManagerMock(sessionMessages),
-      SettingsManager: {
-        create: vi.fn(() => ({})),
-      },
+    }));
+    vi.doMock("../sessions/compaction/compaction.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../sessions/compaction/compaction.js")>()),
       estimateTokens: estimateTokensMock,
       generateSummary: vi.fn(async () => "summary"),
     }));
@@ -746,11 +736,11 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     resolveEmbeddedAgentStream: resolveEmbeddedAgentStreamMock,
   }));
 
-  vi.doMock("./extra-params.js", () => ({
+  mockCompactionPreparation(options, {
     applyExtraParamsToAgent: applyExtraParamsToAgentMock,
     resolveAgentTransportOverride: resolveAgentTransportOverrideMock,
-    resolvePreparedExtraParams: vi.fn(() => ({})),
-  }));
+    buildEmbeddedExtensionFactories: buildEmbeddedExtensionFactoriesMock,
+  });
 
   vi.doMock("./compaction-safety-timeout.js", async () => {
     const actual = await vi.importActual<typeof import("./compaction-safety-timeout.js")>(
@@ -774,11 +764,6 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
       validateGeminiTurns: false,
       validateAnthropicTurns: false,
     })),
-  }));
-
-  // mock-isolation: Keep extension state isolated while safeguard tests install their own factories.
-  vi.doMock("./extensions.js", () => ({
-    buildEmbeddedExtensionFactories: buildEmbeddedExtensionFactoriesMock,
   }));
 
   vi.doMock("./history.js", () => ({
@@ -931,7 +916,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
   return {
     ...compactModule,
     compactEmbeddedAgentSession: (params, host = {}) =>
-      compactQueuedModule.compactEmbeddedAgentSession(params, {
+      compactQueuedModule.compactQueuedEmbeddedAgentSession(params, {
         ...host,
         sourceAuthority: host.sourceAuthority ?? {
           assertActive: host.assertActive ?? (() => {}),

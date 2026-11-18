@@ -152,6 +152,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     };
     const attempt = {
       runId: "context-writer",
+      inputProvenance: { kind: "internal_system" as const, sourceTool: "cron_execution" },
       preparedSessionTarget: { target, assertCurrent: composeSessionSourceAssertion([]) },
     };
     for (const tokens of [810_448, 20_000]) {
@@ -170,6 +171,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     );
     expect(s.read()?.totalTokens).toBe(20_000);
     await s.update({
+      preserveUserFacingSessionModelState: true,
       compactionAccounting: {
         ...accountingFact(s.storePath, {
           lifecycleRevision: entry.lifecycleRevision,
@@ -420,6 +422,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       }
       const before = s.read();
       await s.update({
+        preserveUserFacingSessionModelState: true,
         compactionAccounting: accountingFact(s.storePath, {
           lifecycleRevision: "lifecycle",
           activeWriterRunId: "previous-writer",

@@ -48,7 +48,6 @@ const STARTUP_MIGRATION_LEASE = {
 };
 const STARTUP_MIGRATION_LEASE_POLL_INTERVAL_MS = 250;
 export const STARTUP_MIGRATION_LEASE_TTL_MS = 5 * 60_000;
-export const STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS = 60_000;
 
 export type StartupMigrationLease = {
   /** Publication guards may already hold the SQLite writer, so this check must stay read-only. */
@@ -109,11 +108,7 @@ function assertStartupMigrationLeaseOwned(expiresAt: number | undefined): void {
 
 /** Returns whether the shared startup/Doctor lease has a live process owner. */
 export function hasActiveStartupMigrationLease(
-  params: {
-    env?: NodeJS.ProcessEnv;
-    nowMs?: number;
-    onActivity?: (activity: { owner: string; pid?: number; heartbeatAt: number | null }) => void;
-  } = {},
+  params: { env?: NodeJS.ProcessEnv; nowMs?: number } = {},
 ): boolean {
   const env = params.env ?? process.env;
   const nowMs = params.nowMs ?? Date.now();
@@ -125,7 +120,7 @@ export function hasActiveStartupMigrationLease(
           db,
           stateDb
             .selectFrom("state_leases")
-            .select(["payload_json as payloadJson", "owner", "heartbeat_at as heartbeatAt"])
+            .select("payload_json as payloadJson")
             .where("scope", "=", STARTUP_MIGRATION_LEASE.scope)
             .where("lease_key", "=", STARTUP_MIGRATION_LEASE.key)
             .where("expires_at", ">", nowMs),
@@ -133,16 +128,10 @@ export function hasActiveStartupMigrationLease(
         if (!lease) {
           return false;
         }
-        const owner = parseStateLeaseProcessOwner(lease.payloadJson);
-        if (readStateLeaseProcessOwnerStatus(owner) === "dead") {
-          return false;
-        }
-        params.onActivity?.({
-          owner: lease.owner,
-          pid: owner?.host === hostname() ? owner.pid : undefined,
-          heartbeatAt: lease.heartbeatAt,
-        });
-        return true;
+        return (
+          readStateLeaseProcessOwnerStatus(parseStateLeaseProcessOwner(lease.payloadJson)) !==
+          "dead"
+        );
       },
       { env },
     ) ?? false

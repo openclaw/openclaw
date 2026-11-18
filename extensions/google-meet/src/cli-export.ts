@@ -294,7 +294,6 @@ function renderTranscriptMarkdown(result: GoogleMeetArtifactsResult): string {
     lines.push(`## ${entry.conferenceRecord.name}`);
     if (entry.transcriptEntries.length === 0) {
       lines.push("_No transcript entries._");
-      continue;
     }
     for (const transcriptEntries of entry.transcriptEntries) {
       lines.push("");

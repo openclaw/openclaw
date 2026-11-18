@@ -8,6 +8,7 @@ import type {
   ChatHistoryResponsePage,
 } from "../config/sessions/session-history-types.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { isNormalizedMessageChannel } from "../utils/message-channel-core.js";
 import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
 import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
@@ -292,6 +293,23 @@ export function encodeChatHistoryResponsePage(
   params: ChatHistoryPageParams,
 ): ChatHistoryPage {
   if (!params.encodeResponse) {
+    return page;
+  }
+  // Bundled display adapters can exist without a running channel account.
+  // Keep webchat on the worker-encoded fast path; channel views are viewer-bound.
+  if (
+    params.deferChannelUserDisplay &&
+    page.messages.some((value) => {
+      const message = asOptionalRecord(value);
+      const transport = asOptionalRecord(asOptionalRecord(message?.["__openclaw"])?.transport);
+      return (
+        message?.role === "user" &&
+        typeof transport?.channel === "string" &&
+        typeof transport.accountId === "string" &&
+        isNormalizedMessageChannel(transport.channel)
+      );
+    })
+  ) {
     return page;
   }
   // Budgeting and transport consume the same synchronous plain-data projection.

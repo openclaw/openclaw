@@ -27,7 +27,7 @@ import {
   isSessionWorkStartInvalidatedError,
   SessionWorkStartChangedError,
 } from "../../../config/sessions/work-start-error.js";
-import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
+import { readOwnNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
@@ -73,7 +73,7 @@ function isInterruptedTurnEntry(entry: SessionEntry, runId: string): boolean {
   }
   const message = entry.message;
   if (message.role === "custom") {
-    return readNestedToolActivity(message)?.details.runId === runId;
+    return readOwnNestedToolActivity(message)?.details.runId === runId;
   }
   const delivery = isOpenClawDeliveryMirrorAssistantMessage(message)
     ? asOptionalRecord(Reflect.get(message, "openclawDeliveryMirror"))
@@ -566,7 +566,7 @@ export async function prepareForeignPendingUserTurns(
   | ((
       activeSession: ForeignPendingUserTurnSession,
       currentUserIdempotencyKey: string | undefined,
-    ) => ForeignPendingUserTurns | undefined)
+    ) => Promise<ForeignPendingUserTurns | undefined>)
   | undefined
 > {
   const target = sessionManager.getSessionTarget();
@@ -587,10 +587,12 @@ export async function prepareForeignPendingUserTurns(
   const entries = new Map<string, string>();
   const adopted = new Set<string>();
   let observing = false;
-  return (activeSession, currentUserIdempotencyKey) => {
+  return async (activeSession, currentUserIdempotencyKey) => {
+    assertPrepared();
+    const liveEntries = await readEntries();
     assertPrepared();
     // Preserve the first sample through transcript reload even if a source finishes meanwhile.
-    for (const [id, key] of readEntries()) {
+    for (const [id, key] of liveEntries) {
       entries.set(id, key);
     }
     if (!entries.size) {

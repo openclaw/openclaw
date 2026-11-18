@@ -4,7 +4,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
@@ -110,17 +110,17 @@ export function resolveMeetingTranscriptExportOwnership(params: {
   return manifestMatches.length === 1 ? manifestMatches[0] : undefined;
 }
 
-export function detectLegacyMeetingTranscripts(params: {
+export async function detectLegacyMeetingTranscripts(params: {
   stateDir: string;
   env?: NodeJS.ProcessEnv;
   doctorOnlyStateMigrations?: boolean;
   artifactPreservingReadOnly?: boolean;
-}): LegacyMeetingTranscriptsDetection {
+}): Promise<LegacyMeetingTranscriptsDetection> {
   const sourceDir = path.join(params.stateDir, "transcripts");
   if (params.doctorOnlyStateMigrations !== true) {
     return { sourceDir, hasLegacy: false };
   }
-  const databaseState = readMeetingTranscriptMigrationDetectionState({
+  const databaseState = await readMeetingTranscriptMigrationDetectionState({
     env: { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir },
     artifactPreservingReadOnly: params.artifactPreservingReadOnly,
   });
@@ -184,10 +184,10 @@ export function detectLegacyMeetingTranscripts(params: {
   }
 }
 
-export function readMeetingTranscriptMigrationDetectionState(params: {
+export async function readMeetingTranscriptMigrationDetectionState(params: {
   env: NodeJS.ProcessEnv;
   artifactPreservingReadOnly?: boolean;
-}): MeetingTranscriptMigrationDetectionState {
+}): Promise<MeetingTranscriptMigrationDetectionState> {
   const empty = (): MeetingTranscriptMigrationDetectionState => ({
     exportOwnership: new Map(),
     exportOwnershipByFoldedSelector: new Map(),
@@ -246,8 +246,9 @@ export function readMeetingTranscriptMigrationDetectionState(params: {
     isArtifactPreservingStateRead("shared", databasePath)
   ) {
     return (
-      withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(read, { env: params.env }) ??
-      empty()
+      (await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(read, {
+        env: params.env,
+      })) ?? empty()
     );
   }
   if (!fs.existsSync(databasePath)) {

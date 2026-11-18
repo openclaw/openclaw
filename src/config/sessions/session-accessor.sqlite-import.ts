@@ -9,7 +9,7 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { recordLegacyAcpMigrationSources } from "./session-accessor.sqlite-acp-provenance.js";
-import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
+import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-read.js";
 import type { SessionAccessScope, TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
@@ -164,6 +164,7 @@ function importSqliteSessionRowsInTransaction(
       database,
       params.entry.sessionId,
       params.transcriptMtimeMs,
+      { strictly: transcriptEvents > 0 },
     );
   } else if (transcriptEvents > 0) {
     touchTranscriptMutationInTransaction(database, params.entry.sessionId);

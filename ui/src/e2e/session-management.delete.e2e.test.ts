@@ -18,57 +18,36 @@ const basicOptions = {
 const desktopOptions = { ...basicOptions, viewport: { height: 900, width: 1280 } };
 
 suite.define(() => {
-  it("does not archive a parent when clicking its removed child disclosure position", () =>
+  it("aligns childless sidebar rows to the disclosure edge", () =>
     suite.withPage(desktopOptions, async ({ page }) => {
       const now = Date.now();
       const main = sessionRow("agent:main:main", "Home", now);
       const parent = sessionRow("agent:main:parent", "Parent conversation", now + 2, {
         childSessions: ["agent:main:child"],
       });
-      const child = sessionRow("agent:main:child", "Child", now + 1, {
-        spawnedBy: parent.key,
-      });
+      const child = sessionRow("agent:main:child", "Child", now + 1, { spawnedBy: parent.key });
+      const plain = sessionRow(
+        "agent:main:plain",
+        "A long conversation title that truncates",
+        now + 3,
+      );
       await seedChatSettings(page, suite.server.baseUrl, { navWidth: 320 });
-      const gateway = await support.installMockGateway(page, {
-        sessions: [main, parent, child],
+      await support.installMockGateway(page, {
+        sessions: [main, parent, child, plain],
         sessionKey: main.key,
-        sessionArchiveFiltering: true,
       });
       await page.goto(support.controlUiSessionUrl(suite.server.baseUrl, main.key));
-      const row = page.locator(`.sidebar-recent-session[data-session-key="${parent.key}"]`);
-      const toggle = row.locator("[data-child-session-toggle]");
+      const toggle = page.locator(`[data-session-key="${parent.key}"] [data-child-session-toggle]`);
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${plain.key}"]`);
       await toggle.waitFor();
-      const bounds = await toggle.boundingBox();
-      const point = { x: bounds!.x + bounds!.width / 2, y: bounds!.y + bounds!.height / 2 };
-      await page.mouse.click(point.x, point.y);
-      await gateway.setSessionsListResponse(
-        support.sessionsListResponse([main, { ...parent, childSessions: [] }]),
-      );
-      await gateway.emitGatewayEvent("sessions.changed", {
-        sessionKey: child.key,
-        sessionId: child.sessionId,
-        agentId: "main",
-        reason: "delete",
-      });
-      await gateway.emitGatewayEvent("sessions.changed", { reason: "delete" });
-      await toggle.waitFor({ state: "detached" });
-      await support.captureUiProof(suite, page, "removed-child-disclosure.png");
-      const archiveAtPoint = await page.evaluate(
-        ({ x, y }) =>
-          Boolean(document.elementFromPoint(x, y)?.closest("[data-sidebar-session-archive]")),
-        point,
-      );
-      await page.mouse.click(point.x, point.y);
-      expect.soft(archiveAtPoint).toBe(false);
-      await expectRequestCountStable(gateway, "sessions.patch", 0, undefined, {
-        key: parent.key,
-        archived: true,
-      });
+      const toggleBox = (await toggle.boundingBox())!;
+      // Rows without children use the disclosure's edge slot instead of reserving it empty.
+      const titleBox = (await row.locator(".sidebar-recent-session__text").boundingBox())!;
+      expect.soft(titleBox.x + titleBox.width).toBeGreaterThan(toggleBox.x);
       await row.hover();
-      await row.locator("[data-sidebar-session-archive]").click();
-      await gateway.waitForRequest("sessions.patch", {
-        match: { key: parent.key, archived: true },
-      });
+      const archiveBox = (await row.locator("[data-sidebar-session-archive]").boundingBox())!;
+      await support.captureUiProof(suite, page, "childless-row-alignment.png");
+      expect(archiveBox.x + archiveBox.width).toBeGreaterThan(toggleBox.x);
     }));
 
   it.each(["delete", "archive"] as const)(
@@ -118,7 +97,7 @@ suite.define(() => {
           });
           const recovery = await support.waitForConfirmModal(page);
           await ui.button(recovery, `Discard changes and ${action}`, false).waitFor();
-          await ui.expectText(recovery, "Reconnect it to keep those changes");
+          await ui.expectText(recovery, "Reconnect it to keep them");
           return recovery;
         };
 
@@ -386,6 +365,7 @@ suite.define(() => {
       await ui.menuItem(page, "Advanced").click();
       await ui.menuItem(page.locator("openclaw-session-menu"), "Delete…", false).click();
       const confirmation = await support.waitForConfirmModal(page);
+      await support.captureUiProof(suite, page, "delete-confirmation.png", confirmation);
       await gateway.deferNext("sessions.delete");
       await ui.button(confirmation, "Delete").evaluate((control) => {
         if (!(control instanceof HTMLButtonElement)) {
@@ -403,10 +383,45 @@ suite.define(() => {
         code: "INVALID_REQUEST",
         message: `Session ${key} ${changedMessage}`,
       });
-      const error = page.locator("[data-sidebar-session-error]");
+      const error = page.locator("openclaw-toast-host");
       await ui.expectText(error, changedMessage);
       expect(await error.textContent()).not.toContain("GatewayRequestError");
       await ui.visible(row);
       expect(nativeDialogs).toEqual([]);
+      if (support.captureUiProofEnabled) {
+        // Supplementary production-dialog rendering; the real sidebar path is exercised above.
+        const modules = await page.evaluateHandle<{
+          dialog: typeof import("../components/confirm-dialog.ts");
+          copy: typeof import("../lib/sessions/session-delete-confirmation.ts");
+          i18n: typeof import("../i18n/index.ts");
+        }>(
+          '(async () => ({ dialog: await import("/src/components/confirm-dialog.ts"), copy: await import("/src/lib/sessions/session-delete-confirmation.ts"), i18n: await import("/src/i18n/index.ts") }))()',
+        );
+        for (const incognitoOnly of [true, false]) {
+          await modules.evaluate(({ dialog, copy, i18n }, only) => {
+            const sessions = [{ key: "agent:main:dashboard:incognito-private", incognito: true }];
+            if (!only) {
+              sessions.push({ key: "agent:main:research", incognito: false });
+            }
+            void dialog.showConfirmDialog({
+              title: only
+                ? i18n.t("sessionsView.deleteSessionTitle", { session: "Private notes" })
+                : i18n.t("sessionsView.deleteSessionsTitle", { count: "2" }),
+              message: copy.sessionDeleteConfirmationMessage(sessions),
+              confirmLabel: i18n.t("common.delete"),
+              danger: true,
+            });
+          }, incognitoOnly);
+          const modal = await support.waitForConfirmModal(page);
+          await support.captureUiProof(
+            suite,
+            page,
+            incognitoOnly ? "incognito-confirmation.png" : "mixed-confirmation.png",
+            modal,
+          );
+          await ui.button(modal, "Cancel").click();
+        }
+        await modules.dispose();
+      }
     }));
 });

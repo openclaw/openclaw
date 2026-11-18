@@ -147,6 +147,9 @@ export function isNodeLaunchAgentLabel(label: string): boolean {
   return label === NODE_LAUNCH_AGENT_LABEL || label.startsWith(`${NODE_LAUNCH_AGENT_LABEL}.`);
 }
 
+/** Durable exec jobs are registry-owned and transient; service repair never inspects them. */
+export const DURABLE_PROCESS_LAUNCHD_LABEL_PREFIX = "ai.openclaw.durable-proc.";
+
 export function resolveNodeSystemdServiceName(profile?: string): string {
   return `${NODE_SYSTEMD_SERVICE_NAME}${resolveGatewayProfileSuffix(profile)}`;
 }

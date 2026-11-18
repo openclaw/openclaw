@@ -1,5 +1,6 @@
 import { createMemo, Loading, onSettled } from "solid-js";
 import type { AgentSelectElement } from "../../components/agent-select.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import type { PopoverHandle } from "../../components/solid/popover.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
@@ -18,6 +19,24 @@ import { draftWhereChipParams, resolveWhereChip } from "./where-chip.ts";
 import { WhereChip } from "./where-chip.tsx";
 
 registerNewSessionSetupEnglish();
+
+function CheckoutLoadingRow() {
+  return (
+    <span class="new-session-page__select new-session-page__checkout-loading">
+      <span
+        class="new-session-page__trigger new-session-page__checkout-skeleton"
+        role="status"
+        aria-label={t("common.loading")}
+        style={{ "pointer-events": "none" }}
+      >
+        <span class="new-session-page__target-icon" aria-hidden="true">
+          <Icon name="gitBranch" />
+        </span>
+        <span class="new-session-page__skeleton-bar" aria-hidden="true" style={{ width: "80px" }} />
+      </span>
+    </span>
+  );
+}
 
 export function AgentSelect(props: {
   params: AgentSelectOptions;
@@ -127,18 +146,30 @@ export function NewSessionPlaceControls(props: {
     const nativeTerminal = catalog.isTarget(data);
     const cloudProfiles = nativeTerminal ? [] : gateway.cloudProfiles;
     const projects = nativeTerminal ? [] : browser.projects;
+    const workspacePath = place.workspacePath();
     const recents = nativeTerminal
       ? []
       : browser.resolveProjectRecents({
           sessions: context?.sessions.state.result?.sessions ?? [],
-          workspace: place.workspacePath(),
+          workspace: workspacePath,
           workspaceRoots: place.knownWorkspaceRoots(),
           isAdmin: place.isAdmin(),
         });
     const whereState = resolveWhereChip(draftWhereChipParams(place, gateway, cloudProfiles));
+    const agentRoster = context?.agents.state;
+    const projectLabelPending = Boolean(
+      agentRoster?.agentsLoading &&
+      !agentRoster.agentsList &&
+      !workspacePath &&
+      !place.folder &&
+      !place.deviceFolder &&
+      !place.freshWorkspace &&
+      !browser.remoteProject &&
+      !browser.projectId,
+    );
     const projectState = resolveProjectChip({
       folder: place.deviceFolder?.path ?? place.folder,
-      workspace: place.workspacePath(),
+      workspace: workspacePath,
       projectId: browser.projectId,
       selectedRemoteProject: browser.remoteProject,
       projects,
@@ -151,6 +182,11 @@ export function NewSessionPlaceControls(props: {
       browser,
       whereState,
       projectState,
+      projectLabelPending,
+      // The mobile tray stacks above the composer. Reserve the possible
+      // checkout row while the default workspace's Git status is still unknown.
+      checkoutPending:
+        projectLabelPending && !nativeTerminal && !place.hostedEnvironment && place.canWrite(),
     };
   });
   return (
@@ -189,14 +225,7 @@ export function NewSessionPlaceControls(props: {
             ref={(element) => {
               workspace = element;
             }}
-            class={[
-              "new-session-page__workspace",
-              {
-                "new-session-page__workspace--checkout":
-                  props.params.place.checkoutVisible &&
-                  !(view().nativeTerminal && props.params.place.terminalOnNode),
-              },
-            ]}
+            class="new-session-page__workspace"
           >
             {props.params.place.hostedEnvironment ? (
               <span
@@ -219,13 +248,18 @@ export function NewSessionPlaceControls(props: {
               <ProjectChip
                 params={props.params}
                 state={view().projectState}
+                labelPending={view().projectLabelPending}
                 nativeTerminal={view().nativeTerminal}
                 focus={view().browser.projectFocus}
               />
             )}
-            {props.params.place.checkoutVisible &&
+            {(view().checkoutPending || props.params.place.checkoutVisible) &&
             !(view().nativeTerminal && props.params.place.terminalOnNode) ? (
-              <CheckoutChip params={props.params} folderLabel={view().projectState.label} />
+              view().checkoutPending || props.params.place.repositoryState.checkoutPending ? (
+                <CheckoutLoadingRow />
+              ) : (
+                <CheckoutChip params={props.params} folderLabel={view().projectState.label} />
+              )
             ) : undefined}
           </div>
           {props.params.place.deviceFolder ? (
