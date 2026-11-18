@@ -130,11 +130,11 @@ export function createGoalChatRunGate(throws: boolean) {
   const registry = getTestPluginRegistry();
   return {
     hook,
-    installHook() {
+    installHook: () => {
       registry.typedHooks.push(registration);
       initializeGlobalHookRunner(registry);
     },
-    removeHook() {
+    removeHook: () => {
       registry.typedHooks = registry.typedHooks.filter((entry) => entry !== registration);
       initializeGlobalHookRunner(registry);
     },

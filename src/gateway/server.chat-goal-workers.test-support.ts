@@ -110,7 +110,7 @@ export function registerWorkerGoalChatCases(
         "OPENCLAW_BUNDLED_PLUGINS_DIR",
         "OPENAI_API_KEY",
       ]);
-      using _restorePolicyEnv = { [Symbol.dispose]: () => policyEnv.restore() };
+      using _ = { [Symbol.dispose]: () => policyEnv.restore() };
       if (implicitRuntime) {
         delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
         delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
