@@ -26,7 +26,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import {
   isSessionsGoalClearParams,
   isSessionsGoalUpdateParams,
-} from "../../lib/protocol-validators.generated/session-input.js";
+} from "../../lib/protocol-validators.generated/session.js";
 import {
   scopedAgentIdForSession,
   scopedAgentListParamsForSession,

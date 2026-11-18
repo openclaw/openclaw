@@ -13,7 +13,7 @@ import {
   isSessionTitleSource,
   isSessionToolOverrides,
   isSessionWorktreeSource,
-} from "../protocol-validators.generated/session-input.js";
+} from "../protocol-validators.generated/session.js";
 import type { SessionCreateParams } from "./create.ts";
 import {
   listSessionPlacementRecoveryStorageKeys,

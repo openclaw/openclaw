@@ -1,6 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import { isAgentActivityItem } from "../protocol-validators.generated/activity.js";
+import { isAgentActivityItem } from "../protocol-validators.generated/session.js";
 
 export function readPreparedActivity(message: unknown): AgentActivityItem[] {
   const activity = asOptionalRecord(message)?.activity;

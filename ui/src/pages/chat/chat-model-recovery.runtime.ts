@@ -5,7 +5,7 @@ import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.t
 import { resolvePreferredServerChatModelValue } from "../../lib/chat/model-ref.ts";
 import { resolveChatModelOverrideValue } from "../../lib/chat/model-select-state.ts";
 import { formatUiError, formatUiErrorDetails } from "../../lib/format-error.ts";
-import { isAgentRuntimeRestrictionErrorDetails } from "../../lib/protocol-validators.generated/session-input.js";
+import { isAgentRuntimeRestrictionErrorDetails } from "../../lib/protocol-validators.generated/session.js";
 import { setChatError } from "./chat-history-state.ts";
 import {
   claimChatModelSelection,

@@ -15,7 +15,7 @@ import { resolveToolDisplayIdentity } from "../../lib/chat/tool-display-identity
 import {
   cleanAgentActivityItem,
   isAgentActivityItem,
-} from "../../lib/protocol-validators.generated/activity.js";
+} from "../../lib/protocol-validators.generated/session.js";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { buildToolStreamIdentity, extractToolMessageRefs } from "./tool-stream-identity.ts";
 
