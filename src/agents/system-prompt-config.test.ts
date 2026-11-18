@@ -230,6 +230,40 @@ describe("buildConfiguredAgentSystemPrompt", () => {
   );
 
   it.each([{ toolNames: [] }, { toolNames: ["gateway"] }])(
+    "keeps bounded local config recovery available with tools $toolNames",
+    async ({ toolNames }) => {
+      for (const prompt of [
+        await buildPrompt({ toolNames }),
+        buildAgentHarnessBasePrompt({ toolNames }),
+      ]) {
+        expect(prompt).toContain("blocks an explicitly requested local repair");
+        expect(prompt).toContain("use available file/exec tools within their existing permissions");
+        expect(prompt).toContain("preserve a rollback copy");
+        expect(prompt).toContain("validate and read back");
+        expect(prompt).toContain(
+          "Recovery must not override an approval decision, readonly config, containment, or disabled tools",
+        );
+        expect(prompt).toContain(
+          "Do not use this fallback to change access, approval, or ownership policies",
+        );
+        expect(prompt).not.toContain("These commands do not need helper inference");
+      }
+    },
+  );
+
+  it("teaches exact config recovery on regular and native harness surfaces", async () => {
+    const toolNames = ["openclaw", "exec"];
+    for (const prompt of [
+      await buildPrompt({ toolNames }),
+      buildAgentHarnessBasePrompt({ toolNames }),
+    ]) {
+      expect(prompt).toContain("config set <path> <value>");
+      expect(prompt).toContain("These commands do not need helper inference");
+      expect(prompt).toContain("existing approval and config-write checks still apply");
+    }
+  });
+
+  it.each([{ toolNames: [] }, { toolNames: ["gateway"] }])(
     "does not recommend disabled update or restart commands with tools $toolNames",
     async ({ toolNames }) => {
       const disabled = await buildPrompt({

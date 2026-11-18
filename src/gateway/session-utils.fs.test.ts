@@ -16,6 +16,7 @@ import {
   createArchiveSourceSnapshotFixture,
   createResetKeptTailTranscriptFixture,
 } from "./session-transcript-archive.test-support.js";
+import { resolveSessionTranscriptCandidatesAsync } from "./session-transcript-files.fs.js";
 import { collectSessionTranscriptMessages } from "./session-transcript-source-pages.js";
 import {
   readLatestSessionUsageFromTranscriptFileAsync,
@@ -222,30 +223,62 @@ describe("artifact usage", () => {
   }
   const usage = () => readLatestSessionUsageFromTranscriptFileAsync(id, storePath);
 
-  test("aggregates assistant usage without synchronous filesystem calls", async () => {
-    writeUsage([
-      assistant({
-        provider: "anthropic",
+  test.for(["generated", "relative", "absolute", "indirect-link"])(
+    "aggregates assistant usage without synchronous filesystem calls (%s)",
+    async (mode, context) => {
+      writeUsage([
+        assistant({
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          usage: { input: 1800, output: 400, cacheRead: 600, cost: { total: 0.0055 } },
+        }),
+        assistant({ usage: { input: 2400, output: 250, cacheRead: 900, cost: { total: 0.006 } } }),
+        assistant({ provider: "openclaw", model: "command" }),
+      ]);
+      let selectedStorePath = storePath;
+      let alias: string | undefined;
+      if (mode === "indirect-link") {
+        if (process.platform === "win32") {
+          context.skip();
+        }
+        const main = path.join(tmpDir, id, "agents", "main", "sessions");
+        const worker = path.join(tmpDir, id, "agents", "worker", "sessions");
+        fs.mkdirSync(main, { recursive: true });
+        fs.mkdirSync(path.join(worker, "child"), { recursive: true });
+        fs.copyFileSync(path.join(tmpDir, `${id}.jsonl`), path.join(main, `${id}.jsonl`));
+        writeRecords(path.join(worker, `${id}.jsonl`), [
+          { message: assistant({ usage: { input: 999, output: 999 } }) },
+        ]);
+        fs.symlinkSync(path.join(worker, "child"), path.join(main, "link"), "dir");
+        alias = path.join(main, "alias.jsonl");
+        fs.symlinkSync(`link/../${id}.jsonl`, alias);
+        selectedStorePath = path.join(main, "sessions.json");
+      }
+      using measured = observeMainThreadFs();
+      const sessionFile =
+        mode === "generated"
+          ? undefined
+          : mode === "relative"
+            ? `${id}.jsonl`
+            : (alias ?? path.join(tmpDir, `${id}.jsonl`));
+      const snapshot = await readLatestSessionUsageFromTranscriptFileAsync(
+        id,
+        selectedStorePath,
+        sessionFile,
+      );
+      expect(snapshot).toMatchObject({
+        modelProvider: "anthropic",
         model: "claude-sonnet-4-6",
-        usage: { input: 1800, output: 400, cacheRead: 600, cost: { total: 0.0055 } },
-      }),
-      assistant({ usage: { input: 2400, output: 250, cacheRead: 900, cost: { total: 0.006 } } }),
-      assistant({ provider: "openclaw", model: "command" }),
-    ]);
-    using measured = observeMainThreadFs();
-    const snapshot = await usage();
-    expect(snapshot).toMatchObject({
-      modelProvider: "anthropic",
-      model: "claude-sonnet-4-6",
-      inputTokens: 4200,
-      outputTokens: 650,
-      cacheRead: 1500,
-      totalTokens: 3550,
-      totalTokensFresh: true,
-    });
-    expect(snapshot?.costUsd).toBeCloseTo(0.0115, 8);
-    expect(measured.stacks()).toEqual([]);
-  });
+        inputTokens: 4200,
+        outputTokens: 650,
+        cacheRead: 1500,
+        totalTokens: 3550,
+        totalTokensFresh: true,
+      });
+      expect(snapshot?.costUsd).toBeCloseTo(0.0115, 8);
+      expect(measured.stacks()).toEqual([]);
+    },
+  );
 
   test.each(["command", "delivery-mirror", "gateway-injected", "automation-result"])(
     "retains a meaningful zero-cost artifact snapshot without a %s model identity",
@@ -310,12 +343,18 @@ describe("artifact usage", () => {
 });
 
 describe("transcript path safety", () => {
-  test("drops unsafe session IDs instead of producing traversal paths", () => {
+  test("drops unsafe session IDs instead of producing traversal paths", async () => {
     expect(resolveSessionTranscriptCandidates("../etc/passwd", storePath)).toStrictEqual([]);
+    await expect(
+      resolveSessionTranscriptCandidatesAsync("../etc/passwd", storePath),
+    ).resolves.toStrictEqual([]);
   });
 
-  test("drops unsafe sessionFile candidates and keeps safe fallbacks", () => {
+  test("drops unsafe sessionFile candidates and keeps safe fallbacks", async () => {
     const candidates = resolveSessionTranscriptCandidates("safe", storePath, "../../etc/passwd");
+    await expect(
+      resolveSessionTranscriptCandidatesAsync("safe", storePath, "../../etc/passwd"),
+    ).resolves.toStrictEqual(candidates);
     expect(candidates.every((candidate) => !candidate.includes("etc/passwd"))).toBe(true);
     expect(candidates.map((candidate) => path.resolve(candidate))).toContain(
       path.join(tmpDir, "safe.jsonl"),

@@ -3,6 +3,7 @@ import path from "node:path";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
 import { hasErrnoCode } from "../../infra/errno.js";
+import { readPackageReleaseSlotSync } from "../../infra/package-release-slot-path.js";
 import { restoreInterruptedNpmPackageRootLink } from "../../infra/package-update-npm-root.js";
 import { pathEntryExists, realpathOrResolve } from "../../infra/path-existence.js";
 import { isPathStrictlyInside } from "../../infra/path-guards.js";
@@ -29,8 +30,9 @@ import {
 export async function inspectNpmGlobalDestination(
   root: string,
   installTarget: ResolvedGlobalInstallTarget,
-  dryRun = false,
+  options: { dryRun?: boolean } = {},
 ) {
+  const dryRun = options.dryRun === true;
   const destination: Omit<UpdateDestinationFailure, "ownership" | "cause"> = {
     destinationKind: "unknown",
     prefix: null,
@@ -104,6 +106,36 @@ export async function inspectNpmGlobalDestination(
       (packageRootReal !== null &&
         launcherTarget !== null &&
         isPathStrictlyInside(packageRootReal, launcherTarget));
+    // A service started by a release's real path would keep running that release after
+    // the link moves; published updaters write such paths when run through the link.
+    // Replace that release in place, as they do. The restart's service refresh then
+    // installs the service from the package path, and the next update switches releases.
+    const releaseSlot =
+      ownsPackage && ownsLauncher ? readPackageReleaseSlotSync(packageRoot) : null;
+    const releaseLayout = releaseSlot ? await summarizeGatewayServiceLayout(command) : undefined;
+    if (
+      releaseSlot &&
+      releaseLayout?.entrypoint &&
+      isPathStrictlyInside(releaseSlot.releaseRoot, path.resolve(releaseLayout.entrypoint))
+    ) {
+      const rebind = formatCliCommand("openclaw gateway install --force").replace(
+        /^openclaw\b/,
+        () => `node ${quote(path.join(packageRoot, "openclaw.mjs"))}`,
+      );
+      return {
+        kind: "owned" as const,
+        interruptedLink,
+        releaseBoundService: {
+          releaseRoot: releaseSlot.releaseRoot,
+          installTarget: {
+            ...installTarget,
+            globalRoot: path.dirname(releaseSlot.releaseRoot),
+            packageRoot: releaseSlot.releaseRoot,
+          },
+          warning: `The Gateway service starts ${releaseLayout.entrypoint}, inside the release ${releaseSlot.releaseRoot}, so this update replaces that release in place. If the restart does not bind the service to the package path ${packageRoot}, run \`${rebind}\`; the next update then switches releases.`,
+        },
+      };
+    }
     if (ownsPackage && ownsLauncher) {
       return { kind: "owned" as const, interruptedLink };
     }

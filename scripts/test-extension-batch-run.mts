@@ -40,6 +40,8 @@ import {
   type VitestReportOutcome,
 } from "./lib/vitest-report-owner.mts";
 import { resolveVitestRuntimeCliSelections } from "./lib/vitest-runtime-selection.mts";
+import { getVitestWorkerDescriptor } from "./lib/vitest-worker-descriptor.mts";
+import { createVitestWorkerRun } from "./lib/vitest-worker-run.mts";
 
 const DATABASE_WORKER_CONFIG = "test/vitest/vitest.extension-database-workers.config.ts";
 const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
@@ -427,10 +429,16 @@ export async function runExtensionBatchPlan(
     cwd,
   );
   const termination: { signal: NodeJS.Signals | null } = { signal: null };
+  const parentWorkers = getVitestWorkerDescriptor();
+  // One upstream loan serves every group and the final report replay.
+  const workers =
+    parentWorkers && resolveExplicitVitestMode(["run", ...vitestArgs]) !== "watch"
+      ? createVitestWorkerRun(env, parentWorkers)
+      : undefined;
   const onSignal = (value: NodeJS.Signals) => {
     termination.signal ??= value;
   };
-  if (reports) {
+  if (reports || workers) {
     process.on("SIGTERM", onSignal);
     process.on("SIGINT", onSignal);
   }
@@ -444,7 +452,17 @@ export async function runExtensionBatchPlan(
     try {
       attempt = reports?.attempt(invocations.indexOf(invocation), invocation.args);
       if (!attempt) {
-        const code = await runGroup(invocation);
+        const code = await runGroup({
+          ...invocation,
+          workerRun: workers,
+          ...(workers
+            ? {
+                onComplete: (value: VitestReportOutcome) => {
+                  termination.signal ??= value.signal;
+                },
+              }
+            : {}),
+        });
         exitCode = mergeVitestExitCodes(exitCode, code);
         stopScheduling ||= code !== 0 && code !== 1;
         return code;
@@ -452,6 +470,7 @@ export async function runExtensionBatchPlan(
       let outcome: VitestReportOutcome | undefined;
       const code = await runGroup({
         ...invocation,
+        workerRun: workers,
         args: attempt.args,
         onComplete(value) {
           outcome = value;
@@ -511,33 +530,40 @@ export async function runExtensionBatchPlan(
     );
     throw error;
   } finally {
-    if (reports) {
+    try {
+      if (reports) {
+        try {
+          const reportCode = await reports.finish(
+            async (mergeArgs) => {
+              const args = mergeArgs.slice(1);
+              const configIndex = args.indexOf("--config");
+              const config = args.splice(configIndex, 2)[1]!;
+              let outcome: VitestReportOutcome | undefined;
+              const code = await runVitestBatch({
+                config,
+                args,
+                targets: [],
+                env,
+                homeMode,
+                workerRun: workers,
+                onComplete(value) {
+                  outcome = value;
+                  termination.signal ??= value.signal;
+                },
+              });
+              return outcome ?? { code, signal: null };
+            },
+            termination.signal ? `Cancelled by ${termination.signal}` : reportFailure,
+          );
+          exitCode = mergeVitestExitCodes(exitCode, reportCode);
+        } catch (error) {
+          exitCode = vitestInfrastructureExitCode(exitCode);
+          console.error(error);
+        }
+      }
+    } finally {
       try {
-        const reportCode = await reports.finish(
-          async (mergeArgs) => {
-            const args = mergeArgs.slice(1);
-            const configIndex = args.indexOf("--config");
-            const config = args.splice(configIndex, 2)[1]!;
-            let outcome: VitestReportOutcome | undefined;
-            const code = await runVitestBatch({
-              config,
-              args,
-              targets: [],
-              env,
-              homeMode,
-              onComplete(value) {
-                outcome = value;
-                termination.signal ??= value.signal;
-              },
-            });
-            return outcome ?? { code, signal: null };
-          },
-          termination.signal ? `Cancelled by ${termination.signal}` : reportFailure,
-        );
-        exitCode = mergeVitestExitCodes(exitCode, reportCode);
-      } catch (error) {
-        exitCode = vitestInfrastructureExitCode(exitCode);
-        console.error(error);
+        await workers?.dispose({ interrupted: Boolean(termination.signal) });
       } finally {
         process.off("SIGTERM", onSignal);
         process.off("SIGINT", onSignal);

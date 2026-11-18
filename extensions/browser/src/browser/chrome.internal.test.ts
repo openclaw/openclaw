@@ -10,6 +10,7 @@ import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import type { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { stubBrowserExecutableAndPrefs } from "./chrome.internal.test-support.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const execFileSyncMock = vi.hoisted(() => vi.fn());
@@ -48,6 +49,7 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => ({
 vi.mock("openclaw/plugin-sdk/path-existence-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/path-existence-runtime")>()),
   executableFileExistsSync: (filePath: string) => fs.existsSync(filePath),
+  canAccess: async (filePath: string) => fs.existsSync(filePath),
 }));
 
 vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => ({
@@ -114,22 +116,6 @@ function makeFailedSpawnProc(error: NodeJS.ErrnoException): FakeProc {
   const proc = makeFakeProc({ pid: undefined });
   queueMicrotask(() => proc.emit("error", error));
   return proc;
-}
-
-function stubBrowserExecutableAndPrefs(
-  preferences: "present" | "missing",
-  executablePath?: string,
-) {
-  vi.spyOn(fs, "existsSync").mockImplementation((p) => {
-    const value = String(p);
-    const isExecutable = executablePath
-      ? value === executablePath
-      : value.includes("Google Chrome") ||
-        value.includes("google-chrome") ||
-        value.includes("/usr/bin/chromium");
-    const isPreferences = value.endsWith("Local State") || value.endsWith("Preferences");
-    return isExecutable || (preferences === "present" && isPreferences);
-  });
 }
 
 function requireSpawnCall(index = 0): unknown[] {
@@ -1019,8 +1005,8 @@ describe("chrome.ts internal", () => {
         stubBrowserExecutableAndPrefs("present");
         const profile = makeProfile(51117, { driver: "openclaw" as const });
         const lockPath = path.join(resolveOpenClawUserDataDir(profile.name), "SingletonLock");
-        const readlink = fs.readlinkSync.bind(fs);
-        vi.spyOn(fs, "readlinkSync").mockImplementation((candidate, options) => {
+        const readlink = fsp.readlink.bind(fsp);
+        vi.spyOn(fsp, "readlink").mockImplementation(async (candidate, options) => {
           if (String(candidate) !== lockPath) {
             return readlink(candidate, options);
           }

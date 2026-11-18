@@ -1,10 +1,12 @@
 import type { LocalPackageOverridesResult } from "./package-local-overrides-shared.js";
+import type { PackageReleaseRecord, PackageReleaseTarget } from "./package-release-slot.js";
 import type { PackageActivationRuntime } from "./package-update-activation-runtime.types.js";
 import type { PackagePostInstallVerifier } from "./package-update-verification-step.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import type { NativePackageStage } from "./update-native-package-stage.js";
 import type { NpmGlobalPrefixLayout } from "./update-npm-prefix.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery-types.js";
+import type { UpdateRunGitActivation } from "./update-run-schema.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 export type PackageActivationOptions = {
@@ -23,6 +25,8 @@ export type PackageUpdateTransaction = {
   /** Drops server-side captures; retirement calls it before removing the snapshot root. */
   discardDatabaseCaptures?: () => Promise<void>;
   assertRollbackSafe?: () => Promise<void>;
+  /** Set only by an in-place Git checkout activation: the commit and build it made live. */
+  readGitActivation?: () => Promise<UpdateRunGitActivation | undefined>;
   rollback: (
     assertCurrent: () => void,
   ) => Promise<
@@ -49,6 +53,10 @@ export type StagedPackageInstall = {
   installTarget: ResolvedGlobalInstallTarget;
   native?: NativePackageStage;
   activationCustody?: boolean;
+  /** Set when the stage is a release behind the package link of this prefix. */
+  release?: PackageReleaseTarget;
+  /** Why this update could not use the release layout; reported by the swap that replaces it. */
+  releaseUnavailable?: string;
 };
 
 export type StagedPackageSwapParams = {
@@ -65,6 +73,8 @@ export type StagedPackageSwapParams = {
   activation?: PackageActivationOptions;
   localOverrides?: { reapply: boolean; env?: NodeJS.ProcessEnv };
   onLocalOverrides?: (result: LocalPackageOverridesResult) => void;
+  /** Records the switch before the link changes. */
+  onPackageRelease?: (release: PackageReleaseRecord) => void | Promise<void>;
 };
 
 export type StagedPackageSwapResult =

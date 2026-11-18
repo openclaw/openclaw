@@ -63,7 +63,7 @@ it("keeps the source benchmark JSON parseable across all history readers", () =>
       cwd: process.cwd(),
       encoding: "utf8",
       // Exercise diagnostic routing rather than Vitest's default silent console.
-      env: { ...process.env, OPENCLAW_LOG_LEVEL: "info" },
+      env: { ...process.env, OPENCLAW_LOG_LEVEL: "info", TSX_DISABLE_CACHE: "1" },
       timeout: 60_000,
     },
   );

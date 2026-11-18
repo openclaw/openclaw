@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { collectDependencyManifestChanges } from "./dependency-manifests.mjs";
 import {
   GitHubDiffDataError,
   GitHubRateLimitError,
@@ -10,6 +11,7 @@ import {
   parseApprovalCommands,
   publishGuardStatus,
 } from "./guard-shared.mjs";
+import { loadSecurityReviewPolicy } from "./security-review-policy.mjs";
 import { securityReviewRollout } from "./security-review-rollout.mjs";
 
 const requestMarker = "<!-- openclaw:approval-request ";
@@ -469,7 +471,7 @@ export async function failGuard(guard, error, { terminal = false } = {}) {
   );
 }
 
-async function approverRole(guard, user) {
+async function approverRole(guard, user, { author = false } = {}) {
   if (user?.type !== "User" || !user.login) {
     return null;
   }
@@ -486,6 +488,36 @@ async function approverRole(guard, user) {
   if (guard.approvalCommand === securityReviewContracts.dependency.approvalCommand) {
     if (permission?.role_name === "admin") {
       return "admin";
+    }
+    if (author && permission?.role_name === "maintain") {
+      const { isDependencyFile, isDependencyManifest } = loadSecurityReviewPolicy();
+      // Native merge admission has no workflow analysis; use the same pinned diff.
+      const files = guard.files ?? (await readGuardFileSnapshot(guard)).files;
+      if (
+        !files.some((file) =>
+          [file.filename, file.previous_filename].some(
+            (path) =>
+              typeof path === "string" &&
+              (isDependencyFile(path) ||
+                // Metadata-only manifests can be absent from the protected-field diff.
+                (isDependencyManifest(path) &&
+                  ["added", "removed", "copied"].includes(file.status))),
+          ),
+        )
+      ) {
+        guard.dependencyManifestChanges ??= await collectDependencyManifestChanges(guard.api, {
+          owner: guard.owner,
+          repo: guard.repo,
+          pullRequest: guard.pullRequest,
+          files,
+        });
+        if (
+          guard.dependencyManifestChanges.length > 0 &&
+          guard.dependencyManifestChanges.every((change) => change.releaseVersionOnly)
+        ) {
+          return "maintain";
+        }
+      }
     }
     try {
       const membership = await guard.membershipApi.request(
@@ -550,7 +582,7 @@ export function withApprovalRequest(guard, body) {
 export async function findMaintainerApproval(guard) {
   const { pullRequest } = guard;
   const sha = pullRequest.head.sha;
-  const authorRole = await approverRole(guard, pullRequest.user);
+  const authorRole = await approverRole(guard, pullRequest.user, { author: true });
   if (authorRole) {
     return { kind: "author", login: pullRequest.user.login, role: authorRole, sha };
   }

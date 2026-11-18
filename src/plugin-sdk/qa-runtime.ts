@@ -21,6 +21,9 @@ export { mergeAttemptToolMediaPayloads } from "../agents/embedded-agent-runner/r
 export { wrapPromptDataBlock } from "../agents/sanitize-for-prompt.js";
 export { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 export { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
+// Private QA config projection reuses the canonical policy schema and target registry.
+export { SecretsConfigSchema } from "../config/zod-schema.core.js";
+export { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 export {
   createLazyCliRuntimeLoader,
   createLiveTransportQaCliRegistration,

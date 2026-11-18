@@ -341,19 +341,13 @@ async function executeClaim(
     // Preserve the preparation refusal so its source records abandonment.
     const retrySources =
       claim.retryBeforeExecution && !pluginUnavailable
-        ? sources.filter((item) => {
-            try {
-              item.operatorAuthority?.assertCurrent();
-            } catch {
-              return false;
-            }
-            return (
+        ? sources.filter(
+            (item) =>
               !isFollowupRunAborted(item) &&
               !item.controllerInput?.retirementRequested &&
               (!adoptionRefused || !item.controllerInput?.custody.adopted) &&
-              !item.controllerInput?.custody.completed
-            );
-          })
+              !item.controllerInput?.custody.completed,
+          )
         : [];
     if (!retrySources.length) {
       claim.retryBeforeExecution = false;
