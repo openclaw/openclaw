@@ -351,7 +351,6 @@ describe("control-ui-i18n generated ownership", () => {
     ).toEqual([
       "titleOne",
       "titleMany",
-      "description",
       "summary",
       "showCommands",
       "morePaths",
@@ -496,7 +495,6 @@ describe("control-ui-i18n generated ownership", () => {
       "contextDeferredEstimate",
       "contextSkills",
       "contextSystem",
-      "contextFree",
       "contextUnverified",
       "contextOpen",
       "contextLoading",

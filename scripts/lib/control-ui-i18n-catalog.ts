@@ -340,24 +340,22 @@ export function loadControlUiSourceCatalog(): TranslationMap {
                 "contextAvailableOnDemand",
                 "contextDeferredEstimate",
               ]
-            : name === "contextSystem"
-              ? ["contextFree"]
-              : name === "contextOffline"
-                ? ["contextUnavailable", "contextReserve"]
-                : name === "contextExactCount"
-                  ? [
-                      "contextFreeShort",
-                      "contextReserveShort",
-                      "contextInputShort",
-                      "contextOutputShort",
-                      "contextSearch",
-                      "contextSearchCount",
-                      "contextSearchSkills",
-                      "contextSearchFiles",
-                      "contextSearchTools",
-                      "contextShowAll",
-                    ]
-                  : [];
+            : name === "contextOffline"
+              ? ["contextUnavailable", "contextReserve"]
+              : name === "contextExactCount"
+                ? [
+                    "contextFreeShort",
+                    "contextReserveShort",
+                    "contextInputShort",
+                    "contextOutputShort",
+                    "contextSearch",
+                    "contextSearchCount",
+                    "contextSearchSkills",
+                    "contextSearchFiles",
+                    "contextSearchTools",
+                    "contextShowAll",
+                  ]
+                : [];
         for (const inspectorKey of inspectorKeys) {
           sessionDetails[inspectorKey] = inspectorCopy[inspectorKey];
         }
