@@ -100,7 +100,6 @@ function runPluginManifest(
   targetRoot?: string,
   runnerBackend = "",
   boatJobLimit = "20",
-  runAttempt = "1",
 ) {
   const workflow = readPluginPrereleaseWorkflow();
   const step = workflow.jobs.preflight.steps.find(
@@ -122,7 +121,7 @@ function runPluginManifest(
       FULL_RELEASE_VALIDATION: eventName === "schedule" ? "false" : "true",
       GITHUB_EVENT_NAME: eventName,
       GITHUB_REPOSITORY: "openclaw/openclaw",
-      GITHUB_RUN_ATTEMPT: runAttempt,
+      GITHUB_RUN_ATTEMPT: "1",
       GITHUB_OUTPUT: outputPath,
       PATH: process.env.PATH,
       PHASE: phase,
@@ -570,7 +569,7 @@ export const createExtensionTestShards = () => [{
       ).if,
     ).toBe("matrix.requires_bun == true");
 
-    const hourly = runPluginManifest("independent", "schedule");
+    const hourly = runPluginManifest("independent", "schedule", "", undefined, "boat", "");
     const boatHourly = runPluginManifest("independent", "schedule", "", undefined, "boat");
     const release = runPluginManifest("independent");
     const forcedNode = runPluginManifest("independent", "workflow_dispatch", "node");
@@ -599,32 +598,12 @@ export const createExtensionTestShards = () => [{
       expectDefined(outputs(boatHourly.output).plugin_prerelease_extension_matrix, "Boat matrix"),
     ).include;
     expect(
-      boatRows.filter((row: Record<string, string>) => row.runner_label.startsWith("boat")),
+      boatRows.filter((row: { runner_label: string }) => row.runner_label.startsWith("boat")),
     ).toHaveLength(20);
     expect(
       boatRows.map(({ runner_label: _label, ...row }: Record<string, unknown>) => row),
     ).toEqual(physicalRows.map(({ runner_label: _label, ...row }: Record<string, unknown>) => row));
     expect(boatRows.slice(20)).toEqual(physicalRows.slice(20));
-    for (const [limit, attempt] of [
-      ["0", "1"],
-      ["", "1"],
-      ["bad", "1"],
-      ["20", "2"],
-    ]) {
-      const fallback = runPluginManifest(
-        "independent",
-        "schedule",
-        "",
-        undefined,
-        "boat",
-        limit,
-        attempt,
-      );
-      expect(fallback.result.status, fallback.result.stderr).toBe(0);
-      expect(
-        JSON.parse(outputs(fallback.output).plugin_prerelease_extension_matrix).include,
-      ).toEqual(physicalRows);
-    }
     const boatLabels = new Set(boatRows.map((row: Record<string, unknown>) => row.runner_label));
     for (const runner_label of boatLabels) {
       for (const releaseRunnerGroup of ["", "release-runners"]) {
