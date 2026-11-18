@@ -1075,6 +1075,22 @@ baseline; 1.88 s candidate command time); these are correctness runs, not a
 performance comparison. Scoped scripts-test typecheck, lint, formatting and
 both line-cap ratchets pass. Production and shared-helper code are unchanged.
 
+### Standalone SQLite fixture cleanup (beta.3 preparation)
+
+The local beta.3 backport of `76d63b8aaf4503af62383d562978f0c9e08df3a7`
+reuses `cleanupTempDirs` in the existing synchronous teardown. Staging,
+child-process mocks, all three declarations / five expanded cases, production
+code and the shared helper remain unchanged.
+
+Fault injection through the actual registered Vitest hook preserves the original
+removal error on both versions. Before the repair, both tracked roots are lost
+and the healthy sibling remains on disk. After the repair, the failed root stays
+tracked, the healthy sibling is removed, and a retry removes the failed root.
+Each injected run intentionally reports one hook failure and four passing cases.
+Instrumentation is removed afterward. The clean staging and shared-helper suites
+pass 16 cases with the existing Windows-only case skipped on Linux. This does
+not establish real macOS compilation or SQLite capability qualification.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
