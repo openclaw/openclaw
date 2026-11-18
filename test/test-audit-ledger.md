@@ -1096,6 +1096,25 @@ restoration passed. Scoped scripts-test typecheck, lint, formatting and both
 line-cap ratchets pass. Independent preservation and local ClawSweeper reviews
 found no actionable defects.
 
+### Hotspot report fixture cleanup
+
+At `5cb4520c7e1d2d4ef519508c2c5dd091e446d789`, hotspot-report teardown
+clears its tracked roots before removal and stops on the first error. Reuse
+the shared cleanup owner without changing the fixture factory or the single
+declaration / expanded case. Preserve the real CLI's rejection of a valid
+report with no timed files: exit 1, empty stdout and the specific diagnostic.
+The shared report-parser tests protect a separate contract; they do not
+replace this CLI-boundary proof. Production and shared helpers are unchanged.
+
+Injection through the actual registered Vitest hook confirms that the original
+cleanup loses both failed and unattempted roots and performs no retry. The
+shared owner preserves the same error, removes the healthy root, retains the
+failed root and succeeds on retry. Both injected runs intentionally fail the
+single case at teardown; both clean runs pass it. Temporary instrumentation
+was restored byte for byte. Scoped scripts-test typecheck, lint, formatting
+and both line-cap ratchets pass. Independent preservation and local
+ClawSweeper reviews found no actionable defects.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.

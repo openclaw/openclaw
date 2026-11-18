@@ -85,6 +85,9 @@ suite.define(() => {
       const bUrl = `${suite.server.baseUrl}cron?job=${b.id}`;
       const aUrl = `${suite.server.baseUrl}cron?job=${a.id}`;
       await page.goto(bUrl);
+      // An automation opens on its prompt; its settings open from Edit.
+      const openEditor = () => page.locator('[data-test-id="cron-edit"]').click();
+      await openEditor();
       const name = page.locator("#cron-name");
       const editor = page.locator("fieldset.cron-editor");
       await expect.poll(() => name.inputValue()).toBe(b.name);
@@ -108,6 +111,7 @@ suite.define(() => {
           history.pushState(null, "", url);
           window.dispatchEvent(new PopStateEvent("popstate"));
         }, aUrl);
+        await openEditor();
         await expect.poll(() => name.inputValue()).toBe(a.name);
         expect((await observe()).samePage).toBe(true);
         await name.fill(saved.name);
@@ -123,6 +127,7 @@ suite.define(() => {
         if (goBack) {
           await page.goBack();
           await page.waitForURL(bUrl);
+          await openEditor();
           await expect.poll(() => name.inputValue()).toBe(b.name);
         }
         expect(await observe()).toMatchObject({ samePage: true, busy: "true" });
@@ -137,14 +142,24 @@ suite.define(() => {
             ...(outcome === "conflict" ? { details: { code: "CRON_JOB_CHANGED" } } : {}),
           });
         }
-        await expect.poll(() => editor.getAttribute("aria-busy")).toBe("false");
-        const settled = await observe();
-        expect(settled).toMatchObject({
-          url: goBack ? bUrl : aUrl,
-          name: goBack ? b.name : saved.name,
-          title: goBack ? b.name : outcome === "error" ? a.name : saved.name,
-          samePage: true,
-        });
+        if (!goBack && outcome === "saved") {
+          // A saved edit returns to the automation's prompt and history.
+          await page.locator('[data-test-id="cron-edit"]').waitFor();
+          expect(await editor.count()).toBe(0);
+          await expect
+            .poll(async () => (await page.locator(".cron-detail-title").textContent())?.trim())
+            .toBe(saved.name);
+          expect(page.url()).toBe(aUrl);
+        } else {
+          await expect.poll(() => editor.getAttribute("aria-busy")).toBe("false");
+          const settled = await observe();
+          expect(settled).toMatchObject({
+            url: goBack ? bUrl : aUrl,
+            name: goBack ? b.name : saved.name,
+            title: goBack ? b.name : outcome === "error" ? a.name : saved.name,
+            samePage: true,
+          });
+        }
         const errors = await page.locator(".callout.danger").allTextContents();
         if (goBack || outcome === "saved") {
           expect(errors).toEqual([]);

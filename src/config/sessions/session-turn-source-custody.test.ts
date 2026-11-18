@@ -363,7 +363,7 @@ it("retains actor-bound recorder custody through a durable worker publication fa
       expect(published).toHaveBeenCalledOnce();
     } finally {
       try {
-        recorder.finishPendingInput?.("interrupted");
+        recorder.finishPendingInput?.("interrupted", "failed");
         await recorder.waitForPendingInputSettlement?.();
       } finally {
         await input.actor.release();

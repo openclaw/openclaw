@@ -18,7 +18,7 @@ import {
   type TranscriptRecentReadLimits,
 } from "../../sessions/transcript-anchor-page.js";
 import type { TranscriptReadWindowOptions } from "../../sessions/transcript-read-window.js";
-import { isVisibleTranscriptRecord } from "../../sessions/transcript-visible-record.js";
+import { isVisibleTranscriptRecord } from "../../sessions/transcript-record-visibility.js";
 import type {
   SessionTranscriptRawDeltaLimits,
   TranscriptEvent,

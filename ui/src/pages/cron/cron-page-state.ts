@@ -60,7 +60,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
   let cron = createInitialCronState();
   // `?activity` shows every automation's runs in place of the overview.
   const [activityOpen, setActivityOpen] = createSignal(false);
-  const [detailTab, setDetailTab] = createSignal<CronDetailTab>("settings");
+  const [detailTab, setDetailTab] = createSignal<CronDetailTab>("history");
   let active = false;
   const cleanups: Array<() => void> = [];
   const gateway = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
@@ -119,7 +119,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     // Replacing the owner retires results from the previous agent scope.
     resetGatewayState(context().gateway.snapshot);
     cron.cronAgentId = scopeId;
-    setDetailTab("settings");
+    setDetailTab("history");
     ensureInitialData();
     publish();
   });
@@ -349,7 +349,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     cron.cronNotice = null;
     const routeData = cronRoute.resolveCronRouteData(search);
     setActivityOpen(Boolean(routeData.activity));
-    setDetailTab("settings");
+    setDetailTab("history");
     routeSelection.target = routeData.jobId ? routeData : null;
     routeSelection.requested = false;
     cron.cronRunsRunId = null;
@@ -368,7 +368,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     if (panelKey !== lastPanelKey) {
       presentation.retire();
       lastPanelKey = panelKey;
-      setDetailTab(cronRoute.resolveCronDetailTab(cron.cronEditingJob, cron.cronRunsRunId));
+      setDetailTab(cronRoute.resolveCronDetailTab(cron.cronEditingJob));
       const scroller = host().closest(".content");
       if (scroller instanceof HTMLElement && typeof scroller.scrollTo === "function") {
         scroller.scrollTo({ top: 0 });
@@ -474,7 +474,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
   function selectJob(job: CronJob, runId: string | null = null) {
     routeSelection.select(job.id, runId);
     pendingRunScroll = Boolean(runId);
-    setDetailTab(cronRoute.resolveCronDetailTab(job, runId));
+    setDetailTab(cronRoute.resolveCronDetailTab(job));
     cron.cronCreateOpen = false;
     // Inspecting another run of the current saved job must not discard its draft.
     if (cron.cronEditingJob !== job) {
@@ -590,7 +590,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     onSettled(() => void presentation.runTask(loadCronRuns));
   }
 
-  function submitForm(runNow = false): void {
+  function submitForm(): void {
     const view = presentation.capture();
     if (!presentation.isCurrent(view) || !canManageCron()) {
       return;
@@ -609,6 +609,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     const editorGeneration = deliveryDirectory.generation;
     const pending = presentation.runTask(async (cronState) => {
       const editing = Boolean(cronState.cronEditingJob);
+      const editedJobId = cronState.cronEditingJob?.id;
       const result = await addCronJob(cronState);
       if (!result.saved) {
         // Conflict recovery may replace the route even though saved is false.
@@ -620,11 +621,17 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       const stillEditing = editing || Boolean(cronState.cronEditingJob);
       deliveryDirectory.afterSave(cronState, connectionScope, editorGeneration, stillEditing);
       if (editing) {
+        // A saved edit returns to the automation's prompt and history, unless another one is open.
+        if (
+          cronState === cron &&
+          cronState.cronEditingJob?.id === editedJobId &&
+          deliveryDirectory.generation === editorGeneration &&
+          connectionScope &&
+          gateway.isCurrent(connectionScope)
+        ) {
+          showDetailTab("history");
+        }
         return;
-      }
-      if (runNow) {
-        // Explicit create-and-run intent survives navigation while saving.
-        await runCronJob(cronState, result.jobId);
       }
       // Creating returns to the overview's all-job history.
       if (
@@ -639,21 +646,31 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     void presentation.mutate(view, pending);
   }
 
+  function showDetailTab(tab: CronDetailTab) {
+    setDetailTab(tab);
+    onSettled(() => {
+      ensureEditorSources();
+      void presentation.runTask(loadCronRuns);
+    });
+  }
+
   const actions = {
-    onDetailTabChange: (tab: CronDetailTab) => {
-      setDetailTab(tab);
-      onSettled(() => {
-        ensureEditorSources();
-        void presentation.runTask(loadCronRuns);
-      });
+    onDetailTabChange: showDetailTab,
+    /** Leaving the form discards its unsaved edits and returns to the prompt and history. */
+    onCancelEdit: () => {
+      if (cron.cronEditingJob && canManageJob(cron.cronEditingJob)) {
+        startCronEdit(cron, cron.cronEditingJob);
+        deliveryDirectory.reconcileRoute(cron, gateway.capture(), deliveryDirectory.generation);
+        publishCronState();
+      }
+      showDetailTab("history");
     },
     onFormChange: patchForm,
     onRefresh: () => {
       onSettled(() => ensureEditorSources(true));
       return refreshCron({ refresh: true });
     },
-    onSubmit: () => submitForm(),
-    onSubmitRunNow: () => submitForm(true),
+    onSubmit: submitForm,
     onSelectJob: selectJob,
     onOpenCreate: openCreate,
     onClosePanel: closePanel,

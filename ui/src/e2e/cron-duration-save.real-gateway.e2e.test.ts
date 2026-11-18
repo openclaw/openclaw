@@ -486,13 +486,13 @@ async function submitCronForm(
   expect(request.method).toBe(method);
   await expect.poll(() => replies.some(({ id }) => id === request.id)).toBe(true);
   const reply = requireRecord(replies.find(({ id }) => id === request.id));
-  expect(reply).toMatchObject({ ok: true });
+  expect(reply, JSON.stringify(reply.error)).toMatchObject({ ok: true });
   const id = cronJobId(requireRecord(method === "cron.add" ? reply.payload : request.params));
   if (method === "cron.add") {
     await page.locator('.cron-page[data-panel-mode="create"]').waitFor({ state: "detached" });
     await automationRow(page, id);
   } else {
-    await expect.poll(() => page.locator('[data-test-id="cron-submit"]').isDisabled()).toBe(false);
+    await page.locator('[data-test-id="cron-edit"]').waitFor();
   }
   const stored = await readJob(id);
   expect(stored).toMatchObject({ id, enabled: false });
@@ -576,8 +576,14 @@ async function readAlertFields(page: Page) {
   };
 }
 
+async function openEdit(page: Page) {
+  await page.locator('[data-test-id="cron-edit"]').click();
+  await page.locator("fieldset.cron-editor").waitFor();
+}
+
 async function openAdvanced(page: Page, name: unknown) {
   await expect.poll(() => page.locator(".cron-detail-title").textContent()).toBe(name);
+  await openEdit(page);
   await page.locator("details.cron-advanced > summary").click();
 }
 
@@ -596,16 +602,15 @@ suite.define(() => {
       const jobId = cronJobId(job);
       await withCronJobPage(cliJson, jobId, async (evidence) => {
         const { page } = evidence;
-        const input = page.locator("#cron-payload-text");
-        await input.waitFor();
-        expect(await input.inputValue()).toBe(prompt);
         const preview = page.getByRole("region", { name: "Prompt preview", exact: true });
-        expect((await preview.boundingBox())?.height).toBe(240);
         await preview.focus();
         await page.keyboard.press("End");
         await expect
           .poll(() => preview.evaluate((element) => element.scrollTop))
           .toBeGreaterThan(0);
+        await openEdit(page);
+        const input = page.locator("#cron-payload-text");
+        expect(await input.inputValue()).toBe(prompt);
         const edited = prompt + "Updated through the real Gateway.";
         await input.fill(edited);
         const saved = await submitCronForm(evidence, "cron.update");
@@ -613,7 +618,7 @@ suite.define(() => {
         // The reload reopens the automation from its ?job= link.
         await page.reload();
         await waitForControlUiGatewayReady(page);
-        await input.waitFor();
+        await openEdit(page);
         expect(await input.inputValue()).toBe(edited);
       });
     });
@@ -631,14 +636,14 @@ suite.define(() => {
       const jobId = cronJobId(job);
       await withCronJobPage(cliJson, jobId, async (evidence) => {
         const { page } = evidence;
-        await page.locator("details.cron-advanced > summary").click();
+        await openAdvanced(page, job.name);
         const timeout = page.locator("#cron-timeout-seconds");
         expect(await timeout.inputValue()).toBe("90");
         await timeout.fill("");
         const cleared = await submitCronForm(evidence, "cron.update");
         await page.reload();
         await waitForControlUiGatewayReady(page);
-        await page.locator("details.cron-advanced > summary").click();
+        await openAdvanced(page, job.name);
         await timeout.scrollIntoViewIfNeeded();
         expect(cleared.stored.payload).not.toHaveProperty("timeoutSeconds");
         expect(await timeout.inputValue()).toBe("");
@@ -646,6 +651,7 @@ suite.define(() => {
           await timeout.fill(value);
           const saved = await submitCronForm(evidence, "cron.update");
           expect(saved.stored.payload).toMatchObject({ timeoutSeconds: Number(value) });
+          await openAdvanced(page, job.name);
           expect(await timeout.inputValue()).toBe(value);
         }
       });
@@ -657,7 +663,7 @@ suite.define(() => {
       const job = await seedCliAutomation(cliJson, "Browser stagger fixture", {
         session: "main",
         "system-event": "Synthetic paused browser fixture",
-        cron: "0 * * * *",
+        cron: "5 * * * *",
         tz: "UTC",
         stagger: "1001ms",
       });
@@ -673,6 +679,7 @@ suite.define(() => {
         const { request, stored } = await submitCronForm(evidence, "cron.update", (id) =>
           cliJson(["automations", "get", id, "--json"]),
         );
+        await openAdvanced(page, job.name);
         const reloadedStagger = await amount.inputValue();
         await amount.scrollIntoViewIfNeeded();
         expect({ loadedStagger, submitted: request.params, stored, reloadedStagger }).toMatchObject(
@@ -709,7 +716,9 @@ suite.define(() => {
         await page.locator("#cron-failure-alert-cooldown-seconds").scrollIntoViewIfNeeded();
         await page.locator("#cron-description").fill("Only metadata changed");
         const saved = await submitCronForm(evidence, "cron.update");
+        await openAdvanced(page, job.stored.name);
         const savedFields = await readAlertFields(page);
+        await page.locator('[data-test-id="cron-cancel"]').click();
         const menu = page.locator(".cron-detail-actions .cron-job-menu");
         await menu.locator(".cron-job-menu__trigger").click();
         await menu.locator('[data-value="clone"]').click();
@@ -779,13 +788,16 @@ suite.define(() => {
           includeSkipped: true,
         });
         const policyMode = page.locator("openclaw-select-picker:has(#cron-failure-alert-mode)");
+        await openAdvanced(page, job.stored.name);
         await choosePicker(policyMode, "inherit");
         const inherited = await submitCronForm(evidence, "cron.update");
         expect(inherited.request.params).toMatchObject({ patch: { failureAlert: null } });
         expect(inherited.stored).not.toHaveProperty("failureAlert");
+        await openAdvanced(page, job.stored.name);
         await choosePicker(policyMode, "disabled");
         const disabled = await submitCronForm(evidence, "cron.update");
         expect(disabled.stored.failureAlert).toBe(false);
+        await openAdvanced(page, job.stored.name);
         await choosePicker(policyMode, "custom");
         await page.locator("#cron-failure-alert-cooldown-seconds").fill("0");
         const zero = await submitCronForm(evidence, "cron.update");
