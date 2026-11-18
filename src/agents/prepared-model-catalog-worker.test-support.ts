@@ -169,8 +169,6 @@ export function writeFixturePlugin(params: {
   asyncSyntheticAuth?: boolean;
   syntheticAuthAvailable?: boolean;
   catalogControl?: boolean;
-  /** Publishes the Codex client version handed to this worker request as a model id. */
-  reportCodexClientVersion?: boolean;
 }): string {
   const pluginDir = path.join(params.root, "plugin");
   fs.mkdirSync(pluginDir, { recursive: true });
@@ -263,12 +261,6 @@ module.exports = {
       catalog: {
         run(context) {
           ${catalogControlSource}
-          ${
-            params.reportCodexClientVersion
-              ? `const handedOff = globalThis[Symbol.for("openclaw.codexClientVersionHandoff")]?.getStore();
-          const codexClientVersion = handedOff ? (handedOff.version ?? "unreported") : "not-handed-off";`
-              : ""
-          }
           const refOnlyApi = context.resolveProviderApiKey(${JSON.stringify(REF_ONLY_API_PROVIDER_ID)}).apiKey;
           const refOnlyToken = context.resolveProviderApiKey(${JSON.stringify(REF_ONLY_TOKEN_PROVIDER_ID)}).apiKey;
           const durableAuth = context.resolveProviderApiKey(${JSON.stringify(DURABLE_AUTH_PROVIDER_ID)}).apiKey;
@@ -278,7 +270,6 @@ module.exports = {
             ...route,
             models: [
               ${params.catalogControl ? "...legacyModels," : ""}
-              ${params.reportCodexClientVersion ? 'model("codex-client-" + codexClientVersion, "Codex client version proof"),' : ""}
               model("sqlite-model", "SQLite model"),
               model(${JSON.stringify(`plugin-generation-${params.pluginVersion ?? "v1"}`)}, "Plugin generation proof"),
               model(\`ref-proof-api-\${hasRefOnlyApi}-token-\${hasRefOnlyToken}\`, "Ref-only worker proof"),

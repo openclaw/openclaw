@@ -40,8 +40,12 @@ export function createChatPaneRunRecoveryActions(
     isCurrent: () => boolean;
     latestFailedRunId: () => string | undefined;
     onRewindMessage?: ChatProps["onRewindMessage"];
+    onStartNewSession?: (summary: string) => Promise<boolean>;
   },
-): Pick<ChatProps, "onRetryRun" | "failedMessageEditSource" | "onDismissRunError"> {
+): Pick<
+  ChatProps,
+  "onRetryRun" | "onStartNewSession" | "failedMessageEditSource" | "onDismissRunError"
+> {
   const sessionKey = state.sessionKey;
   const ownsFailure = (runId: string) =>
     options.isCurrent() &&
@@ -72,6 +76,14 @@ export function createChatPaneRunRecoveryActions(
           }
         }
       : undefined,
+    onStartNewSession:
+      options.canSend && options.onStartNewSession
+        ? (runId, summary) => {
+            if (ownsFailure(runId)) {
+              void options.onStartNewSession?.(summary);
+            }
+          }
+        : undefined,
     // Reply failures can be dismissed; placement failures keep their recovery action.
     onDismissRunError: state.chatRunError ? () => dismissChatRunError(state) : undefined,
   };
