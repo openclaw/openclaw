@@ -56,7 +56,8 @@ it.each([false, true])(
 );
 
 it.each(["runtime", "doctor-maintenance"] as const)("handles %s writers", (kind) => {
-  for (const writer of ["9999.1.1", VERSION, undefined]) {
+  // A source build of main can write a newer schema under an equal, lower, or unrecognized label (#200886).
+  for (const writer of ["9999.1.1", VERSION, "2000.1.1", "2026.11.6-dev.1", undefined]) {
     const newer = writer === "9999.1.1";
     const error = createNewerSqliteSchemaVersionError("db", "/tmp/db", 12, 11, writer, kind);
 
@@ -69,9 +70,13 @@ it.each(["runtime", "doctor-maintenance"] as const)("handles %s writers", (kind)
     // Two builds sharing one release version can support different schemas (#115008).
     expect(error.message).not.toMatch(/Do not downgrade|Upgrade OpenClaw/);
     expect(error.message.includes("newer than this Gateway")).toBe(newer);
-    expect(error.message.includes("doctor --fix")).toBe(kind === "runtime" && writer === VERSION);
-    expect(error.message.includes("It was written")).toBe(
-      kind === "runtime" ? Boolean(writer) : newer,
+    // The schema is newer whatever the writer label says, so Doctor cannot repair it.
+    expect(error.message).not.toContain("doctor --fix");
+    const writerShown =
+      kind === "runtime" ? Boolean(writer) : Boolean(writer) && writer !== VERSION;
+    expect(error.message.includes("It was written")).toBe(writerShown);
+    expect(error.message.includes("a different build with a newer schema")).toBe(
+      writerShown && !newer,
     );
     if (kind === "runtime") {
       const preflight = new OpenClawDatabaseSchemaPreflightError([
@@ -85,6 +90,8 @@ it.each(["runtime", "doctor-maintenance"] as const)("handles %s writers", (kind)
       ]);
       expect(preflight.message.includes("newer than this Gateway")).toBe(newer);
       expect(preflight.message.includes("Use the newer install")).toBe(newer);
+      expect(preflight.message.includes("Use a build that supports these schemas")).toBe(!newer);
+      expect(preflight.message).not.toContain("at least as new as the writer");
     }
   }
 });

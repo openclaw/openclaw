@@ -241,7 +241,9 @@ it("validates a replacement agent file even when the pathname was admitted", asy
   raw.close();
   renameSync(replacement, first.path);
   using observation = observeReads();
-  expect(() => openReader(options)).toThrow(/OpenClaw 2026\.10\.8;.*doctor --fix/isu);
+  expect(() => openReader(options)).toThrow(
+    /OpenClaw 2026\.10\.8, a different build with a newer schema/u,
+  );
   expect(validationStatements(observation.queries).length).toBeGreaterThan(0);
 });
 

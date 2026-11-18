@@ -97,8 +97,8 @@ container starts without `openclaw gateway recover-lock`. SIGKILL still leaves l
 After a downgrade, the Gateway refuses databases whose schema is newer than the
 running build supports. The startup error and `openclaw gateway status --deep`
 report the found and supported schema versions, the writer build when recorded,
-and the refusing build. Run a build at least as new as the writer that supports
-those schemas, or stop the service and restore your pre-upgrade backup. Startup
+and the refusing build. Run a build that supports those schemas, or stop the
+service and restore your pre-upgrade backup. Startup
 retains exit status `78` and parks a managed LaunchAgent when possible. A refused
 shared-state database cannot record a new lifecycle row; the error log explains
 the refusal, and deep status reports it instead of an unavailable shutdown record.

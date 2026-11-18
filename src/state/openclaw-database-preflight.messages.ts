@@ -50,7 +50,7 @@ function formatIncompatibleDatabaseSchemas(
     `Refused by ${describeRunningOpenClawBuild()}. ` +
     (incompatibleDatabases.some((database) => isNewerSqliteWriterVersion(database.writerAppVersion))
       ? "Use the newer install that supports these schemas, or run openclaw update to update this Gateway service before restarting. To use an older build, stop the service and restore your pre-upgrade backup created with openclaw backup create. "
-      : "Run a build at least as new as the writer that supports these schemas, or stop the service and restore your pre-upgrade backup created with openclaw backup create. ") +
+      : "Use a build that supports these schemas with this state directory, or stop the service and restore your pre-upgrade backup created with openclaw backup create. ") +
     `See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`
   );
 }
