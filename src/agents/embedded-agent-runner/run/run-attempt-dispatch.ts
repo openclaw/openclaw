@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import * as sourceTurn from "../../../auto-reply/reply/source-turn-id.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
@@ -98,7 +97,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
 
   params.assertModelInput?.(effectiveModel);
 
-  await fs.mkdir(workspaceDir, { recursive: true });
   if (!input.startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.workspace);
   }
