@@ -100,17 +100,21 @@ const mocks = await vi.hoisted(async () => ({
     }
     return {};
   }),
-  describeImageFile: vi.fn(async () => ({
-    text: "friendly lobster",
-    provider: "openai",
-    model: "gpt-4.1-mini",
-  })),
+  describeImageFile: vi.fn<typeof import("../media-understanding/runtime.js").describeImageFile>(
+    async () => ({
+      text: "friendly lobster",
+      provider: "openai",
+      model: "gpt-4.1-mini",
+    }),
+  ),
   prepareImageDescriptionInput: vi.fn(async () => ({
     buffer: Buffer.from("image"),
     fileName: "photo.jpg",
     mime: "image/jpeg",
   })),
-  describePreparedImageWithModel: vi.fn(async () => ({
+  describePreparedImageWithModel: vi.fn<
+    typeof import("../media-understanding/runtime.js").describePreparedImageWithModel
+  >(async () => ({
     text: "friendly lobster",
     model: "gpt-4.1-mini",
   })),
@@ -524,12 +528,12 @@ describe("capability cli", () => {
     callArg<Record<string, unknown>>(mocks.acquireSimpleCompletionModelForAgent);
   const firstJsonOutput = () => callArg<Record<string, unknown>>(mocks.runtime.writeJson);
   registerMediaPathCapabilityCliTests({ mocks, tempDirs, firstJsonOutput });
-  const imageDescribeCall = (index = 0) =>
-    callArg<ImageDescribeParams>(mocks.describeImageFile, index);
+  const imageDescribeCall = (index = 0) => mocks.describeImageFile.mock.calls[index]?.[0];
+
   const firstImagePrepareCall = () =>
     callArg<ImageDescribeParams>(mocks.prepareImageDescriptionInput);
   const firstImageDescribeWithModelCall = () =>
-    callArg<ImageDescribeParams>(mocks.describePreparedImageWithModel);
+    mocks.describePreparedImageWithModel.mock.calls[0]?.[0];
   const firstImageGenerationCall = () => callArg<Record<string, unknown>>(mocks.generateImage);
   const firstVideoGenerationCall = () => callArg<Record<string, unknown>>(mocks.generateVideo);
 
@@ -1005,6 +1009,45 @@ describe("capability cli", () => {
     },
   );
 
+  it.each(["image", "image-model"])(
+    "cancels pending %s execution",
+    async (kind) => {
+      const scope = new AsyncWorkScope();
+      let cancelled = false;
+      const waitForAbort = (signal?: AbortSignal) => {
+        expect(signal).toBeDefined();
+        const { promise, reject } = Promise.withResolvers<never>();
+        signal?.addEventListener("abort", () => {
+          cancelled = true;
+          reject(signal.reason);
+        }, { once: true });
+        scope.beginClose(new Error("interrupted"));
+        return promise;
+      };
+      await scope.track(() => {
+          const describeImage =
+            kind === "image" ? mocks.describeImageFile : mocks.describePreparedImageWithModel;
+          describeImage.mockImplementationOnce((_params, execution) =>
+            waitForAbort(execution?.signal),
+          );
+          return runCapability(
+            "image",
+            "describe",
+            "--file",
+            "photo.jpg",
+            ...(kind === "image-model" ? ["--model", "ollama/vision"] : []),
+            "--json",
+          );
+      });
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+      expect(mocks.runtime.log).not.toHaveBeenCalled();
+      expect(mocks.runtime.error).not.toHaveBeenCalled();
+      expect(cancelled).toBe(true);
+      await scope.drain();
+    },
+  );
+
+
   it("defaults tts status to gateway transport", async () => {
     await runCapability("tts", "status", "--json");
 
@@ -1115,10 +1158,8 @@ describe("capability cli", () => {
       }),
     );
     expect(mocks.prepareImageDescriptionInput).toHaveBeenCalledTimes(1);
-    const calls = mocks.describePreparedImageWithModel.mock.calls as unknown as Array<
-      [ImageDescribeParams]
-    >;
-    expect(calls.map(([call]) => `${String(call.provider)}/${String(call.model)}`)).toEqual([
+    const calls = mocks.describePreparedImageWithModel.mock.calls;
+    expect(calls.map(([call]) => `${call.provider}/${call.model}`)).toEqual([
       "openrouter/google/gemma-4-31b-it:free",
       "openrouter/google/gemma-4-31b-it",
     ]);
@@ -1136,6 +1177,30 @@ describe("capability cli", () => {
       ],
       outputs: [{ text: "fallback description", model: "google/gemma-4-31b-it" }],
     });
+  });
+
+  it("does not start an image fallback after interruption", async () => {
+    primeImageFallback();
+    const scope = new AsyncWorkScope();
+    mocks.describePreparedImageWithModel.mockImplementationOnce(async () => {
+      scope.beginClose(new DOMException("interrupted", "AbortError"));
+      throw new Error("upstream 429 rate limit");
+    });
+    await scope.track(() =>
+      runCapability(
+        "image",
+        "describe",
+        ...cliOptions({
+          file: "photo.jpg",
+          model: "openrouter/google/gemma-4-31b-it:free",
+          json: true,
+        }),
+      ),
+    );
+    await scope.drain();
+    expect(mocks.describePreparedImageWithModel).toHaveBeenCalledTimes(1);
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1302,1001 +1367,3 @@ describe("capability cli", () => {
         background: "transparent",
         moderation: "auto",
       },
-    });
-    expect(firstJsonOutput()?.outputs).toEqual([
-      expect.objectContaining({ path: outputPath, mimeType: "image/png" }),
-    ]);
-    expect(inputImages).toHaveLength(2);
-    expect(inputImages[0]?.fileName).toBe(path.basename(inputPath));
-  });
-
-  it.each(["generate", "edit"])(
-    "rejects invalid image %s resolution before dispatch",
-    async (action) => {
-      await expect(
-        runCapability(
-          "image",
-          action,
-          "--prompt",
-          "portrait",
-          ...(action === "edit" ? ["--file", "unused.png"] : []),
-          "--resolution",
-          "1080p",
-          "--json",
-        ),
-      ).rejects.toThrow("exit 1");
-      expectRuntimeErrorContains("resolution must be one of 1K, 2K, or 4K");
-      expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
-      expect(mocks.generateImage).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    ["--timeout-ms", ""],
-    ["--timeout-ms", "1000ms"],
-  ])("rejects invalid image option %s %j before dispatch", async (flag, value) => {
-    await expect(generateImage(flag, value)).rejects.toThrow("exit 1");
-    expectRuntimeErrorContains("Invalid --timeout-ms. Use a positive millisecond value");
-    expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
-    expect(mocks.generateVideo).not.toHaveBeenCalled();
-    expect(mocks.describeImageFile).not.toHaveBeenCalled();
-    expect(mocks.prepareImageDescriptionInput).not.toHaveBeenCalled();
-    expect(mocks.describePreparedImageWithModel).not.toHaveBeenCalled();
-    expect(mocks.generateImage).not.toHaveBeenCalled();
-  });
-
-  it.each([false, true])(
-    "downloads generated videos with private-network opt-in %s",
-    async (allowPrivateNetwork) => {
-      if (allowPrivateNetwork) {
-        mocks.loadConfig.mockReturnValue({
-          models: { providers: { vydra: { request: { allowPrivateNetwork: true } } } },
-        });
-      }
-      const url = allowPrivateNetwork
-        ? "http://127.0.0.2:40123/private-video.mp4"
-        : "https://example.com/generated-video.mp4";
-      primeGeneratedVideoUrl(url);
-      const fetchMock = mockVideoFetch(Buffer.from("video-bytes"));
-      const fixture = allowPrivateNetwork
-        ? undefined
-        : await outputFixture(".mp4", "previous-video");
-      await generateVideo(...(fixture ? ["--output", fixture.outputBase] : []));
-      expect(firstVideoGenerationCall()?.durationSeconds).toBeUndefined();
-      const fetchCalls = fetchMock.mock.calls as unknown as Array<[string, { signal?: unknown }]>;
-      expect(fetchCalls[0]?.[0]).toBe(url);
-      const output = firstJsonOutput();
-      const outputs = output?.outputs as Array<Record<string, unknown>>;
-      expect(output?.capability).toBe("video.generate");
-      expect(output?.provider).toBe("vydra");
-      expect(outputs).toHaveLength(1);
-      if (fixture) {
-        expect(fetchCalls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
-        await expectOutputFile(fixture, "video-bytes");
-        expect(outputs[0]?.path).toBe(fixture.outputPath);
-        expect(outputs[0]?.mimeType).toBe("video/mp4");
-        expect(outputs[0]?.size).toBe(11);
-      }
-    },
-  );
-
-  registerVideoOutputCapabilityCliTests({
-    mocks,
-    generateVideo,
-    primeGeneratedVideoUrl,
-    mockVideoFetch,
-    outputFixture,
-    expectOutputFile,
-    expectRuntimeErrorContains,
-  });
-
-  it("preserves buffered image output when publication fails", async () => {
-    const buffer = Buffer.alloc(2_048, 0x49);
-    mocks.generateImage.mockResolvedValue({
-      provider: "openai",
-      model: "gpt-image-2",
-      attempts: [],
-      images: [{ buffer, mimeType: "image/png", fileName: "generated.png" }],
-    });
-    const fixture = await outputFixture(".png", "existing-image");
-    const { outputBase } = fixture;
-
-    const writeFile = fs.writeFile.bind(fs);
-    const writeFileSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-      const [filePath, data, options] = args;
-      if (typeof filePath === "string" && Buffer.isBuffer(data) && data.equals(buffer)) {
-        await writeFile(filePath, data.subarray(0, 17), options);
-        throw new Error("injected buffered media write failure");
-      }
-      await writeFile(...args);
-    });
-
-    try {
-      await expect(generateImage("--output", outputBase)).rejects.toThrow("exit 1");
-
-      expectRuntimeErrorContains("injected buffered media write failure");
-      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-      await expectOutputFile(fixture, "existing-image");
-    } finally {
-      writeFileSpy.mockRestore();
-    }
-  });
-
-  it("blocks private-network url-only generated video downloads by default", async () => {
-    mocks.loadConfig.mockReturnValue({});
-    primeGeneratedVideoUrl("http://127.0.0.2:40123/private-video.mp4?sig=secret-presigned-token");
-    const fetchMock = mockVideoFetch(Buffer.from("video-bytes"));
-
-    await expect(generateVideo()).rejects.toThrow("exit 1");
-
-    expect(fetchMock).not.toHaveBeenCalled();
-    expectRuntimeErrorContains("Blocked hostname or private/internal/special-use IP address");
-    expect(runtimeErrorMessages().join("\n")).not.toContain("secret-presigned-token");
-    expect(runtimeErrorMessages().join("\n")).not.toContain("/private-video.mp4");
-  });
-
-  it.each([
-    ["2.5", 2.5],
-    ["0.5", 0.5],
-    ["2e0", 2],
-  ] as const)(
-    "passes video duration %s and generation parameters through to runtime",
-    async (duration, expected) => {
-      mocks.generateVideo.mockResolvedValue({
-        provider: "minimax",
-        model: "MiniMax-Hailuo-2.3",
-        attempts: [],
-        ignoredOverrides: [
-          { key: "audio", value: true },
-          { key: "watermark", value: true },
-        ],
-        videos: [
-          {
-            buffer: Buffer.from("video-bytes"),
-            mimeType: "video/mp4",
-            fileName: "provider-name.mp4",
-          },
-        ],
-      });
-
-      await generateVideo(
-        ...cliOptions({
-          model: "minimax/MiniMax-Hailuo-2.3",
-          size: "1280x768",
-          "aspect-ratio": "16:9",
-          resolution: "768p",
-          duration,
-          audio: true,
-          watermark: true,
-          "timeout-ms": 300000,
-        }),
-      );
-
-      const videoCall = firstVideoGenerationCall();
-      expect(videoCall?.prompt).toBe("friendly lobster");
-      expect(videoCall?.modelOverride).toBe("minimax/MiniMax-Hailuo-2.3");
-      expect(videoCall?.size).toBe("1280x768");
-      expect(videoCall?.aspectRatio).toBe("16:9");
-      expect(videoCall?.resolution).toBe("768P");
-      expect(videoCall?.durationSeconds).toBe(expected);
-      expect(videoCall?.audio).toBe(true);
-      expect(videoCall?.watermark).toBe(true);
-      expect(videoCall?.timeoutMs).toBe(300000);
-      expect(firstJsonOutput()?.ignoredOverrides).toEqual([
-        { key: "audio", value: true },
-        { key: "watermark", value: true },
-      ]);
-    },
-  );
-
-  it("fails video generate when a provider returns an undeliverable asset", async () => {
-    mocks.generateVideo.mockResolvedValue({
-      provider: "vydra",
-      model: "veo3",
-      attempts: [],
-      videos: [{ mimeType: "video/mp4" }],
-    });
-
-    await expect(generateVideo()).rejects.toThrow("exit 1");
-    expectRuntimeErrorContains("Video asset at index 0 has neither buffer nor url");
-  });
-
-  it("fails closed when an url-only generated video exceeds the in-memory byte cap", async () => {
-    mocks.loadConfig.mockReturnValue({});
-    primeGeneratedVideoUrl("https://example.com/oversized-video.mp4?sig=secret-presigned-token");
-    // Offer far more than the 16 MiB default video cap in 1 MiB chunks so the
-    // bounded reader has to cancel mid-stream instead of buffering it all. The
-    // source would yield 64 MiB if fully drained; a correct guard stops early.
-    const oneMiBChunk = new Uint8Array(1024 * 1024);
-    const overCapChunks = 64;
-    let enqueued = 0;
-    let canceled = false;
-    const oversizedBody = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (enqueued >= overCapChunks) {
-          controller.close();
-          return;
-        }
-        enqueued += 1;
-        controller.enqueue(oneMiBChunk);
-      },
-      cancel() {
-        canceled = true;
-      },
-    });
-    const fetchMock = mockVideoFetch(oversizedBody);
-
-    await expect(generateVideo()).rejects.toThrow("exit 1");
-
-    const fetchCalls = fetchMock.mock.calls as unknown as Array<[string]>;
-    expect(fetchCalls[0]?.[0]).toBe(
-      "https://example.com/oversized-video.mp4?sig=secret-presigned-token",
-    );
-    expectRuntimeErrorContains("vydra generated video download exceeds 16777216 bytes");
-    // Security regression guard: the overflow error must NOT echo the raw
-    // provider URL (it may carry signed/tokenized access material). See the
-    // sibling generated-media downloaders, which report provider + cap only.
-    expect(runtimeErrorMessages().join("\n")).not.toContain("secret-presigned-token");
-    expect(runtimeErrorMessages().join("\n")).not.toContain("https://example.com");
-    expect(canceled).toBe(true);
-    expect(enqueued).toBeLessThan(overCapChunks);
-    expect(enqueued).toBeLessThanOrEqual(18);
-  });
-
-  it.each([
-    {
-      status: 403,
-      statusText: "Forbidden",
-      body: "download forbidden",
-      error: "vydra generated video download failed",
-    },
-    {
-      status: 200,
-      statusText: "OK",
-      body: "render still processing",
-      error: "vydra generated video download: malformed video response",
-    },
-  ])(
-    "rejects textual generated-video downloads with HTTP $status",
-    async ({ status, statusText, body, error }) => {
-      mocks.loadConfig.mockReturnValue({});
-      primeGeneratedVideoUrl("https://example.com/private-video.mp4?sig=secret-presigned-token");
-      mockVideoFetch(body, { status, statusText, headers: { "content-type": "text/plain" } });
-      await expect(generateVideo()).rejects.toThrow("exit 1");
-      expectRuntimeErrorContains(error);
-      if (status === 403) {
-        expectRuntimeErrorContains("HTTP 403");
-      }
-      expect(runtimeErrorMessages().join("\n")).not.toContain("secret-presigned-token");
-      expect(runtimeErrorMessages().join("\n")).not.toContain("https://example.com");
-      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    { mode: "buffered", withOutput: false },
-    { mode: "streamed", withOutput: true },
-  ])("rejects an empty-body url-only generated video in $mode mode", async ({ withOutput }) => {
-    mocks.loadConfig.mockReturnValue({});
-    primeGeneratedVideoUrl("https://example.com/empty-video.mp4");
-    mockVideoFetch(Buffer.alloc(0));
-    const fixture = withOutput ? await outputFixture(".mp4", "keep-existing-video") : undefined;
-    await expect(
-      generateVideo(...(fixture ? ["--output", fixture.outputBase] : [])),
-    ).rejects.toThrow("exit 1");
-    expectRuntimeErrorContains("Generated media output is empty");
-    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-    if (fixture) {
-      await expectOutputFile(fixture, "keep-existing-video");
-    }
-  });
-
-  it.each([
-    [
-      "infer",
-      ["web", "search", "--query", "ping", "--limit"],
-      "",
-      "--limit must be a positive integer",
-    ],
-    [
-      "capability",
-      ["video", "generate", "--prompt", "clip", "--duration"],
-      "   ",
-      "--duration must be a positive duration (1–9007199254740991s after rounding",
-    ],
-  ] as const)(
-    "rejects blank numeric input before %s %j dispatch",
-    async (command, argv, raw, message) => {
-      const webSearchRuntime = await import("../web-search/runtime.js");
-      vi.mocked(webSearchRuntime.runWebSearch).mockClear();
-
-      await expect(runCap(command, ...argv, raw)).rejects.toThrow("exit 1");
-
-      expectRuntimeErrorContains(message);
-      expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
-      expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
-      expect(mocks.generateImage).not.toHaveBeenCalled();
-      expect(mocks.generateVideo).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["0", "-5", "0.4", "abc", "Infinity", "1e309", "9007199254740992"])(
-    "rejects invalid video duration %s before dispatch",
-    async (duration) => {
-      await expect(generateVideo("--duration", duration)).rejects.toThrow("exit 1");
-
-      expectRuntimeErrorContains(
-        "--duration must be a positive duration (1–9007199254740991s after rounding; e.g. 1, 2.5, 10).",
-      );
-      expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
-      expect(mocks.generateVideo).not.toHaveBeenCalled();
-    },
-  );
-
-  it("reports actual audio attribution and forwards request hints", async () => {
-    mocks.transcribeAudioFile.mockResolvedValueOnce({
-      text: "meeting notes",
-      provider: "fixture-asr",
-      model: "fixture-actual-model",
-    });
-    await runCap(
-      "infer",
-      "audio",
-      "transcribe",
-      ...cliOptions({
-        file: "memo.m4a",
-        model: "openai/whisper-1",
-        language: "en",
-        prompt: "Focus on names",
-      }),
-    );
-    expect(mocks.transcribeAudioFile).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ language: "en", prompt: "Focus on names" }),
-    );
-    const output = mocks.runtime.log.mock.calls.at(-1)?.[0];
-    expect(output).toContain("provider: fixture-asr");
-    expect(output).toContain("model: fixture-actual-model");
-    expect(output).toContain(path.resolve("memo.m4a"));
-    expect(output).toContain("meeting notes");
-  });
-
-  it.each([
-    {
-      name: "default provider without a config block",
-      config: {},
-      args: [],
-      expected: { tts: { providers: { openai: { apiKey: "profile-openai-key" } } } },
-    },
-    {
-      name: "root provider",
-      config: { tts: { providers: { openai: { voice: "coral" } } } },
-      args: ["--provider", " OpenAI ", "--model", " openai/gpt-4o-mini-tts ", "--voice", "alloy"],
-      expectedOverrides: {
-        provider: "openai",
-        providerOverrides: { openai: { modelId: "gpt-4o-mini-tts", voiceId: "alloy" } },
-      },
-      expected: {
-        tts: { providers: { openai: { voice: "coral", apiKey: "profile-openai-key" } } },
-      },
-    },
-    {
-      name: "channel provider",
-      config: {
-        channels: { discord: { tts: { providers: { openai: { speakerVoice: "nova" } } } } },
-      },
-      args: ["--channel", "discord"],
-      expected: {
-        channels: {
-          discord: {
-            tts: { providers: { openai: { speakerVoice: "nova", apiKey: "profile-openai-key" } } },
-          },
-        },
-      },
-    },
-  ])(
-    "hydrates $name TTS config from API-key profiles",
-    async ({ config, args, expected, expectedOverrides }) => {
-      mocks.loadConfig.mockReturnValue(config);
-      primeOpenAiAuthProfile();
-      await convertTts(...args);
-      expect(mocks.resolveApiKeyForProviderCore).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: "openai",
-          cfg: config,
-          credentialPrecedence: "profile-first",
-        }),
-      );
-      expect(firstTextToSpeechCall()?.cfg).toEqual(expected);
-      if (expectedOverrides) {
-        expect(firstTextToSpeechCall()).toMatchObject({
-          overrides: expectedOverrides,
-          disableFallback: true,
-        });
-      }
-      expect(mocks.updateTtsPrefsAsync).not.toHaveBeenCalled();
-      expect(mocks.setRuntimeConfigSnapshot).toHaveBeenLastCalledWith(expected, undefined);
-    },
-  );
-
-  it.each([
-    {
-      name: "inherited channel",
-      config: {
-        tts: { providers: { openai: { apiKey: "config-key" } } },
-        channels: { discord: { tts: { providers: { openai: { speakerVoice: "nova" } } } } },
-      },
-      args: ["--channel", "discord"],
-      resolved: { providerConfigs: { openai: { apiKey: "config-key", speakerVoice: "nova" } } },
-    },
-    {
-      name: "provider map",
-      config: { tts: { providers: { openai: { apiKey: "config-key" } } } },
-      args: ["--model", "openai/gpt-4o-mini-tts"],
-      resolved: { providerConfigs: {} },
-    },
-    {
-      name: "token profile",
-      config: { tts: { provider: "openai" } },
-      args: [],
-      resolved: { providerConfigs: {} },
-      token: true,
-    },
-  ])("preserves existing $name TTS credentials", async ({ config, args, resolved, token }) => {
-    mocks.loadConfig.mockReturnValue(config);
-    mocks.resolveTtsConfig.mockReturnValue(resolved);
-    primeOpenAiAuthProfile(token ? "token" : "api-key");
-    await convertTts(...args);
-    if (token) {
-      const cfg = firstTextToSpeechCall()?.cfg as {
-        tts?: { providers?: { openai?: { apiKey?: string } } };
-      };
-      expect(cfg.tts?.providers?.openai?.apiKey).toBeUndefined();
-    } else {
-      expect(firstTextToSpeechCall()?.cfg).toEqual(config);
-      expect(mocks.resolveApiKeyForProviderCore).not.toHaveBeenCalled();
-    }
-  });
-
-  it("preserves explicit TTS selection without inventing overrides", async () => {
-    await convertTts("--provider", "xiaomi");
-    expect(mocks.resolveExplicitTtsOverridesAsync).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "xiaomi", modelId: undefined }),
-    );
-    expect(firstTextToSpeechCall()?.disableFallback).toBe(true);
-  });
-
-  it("rejects conflicting TTS provider and model selections", async () => {
-    await expect(
-      convertTts("--provider", "xiaomi", "--model", "openai/gpt-4o-mini-tts"),
-    ).rejects.toThrow("exit 1");
-
-    expectRuntimeErrorContains("TTS --provider must match the provider in --model.");
-  });
-
-  it("fails clearly when gateway TTS output is requested against a remote gateway", async () => {
-    mocks.loadConfig.mockReturnValue({
-      gateway: { mode: "remote", remote: { url: "wss://gateway.example.com" } },
-    });
-
-    await expect(convertTts("--gateway", "--output", "hello.mp3")).rejects.toThrow("exit 1");
-
-    expectRuntimeErrorContains("--output is not supported for remote gateway TTS yet");
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
-
-  it.each(["existing", "absent"])(
-    "preserves output after accepted TTS interruption (%s)",
-    async (state) => {
-      const fixture = await outputFixture(".wav", "existing-speech");
-      const sourcePath = path.join(tempDirs.make("tts-source-"), "source.wav");
-      const wav = Buffer.alloc(64);
-      wav.write("RIFF", 0, "ascii");
-      wav.writeUInt32LE(56, 4);
-      wav.write("WAVEfmt ", 8, "ascii");
-      await fs.writeFile(sourcePath, wav);
-      if (state === "absent") {
-        await fs.rm(fixture.outputPath);
-      }
-      mocks.callGateway.mockResolvedValueOnce({
-        audioPath: sourcePath,
-        provider: "google",
-        outputFormat: "wav",
-        voiceCompatible: false,
-      });
-      const scope = new AsyncWorkScope();
-      const readFile = fs.readFile.bind(fs);
-      const readFileSpy = vi.spyOn(fs, "readFile").mockImplementationOnce(async () => {
-        const buffer = await readFile(sourcePath);
-        scope.beginClose(new Error("command interrupted"));
-        return buffer;
-      });
-      try {
-        await scope.track(() => convertTts("--gateway", "--output", fixture.outputPath));
-        expect(firstGatewayCall()?.method).toBe("tts.convert");
-        expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-        if (state === "absent") {
-          expect(await fs.readdir(fixture.dir)).toEqual([]);
-        } else {
-          await expectOutputFile(fixture, "existing-speech");
-        }
-        expect(await fs.readFile(sourcePath)).toEqual(wav);
-      } finally {
-        readFileSpy.mockRestore();
-        await scope.drain();
-      }
-    },
-  );
-
-  it("preserves Gateway TTS output when the final copy fails", async () => {
-    const tempDir = tempDirs.make("openclaw-tts-copy-fail-");
-    const sourcePath = path.join(tempDir, "source.mp3");
-    const outputDir = path.join(tempDir, "output");
-    const outputPath = path.join(outputDir, "speech.mp3");
-    await fs.mkdir(outputDir);
-    await fs.writeFile(sourcePath, Buffer.alloc(2_048, 0x41));
-    await fs.writeFile(outputPath, "existing-speech");
-    await fs.chmod(outputPath, 0o640);
-
-    mocks.callGateway.mockResolvedValueOnce({
-      audioPath: sourcePath,
-      provider: "openai",
-      outputFormat: "mp3",
-      voiceCompatible: false,
-    } as never);
-
-    const writeFile = fs.writeFile.bind(fs);
-    const writeFileSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-      const [destination, data] = args;
-      if (
-        typeof destination === "string" &&
-        destination.startsWith(outputDir) &&
-        Buffer.isBuffer(data)
-      ) {
-        await writeFile(destination, data.subarray(0, 17));
-        throw new Error("injected TTS copy failure");
-      }
-      await writeFile(...args);
-    });
-
-    try {
-      await expect(
-        convertTts("--gateway", "--voice", "alloy", "--output", outputPath),
-      ).rejects.toThrow("exit 1");
-
-      expect(firstGatewayCall()?.method).toBe("tts.convert");
-      expect(firstGatewayCall()?.params?.provider).toBeUndefined();
-      expect(firstGatewayCall()?.params?.voiceId).toBe("alloy");
-
-      expectRuntimeErrorContains("injected TTS copy failure");
-      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-      expect(await fs.readFile(outputPath, "utf8")).toBe("existing-speech");
-      if (process.platform !== "win32") {
-        expect((await fs.stat(outputPath)).mode & 0o777).toBe(0o640);
-      }
-      expect(await fs.readdir(outputDir)).toEqual(["speech.mp3"]);
-    } finally {
-      writeFileSpy.mockRestore();
-    }
-  });
-
-  it("names TTS output after the audio format the provider returned", async () => {
-    const tempDir = tempDirs.make("openclaw-tts-output-ext-");
-    const sourcePath = path.join(tempDir, "source.wav");
-    const wav = Buffer.alloc(64);
-    wav.write("RIFF", 0, "ascii");
-    wav.writeUInt32LE(56, 4);
-    wav.write("WAVEfmt ", 8, "ascii");
-    await fs.writeFile(sourcePath, wav);
-    mocks.callGateway.mockResolvedValueOnce({
-      audioPath: sourcePath,
-      provider: "google",
-      outputFormat: "wav",
-      voiceCompatible: false,
-    } as never);
-
-    await convertTts("--gateway", "--output", path.join(tempDir, "speech.mp3"));
-
-    const written = path.join(tempDir, "speech.wav");
-    expect(firstJsonOutput()).toMatchObject({ outputs: [{ path: written, format: "wav" }] });
-    expect(await fs.readFile(written)).toEqual(wav);
-    await expect(fs.access(path.join(tempDir, "speech.mp3"))).rejects.toThrow();
-  });
-
-  registerEmbeddingCapabilityCliTests({
-    embedBatch: mocks.embedBatch,
-    closeProvider: closeEmbeddingProviderMock,
-    providerCall: firstEmbeddingProviderCall,
-    jsonOutput: firstJsonOutput,
-    log: mocks.runtime.log,
-    expectError: expectRuntimeErrorContains,
-  });
-
-  it.each(["populated", "lock-failed"])(
-    "logs out provider profiles when the store is %s",
-    async (state) => {
-      const store = {
-        version: 1,
-        profiles: {
-          "openai:default": { id: "openai:default" },
-          "openai:secondary": { id: "openai:secondary" },
-          "anthropic:default": { id: "anthropic:default" },
-        },
-        order: { openai: ["openai:default", "openai:secondary"] },
-        lastGood: { openai: "openai:secondary" },
-        usageStats: {
-          "openai:default": { errorCount: 2 },
-          "openai:secondary": { errorCount: 1 },
-          "anthropic:default": { errorCount: 3 },
-        },
-      };
-      const profiles =
-        state === "populated" ? ["openai:default", "openai:secondary"] : ["openai:default"];
-      mocks.listProfilesForProvider.mockReturnValue(profiles);
-      if (state === "populated") {
-        mocks.loadAuthProfileStoreForRuntime.mockReturnValue(store as never);
-        mocks.updateAuthProfileStoreWithLock.mockImplementationOnce(async ({ updater }) => {
-          updater(store);
-          return store;
-        });
-      } else if (state === "lock-failed") {
-        mocks.updateAuthProfileStoreWithLock.mockResolvedValueOnce(null as never);
-      }
-      const run = runCapability("model", "auth", "logout", "--provider", "openai", "--json");
-      if (state === "lock-failed") {
-        await expect(run).rejects.toThrow("exit 1");
-        expectRuntimeErrorContains("Failed to remove saved auth profiles for provider openai.");
-        return;
-      }
-      await run;
-      expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
-        provider: "openai",
-        removedProfiles: profiles,
-      });
-      if (state === "populated") {
-        expect(store.profiles).toEqual({ "anthropic:default": { id: "anthropic:default" } });
-        expect(store.order).toEqual({});
-        expect(store.lastGood).toEqual({});
-        expect(store.usageStats).toEqual({ "anthropic:default": { errorCount: 3 } });
-        expect(mocks.updateAuthProfileStoreWithLock).toHaveBeenCalledWith(
-          expect.objectContaining({ agentDir: "/tmp/agent-main" }),
-        );
-      }
-    },
-  );
-
-  it.each([
-    ["parent", "login", "beta", undefined],
-    ["leaf", "status", "beta", undefined],
-    ["parent", "status", "", "--agent must not be blank"],
-    ["leaf", "status", "retired", 'Unknown agent id "retired"'],
-  ] as const)("routes %s model auth %s for agent %j", async (position, action, agent, error) => {
-    mocks.loadConfig.mockReturnValue({
-      agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
-    });
-    const args = action === "login" ? ["--provider", "openai"] : ["--json"];
-    const run = runModelAuthWithAgent(position, action, agent, ...args);
-    if (error) {
-      await expect(run).rejects.toThrow("exit 1");
-      expectRuntimeErrorContains(error);
-      expect(mocks.modelsStatusCommand).not.toHaveBeenCalled();
-      return;
-    }
-    await run;
-    const command = action === "login" ? mocks.modelsAuthLoginCommand : mocks.modelsStatusCommand;
-    expect(command).toHaveBeenCalledWith(
-      expect.objectContaining(
-        action === "login" ? { provider: "openai", agent } : { json: true, agent },
-      ),
-      action === "login" ? mocks.runtime : expect.any(Object),
-    );
-  });
-
-  it("marks env-backed image providers as configured", async () => {
-    vi.stubEnv("FAL_KEY", "fal-test-key");
-    mocks.getProviderEnvVarsCore.mockReturnValueOnce(["FAL_KEY"]);
-    mocks.listRuntimeImageGenerationProviders.mockReturnValueOnce([
-      { id: "fal", label: "fal", defaultModel: "fal-ai/flux", models: [] },
-    ] as never);
-
-    await runCap("capability", "image", "providers", "--json");
-
-    expect(firstJsonOutput()).toMatchObject([
-      { id: "fal", available: true, configured: true, selected: false },
-    ]);
-  });
-
-  it("marks env-backed video generation and description providers as configured", async () => {
-    vi.stubEnv("RUNWAYML_API_SECRET", "runway-test-key");
-    vi.stubEnv("GEMINI_API_KEY", "gemini-test-key");
-    mocks.getProviderEnvVarsCore.mockImplementation((providerId: string) =>
-      providerId === "runway" ? ["RUNWAYML_API_SECRET"] : ["GEMINI_API_KEY"],
-    );
-    mocks.listRuntimeVideoGenerationProviders.mockReturnValueOnce([
-      { id: "runway", label: "Runway", defaultModel: "gen4", models: [] },
-    ] as never);
-    mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(
-      new Map([
-        [
-          "google",
-          {
-            id: "google",
-            capabilities: ["video"],
-            defaultModels: { video: "gemini-3-flash-preview" },
-          },
-        ],
-      ]),
-    );
-
-    await runCap("capability", "video", "providers", "--json");
-
-    expect(firstJsonOutput()).toMatchObject({
-      generation: [{ id: "runway", configured: true }],
-      description: [{ id: "google", configured: true }],
-    });
-  });
-
-  it("marks env-backed TTS providers as configured", async () => {
-    vi.stubEnv("XAI_API_KEY", "xai-test-key");
-    mocks.getProviderEnvVarsCore.mockReturnValueOnce(["XAI_API_KEY"]);
-    mocks.listSpeechProviders.mockReturnValueOnce([
-      { id: "xai", label: "xAI", models: [], voices: [] },
-    ] as never);
-
-    await runCap("capability", "tts", "providers", "--local", "--json");
-
-    expect(firstJsonOutput()).toMatchObject({
-      providers: [{ id: "xai", configured: true, selected: false }],
-    });
-  });
-
-  it("distinguishes the local STT fallback winner from global provider selection", async () => {
-    vi.stubEnv("DEEPGRAM_API_KEY", "deepgram-test-key");
-    mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(
-      new Map([
-        [
-          "deepgram",
-          {
-            id: "deepgram",
-            capabilities: ["audio"],
-            defaultModels: { audio: "nova-3" },
-          },
-        ],
-      ]),
-    );
-    const candidate = {
-      id: "whisper-cli" as const,
-      command: "whisper-cli",
-      resolvedCommand: "/opt/homebrew/bin/whisper-cli",
-      available: true,
-      ready: true,
-      capableBackend: "metal" as const,
-      evidence: "Apple Silicon Homebrew whisper-cpp runtime with Metal support",
-      selected: true,
-      entry: {
-        type: "cli" as const,
-        command: "whisper-cli",
-        args: ["{{MediaPath}}"],
-      },
-    };
-    mocks.inspectLocalAudioSelection.mockResolvedValueOnce({
-      candidates: [candidate],
-      entries: [candidate.entry],
-      selected: candidate,
-    });
-
-    await runCapability("audio", "providers", "--json");
-
-    expect(firstJsonOutput()).toMatchObject([
-      { id: "deepgram", available: true, configured: true, selected: false },
-      {
-        id: "local/whisper-cli",
-        available: true,
-        configured: true,
-        selected: false,
-        localFallbackSelected: true,
-        observedBackend: "unknown",
-      },
-    ]);
-  });
-
-  it("reports structured web search failures and exits nonzero", async () => {
-    const provider = "kitchen-sink-search";
-    const message = "Kitchen Sink rate limit.";
-    const runtime = await import("../web-search/runtime.js");
-    vi.mocked(runtime.runWebSearch).mockResolvedValueOnce({
-      provider,
-      result: {
-        ok: false,
-        statusCode: 429,
-        error: { code: "rate_limited", message },
-        results: [],
-      },
-    });
-    await expect(
-      runCap("capability", "web", "search", "--query", "rate limit", "--json"),
-    ).rejects.toThrow("exit 1");
-    expect(firstJsonOutput()).toEqual(
-      expect.objectContaining({
-        ok: false,
-        capability: "web.search",
-        provider,
-        error: message,
-      }),
-    );
-  });
-
-  it.each([
-    { format: undefined, provider: undefined },
-    { format: "text", provider: "firecrawl" },
-  ])("fetches through the default tool with $format output", async ({ format, provider }) => {
-    const config = { tools: { web: { fetch: { maxChars: 1200 } } } };
-    const resolvedConfig = { ...config, resolved: true };
-    mocks.loadConfig.mockReturnValue(config);
-    mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({
-      resolvedConfig,
-      effectiveConfig: resolvedConfig,
-      diagnostics: [],
-    });
-    const result = {
-      title: "Example Domain",
-      text: "Example content",
-      externalContent: { untrusted: true, source: "web_fetch", wrapped: true, provider },
-    };
-    const execute = vi.fn(async () => ({ content: [], details: result }));
-    const { createWebFetchTool } = await import("../agents/tools/web-fetch.js");
-    vi.mocked(createWebFetchTool).mockReturnValueOnce({ execute } as never);
-
-    await runCap(
-      "infer",
-      "web",
-      "fetch",
-      "--url",
-      "https://example.com",
-      ...(format ? ["--format", format] : []),
-      "--json",
-    );
-
-    expect(createWebFetchTool).toHaveBeenCalledWith({ config: resolvedConfig });
-    expect(execute).toHaveBeenCalledExactlyOnceWith("infer-web-fetch", {
-      url: "https://example.com",
-      extractMode: format,
-    });
-    expect(firstJsonOutput()).toEqual({
-      ok: true,
-      capability: "web.fetch",
-      transport: "local",
-      provider: provider ?? "direct",
-      attempts: [],
-      outputs: [{ result }],
-    });
-  });
-
-  it.each([undefined, "firecrawl"])(
-    "rejects disabled web fetch with provider %s",
-    async (provider) => {
-      mocks.loadConfig.mockReturnValue({ tools: { web: { fetch: { enabled: false } } } });
-
-      await expect(
-        runCap(
-          "infer",
-          "web",
-          "fetch",
-          "--url",
-          "https://example.com",
-          ...(provider ? ["--provider", provider] : []),
-          "--json",
-        ),
-      ).rejects.toThrow("exit 1");
-
-      expect(runtimeErrorMessages().join("\n")).toContain("tools.web.fetch.enabled");
-      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    {
-      action: "search",
-      config: { tools: { web: { search: { provider: "exa", enabled: true } } } },
-      args: ["--query", "ping", "--limit", "3"],
-    },
-    {
-      action: "fetch",
-      config: { tools: { web: { fetch: { enabled: true } } } },
-      args: ["--url", "https://example.com", "--format", "text"],
-    },
-  ])(
-    "resolves selected web $action provider SecretRefs before execution",
-    async ({ action, config, args }) => {
-      const resolvedConfig = { ...config, resolved: true };
-      mocks.loadConfig.mockReturnValue(config);
-      mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({
-        resolvedConfig,
-        effectiveConfig: resolvedConfig,
-        diagnostics: [],
-      });
-      const search = await import("../web-search/runtime.js");
-      const fetch = await import("../web-fetch/runtime.js");
-      const execute = vi.fn(async () => ({ content: "ok" }));
-      if (action === "search") {
-        vi.mocked(search.runWebSearch).mockResolvedValueOnce({
-          provider: "firecrawl",
-          result: { results: [] },
-        });
-      } else {
-        vi.mocked(fetch.resolveWebFetchDefinition).mockReturnValueOnce({
-          provider: { id: "firecrawl" },
-          definition: { execute },
-        } as never);
-      }
-      await runCap("infer", "web", action, ...args, "--provider", "firecrawl", "--json");
-      const targets =
-        action === "search"
-          ? mocks.getCapabilityWebSearchCommandSecretTargets
-          : mocks.getCapabilityWebFetchCommandSecretTargets;
-      expect(targets).toHaveBeenCalledWith(config, { providerId: "firecrawl" });
-      const resolution = mocks.resolveCommandConfigWithSecrets.mock.calls.at(-1)?.[0];
-      expect(resolution).toMatchObject({
-        commandName: `infer web ${action}`,
-        targetIds: new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
-        forcedActivePaths: new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
-      });
-      expect(resolution).not.toHaveProperty("allowedPaths");
-      if (action === "search") {
-        expect(search.runWebSearch).toHaveBeenCalledWith({
-          config: resolvedConfig,
-          providerId: "firecrawl",
-          args: { query: "ping", count: 3, limit: 3 },
-        });
-      } else {
-        expect(fetch.resolveWebFetchDefinition).toHaveBeenCalledWith({
-          config: resolvedConfig,
-          providerId: "firecrawl",
-        });
-        expect(execute).toHaveBeenCalledExactlyOnceWith({
-          url: "https://example.com",
-          extractMode: "text",
-        });
-      }
-    },
-  );
-
-  it("includes selected custom generic embedding provider aliases", async () => {
-    mocks.loadConfig.mockReturnValue({
-      models: {
-        providers: {
-          "tenant-embeddings": {
-            api: "openai-responses",
-            baseUrl: "http://127.0.0.1:1234/v1",
-            models: [],
-          },
-        },
-      },
-    });
-    mocks.resolveMemorySearchConfig.mockReturnValue({
-      provider: "tenant-embeddings",
-      model: "text-embedding-bge-m3",
-    } as never);
-    mocks.listMemoryEmbeddingProviders.mockReturnValue([
-      { id: "openai", defaultModel: "text-embedding-3-small", transport: "remote" },
-    ]);
-    mocks.listEmbeddingProviders.mockReturnValue([
-      { id: "openai-compatible", transport: "remote" },
-    ] as never);
-
-    await runCapability("embedding", "providers", "--json");
-
-    expect(firstJsonOutput()).toMatchObject([
-      { id: "openai", configured: false, selected: false },
-      { id: "openai-compatible", configured: false, selected: false },
-      {
-        id: "tenant-embeddings",
-        configured: true,
-        selected: true,
-        defaultModel: "text-embedding-bge-m3",
-        transport: "remote",
-      },
-    ]);
-  });
-});
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -107,8 +107,9 @@ function resolveFileLocalRoots(filePath: string): string[] | undefined {
 /** Runs media understanding for one local file or remote URL and returns the first matching output. */
 export async function runMediaUnderstandingFile(
   params: RunMediaUnderstandingFileParams,
+  execution?: MediaExecutionContext,
 ): Promise<RunMediaUnderstandingFileResult> {
-  return runFile(params, { prompt: params.prompt?.trim() || undefined });
+  return runFile(params, { prompt: params.prompt?.trim() || undefined }, execution);
 }
 
 async function runFile(
@@ -215,12 +216,17 @@ async function runFile(
 
 export async function describeImageFile(
   params: DescribeImageFileParams,
+  execution?: MediaExecutionContext,
 ): Promise<RunMediaUnderstandingFileResult> {
-  return await runMediaUnderstandingFile({ ...params, capability: "image" });
+  return await runMediaUnderstandingFile({ ...params, capability: "image" }, execution);
 }
 
 /** Reads and normalizes image input once before explicit-model fallback attempts. */
-export async function prepareImageDescriptionInput(params: PrepareImageDescriptionInputParams) {
+export async function prepareImageDescriptionInput(
+  params: PrepareImageDescriptionInputParams,
+  execution?: MediaExecutionContext,
+) {
+  assertMediaExecutionCurrent(execution);
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   const input = { ...params, timeoutMs };
   const attachments = normalizeMediaAttachments(
@@ -236,6 +242,7 @@ export async function prepareImageDescriptionInput(params: PrepareImageDescripti
       attachmentIndex: 0,
       maxBytes: MEDIA_CAPABILITY_DEFAULTS.image.maxBytes,
       timeoutMs,
+      signal: execution?.signal,
     });
     image = {
       buffer: media.buffer,
@@ -259,7 +266,11 @@ export async function prepareImageDescriptionInput(params: PrepareImageDescripti
   };
 }
 
-export async function describePreparedImageWithModel(params: DescribePreparedImageWithModelParams) {
+export async function describePreparedImageWithModel(
+  params: DescribePreparedImageWithModelParams,
+  execution?: MediaExecutionContext,
+) {
+  assertMediaExecutionCurrent(execution);
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const provider = providerRegistry.get(normalizeMediaProviderId(params.provider));
@@ -278,6 +289,7 @@ export async function describePreparedImageWithModel(params: DescribePreparedIma
     agentDir,
     workspaceDir: params.workspaceDir,
   });
+  assertMediaExecutionCurrent(execution);
   return await describeImage({
     buffer: image.buffer,
     fileName: image.fileName ?? params.image.fileName,
@@ -287,6 +299,7 @@ export async function describePreparedImageWithModel(params: DescribePreparedIma
     prompt: params.prompt,
     maxTokens: params.maxTokens,
     timeoutMs,
+    ...(execution ? { signal: execution.signal } : {}),
     cfg: params.cfg,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     agentDir,

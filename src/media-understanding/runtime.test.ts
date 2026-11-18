@@ -7,6 +7,7 @@ import {
   describeVideoFile,
   describeImageFile,
   describeImageFileWithModel,
+  describePreparedImageWithModel,
   extractStructuredWithModel,
   runMediaUnderstandingFile,
   transcribeAudioFile,
@@ -33,7 +34,9 @@ const mocks = vi.hoisted(() => {
     normalizeMediaProviderId: vi.fn((provider: string) => provider.trim().toLowerCase()),
     buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
     getMediaUnderstandingProvider: vi.fn(),
-    describeImageWithModel: vi.fn(async () => ({ text: "generic image ok", model: "vision" })),
+    describeImageWithModel: vi.fn<typeof import("./image-runtime.js").describeImageWithModel>(
+      async () => ({ text: "generic image ok", model: "vision" }),
+    ),
     convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
     optimizeImageDescriptionInput: vi.fn(
       async (params: { buffer: Buffer; fileName?: string; mime?: string }) => ({
@@ -407,6 +410,25 @@ describe("media-understanding runtime", () => {
     expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
       expect.objectContaining({ timeoutMs: MAX_TIMER_TIMEOUT_MS }),
     );
+  });
+
+  it("cancels an admitted explicit image provider request", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("interrupted", "AbortError");
+    mocks.describeImageWithModel.mockImplementationOnce(async (request) => {
+      controller.abort(reason);
+      request.signal?.throwIfAborted();
+      return { text: "late result", model: "vision" };
+    });
+    await expect(
+      describePreparedImageWithModel(
+        {
+          ...IMAGE_MODEL_DEFAULTS,
+          image: { buffer: Buffer.from("image"), fileName: "image.png" },
+        },
+        { signal: controller.signal, assertCurrent: () => controller.signal.throwIfAborted() },
+      ),
+    ).rejects.toBe(reason);
   });
 
   it("caps explicit structured extraction timeouts before provider execution", async () => {
