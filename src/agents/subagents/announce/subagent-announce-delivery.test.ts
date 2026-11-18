@@ -1633,7 +1633,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         "no_visible_payload",
         "adapter_returned_no_identity",
       ]),
-      expected: ambiguousCompletion,
+      expected: { ...ambiguousCompletion, finalAssistantVisibleText: "" },
     },
     {
       name: "empty output before a hook cancellation",
@@ -1679,10 +1679,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     { name: "empty", deliveryStatus: { status: "sent", resultCount: 0 } },
   ])("does not credit a $name automatic completion receipt", async (testCase) => {
     const { deliveryStatus, expected } = testCase;
-    const payloads = "payloads" in testCase ? testCase.payloads : undefined;
     const callGateway = createGatewayMock({
+      status: "ok",
       result: {
-        payloads: payloads ?? [{ text: "Generated completion" }],
+        payloads: "payloads" in testCase ? testCase.payloads : [{ text: "Generated completion" }],
         deliveryStatus,
       },
     });

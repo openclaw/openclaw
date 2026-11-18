@@ -1,5 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { resolveMockSubagentTurn } from "./mock-openai-input.js";
+import {
+  extractToolOutput,
+  hasToolOutput,
+  resolveMockSubagentTurn,
+} from "./mock-openai-input.js";
+
+it.each([
+  "OpenClaw runtime context for this turn:\nWorkspace instructions: retry failed installs.",
+  "<conversation_context>\n[user]\nRetry the old task.\n</conversation_context>",
+])("fences tool output at a fresh request after reference context: %s", (context) => {
+  const input = [
+    { type: "function_call_output", name: "openclaw_current_sender", output: "sender context" },
+    { role: "user", content: `${context}\n\nCurrent user request:\nWrite the artifact.` },
+  ];
+  expect(hasToolOutput(input)).toBe(false);
+  expect(extractToolOutput(input)).toBe("");
+  const continued = [
+    ...input,
+    { type: "function_call_output", call_id: "write", output: "Artifact written." },
+    { role: "user", content: "Continue." },
+  ];
+  expect(hasToolOutput(continued)).toBe(true);
+  expect(extractToolOutput(continued)).toBe("Artifact written.");
+});
 
 const kickoff = { role: "user", content: "Subagent terminal reply QA check: fallback." };
 const settled =
