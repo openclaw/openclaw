@@ -30,8 +30,6 @@ import { finalizeOpenClawTools } from "./openclaw-tools.finalize.js";
 import { resolveCapturedOpenClawToolsFsPolicy } from "./openclaw-tools.fs-policy.js";
 import { createHostedGatewayTools } from "./openclaw-tools.gateway.js";
 import {
-  isToolExplicitlyAllowedByFactoryPolicy,
-  mergeFactoryPolicyList,
   resolveImageToolFactoryAvailable,
   resolveOptionalMediaToolFactoryPlan,
 } from "./openclaw-tools.media-factory-plan.js";
@@ -39,6 +37,7 @@ import { resolveWebSearchToolContext } from "./openclaw-tools.model-context.js";
 import { prepareOpenClawTools } from "./openclaw-tools.preparation.js";
 import {
   applyNodesToolWorkspaceGuard,
+  resolveOptionalToolRegistrationPolicy,
   shouldIncludePrimarySessionToolForOpenClawTools,
   shouldIncludeProgressCardToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
@@ -382,6 +381,7 @@ function* createOpenClawToolsSteps(
     hostnameAllowlistRef: options?.webFetchHostnameAllowlistRef,
   });
   options?.recordToolPrepStage?.("openclaw-tools:web-fetch-tool");
+  let messageToolAvailable = false;
   const messageTool = options?.disableMessageTool
     ? null
     : ((yield {
@@ -397,6 +397,10 @@ function* createOpenClawToolsSteps(
             options?.messageToolTurnCapability?.token ?? options?.messageActionTurnCapability,
           admitScheduledInvocation: options?.admitScheduledMessageInvocation,
           preparedMessageToolCatalog: options?.preparedModelRuntime?.messageToolCatalog,
+          onAvailability: (available) => {
+            messageToolAvailable = available;
+            options?.onMessageToolAvailability?.(available);
+          },
           currentMessagingTarget:
             options?.currentMessagingTarget ??
             (options?.sourceReplyOnly ? options.agentTo : undefined),
@@ -418,25 +422,14 @@ function* createOpenClawToolsSteps(
   });
   options?.recordToolPrepStage?.("openclaw-tools:nodes-tool");
   const embedded = isEmbeddedMode();
-  const explicitFactoryAllowlist = mergeFactoryPolicyList(
-    resolvedConfig?.tools?.allow,
-    resolvedConfig?.tools?.alsoAllow,
-    options?.pluginToolAllowlist,
-  );
-  const explicitFactoryDenylist = mergeFactoryPolicyList(
-    resolvedConfig?.tools?.deny,
-    options?.pluginToolDenylist,
-  );
-  const scheduledWidgetExplicitlyAllowed = isToolExplicitlyAllowedByFactoryPolicy({
-    toolName: "show_widget",
-    allowlist: options?.runtimeToolAllowlist,
-    denylist: explicitFactoryDenylist,
-  });
+  const { includeMessageTool, scheduledWidgetExplicitlyAllowed } =
+    resolveOptionalToolRegistrationPolicy(options, embedded);
   const widgetBoardSessionKey = scheduledTargets?.boardSessionKey ?? sessionKey;
-  // Authorized recovery and capped scheduled turns can author boards without an inline renderer.
+  // A recorded widget surface can keep authoring its durable board on internal
+  // wakes. Tool policy and board authority still apply; this grants no renderer.
   const pinnedWidgetAuthoringAdmitted =
     (options?.pinnedWidgetAuthoring === true ||
-      (scheduledCaller && scheduledWidgetExplicitlyAllowed)) &&
+      (scheduledCaller ? scheduledWidgetExplicitlyAllowed : inlineWidgetClientAvailable)) &&
     !currentChannelWidgetPresenter &&
     Boolean(widgetBoardSessionKey) &&
     !isCronRunSessionKey(widgetBoardSessionKey);
@@ -446,14 +439,6 @@ function* createOpenClawToolsSteps(
     pinnedWidgetAuthoringAdmitted &&
     inlineWidgetClientAvailable &&
     options?.clientCaps?.includes("inline-widgets") !== true;
-  const includeMessageTool =
-    !embedded ||
-    options?.sourceReplyDeliveryMode === "message_tool_only" ||
-    isToolExplicitlyAllowedByFactoryPolicy({
-      toolName: "message",
-      allowlist: explicitFactoryAllowlist,
-      denylist: explicitFactoryDenylist,
-    });
   const sessionLookupToolOptions = {
     agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
     sandboxed: options?.sandboxed,
@@ -569,7 +554,9 @@ function* createOpenClawToolsSteps(
           cwd: resolveWorkspaceRoot(options?.cwd ?? options?.workspaceDir ?? inferredWorkspaceDir),
         })
       : []),
-    includeMessageTool ? messageTool : null,
+    includeMessageTool && (messageToolAvailable || options?.retainUnavailableMessageTool)
+      ? messageTool
+      : null,
     !isCoreCanvasHostEnabled(resolvedConfig) && !currentChannelWidgetPresenter
       ? null
       : createShowWidgetTool({

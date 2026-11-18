@@ -32,7 +32,7 @@ export function buildCronToolDescription(params: {
     : "Authenticated configured channel owners and Control UI administrators can manage any Gateway automation. Other turns see caller-visible jobs and scoped counts only";
   const adminRecovery = params.callerScoped
     ? "ask an authorized administrator to check through the Automations page"
-    : "ask an authorized administrator to check through a fresh authenticated owner/administrator turn or the Automations page";
+    : "ask a configured channel owner to reply in chat to inspect or retry the job, or a Control UI administrator to use the Automations page";
   const streamScheduleLine = params.triggersEnabled
     ? '\n- {kind:"stream",command:[argv],mode:"match",match:"ERROR"}: persistent source in the creator\'s supported Docker sandbox or on the Gateway. Match output with a regex; omit mode/match for every line. Matching lines trigger the payload and its delivery without another user turn.'
     : "";

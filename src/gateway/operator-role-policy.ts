@@ -10,6 +10,10 @@ import type { SessionCreatedActor } from "../config/sessions/session-entry-prove
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  isDeeplyFrozenPlainData,
+  memoizeFrozenPlainDataProjection,
+} from "../shared/immutable-data.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
@@ -27,6 +31,15 @@ import { SessionMutationAuthorizationChangedError } from "./session-mutation-aut
 
 const operatorRoleLog = createSubsystemLogger("gateway/operator-roles");
 const reportedUnknownAssignments = new Set<string>();
+const githubAssignmentKeys = memoizeFrozenPlainDataProjection(
+  (assignments: Record<string, string>) => {
+    const keys: Record<string, string> = Object.create(null);
+    for (const key of Object.keys(assignments)) {
+      keys[key.trim().toLowerCase()] ??= key;
+    }
+    return keys;
+  },
+);
 type OperatorRolePolicyChange =
   | { kind: "assignment"; profileId: string; roleOnly: boolean }
   | { kind: "config"; context: object };
@@ -124,7 +137,9 @@ export function resolveOperatorRoleSelection(
     // Config validation rejects duplicate normalized logins; exact keys need no roster scan.
     const key = Object.hasOwn(assignments, login)
       ? login
-      : Object.keys(assignments).find((candidate) => candidate.trim().toLowerCase() === login);
+      : isDeeplyFrozenPlainData(assignments)
+        ? githubAssignmentKeys(assignments)[login]
+        : Object.keys(assignments).find((candidate) => candidate.trim().toLowerCase() === login);
     const role = key === undefined ? undefined : assignments[key];
     if (role && Object.hasOwn(roles.definitions, role)) {
       return { effectiveRole: role, roleSource: "githubLogin" };
@@ -269,7 +284,7 @@ export function resolveOperatorRolePolicy(
       authority.assertCurrent();
       return undefined;
     }
-    if (roleFacts?.policy) {
+    if (roleFacts && Object.hasOwn(roleFacts, "policy")) {
       return roleFacts.policy;
     }
     if (

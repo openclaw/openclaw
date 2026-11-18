@@ -1,5 +1,8 @@
 import fs from "node:fs/promises";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import { SessionWorkStartInvalidatedError } from "../config/sessions/work-start-error.js";
 import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAdmittedRunActiveAssertion } from "./admitted-run-context.js";
@@ -13,6 +16,9 @@ import {
 } from "./sandbox/runtime-status.js";
 import { prepareSessionPlacementSandbox } from "./session-placement-admission.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
+import { readRegistryWorktree } from "./worktrees/registry-read.js";
+import { recordRegistryWorktreeActivity } from "./worktrees/registry.js";
+import { captureWorktreeRunEndContext } from "./worktrees/run-end-lifecycle.js";
 
 export type WorkspaceSandboxParams = Pick<
   EmbeddedRunAttemptParams,
@@ -129,6 +135,32 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const sessionKey = params.sessionKey?.trim() || params.sessionId;
   const sandboxSessionKey = params.sandboxSessionKey?.trim() || sessionKey;
+  if (params.sessionKey?.trim()) {
+    const entry = await readSessionEntryReadOnlyInWorker(
+      {
+        agentId: sessionAgentId,
+        sessionKey,
+        storePath: resolveSessionStorePathCore(params.config?.session?.store, {
+          agentId: sessionAgentId,
+        }),
+      },
+      assertCurrent,
+    );
+    if (entry?.archivedAt === undefined && entry?.worktree) {
+      const context = captureWorktreeRunEndContext(process.env);
+      const worktree = await readRegistryWorktree(context, entry.worktree.id);
+      assertCurrent();
+      if (worktree?.removedAt !== undefined) {
+        // Removal does not record intent; only the explicit restore action may undo deletion.
+        throw new SessionWorkStartInvalidatedError(
+          `This session's worktree was removed by cleanup or deletion. Use Restore in Settings > Worktrees (worktrees.restore), or start a new session. Worktree: ${entry.worktree.id}.`,
+        );
+      }
+      if (worktree) {
+        await recordRegistryWorktreeActivity(context.environment, worktree, assertCurrent);
+      }
+    }
+  }
   const prepareWorkspace = async (
     sandboxRuntimeStatus?: ReturnType<typeof resolveSandboxRuntimeStatus>,
   ) =>

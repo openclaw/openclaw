@@ -439,17 +439,6 @@ export async function executeSessionsSend(
         /^cron:[^:]+:trigger$/.test(parseAgentSessionKey(requesterSessionKey)?.rest ?? "");
       let targetSession = await readSession(resolvedKey, targetAgentId);
       let targetSessionEntry = targetSession.store[targetSession.canonicalKey];
-      if (
-        opts?.expectedTargetLifecycleRevision !== undefined &&
-        (targetSessionEntry?.lifecycleRevision ?? null) !== opts.expectedTargetLifecycleRevision
-      ) {
-        return sendFailure(
-          "error",
-          "Target session lifecycle changed before retained send.",
-          displayKey,
-          runId,
-        );
-      }
       const inputProvenance = {
         kind: "inter_session" as const,
         sourceSessionKey: requesterSessionKey,
@@ -613,7 +602,9 @@ export async function executeSessionsSend(
           sourceOrigin: sameSession ? requesterOrigin : undefined,
           sessionKey: resolvedKey,
           sessionStoreTarget: targetSession,
-          allowActiveRunQueueDelivery: !sameSession && timeoutSeconds === 0,
+          // A parent's guidance belongs in its busy child's current run; a queued turn would
+          // start after that run finished and redo its work. Other targets steer only zero-wait.
+          allowActiveRunQueueDelivery: !sameSession && (timeoutSeconds === 0 || ownChild),
           expectedSessionId,
           preparedTargetSessionId: targetSessionEntry?.sessionId,
           assertSendCurrent: communication.assertCurrent,

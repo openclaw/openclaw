@@ -49,21 +49,21 @@ their name on hover or keyboard focus and stays visible on touch screens. Use
 Pages always hides dashboards from
 archived sessions and has no archive toggle. To find archived sessions in the
 sidebar, use the **Sessions** filter instead. Hover or focus an icon for its name.
-The active agent's avatar sits at the top of the rail and opens the agent menu;
-in team mode it opens the workspace menu. The accented **+**, labeled **New session**,
-sits directly below the avatar, separated from navigation by a divider. It stays in
-the same place in Pages, Sessions, and Users, even when the list is collapsed.
-It opens New session for the selected agent; in team mode, choose an agent from
-its menu first. Command-palette search sits below the three view buttons.
+The active agent's avatar sits at the top of the rail and only opens the agent menu,
+from any page and with the list open or collapsed; in team mode it opens the workspace
+menu. **Sessions** sits directly below the avatar and opens the session list; its icon
+fills while that list is open. **New session** (**+**) sits in the Sessions list header,
+beside **Filter & sort**, and opens New session for the selected agent; in team mode,
+choose an agent from its menu first. Command-palette search sits below the three view buttons.
 Search failures show **Couldn’t search sessions. Try again.**, rather than an empty result.
 If message search is unavailable, the palette still shows matching session titles and details.
-Click the selected Pages or Sessions view again to collapse its list, or press ⌘B on
+Use the list's collapse button to hide it, or press ⌘B on
 Mac or Ctrl+B on Windows/Linux. Clicks use the normal sidebar animation; the
 keyboard shortcut opens or closes navigation immediately. Reduced-motion preferences
 also keep clicks immediate. While the list is hidden, none of the three view
 buttons is selected; click any view to open its list. Selecting a different view
-while the list is open switches directly to that view. Clicking Users again keeps
-its list open; use the collapse button or keyboard shortcut to hide it.
+while the list is open switches directly to that view. Clicking Sessions or Users again
+keeps its list open.
 Home, Inbox, and your account controls stay together at the bottom of the rail.
 When gateway switching is available, the account menu shows one current-gateway row.
 Open it to switch gateways or open **Gateway settings**; **Set as primary** appears
@@ -122,13 +122,19 @@ participation and mentions. External catalog entries appear in **Involving me**
 only when their adopted OpenClaw conversation is in the Gateway-filtered list.
 Shared or imported catalog access alone does not establish involvement; use
 **All owners** to browse those sources. The separate filter button controls the
-remaining session filters. New session stays in the rail rather than moving
-into this header. In mobile chat, open navigation to reach **New session**
-in the rail; the conversation header reserves its two right-hand controls for
-**Session actions** and **Panels**. Other mobile pages keep an equivalent **+** in
-the page topbar while the drawer is closed. Opening the drawer moves that action
-back to the rail, without a second header button. In team mode, creation opens the
-same agent picker as the rail. Native apps keep their native creation controls.
+remaining session filters. On mobile chat, open navigation and choose **Sessions**
+to reach **New session** in the list header. The conversation header keeps its
+two right-hand controls for **Session actions** and **Panels**. Other mobile pages
+also offer **New session** (**+**) in the page topbar while the drawer is closed.
+In team mode, **New session** first opens an agent picker. Native apps keep their
+native creation controls.
+
+The agent picker sets the sidebar's agent scope. **My sessions**, a named owner,
+**Involving me**, and **All owners** stay within the selected agent; changing the
+owner never expands the list to other agents. Sidebar pins and personal sections
+also follow that agent scope without removing their saved references. Choose
+**Show all** in the agent picker to browse across agents. Explicit rail shortcuts
+remain available across agent selections.
 
 Session activity and unread indicators stay in the leading column across owner
 filters, grouping modes, pinned sessions, and child rows. Idle rows reserve the
@@ -510,6 +516,12 @@ Persistent child conversations and forks stay nested after their turns finish,
 including after a reload or Gateway restart. Archiving hides them from the
 **Active** list; restoring them brings them back under their parent.
 
+GitHub publication keeps internal records for its checkout, retries, and recovery.
+These stay out of the conversation tree and child counts by default, including
+records created before an update. Enable **Show system sessions** to inspect them.
+Publication results and pull requests remain attached to the original conversation;
+this display filter does not change permissions or publication authority.
+
 Choose **Show all** in the agent switcher to open the **Sessions** page across all agents and expand the compact agent roster. This clears any agent filter, even when the roster is already selected. The browser remembers the roster mode. Selecting an agent row opens its main conversation; use **Sessions** in that agent's options menu to browse only its conversations.
 
 Session-row owner avatars appear automatically when the signed-in user and session roster identify more than one human. With only one human, owner avatars stay hidden even when agents own or participate in sessions. Agent participants and undisplayed participant counts do not enable attribution. Session icons, channel avatars, and activity indicators keep their usual behavior.
@@ -693,7 +705,7 @@ the search; Arrow Down and Enter let you select a matching owner.
 
 1. Open the saved session and select **Session sharing** in the chat header. In the compact header menu, select **Session sharing** there instead.
 2. Under **Link sharing**, enable **Anyone with the link**, review **Make this session public?**, then select **Make public**.
-3. Select **Copy public link** to copy the normal thread URL, or scan the QR code in the sharing menu to open that same URL on another device. The mobile sharing page also shows the code. Select **Use claw QR** for the image-styled version, **Download claw QR** to save its full-size PNG, or **Use standard QR** if scanning is difficult. The **Public** badge in the chat header remains visible while the transcript is published and updates when another window changes public access.
+3. Select **Copy public link** to copy the normal thread URL, or scan the QR code in the sharing menu to open that same URL on another device. The sharing menu and mobile sharing page show the claw QR automatically. If the panel is too narrow or the artwork can’t load, a plain QR appears instead. The **Public** badge in the chat header remains visible while the transcript is published and updates when another window changes public access.
 4. Open that same URL in a signed-out browser to verify the read-only conversation and **Log in** button. Signing in returns to the thread with your existing permissions. New user and assistant text, including progress updates, becomes visible to public readers automatically.
 5. Return to **Session sharing** and select **Disable public access** to stop anonymous reads. The same URL then returns an unavailable page to signed-out readers. Enabling access again makes that URL public again; disabling access cannot recall saved copies.
 
@@ -783,13 +795,15 @@ accompany text. There is no attachment picker in the palette.
 Type **@** to search eligible people by name or verified GitHub handle, just as
 in the chat composer. Use **↑/↓** or **Home/End**, then **Enter** or **Tab** to
 select a person; **Escape** dismisses the people picker before the palette.
-The compact **Will notify** row shows selected people once each, with **+N**
+The compact **Notify or invite** row shows selected people once each, with **+N**
 when space is tight. You can select up to ten mention references. Editing or
 deleting a selected name removes that reference; **Remove mention** clears all
 recipient selections without deleting the text. Pasted names and email addresses
 remain ordinary text. The picker replaces search results while open, and selected
 mentions keep the palette in composer mode. Mentions travel with the first message
-of the new session; they never share a session, invite people, or grant access.
+of the new session. For roles with `sessions.others: "invited"`, a selected
+mention from the creator or an admin grants membership when that message commits.
+It does not change session visibility or the recipient's operator scopes.
 
 - **Enter** selects a person while the people picker is open; otherwise it opens
   or runs the selected search result. With no result, Enter does not send.

@@ -551,6 +551,7 @@ async function runGuidedOnboardingFlow(
             : undefined,
         ),
       );
+      applyProgress.stop();
       if (applied.lines.length > 0) {
         await prompter.note(applied.lines.join("\n"), t("wizard.guided.localSetupTitle"));
       }
@@ -582,7 +583,6 @@ async function runGuidedOnboardingFlow(
         throw new Error("Setup wrote an invalid OpenClaw config.");
       }
       persistedConfig = appliedSnapshot.sourceConfig ?? appliedSnapshot.config;
-      applyProgress.stop(t("wizard.guided.setupDone"));
     } catch (error) {
       applyProgress.stop(failureTitle);
       if (teamCoordinatorId) {

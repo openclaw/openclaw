@@ -132,8 +132,7 @@ export function resolveToolOperationLabel(
   }
   if (name === "view_image") {
     const key = byOutcome(outcome, "viewingImage", "viewedImage", "viewImage");
-    const imageName = typeof args?.path === "string" ? pathDisplayName(args.path) : undefined;
-    return [t(`chat.toolCards.${key}`), imageName].filter(Boolean).join(" ");
+    return t(`chat.toolCards.${key}`);
   }
   if (name === "ask_user") {
     const key = byOutcome(outcome, "askingQuestion", "askedQuestion", "questionRequest");

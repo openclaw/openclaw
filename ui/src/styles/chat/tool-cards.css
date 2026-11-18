@@ -579,6 +579,13 @@
   background: transparent;
 }
 
+.row.chat-inspection {
+  width: fit-content;
+  align-items: start;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 .chat-activity-group__body .chat-tool-msg-collapse.is-open {
   margin-bottom: 8px;
 }
@@ -960,12 +967,15 @@
   margin-inline: 12px;
 }
 
+/* The summary ends where the reply text does. An auto track would grow to the
+   unwrapped summary in WebKit and Firefox and carry it past the column. */
 .chat-activity-group {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
   width: 100%;
   min-width: 0;
-  max-width: var(--chat-message-max-width, min(760px, 100%));
+  max-width: var(--chat-message-max-width, 100%);
 }
 
 /* Author display rules must preserve the live disclosure's hidden state. */
@@ -978,6 +988,7 @@
   min-width: 0;
   overflow: hidden;
   font: inherit;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -994,17 +1005,20 @@
   color: var(--warn);
 }
 
-/* Parent and child rows share one icon/text grid; order and whitespace carry
-   hierarchy without shrinking the available command width. */
+/* Expanded operations stay compact inside their own rail. The transcript owns
+   list scrolling; individual output blocks retain their existing bounds. */
 .chat-activity-group__body {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: min(420px, 58vh);
   margin: 0;
-  padding-left: 0;
-  border-left: 0;
-  overflow-y: auto;
+}
+
+.chat-activity-group:not(.chat-activity-group--inline):not(.chat-activity-group--step)
+  > .chat-activity-group__body {
+  margin-inline-start: 8px;
+  padding-inline-start: 16px;
+  border-inline-start: 1px solid var(--border);
 }
 
 .chat-activity-group__body[hidden] {
@@ -1015,37 +1029,42 @@
   gap: 4px;
 }
 
-/* Run bodies use display: contents, so both paths share the outer 2px gap. */
-.chat-group-messages > .chat-tool-msg-collapse + .chat-tool-msg-collapse,
-.chat-group-messages > .chat-activity-group + .chat-tool-msg-collapse,
-.chat-group-messages > .chat-tool-msg-collapse + .chat-activity-group,
-.chat-group-messages > .chat-activity-group + .chat-bubble--tool-shell,
-.chat-group-messages > .chat-bubble--tool-shell + .chat-activity-group,
-.chat-group-messages > .chat-tool-msg-collapse + .chat-bubble--tool-shell,
-.chat-group-messages > .chat-bubble--tool-shell + .chat-tool-msg-collapse,
-.chat-group-messages > .chat-bubble--tool-shell + .chat-bubble--tool-shell,
-.chat-agent-run-body > .chat-tool-msg-collapse + .chat-tool-msg-collapse,
-.chat-agent-run-body > .chat-activity-group + .chat-tool-msg-collapse,
-.chat-agent-run-body > .chat-tool-msg-collapse + .chat-activity-group,
-.chat-agent-run-body > .chat-activity-group + .chat-bubble--tool-shell,
-.chat-agent-run-body > .chat-bubble--tool-shell + .chat-activity-group,
-.chat-agent-run-body > .chat-tool-msg-collapse + .chat-bubble--tool-shell,
-.chat-agent-run-body > .chat-bubble--tool-shell + .chat-tool-msg-collapse,
-.chat-agent-run-body > .chat-bubble--tool-shell + .chat-bubble--tool-shell {
-  margin-block-start: 2px;
-}
-
-/* Grouped activity owns vertical scrolling; inline trails keep per-card bounds. */
-.chat-activity-group:not(.chat-activity-group--inline)
-  > .chat-activity-group__body
-  :is(
-    .chat-tool-msg-body,
-    .chat-tool-term__out,
-    .chat-tool-card__block-content,
-    .chat-diff,
-    .chat-tool-msg-body > .chat-text
-  ) {
-  max-height: none;
+/* Transparent run/card hosts still participate in sibling selection. Apply the
+   block gap to the visible box while keeping expanded children compact. */
+:is(.chat-group-messages, .chat-agent-run-body)
+  > :is(
+    .chat-activity-group,
+    .chat-tool-msg-collapse,
+    .chat-bubble--tool-shell,
+    openclaw-chat-tool-card
+  )
+  + .chat-activity-group,
+:is(.chat-group-messages, .chat-agent-run-body)
+  > :is(
+    .chat-activity-group,
+    .chat-tool-msg-collapse,
+    .chat-bubble--tool-shell,
+    openclaw-chat-tool-card
+  )
+  + .chat-tool-msg-collapse,
+:is(.chat-group-messages, .chat-agent-run-body)
+  > :is(
+    .chat-activity-group,
+    .chat-tool-msg-collapse,
+    .chat-bubble--tool-shell,
+    openclaw-chat-tool-card
+  )
+  + .chat-bubble--tool-shell,
+:is(.chat-group-messages, .chat-agent-run-body)
+  > :is(
+    .chat-activity-group,
+    .chat-tool-msg-collapse,
+    .chat-bubble--tool-shell,
+    openclaw-chat-tool-card
+  )
+  + openclaw-chat-tool-card
+  > .chat-tool-msg-collapse {
+  margin-block-start: calc(var(--chat-run-block-gap) - var(--chat-message-gap));
 }
 
 @keyframes chat-work-settle-in {
@@ -1079,7 +1098,6 @@
 
 .chat-activity-group__label.chat-activity-group__label--live {
   color: inherit;
-  text-overflow: ellipsis;
 }
 
 @keyframes chat-activity-headline-enter {
@@ -1284,9 +1302,4 @@ openclaw-chat-tool-output {
   border: 0;
   background: transparent;
   text-decoration: underline;
-}
-
-.chat-activity-group--inline > .chat-activity-group__body {
-  max-height: none;
-  overflow: visible;
 }

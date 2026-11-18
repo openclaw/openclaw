@@ -19,6 +19,7 @@ export type SessionTranscriptTurnLifecyclePatch = {
   abortedLastRun?: boolean;
   endedAt?: number;
   lifecycleRunId?: SessionEntry["lifecycleRunId"];
+  lifecycleRestartScope?: SessionEntry["lifecycleRestartScope"];
   lastRunId?: SessionEntry["lastRunId"];
   lastRunError?: SessionEntry["lastRunError"];
   lastInteractionAt?: number;

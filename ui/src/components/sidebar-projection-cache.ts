@@ -3,9 +3,9 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
 /** Source identities invalidate derivations; visible revisions can suppress equivalent replacements. */
 export class SidebarProjectionMemo<T> {
-  private slots: readonly unknown[] | undefined;
-  private value!: T;
-  private revision = 0;
+  #slots: readonly unknown[] | undefined;
+  #value!: T;
+  #revision = 0;
 
   readRevision(
     inputs: () => readonly unknown[],
@@ -13,26 +13,26 @@ export class SidebarProjectionMemo<T> {
     equals: (a: T, b: T) => boolean = Object.is,
   ): number {
     this.read(inputs, project, equals);
-    return this.revision;
+    return this.#revision;
   }
 
   read(inputs: () => readonly unknown[], project: () => T, equals?: (a: T, b: T) => boolean): T {
     const slots = inputs();
     if (
-      !this.slots ||
-      slots.length !== this.slots.length ||
-      slots.some((slot, index) => !Object.is(slot, this.slots![index]))
+      !this.#slots ||
+      slots.length !== this.#slots.length ||
+      slots.some((slot, index) => !Object.is(slot, this.#slots![index]))
     ) {
       const next = project();
-      if (!this.slots || !equals?.(this.value, next)) {
-        this.revision += 1;
+      if (!this.#slots || !equals?.(this.#value, next)) {
+        this.#revision += 1;
       }
       // Keep the latest snapshot even when hidden children changed without changing presentation.
-      this.value = next;
+      this.#value = next;
       // Stateful projection may publish created order, membership, or subtitles.
-      this.slots = inputs();
+      this.#slots = inputs();
     }
-    return this.value;
+    return this.#value;
   }
 }
 
@@ -84,7 +84,7 @@ export function sameSidebarPresentation(a: unknown, b: unknown, omit?: string): 
 /** Formatting belongs to a row's lifetime, not the lifetime of a list publication. */
 export class SidebarSessionRowProjection {
   readonly runtimeSampledAtByRow = new WeakMap<GatewaySessionRow, number>();
-  private readonly rows = new WeakMap<
+  readonly #rows = new WeakMap<
     GatewaySessionRow,
     [SidebarProjectionMemo<SidebarRecentSession>, SidebarProjectionMemo<SidebarRecentSession>]
   >();
@@ -95,10 +95,10 @@ export class SidebarSessionRowProjection {
     inputs: readonly unknown[],
     project: () => SidebarRecentSession,
   ): SidebarRecentSession {
-    let memos = this.rows.get(row);
+    let memos = this.#rows.get(row);
     if (!memos) {
       memos = [new SidebarProjectionMemo(), new SidebarProjectionMemo()];
-      this.rows.set(row, memos);
+      this.#rows.set(row, memos);
     }
     return memos[isChild ? 1 : 0].read(() => inputs, project);
   }

@@ -70,11 +70,11 @@ describe("release:prepush", () => {
     expect(output).toContain("Usage: pnpm release:prepush");
   });
 
-  it("pushes a first cut from its shipped ancestor while retaining strict changed-byte gates", () => {
+  it.each([false, true])("pushes an audited first cut (shallow: %s)", (shallow) => {
     const root = process.cwd();
     const repo = mkdtempSync(join(tmpdir(), "openclaw-release-baseline-"));
     const remote = join(repo, "remote.git");
-    const checkout = join(repo, "checkout");
+    let checkout = join(repo, "checkout");
     mkdirSync(checkout);
     const git = (args: string[]) =>
       execFileSync("git", ["-C", checkout, ...args], { encoding: "utf8" }).trim();
@@ -109,7 +109,9 @@ describe("release:prepush", () => {
         join(checkout, "CHANGELOG.md"),
         "# Changelog\n\n## 2026.10.7\n\n### Fixes\n\n- Fixture.\n",
       );
-      execFileSync(process.execPath, ["scripts/release-changelog.mjs", "split"], { cwd: checkout });
+      execFileSync(process.execPath, ["scripts/release-changelog.mjs", "split"], {
+        cwd: checkout,
+      });
       commit("shared");
       git(["switch", "--quiet", "-c", "release/2026.10.6"]);
       mkdirSync(join(checkout, "patches"));
@@ -133,6 +135,16 @@ describe("release:prepush", () => {
       expect(git(["ls-remote", "origin", "refs/heads/release/2026.10.7"])).toBe("");
       writeFileSync(join(checkout, "candidate.txt"), "candidate\n");
       const candidate = commit("new candidate");
+      if (shallow) {
+        const shallowCheckout = join(repo, "shallow");
+        git(["clone", "--quiet", "--depth=3", `file://${checkout}`, shallowCheckout]);
+        checkout = shallowCheckout;
+        git(["remote", "set-url", "origin", remote]);
+        git(["config", "user.name", "Release Test"]);
+        git(["config", "user.email", "release-test@example.com"]);
+        git(["config", "core.hooksPath", "/dev/null"]);
+        expect(git(["rev-parse", "--is-shallow-repository"])).toBe("true");
+      }
       const result = push();
       expect(result.stderr).not.toContain("trailing whitespace");
       expect(result.status, result.stdout + result.stderr).toBe(0);

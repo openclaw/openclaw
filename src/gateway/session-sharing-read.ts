@@ -10,7 +10,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
-import { prepareUserProfileRoleAuthority } from "../state/user-channel-identity-operations.js";
+import {
+  prepareUserProfileRoleAuthority,
+  prepareUserProfileSelectionAuthority,
+} from "../state/user-channel-identity-operations.js";
 import type { UserProfileIdentity } from "../state/user-profiles.types.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
@@ -152,6 +155,7 @@ export function prepareSessionSharing(
 }
 
 export type PreparedSessionSharingProfiles = {
+  admit: () => void;
   readCurrent: () => {
     profile: UserProfileIdentity | undefined;
     roleProfile: UserProfileIdentity | undefined;
@@ -244,6 +248,7 @@ export async function prepareSessionSharingProfiles(
   const identityId = sharingIdentity(client, actor)?.id;
   const roleProfileId = actor?.kind === "operator" ? actor.profileId : undefined;
   const runAuthority = client?.internal?.operatorRunAuthority;
+  let admitted = runAuthority !== undefined;
   const unavailable = () => {
     throw new SessionMutationAuthorizationChangedError(authenticatedProfileUnavailableError());
   };
@@ -270,18 +275,21 @@ export async function prepareSessionSharingProfiles(
         ) {
           return requesterChanged();
         }
-        return current;
+        return admitted ? retained : current;
       };
     }
     const prepared = await prepareUserProfileRoleAuthority(profileId, options);
+    const selection = prepared && (await prepareUserProfileSelectionAuthority(profileId, options));
     const profile = prepared && { ...prepared, aliases: new Set(prepared.aliases) };
     return () => {
       if (prepared && !prepared.isCurrent()) {
         prepared.readSource();
-        throw new SessionSharingProfileFactsChangedError(
-          authenticatedProfileUnavailableError(),
-          prepared.readSource,
-        );
+        if (!admitted || !selection?.isCurrent() || selection.profileId !== prepared.profileId) {
+          throw new SessionSharingProfileFactsChangedError(
+            authenticatedProfileUnavailableError(),
+            prepared.readSource,
+          );
+        }
       }
       return profile;
     };
@@ -305,7 +313,13 @@ export async function prepareSessionSharingProfiles(
     return { profile: readProfile(), roleProfile: readRoleProfile() };
   };
   readCurrent();
-  return { readCurrent };
+  return {
+    readCurrent,
+    admit: () => {
+      readCurrent();
+      admitted = true;
+    },
+  };
 }
 
 /** Refresh changed profile facts only before the synchronous consumer has begun effects. */
@@ -391,7 +405,7 @@ export function prepareProjectedSessionSharing(params: {
   cfg: OpenClawConfig;
   client: GatewayClient | null;
   isMember: (target: SessionSharingTarget, identityId: string) => boolean;
-  profiles?: PreparedSessionSharingProfiles;
+  profiles?: Pick<PreparedSessionSharingProfiles, "readCurrent">;
   /** Retained consumers lend current membership; viewer facts still revalidate on every call. */
   owner?: object;
 }): ProjectedSessionSharing {

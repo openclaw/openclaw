@@ -8,9 +8,8 @@ import { type ClientOptions, WebSocketServer } from "openclaw/plugin-sdk/websock
 import { afterEach, expect, it, vi } from "vitest";
 import { runCodexIsolatedCompletion } from "./isolated-completion.js";
 import { isolatedParams } from "./isolated-completion.params-test-support.js";
-import { resolveManagedCodexClientVersion, setManagedCodexPluginRoot } from "./managed-binary.js";
+import { setManagedCodexPluginRoot } from "./managed-binary.js";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
-import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 const transport = vi.hoisted(() => ({
   upstream: "",
@@ -203,9 +202,6 @@ it.skipIf(process.platform === "win32")(
       api: "openai-responses",
       content: [{ type: "text", text: "NATIVE_BOUNDARY_OK" }],
     });
-    await expect(resolveManagedCodexClientVersion("package-first")).resolves.toBe(
-      CODEX_APP_SERVER_VERSION,
-    );
     expect(transport.models).toEqual(["gpt-5.4"]);
     // Native startup may prepare multiple sockets; models records actual inference calls.
     expect(transport.paths.length).toBeGreaterThan(0);

@@ -65,20 +65,24 @@ export function formatUpdateCampaignLabel(
   if (!campaign) {
     return null;
   }
+  // Every campaign toward a newer release or revision publishes its target. The Gateway announces
+  // one without a target only to restart on its running version and finish plugin updates that an
+  // earlier update left owed. The lazy update views that call this register the finishing copy.
+  const copy = schedule?.target ? "updates.campaign" : "updates.finishing";
   if (campaign.state === "applying") {
-    return t("updates.campaign.applying");
+    return t(`${copy}.applying`);
   }
   if (campaign.holdUntilMs !== undefined && campaign.holdUntilMs > nowMs) {
-    return t("updates.campaign.held", {
+    return t(`${copy}.held`, {
       time: formatCountdown(campaign.holdUntilMs, nowMs),
     });
   }
   if (campaign.state === "waiting-for-idle") {
-    return t("updates.campaign.waitingForIdle", {
+    return t(`${copy}.waitingForIdle`, {
       time: formatCountdown(campaign.forceAtMs, nowMs),
     });
   }
-  return t("updates.campaign.countdown", {
+  return t(`${copy}.countdown`, {
     time: formatCountdown(campaign.applyAtMs ?? campaign.forceAtMs, nowMs),
   });
 }

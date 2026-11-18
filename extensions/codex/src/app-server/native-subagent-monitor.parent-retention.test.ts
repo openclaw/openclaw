@@ -147,6 +147,10 @@ it("permits parent cold resume once every child is terminal, while preserving un
   // A still-running sibling requires the native parent subscription to remain alive.
   await expect(releaseForResume()).rejects.toThrow("claimed by active work; stop it first");
   expect(client.request.mock.calls.some(([method]) => method === "thread/unsubscribe")).toBe(false);
+  // Its wake turn could only take the parent through that refused release: hold the
+  // result without spending its retry schedule until the sibling settles.
+  await vi.advanceTimersByTimeAsync(600_000);
+  expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
 
   await client.notify(
     nativeCompletionNotification({ agentPath: "child-b", result: "second result" }),

@@ -17,7 +17,7 @@ export class ReplySessionInitConflictError extends Error {
 const SESSION_INIT_CONFLICT_MESSAGE_RE =
   /^reply session initialization conflicted for \S+(?:; please retry your message\.)?$/u;
 
-function isReplySessionInitConflictError(error: unknown): boolean {
+export function isReplySessionInitConflictError(error: unknown): boolean {
   return (
     error instanceof ReplySessionInitConflictError ||
     SESSION_INIT_CONFLICT_MESSAGE_RE.test(error instanceof Error ? error.message : String(error))

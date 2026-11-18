@@ -3324,7 +3324,6 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       "test/plugin-npm-release.test.ts",
       "test/plugin-clawhub-release.test.ts",
       "android-version",
-      "android-pin-version",
       "docker-release-policy",
       "docker-release-artifacts",
       "full-release-validation-at-sha",
@@ -3738,12 +3737,15 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ["security-review-script", "security-review-rollout"],
   ],
   [
-    /^scripts\/github\/(?:guard-review|security-review-policy)\.mjs$/u,
+    /^scripts\/(?:github\/(?:dependency-manifests|guard-review|security-review-policy)|lib\/release-version)\.mjs$/u,
     [
       "dependency-guard-script",
       "security-sensitive-guard-script",
       "security-review-script",
       "security-review-rollout",
+      "security-review-admission",
+      "security-review-workflow",
+      "pr-merge-prior-ci",
     ],
   ],
   [/^scripts\/github\/guard-shared\.mjs$/u, ["security-review-script", "security-review-event"]],
@@ -3783,7 +3785,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       npmPostpublish,
     ],
   ],
-  [/^scripts\/lib\/android-version\.ts$/u, ["android-version", "android-pin-version"]],
+  [/^scripts\/lib\/android-version\.ts$/u, ["android-version"]],
   [
     /^scripts\/lib\/docker-e2e-plan\.(?:mjs|mts)$/u,
     [dockerE2e, "docker-all-scheduler", pluginPrerelease],
@@ -4410,9 +4412,10 @@ function resolveToolingTestTargets(
     semanticTargets.length ||
     conventionalTargets?.length,
   );
+  // A conventional filename is an owner hint, not an exhaustive consumer list.
   const importGraphResult =
     !options.boundedOwners &&
-    !hasDirectOwner &&
+    (!hasDirectOwner || conventionalTargets?.length) &&
     (options.forceFullImportGraph ||
       TOOLING_IMPORTABLE_FILE_EXTENSIONS.some((ext) => implementationPath.endsWith(ext)))
       ? options.forceFullImportGraph

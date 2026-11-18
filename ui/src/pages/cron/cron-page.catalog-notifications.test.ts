@@ -9,7 +9,7 @@ import {
   createPage,
   waitForCronPage,
 } from "./cron-page.test-support.tsx";
-import { cronRpc, emitEvent } from "./cron-rpc.test-support.ts";
+import { catalogModel, cronRpc, emitEvent } from "./cron-rpc.test-support.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -25,7 +25,7 @@ it("clears a failed catalog refresh during retry without holding the task draft"
     cronRpc({
       "models.list": () =>
         ++reads === 1
-          ? { models: [{ id: "initial-model" }] }
+          ? { models: [catalogModel("initial-model")] }
           : reads === 2
             ? failed.promise
             : retry.promise,
@@ -35,7 +35,7 @@ it("clears a failed catalog refresh during retry without holding the task draft"
   try {
     click(page, '[data-test-id="cron-new-task"]');
     await waitForCronPage(() => expect(page.querySelector("#cron-name")).not.toBeNull());
-    await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["initial-model"]));
+    await waitForCronPage(() => expect(page.cronCatalogModels).toEqual(["fixture/initial-model"]));
     const name = fillInput(page, "#cron-name", "Retained task draft");
     invalidateChatMetadataStore(client);
     await waitForCronPage(() => expect(reads).toBe(2));
@@ -51,9 +51,9 @@ it("clears a failed catalog refresh during retry without holding the task draft"
     expect(page.querySelector("#cron-name")).toBe(name);
     fillInput(page, "#cron-name", "Draft edited during retry");
     await waitForCronPage(() => expect(page.cron.cronForm.name).toBe("Draft edited during retry"));
-    expect(page.cronModelSuggestions).toEqual(["initial-model"]);
-    retry.resolve({ models: [{ id: "updated-model" }] });
-    await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["updated-model"]));
+    expect(page.cronCatalogModels).toEqual(["fixture/initial-model"]);
+    retry.resolve({ models: [catalogModel("updated-model")] });
+    await waitForCronPage(() => expect(page.cronCatalogModels).toEqual(["fixture/updated-model"]));
     expect(name.value).toBe("Draft edited during retry");
   } finally {
     failed.resolve({ models: [] });
@@ -66,7 +66,7 @@ it("refreshes catalog warnings when the shell invalidates after the page receive
   let refreshFailed = false;
   const client = createTestGatewayClient(
     cronRpc({
-      "models.list": () => ({ models: [{ provider: "fixture", id: "current" }], refreshFailed }),
+      "models.list": () => ({ models: [catalogModel("current")], refreshFailed }),
     }),
   );
   const gateway = createGateway(client, true);
@@ -77,7 +77,7 @@ it("refreshes catalog warnings when the shell invalidates after the page receive
   });
   const page = createPage(createContext(gateway), { render: true });
   click(page, '[data-test-id="cron-new-task"]');
-  await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["fixture/current"]));
+  await waitForCronPage(() => expect(page.cronCatalogModels).toEqual(["fixture/current"]));
 
   refreshFailed = true;
   for (const listener of listeners) {
@@ -90,7 +90,7 @@ it("refreshes catalog warnings when the shell invalidates after the page receive
 });
 
 it("loads the catalogue only for an open editor and retires closed-editor invalidations", async () => {
-  const request = cronRpc({ "models.list": () => ({ models: [{ id: "editor-model" }] }) });
+  const request = cronRpc({ "models.list": () => ({ models: [catalogModel("editor-model")] }) });
   const client = createTestGatewayClient(request);
   const gateway = createGateway(client, true);
   const page = createPage(createContext(gateway), { render: true });
@@ -102,7 +102,7 @@ it("loads the catalogue only for an open editor and retires closed-editor invali
     await page.settle();
     expect(modelCalls()).toHaveLength(0);
     click(page, '[data-test-id="cron-new-task"]');
-    await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["editor-model"]));
+    await waitForCronPage(() => expect(page.cronCatalogModels).toEqual(["fixture/editor-model"]));
     expect(modelCalls()).toHaveLength(1);
     page.closePanel();
     await page.settle();
@@ -111,7 +111,7 @@ it("loads the catalogue only for an open editor and retires closed-editor invali
     expect(modelCalls()).toHaveLength(1);
     click(page, '[data-test-id="cron-new-task"]');
     await waitForCronPage(() => expect(modelCalls()).toHaveLength(2));
-    await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["editor-model"]));
+    await waitForCronPage(() => expect(page.cronCatalogModels).toEqual(["fixture/editor-model"]));
   } finally {
     page.remove();
   }

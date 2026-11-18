@@ -9,8 +9,22 @@
  * Add --native-image <installed-image-id> for a real Docker guest and heartbeat;
  * use --temporary-root <short-existing-directory> to place fixtures off the OS disk.
  *
+ * --retry-entries 4000 measures recovery after review-base preparation fails,
+ * with that many imported files partially staged at their pre-refresh entries.
+ * --snapshot measures canonical publication capture instead of prepare_pr. It edits
+ * 1,000 tracked and adds 1,000 untracked files, then verifies the captured tree and
+ * byte-identical source index. The guest resumes during canonical staging only on
+ * the candidate. Acceptance: zero snapshot-stage paused time, lower median pause
+ * beyond A/A spread, identical contents, no >=20% median/p95 time or CPU regression.
+ * Reports native Git counts, lease-current read cost and longest async callback.
  * Run two baseline controls, then five interleaved A/B pairs. Allocation profiling
  * is a separate pass (--allocation), never mixed with unprofiled timing samples.
+ * Reports existing worker-message counters before/after the action, including
+ * unmeasured messages; known payload bytes are not complete wire-byte totals.
+ * --traffic separately measures V8-serializable main-boundary envelopes (shared
+ * memory and message ports counted as handles); exclude it from timing/allocation.
+ * cgroupCpuMs includes subprocesses; use an isolated cgroup v2 mount rooted at the
+ * benchmark's cgroup. Other cgroup layouts report null.
  * The unchanged tree has 62k files/1.1 GB. Its upstream adds 512 MiB of unique
  * historical objects then replaces them with small current files. This local Git
  * server declines filtering, so the real fetch downloads history while the final
@@ -53,7 +67,10 @@ const { values } = parseArgs({
     files: { type: "string", default: "62000" },
     "file-bytes": { type: "string", default: "17742" },
     "history-mib": { type: "string", default: "512" },
+    "retry-entries": { type: "string", default: "0" },
+    snapshot: { type: "boolean", default: false },
     allocation: { type: "boolean", default: false },
+    traffic: { type: "boolean", default: false },
     "native-image": { type: "string" },
     "native-engine": { type: "string", default: "docker" },
   },
@@ -68,6 +85,7 @@ const files = Number(values.files);
 const fileBytes = Number(values["file-bytes"]);
 const historyMiB = Number(values["history-mib"]);
 assert(["docker", "podman"].includes(values["native-engine"]!));
+assert(!(values.allocation && values.traffic), "Profile allocation and traffic separately");
 for (const value of [files, fileBytes, historyMiB]) {
   assert(Number.isSafeInteger(value) && value > 0);
 }
@@ -114,9 +132,14 @@ import path from "node:path";
 import os from "node:os";
 import { execFile } from "node:child_process";
 import { Session } from "node:inspector/promises";
+import { createHook } from "node:async_hooks";
+import { DefaultSerializer, getHeapStatistics } from "node:v8";
+import { MessagePort } from "node:worker_threads";
 import { it, expect, onTestFinished, vi } from "vitest";
 import * as engine from "../agents/sandbox/docker.js";
+import * as gitExec from "../infra/git-exec.js";
 import * as projectionOperation from "./worker-environments/local-workspace-projection-operation.js";
+import * as workerMessages from "../infra/worker-message-metrics.js";
 import { installGitHubPublicationTestHarness } from "./github-publication.test-support.js";
 
 installGitHubPublicationTestHarness({ creatorEmail: "publication-guest@example.test", sandbox: "required", realWorktree: true });
@@ -145,6 +168,7 @@ it("measures immutable object acquisition beside a live guest", async () => {
   if (nativeImage) {
     await docker(["run", "--detach", "--name", nativeName, "--network=none", "--cap-drop=ALL", ...(nativeEngine === "docker" ? ["--memory=256m", "--cpus=1"] : []), "--env", "GIT_AUTHOR_NAME=Fixture", "--env", "GIT_COMMITTER_NAME=Fixture", "--env", "GIT_AUTHOR_EMAIL=fixture@example.test", "--env", "GIT_COMMITTER_EMAIL=fixture@example.test", "--mount", "type=bind,src=" + f.projection + ",dst=" + f.projection, "--workdir", f.projection, nativeImage, "node", "-e", "const fs=require('fs');setInterval(()=>fs.appendFileSync('.git/pause-proof-heartbeat.jsonl',String(Date.now())+'\\n'),25)"]);
     onTestFinished(async () => { await docker(["rm", "--force", nativeName]); });
+    await docker(["exec", nativeName, "node", "-e", "require('fs').writeFileSync('.git/pause-proof-heartbeat.jsonl', String(Date.now()) + '\\n')"]);
     f.sandbox.backend!.runShellCommand = async ({ script, args, stdin }) => {
       const result = await docker(["exec", "--interactive", "--workdir", f.projection, nativeName, "sh", "-c", script, "sandbox-fixture", ...(args ?? [])], stdin, true);
       return { code: result.code, stdout: Buffer.from(result.stdout), stderr: Buffer.from(result.stderr) };
@@ -152,20 +176,65 @@ it("measures immutable object acquisition beside a live guest", async () => {
   }
   const runtime = await bindFixtureRuntime(f);
   using _projection = runtime.projection;
-  const upstream = (...args: string[]) => f.local!.git("-C", f.upstream, ...args);
-  await upstream("config", "gc.auto", "0");
-  await upstream("config", "uploadpack.allowFilter", "false");
-  await upstream("checkout", "topic/existing");
-  await fs.cp(path.join(fixtureRoot, "history"), path.join(f.upstream, "history"), { recursive: true });
-  await upstream("add", "history");
-  await upstream("-c", "pack.window=0", "commit", "-m", "Synthetic historical object population");
-  for (const name of Object.keys(seed.hashes)) {
-    await fs.writeFile(path.join(f.upstream, "history", name), "current synthetic contents\n");
+  const snapshotMode = process.env.OPENCLAW_PUBLICATION_PAUSE_SNAPSHOT === "1";
+  const { captureGitHubPublicationWorkspaceSnapshot } = await import("./github-publication-git-transport.js");
+  const snapshotFiles = Math.min(1000, seed.files);
+  const snapshotContents = "synthetic publication edit\n".padEnd(seed.fileBytes, "y");
+  if (snapshotMode) {
+    // Real PR preparation leaves the canonical index populated by read-tree,
+    // without the file-stat cache that a fixture's ordinary checkout supplies.
+    await f.invoke();
+    for (let index = 0; index < snapshotFiles; index++) {
+      await fs.writeFile(path.join(f.projection, "payload", String(Math.floor(index / 100)).padStart(4, "0"), String(index).padStart(6, "0") + ".txt"), snapshotContents);
+      await fs.writeFile(path.join(f.projection, "untracked-" + index + ".txt"), snapshotContents);
+    }
   }
-  await upstream("add", "history");
-  await upstream("commit", "-m", "Keep small current files");
-  const head = await f.advanceHead({ "pr.txt": "current PR contents\n" });
+  const sourceIndex = path.resolve(f.cwd, await f.git("rev-parse", "--git-path", "index"));
+  const sourceIndexBytes = await fs.readFile(sourceIndex);
+  const upstream = (...args: string[]) => f.local!.git("-C", f.upstream, ...args);
+  let head = "";
+  if (!snapshotMode) {
+    await upstream("config", "gc.auto", "0");
+    await upstream("config", "uploadpack.allowFilter", "false");
+    await upstream("checkout", "topic/existing");
+    await fs.cp(path.join(fixtureRoot, "history"), path.join(f.upstream, "history"), { recursive: true });
+    await upstream("add", "history");
+    await upstream("-c", "pack.window=0", "commit", "-m", "Synthetic historical object population");
+    for (const name of Object.keys(seed.hashes)) {
+      await fs.writeFile(path.join(f.upstream, "history", name), "current synthetic contents\n");
+    }
+    await upstream("add", "history");
+    await upstream("commit", "-m", "Keep small current files");
+    head = await f.advanceHead({ "pr.txt": "current PR contents\n" });
+  }
   console.log("publication-pause: upstream history ready");
+  const retryEntries = Number(process.env.OPENCLAW_PUBLICATION_PAUSE_RETRY_ENTRIES ?? 0);
+  const retryFiles: Record<string, string> = {};
+  if (retryEntries) {
+    for (let index = 0; index < retryEntries; index++) {
+      const name = "retry/" + Math.floor(index / 100) + "/entry-" + index + ".txt";
+      await fs.mkdir(path.dirname(path.join(f.upstream, name)), { recursive: true });
+      retryFiles[name] = ("imported entry " + index + "\n").padEnd(seed.fileBytes, "a");
+    }
+    await f.advanceHead(retryFiles);
+    await f.invoke();
+    for (const name of Object.keys(retryFiles)) retryFiles[name] = ("updated " + name + "\n").padEnd(seed.fileBytes, "b");
+    head = await f.advanceHead(retryFiles);
+    const backend = f.sandbox.backend!;
+    const shell = backend.runShellCommand.bind(backend);
+    using interrupted = vi.spyOn(backend, "runShellCommand").mockImplementation(async (params) => {
+      if (params.script.includes("for candidate do")) {
+        return { code: 1, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+      }
+      return await shell(params);
+    });
+    await expect(f.invoke()).rejects.toThrow("review-base preparation failed");
+    interrupted.mockRestore();
+    const partial = await f.guestGit("status", "--porcelain", "--", "retry");
+    expect(partial.split("\n")).toHaveLength(retryEntries);
+    expect(partial.split("\n").every(line => line.startsWith("AM "))).toBe(true);
+  }
+  console.log("publication-pause: recovery fixture ready");
   const fetched: { durationMs: number; pausedAtStart: boolean; pausedAtEnd: boolean }[] = [];
   const pauses: { start: number; end?: number }[] = [];
   const phases: { phase: string; at: number; paused: boolean }[] = [];
@@ -174,9 +243,21 @@ it("measures immutable object acquisition beside a live guest", async () => {
     phase = next;
     phases.push({ phase, at: performance.now(), paused: runtime.isPaused() });
   };
+  const currentReads = { count: 0, totalMs: 0, maxMs: 0 };
   const projectionRun = projectionOperation.runLocalWorkspaceProjection;
   using projectionSpy = vi.spyOn(projectionOperation, "runLocalWorkspaceProjection");
-  projectionSpy.mockImplementation((owner, store, run, options = {}) => projectionRun(owner, store, run, {
+  projectionSpy.mockImplementation((owner, store, run, options = {}) => projectionRun(owner, store, (state, ...rest) => run({
+    ...state,
+    current: () => {
+      const start = performance.now();
+      try { return state.current(); }
+      finally {
+        const elapsed = performance.now() - start;
+        currentReads.count++; currentReads.totalMs += elapsed;
+        currentReads.maxMs = Math.max(currentReads.maxMs, elapsed);
+      }
+    },
+  }, ...rest), {
     ...options,
     onPhase: (next) => { mark(next); options.onPhase?.(next); },
   }));
@@ -205,11 +286,19 @@ it("measures immutable object acquisition beside a live guest", async () => {
     return result;
   };
   const objects = path.resolve(f.cwd, await f.git("rev-parse", "--git-common-dir"), "objects");
+  const gitCommands: Record<string, { count: number; wallMs: number; pausedMs: number }> = {};
+  const execute = gitExec.executeGitCommand;
+  using gitObserver = vi.spyOn(gitExec, "executeGitCommand");
+  gitObserver.mockImplementation(async (cwd, argv, options) => {
+    const command = argv.find(arg => ["ls-tree", "rev-parse", "update-ref", "cat-file", "merge-base", "read-tree", "config"].includes(arg)) ?? "other";
+    const counter = gitCommands[command] ??= { count: 0, wallMs: 0, pausedMs: 0 };
+    const start = performance.now(), paused = runtime.isPaused();
+    try { return await execute(cwd, argv, options); }
+    finally { const ms = performance.now() - start; counter.count++; counter.wallMs += ms; if (paused) counter.pausedMs += ms; }
+  });
   const transport = mocks.runCommand.getMockImplementation()!;
   mocks.runCommand.mockImplementation(async (argv: string[], options) => {
-    if (!argv.includes("fetch")) {
-      return await transport(argv, options);
-    }
+    if (!argv.includes("fetch")) return await transport(argv, options);
     const started = performance.now();
     const pausedAtStart = runtime.isPaused();
     const result = await transport(argv, options);
@@ -217,9 +306,58 @@ it("measures immutable object acquisition beside a live guest", async () => {
     return result;
   });
   const allocation = process.env.OPENCLAW_PUBLICATION_PAUSE_ALLOCATION === "1";
+  const traffic = process.env.OPENCLAW_PUBLICATION_PAUSE_TRAFFIC === "1";
+  class TrafficSerializer extends DefaultSerializer {
+    private nextSharedId = 0;
+    _getSharedArrayBufferId() { return this.nextSharedId++; }
+    _writeHostObject(value: object) {
+      if (value instanceof MessagePort) { this.writeUint32(0xffffffff); return; }
+      super._writeHostObject(value);
+    }
+  }
+  const envelopes = {
+    to_worker: { messages: 0, serializedBytes: 0, unsupported: 0 },
+    from_worker: { messages: 0, serializedBytes: 0, unsupported: 0 },
+  };
+  let measuring = false;
+  const measureEnvelope = (message: unknown, direction: keyof typeof envelopes) => {
+    if (measuring) {
+      const counter = envelopes[direction];
+      counter.messages++;
+      try {
+        const serializer = new TrafficSerializer();
+        serializer.writeHeader();
+        serializer.writeValue(message);
+        counter.serializedBytes += serializer.releaseBuffer().byteLength;
+      }
+      catch { counter.unsupported++; }
+    }
+  };
+  // Observe native task/control ports before transfer, including Worker.postMessage's port.
+  const postPort = MessagePort.prototype.postMessage;
+  using port = traffic ? vi.spyOn(MessagePort.prototype, "postMessage") : undefined;
+  port?.mockImplementation(function (message, transfers) {
+    measureEnvelope(message, "to_worker");
+    postPort.call(this, message, transfers);
+  });
+  const observe = workerMessages.observeWorkerMessage;
+  using observer = traffic ? vi.spyOn(workerMessages, "observeWorkerMessage") : undefined;
+  observer?.mockImplementation((message, direction, ...rest) => {
+    if (direction === "from_worker") measureEnvelope(message, direction);
+    observe(message, direction, ...rest);
+  });
   const guestCpu = async () => nativeImage && nativeEngine === "docker"
     ? Number((await docker(["exec", nativeName, "cat", "/sys/fs/cgroup/cpu.stat"])).stdout.match(/^usage_usec (\d+)$/m)?.[1])
     : null;
+  const cgroupRootOwnsProcess = process.platform === "linux" &&
+    (await fs.readFile("/sys/fs/cgroup/cgroup.procs", "utf8").catch(() => ""))
+      .split("\n").includes(String(process.pid));
+  const cgroupCpu = async () => {
+    const usage = cgroupRootOwnsProcess
+      ? (await fs.readFile("/sys/fs/cgroup/cpu.stat", "utf8").catch(() => "")).match(/^usage_usec (\d+)$/m)?.[1]
+      : undefined;
+    return usage === undefined ? null : Number(usage);
+  };
   const objectBytesBefore = await bytesUnder(objects);
   const guestCpuBefore = await guestCpu();
   const heartbeatStart = nativeImage ? (await fs.readFile(path.join(f.projection, ".git/pause-proof-heartbeat.jsonl"), "utf8")).trim().split("\n").length : 0;
@@ -233,20 +371,34 @@ it("measures immutable object acquisition beside a live guest", async () => {
   }
   const filesystem = await fs.statfs(f.projection);
   const agentDatabaseBytes = (await fs.stat(path.join(process.env.OPENCLAW_STATE_DIR!, "agents/main/agent/openclaw-agent.sqlite"))).size;
+  const cgroupCpuBefore = await cgroupCpu();
+  const workerMessagesBefore = workerMessages.getWorkerMessageMetrics();
+  const allocatedBefore = Reflect.get(getHeapStatistics(), "total_allocated_bytes");
   const cpu = process.cpuUsage();
   const threadCpu = process.threadCpuUsage();
   const heapBefore = process.memoryUsage();
   const started = performance.now();
   const beforeLoad = os.loadavg();
   console.log("publication-pause: measured owner starts");
+  let segmentStarted = performance.now(), longestTaskMs = 0;
+  const hook = createHook({
+    before() { segmentStarted = performance.now(); },
+    after() { longestTaskMs = Math.max(longestTaskMs, performance.now() - segmentStarted); },
+  });
+  hook.enable();
+  measuring = true;
   let outcome: unknown;
   let failure: string | undefined;
   try {
-    outcome = await f.invoke();
+    outcome = snapshotMode
+      ? await captureGitHubPublicationWorkspaceSnapshot({ cwd: f.cwd })
+      : await f.invoke();
   } catch (error) {
     failure = String(error);
   }
+  hook.disable();
   const ownerMs = performance.now() - started;
+  measuring = false;
   mark("finished");
   const phaseMs: Record<string, { running: number; paused: number }> = {};
   for (let index = 0; index + 1 < phases.length; index++) {
@@ -257,6 +409,9 @@ it("measures immutable object acquisition beside a live guest", async () => {
   const processCpu = process.cpuUsage(cpu);
   const mainCpu = process.threadCpuUsage(threadCpu);
   const heapAfter = process.memoryUsage();
+  const allocatedAfter = Reflect.get(getHeapStatistics(), "total_allocated_bytes");
+  const workerMessagesAfter = workerMessages.getWorkerMessageMetrics();
+  const cgroupCpuAfter = await cgroupCpu();
   let sampledAllocationBytes: number | null = null;
   if (allocation) {
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
@@ -277,7 +432,7 @@ it("measures immutable object acquisition beside a live guest", async () => {
     ? (await fs.readFile(path.join(f.projection, ".git/pause-proof-heartbeat.jsonl"), "utf8")).trim().split("\n").slice(Math.max(0, heartbeatStart - 1)).map(Number)
     : [];
   const report = {
-    fixture: seed,
+    fixture: seed, snapshotMode, retryEntries, gitCommands, currentReads, longestTaskMs,
     qualification: nativeImage
       ? "Registered action with synthetic GitHub; native container, Git and workspace owners; filesystem type and synthetic database bytes reported separately"
       : "Registered action with synthetic GitHub and simulated container engine; real Git fetch and workspace owners; local filesystem, no native guest or btrfs claim",
@@ -286,13 +441,37 @@ it("measures immutable object acquisition beside a live guest", async () => {
     node: process.version, bun: process.versions.bun ?? null, executable: process.execPath, platform: process.platform, cpus: os.cpus().length, memory: os.totalmem(), beforeLoad, afterLoad: os.loadavg(),
     ownerMs, processCpuMs: (processCpu.user + processCpu.system) / 1000, mainCpuMs: (mainCpu.user + mainCpu.system) / 1000,
     guestCpuMs: guestCpuBefore !== null && guestCpuAfter !== null ? (guestCpuAfter - guestCpuBefore) / 1000 : null,
+    cgroupCpuMs: cgroupCpuBefore !== null && cgroupCpuAfter !== null ? (cgroupCpuAfter - cgroupCpuBefore) / 1000 : null,
     heapBefore, heapAfter, sampledAllocationBytes, fetched, pauseMs, phaseMs,
+    mainAllocatedBytes: typeof allocatedBefore === "number" && typeof allocatedAfter === "number"
+      ? allocatedAfter - allocatedBefore : null,
+    workerMessagesBefore, workerMessagesAfter,
+    serializedEnvelopes: traffic ? envelopes : undefined,
     objectBytesBefore, objectBytesAfter, objectByteGrowth: objectBytesAfter - objectBytesBefore,
     totalPauseMs: pauseMs.reduce((sum, value) => sum + value, 0), maxPauseMs: Math.max(0, ...pauseMs),
     pausedAtReturn: runtime.isPaused(), outcome, failure, verified: false,
   };
   await fs.writeFile(path.join(output, "report.json"), JSON.stringify(report, null, 2));
   expect(failure).toBeUndefined();
+  if (traffic) {
+    for (const counter of Object.values(envelopes)) {
+      expect(counter.messages).toBeGreaterThan(0);
+      expect(counter.unsupported).toBe(0);
+    }
+  }
+  if (snapshotMode) {
+    const snapshot = outcome as { workspaceTree: string };
+    expect(await fs.readFile(sourceIndex)).toEqual(sourceIndexBytes);
+    const paths = (await f.git("ls-tree", "-r", "--name-only", snapshot.workspaceTree)).split("\n");
+    expect(paths.filter(name => name.startsWith("untracked-"))).toHaveLength(snapshotFiles);
+    for (const name of ["payload/0000/000000.txt", "untracked-0.txt"]) {
+      expect(await f.git("show", snapshot.workspaceTree + ":" + name)).toBe(snapshotContents);
+    }
+    expect(runtime.isPaused()).toBe(false);
+    report.verified = true;
+    await fs.writeFile(path.join(output, "report.json"), JSON.stringify(report, null, 2));
+    return;
+  }
   expect(outcome).toMatchObject({ status: "prepared", headCommit: head });
   expect(runtime.isPaused()).toBe(false);
   expect(await f.git("write-tree")).toBe(await upstream("rev-parse", head + "^{tree}"));
@@ -308,6 +487,10 @@ it("measures immutable object acquisition beside a live guest", async () => {
     }
     expect(await fs.readFile(path.join(root, "pr.txt"), "utf8")).toBe("current PR contents\n");
   }
+  for (const [name, content] of Object.entries(retryFiles)) {
+    expect(await fs.readFile(path.join(f.projection, name), "utf8")).toBe(content);
+  }
+  expect(await f.guestGit("diff", "--name-only")).toBe("");
   report.verified = true;
   await fs.writeFile(path.join(output, "report.json"), JSON.stringify(report, null, 2));
 }, 1_800_000);
@@ -458,9 +641,13 @@ try {
       env: {
         ...process.env,
         TMPDIR: temporaryRoot,
+        OPENCLAW_VITEST_RUNTIME: "node",
         OPENCLAW_PUBLICATION_PAUSE_FIXTURE: path.resolve(values.fixture),
         OPENCLAW_PUBLICATION_PAUSE_OUTPUT: output,
+        OPENCLAW_PUBLICATION_PAUSE_SNAPSHOT: values.snapshot ? "1" : "0",
         OPENCLAW_PUBLICATION_PAUSE_ALLOCATION: values.allocation ? "1" : "0",
+        OPENCLAW_PUBLICATION_PAUSE_TRAFFIC: values.traffic ? "1" : "0",
+        OPENCLAW_PUBLICATION_PAUSE_RETRY_ENTRIES: values["retry-entries"],
         OPENCLAW_PUBLICATION_PAUSE_NATIVE_IMAGE: values["native-image"],
         OPENCLAW_PUBLICATION_PAUSE_NATIVE_ENGINE: values["native-engine"],
         OPENCLAW_PUBLICATION_PAUSE_NATIVE_NAME: "openclaw-pause-proof-" + process.pid,

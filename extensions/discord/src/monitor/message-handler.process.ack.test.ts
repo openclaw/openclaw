@@ -3,7 +3,7 @@ import { DEFAULT_EMOJIS } from "openclaw/plugin-sdk/channel-feedback";
 import { resolveGroupThreadMentionFacts } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
+import * as replyTesting from "openclaw/plugin-sdk/reply-payload-testing";
 import * as replyRuntime from "openclaw/plugin-sdk/reply-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { expect, it, vi, afterEach } from "vitest";
@@ -203,8 +203,6 @@ it.each(["current", "aborted", "policy changed"] as const)(
   },
 );
 
-const conflictError = () => new Error("reply session initialization conflicted for test");
-
 it.each([
   ["delivered", "user_request", 1],
   ["policy suppressed", "room_event", 0],
@@ -218,7 +216,7 @@ it.each([
     if (outcome === "aborted") {
       controller.abort();
     }
-    throw conflictError();
+    throw new replyTesting.ReplySessionInitConflictError("agent:main:discord:channel:test");
   });
   if (outcome === "downstream suppressed") {
     deliver.mockResolvedValueOnce({ visibleReplySent: false });
@@ -234,7 +232,6 @@ it.each([
     effectiveWasMentioned: inboundEventKind !== "room_event",
   });
   if (outcome === "delivery failed") {
-    await expect(processing).rejects.toBeInstanceOf(Error);
     await expect(processing).rejects.toMatchObject({ cause: expect.any(Error) });
   } else {
     await expect(processing).resolves.toBeUndefined();
@@ -463,7 +460,7 @@ it.each([false, true])("binds group-thread delivery (warning=%s)", async (warnin
     agents: { ownership: "explicit", entries },
     broadcast: { "discord:c1": agents },
   };
-  const warningPayload = setReplyPayloadMetadata(
+  const warningPayload = replyTesting.setReplyPayloadMetadata(
     { text: "The attachment could not be processed.", isError: true },
     { nonTerminalToolErrorWarning: true },
   );

@@ -319,6 +319,8 @@ export type ChannelThreadingAdapter = {
    * target lookup.
    */
   threadAddressing?: "address" | "message";
+  /** True only if omitting this thread id sends to the exact same transport destination. */
+  isThreadAddressedByTarget?: (params: { to: string; threadId: string | number }) => boolean;
   matchesToolContextTarget?: (params: {
     target: string;
     toolContext: ChannelThreadingToolContext;

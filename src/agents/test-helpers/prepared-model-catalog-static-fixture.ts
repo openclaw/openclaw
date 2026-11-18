@@ -28,7 +28,6 @@ export function createStaticCatalogSnapshotFixture(params: {
       readOnly?: boolean;
       metadataWorkspace?: "none" | "activation";
       provideMetadataToWorker?: boolean;
-      reportCodexClientVersion?: boolean;
     },
   ) {
     const fixture = await createCatalogFixture(makeTempDir, spinMs, envOverride, {

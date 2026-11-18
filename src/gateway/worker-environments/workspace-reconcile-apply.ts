@@ -307,6 +307,8 @@ export async function applyStagedWorkerWorkspace(
       stagingRoot: params.stagingRoot,
       baseEntries,
       appliedEntries,
+      publicationCopy:
+        acceptance.kind === "checkpoint" && typeof params.journal.begin === "function",
     });
     // Preparation may run beside guest writes; fence them before confirming the plan.
     await params.freezeTarget?.();
@@ -330,7 +332,7 @@ export async function applyStagedWorkerWorkspace(
       basePack: snapshot.basePack,
     };
     params.assertCurrent?.();
-    await params.journal.begin(journal);
+    await params.journal.begin?.(journal, snapshot.publicationPack);
     try {
       params.onPhase?.("apply");
       const temporary = await prepareWorkspaceTemporaryDirectory("openclaw-workspace-apply-input-");
@@ -347,7 +349,12 @@ export async function applyStagedWorkerWorkspace(
                 currentNodes,
                 applyPaths: preflight.applyPaths,
               }),
-              appliedEntries,
+              // Confirmed preflight already established existing file/symlink types.
+              // Only new paths or replaced directories can need derived-child cleanup.
+              appliedEntries: appliedEntries.filter((entry) => {
+                const base = baseNodes.get(entry.path);
+                return !base || base.type === "directory";
+              }),
               buildCacheInputs,
               patchPath,
             },

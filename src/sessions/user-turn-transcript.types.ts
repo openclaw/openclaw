@@ -13,6 +13,7 @@ import type {
 } from "../config/sessions/goals-operations.types.js";
 import type { SessionInputLifecycleAdmission } from "../config/sessions/session-input-lifecycle.js";
 import type { SessionMessageRewriteResult } from "../config/sessions/session-message-rewrite.types.js";
+import type { SessionPendingInputEndCause } from "../config/sessions/session-pending-input-end-cause.types.js";
 import type { PreparedSessionMentionInvitation } from "../config/sessions/session-sharing-authority.types.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type {
@@ -73,7 +74,6 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> &
       timeoutMs?: number;
     };
     requesterOrigin?: RequesterOrigin;
-    pendingInputCancelledByUser?: true;
   };
 };
 
@@ -287,7 +287,14 @@ export type UserTurnTranscriptRecorder = {
   withPendingInput?: <T>(run: () => T) => T;
   withPendingInputCurrent?: <T>(run: () => T) => Promise<Awaited<T>>;
   assertPendingInputLifetimeCurrent?: () => void;
-  finishPendingInput?: (disposition: "cancelled" | "interrupted", userInitiated?: true) => void;
+  finishPendingInput?: (
+    disposition: "cancelled" | "interrupted",
+    endCause: SessionPendingInputEndCause,
+  ) => void;
+  /** Drop process custody after consumption without inventing a terminal cause. */
+  releasePendingInput?: () => void;
+  /** Drop live custody on a transient outage while retaining the queued durable input. */
+  relinquishPendingInput?: () => void;
   /** Join accepted completion and disposition writes before releasing the turn's admission. */
   waitForPendingInputSettlement?: () => Promise<void>;
   /** Replaces generated current-turn text before runtime persistence/provider submission. */

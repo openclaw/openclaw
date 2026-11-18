@@ -1,6 +1,7 @@
 import { getObserver } from "@solidjs/signals";
 import { dynamic, type JSX } from "@solidjs/web";
 import { createMemo, lazy, Loading, Show } from "solid-js";
+import { isRailSectionPin } from "../app-navigation.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { patchSettings } from "../app/settings.ts";
@@ -36,6 +37,7 @@ import {
   runControlUiPluginAction,
 } from "../plugins/control-ui-actions.ts";
 import { renderSidebarAgentMenu as SidebarAgentMenu } from "./app-sidebar-agent-menu.tsx";
+import { renderSidebarAutomationsFilterMenuForMenus } from "./app-sidebar-automations-filter.tsx";
 import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-dropdown.tsx";
 import { renderSidebarIdentityMenu as SidebarIdentityMenu } from "./app-sidebar-identity-menu.tsx";
 import { renderSidebarPeopleFilterMenuForMenus } from "./app-sidebar-people-filter-menu.tsx";
@@ -105,8 +107,10 @@ function renderSidebarMenus(
   return [
     <Show when={projected.railPinMenuPosition} keyed>
       {(menu) => {
+        // Moves stay within the pin's rail group: sections above the separator, the rest below.
+        const group = isRailSectionPin(menu.entry);
         const entries = [...projected.railPins]
-          .filter(([, element]) => element.isConnected)
+          .filter(([entry, element]) => element.isConnected && isRailSectionPin(entry) === group)
           .toSorted(([, left], [, right]) =>
             left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
           )
@@ -583,6 +587,9 @@ function renderSidebarMenus(
     </Show>,
     <Show when={projected.peopleFilterMenuPosition} keyed>
       {(menu) => renderSidebarPeopleFilterMenuForMenus(projected, view, menu)}
+    </Show>,
+    <Show when={projected.automationsFilterMenuPosition}>
+      {renderSidebarAutomationsFilterMenuForMenus(projected, view)}
     </Show>,
     <Show when={projected.catalogViewMenuPosition} keyed>
       {(menu) => renderSidebarCatalogViewMenuForMenus(projected, view, menu)}

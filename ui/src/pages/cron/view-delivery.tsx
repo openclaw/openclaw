@@ -1,11 +1,19 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { createMemo } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 import type { ChannelPickerOption } from "../../components/solid/channel-picker.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { SettingsSection, SettingsRow } from "../../components/solid/settings-ui.tsx";
+import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
+import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import type { CronFormState } from "../../lib/cron/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { CronSelect, CronInput, ToggleRow, FieldRow, errorIdForField } from "./view-fields.tsx";
+import {
+  CronSelect,
+  CronInput,
+  ToggleRow,
+  FieldRow,
+  errorIdForField,
+  inputIdForField,
+} from "./view-fields.tsx";
 import { DurationRow } from "./view-schedule.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
 function buildChannelOptions(data: CronProps): ChannelPickerOption[] {
@@ -20,20 +28,21 @@ function buildChannelOptions(data: CronProps): ChannelPickerOption[] {
     })),
   ];
 }
-export function DeliverySection(
+/** Where results go, in the order the Results section lists them. */
+function DeliveryRows(
   props: CronProps & {
+    isAgentTurn: boolean;
     supportsAnnounce: boolean;
     selectedDeliveryMode: CronFormState["deliveryMode"];
+    channelOptions: readonly ChannelPickerOption[];
   },
 ) {
-  const channelOptions = createMemo(() => buildChannelOptions(props));
   return (
-    <SettingsSection title={t("cron.detail.deliverySection")}>
+    <>
       <CronSelect
         {...props}
         field="deliveryMode"
         label={t("cron.form.deliveryModeLabel")}
-        help={t("cron.form.deliveryHelp")}
         value={props.selectedDeliveryMode}
         errorKey="deliveryMode"
         options={[
@@ -51,32 +60,23 @@ export function DeliverySection(
         <>
           <CronSelect
             {...props}
+            field="deliveryChannel"
+            label={t("cron.form.channel")}
+            help={t("cron.form.channelHelp")}
+            options={props.channelOptions}
+            channel
+          />
+          <CronSelect
+            {...props}
             field="deliveryTarget"
             label={t("cron.form.deliveryTarget")}
-            help={t("cron.form.ownerTargetHelp")}
+            help={
+              props.form.deliveryTarget === "owner" ? t("cron.form.ownerTargetHelp") : undefined
+            }
             options={[
               { value: "", label: t("cron.form.channelTarget") },
               { value: "owner", label: t("cron.form.ownerTarget") },
             ]}
-          />
-          <CronSelect
-            {...props}
-            field="deliveryDirectPolicy"
-            label={t("cron.form.directPolicy")}
-            errorKey="deliveryDirectPolicy"
-            options={[
-              { value: "", label: t("cron.form.defaultPolicy") },
-              { value: "allow", label: t("cron.form.allowDirect") },
-              { value: "block", label: t("cron.form.blockDirect") },
-            ]}
-          />
-          <CronSelect
-            {...props}
-            field="deliveryChannel"
-            label={t("cron.form.channel")}
-            help={t("cron.form.channelHelp")}
-            options={channelOptions()}
-            channel
           />
           {props.form.deliveryTarget !== "owner" ? (
             <CronInput
@@ -86,6 +86,28 @@ export function DeliverySection(
               help={t("cron.form.toHelp")}
               list="cron-delivery-to-suggestions"
               placeholder={t("cron.form.toPlaceholder")}
+            />
+          ) : undefined}
+          <CronSelect
+            {...props}
+            field="deliveryDirectPolicy"
+            label={t("cron.form.directPolicy")}
+            help={t("cron.form.directPolicyHelp")}
+            errorKey="deliveryDirectPolicy"
+            options={[
+              { value: "", label: t("cron.form.defaultPolicy") },
+              { value: "allow", label: t("cron.form.allowDirect") },
+              { value: "block", label: t("cron.form.blockDirect") },
+            ]}
+          />
+          {props.isAgentTurn ? (
+            <CronInput
+              {...props}
+              field="deliveryAccountId"
+              label={t("cron.form.accountId")}
+              help={t("cron.form.accountIdHelp")}
+              list="cron-delivery-account-suggestions"
+              placeholder="default"
             />
           ) : undefined}
         </>
@@ -102,33 +124,209 @@ export function DeliverySection(
           placeholder={t("cron.form.webhookPlaceholder")}
         />
       ) : undefined}
-    </SettingsSection>
+      {props.isAgentTurn ? (
+        <ToggleRow
+          {...props}
+          field="payloadIncludeReasoning"
+          label={t("cron.form.includeReasoning")}
+          help={t("cron.form.includeReasoningHelp")}
+        />
+      ) : undefined}
+      {props.selectedDeliveryMode !== "none" ? (
+        <ToggleRow
+          {...props}
+          field="deliveryBestEffort"
+          label={t("cron.form.bestEffortDelivery")}
+          help={t("cron.form.bestEffortHelp")}
+        />
+      ) : undefined}
+      <CronInput
+        {...props}
+        field="sessionKey"
+        label={t("cron.form.sessionKey")}
+        help={t("cron.form.sessionKeyHelp")}
+        placeholder={t("cron.form.sessionKeyPlaceholder")}
+      />
+    </>
   );
 }
+/** Fields the Advanced sections hold; a validation error on one opens the disclosure. */
+const ADVANCED_FIELDS = [
+  "timeoutSeconds",
+  "activeHoursStart",
+  "activeHoursEnd",
+  "activeHoursTimezone",
+  "triggerScript",
+  "deliveryMode",
+  "deliveryDirectPolicy",
+  "deliveryTo",
+  "failureAlertAfter",
+  "failureAlertCooldownSeconds",
+  "staggerAmount",
+  "cronTz",
+] as const;
+/**
+ * Every setting beyond the prompt, schedule, model, agent and action, behind one quiet
+ * disclosure, sorted into one section per concern. A validation error inside opens it.
+ */
 export function Advanced(
   props: CronProps & {
     mode: CronPanelMode;
     isAgentTurn: boolean;
+    supportsAnnounce: boolean;
     selectedDeliveryMode: CronFormState["deliveryMode"];
   },
 ) {
   const isCronSchedule = () => props.form.scheduleKind === "cron";
   const channelOptions = createMemo(() => buildChannelOptions(props));
-  // Collapsible section: the summary stands in for the section heading, the
-  // body keeps the one-group-of-rows settings shape.
+  const [open, setOpen] = createSignal(false);
+  const hasAdvancedError = createMemo(() =>
+    ADVANCED_FIELDS.some((field) => Boolean(props.fieldErrors[field])),
+  );
   return (
-    <section class="settings-section">
-      <details class="cron-advanced">
-        <summary class="settings-section__heading cron-advanced__summary">
-          {t("cron.form.advanced")}
-          {props.form.triggerEnabled ? (
-            <span class="cron-trigger-summary">
-              <Icon name="gitBranch" /> {t("cron.form.triggerConfigured")}
-            </span>
+    <details
+      class="cron-advanced"
+      // A validation change can reveal the section. Native toggles keep the user's
+      // choice while the same error remains.
+      open={hasAdvancedError() || open()}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary class="cron-advanced__summary" data-test-id="cron-advanced">
+        {t("cron.form.advanced")}
+        <Icon name="chevronDown" />
+        {props.form.triggerEnabled ? (
+          <span class="cron-trigger-summary">
+            <Icon name="gitBranch" /> {t("cron.form.triggerConfigured")}
+          </span>
+        ) : undefined}
+      </summary>
+      <div class="cron-advanced__sections">
+        <SettingsSection title={t("cron.detail.generalSection")}>
+          <CronInput
+            {...props}
+            field="description"
+            label={t("cron.form.description")}
+            placeholder={t("cron.form.descriptionPlaceholder")}
+          />
+          <CronSelect
+            {...props}
+            field="ownerProfileId"
+            label={t("cron.form.humanOwner")}
+            help={t("cron.form.humanOwnerHelp")}
+            disabled={!props.editingJob || !props.canManage}
+            options={
+              props.ownerOptions ?? [
+                {
+                  value: props.form.ownerProfileId,
+                  label: props.form.ownerProfileId || t("cron.form.ownerUnassigned"),
+                },
+              ]
+            }
+          />
+          {props.mode === "create" ? (
+            <ToggleRow
+              {...props}
+              field="enabled"
+              label={t("cron.form.startEnabled")}
+              help={t("cron.form.startEnabledHelp")}
+            />
           ) : undefined}
-        </summary>
-        <p class="settings-section__desc">{t("cron.form.advancedHelp")}</p>
-        <div class="settings-group">
+          {props.form.scheduleKind === "at" || props.form.scheduleKind === "on-exit" ? (
+            <ToggleRow
+              {...props}
+              field="deleteAfterRun"
+              label={t("cron.form.deleteAfterRun")}
+              help={t("cron.form.deleteAfterRunHelp")}
+            />
+          ) : undefined}
+        </SettingsSection>
+        <SettingsSection title={t("cron.form.advancedTask")}>
+          {props.form.payloadLocked ? (
+            <FieldRow
+              label={t("cron.form.action")}
+              controlId={inputIdForField("payloadKind")}
+              control={
+                <input
+                  id={inputIdForField("payloadKind")}
+                  class="settings-input"
+                  value={
+                    props.form.payloadKind === "script"
+                      ? t("cron.form.script")
+                      : t("cron.form.command")
+                  }
+                  readonly
+                />
+              }
+            />
+          ) : (
+            <CronSelect
+              {...props}
+              field="payloadKind"
+              label={t("cron.form.action")}
+              options={[
+                { value: "systemEvent", label: t("cron.form.systemEvent") },
+                { value: "agentTurn", label: t("cron.form.agentTurn") },
+              ]}
+            />
+          )}
+          {props.isAgentTurn && props.form.payloadText.trim() ? (
+            <FieldRow
+              label={t("cron.form.promptPreview")}
+              controlId=""
+              stacked
+              wide
+              control={
+                <div
+                  class="cron-prompt-preview"
+                  role="region"
+                  aria-label={t("cron.form.promptPreview")}
+                  tabindex="0"
+                >
+                  <MarkdownHtml class="chat-text" markdown={props.form.payloadText} />
+                </div>
+              }
+            />
+          ) : undefined}
+          {props.isAgentTurn ? (
+            <>
+              <CronInput
+                {...props}
+                field="timeoutSeconds"
+                label={t("cron.form.timeoutSeconds")}
+                help={t("cron.form.timeoutHelp")}
+                errorKey="timeoutSeconds"
+                placeholder={t("cron.form.timeoutPlaceholder")}
+              />
+              <ToggleRow
+                {...props}
+                field="payloadLightContext"
+                label={t("cron.form.lightContext")}
+                help={t("cron.form.lightContextHelp")}
+              />
+            </>
+          ) : undefined}
+        </SettingsSection>
+        {isCronSchedule() ? (
+          <SettingsSection title={t("cron.form.advancedTiming")}>
+            <CronInput
+              {...props}
+              field="cronTz"
+              errorKey="cronTz"
+              label={t("cron.form.timezoneOptional")}
+              help={t("cron.form.timezoneHelp")}
+              list="cron-tz-suggestions"
+              placeholder={t("cron.form.timezonePlaceholder")}
+            />
+            <ToggleRow
+              {...props}
+              field="scheduleExact"
+              label={t("cron.form.exactTiming")}
+              help={t("cron.form.exactTimingHelp")}
+            />
+            <DurationRow {...props} kind="stagger" />
+          </SettingsSection>
+        ) : undefined}
+        <SettingsSection title={t("cron.form.advancedConditions")}>
           <ToggleRow
             {...props}
             field="activeHoursEnabled"
@@ -155,6 +353,7 @@ export function Advanced(
                 {...props}
                 field="activeHoursTimezone"
                 label={t("cron.form.timezoneOptional")}
+                help={t("cron.form.activeHoursTimezoneHelp")}
                 errorKey="activeHoursTimezone"
                 list="cron-tz-suggestions"
                 placeholder={t("cron.form.timezonePlaceholder")}
@@ -176,104 +375,17 @@ export function Advanced(
             />
           ) : undefined}
           <TriggerRows {...props} />
-          <CronInput
-            {...props}
-            field="description"
-            label={t("cron.form.description")}
-            placeholder={t("cron.form.descriptionPlaceholder")}
-          />
-          {props.mode === "create" ? (
-            <ToggleRow {...props} field="enabled" label={t("cron.form.startEnabled")} />
-          ) : undefined}
-          <CronSelect
-            {...props}
-            field="wakeMode"
-            label={t("cron.form.wakeMode")}
-            help={t("cron.form.wakeModeHelp")}
-            options={[
-              { value: "now", label: t("cron.form.now") },
-              { value: "next-heartbeat", label: t("cron.form.nextHeartbeat") },
-            ]}
-          />
-          {props.isAgentTurn ? (
-            <CronInput
-              {...props}
-              field="timeoutSeconds"
-              label={t("cron.form.timeoutSeconds")}
-              help={t("cron.form.timeoutHelp")}
-              errorKey="timeoutSeconds"
-              placeholder={t("cron.form.timeoutPlaceholder")}
-            />
-          ) : undefined}
-          {props.form.scheduleKind === "at" || props.form.scheduleKind === "on-exit" ? (
-            <ToggleRow
-              {...props}
-              field="deleteAfterRun"
-              label={t("cron.form.deleteAfterRun")}
-              help={t("cron.form.deleteAfterRunHelp")}
-            />
-          ) : undefined}
-          <ToggleRow
-            {...props}
-            field="clearAgent"
-            label={t("cron.form.clearAgentOverride")}
-            help={t("cron.form.clearAgentHelp")}
-          />
-          <CronInput
-            {...props}
-            field="sessionKey"
-            label={t("cron.form.sessionKey")}
-            help={t("cron.form.sessionKeyHelp")}
-            placeholder="agent:main:main"
-          />
-          {isCronSchedule() ? (
-            <>
-              <ToggleRow
-                {...props}
-                field="scheduleExact"
-                label={t("cron.form.exactTiming")}
-                help={t("cron.form.exactTimingHelp")}
-              />
-              <DurationRow {...props} kind="stagger" />
-            </>
-          ) : undefined}
-          {props.isAgentTurn ? (
-            <>
-              <CronInput
-                {...props}
-                field="deliveryAccountId"
-                label={t("cron.form.accountId")}
-                help={t("cron.form.accountIdHelp")}
-                list="cron-delivery-account-suggestions"
-                disabled={props.selectedDeliveryMode !== "announce"}
-                placeholder="default"
-              />
-              <ToggleRow
-                {...props}
-                field="payloadLightContext"
-                label={t("cron.form.lightContext")}
-                help={t("cron.form.lightContextHelp")}
-              />
-              <ToggleRow
-                {...props}
-                field="payloadIncludeReasoning"
-                label={t("cron.form.includeReasoning")}
-                help={t("cron.form.includeReasoningHelp")}
-              />
-              <FailureAlertRows {...props} channelOptions={channelOptions()} />
-            </>
-          ) : undefined}
-          {props.selectedDeliveryMode !== "none" ? (
-            <ToggleRow
-              {...props}
-              field="deliveryBestEffort"
-              label={t("cron.form.bestEffortDelivery")}
-              help={t("cron.form.bestEffortHelp")}
-            />
-          ) : undefined}
-        </div>
-      </details>
-    </section>
+        </SettingsSection>
+        <SettingsSection title={t("cron.form.advancedResults")}>
+          <DeliveryRows {...props} channelOptions={channelOptions()} />
+        </SettingsSection>
+        {props.isAgentTurn ? (
+          <SettingsSection title={t("cron.form.failureAlerts")}>
+            <FailureAlertRows {...props} channelOptions={channelOptions()} />
+          </SettingsSection>
+        ) : undefined}
+      </div>
+    </details>
   );
 }
 function TriggerRows(props: CronProps) {
@@ -362,7 +474,7 @@ function FailureAlertRows(
       <CronSelect
         {...props}
         field="failureAlertMode"
-        label={t("cron.form.failureAlerts")}
+        label={t("cron.form.failureAlertSend")}
         help={t("cron.form.failureAlertsHelp")}
         options={[
           { value: "inherit", label: t("cron.form.failureAlertInherit") },
@@ -390,6 +502,16 @@ function FailureAlertRows(
           />
           <CronSelect
             {...props}
+            field="failureAlertDeliveryMode"
+            label={t("cron.form.failureAlertMode")}
+            options={[
+              { value: "", label: t("cron.form.failureAlertInherit") },
+              { value: "announce", label: t("cron.form.failureAlertAnnounce") },
+              { value: "webhook", label: t("cron.form.failureAlertWebhook") },
+            ]}
+          />
+          <CronSelect
+            {...props}
             field="failureAlertChannel"
             label={t("cron.form.failureAlertChannel")}
             options={props.channelOptions}
@@ -402,16 +524,6 @@ function FailureAlertRows(
             help={t("cron.form.failureAlertToHelp")}
             list="cron-failure-alert-to-suggestions"
             placeholder={t("cron.form.failureAlertToPlaceholder")}
-          />
-          <CronSelect
-            {...props}
-            field="failureAlertDeliveryMode"
-            label={t("cron.form.failureAlertMode")}
-            options={[
-              { value: "", label: t("cron.form.failureAlertInherit") },
-              { value: "announce", label: t("cron.form.failureAlertAnnounce") },
-              { value: "webhook", label: t("cron.form.failureAlertWebhook") },
-            ]}
           />
           <CronInput
             {...props}

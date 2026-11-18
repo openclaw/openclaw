@@ -53,7 +53,7 @@ import {
 import { getUserProfileListItem } from "../../state/user-profile-list-item.test-support.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkCanonicalUserProfileEmail } from "../../state/user-profile-writes.js";
-import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withoutMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
@@ -65,10 +65,10 @@ import {
 import { GitHubCliUnavailableError } from "../github-cli-preflight.js";
 import { createGitHubOAuthLifecycle } from "../github-oauth-lifecycle.js";
 import { bindPersonalGitHubPublicationSelection } from "../github-personal-publication.js";
-import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 import {
+  blockPersonalGitHubProfile,
   expectReceiptBackedPersonalGitHubAuthority,
   preparePersonalGitHubPoll,
 } from "./users-github.authority.test-support.js";
@@ -108,12 +108,9 @@ async function start(client = alice): Promise<UsersGitHubAuthorizeStartResult> {
   expect(respond.mock.calls[0]?.[0]).toBe(true);
   return respond.mock.calls[0]![1] as UsersGitHubAuthorizeStartResult;
 }
-function preparePoll(client = alice) {
-  preparePersonalGitHubPoll(owner(client));
-}
 async function connect(client = alice) {
   const started = await start(client);
-  preparePoll(client);
+  preparePersonalGitHubPoll(owner(client));
   const result = await withoutMainThreadSql(() =>
     rpc(client, "users.github.authorize.poll", { requestId: started.requestId }),
   );
@@ -123,16 +120,6 @@ async function connect(client = alice) {
     throw new Error("Expected connected GitHub account");
   }
   return { ...connection, selection: connection.selection };
-}
-function blockAlice() {
-  config.gateway = {
-    roles: {
-      definitions: { blocked: { scopes: [], agents: [], sessions: { others: "none" } } },
-      default: "blocked",
-    },
-  };
-  setUserProfileRole(owner(), "blocked");
-  invalidateOperatorRolePolicy(owner());
 }
 async function pendingRefresh() {
   expireUserGitHubAccessToken(owner());
@@ -385,7 +372,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
   });
 
   it.each(["disconnect", "role"] as const)(
-    "rechecks %s after personal status verification",
+    "retains admitted role authority but fences %s credential changes after verification",
     async (race) => {
       await connect();
       const verify = network.verify.getMockImplementation()!;
@@ -394,14 +381,21 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
           if (race === "disconnect") {
             await rpc(alice, "users.github.disconnect");
           } else {
-            blockAlice();
+            blockPersonalGitHubProfile(config, owner());
           }
         }
         return await verify(token, options);
       });
       const response = await rpc(alice, "users.github.status");
-      expect(response.mock.calls[0]?.[0]).toBe(false);
-      expect(response.mock.calls[0]?.[1]).toBeUndefined();
+      expect(response.mock.calls[0]?.[0]).toBe(race === "role");
+      if (race === "role") {
+        expect(response.mock.calls[0]?.[1]).toMatchObject({
+          personal: { state: "connected", account: { login: "personal-alice" } },
+        });
+        expect((await rpc(alice, "users.github.status")).mock.calls[0]?.[0]).toBe(false);
+      } else {
+        expect(response.mock.calls[0]?.[1]).toBeUndefined();
+      }
     },
   );
 
@@ -598,7 +592,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
 
   it("rejects copied pending IDs before lookup, deduplication, or cancellation", async () => {
     const started = await start();
-    preparePoll();
+    preparePersonalGitHubPoll(owner());
     const waiting = createDeferredCore<{ status: "authorized"; tokens: typeof tokens }>();
     network.poll.mockReturnValueOnce(waiting.promise);
     const pending = rpc(alice, "users.github.authorize.poll", { requestId: started.requestId });
@@ -676,10 +670,10 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
   });
 
   it.each(["cancel", "disconnect", "replacement", "merge", "role", "expiry"] as const)(
-    "fences installation when %s wins the awaited poll",
+    "finishes admitted role changes while fencing %s selection changes during polling",
     async (race) => {
       const started = await start();
-      preparePoll();
+      preparePersonalGitHubPoll(owner());
       const waiting = createDeferredCore<{ status: "authorized"; tokens: typeof tokens }>();
       network.poll.mockReturnValueOnce(waiting.promise);
       const pending = rpc(alice, "users.github.authorize.poll", { requestId: started.requestId });
@@ -697,16 +691,22 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
         linkEmail("alice@example.test", owner(bob));
       }
       if (race === "role") {
-        blockAlice();
+        blockPersonalGitHubProfile(config, owner());
       }
       if (race === "expiry") {
         expireUserGitHubAuthorization(owner());
       }
       waiting.resolve({ status: "authorized", tokens });
       const response = await pending;
-      expect(response.mock.calls[0]?.[1]).not.toMatchObject({ status: "success" });
-      expect((await readConnection(resolveOwner(owner())!))?.selection.kind).toBe("disconnected");
-      expect(network.command.mock.calls.some(([argv]) => argv[1] === "auth")).toBe(false);
+      if (race === "role") {
+        expect(response.mock.calls[0]?.[1]).toMatchObject({ status: "success" });
+        expect((await readConnection(owner()))?.selection.kind).toBe("connected");
+        expect((await rpc(alice, "users.github.status")).mock.calls[0]?.[0]).toBe(false);
+      } else {
+        expect(response.mock.calls[0]?.[1]).not.toMatchObject({ status: "success" });
+        expect((await readConnection(resolveOwner(owner())!))?.selection.kind).toBe("disconnected");
+        expect(network.command.mock.calls.some(([argv]) => argv[1] === "auth")).toBe(false);
+      }
     },
   );
 
@@ -742,7 +742,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     "rechecks %s after credential verification before the final connection commit",
     async (race) => {
       const started = await start();
-      preparePoll();
+      preparePersonalGitHubPoll(owner());
       const fallback = network.verify.getMockImplementation()!;
       network.verify.mockImplementation(async (token, options) => {
         const result = await fallback(token, options);
