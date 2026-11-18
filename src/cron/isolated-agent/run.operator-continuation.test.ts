@@ -22,6 +22,8 @@ import * as publicationIdentity from "../../gateway/github-publication-availabil
 import * as publicationTransport from "../../gateway/github-publication-git-transport.js";
 import { createGitHubPublicationCoordinator } from "../../gateway/github-publication.js";
 import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import { decodeGatewayOperatorRecoverySource } from "../../gateway/operator-run-recovery-source.codec.js";
+import { restoreGatewayOperatorSource } from "../../gateway/operator-run-recovery.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
 import {
   admission,
@@ -179,6 +181,9 @@ it.each([
   const queuedEdit = ownerEdit || managerRename || captureRace;
   const recurring = scenario === "recurring trigger reload";
   const selfRemoving = scenario.startsWith("self removal");
+  const roleRevokedDuringMerge =
+    scenario === "role revoked during merge" ||
+    scenario === "self removal then role revoked during merge";
   const scopedOperator =
     scenario === "write-scoped operator" || scenario === "cron-scoped operator";
   const config = await prepareAuthorityConfig({
@@ -532,7 +537,7 @@ it.each([
         expect(argv).toContain("repos/fixture/repository/pulls/7");
         reads++;
         if (reads === 2) {
-          // Commit authority loss during awaited preflight, before the final write.
+          // Commit authority loss during preflight: this write finishes; fresh admission refuses.
           if (
             scenario === "role revoked during merge" ||
             scenario === "self removal then role revoked during merge"
@@ -553,6 +558,7 @@ it.each([
   const restartEntered = createDeferredCore();
   const restartContinue = createDeferredCore();
   let entered = 0;
+  let modelAdmissions = 0;
   let offered: unknown;
   let admittedOperator = false;
   const results: unknown[] = [];
@@ -575,6 +581,7 @@ it.each([
       "gateway",
       params.runId,
     );
+    modelAdmissions++;
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     await params.onExecutionStarted?.({ lifecycleGeneration });
     params.onExecutionPhase?.({ phase: "model_call_started" });
@@ -663,12 +670,6 @@ it.each([
               results.push(await publish.execute(`scheduled-${args.action}`, args));
             } catch (error) {
               rejected = String(error);
-              if (
-                scenario === "role revoked during merge" ||
-                scenario === "self removal then role revoked during merge"
-              ) {
-                expect(params.abortSignal?.aborted).toBe(true);
-              }
             }
           }
         }
@@ -777,10 +778,23 @@ it.each([
     }
     await finished.promise;
     await execution.waitForIdle();
+    if (roleRevokedDuringMerge) {
+      const source = decodeGatewayOperatorRecoverySource(
+        expectDefined(job.operatorSource, "captured operator source").source,
+      );
+      await expect(
+        restoreGatewayOperatorSource({
+          snapshot: source.snapshot,
+          target,
+          context,
+          assertCurrent: () => {},
+        }),
+      ).rejects.toThrow(/operator identity changed/i);
+    }
     if (selfRemoving) {
       expect(execution.getJob(job.id)).toBeUndefined();
       expect(entered).toBe(1);
-      if (scenario !== "self removal") {
+      if (scenario === "self removal then session replaced during merge") {
         expect(finishedEvent).toMatchObject({ status: "error" });
         expect(reads).toBe(2);
         expect(results).toHaveLength(1);
@@ -820,7 +834,7 @@ it.each([
       expect(rejected ?? finishedEvent?.error).toMatch(
         /allow|authority|principal|policy|Person ingress requires trusted-proxy/i,
       );
-      expect(entered).toBe(0);
+      expect(modelAdmissions, "Refused authority must not reach model admission").toBe(0);
       return;
     }
     if (managerRename || captureRace) {
@@ -885,9 +899,7 @@ it.each([
         expect(execution.getJob(job.id)?.state.consecutiveErrors).toBe(1);
       }
     } else {
-      expect(state.lastRunStatus, state.lastError).toBe(
-        scenario === "role revoked during merge" ? "error" : "ok",
-      );
+      expect(state.lastRunStatus, state.lastError).toBe("ok");
       expect(entered).toBe(1);
       if (
         unavailableSource ||
@@ -897,6 +909,7 @@ it.each([
         scenario === "operator" ||
         scenario === "write-scoped operator" ||
         scenario === "paused force run" ||
+        roleRevokedDuringMerge ||
         // The continuation's conversation is linked by key: an edit or reset keeps it.
         scenario === "session edited" ||
         scenario === "session replaced" ||
@@ -918,12 +931,6 @@ it.each([
             schedule: job.schedule,
           });
         }
-      } else if (scenario === "role revoked during merge") {
-        expect(state.lastError).toBe("Session event execution aborted");
-        expect(reads).toBe(2);
-        expect(results).toHaveLength(1);
-        expect(rejected).toBe("AbortError: Aborted");
-        expect(writes).toEqual([]);
       } else if (scenario === "current tool deny") {
         expect(offered).toBeUndefined();
       } else {
