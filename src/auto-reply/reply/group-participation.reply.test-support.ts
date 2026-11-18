@@ -1,25 +1,34 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import {
+  disposeAllSessionMcpRuntimes,
+  setSessionMcpRuntimeScheduler,
+} from "../../agents/agent-bundle-mcp-manager-api.js";
 import { waitForSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
 import { sendDurableMessageBatchCore } from "../../channels/message/send.js";
+import { createTypingCallbacks } from "../../channels/typing.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import type { GetReplyOptions } from "../types.js";
+import { dispatchInboundMessageWithBufferedDispatcher } from "../dispatch.js";
 import { dispatchLowLevelChannelReplyFromConfig } from "./dispatch-from-config.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { getReplyFromConfig } from "./get-reply.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
-import { createReplyDispatcher } from "./reply-dispatcher.js";
 
-export async function createGroupReplyFixture() {
+export async function createGroupReplyFixture(channel: "telegram" | "whatsapp" = "telegram") {
   const state = await createOpenClawTestState({
     label: "group-participation-reply",
     env: { OPENCLAW_ALLOW_SLOW_REPLY_TESTS: "1" },
   });
+  // The real reply runtime requires a lifecycle-owned MCP scheduler, even without servers.
+  const scheduler = createTestGatewayScheduler();
+  await setSessionMcpRuntimeScheduler(scheduler);
   const requests: unknown[] = [];
   const responses: Array<{ delta: unknown; stop?: string; beforeResponse?: () => Promise<void> }> =
     [];
@@ -62,7 +71,7 @@ export async function createGroupReplyFixture() {
   const storePath = path.join(state.sessionsDir(), "sessions.json");
   const config: OpenClawConfig = {
     agents: {
-      list: [{ id: "main", default: true, workspace: state.workspaceDir }],
+      entries: { main: { workspace: state.workspaceDir } },
       defaults: {
         workspace: state.workspaceDir,
         model: { primary: "test-provider/test-model" },
@@ -71,10 +80,10 @@ export async function createGroupReplyFixture() {
         thinkingDefault: "off",
       },
     },
-    channels: { telegram: { groups: { "*": { requireMention: false } } } },
+    channels: { [channel]: { groups: { "*": { requireMention: false } } } },
     session: { store: storePath },
     tools: { profile: "coding" },
-    messages: { queue: { mode: "followup", debounceMsByChannel: { telegram: 0 } } },
+    messages: { queue: { mode: "followup", debounceMsByChannel: { [channel]: 0 } } },
     models: {
       providers: {
         "test-provider": {
@@ -117,14 +126,16 @@ export async function createGroupReplyFixture() {
       BodyForAgent: body,
       RawBody: body,
       CommandBody: body,
-      From: `telegram:group:${groupId}`,
-      To: `telegram:${groupId}`,
-      SessionKey: `agent:main:telegram:group:${groupId}`,
-      Provider: "telegram",
-      Surface: "telegram",
+      From: channel === "whatsapp" ? groupId : `telegram:group:${groupId}`,
+      To: channel === "whatsapp" ? groupId : `telegram:${groupId}`,
+      SessionKey: `agent:main:${channel}:group:${groupId}`,
+      OriginatingChannel: channel,
+      OriginatingTo: groupId,
+      Provider: channel,
+      Surface: channel,
       ChatType: "group",
       GroupSubject: "Port discussion",
-      SenderId: "1001",
+      SenderId: channel === "whatsapp" ? "+15555550123" : "1001",
       SenderName: "Alice",
       MessageSid: messageId,
       WasMentioned: mentioned,
@@ -144,16 +155,18 @@ export async function createGroupReplyFixture() {
     ) => {
       responses.push(...next);
     },
-    reply: (
+    reply: async (
       body: string,
       messageId: string,
-      groupId = "-10001",
-      options?: GetReplyOptions,
+      groupId = channel === "whatsapp" ? "120363000000001@g.us" : "-10001",
+      options?: InternalGetReplyOptions,
       mentioned = false,
       commandSource?: "native" | "text",
       inboundEventKind?: "room_event",
-    ) =>
-      getReplyFromConfig(
+    ) => {
+      await state.writeConfig(config);
+      setRuntimeConfigSnapshot(config);
+      return getReplyFromConfig(
         context(body, messageId, groupId, mentioned, commandSource, inboundEventKind),
         {
           onPartialReply: (payload) => {
@@ -168,50 +181,80 @@ export async function createGroupReplyFixture() {
           ...options,
         },
         config,
-      ),
-    dispatch: async (body: string, messageId: string, groupId: string) => {
+      );
+    },
+    dispatch: async (
+      body: string,
+      messageId: string,
+      groupId: string,
+      options?: InternalGetReplyOptions,
+      mentioned = false,
+      onDispatchReturned?: () => void,
+    ) => {
       setActivePluginRegistry(
         createTestRegistry([
           {
-            pluginId: "telegram",
+            pluginId: channel,
             source: "test",
             plugin: createOutboundTestPlugin({
-              id: "telegram",
+              id: channel,
               outbound: {
                 deliveryMode: "direct",
                 sendText: async ({ text }) => {
                   sent.push(text);
-                  return { channel: "telegram", messageId: `sent-${sent.length}` };
+                  return { channel, messageId: `sent-${sent.length}` };
                 },
               },
             }),
           },
         ]),
       );
-      const dispatcher = createReplyDispatcher({
-        deliver: (payload, info) =>
-          sendDurableMessageBatchCore({
-            cfg: config,
-            channel: "telegram",
-            to: groupId,
-            payloads: [payload],
-            onPlatformSendDispatch: info.onPlatformSendDispatch,
-            assertDirectAdapterHandoff: info.assertPlatformSendAuthorized,
-          }),
+      const typingCallbacks = createTypingCallbacks({
+        start: async () => {
+          typing++;
+          await options?.onReplyStart?.();
+        },
+        onStartError: (error) => {
+          throw error;
+        },
+        keepaliveIntervalMs: 0,
+        maxDurationMs: 0,
       });
-      try {
-        return await dispatchLowLevelChannelReplyFromConfig({
-          cfg: config,
-          ctx: context(body, messageId, groupId),
-          dispatcher,
-        });
-      } finally {
-        dispatcher.markComplete();
-        await dispatcher.waitForIdle();
-      }
+      return dispatchInboundMessageWithBufferedDispatcher({
+        cfg: config,
+        ctx: context(body, messageId, groupId, mentioned),
+        dispatchReplyFromConfig: async (params) => {
+          const result = await dispatchLowLevelChannelReplyFromConfig(params);
+          onDispatchReturned?.();
+          return result;
+        },
+        dispatcherOptions: {
+          typingCallbacks,
+          deliver: (payload, info) =>
+            sendDurableMessageBatchCore({
+              cfg: config,
+              channel,
+              to: groupId,
+              payloads: [payload],
+              onPlatformSendDispatch: info.onPlatformSendDispatch,
+              assertDirectAdapterHandoff: info.assertPlatformSendAuthorized,
+            }),
+        },
+        replyOptions: {
+          onPartialReply: (payload) => {
+            if (payload.text) {
+              partials.push(payload.text);
+            }
+          },
+          typingKeepalive: false,
+          ...options,
+        },
+      });
     },
     close: async () => {
       await waitForSessionMaintenance();
+      await disposeAllSessionMcpRuntimes();
+      await scheduler.stop();
       clearRuntimeConfigSnapshot();
       resetPluginRuntimeStateForTest();
       await new Promise<void>((resolve, reject) => {

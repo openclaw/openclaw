@@ -87,7 +87,7 @@ type ReplyDispatchDeliveryOutcomeTracker = {
 };
 
 /** Invoke immediately without letting observer failures interrupt delivery bookkeeping. */
-function invokeReplyDispatcherObserver(
+export function invokeReplyDispatcherObserver(
   observer: () => unknown,
   onError: (error: unknown) => void = () => undefined,
 ): Promise<unknown> {

@@ -10,6 +10,9 @@ import { settleProgressVisibilityCallbackResult } from "../../channels/progress-
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
+import { resolveTurnPersonalProfiles } from "../../sessions/session-participant-input.js";
+import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
+import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { isFastModeAutoProgressPayload } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -29,7 +32,6 @@ import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-t
 import { createReplyInputAdmission } from "./reply-input-admission.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
-import { prepareReplyRunToolAuthority } from "./reply-tool-authority.js";
 import { resolveFollowupReplyExpectation } from "./source-reply-delivery-mode.js";
 import { resolveReplySourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
@@ -88,13 +90,16 @@ export async function executeFollowupTurn(params: {
 }): Promise<FollowupExecutionResult> {
   const { turn, defaults } = params;
   const sourceOpts = defaults.opts;
-  const terminalReplyExpectation = resolveFollowupReplyExpectation(turn.queued, turn.config);
-  turn.queued.run.terminalReplyExpectation = terminalReplyExpectation;
+  const replyExpectation = () => resolveFollowupReplyExpectation(turn.queued, turn.config);
+  turn.queued.run.terminalReplyExpectation = replyExpectation();
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
   const progressAllowed = () =>
     turn.sendPolicy === "allow" &&
     !roomEvent &&
-    !readGroupParticipationRun(turn.operation)?.isPrivate;
+    !readGroupParticipationRun(turn.operation)?.isObserving;
+  const progressAllowed = () =>
+    deliveryAllowed() &&
+    (sourceOpts?.progressRequiresReply !== true || isRequiredReplyExpectation(replyExpectation()));
   const currentVerboseLevel = (): VerboseLevel => {
     const level =
       turn.queued.run.verboseLevelOverride ??
@@ -188,20 +193,24 @@ export async function executeFollowupTurn(params: {
       : undefined;
   const baseTypingSignals = createTypingSignaler({
     typing: defaults.typing,
-    mode: turn.sendPolicy === "allow" && !roomEvent ? defaults.typingMode : "never",
-    isHeartbeat,
+    mode: defaults.typingMode,
   });
+  // Participation can change during preflight; read its owner when feedback executes.
+  const signalTyping = (signal: () => Promise<void>) =>
+    enqueueProgress(async () => {
+      if (progressAllowed()) {
+        await signal();
+      }
+    });
   const typingSignals: TypingSignaler = {
     ...baseTypingSignals,
-    signalRunStart: () => enqueueProgress(baseTypingSignals.signalRunStart),
-    signalMessageStart: () => enqueueProgress(baseTypingSignals.signalMessageStart),
-    signalTextDelta: (text) => enqueueProgress(() => baseTypingSignals.signalTextDelta(text)),
-    signalReasoningDelta: () => enqueueProgress(baseTypingSignals.signalReasoningDelta),
-    signalToolStart: () => enqueueProgress(baseTypingSignals.signalToolStart),
+    signalRunStart: () => signalTyping(baseTypingSignals.signalRunStart),
+    signalMessageStart: () => signalTyping(baseTypingSignals.signalMessageStart),
+    signalTextDelta: (text) => signalTyping(() => baseTypingSignals.signalTextDelta(text)),
+    signalReasoningDelta: () => signalTyping(baseTypingSignals.signalReasoningDelta),
+    signalToolStart: () => signalTyping(baseTypingSignals.signalToolStart),
     signalExecutionActivity: () =>
-      enqueueProgress(
-        baseTypingSignals.signalExecutionActivity ?? baseTypingSignals.signalRunStart,
-      ),
+      signalTyping(baseTypingSignals.signalExecutionActivity ?? baseTypingSignals.signalRunStart),
   };
   const progressOpts: InternalGetReplyOptions = {
     ...sourceOpts,
@@ -377,13 +386,6 @@ export async function executeFollowupTurn(params: {
           turn.queued.personalBootstrapEligible === true,
         ),
       );
-      await turn.operation.bindToolAuthoritySnapshotAsync(
-        prepareReplyRunToolAuthority(
-          turn.queued,
-          turn.session.current(),
-          captureReplyOperationSessionReader(turn.operation),
-        ),
-      );
       turn.operation.setPhase("running");
       const gatewayOwnsCompletion =
         turn.queued.queuedFollowupReplyDisposition?.kind === "deliver" &&
@@ -395,8 +397,8 @@ export async function executeFollowupTurn(params: {
       }
       const execute = () =>
         executeAgentTurn({
-          completeObservedTurn: inputAdmission.completeObservedTurn,
-          recoveryMemoryFlushAttempted: turn.memoryFlushAttempted,
+          completeUnexecutedTurn: inputAdmission.completeUnexecutedTurn,
+          admittedTurn: turn,
           completionSource: gatewayOwnsCompletion ? "reply-dispatch" : undefined,
           commandBody: turn.queued.prompt,
           transcriptCommandBody: turn.queued.transcriptPrompt,
@@ -504,7 +506,7 @@ export async function executeFollowupTurn(params: {
       outcome: {
         kind: "rejected",
         payload: buildTerminalAgentRunFailureReplyPayload({
-          replyExpectation: terminalReplyExpectation,
+          replyExpectation: replyExpectation(),
           visibleReplyDelivered,
         }),
       },

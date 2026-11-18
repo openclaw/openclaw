@@ -38,7 +38,8 @@ import * as toolAuthority from "./reply-tool-authority.js";
 import { prepareReplyRunToolAuthority, prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { createQueueTestRun } from "./reply-tool-authority.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
-import { createMockTypingController, createReplyParams } from "./test-helpers.js";
+import { createReplyParams } from "./test-helpers.js";
+import { createTypingController } from "./typing.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -276,7 +277,12 @@ describe("ordinary steering into automatic model fallback", () => {
         });
       }
       const delivered = createDeferred<FollowupRun>();
-      const consumeFollowup = vi.fn(async (queued: FollowupRun) => delivered.resolve(queued));
+      const onReplyStart = vi.fn(async () => {});
+      const typing = createTypingController({ onReplyStart, keepalive: false });
+      const consumeFollowup = vi.fn(async (queued: FollowupRun) => {
+        await typing.startTypingLoop();
+        delivered.resolve(queued);
+      });
       vi.spyOn(followupRunner, "createFollowupRunner").mockReturnValue(async (queued) => {
         // Follow-up admission owns execution ordering after a parked input settles.
         const admission = await admitReplyTurn({
@@ -310,7 +316,6 @@ describe("ordinary steering into automatic model fallback", () => {
         },
       );
       const resultState: ReplyOperationRunState = {};
-      const typing = createMockTypingController();
       const incoming = steer(run, key, {
         opts: { runId: key, [REPLY_OPERATION_RUN_STATE]: resultState },
         typing,
@@ -347,7 +352,7 @@ describe("ordinary steering into automatic model fallback", () => {
         }
         expect(injected).not.toHaveBeenCalled();
         expect(getFollowupQueueDepth(key)).toBe(0);
-        expect(typing.cleanup).toHaveBeenCalledOnce();
+        expect(onReplyStart).toHaveBeenCalledTimes(revoked ? 0 : 1);
         expect(run.run.clientCaps).toEqual(["ui-commands", "ui-tool-images"]);
         expect(run.run.gatewayUiCommandTarget).toEqual({
           connId: "new-tab",
@@ -361,6 +366,7 @@ describe("ordinary steering into automatic model fallback", () => {
           registryState.getSessionControllerEntryForOperation(operation).target,
         );
         operation.complete();
+        typing.cleanup();
       }
     },
   );
