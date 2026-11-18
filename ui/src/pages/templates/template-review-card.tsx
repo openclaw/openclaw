@@ -38,7 +38,7 @@ export function TemplateReviewCard(props: {
   byline?: string;
   status?: JSX.Element;
   footer?: JSX.Element;
-  notices?: JSX.Element;
+  itemDetails?: (item: TemplateDraftReviewItem) => JSX.Element;
   readPackagePreview: (item: TemplateDraftReviewItem) => Promise<TemplatePackagePreview | null>;
 }) {
   const review = () => props.review;
@@ -266,11 +266,11 @@ export function TemplateReviewCard(props: {
             {(item) => (
               <div class="template-creator__preview">
                 <TemplateItemDetails readPackagePreview={props.readPackagePreview} item={item()} />
+                {props.itemDetails?.(item())}
               </div>
             )}
           </Show>
         </Show>
-        {props.notices}
       </div>
       <Show when={props.footer}>
         <footer class="template-creator__footer">{props.footer}</footer>

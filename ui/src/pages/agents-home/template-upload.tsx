@@ -1,5 +1,6 @@
-import { createSignal, createUniqueId, For, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import { MAX_TEMPLATE_UPLOAD_ARCHIVE_BYTES } from "../../../../packages/gateway-protocol/src/template-source-limits.js";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import "../../components/modal-dialog.tsx";
 import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { IconButton } from "../../components/solid/icon-button.tsx";
@@ -16,7 +17,7 @@ import { openTemplateAgentChat } from "./template-agent-chat.ts";
 import { TemplateArtwork } from "./template-artwork.tsx";
 import { templateImportFacts } from "./template-import-facts.ts";
 import { TemplateImportReview } from "./template-import-review.tsx";
-import { TemplatePackageConsent } from "./template-package-consent.tsx";
+import { templatePackageConsents } from "./template-package-consent.tsx";
 import {
   applyTemplateUpload,
   readTemplateAddReviewPlan,
@@ -26,8 +27,6 @@ import {
 
 export function TemplateUpload() {
   const context = useApplication();
-  const consentId = createUniqueId();
-  const acknowledgementId = createUniqueId();
   let fileInput: HTMLInputElement | undefined;
   const [filename, setFilename] = createSignal("");
   const [review, setReview] = createSignal<TemplateAddReviewPlan | null>(null);
@@ -37,13 +36,18 @@ export function TemplateUpload() {
   // Only a failed review may pick again; an uncertain apply must not invite a blind retry.
   const [canChooseAgain, setCanChooseAgain] = createSignal(false);
   const [opening, setOpening] = createSignal(false);
+  const [confirming, setConfirming] = createSignal(false);
+  let confirmation: AbortController | undefined;
   const reviewing = () => busy() && !review();
-  const applying = () => (busy() && Boolean(review())) || opening();
+  const applying = () => (busy() && Boolean(review())) || opening() || confirming();
   // Keep archive bytes only for this selection's review/apply, never in persisted UI state.
   let source: TemplateUploadSource | undefined;
   let generation = 0;
   function reset() {
     generation += 1;
+    confirmation?.abort();
+    confirmation = undefined;
+    setConfirming(false);
     source = undefined;
     setFilename("");
     setReview(null);
@@ -88,8 +92,13 @@ export function TemplateUpload() {
       };
       const plan = await readTemplateAddReviewPlan(scope.client, upload);
       if (gateway.isCurrent(scope) && current === generation) {
-        source = upload;
-        setReview(plan);
+        if (plan.blockers.length) {
+          setMessage(plan.blockers.map((blocker) => blocker.message).join("\n"));
+          setCanChooseAgain(true);
+        } else {
+          source = upload;
+          setReview(plan);
+        }
       }
     } catch (error) {
       if (gateway.isCurrent(scope) && current === generation) {
@@ -132,12 +141,66 @@ export function TemplateUpload() {
     const plan = review();
     const upload = source;
     const current = generation;
-    if (!scope || !plan || !upload || busy() || !canUpload() || plan.blockers.length) {
+    if (
+      !scope ||
+      !plan ||
+      !upload ||
+      busy() ||
+      confirmation ||
+      !canUpload() ||
+      plan.blockers.length
+    ) {
       return;
     }
-    setBusy(true);
     setMessage("");
+    let submitted = false;
     try {
+      const consents = templatePackageConsents(plan);
+      if (consents.length || plan.riskAcknowledgementRequired) {
+        const controller = new AbortController();
+        confirmation = controller;
+        setConfirming(true);
+        try {
+          const accepted = await showConfirmDialog({
+            title: t("templatesCatalog.importConfirmTitle", {
+              name: templateImportFacts(plan).name,
+            }),
+            message:
+              plan.riskAcknowledgementRequired && plan.trustWarning
+                ? plan.trustWarning
+                : t("templatesCatalog.importConfirmMessage"),
+            details: consents
+              .map((item) => [item.label, ...item.grants, item.warning].filter(Boolean).join("\n"))
+              .join("\n\n"),
+            confirmLabel: t("templatesCatalog.importButton"),
+            requiredAcknowledgement: t("templatesCatalog.importConfirmAcknowledgement"),
+            signal: controller.signal,
+            canConfirm: () =>
+              gateway.isCurrent(scope) &&
+              current === generation &&
+              review() === plan &&
+              canUpload(),
+          });
+          if (!accepted) {
+            return;
+          }
+        } finally {
+          if (confirmation === controller) {
+            confirmation = undefined;
+            setConfirming(false);
+          }
+        }
+      }
+      if (
+        !gateway.isCurrent(scope) ||
+        current !== generation ||
+        review() !== plan ||
+        !canUpload()
+      ) {
+        return;
+      }
+      setBusy(true);
+      submitted = true;
       const result = await applyTemplateUpload(scope.client, upload, plan);
       if (gateway.isCurrent(scope) && current === generation) {
         source = undefined;
@@ -150,9 +213,10 @@ export function TemplateUpload() {
       }
     } catch (error) {
       if (gateway.isCurrent(scope) && current === generation) {
-        // Do not offer a blind retry after an uncertain mutation outcome.
+        // Only a failed confirmation may reselect; a submitted apply can be uncertain.
         source = undefined;
         setReview(null);
+        setCanChooseAgain(!submitted);
         setMessage(formatUiError(error));
       }
     } finally {
@@ -208,12 +272,7 @@ export function TemplateUpload() {
                 busy() ? "templatesCatalog.importingArchive" : "templatesCatalog.importButton",
               )}
               aria-busy={busy() ? "true" : undefined}
-              aria-describedby={
-                review()?.riskAcknowledgementRequired
-                  ? consentId + " " + acknowledgementId
-                  : consentId
-              }
-              disabled={busy() || Boolean(review()?.blockers.length)}
+              disabled={applying() || Boolean(review()?.blockers.length)}
               onClick={() => void install()}
             >
               <Show when={busy()}>
@@ -322,25 +381,6 @@ export function TemplateUpload() {
                 <TemplateImportReview
                   plan={plan()}
                   readPackagePreview={readPackagePreview}
-                  notices={
-                    <>
-                      <div id={consentId} class="template-import-consent templates-add-consent">
-                        <TemplatePackageConsent plan={plan()} />
-                      </div>
-                      <Show when={plan().blockers.length}>
-                        <InlineAlert tone="danger" role="alert">
-                          <ul>
-                            <For each={plan().blockers}>{(item) => <li>{item.message}</li>}</For>
-                          </ul>
-                        </InlineAlert>
-                      </Show>
-                      <Show when={plan().riskAcknowledgementRequired}>
-                        <p id={acknowledgementId}>
-                          {plan().trustWarning} {t("templatesCatalog.importRiskAcknowledgement")}
-                        </p>
-                      </Show>
-                    </>
-                  }
                   footer={<ImportActions />}
                 />
               )}

@@ -1,12 +1,13 @@
 import type { TemplateDraftReviewItem } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
-import { createMemo } from "solid-js";
+import { createMemo, For } from "solid-js";
 import { registerTemplateCreatorEnglish } from "../../i18n/locales/en-template-creator.ts";
 import { registerTemplatesEnglish } from "../../i18n/locales/en-templates.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { TemplatePackagePreview } from "../templates/creator-publication.ts";
 import { TemplateReviewCard, type TemplateReviewData } from "../templates/template-review-card.tsx";
 import { templateImportFacts } from "./template-import-facts.ts";
+import { TemplatePackageConsent, templatePackageConsents } from "./template-package-consent.tsx";
 import type { TemplateAddReviewPlan } from "./templates-catalog-client.ts";
 
 registerEnglishCatalog(registerTemplatesEnglish);
@@ -16,9 +17,9 @@ registerEnglishCatalog(registerTemplateCreatorEnglish);
 export function TemplateImportReview(props: {
   plan: TemplateAddReviewPlan;
   footer?: JSX.Element;
-  notices?: JSX.Element;
   readPackagePreview: (item: TemplateDraftReviewItem) => Promise<TemplatePackagePreview | null>;
 }) {
+  const consents = createMemo(() => templatePackageConsents(props.plan));
   const review = createMemo<TemplateReviewData>(() => {
     const facts = templateImportFacts(props.plan);
     const items: TemplateDraftReviewItem[] = [
@@ -111,7 +112,23 @@ export function TemplateImportReview(props: {
       byline={byline()}
       readPackagePreview={props.readPackagePreview}
       footer={props.footer}
-      notices={props.notices}
+      itemDetails={(item) => (
+        <For
+          each={consents().filter(
+            (consent) =>
+              consent.kind === item.kind &&
+              (item.kind === "plugin"
+                ? consent.actionId === item.id
+                : item.requirement &&
+                  consent.packageRef ===
+                    (item.requirement.source === "bundled"
+                      ? item.requirement.path
+                      : item.requirement.ref)),
+          )}
+        >
+          {(consent) => <TemplatePackageConsent review={consent} />}
+        </For>
+      )}
     />
   );
 }

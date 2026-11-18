@@ -68,6 +68,17 @@ describe("shared local Template review", () => {
     value.reviewFiles = [
       { path: "SOUL.md", content: "Reviewed instructions", workspacePaths: ["SOUL.md"] },
     ];
+    value.skillReviews = [
+      {
+        source: "clawhub",
+        actionId: "skill:@example/weather",
+        ref: "@example/weather",
+        version: "1.0.0",
+        integrity: "sha256:" + "a".repeat(64),
+        reviewToken: "review",
+        riskWarning: "Skill warning",
+      },
+    ];
     const view = mountSolid(() => (
       <TemplateImportReview plan={value} readPackagePreview={() => Promise.resolve(null)} />
     ));
@@ -75,6 +86,7 @@ describe("shared local Template review", () => {
     expect(view.getByRole("heading", { name: "Example briefing" })).toBeTruthy();
     expect(view.getByText("@example/briefing · v0.1.2")).toBeTruthy();
     expect(view.queryByText("Behavior and authority")).toBeNull();
+    expect(view.queryByText("Skill warning")).toBeNull();
     expect(view.container.querySelector(".template-creator__status")).toBeNull();
     expect(view.container.querySelector(".template-package-art svg")).not.toBeNull();
     view.getByRole("button", { name: /Workspace files/ }).click();
@@ -88,7 +100,9 @@ describe("shared local Template review", () => {
     flush();
     view.getByRole("button", { name: /Skills/ }).click();
     flush();
-    expect(view.getByRole("button", { name: "@example/weather" })).toBeTruthy();
+    view.getByRole("button", { name: "@example/weather" }).click();
+    flush();
+    expect(view.getByText("Skill warning")).toBeTruthy();
     view.unmount();
   });
 

@@ -54,55 +54,62 @@ function grantSummary(grants: TemplatePluginGrants): string[] {
   return summary;
 }
 
-export function TemplatePackageConsent(props: { plan: TemplateAddReviewPlan }) {
+export function templatePackageConsents(plan: TemplateAddReviewPlan) {
+  return [
+    ...plan.pluginReviews
+      .filter((item) => item.ownerAction === "install")
+      .map((item) => ({
+        kind: "plugin" as const,
+        actionId: item.actionId,
+        packageRef: "path" in item ? item.path : item.ref,
+        label:
+          ("path" in item ? item.path : item.ref) +
+          " · " +
+          ("path" in item
+            ? t("templatesCatalog.dependencyBundled")
+            : t("templatesCatalog.version", { version: item.version })),
+        grants: [
+          ...grantSummary(item.capabilityGrants),
+          ...Object.entries(item.capabilityGrantsByPluginId)
+            .filter(([id]) => id !== item.pluginId)
+            .flatMap(([id, grants]) => grantSummary(grants).map((grant) => id + ": " + grant)),
+        ],
+        warning: item.riskWarning,
+      })),
+    ...plan.skillReviews.map((item) => ({
+      kind: "skill" as const,
+      actionId: item.actionId,
+      packageRef: "path" in item ? item.path : item.ref,
+      label:
+        ("path" in item ? item.path : item.ref) +
+        " · " +
+        ("path" in item
+          ? t("templatesCatalog.dependencyBundled")
+          : t("templatesCatalog.version", { version: item.version })),
+      grants: [],
+      warning: item.riskWarning,
+    })),
+  ];
+}
+
+export function TemplatePackageConsent(props: {
+  review: ReturnType<typeof templatePackageConsents>[number];
+}) {
   return (
     <>
-      <For each={props.plan.pluginReviews.filter((item) => item.ownerAction === "install")}>
-        {(item) => (
-          <div class="templates-add-consent__item template-creator__detail-panel template-creator__detail-group">
-            <strong>{"path" in item ? item.path : item.ref}</strong>
-            <span>
-              {"path" in item
-                ? t("templatesCatalog.dependencyBundled")
-                : t("templatesCatalog.version", { version: item.version })}
-            </span>
-            <strong>{t("pluginConsent.grantsTitle")}</strong>
+      <Show when={props.review.grants.length}>
+        <div class="template-creator__detail-group">
+          <h3>{t("pluginConsent.grantsTitle")}</h3>
+          <div class="template-creator__detail-panel">
             <ul>
-              <For each={grantSummary(item.capabilityGrants)}>{(grant) => <li>{grant}</li>}</For>
+              <For each={props.review.grants}>{(grant) => <li>{grant}</li>}</For>
             </ul>
-            <For
-              each={Object.entries(item.capabilityGrantsByPluginId).filter(
-                ([id]) => id !== item.pluginId,
-              )}
-            >
-              {([id, grants]) => (
-                <>
-                  <strong>{id}</strong>
-                  <ul>
-                    <For each={grantSummary(grants)}>{(grant) => <li>{grant}</li>}</For>
-                  </ul>
-                </>
-              )}
-            </For>
-            <Show when={item.riskWarning}>
-              {<InlineAlert tone="warning">{item.riskWarning}</InlineAlert>}
-            </Show>
           </div>
-        )}
-      </For>
-      <For each={props.plan.skillReviews}>
-        {(item) => (
-          <div class="templates-add-consent__item template-creator__detail-panel template-creator__detail-group">
-            <strong>{"path" in item ? item.path : item.ref}</strong>
-            <span>
-              {"path" in item
-                ? t("templatesCatalog.dependencyBundled")
-                : t("templatesCatalog.version", { version: item.version })}
-            </span>
-            {<InlineAlert tone="warning">{item.riskWarning}</InlineAlert>}
-          </div>
-        )}
-      </For>
+        </div>
+      </Show>
+      <Show when={props.review.warning}>
+        <InlineAlert tone="warning">{props.review.warning}</InlineAlert>
+      </Show>
     </>
   );
 }

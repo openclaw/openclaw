@@ -6,7 +6,10 @@ const enTemplates = {
     importButton: "Import",
     chooseAnotherArchive: "Change file",
     importVersion: "v{version}",
-    importRiskAcknowledgement: "Importing also acknowledges the package security warnings above.",
+    importConfirmTitle: "Import {name}?",
+    importConfirmMessage: "Review the package permissions and warnings before importing.",
+    importConfirmAcknowledgement:
+      "I approve these permissions and acknowledge the package warnings.",
     importTitle: "Import Template",
     archiveLabel: "Template archive",
     invalidArchive: "Choose a nonempty Template .tgz archive up to 1 MiB.",

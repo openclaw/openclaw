@@ -17,6 +17,7 @@ const gateway = vi.hoisted(() => ({
   navigate: vi.fn(),
   selectAgent: vi.fn(),
   setSessionKey: vi.fn(),
+  current: true,
 }));
 vi.mock("../../lib/reactive/context.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../lib/reactive/context.ts")>()),
@@ -41,7 +42,7 @@ vi.mock("../../lib/reactive/gateway-page.ts", async (importOriginal) => ({
       },
     },
     capture: () => ({ client: {} }),
-    isCurrent: () => true,
+    isCurrent: () => gateway.current,
   }),
 }));
 vi.mock("../../lib/blob-data-url.ts", async (importOriginal) => ({
@@ -70,10 +71,33 @@ const plan: TemplateAddReviewPlan = {
 afterEach(() => {
   cleanupSolid();
   vi.clearAllMocks();
+  gateway.current = true;
 });
 
+function mountUpload(render = () => <TemplateUpload />) {
+  const view = mountSolid(render);
+  const input = view.container.querySelector<HTMLInputElement>('input[type="file"]')!;
+  return {
+    ...view,
+    input,
+    choose: (name = "example.tgz") =>
+      fireEvent.change(input, { target: { files: [new File(["archive"], name)] } }),
+    button: (name: string) =>
+      within(view.container.querySelector("openclaw-modal-dialog") ?? view.container).getByRole(
+        "button",
+        { name },
+      ) as HTMLButtonElement,
+  };
+}
+const consentDialog = async () =>
+  within(
+    await waitFor(() =>
+      within(document.body).getByRole("dialog", { name: "Import Example briefing?" }),
+    ),
+  );
+
 describe("TemplateUpload", () => {
-  it("uses the shared mobile header and keeps import progress at the confirmation action", async ({
+  it("uses the mobile header, confirms reviewed consent, then reports apply and opens the installed chat", async ({
     onTestFinished,
   }) => {
     const planning = Promise.withResolvers<TemplateAddReviewPlan>();
@@ -84,7 +108,7 @@ describe("TemplateUpload", () => {
     const slot = document.createElement("div");
     document.body.append(slot);
     onTestFinished(() => slot.remove());
-    const view = mountSolid(() => (
+    const view = mountUpload(() => (
       <ShellLayoutProvider value={{ owner, host: document.body }}>
         <TemplateUpload />
       </ShellLayoutProvider>
@@ -98,32 +122,34 @@ describe("TemplateUpload", () => {
     expect(trigger.textContent).toBe("");
     expect(trigger.querySelector("svg")).not.toBeNull();
     expect(trigger.innerHTML).toContain("M12 5v14");
-    const input = view.container.querySelector<HTMLInputElement>('input[type="file"]')!;
-    const click = vi.spyOn(input, "click");
+    const click = vi.spyOn(view.input, "click");
     trigger.click();
     expect(click).toHaveBeenCalledOnce();
-    fireEvent.change(input, { target: { files: [new File(["archive"], "example.tgz")] } });
+    view.choose();
     await waitFor(() => expect(view.getByRole("status").textContent).toBe("Reviewing template…"));
     expect(view.container.querySelector(".template-import-skeleton")).not.toBeNull();
-    expect((view.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(
-      false,
-    );
+    expect(view.button("Cancel").disabled).toBe(false);
     expect(view.container.querySelector(".template-creator__footer")?.textContent).toContain(
       "Reviewing template…",
     );
-    planning.resolve(plan);
-    await waitFor(() =>
-      expect(
-        within(view.container.querySelector("openclaw-modal-dialog")!).getByRole("button", {
-          name: "Import",
-        }),
-      ).toBeTruthy(),
-    );
-    const confirm = view.getByRole("button", {
-      name: "Import",
-    }) as HTMLButtonElement;
+    const reviewed = {
+      ...plan,
+      riskAcknowledgementRequired: true,
+      trustWarning: "Package warning",
+    };
+    planning.resolve(reviewed);
+    await waitFor(() => expect(view.button("Import")).toBeTruthy());
+    const confirm = view.button("Import");
     confirm.click();
+    const consent = await consentDialog();
+    const submit = consent.getByRole("button", { name: "Import" }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    expect(gateway.apply).not.toHaveBeenCalled();
+    consent.getByRole("checkbox").click();
     flush();
+    expect(submit.disabled).toBe(false);
+    submit.click();
+    await waitFor(() => expect(gateway.apply).toHaveBeenCalledOnce());
     expect(confirm.disabled).toBe(true);
     expect(confirm.textContent).toBe("Importing…");
     expect(confirm.getAttribute("aria-label")).toBe("Importing…");
@@ -132,9 +158,13 @@ describe("TemplateUpload", () => {
     expect(confirm.querySelector('[role="status"]')?.textContent).toBe("Importing…");
     expect(view.container.querySelector('.oc-dialog__body > [role="status"]')).toBeNull();
     expect(view.queryByRole("button", { name: "Change file" })).toBeNull();
-    expect((view.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(view.button("Cancel").disabled).toBe(true);
     expect(trigger.disabled).toBe(true);
-    expect(gateway.apply).toHaveBeenCalledWith({}, { kind: "upload", archiveBase64: "YQ==" }, plan);
+    expect(gateway.apply).toHaveBeenCalledWith(
+      {},
+      { kind: "upload", archiveBase64: "YQ==" },
+      reviewed,
+    );
     applying.resolve({ status: "complete", agentId: "example" });
     await waitFor(() =>
       expect(view.getByRole("status").textContent).toBe("Installed agent: example"),
@@ -142,9 +172,7 @@ describe("TemplateUpload", () => {
     expect(view.getByRole("heading", { name: "Example briefing" })).toBeTruthy();
     const refreshing = Promise.withResolvers<AgentsListResult | null>();
     gateway.refreshList.mockReturnValue(refreshing.promise);
-    const openChat = view.getByRole("button", {
-      name: "Open chat",
-    }) as HTMLButtonElement;
+    const openChat = view.button("Open chat");
     openChat.click();
     flush();
     expect(gateway.refreshList).toHaveBeenCalledOnce();
@@ -159,20 +187,16 @@ describe("TemplateUpload", () => {
     release();
     flush();
     expect(slot.querySelector("button")).toBeNull();
-    view.unmount();
-    slot.remove();
   });
 
   it("cancels a pending review and ignores its late result", async () => {
     const planning = Promise.withResolvers<TemplateAddReviewPlan>();
     gateway.plan.mockReturnValue(planning.promise);
-    const view = mountSolid(() => <TemplateUpload />);
-    const input = view.container.querySelector<HTMLInputElement>('input[type="file"]')!;
-    fireEvent.change(input, { target: { files: [new File(["archive"], "example.tgz")] } });
+    const view = mountUpload();
+    view.choose();
     await waitFor(() => expect(view.getByRole("status").textContent).toBe("Reviewing template…"));
-    const cancel = view.getByRole("button", { name: "Cancel" }) as HTMLButtonElement;
-    expect(cancel.disabled).toBe(false);
-    cancel.click();
+    expect(view.button("Cancel").disabled).toBe(false);
+    view.button("Cancel").click();
     planning.resolve(plan);
     await planning.promise;
     flush();
@@ -180,35 +204,41 @@ describe("TemplateUpload", () => {
     expect(gateway.apply).not.toHaveBeenCalled();
   });
 
-  it("offers Change file after an invalid archive without requesting a plan", async () => {
-    const view = mountSolid(() => <TemplateUpload />);
-    const input = view.container.querySelector<HTMLInputElement>('input[type="file"]')!;
-    const choose = vi.spyOn(input, "click");
-    fireEvent.change(input, { target: { files: [new File(["archive"], "wrong.txt")] } });
-    await waitFor(() => expect(view.getByRole("alert").textContent).toContain(".tgz"));
-    const change = view.getAllByRole("button", { name: "Change file" }).at(-1)!;
-    change.click();
-    expect(choose).toHaveBeenCalledOnce();
-    expect(gateway.plan).not.toHaveBeenCalled();
-    expect(gateway.apply).not.toHaveBeenCalled();
-  });
+  it.each([
+    { name: "wrong.txt", message: ".tgz", blocked: false },
+    { name: "example.tgz", message: "The required plugin is blocked.", blocked: true },
+  ])(
+    "offers reselect without apply for $name (blocked=$blocked)",
+    async ({ name, message, blocked }) => {
+      gateway.plan.mockResolvedValue({
+        ...plan,
+        blockers: [{ code: "blocked", path: "plugins.research", message }],
+      });
+      const view = mountUpload();
+      const choose = vi.spyOn(view.input, "click");
+      view.choose(name);
+      await waitFor(() => expect(view.getByRole("alert").textContent).toContain(message));
+      view.button("Change file").click();
+      expect(choose).toHaveBeenCalledOnce();
+      expect(
+        within(view.container.querySelector("openclaw-modal-dialog")!).queryByRole("button", {
+          name: "Import",
+        }),
+      ).toBeNull();
+      expect(gateway.plan).toHaveBeenCalledTimes(blocked ? 1 : 0);
+      expect(gateway.apply).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not offer Change file or another apply after an uncertain installation failure", async () => {
     gateway.plan.mockResolvedValue(plan);
     gateway.apply.mockRejectedValue(new Error("Connection lost after submission"));
-    const view = mountSolid(() => <TemplateUpload />);
-    const input = view.container.querySelector<HTMLInputElement>('input[type="file"]')!;
-    fireEvent.change(input, { target: { files: [new File(["archive"], "example.tgz")] } });
+    const view = mountUpload();
+    view.choose();
     await waitFor(() =>
-      expect(
-        within(view.container.querySelector("openclaw-modal-dialog")!).getByRole("button", {
-          name: "Import",
-        }),
-      ).toBeTruthy(),
+      expect(view.getByRole("heading", { name: "Example briefing" })).toBeTruthy(),
     );
-    within(view.container.querySelector("openclaw-modal-dialog")!)
-      .getByRole("button", { name: "Import" })
-      .click();
+    view.button("Import").click();
     await waitFor(() => expect(view.getByRole("alert").textContent).toContain("Connection lost"));
     expect(view.queryByRole("button", { name: "Change file" })).toBeNull();
     expect(
@@ -217,5 +247,34 @@ describe("TemplateUpload", () => {
       }),
     ).toBeNull();
     expect(gateway.apply).toHaveBeenCalledOnce();
+  });
+
+  it.each(["cancelled", "stale"])("does not apply %s package consent", async (outcome) => {
+    gateway.plan.mockResolvedValue({
+      ...plan,
+      riskAcknowledgementRequired: true,
+      trustWarning: "Package warning",
+    });
+    const view = mountUpload();
+    view.choose();
+    await waitFor(() =>
+      expect(view.getByRole("heading", { name: "Example briefing" })).toBeTruthy(),
+    );
+    view.button("Import").click();
+    const consent = await consentDialog();
+    if (outcome === "stale") {
+      consent.getByRole("checkbox").click();
+      flush();
+      gateway.current = false;
+      consent.getByRole("button", { name: "Import" }).click();
+      expect(gateway.apply).not.toHaveBeenCalled();
+    }
+    consent.getByRole("button", { name: "Cancel" }).click();
+    await waitFor(() =>
+      expect(
+        within(document.body).queryByRole("dialog", { name: "Import Example briefing?" }),
+      ).toBeNull(),
+    );
+    expect(gateway.apply).not.toHaveBeenCalled();
   });
 });
