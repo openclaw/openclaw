@@ -10,7 +10,6 @@ import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import { classifyPortListener } from "../../infra/ports-format.js";
 import {
   hasActiveStartupMigrationLease,
-  STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS,
   STARTUP_MIGRATION_LEASE_TTL_MS,
 } from "../../infra/startup-migration-checkpoint.js";
 import {
@@ -189,7 +188,6 @@ export async function waitForGatewayHealthyRestart(
   );
   let migrationActive = false;
   let nextMigrationActivityPollMs = 0;
-  let migrationHeartbeat: number | undefined;
   let observedStartupMigration = false;
   let observedRunning = false;
   let observedListener = false;
@@ -445,34 +443,15 @@ export async function waitForGatewayHealthyRestart(
         consecutiveStoppedFreeCount = 0;
       }
 
-      let migrationProgress = false;
-      let migrationCompleted = false;
       if (snapshot.runtime.status !== "running") {
         migrationActive = false;
       } else if (elapsedMs >= nextMigrationActivityPollMs) {
-        const previousHeartbeat = migrationHeartbeat;
-        migrationHeartbeat = undefined;
         try {
           migrationActive = (params.isStartupMigrationActive ?? hasActiveStartupMigrationLease)({
             env: params.env,
-            onActivity: (activity) => {
-              if (
-                activity.pid === undefined ||
-                activity.pid !== snapshot.runtime.pid ||
-                activity.heartbeatAt === null
-              ) {
-                return;
-              }
-              migrationProgress =
-                previousHeartbeat === undefined || activity.heartbeatAt > previousHeartbeat;
-              migrationHeartbeat = activity.heartbeatAt;
-            },
           });
-          migrationCompleted = !migrationActive && previousHeartbeat !== undefined;
         } catch {
           migrationActive = false;
-          migrationProgress = false;
-          migrationHeartbeat = previousHeartbeat;
         }
         nextMigrationActivityPollMs = elapsedMs + STARTUP_MIGRATION_ACTIVITY_POLL_MS;
       }
@@ -498,8 +477,15 @@ export async function waitForGatewayHealthyRestart(
           listenerOwnedByRuntimePid({ listener, runtimePid }),
         );
       const running = snapshot.runtime.status === "running";
-      // Only new phases from the replacement's own listener renew the watchdog.
-      // Repeated phases and a supervisor's next process are not forward progress.
+      // Before its listener the replacement has no phase endpoint, so the same service
+      // process still running is its startup signal. Afterwards only new phases from its
+      // own listener renew the watchdog; repeats and a supervisor's next process do not.
+      const preListenerStartup =
+        running &&
+        runtimePid !== undefined &&
+        !observedListener &&
+        snapshot.portUsage.status === "free" &&
+        (startupPhasePid ??= runtimePid) === runtimePid;
       let phaseProgress = false;
       if (
         running &&
@@ -524,18 +510,11 @@ export async function waitForGatewayHealthyRestart(
         !healthy &&
         stableRunning &&
         (boundedDeadlineMs !== undefined || elapsedMs <= startupProgressDeadlineMs) &&
-        (migrationProgress || migrationCompleted || startupProgress)
+        (startupProgress || preListenerStartup)
       ) {
-        // Include one poll of observation lag after the producer's renewal interval.
         startupProgressDeadlineMs = Math.max(
           startupProgressDeadlineMs,
-          elapsedMs +
-            Math.max(
-              progressWindowMs,
-              migrationProgress
-                ? STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS + STARTUP_MIGRATION_ACTIVITY_POLL_MS
-                : 0,
-            ),
+          elapsedMs + progressWindowMs,
         );
       }
       // Re-observing a service or listener after a failed probe is not new progress.
