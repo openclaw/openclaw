@@ -263,20 +263,23 @@ function completeProviderRuntimeContext<
 export function normalizeProviderResolvedModelWithPlugin(
   params: ProviderRuntimeLookup & {
     pluginMetadataSnapshot?: PluginMetadataRegistryView;
+    runtimeHandle?: ProviderRuntimePluginHandle;
     context: ProviderNormalizeResolvedModelContext;
   },
 ): ProviderRuntimeModel | undefined {
   const context = completeProviderRuntimeContext(params);
   return (
-    resolveProviderRuntimePlugin({
+    ensureProviderRuntimePluginHandle({
       ...params,
       modelId: params.context.modelId,
-    })?.normalizeResolvedModel?.(context) ?? undefined
+    }).plugin?.normalizeResolvedModel?.(context) ?? undefined
   );
 }
 
 export function applyProviderResolvedTransportWithPlugin(
   params: ProviderRuntimeLookup & {
+    runtimeHandle?: ProviderRuntimePluginHandle;
+    resolveFallbackPlugins?: () => readonly ProviderPlugin[];
     context: ProviderNormalizeResolvedModelContext;
   },
 ): ProviderRuntimeModel | undefined {
@@ -287,6 +290,8 @@ export function applyProviderResolvedTransportWithPlugin(
     config,
     workspaceDir,
     env: params.env,
+    runtimeHandle: params.runtimeHandle,
+    resolveFallbackPlugins: params.resolveFallbackPlugins,
     modelId: params.context.modelId,
     context: {
       ...(config !== undefined ? { config } : {}),
@@ -318,6 +323,8 @@ export function applyProviderResolvedTransportWithPlugin(
 export function normalizeProviderTransportWithPlugin(
   params: ProviderRuntimeLookup & {
     modelId?: string | null;
+    runtimeHandle?: ProviderRuntimePluginHandle;
+    resolveFallbackPlugins?: () => readonly ProviderPlugin[];
     context: ProviderNormalizeTransportContext;
   },
 ): { api?: string | null; baseUrl?: string } | undefined {
@@ -338,7 +345,8 @@ export function normalizeProviderTransportWithPlugin(
   // this provider's credential.
   const origin = (url?: string) => (url ? URL.parse(url)?.origin : undefined);
   const requestOrigin = origin(params.context.baseUrl);
-  for (const candidate of resolveProviderPluginsForHooks(params)) {
+  for (const candidate of params.resolveFallbackPlugins?.() ??
+    resolveProviderPluginsForHooks(params)) {
     const normalized =
       candidate === matchedPlugin ? undefined : candidate.normalizeTransport?.(context);
     const keepsOrigin =

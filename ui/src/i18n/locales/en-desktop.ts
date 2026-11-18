@@ -6,6 +6,7 @@ const enDesktop = {
   desktop: {
     title: en.desktop.title,
     openWindow: en.desktop.openWindow,
+    openWindowTooltip: en.desktop.openWindowTooltip,
     unavailable: en.desktop.unavailable,
     toggle: en.desktop.toggle,
     hide: "Hide desktop panel",
@@ -72,7 +73,7 @@ const enDesktop = {
     audio: {
       unavailable: "Audio unavailable",
       setupUnavailable:
-        "Desktop audio setup is unavailable. Ask an admin to check that pulseaudio and pulseaudio-utils are installed, then restart the managed desktop.",
+        "Audio unavailable. Ask an admin to check PulseAudio and pulseaudio-utils, then restart this desktop.",
       reconnect: "Reconnect desktop for audio",
       connecting: "Connecting desktop audio…",
       unmute: "Unmute desktop audio",

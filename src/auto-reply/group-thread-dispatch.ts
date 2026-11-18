@@ -181,6 +181,7 @@ function prepareParticipant(
         prepareAssistantTranscriptMessage: undefined,
         suppressNextUserMessagePersistence: undefined,
         messageInjectionDisposition: undefined,
+        messageInjectionRejection: undefined,
         runId: undefined,
         ...observeAgentRunStart(original, (start) => {
           runState.runId = start.runId;

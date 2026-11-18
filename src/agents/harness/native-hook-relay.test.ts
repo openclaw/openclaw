@@ -33,6 +33,7 @@ import {
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 import * as nativeHookRelayBridge from "./native-hook-relay-bridge.js";
 import { invokeNativeHookRelayBridge } from "./native-hook-relay-client.js";
+import { nativeHookRelayState } from "./native-hook-relay-state.js";
 import * as nativeHookRelayStore from "./native-hook-relay-store.js";
 import type { NativeHookRelayBridgeRecord } from "./native-hook-relay-store.js";
 import {
@@ -1159,9 +1160,7 @@ describe("native hook relay registry", () => {
     setActivePluginRegistry(policyRegistry);
     initializeGlobalHookRunner(hookRegistry);
 
-    const relay = registerRelay({
-      preToolUseLoopDetection: false,
-    });
+    const relay = registerRelay();
 
     expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
     expect(relay.toolMatcherForEvent("pre_tool_use")).toEqual(["apply_patch", "exec"]);
@@ -1713,7 +1712,7 @@ describe("native hook relay registry", () => {
         ]),
       );
       const relay = alias
-        ? registerRelay({ preToolUseLoopDetection: false })
+        ? registerRelay()
         : registerAgentRelay(kind === "stale command" ? { channelId: "telegram" } : {});
       if (alias) {
         expect(relay.toolMatcherForEvent("pre_tool_use")).toEqual([toolName]);
@@ -2200,7 +2199,6 @@ describe("native hook relay registry", () => {
       sessionKey: "agent:main:session-1",
       config: config as never,
       allowedEvents: ["pre_tool_use"],
-      preToolUseLoopDetection: false,
     });
 
     expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
@@ -2389,6 +2387,57 @@ describe("native hook relay registry", () => {
     });
 
     expect(approvalRequester).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps replacement pending PermissionRequest approvals when stale approvals settle", async () => {
+    const { pendingPermissionApprovals } = nativeHookRelayState;
+    const relayId = "codex-stale-pending-permission";
+    const firstRelay = registerRelay({ relayId });
+    const resolvers: Array<(decision: "allow") => void> = [];
+    const approvalRequester = vi.fn(
+      () =>
+        new Promise<"allow">((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+    const payload = {
+      hook_event_name: "PermissionRequest",
+      tool_name: "Bash",
+      tool_use_id: "native-call-1",
+      tool_input: { command: "git push" },
+    };
+
+    const firstApproval = invokeRelay(relayId, "permission_request", payload);
+    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(1));
+    expect(pendingPermissionApprovals.size).toBe(1);
+
+    firstRelay.unregister();
+    await expect(firstApproval).rejects.toThrow("registration is inactive");
+    registerRelay({ relayId });
+    const secondApproval = invokeRelay(relayId, "permission_request", payload);
+    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(2));
+    expect(pendingPermissionApprovals.size).toBe(1);
+    const successorApproval = pendingPermissionApprovals.values().next().value;
+
+    resolvers[0]?.("allow");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(pendingPermissionApprovals.size).toBe(1);
+    expect(pendingPermissionApprovals.values().next().value).toBe(successorApproval);
+
+    const duplicateSecondApproval = invokeRelay(relayId, "permission_request", payload);
+    // File preparation must finish before the duplicate can join the successor approval.
+    await vi.waitFor(() => {
+      expect(successorApproval?.waiters).toBe(2);
+      expect(pendingPermissionApprovals.values().next().value).toBe(successorApproval);
+    });
+    expect(approvalRequester).toHaveBeenCalledTimes(2);
+
+    resolvers[1]?.("allow");
+    await expect(Promise.all([secondApproval, duplicateSecondApproval])).resolves.toHaveLength(2);
+    expect(pendingPermissionApprovals.size).toBe(0);
   });
 
   it("does not reuse pending PermissionRequest approvals when a tool call id is reused with different input", async () => {

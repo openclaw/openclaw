@@ -598,13 +598,511 @@ CLI-test typecheck, typed lint, formatting and diff checks passed. Production
 and support line counts are unchanged. Full dead-code scans and hosted/landing
 outcomes are tracked in [PR #197639](https://github.com/openclaw/openclaw/pull/197639).
 
+### Tool-result fidelity at each output
+
+At `a41c7111235fdfcb5e4103edba0e5ff711d7e02c`, the single tool-result reuse
+case mixed trajectory, callback and terminal values and searched for a secret
+also present in metadata. Its persistence check had the same weakness. The
+repair keeps both existing completion routes and independently asserts complete
+text and metadata at every output. It preserves the distinct stored/display
+image contracts, awaits the session append and removes the direct sanitizer
+replay plus an unused mock-reset hook. No production or support code changes;
+the physical and expanded case counts both remain one.
+
+The original case passed with `sanitizeToolResult`'s text output deliberately
+emptied (488.40 seconds). The repaired case rejected the same fault at its first
+trajectory assertion (135.74 seconds). Both mutations were restored byte for
+byte. Baseline owner/sibling proof passed all 50 cases (555.94 seconds). The
+original ran in agents-core; the repaired case routes to unit-fast. These
+single runs, with different worker-cache states, do not establish a speedup.
+
+The clean repaired case passed (330.24 seconds). Independent preservation
+review and full local ClawSweeper review of
+`dbdea04a67b99b9541ea64fba03de9a10a3cfe3f` found no actionable issues. The
+agents-root test typecheck, typed lint, formatting and diff checks passed.
+Full dead-code scans and hosted/landing outcomes are tracked in
+[PR #197771](https://github.com/openclaw/openclaw/pull/197771).
+
+### CLI patch fixture cleanup on write failure
+
+At `9cfa4b5ff744da4e7133c53dfea287abdba1c223`, `readPatch` allocated its
+temporary directory and wrote the fixture before entering its cleanup block.
+An injected `ENOSPC` write failure preserved the original error but left the
+directory behind. Moving the write into the existing `try` gives allocation
+one cleanup owner even when fixture setup fails. No production code, test
+declarations, inputs or assertions change; all eight declarations and 13
+expanded cases remain.
+
+The repaired helper removes the directory under the same injected write
+failure and preserves the exact error. Baseline and repaired CLI suites pass
+all 13 cases (67.87 and 13.25 seconds respectively; different compiler cache
+states, not a measured speedup). Scoped CLI test typecheck, typed lint,
+formatting and diff checks pass. Independent preservation review found no
+coverage loss. Full local review and hosted outcomes are tracked in
+[PR #198020](https://github.com/openclaw/openclaw/pull/198020).
+
+### Plugin install fixture setup cleanup
+
+At `ee854a1d757943482bb6361c7ccd4f560c8fc92e`, four temporary roots in
+`plugins-install-config.test.ts` perform fallible setup before entering their
+cleanup blocks. They now register with the existing per-test temp directory
+tracker before setup. The cwd spy keeps its own restoration. All 20
+declarations, 23 expanded cases, inputs and assertions remain; test code shrinks
+by 11 lines, with no production or support changes.
+
+The normal suite passes all 23 cases before and after the repair. Under four
+injected fixture-write failures, both revisions report the same four errors
+and preserve the other 19 cases. An `onTestFinished` observation finds all four
+roots still present on the base and none after the repair. The runner already
+reclaims its entire namespace at process exit; this repairs per-case retention,
+not a permanent host leak. Temporary instrumentation was restored byte for
+byte. Independent preservation review found no lost coverage. Focused checks,
+full local review and hosted outcomes are tracked in
+[PR #198138](https://github.com/openclaw/openclaw/pull/198138).
+
+Adjacent source review retains the existing custody in `dns-cli.test.ts`,
+`node-cli/identity.test.ts`, `plugins-control-ui-build.test.ts` and
+`secrets-store-input.test.ts`. Their roots are registered before setup, or their
+database/FIFO owners settle before removal; no runtime claim is made for them.
+
+### Filesystem capability probe error reporting
+
+At `3ead3dcb1b3a3755197cc7aaaa2fc248b6f0298f`, the install-path symlink
+probe suppresses every setup error, and the two safe-bin case-sensitivity
+probes return successfully on unexpected filesystem errors. The repair limits
+capability exclusions to the relevant operation and expected error codes. Setup
+and cleanup errors propagate; case-sensitivity exclusions become explicit skips.
+All 24 declarations, 32 expanded cases and boundary assertions remain. No
+production or shared support changes; test code grows by 16 lines.
+
+The original suite reports 32 passes. With the repair it reports 31 passes and
+one explicit filesystem exclusion previously counted as a pass. The original
+stays green under injected allocation, symlink, cleanup and both case-probe
+errors; the repair fails on each. Expected unsupported-symlink and
+case-sensitivity controls still pass with explicit skips. All temporary
+instrumentation was restored byte for byte. Independent preservation review
+found no coverage loss. Focused checks, full local review and hosted outcomes
+are tracked in [PR #198154](https://github.com/openclaw/openclaw/pull/198154).
+
+### Binary discovery oracle errors
+
+At `da0e0ba8cae139938cba66ff96e1f794c48acf12`, two binary-discovery tests
+interpret every `which` error as a missing executable. The repair preserves
+real resolver parity while accepting only the expected exit status 1 without a
+signal. Fixed fixture outcomes are asserted independently, so two broken
+lookups cannot agree on a false negative. All 11 declarations and 19 expanded
+cases remain; test code grows by four lines, with no production or support
+changes.
+
+Normal baseline and repaired runs pass all 19 cases. Replacing negative lookup
+results with real child-process launch errors, exit status 2 or signal
+termination leaves the original green; each repaired control fails the two
+affected cases. A paired false-negative mutation of `which` and `detectBinary`
+also passes the original but fails both repaired positive controls. Temporary
+test and production instrumentation was restored byte for byte. Independent
+preservation review found no lost coverage. Focused checks, full local review
+and hosted outcomes are tracked in
+[PR #198168](https://github.com/openclaw/openclaw/pull/198168).
+
+### Guarded fetch redirect caller headers
+
+At `91046f7bbbb8b064491ee2ecbfd782cb12b0124c`, the cross-origin header case
+only supplies a symbol-bearing dictionary. Header normalization copies that
+representation before redirect handling, so the case misses mutation of an
+ordinary caller-owned dictionary. The repair adds the plain representation to
+the same declaration and checks the original string fields after the redirect.
+It retains the symbol stripping and exact safe-header expectations. All 28
+owner declarations remain; expanded cases increase from 49 to 50. Test code
+grows by nine lines; no production or shared support code changes.
+
+The baseline owner and header-normalizer suites pass all 55 cases. They also
+pass all 55 when the redirect filter temporarily removes unsafe fields from
+its input in place. The repair rejects that same mutation in the new plain
+row, with the other 55 cases passing. Temporary changes are restored byte for
+byte. The clean candidate passes all 56 cases. Targeted checks and full review
+are tracked in [PR #198181](https://github.com/openclaw/openclaw/pull/198181).
+
+The other 27 guarded-fetch declarations retain their policy, redirect,
+transport, deadline and lifecycle contracts. Independent source review retains
+all ten declarations (13 expanded cases) in `ssrf.dispatcher.test.ts` and
+`fetch-guard.configured-origin-linklocal.test.ts`: their negative inputs reach
+the intended guard. The separate Ollama transport integration supplies the
+positive provider-owned link-local exemption proof. These additional retention
+decisions are source-only; no runtime result or removal is claimed for them.
+
+### Runtime FormData payload fidelity
+
+At `5dfccbb92b2ab016c8c2082968f0b87798dc13bb`, the runtime FormData case checks
+the filename but not file bytes or MIME type. It now checks the dispatched
+Blob's exact bytes and MIME type while retaining its filename, model-field and
+stale-header assertions. All seven declarations and ten expanded cases across
+runtime-fetch, proxy-fetch and the FormData helper remain. Test code grows by
+seven lines; production and shared support code do not change.
+
+The baseline and clean candidate pass all ten cases. Empty-file and explicit
+generic-MIME mutations both pass the baseline but fail the repaired case at
+the corresponding assertion, with the other nine cases passing. A first
+rewrapping-only MIME control stayed green and was not counted as proof; the
+explicit control substitutes `application/octet-stream` while preserving bytes.
+All temporary production and test changes were restored byte for byte.
+The precise scanner mistakes the bounded fixture Blob read for an untrusted
+HTTP response read; a rule-specific exception documents that false positive.
+Focused checks, independent preservation review, full local review and hosted
+outcomes are tracked in [PR #198305](https://github.com/openclaw/openclaw/pull/198305).
+
+The adjacent SSRF, dispatcher-pool, guarded-body-stream and hostname suites
+retain 24 declarations and 48 expanded cases. They protect policy
+and DNS boundaries, pool capacity and lifetime, stream cleanup and metadata,
+and hostname normalization. The request-body,
+authority and release suites retain another ten declarations and 21 expanded
+cases covering wire payloads, caller authority and release ownership. These
+retention decisions are source-only; no runtime pass or removal is claimed.
+
+### Provider WebSocket proxy DNS pin proof
+
+At `cd61ce32dd28e92003b213f8d2014608504515fb`, the provider WebSocket proxy
+case used localhost and accepted any function-valued socket lookup. Replacing
+the prepared proxy lookup with Node's default DNS lookup still passed all 21
+WebSocket and Node proxy cases. The repaired fixture uses `proxy.invalid`, pinned
+to loopback through the real SSRF resolver, so the existing successful CONNECT
+and WebSocket assertions require the prepared pin. The same mutation now fails
+only the proxy transport row with `ENOTFOUND proxy.invalid`; restoring production
+passes all 21 cases. Production was restored byte for byte. No cases were added
+or removed; the test file shrinks by one line and production is unchanged.
+
+Source review covers 35 declarations and 59 expanded cases across proxy-env,
+node-proxy-agent, provider-websocket, undici-runtime and undici-global-dispatcher.
+The environment, admission, deadline, TLS and lifecycle contracts remain useful.
+Separate follow-ups are the WSL temporary-family dispatch ordering assertion and
+the supplied-env SOCKS CA fixture's setup/cleanup ownership. These are source-only
+findings; no runtime result or production defect is claimed for those follow-ups.
+
+### WSL managed-dispatch ordering proof
+
+At `82e8cded772dcfc01c4f470b58f123ec7cb22266`, the managed-dispatcher WSL
+case checked the disable/restore setter sequence and eventual dispatch, but did
+not order dispatch between those calls. Both moving dispatch before policy
+activation and moving it after restoration still passed all 19 global-dispatcher
+and runtime cases. The repaired case spies on the existing managed dispatcher
+and checks that its call falls between the two policy writes. Each mutation now
+fails only the WSL case (one failed, 18 passed); restored production passes all
+19 cases in 2.64 seconds. Production was restored byte for byte.
+
+All 17 declarations and 19 expanded cases remain. The repair adds five test
+lines, no cases or production code. Timeout updates, helper/lifecycle binding,
+bootstrap/reset ownership, CA rotation and lazy runtime-loading proof remain in
+their existing cases. This proves the synchronous dispatch ordering under the
+WSL policy fixture; it does not claim live Windows or WSL network coverage.
+
+### Managed proxy CA fixture cleanup
+
+At `9cb3c14855e5a5216148a1c125f9240c5da1f6de`, the supplied-env TLS proxy
+case leaked its CA directory when setup or dispatcher teardown failed. The
+existing auto-cleanup tracker now owns the directory, and the existing dispatcher
+helper owns shutdown. All 17 declarations / 27 cases remain, including the real
+HTTP/SOCKS/TLS payload and routing assertions. Independent preservation review
+found no lost contracts.
+
+The baseline passed 27/27. Temporary probes injected a real certificate-write
+failure and a failure after dispatcher shutdown. Both left the directory present
+at an `afterAll` observation, before runner namespace cleanup. With the repair,
+both directories were absent at the same observation and both original errors
+still failed the test. The probes were removed and the file restored byte for
+byte; the clean candidate passed 27/27. Production changed by 0 lines; the test
+changed by +8/-9 lines. The warm candidate run took 2.92 seconds; the cold baseline
+took 17.87 seconds, so these timings do not establish a speed improvement.
+
+### Managed proxy CA cleanup continuation
+
+At `7e69bf4c26b3cd00789f55ee4f6185af8aa2dbf3`, the shared proxy CA fixture
+spliced every directory from its local list before removal. A removal failure
+aborted cleanup of later directories and dropped their ownership. It now uses
+the canonical auto-cleanup tracker. The synchronous writer, filename, contents,
+and omitted-content missing-file fixture remain unchanged. Test support changes
+by +4/-10 lines; production and the shared tracker are unchanged.
+
+All 22 declarations / 31 cases across managed-proxy-undici, proxy-validation and
+proxy-lifecycle remain. Baseline and candidate pass all 31 cases. The existing
+temp-dir helper suite passes its three portable cases; the Windows-only case
+is skipped on macOS. The combined command took 8.32 seconds on the baseline and
+6.21 seconds on the warm candidate; this is not a speed comparison.
+
+A temporary helper-boundary probe captures the actual registered cleanup hook
+and injects a removal failure for the first of two real directories. The baseline
+reports the error but neither removes the second directory nor retries the first
+on the next cleanup call. The candidate preserves the same error, removes the
+second directory and successfully retries the first after removal is restored.
+Both keep normal CA bytes and missing-file behavior. Probe files were removed and
+instrumentation restored byte for byte. Independent review preserves all coverage;
+the lifecycle credential-redaction substring assertion remains a separate
+source-only follow-up, with no production leak claimed.
+
+### Managed proxy credential-redaction proof
+
+At `7ebb510477ac76cb8f0224dd964c775c29625d37`, the startup redaction case
+rejected only the combined username/password substring. It now uses distinct
+fixture credentials and checks each across every logged message, retaining the
+positive proxy-origin assertion. All 12 declarations / 13 cases remain. Test
+code changes by +8/-9 lines; production is unchanged.
+
+The baseline passes all 13 cases, including when the real startup owner is
+temporarily changed to log just the username or just the password in an extra
+message. The repair rejects each mutation in the intended redaction case while
+the other 12 pass. Restored production passes all 13 cases; temporary mutations
+were restored byte for byte. Independent preservation review retains startup,
+CA loading, inherited routing, loopback policy, environment restoration,
+overlapping ownership and shutdown proof. This closes the earlier source-only
+redaction assertion follow-up; no existing production leak is claimed.
+
+### External proxy loopback response proof
+
+At `08ae8c62b83ede02db3a8d2bc3ce36206008d253`, the external-proxy child-process
+case checks four response statuses but only one shared response-body substring.
+Each response now has a complete status/body assertion. Both declarations and
+expanded cases remain, including WebSocket bypass, exact CONNECT targets and
+the separate target-TLS-hostname proof. Test code changes by +6/-5 lines;
+production and shared support are unchanged.
+
+The baseline passes both cases even when the loopback server returns a corrupted
+body for one request pathname at a time: Undici fetch, global fetch, Node HTTP
+and the explicit HTTP agent. The repair rejects all four controls at the
+corresponding payload assertion while the TLS case passes. The restored candidate
+passes both cases. All temporary fixture mutations were restored byte for byte;
+production was never mutated. The cold baseline command took 474.76 seconds
+including builds; the warm candidate took 73.55 seconds, with 31.04 seconds
+reported by Vitest, mostly transformation. These are not speed-comparison data.
+
+Independent source review retains the realtime provider's two admission/refusal
+rows and the bare-WebSocket mock that exposes its Bun transport regression.
+Its sequential cleanup can skip remaining closers after an earlier failure;
+that is a separate source-only follow-up, not a measured leak or applied repair.
+
+### Realtime proxy fixture cleanup
+
+At `98556d69bfb13ac141ba4db884cbc92ab727b7ed`, the realtime proxy fixture
+forgets its remaining closers when an earlier reverse-order cleanup throws.
+The fixture now uses the existing shared cleanup runner, which attempts all
+closers and preserves single or multiple failures. Both admission/refusal rows,
+their assertions and the runtime WebSocket mock remain: one declaration, two
+expanded cases. Test code changes by +4/-5 lines; production and shared support
+are unchanged.
+
+With an injected error after the real bridge closes, the baseline leaves its
+managed proxy registered and both network listeners open in both rows. The
+candidate clears the registration and closes both listeners in reverse order,
+preserving the original error. A second injected failure after proxy shutdown
+preserves both errors in an aggregate without skipping either listener.
+Environment restoration passes throughout. Observations precede emergency
+cleanup, and every temporary probe was restored byte for byte.
+
+The clean baseline passes both cases in 163.76 seconds wall time, including cold
+worker compilation. The warm candidate passes both in 22.06 seconds wall time
+(16.29 seconds reported by Vitest). These are not speed-comparison data.
+Independent preservation review found no lost contract. This closes the earlier
+source-only realtime cleanup follow-up; no production change is claimed.
+
+### Secrets CLI plan fixture setup custody
+
+At `69c3acaca6854826a03e7e6ee2a1cf0334959282`, `withPlanFile` writes its
+temporary plan before entering its cleanup block. A partial write followed by
+failure therefore leaves the file behind. Move that write into the existing
+`try`; retain the callback, contents, error propagation and removal operation.
+All 22 declarations / 23 expanded cases remain, including malformed UTF-8,
+literal replacement characters, size limits, FIFO rejection and error causes.
+Test code changes by +1/-1 line; production and shared support are unchanged.
+
+With a real partial write followed by injected `ENOSPC` inside the existing
+valid-Unicode Vitest case, the baseline leaves the file present. The candidate
+removes it, preserves the exact write error and never invokes the apply handler.
+Both observations precede emergency cleanup. Temporary instrumentation was
+restored byte for byte. A separate direct invocation of the unchanged helper
+body confirms the same result and that baseline removal was never called.
+
+The clean baseline and candidate each pass all 23 cases. Baseline wall time was
+54.35 seconds including cold worker compilation; the warm candidate took 6.71
+seconds (4.47 seconds reported by Vitest). These are not speed-comparison data.
+Independent preservation and local ClawSweeper review found no lost contract
+or actionable finding. Source-only follow-ups remain for FIFO setup cleanup,
+failed MCP temporary-directory removal and environment restoration after
+channel/model fixture removal errors.
+
+### Secrets CLI FIFO fixture setup custody
+
+At `d32ac41084fcaef1099ecdbfeb1cfa81da532642`, the FIFO rejection case
+allocates its directory before running `mkfifo`, outside the cleanup scope.
+Use the existing automatic temporary-directory tracker so failed setup also
+releases that directory. Retain the positive regular-file preflight, real FIFO
+creation, CLI rejection assertions, timeout, recovery writer and awaited parse
+settlement. All 22 declarations / 23 expanded cases remain; one fixture is
+repaired and no coverage is removed. Test code changes by +4/-3 lines;
+production and shared helper code are unchanged.
+
+A direct execution of the existing setup block with `mkfifo` unavailable
+reproduces `ENOENT` and leaves the allocated directory present while preserving
+the original setup error. The same fault inside the existing Vitest case leaves
+the directory present on the baseline and removes it with the candidate. Both
+preserve the exact setup error and never invoke the apply handler. Observations
+precede emergency cleanup; temporary instrumentation was restored byte for byte.
+
+The clean baseline and candidate each pass all 23 cases. Baseline wall time was
+65.27 seconds including cold worker compilation; the warm candidate took 10.93
+seconds (7.58 seconds reported by Vitest). These are not speed-comparison data.
+The shared temporary-directory helper passes 11 cases with its Windows-only
+case skipped on macOS. Independent preservation and local ClawSweeper review
+found no lost contract or actionable finding. This closes the earlier FIFO
+setup cleanup follow-up; no production change is claimed.
+
+### MCP CLI workspace cleanup custody
+
+At `a56ba88e924fad822fd8f447f1b67e82c13c6f42`, the MCP CLI harness empties
+its directory tracker before asynchronous removal succeeds. A failed removal
+leaves the directory untracked and unavailable to a later cleanup attempt.
+Delegate removal to the existing shared cleanup helper; preserve allocation,
+explicit caller-owned teardown, mock restoration and exit-code restoration.
+All five consumer suites remain: 46 declarations / 57 expanded cases. Test
+support changes by +2/-3 lines; production and shared helper code are unchanged.
+
+Direct execution of the baseline cleanup body with an injected removal failure
+leaves the failed directory present and untracked after both cleanup attempts.
+The other directory is removed and the exact error and exit code are preserved.
+The same fault in an existing Vitest consumer case confirms that the candidate
+retains the failed path and removes it on the second cleanup call. Both versions
+remove the healthy workspace and restore the temporary home, environment, cwd
+and exit code. Observations precede emergency cleanup; temporary instrumentation
+was restored byte for byte.
+
+All five consumer suites pass on both versions: 56 cases pass and the one
+Windows-only case is skipped on macOS. Baseline wall time was 106.39 seconds;
+the candidate took 138.65 seconds (121.87 seconds reported by Vitest). These are
+qualification observations, not speed-comparison data. The unchanged shared
+helper passes 11 cases with its Windows-only case skipped. Independent
+preservation and full local ClawSweeper review found no actionable issue.
+This closes the earlier MCP temporary-directory removal follow-up.
+
+### Channel and model fixture environment restoration
+
+At `ea8bbbb3b672b7df04d3747941d75cf7345a37fc`, the channel catalog-row
+and model-status cold-import fixtures remove their suite roots before restoring
+stubbed environment variables. A removal error skips that restoration. Keep each
+existing suite-lifetime root and put environment restoration in `finally`.
+All three declarations / four expanded cases remain, including both channel
+account shapes, missing-owner repair hints and all three model-status routes.
+Test code changes by +10/-4 lines; production and shared support are unchanged.
+
+Direct execution of both original teardown bodies with an injected removal
+failure preserves the exact error but skips environment restoration. The same
+fault in each actual Vitest afterAll hook confirms that the baseline leaves all
+three fixture environment variables stubbed, while the candidate restores all
+three. Both preserve the exact removal error and report the expected teardown
+failure. Observations precede emergency cleanup; temporary instrumentation was
+restored byte for byte.
+
+The clean baseline and candidate each pass all four cases. Baseline wall time
+was 73.44 seconds including cold worker compilation; the warm candidate took
+11.33 seconds (8.19 seconds reported by Vitest). These are qualification
+observations, not speed-comparison data. Independent preservation and full local
+ClawSweeper review found no actionable issue. This closes the earlier channel
+and model fixture environment-restoration follow-up.
+
+### Startup fixture cleanup custody
+
+At `5dc8071931853986c9a924c2e99996b8b5753a71`, the startup metadata and
+command-timing fixtures empty their directory trackers before removal succeeds.
+A failed removal leaves the root untracked and unavailable to a later cleanup
+attempt. Delegate both hooks to the existing shared cleanup owner. Keep the
+timing fixture's synchronous timeline flush immediately before removal.
+All four declarations / four expanded cases remain; production and shared
+helper code are unchanged.
+
+Direct execution and actual Vitest `afterEach` fault/retry probes reproduce
+both original hooks forgetting the failed root. Neither retries it; metadata
+also leaves the healthy sibling behind. The candidate hooks preserve the exact
+error, remove the healthy sibling, retain the failed root, and remove it when
+the same hook runs again without the fault. Timing flush precedes both removal
+attempts. Each fault run intentionally reports two failed / two passed cases;
+all original case assertions execute. Temporary instrumentation was restored
+byte-for-byte.
+
+Clean baseline and candidate runs pass all four cases (5.66 s and 3.28 s wall
+time; Vitest durations 2.40 s and 0.779 s). These are qualification observations,
+not a performance comparison. Scoped CLI-test typecheck, lint, formatting,
+line-cap and max-lines ratchets, and `git diff --check` pass. Independent review
+and local ClawSweeper report no actionable findings. The shared cleanup helper
+is unchanged and retains its prior 11-pass / one-Windows-skip proof.
+
+### Agent startup fixture cleanup custody
+
+At `33d26e441f91c3d2534071a8d36e8aa9d146d07f`, the agent startup timing fixture clears
+its directory tracker before asynchronous removal succeeds. A failed removal
+therefore leaves the root untracked. Delegate cleanup to the existing shared
+owner, preserving the order: flush timeline, restore stubbed environment, remove
+tracked roots. The single declaration / expanded case and all timeline-content
+assertions remain; production and shared-helper code are unchanged.
+
+Direct execution and an actual Vitest `afterEach` fault/retry probe reproduce
+the original hook forgetting its failed root. The candidate preserves the exact
+error, removes a healthy sibling, retains the failed root, and removes it when
+the same hook runs again without the fault. Both versions flush and restore the
+two diagnostics environment variables before removal. Each fault run reports
+one intentional teardown failure after the original assertions execute.
+Temporary instrumentation was restored byte-for-byte.
+
+The clean baseline and candidate each pass the single case (11.64 s and 6.21 s
+wall time; Vitest durations 3.67 s and 1.78 s). These are qualification
+observations, not a performance comparison. Scoped agent-test typecheck, lint,
+formatting, line-cap/max-lines ratchets, and `git diff --check` pass. Independent
+preservation and local ClawSweeper review found no actionable issue. The shared
+cleanup helper is unchanged; its prior 11-pass / one-Windows-skip proof is reused.
+
+### Source scan fixture cleanup custody
+
+At `10f6b53ce51827256689604e821c34a7f5e84323`, the source-file scan fixture empties
+its directory tracker before removal succeeds. Reuse the shared cleanup owner
+after the existing pending-scan settlement and reset. All five declarations /
+eight expanded cases remain, including refill concurrency, source ordering,
+pre/post-read limits, decoding, mapper error behavior and live file mutations
+through both collect and map. Keep the asynchronous hook and the `rm` import
+used by the deletion mutation. Production and shared-helper code are unchanged.
+
+Actual Vitest-hook fault injection preserves the original removal error on both
+heads. With a real held scan, every root remains intact until settlement and the
+pending scan is reset before removal. The original hook loses the failed root
+and makes no retry; the candidate retains it, removes a healthy sibling and
+succeeds on the next attempt. Each fault run has one intentional hook failure
+and seven passing cases. Temporary instrumentation was removed and the exact
+candidate bytes restored. All eight clean cases pass on both heads (1.71 s
+baseline; 1.88 s candidate command time); these are correctness runs, not a
+performance comparison. Scoped scripts-test typecheck, lint, formatting and
+both line-cap ratchets pass. Production and shared-helper code are unchanged.
+
+### Built status runtime fixture cleanup
+
+At `a58770f3a50053e89236c787a331c1cb48d4b388`, the built-status runtime test
+clears its directory tracker before removal and stops on the first failure.
+Reuse the shared cleanup owner while preserving the synchronous hook, fixture
+factory and both declarations / four expanded cases. Retain the empty-PATH
+fallback with scoped environment restoration, hashed `.mjs` preference and
+three external-find rows with the no-readdir assertion. Production and shared
+helpers are unchanged.
+
+Actual Vitest-hook fault injection preserves the original error on both
+versions. The baseline loses both roots and performs no retry; the candidate
+removes the healthy root, retains the failed root and removes it on retry.
+Both injected runs intentionally report one hook failure and three passing
+cases. Both clean runs pass all four cases (6.99 s baseline command time;
+1.90 s candidate); these correctness runs are not a performance comparison.
+The temporary instrumentation was restored byte for byte, and scoped PATH
+restoration passed. Scoped scripts-test typecheck, lint, formatting and both
+line-cap ratchets pass. Independent preservation and local ClawSweeper reviews
+found no actionable defects.
+
 ## Pending qualification and proof repairs
 
-- Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: Twitch settled flag; it needs current-source and runtime keeper qualification.
+- Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
 - Transfer rows before consolidating Android loading/blank-auth, persisted outbox keys/epochs, terminal initial projection, and native PCM/decoder/reader cases. Keep typed host-error precedence and active-run settlement.
 - Retain the CodeMode worker-leg deadline case: its real warmed worker and interruption path are distinct from the cancellation table's typed host-error precedence. Both suites keep their active-run settlement checks; this is a source-only retention decision.
 - Repair Android runtime/model fixture custody through existing guaranteed closers; no measured leak is claimed. Retarget misleading coroutine/authority/streaming assertions. Qualify Android dropdown arithmetic, IPv6 URL, empty SMS defaults and component-state mapping against their stronger keepers.
-- Repair swallowed/unrelated setup errors, silent auth/symlink skips, SSRF negative controls, content-absence/privacy results, delayed observer proofs, missing CLI fixture cleanup and aggregate-only tool-result fidelity. Retain CI inventory gaps as route repairs, including PostgreSQL conformance and removed Logbook worker paths.
+- Repair swallowed/unrelated setup errors, silent auth/symlink skips, SSRF negative controls, content-absence/privacy results, delayed observer proofs, missing CLI fixture cleanup. Retain CI inventory gaps as route repairs, including PostgreSQL conformance and removed Logbook worker paths.
 - Diagnostics OTel: the NodeSDK replay removal remains qualified above; content capture completion proof is recorded separately above.
 - SDK removal search was incomplete: public2,115/2,527 complete and bundled169/179 complete. No observed consumer is not proof of no external reliance. The retired target facade was private and excluded from packaging since `780bc791470`.
 - Retain duplicate Swift TLS fixtures in separate packages, renderer-discovered Blobster JSON (also production prompt inputs), process-entry helpers referenced extensionlessly, stable borrowed-reference assertions, and independent release/architecture/platform guards.

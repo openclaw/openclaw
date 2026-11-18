@@ -41,6 +41,7 @@ import { executeCliProcess } from "./execute-process.js";
 import { createCliToolTracking } from "./execute-tool-tracking.js";
 import { resolveCliChildEnv } from "./execution-env.js";
 import { createCliRunCurrentAssertion } from "./execution-target.js";
+import { readCliStreamRefusalOutput, recordCliStreamRefusalToolEffects } from "./exit-error.js";
 import {
   buildCliArgs,
   isClaudeCliBackendId,
@@ -148,10 +149,14 @@ export async function executePreparedCliRun(
     !params.forkCliSessionOnResume
       ? context.resumeContext
       : undefined;
+  const turnContext = [context.contextEngineSystemPromptAddition, resumeContext]
+    .filter(Boolean)
+    .join("\n\n");
   const basePrompt = usePluginOwnedExecution
     ? attemptPrompt
-    : composeCliPromptContext(attemptPrompt, { prependContext: resumeContext });
+    : composeCliPromptContext(attemptPrompt, { prependContext: turnContext });
   const privatePrependContext = [
+    usePluginOwnedExecution ? context.contextEngineSystemPromptAddition : undefined,
     context.promptContext?.prependContext,
     usePluginOwnedExecution ? resumeContext : undefined,
   ]
@@ -581,6 +586,14 @@ export async function executePreparedCliRun(
       }
     }
     if (runFailed) {
+      const refused = readCliStreamRefusalOutput(runError);
+      if (refused) {
+        const { acceptedSessionSpawns } = toolTracking.withExecutionEvidence(refused);
+        recordCliStreamRefusalToolEffects(runError, {
+          toolSummary: events.getToolSummary(),
+          ...(acceptedSessionSpawns ? { acceptedSessionSpawns } : {}),
+        });
+      }
       throw toolTracking.attachDeliveryEvidence(runError);
     }
     if (!runOutput) {

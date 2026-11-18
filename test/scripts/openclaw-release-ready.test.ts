@@ -28,7 +28,6 @@ import {
 import {
   buildReleaseExecutionPlanArtifact,
   composeReleaseAttemptJobs,
-  releaseExecutionPlanSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
 import { validateOpenClawCorePostpublishEvidence } from "../../scripts/openclaw-core-postpublish.mjs";
 import {
@@ -39,6 +38,10 @@ import {
 import { preparedNpmArtifactName } from "../../scripts/plugin-npm-prepared-release.mjs";
 import { expectedChildDispatches } from "../../scripts/release-ci-summary.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  fixture as qualificationAdmissionFixture,
+  qualificationBaselinesJson,
+} from "./release-qualification-admission.test-support.js";
 
 const REPOSITORY = "openclaw/openclaw";
 const SOURCE_SHA = "a".repeat(40);
@@ -244,8 +247,6 @@ describe("release readiness contract", () => {
 
   it.each([
     ["unsealed input", { prepared_plugins: "{}" }],
-    ["retired soak waiver", { stable_soak_waiver: "2026.9.2 approved" }],
-    ["retired lane waiver", { lane_waiver: "2026.9.2 approved" }],
     ["moving source", { tag: "main" }],
     ["wrong beta channel", { npm_dist_tag: "latest" }],
     ["alpha owner", { tag: "v2026.9.2-alpha.1", npm_dist_tag: "alpha" }],
@@ -865,6 +866,8 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
     });
     if (state.frv && !state.unavailableFrv && args[0] === 'run' && args[1] === 'view' && args[2] === '200') {
       console.log(JSON.stringify(state.frv.view));
+    } else if (state.frv && !state.unavailableFrv && args[0] === 'api' && Object.hasOwn(state.frv.sourceResponses, apiEndpoint.replace('repos/${REPOSITORY}/', ''))) {
+      console.log(JSON.stringify(state.frv.sourceResponses[apiEndpoint.replace('repos/${REPOSITORY}/', '')]));
     } else if (state.frv && !state.unavailableFrv && args[0] === 'api' && Object.hasOwn(state.frv.archives, endpoint)) {
       process.stdout.write(readFileSync(state.frv.archives[endpoint]));
     } else if (state.frv && !state.unavailableFrv && args[0] === 'api' && Object.hasOwn(state.frv.logs, endpoint)) {
@@ -989,6 +992,29 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
   `,
   );
   chmodSync(gh, 0o755);
+  // Keep archive transport hermetic on hosts without unzip, while the real
+  // evidence reader still verifies the ZIP digest, entry list, and manifest.
+  const unzip = writeFixtureFile(
+    fixture.root,
+    "bin/unzip",
+    `#!${process.execPath}
+    import { readFileSync } from 'node:fs';
+    import JSZip from ${JSON.stringify(import.meta.resolve("jszip"))};
+    const args = process.argv.slice(2);
+    if (args.length !== 3 || !(
+      (args[0] === '-Z' && args[1] === '-1') || args[0] === '-p'
+    )) throw new Error('unexpected fixture unzip operation: ' + JSON.stringify(args));
+    const archive = await JSZip.loadAsync(readFileSync(args[0] === '-Z' ? args[2] : args[1]));
+    if (args[0] === '-Z') {
+      process.stdout.write(Object.keys(archive.files).join('\\n') + '\\n');
+    } else {
+      const entry = archive.file(args[2]);
+      if (!entry) throw new Error('fixture archive entry missing: ' + args[2]);
+      process.stdout.write(await entry.async('nodebuffer'));
+    }
+  `,
+  );
+  chmodSync(unzip, 0o755);
   const git = writeFixtureFile(
     fixture.root,
     "bin/git",
@@ -1109,24 +1135,60 @@ async function preparationEvidence(
         : {}),
     }),
   );
+  const qualificationTooling = { ref: branch, fullRef: "refs/heads/" + branch, sha: TOOLING_SHA };
+  const baselines: { upgradeBaseline: string; upgradeSurvivorBaselines: string[] } =
+    context.startsWith("extended-stable/")
+      ? {
+          upgradeBaseline: "openclaw@2026.7.33",
+          upgradeSurvivorBaselines: ["openclaw@2026.7.33", "openclaw@2026.8.1"],
+        }
+      : JSON.parse(qualificationBaselinesJson);
+  const laneInputs = { qualification_baselines_json: JSON.stringify(baselines) };
+  const workflow = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
+  const definitions = parse(workflow).on.workflow_dispatch.inputs;
+  const qualificationInputs: Record<string, string> = Object.fromEntries(
+    Object.entries<{ default?: string | boolean | number }>(definitions).map(
+      ([key, definition]) => [key, String(definition.default ?? "")],
+    ),
+  );
+  Object.assign(qualificationInputs, {
+    ref: SOURCE_SHA,
+    expected_sha: SOURCE_SHA,
+    release_profile: profile,
+    rerun_group: "all",
+    mode: "both",
+    target_context_ref: context,
+    provider: "openai",
+    npm_telegram_provider_mode: "mock-openai",
+    run_release_soak: String(!beta),
+    skip_package_telegram_e2e: String(beta),
+    trusted_workflow_json: publicationDispatchEnvelope(qualificationTooling, intent, laneInputs),
+  });
+  // Produce admission through its real owner; the child CLI authenticates its
+  // archive, source blobs, operator authority, and frozen coverage via fake GitHub I/O.
+  const qualification = qualificationAdmissionFixture(true, {
+    inputs: qualificationInputs,
+    candidateSha: SOURCE_SHA,
+    qualificationSha: TOOLING_SHA,
+    transportRef: branch,
+    candidateVersion: version,
+    policy: JSON.parse(readFileSync("scripts/lib/release-qualification-coverage.json", "utf8")),
+    workflowSource: workflow,
+  });
+  qualificationInputs.trusted_workflow_json = publicationDispatchEnvelope(
+    qualificationTooling,
+    intent,
+    laneInputs,
+    qualification.descriptor,
+  );
+  const qualificationCoverage = qualification.receipt.coverage;
   const source = createPublicationSourceFact(
     publicationSourceRequest({
-      PUBLICATION_INPUTS_JSON: JSON.stringify({
-        ref: SOURCE_SHA,
-        release_profile: profile,
-        rerun_group: "all",
-        mode: "direct",
-        target_context_ref: context,
-        provider: "openai",
-        npm_telegram_provider_mode: "mock-openai",
-        run_release_soak: !beta,
-        skip_package_telegram_e2e: beta,
-        trusted_workflow_json: publicationDispatchEnvelope(TOOLING, intent),
-      }),
+      PUBLICATION_INPUTS_JSON: JSON.stringify(qualificationInputs),
       PUBLICATION_TARGET_SHA: SOURCE_SHA,
       PUBLICATION_TARGET_CONTEXT: context || SOURCE_SHA,
       PUBLICATION_COVERAGE_POLICY: coveragePolicy,
-      PUBLICATION_TOOLING_JSON: JSON.stringify(TOOLING),
+      PUBLICATION_TOOLING_JSON: JSON.stringify(qualificationTooling),
       GITHUB_REPOSITORY: REPOSITORY,
       GITHUB_REF: `refs/heads/${branch}`,
       GITHUB_SHA: TOOLING_SHA,
@@ -1214,36 +1276,44 @@ async function preparationEvidence(
     started_at: time,
     completed_at: "2026-09-13T12:01:00.000Z",
   };
-  const planned = expectedChildDispatches("200", 1, branch, 3).map((child, index) => {
-    const selected =
-      child.manifestKey !== "npmTelegram" && (!beta || child.manifestKey !== "productPerformance");
-    return {
-      displayTitle: child.displayTitle,
-      key: child.manifestKey,
-      required: selected,
-      selected,
-      source: "fresh",
-      result: selected ? "success" : "skipped",
-      runId: selected ? String(800 + index) : "",
-      runAttempt: selected ? 1 : null,
-      url: selected ? `https://github.com/${REPOSITORY}/actions/runs/${800 + index}` : "",
-      workflow: child.workflow,
-      workflowRef: branch,
-      workflowSha: TOOLING_SHA,
-      parentJobName: child.parentJobName,
-    };
-  });
+  const planned = expectedChildDispatches("200", 1, branch, 3)
+    .filter((child) =>
+      qualificationCoverage.children.some((entry) => entry.key === child.manifestKey),
+    )
+    .map((child, index) => {
+      return {
+        displayTitle: child.displayTitle,
+        key: child.manifestKey,
+        required: true,
+        selected: true,
+        source: "fresh",
+        result: "success",
+        runId: String(800 + index),
+        runAttempt: 1,
+        url: `https://github.com/${REPOSITORY}/actions/runs/${800 + index}`,
+        workflow: child.workflow,
+        workflowRef: branch,
+        workflowSha: TOOLING_SHA,
+        parentJobName: child.parentJobName,
+      };
+    });
   const plan = buildReleaseExecutionPlanArtifact({
     attemptEvidenceVersion: 3,
     candidate: null,
     coveragePolicy,
+    qualificationCoverage,
+    qualificationInputs,
+    sourceAdmissionContract: "1",
+    sourceAdmission: source,
+    publicationAdmissionContract: "1",
+    publicationAdmission: admission,
     targetVersion: version,
     children: planned.map(({ parentJobName: _name, ...child }) => child),
     evidenceReuse: { requested: false },
     gates: [{ name: "Resolve target ref", required: true, result: "success" }],
     releaseProfile: profile,
     rerunGroup: "all",
-    trustedWorkflow: TOOLING,
+    trustedWorkflow: qualificationTooling,
     expected: {
       parentRunId: "200",
       parentRunAttempt: 1,
@@ -1257,8 +1327,8 @@ async function preparationEvidence(
         toolingSha: TOOLING_SHA,
         releaseProfile: profile,
         releaseSoak: !beta,
-        upgradeSurvivorBaseline: "openclaw@latest",
-        upgradeSurvivorBaselines: "",
+        upgradeSurvivorBaseline: baselines.upgradeBaseline,
+        upgradeSurvivorBaselines: baselines.upgradeSurvivorBaselines.join(","),
         upgradeSurvivorScenarios: "",
         allowFrozenTargetScenarioOmissions: false,
         allowUnreleasedChangelog: false,
@@ -1267,20 +1337,11 @@ async function preparationEvidence(
       }),
     },
   });
-  Object.assign(plan, {
-    sourceAdmissionContract: "1",
-    sourceAdmission: source,
-    publicationAdmissionContract: "1",
-    publicationAdmission: admission,
-  });
-  plan.sha256 = releaseExecutionPlanSha256(plan);
-  const childJobs = (key: string) => [
-    {
-      ...baseJob,
-      id: 950,
-      name: key === "productPerformance" ? "Verify artifact-only report mode" : "test",
-    },
-  ];
+
+  const childJobs = (key: string) =>
+    qualificationCoverage.children
+      .find((child) => child.key === key)!
+      .requiredJobs.map((name, index) => Object.assign({}, baseJob, { id: 950 + index, name }));
   const childEvidence = Object.fromEntries(
     planned
       .filter((entry) => entry.selected)
@@ -1325,11 +1386,17 @@ async function preparationEvidence(
       stableSoakRequired: !beta,
     },
     validationInputs: {
+      ...Object.fromEntries(
+        Object.entries(source.coverage).map(([key, value]) => [
+          key.replace(/_([a-z])/gu, (_, letter: string) => letter.toUpperCase()),
+          value,
+        ]),
+      ),
       ...publicationIntentInputs(source),
       coveragePolicy,
       targetVersion: version,
       targetContextRef: context,
-      mode: "direct",
+      mode: "both",
       provider: "openai",
       codexPluginSpec: "",
       crossOsSuiteFilter: "",
@@ -1342,11 +1409,13 @@ async function preparationEvidence(
       skipPackageTelegramE2e: String(beta),
       allowUnreleasedChangelog: "false",
     },
-    trustedWorkflow: TOOLING,
+    trustedWorkflow: qualificationTooling,
     sourceAdmissionContract: "1",
     sourceAdmission: source,
     publicationAdmissionContract: "1",
     publicationAdmission: admission,
+    qualificationCoverage,
+    qualificationInputs,
     sourceParentRunAttempt: 1,
     executionPlanSha256: plan.sha256,
     publicationArtifacts: { pluginNpm: descriptor("npm") },
@@ -1360,8 +1429,6 @@ async function preparationEvidence(
       ]),
     ),
   };
-  const workflow =
-    'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"\n';
   const responses: Record<string, unknown> = {
     "actions/runs/200": parent,
     "actions/runs/200/attempts/1": parent,
@@ -1396,10 +1463,24 @@ async function preparationEvidence(
           started_at: "2026-09-13T12:01:00.000Z",
           completed_at: "2026-09-13T12:01:03.000Z",
         },
+        {
+          ...baseJob,
+          name: "Record immutable release execution plan digest",
+          number: 7,
+          started_at: "2026-09-13T12:01:03.000Z",
+          completed_at: "2026-09-13T12:01:04.000Z",
+        },
       ],
     },
   ];
-  const logs: Record<string, string> = {};
+  jobs.push(
+    ...qualificationCoverage.requiredParentJobs
+      .filter((name) => !jobs.some((job) => job.name === name))
+      .map((name, index) => Object.assign({}, baseJob, { id: 930 + index, name, steps: [] })),
+  );
+  const logs: Record<string, string> = {
+    "actions/jobs/902/logs": `2026-09-13T12:01:03.750Z FRV_EXECUTION_PLAN_SHA256=${plan.sha256}\n`,
+  };
   for (const [index, child] of planned.entries()) {
     if (!child.selected) {
       continue;
@@ -1415,7 +1496,7 @@ async function preparationEvidence(
     responses[`actions/runs/${child.runId}`] = childRun;
     responses[`actions/runs/${child.runId}/attempts/1`] = childRun;
     responses[`actions/runs/${child.runId}/attempts/1/jobs`] = {
-      total_count: 1,
+      total_count: childJobs(child.key).length,
       jobs: childJobs(child.key),
     };
     const jobId = 910 + index;
@@ -1426,6 +1507,29 @@ async function preparationEvidence(
   responses["actions/runs/200/jobs"] = { total_count: jobs.length, jobs };
   responses["actions/runs/200/attempts/1/jobs"] = { total_count: jobs.length, jobs };
   const archives: Record<string, string> = {};
+  const admissionArchive = join(root, "admission.zip");
+  writeFileSync(admissionArchive, qualification.archive());
+  archives["actions/artifacts/70/zip"] = admissionArchive;
+  for (const endpoint of [
+    "actions/runs/40/attempts/1",
+    "actions/runs/40/attempts/1/jobs?per_page=100",
+    "actions/runs/40/artifacts?per_page=100",
+    "actions/artifacts/70",
+    "git/ref/tags/" + qualification.producer.workflowHeadBranch,
+    "collaborators/release-operator/permission",
+  ]) {
+    responses[endpoint.split("?")[0]!] = JSON.parse(
+      qualification.runGh(["api", "repos/" + REPOSITORY + "/" + endpoint]),
+    );
+  }
+  const sourceResponses: Record<string, unknown> = {};
+  for (const key of qualification.sources.keys()) {
+    const [sha, path] = key.split(":");
+    const endpoint = "contents/" + path + "?ref=" + sha;
+    sourceResponses[endpoint] = JSON.parse(
+      qualification.runGh(["api", "repos/" + REPOSITORY + "/" + endpoint]),
+    );
+  }
   const artifacts = [];
   for (const [index, [name, filename, value]] of (
     [
@@ -1459,6 +1563,7 @@ async function preparationEvidence(
   responses["actions/runs/200/artifacts"] = { total_count: artifacts.length, artifacts };
   return {
     responses,
+    sourceResponses,
     logs,
     archives,
     manifest,

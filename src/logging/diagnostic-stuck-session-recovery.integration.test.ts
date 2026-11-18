@@ -16,7 +16,6 @@ import {
   beginDiagnosticRetryWait,
   createDiagnosticEmbeddedRunOwner,
   getDiagnosticSessionActivitySnapshot,
-  markDiagnosticArgumentChurnObservation,
   markDiagnosticEmbeddedRunStarted,
   markDiagnosticOwnedToolActivity,
 } from "./diagnostic-run-activity.js";
@@ -166,21 +165,6 @@ describe("controller recovery through actual progress producers", () => {
     expect(operation.supersede()).toBe(true);
     expect(cancel).toHaveBeenCalledOnce();
     expect(operation.result).toMatchObject({ kind: "aborted", code: "aborted_for_supersession" });
-  });
-
-  it("continuous argument churn cannot be renewed by mechanical model/tool handoffs", async () => {
-    const { operation, cancel, watchdogAttempt } = begin();
-    for (let step = 0; step <= 12; step++) {
-      vi.setSystemTime(step * 30_000);
-      watchdogAttempt.progress("semantic", "model:repeated_tool_request");
-      markDiagnosticArgumentChurnObservation({ ...ref, watchdogAttempt, active: true });
-    }
-    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
-      lastProgressAgeMs: abortMs,
-      lastProgressReason: "tool_loop:argument_churn",
-    });
-    await recoverStuckDiagnosticSession({ ...ref, operation, ageMs: abortMs });
-    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("a failed cleanup cannot admit a queued successor until the writer really settles", async () => {

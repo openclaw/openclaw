@@ -4,7 +4,7 @@ import {
   assertChromeMcpCdpTransportAllowed,
   resolveCdpControlPolicy,
 } from "./cdp-reachability-policy.js";
-import { isSelectableCdpBrowserTarget } from "./cdp-target-filter.js";
+import { isOperatorOnlyBrowserPageUrl, isSelectableCdpBrowserTarget } from "./cdp-target-filter.js";
 import { CDP_JSON_NEW_TIMEOUT_MS } from "./cdp-timeouts.js";
 import {
   assertCdpEndpointAllowed,
@@ -205,21 +205,23 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
                   return new Map<string, number>();
                 })
             : undefined;
-        return pages.filter(isSelectableCdpBrowserTarget).map((p) => {
-          // Correlate only by the relay's exact CDP target id. The native Chrome
-          // tab id is runtime-scoped and must not replace OpenClaw's stable tN alias.
-          const webExtensionTabId = webExtensionTabIds?.get(p.targetId);
-          const tab: BrowserTab = {
-            targetId: p.targetId,
-            title: p.title,
-            url: p.url,
-            type: p.type,
-          };
-          if (webExtensionTabId !== undefined) {
-            tab.webExtensionTabId = webExtensionTabId;
-          }
-          return tab;
-        });
+        return pages
+          .filter((p) => isSelectableCdpBrowserTarget(p, options))
+          .map((p) => {
+            // Correlate only by the relay's exact CDP target id. The native Chrome
+            // tab id is runtime-scoped and must not replace OpenClaw's stable tN alias.
+            const webExtensionTabId = webExtensionTabIds?.get(p.targetId);
+            const tab: BrowserTab = {
+              targetId: p.targetId,
+              title: p.title,
+              url: p.url,
+              type: p.type,
+            };
+            if (webExtensionTabId !== undefined) {
+              tab.webExtensionTabId = webExtensionTabId;
+            }
+            return tab;
+          });
       }
     }
 
@@ -239,7 +241,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         wsUrl: normalizeWsUrl(t.webSocketDebuggerUrl, profile.cdpUrl),
         type: t.type,
       };
-      if (!tab.targetId || !isSelectableCdpBrowserTarget(tab)) {
+      if (!tab.targetId || !isSelectableCdpBrowserTarget(tab, options)) {
         continue;
       }
       if (tab.wsUrl) {
@@ -261,12 +263,18 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     options?.signal?.throwIfAborted();
     // Chrome MCP target identity is authoritative. A replacement tab cannot
     // inherit an alias safely, even when its URL matches the closed tab.
-    return assignTabAliases(
+    // Aliases follow the agent-visible list, so operator-only pages never get or take one.
+    const aliased = assignTabAliases(
       runtime,
-      tabs,
+      tabs.filter((tab) => !isOperatorOnlyBrowserPageUrl(tab.url)),
       !capabilities.usesChromeMcp &&
         resolveBrowserEngine(profile.engine).descriptor.sessionScope !== "connection",
     );
+    if (aliased.length === tabs.length) {
+      return aliased;
+    }
+    const byTargetId = new Map(aliased.map((tab) => [tab.targetId, tab]));
+    return tabs.map((tab) => byTargetId.get(tab.targetId) ?? tab);
   };
 
   const enforceManagedTabLimit = async (
@@ -334,8 +342,15 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     options?.signal?.throwIfAborted();
     // Rejected, aborted, or undiscovered opens must preserve the prior implicit target.
     // Alias and sticky state therefore change only at this final validated adoption point.
-    const adopted = assignTabAlias({ profileState: runtime, tab, label: options?.label });
-    runtime.lastTargetId = tab.targetId;
+    // Operator-only pages get no alias (aliases follow the agent-visible list) and never
+    // become the implicit tab for agent calls without a targetId.
+    const operatorOnly = isOperatorOnlyBrowserPageUrl(tab.url);
+    const adopted = operatorOnly
+      ? tab
+      : assignTabAlias({ profileState: runtime, tab, label: options?.label });
+    if (!operatorOnly) {
+      runtime.lastTargetId = tab.targetId;
+    }
     // This local-managed raw HTTP cleanup owns no browser process or adapter.
     // Keep it best-effort so an unresponsive old target cannot block tab creation.
     void enforceManagedTabLimit(tab.targetId, options).catch(() => {});
@@ -373,7 +388,10 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
   const openTab: ProfileTabOps["openTab"] = async (url, opts) => {
     opts?.signal?.throwIfAborted();
     const normalizedLabel = opts?.label === undefined ? undefined : normalizeTabLabel(opts.label);
-    let ssrfPolicyOpts = getNavigationPolicy();
+    let ssrfPolicyOpts = {
+      ...getNavigationPolicy(),
+      ...(opts?.includeOperatorPages ? { allowOperatorPages: true as const } : {}),
+    };
     const cdpPolicy = getCdpControlPolicy();
     // Runtime shutdown fences state() before draining this operation's cleanup.
     const cleanupTimeoutMs = state().resolved.remoteCdpTimeoutMs;
@@ -433,6 +451,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
           // Raw CDP cannot carry the automatic grant's final-effect authority fence.
           ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy, {
             browserProxyMode: ssrfPolicyOpts.browserProxyMode,
+            allowOperatorPages: ssrfPolicyOpts.allowOperatorPages,
           });
         }
       }
@@ -450,6 +469,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         url,
         ssrfPolicy: cdpPolicy,
         waitForNavigationResult: true,
+        ...(ssrfPolicyOpts.allowOperatorPages ? { allowOperatorPages: true } : {}),
         ...(cdpActionTimeouts ? { timeouts: cdpActionTimeouts } : {}),
         ...(opts?.signal ? { signal: opts.signal } : {}),
       }).catch(() => null);
@@ -524,7 +544,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         throw new Error("Failed to open tab (missing id)");
       }
       const resolvedUrl = created.url ?? url;
-      if (!isSelectableCdpBrowserTarget({ url: resolvedUrl, type: created.type })) {
+      if (!isSelectableCdpBrowserTarget({ url: resolvedUrl, type: created.type }, opts)) {
         throw new Error("Failed to open tab (non-selectable target)");
       }
       await assertBrowserNavigationResultAllowed({ url: resolvedUrl, ...ssrfPolicyOpts });

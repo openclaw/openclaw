@@ -523,7 +523,7 @@ async function gatherDaemonStatusImpl(
 
   return {
     cli: projection.cli,
-    logFile: resolveConfiguredLogFilePath(cliCfg),
+    logFile: await resolveConfiguredLogFilePath(cliCfg),
     service: {
       inspectionReason: serviceState.inspectionReason,
       label: formatServiceLabel(service.label, runtime),

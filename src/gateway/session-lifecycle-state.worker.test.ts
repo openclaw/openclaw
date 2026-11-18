@@ -85,7 +85,7 @@ it("retains missed shutdown markers in terminal writes without marking resets or
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
     const f = createSessionCompoundWorkerFixture();
-    const retained = { queuedInputIds: ["accepted-input"], hadBackgroundExec: true as const };
+    const retained = { queuedInputIds: ["accepted-input"] };
     const cases: Array<{
       name: string;
       key?: string;

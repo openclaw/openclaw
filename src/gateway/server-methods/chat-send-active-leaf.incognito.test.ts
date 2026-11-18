@@ -10,7 +10,7 @@ installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
-it("checks Incognito sends and Stop against the process-local active path", async () => {
+it("checks Incognito sends against the process-local active path; Stop needs no view", async () => {
   await using fixture = await createBrowserFollowupFixture({
     active: false,
     persistDuringDispatch: true,
@@ -49,17 +49,16 @@ it("checks Incognito sends and Stop against the process-local active path", asyn
       expectedLeafEntryId,
     });
 
-  expectLeafChanged(await stop("obsolete-leaf"));
-  expect((await stop("current-leaf")).mock.calls[0]?.[0]).toBe(true);
+  expect((await stop("obsolete-leaf")).mock.calls[0]?.[0]).toBe(true);
   expectLeafChanged(await send({ ...fixture.params, expectedLeafEntryId: "obsolete-leaf" }));
-  // Without a session fence, only the exact leaf is current.
-  expectLeafChanged(
-    await send({ ...fixture.params, sessionId: undefined, expectedLeafEntryId: "earlier-leaf" }),
-  );
   expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 
-  // A session-fenced sender may still be on the active path behind the newest reply.
-  const accepted = await send({ ...fixture.params, expectedLeafEntryId: "earlier-leaf" });
+  // A sender behind the newest reply is still on the active path, with or without a session id.
+  const accepted = await send({
+    ...fixture.params,
+    sessionId: undefined,
+    expectedLeafEntryId: "earlier-leaf",
+  });
   expect(accepted.mock.calls[0]).toMatchObject({ 0: true, 1: { status: "started" } });
   await fixture.finishDispatch();
   expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();

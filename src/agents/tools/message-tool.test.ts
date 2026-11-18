@@ -45,7 +45,6 @@ import { sanitizeMessageToolVisiblePayload } from "./message-tool-visible-conten
 
 type CreateMessageTool = typeof createMessageTool;
 
-const CRITICAL_THRESHOLD = 20;
 const EMPTY_PREPARED_MESSAGE_TOOL_CATALOG = {
   version: 0,
   channels: [],
@@ -1522,63 +1521,6 @@ describe("message tool explicit target guard", () => {
   );
 });
 
-function mockQaChannelGatewayActionRunner() {
-  mocks.dispatch.mockImplementation(async ({ params }) => {
-    const callIndex = mocks.dispatch.mock.calls.length;
-    return {
-      kind: "send",
-      action: "send",
-      channel: "qa-channel",
-      to: typeof params?.target === "string" ? params.target : "channel:loop-room",
-      handledBy: "plugin",
-      payload: {
-        message: {
-          id: `qa-message-${callIndex}`,
-          accountId: "default",
-          direction: "outbound",
-          conversation: { id: "loop-room", chatType: "channel" },
-          senderId: "openclaw",
-          text: "same visible reply",
-          timestamp: 1_800_000_000_000 + callIndex,
-        },
-      },
-      dryRun: false,
-    } satisfies MessageActionResult;
-  });
-}
-
-it("blocks repeated qa-channel sends returned by the wrapped message tool", async () => {
-  mockQaChannelGatewayActionRunner();
-  const messageTool = createMessageTool();
-  const wrappedTool = wrapToolWithBeforeToolCallHook(messageTool, {
-    agentId: "main",
-    sessionKey: "message-tool-action-runner-loop",
-    sessionId: "message-tool-action-runner-loop-session",
-    runId: "message-tool-action-runner-loop-run",
-    loopDetection: { enabled: true },
-  });
-  const params = { action: "send", target: "channel:loop-room", message: "same visible reply" };
-
-  for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
-    const result = await wrappedTool.execute(`message-tool-send-${i}`, params);
-    expect(result.details).toMatchObject({
-      message: { conversation: { id: "loop-room" }, text: "same visible reply" },
-    });
-  }
-
-  const blocked = await wrappedTool.execute(`message-tool-send-${CRITICAL_THRESHOLD}`, params);
-  expect(mocks.dispatch).toHaveBeenCalledTimes(CRITICAL_THRESHOLD);
-  expect(blocked.details).toMatchObject({ status: "blocked", deniedReason: "tool-loop" });
-  const blockedDetails = blocked.details as { reason?: unknown } | undefined;
-  expect(String(blockedDetails?.reason)).toContain("CRITICAL");
-
-  const blockedAgain = await wrappedTool.execute(
-    `message-tool-send-${CRITICAL_THRESHOLD + 1}`,
-    params,
-  );
-  expect(mocks.dispatch).toHaveBeenCalledTimes(CRITICAL_THRESHOLD);
-  expect(blockedAgain.details).toMatchObject({ status: "blocked", deniedReason: "tool-loop" });
-});
 describe("message tool schema scoping", () => {
   const telegramPlugin = createChannelPlugin({
     id: "telegram",

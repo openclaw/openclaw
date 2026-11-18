@@ -22,6 +22,10 @@ import {
 } from "../../system-agent/delegated-change-policy.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
 import { SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES } from "../../system-agent/operator-approval.js";
+import {
+  getSystemAgentTemplateGateway,
+  withSystemAgentTemplateGateway,
+} from "../../system-agent/template-gateway.js";
 import { createSystemAgentTranscriptStore } from "../../system-agent/transcript-store.js";
 import type { AgentRuntimeDelegatedAuthority } from "../agent-runtime-identity-token.js";
 import { ApprovalObserverClosedError } from "../exec-approval-lifecycle.js";
@@ -126,6 +130,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
     turnSourceThreadId?: string | number;
   };
 }): Promise<DelegatedProposalResolver> {
+  const templateGateway = getSystemAgentTemplateGateway();
   const callerIdentity = getGatewayToolCallerIdentity();
   const approvalAuthority =
     callerIdentity?.approvalAuthority ??
@@ -209,29 +214,37 @@ export async function prepareDelegatedSystemAgentApproval(params: {
         if (decision && decision !== "deny") {
           assertLiveApprovalAuthority();
         }
-        return await params.session.engine.resolveOperatorApproval(
-          decision,
-          proposal.hash,
-          () => {
-            assertLiveApprovalAuthority();
-            if (automatic) {
-              callerIdentity!.assertAutoApproveChangesCurrent!();
-            }
-          },
-          terminalStatus,
+        return await withSystemAgentTemplateGateway(templateGateway, () =>
+          params.session.engine.resolveOperatorApproval(
+            decision,
+            proposal.hash,
+            () => {
+              assertLiveApprovalAuthority();
+              if (automatic) {
+                callerIdentity!.assertAutoApproveChangesCurrent!();
+              }
+            },
+            terminalStatus,
+          ),
         );
       };
       const resolveCorrection = async (
         reply: NonNullable<Awaited<ReturnType<typeof applyDecision>>>,
       ): Promise<Awaited<ReturnType<DelegatedProposalResolver>> | undefined> => {
+        const correction = params.session.engine.getPendingOperatorProposal();
+        const pluginCapabilityContinuation =
+          proposal.operation.kind === "plugin-install" &&
+          correction?.operation.kind === "plugin-install" &&
+          correction.operation.spec === proposal.operation.spec &&
+          Boolean(correction.operation.capabilityReview);
         if (
           proposal.operation.kind !== "config-set" &&
           proposal.operation.kind !== "config-unset" &&
-          proposal.operation.kind !== "config-set-ref"
+          proposal.operation.kind !== "config-set-ref" &&
+          !pluginCapabilityContinuation
         ) {
           return undefined;
         }
-        const correction = params.session.engine.getPendingOperatorProposal();
         if (reply.applied === true || !correction) {
           return undefined;
         }
@@ -240,7 +253,9 @@ export async function prepareDelegatedSystemAgentApproval(params: {
         if (corrective || !active) {
           await retireSystemAgentProposal(params.session, manager, correction.hash);
           const notice = active
-            ? "OpenClaw repair stopped after one corrective attempt. Check the current settings before making a new request."
+            ? pluginCapabilityContinuation
+              ? "The plugin changed during capability review. No plugin change was committed; ask again here to review the current plugin."
+              : "OpenClaw repair stopped after one corrective attempt. Check the current settings before making a new request."
             : "OpenClaw correction cancelled because its approval authority ended. Check the current settings before making a new request.";
           params.session.engine.noteAssistantMessage(notice);
           return { kind: "completed", reply: { ...reply, text: `${reply.text}\n\n${notice}` } };
@@ -282,7 +297,8 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       if (!manager) {
         throw new Error("OpenClaw approval registry unavailable");
       }
-      const operationDescription = describeSystemAgentPersistentOperation(proposal.operation);
+      const operationDescription =
+        proposal.description ?? describeSystemAgentPersistentOperation(proposal.operation);
       const description = approvalReason
         ? `${operationDescription}\n\n${approvalReason}`
         : operationDescription;
@@ -446,7 +462,15 @@ export async function prepareDelegatedSystemAgentApproval(params: {
                 : (correction?.reply ?? reply),
             );
             if (decision) {
-              const applicationStatus = reply?.applied === true ? "applied" : "not-applied";
+              // A capability review continues this same installation. Settle the
+              // source card with its final result, not a false interim failure.
+              const finalReply =
+                proposal.operation.kind === "plugin-install" && correction?.kind === "approval"
+                  ? await correction.completion
+                  : correction?.kind === "completed"
+                    ? correction.reply
+                    : reply;
+              const applicationStatus = finalReply?.applied === true ? "applied" : "not-applied";
               publishApplicationResult(decision, applicationStatus);
             }
           } catch (error) {

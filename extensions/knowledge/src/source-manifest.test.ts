@@ -166,13 +166,14 @@ async function archive(seed: (db: DatabaseSync) => void) {
   const output = path.join(dir, "messages.jsonl");
   const config = path.join(dir, "config.yaml");
   const env = { ...process.env, PATH: bin + path.delimiter + process.env.PATH };
-  return async (channel: string, since: string, before: string, ...extra: string[]) => {
+  const exportRows = async (channel: string, since: string, before: string, ...extra: string[]) => {
     const args = [...flags({ config, channel, since, before, output }), ...extra];
     const stdout = run(discrawlScript, args, { env, stdio: ["ignore", "pipe", "pipe"] });
     expect(stdout).toBe("");
     const lines = (await readFile(output, "utf8")).trim().split("\n");
     return lines.map((line) => JSON.parse(line));
   };
+  return Object.assign(exportRows, { output });
 }
 
 it("Discrawl adapter resolves a stable channel, bounds instants, emits attachment state and includes threads only when asked", async () => {
@@ -211,9 +212,7 @@ it("Discrawl adapter resolves a stable channel, bounds instants, emits attachmen
   expect((await exportRows(...day)).map((msg) => msg.id)).toStrictEqual(["start", "30", "last"]);
   const since = "2026-09-27T00:00:00.000000000-07:00";
   const before = "2026-09-27T07:00:00.000000001Z";
-  expect((await exportRows("20", since, before)).map((message) => message.id)).toStrictEqual([
-    "start",
-  ]);
+  expect((await exportRows("20", since, before)).map((msg) => msg.id)).toStrictEqual(["start"]);
   for (const [start, end] of [
     [before, since],
     [since, "2026-09-27T07:00:00Z"],
@@ -221,14 +220,13 @@ it("Discrawl adapter resolves a stable channel, bounds instants, emits attachmen
     await expect(exportRows("20", start!, end!)).rejects.toThrow(/--since must precede --before/);
   }
   const threaded = await exportRows(...day, "--threads", "include");
-  expect(
-    threaded.map((message) => [message.id, message.payload.thread_name ?? null]),
-  ).toStrictEqual([
-    ["start", null],
-    ["30", null],
-    ["thread", "release plan"],
-    ["last", null],
-  ]);
+  const names = threaded.flatMap((msg) => [msg.id, msg.payload.thread_name ?? null]);
+  expect(names).toStrictEqual(["start", null, "30", null, "thread", "release plan", "last", null]);
+  // A rejected export prints only its error and keeps the previous output.
+  await expect(exportRows("#missing", day[1], day[2])).rejects.toMatchObject({
+    stderr: "Channel name resolved to 0 rows; supply --channel with the stable channel ID\n",
+  });
+  expect(await readFile(exportRows.output, "utf8")).toBe(jsonl(threaded));
 });
 
 it("Discrawl adapter exposes usable help without requiring paired arguments", () => {

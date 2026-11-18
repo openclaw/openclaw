@@ -4,7 +4,7 @@ import { createSignal, For } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createAsyncQuestionPresentation } from "./chat-async-question.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { createToolResultMessage } from "./chat-message.test-support.ts";
@@ -44,7 +44,7 @@ it("renders submitted App references synchronously when a user message acquires 
   ).toEqual(["Helmet shell", "Tiger cowrie"]);
 });
 
-it("renders rich history immediately and retires a superseded message", () => {
+it("renders rich history and retires a superseded message", async () => {
   const question = {
     role: "assistant",
     content: "Choose an audience.",
@@ -99,7 +99,9 @@ it("renders rich history immediately and retires a superseded message", () => {
   });
   setMessages((entries) => [...entries.slice(0, 2), { key: "current", message: currentTool }]);
   flush();
-  expect(view.container.querySelector(".chat-permission-card")).not.toBeNull();
+  await waitForSolid(() =>
+    expect(view.container.querySelector(".chat-permission-card")).not.toBeNull(),
+  );
   expect(view.container.querySelector(".chat-question-summary")?.textContent).toContain(
     "Which audience?",
   );

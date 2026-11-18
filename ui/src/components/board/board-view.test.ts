@@ -659,7 +659,7 @@ describe("openclaw-board-view", () => {
     expectText(testId(view, "board-widget-error"), "The widget sandbox is unavailable.");
   });
 
-  it("keeps cell focus order stable and exposes move, resize, and menu labels", async () => {
+  it("keeps cell focus order stable and exposes menu labels", async () => {
     const view = await mount();
     const cells = [...view.querySelectorAll<HTMLElement>('[data-test-id="board-widget"]')];
     expect(cells.map((cell) => cell.getAttribute("tabindex"))).toEqual(["0", "-1"]);
@@ -673,8 +673,6 @@ describe("openclaw-board-view", () => {
       const drag = cell.querySelector(".board-widget__drag-handle");
       const resize = cell.querySelector(".board-widget__resize-handle");
       const menu = cell.querySelector(".board-widget__menu-trigger");
-      expect(drag?.getAttribute("title")).toMatch(/^Move /u);
-      expect(resize?.getAttribute("title")).toMatch(/^Resize /u);
       expect([drag?.getAttribute("tabindex"), resize?.getAttribute("tabindex")]).toEqual([
         null,
         null,

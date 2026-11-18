@@ -158,7 +158,7 @@ describe("GitHub identity view", () => {
     expect(view.getByRole("alert").textContent).toContain("Synthetic GitHub status unavailable");
     expect(view.getByText("Couldn’t load account status. Try again.")).toBeTruthy();
     expect(view.queryByText("No verified account")).toBeNull();
-    expect(view.queryByText("System GitHub")).toBeNull();
+    expect(view.queryByText("Uses the shared agent account")).toBeNull();
     identity.showPatFallback();
     await identity.configure();
     flush();
@@ -185,7 +185,7 @@ describe("GitHub identity view", () => {
     ));
     const expectUnknown = () => {
       expect(view.queryByText("No verified account")).toBeNull();
-      expect(view.queryByText("System GitHub")).toBeNull();
+      expect(view.queryByText("Uses the shared agent account")).toBeNull();
     };
     flush();
     expectUnknown();
@@ -210,7 +210,7 @@ describe("GitHub identity view", () => {
     await vi.advanceTimersByTimeAsync(0);
     flush();
     expect(view.getByText("No verified account")).toBeTruthy();
-    expect(view.getByText("System GitHub")).toBeTruthy();
+    expect(view.getByText("Uses the shared agent account")).toBeTruthy();
     sync({ statusReadable: false, configurable: false, authorizable: false });
     flush();
     expectUnknown();
@@ -253,9 +253,7 @@ describe("GitHub identity view", () => {
     );
     identity.showPatFallback();
     identity.setDraft("token", "synthetic-first-token");
-    const view = mountSolid(() => (
-      <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
-    ));
+    const view = mountSolid(() => <GitHubConnectionSetup identity={identity} />);
     const oldSaving = identity.configure();
     await vi.advanceTimersByTimeAsync(0);
     flush();
@@ -297,7 +295,13 @@ describe("GitHub identity view", () => {
               identity = createGitHubIdentityView({
                 runExternalMutation: createMutationRunner(client),
               });
-              return <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />;
+              // Profile shows the account summary with its setup beneath it.
+              return (
+                <>
+                  <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
+                  <GitHubConnectionSetup identity={identity} />
+                </>
+              );
             },
           }),
         }),
@@ -459,9 +463,7 @@ describe("GitHub identity view", () => {
       },
     );
     identity.showPatFallback();
-    const view = mountSolid(() => (
-      <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
-    ));
+    const view = mountSolid(() => <GitHubConnectionSetup identity={identity} />);
     const input = view.container.querySelector<HTMLInputElement>(".settings-secret input")!;
     input.focus();
     input.value = "synthetic-pat";

@@ -22,7 +22,10 @@ import {
   isControlUiVersionedPublicAsset,
 } from "../src/gateway/control-ui-root-assets.ts";
 import { selectControlUiRoutePreloads } from "../src/gateway/control-ui-route-preloads.ts";
-import { shouldPrecompressControlUiAsset } from "./config/control-ui-asset-compression.ts";
+import {
+  gzipControlUiAsset,
+  shouldPrecompressControlUiAsset,
+} from "./config/control-ui-asset-compression.ts";
 import {
   collectControlUiBootAssets,
   controlUiBootPreloadsPlugin,
@@ -104,16 +107,6 @@ export async function createControlUiPrecompressedAssetVariants(
   if (!shouldPrecompressControlUiAsset(fileName, body.byteLength, bootAssets.has(fileName))) {
     return [];
   }
-  let compressedGzip = gzip(body, 12);
-  if (bootAssets.has(fileName)) {
-    // Compression levels are not monotonic. Keep the smallest first-load encoding.
-    for (const level of [10, 11]) {
-      const candidate = gzip(body, level);
-      if (candidate.byteLength < compressedGzip.byteLength) {
-        compressedGzip = candidate;
-      }
-    }
-  }
   const variants = [
     {
       fileName: `${fileName}.br`,
@@ -127,9 +120,7 @@ export async function createControlUiPrecompressedAssetVariants(
     },
     {
       fileName: `${fileName}.gz`,
-      // Pinned WASM keeps gzip bytes independent of the host zlib and CPU.
-      // Deferred assets use maximum effort; boot assets keep their smallest encoding.
-      source: Buffer.from(compressedGzip),
+      source: Buffer.from(gzipControlUiAsset(body, bootAssets.has(fileName))),
     },
   ];
   return variants.filter((variant) => variant.source.byteLength < body.byteLength);

@@ -466,7 +466,9 @@
       "loadMoreCards": "加载更多卡片",
       "automationEvent": "事件：{source}",
       "automationWaitingForEvent": "等待事件",
-      "dependencyStatusNotLoaded": "未加载"
+      "dependencyStatusNotLoaded": "未加载",
+      "automationDisabled": "已禁用",
+      "dispatchFirstFailure": "首次启动失败：{message}"
     }
   },
   "zh-TW": {
@@ -936,7 +938,9 @@
       "loadMoreCards": "載入更多卡片",
       "automationEvent": "事件：{source}",
       "automationWaitingForEvent": "等待事件",
-      "dependencyStatusNotLoaded": "未載入"
+      "dependencyStatusNotLoaded": "未載入",
+      "automationDisabled": "已停用",
+      "dispatchFirstFailure": "首次啟動失敗：{message}"
     }
   },
   "pt-BR": {
@@ -1406,7 +1410,9 @@
       "loadMoreCards": "Carregar mais cartões",
       "automationEvent": "Evento: {source}",
       "automationWaitingForEvent": "Aguardando evento",
-      "dependencyStatusNotLoaded": "Não carregado"
+      "dependencyStatusNotLoaded": "Não carregado",
+      "automationDisabled": "Desativado",
+      "dispatchFirstFailure": "Primeira falha na inicialização: {message}"
     }
   },
   "de": {
@@ -1876,7 +1882,9 @@
       "loadMoreCards": "Weitere Karten laden",
       "automationEvent": "Ereignis: {source}",
       "automationWaitingForEvent": "Warten auf Ereignis",
-      "dependencyStatusNotLoaded": "Nicht geladen"
+      "dependencyStatusNotLoaded": "Nicht geladen",
+      "automationDisabled": "Deaktiviert",
+      "dispatchFirstFailure": "Erster Startfehler: {message}"
     }
   },
   "es": {
@@ -2346,7 +2354,9 @@
       "loadMoreCards": "Cargar más tarjetas",
       "automationEvent": "Evento: {source}",
       "automationWaitingForEvent": "Esperando un evento",
-      "dependencyStatusNotLoaded": "Sin cargar"
+      "dependencyStatusNotLoaded": "Sin cargar",
+      "automationDisabled": "Desactivado",
+      "dispatchFirstFailure": "Primer fallo de inicio: {message}"
     }
   },
   "ja-JP": {
@@ -2816,7 +2826,9 @@
       "loadMoreCards": "カードをさらに読み込む",
       "automationEvent": "イベント：{source}",
       "automationWaitingForEvent": "イベント待機中",
-      "dependencyStatusNotLoaded": "未読み込み"
+      "dependencyStatusNotLoaded": "未読み込み",
+      "automationDisabled": "無効",
+      "dispatchFirstFailure": "初回起動の失敗: {message}"
     }
   },
   "ko": {
@@ -3286,7 +3298,9 @@
       "loadMoreCards": "카드 더 불러오기",
       "automationEvent": "이벤트: {source}",
       "automationWaitingForEvent": "이벤트 대기 중",
-      "dependencyStatusNotLoaded": "불러오지 않음"
+      "dependencyStatusNotLoaded": "불러오지 않음",
+      "automationDisabled": "비활성화됨",
+      "dispatchFirstFailure": "첫 시작 실패: {message}"
     }
   },
   "fr": {
@@ -3756,7 +3770,9 @@
       "loadMoreCards": "Charger plus de cartes",
       "automationEvent": "Événement : {source}",
       "automationWaitingForEvent": "En attente d’un événement",
-      "dependencyStatusNotLoaded": "Non chargé"
+      "dependencyStatusNotLoaded": "Non chargé",
+      "automationDisabled": "Désactivé",
+      "dispatchFirstFailure": "Premier échec de démarrage : {message}"
     }
   },
   "hi": {
@@ -4226,7 +4242,9 @@
       "loadMoreCards": "और कार्ड लोड करें",
       "automationEvent": "घटना: {source}",
       "automationWaitingForEvent": "घटना की प्रतीक्षा है",
-      "dependencyStatusNotLoaded": "लोड नहीं हुआ"
+      "dependencyStatusNotLoaded": "लोड नहीं हुआ",
+      "automationDisabled": "अक्षम",
+      "dispatchFirstFailure": "शुरू करने का पहला प्रयास विफल: {message}"
     }
   },
   "ar": {
@@ -4696,7 +4714,9 @@
       "loadMoreCards": "تحميل المزيد من البطاقات",
       "automationEvent": "الحدث: {source}",
       "automationWaitingForEvent": "في انتظار حدث",
-      "dependencyStatusNotLoaded": "غير محمّل"
+      "dependencyStatusNotLoaded": "غير محمّل",
+      "automationDisabled": "معطّل",
+      "dispatchFirstFailure": "أول فشل في بدء التشغيل: {message}"
     }
   },
   "it": {
@@ -5166,7 +5186,9 @@
       "loadMoreCards": "Carica altre schede",
       "automationEvent": "Evento: {source}",
       "automationWaitingForEvent": "In attesa di un evento",
-      "dependencyStatusNotLoaded": "Non caricato"
+      "dependencyStatusNotLoaded": "Non caricato",
+      "automationDisabled": "Disabilitata",
+      "dispatchFirstFailure": "Primo errore di avvio: {message}"
     }
   },
   "tr": {
@@ -5636,7 +5658,9 @@
       "loadMoreCards": "Daha fazla kart yükle",
       "automationEvent": "Olay: {source}",
       "automationWaitingForEvent": "Olay bekleniyor",
-      "dependencyStatusNotLoaded": "Yüklenmedi"
+      "dependencyStatusNotLoaded": "Yüklenmedi",
+      "automationDisabled": "Devre dışı",
+      "dispatchFirstFailure": "İlk başlatma hatası: {message}"
     }
   },
   "uk": {
@@ -6106,7 +6130,9 @@
       "loadMoreCards": "Завантажити більше карток",
       "automationEvent": "Подія: {source}",
       "automationWaitingForEvent": "Очікування події",
-      "dependencyStatusNotLoaded": "Не завантажено"
+      "dependencyStatusNotLoaded": "Не завантажено",
+      "automationDisabled": "Вимкнено",
+      "dispatchFirstFailure": "Перша помилка запуску: {message}"
     }
   },
   "id": {
@@ -6576,7 +6602,9 @@
       "loadMoreCards": "Muat lebih banyak kartu",
       "automationEvent": "Peristiwa: {source}",
       "automationWaitingForEvent": "Menunggu peristiwa",
-      "dependencyStatusNotLoaded": "Belum dimuat"
+      "dependencyStatusNotLoaded": "Belum dimuat",
+      "automationDisabled": "Dinonaktifkan",
+      "dispatchFirstFailure": "Kegagalan awal saat memulai: {message}"
     }
   },
   "pl": {
@@ -7046,7 +7074,9 @@
       "loadMoreCards": "Wczytaj więcej kart",
       "automationEvent": "Zdarzenie: {source}",
       "automationWaitingForEvent": "Oczekiwanie na zdarzenie",
-      "dependencyStatusNotLoaded": "Nie wczytano"
+      "dependencyStatusNotLoaded": "Nie wczytano",
+      "automationDisabled": "Wyłączona",
+      "dispatchFirstFailure": "Pierwszy błąd uruchomienia: {message}"
     }
   },
   "th": {
@@ -7516,7 +7546,9 @@
       "loadMoreCards": "โหลดการ์ดเพิ่มเติม",
       "automationEvent": "เหตุการณ์: {source}",
       "automationWaitingForEvent": "กำลังรอเหตุการณ์",
-      "dependencyStatusNotLoaded": "ยังไม่ได้โหลด"
+      "dependencyStatusNotLoaded": "ยังไม่ได้โหลด",
+      "automationDisabled": "ปิดใช้งาน",
+      "dispatchFirstFailure": "การเริ่มทำงานล้มเหลวครั้งแรก: {message}"
     }
   },
   "vi": {
@@ -7986,7 +8018,9 @@
       "loadMoreCards": "Tải thêm thẻ",
       "automationEvent": "Sự kiện: {source}",
       "automationWaitingForEvent": "Đang chờ sự kiện",
-      "dependencyStatusNotLoaded": "Chưa tải"
+      "dependencyStatusNotLoaded": "Chưa tải",
+      "automationDisabled": "Đã tắt",
+      "dispatchFirstFailure": "Lỗi khởi động đầu tiên: {message}"
     }
   },
   "nl": {
@@ -8456,7 +8490,9 @@
       "loadMoreCards": "Meer kaarten laden",
       "automationEvent": "Gebeurtenis: {source}",
       "automationWaitingForEvent": "Wachten op gebeurtenis",
-      "dependencyStatusNotLoaded": "Niet geladen"
+      "dependencyStatusNotLoaded": "Niet geladen",
+      "automationDisabled": "Uitgeschakeld",
+      "dispatchFirstFailure": "Eerste opstartfout: {message}"
     }
   },
   "fa": {
@@ -8926,7 +8962,9 @@
       "loadMoreCards": "بارگذاری کارت‌های بیشتر",
       "automationEvent": "رویداد: {source}",
       "automationWaitingForEvent": "در انتظار رویداد",
-      "dependencyStatusNotLoaded": "بارگذاری نشده"
+      "dependencyStatusNotLoaded": "بارگذاری نشده",
+      "automationDisabled": "غیرفعال",
+      "dispatchFirstFailure": "اولین خطا در شروع: {message}"
     }
   },
   "ru": {
@@ -9396,7 +9434,9 @@
       "loadMoreCards": "Загрузить ещё карточки",
       "automationEvent": "Событие: {source}",
       "automationWaitingForEvent": "Ожидание события",
-      "dependencyStatusNotLoaded": "Не загружено"
+      "dependencyStatusNotLoaded": "Не загружено",
+      "automationDisabled": "Отключено",
+      "dispatchFirstFailure": "Первая ошибка запуска: {message}"
     }
   },
   "sv": {
@@ -9805,7 +9845,9 @@
       "eventProtocolViolation": "Protokollöverträdelse",
       "eventArchived": "Arkiverad",
       "eventUnarchived": "Återställd från arkivet",
-      "eventStale": "Inaktuell session"
+      "eventStale": "Inaktuell session",
+      "automationDisabled": "Inaktiverad",
+      "dispatchFirstFailure": "Första startfelet: {message}"
     }
   },
   "ca": {
@@ -10214,7 +10256,9 @@
       "eventProtocolViolation": "Infracció del protocol",
       "eventArchived": "Arxivat",
       "eventUnarchived": "Desarxivat",
-      "eventStale": "Sessió obsoleta"
+      "eventStale": "Sessió obsoleta",
+      "automationDisabled": "Desactivada",
+      "dispatchFirstFailure": "Primer error d'inici: {message}"
     }
   }
 }

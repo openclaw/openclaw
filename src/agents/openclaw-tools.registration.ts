@@ -133,26 +133,33 @@ export function shouldIncludeProgressCardToolForOpenClawTools(
   );
 }
 
-export function shouldIncludeMessageToolForOpenClawTools(
-  options:
-    | Pick<OpenClawToolsOptions, "config" | "sourceReplyDeliveryMode" | "pluginToolAllowlist">
-    | undefined,
+export function resolveOptionalToolRegistrationPolicy(
+  options: OpenClawToolsOptions | undefined,
   embedded: boolean,
-  denylist: string[] | undefined,
-): boolean {
-  return (
-    !embedded ||
-    options?.sourceReplyDeliveryMode === "message_tool_only" ||
-    isToolExplicitlyAllowedByFactoryPolicy({
-      toolName: "message",
-      allowlist: mergeFactoryPolicyList(
-        options?.config?.tools?.allow,
-        options?.config?.tools?.alsoAllow,
-        options?.pluginToolAllowlist,
-      ),
-      denylist,
-    })
+): { includeMessageTool: boolean; scheduledWidgetExplicitlyAllowed: boolean } {
+  const denylist = mergeFactoryPolicyList(
+    options?.config?.tools?.deny,
+    options?.pluginToolDenylist,
   );
+  return {
+    includeMessageTool:
+      !embedded ||
+      options?.sourceReplyDeliveryMode === "message_tool_only" ||
+      isToolExplicitlyAllowedByFactoryPolicy({
+        toolName: "message",
+        allowlist: mergeFactoryPolicyList(
+          options?.config?.tools?.allow,
+          options?.config?.tools?.alsoAllow,
+          options?.pluginToolAllowlist,
+        ),
+        denylist,
+      }),
+    scheduledWidgetExplicitlyAllowed: isToolExplicitlyAllowedByFactoryPolicy({
+      toolName: "show_widget",
+      allowlist: options?.runtimeToolAllowlist,
+      denylist,
+    }),
+  };
 }
 
 type PrimarySessionToolRegistrationParams = {

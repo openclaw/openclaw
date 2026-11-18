@@ -1,5 +1,5 @@
 import { lookup as dnsLookupCb, type LookupAddress, type LookupOptions } from "node:dns";
-import { lookup as dnsLookup } from "node:dns/promises";
+import dns from "node:dns/promises";
 import {
   extractEmbeddedIpv4FromIpv6,
   isCloudMetadataIpAddress,
@@ -189,11 +189,8 @@ export function ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(
     : undefined;
 }
 
-const BLOCKED_HOSTNAMES = new Set([
-  "localhost",
-  "localhost.localdomain",
-  "metadata.google.internal",
-]);
+const METADATA_HOSTNAME = "metadata.google.internal";
+const BLOCKED_HOSTNAMES = new Set(["localhost", "localhost.localdomain", METADATA_HOSTNAME]);
 
 function normalizeHostnameAllowlist(values?: string[]): string[] {
   return normalizePolicyHostnames(values).filter((value) => value !== "*" && value !== "*.");
@@ -296,6 +293,12 @@ export function isPrivateIpAddress(address: string, policy?: SsrFPolicy): boolea
     return true;
   }
   return looksLikeUnsupportedIpv4Literal(normalized);
+}
+
+/** True for the cloud-metadata hostname and metadata or link-local IP literals in any encoding. */
+export function isCloudMetadataHostnameOrIp(hostname: string): boolean {
+  const host = normalizeHostname(hostname);
+  return host === METADATA_HOSTNAME || isLinkLocalIpAddress(host) || isCloudMetadataIpAddress(host);
 }
 
 function isBlockedHostnameNormalized(normalized: string): boolean {
@@ -567,7 +570,7 @@ export async function resolvePinnedHostnameWithPolicy(
     params.policy,
   );
 
-  const lookupFn: LookupFn = params.lookupFn ?? dnsLookup;
+  const lookupFn: LookupFn = params.lookupFn ?? dns.lookup;
   const results = normalizeLookupResults(
     await racePromiseWithAbortSignal(
       () => lookupFn(normalized, { all: true }),
@@ -606,7 +609,7 @@ export function assertHostnameAllowedWithPolicy(hostname: string, policy?: SsrFP
 
 export async function resolvePinnedHostname(
   hostname: string,
-  lookupFn: LookupFn = dnsLookup,
+  lookupFn: LookupFn = dns.lookup,
 ): Promise<PinnedHostname> {
   return await resolvePinnedHostnameWithPolicy(hostname, { lookupFn });
 }

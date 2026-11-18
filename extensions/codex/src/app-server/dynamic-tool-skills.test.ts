@@ -22,12 +22,11 @@ beforeEach(async () => {
 
 afterEach(() => cleanupDynamicToolBuildFixture(tempDir, hostCapabilityClosers));
 
-it.each(["allowed", "denied", "oversized", "oversized-multiline"])(
-  "delivers whole skills or refuses %s reads",
+it.each(["allowed", "denied", "oversized"])(
+  "preserves the %s skill-read result through the dynamic tool bridge",
   async (mode) => {
     const denied = mode === "denied";
-    const multiline = mode === "oversized-multiline";
-    const oversized = mode === "oversized" || multiline;
+    const oversized = mode === "oversized";
     const workspaceDir = tempDir;
     const params = createParams(path.join(tempDir, "skills-session.jsonl"), workspaceDir, {
       runtimePlan: createCodexRuntimePlanFixture(),
@@ -45,7 +44,7 @@ it.each(["allowed", "denied", "oversized", "oversized-multiline"])(
       sourceInfo: { source: "test", scope: "temporary", origin: "top-level", path: "/s" } as const,
       disableModelInvocation: false,
       readContent: oversized
-        ? `# Release\n\n${(multiline ? "Complete instructions.\n" : "Complete instructions. ").repeat(5_000)}\nEND OF SKILL`
+        ? `# Release\n\n${"Complete instructions. ".repeat(5_000)}\nEND OF SKILL`
         : "# Release\n\nComplete instructions.\n",
     };
     params.skillsSnapshot = {
@@ -60,12 +59,7 @@ it.each(["allowed", "denied", "oversized", "oversized-multiline"])(
       tools,
       signal: new AbortController().signal,
       loading: "direct",
-      hookContext: {
-        sessionKey: params.sessionKey,
-        runId: params.runId,
-        workspaceDir,
-        contextWindowTokens: multiline ? params.model.contextWindow : undefined,
-      },
+      hookContext: { sessionKey: params.sessionKey, runId: params.runId, workspaceDir },
     });
     const guidance = renderCodexSkillsInstructions({
       attempt: params,
@@ -91,11 +85,13 @@ it.each(["allowed", "denied", "oversized", "oversized-multiline"])(
     if (!denied) {
       expect(JSON.stringify(result)).toContain("release-guide");
       const read = await call("skills_read", { name: "release-guide" });
-      expect(read.success).toBe(!oversized);
+      expect(read.success).toBe(true);
       if (oversized) {
-        expect(read.diagnosticTerminalType).toBe("error");
-        expect(JSON.stringify(read.contentItems)).toContain("cannot deliver the whole skill");
-        expect(JSON.stringify(read.contentItems)).not.toContain("Complete instructions.");
+        expect(read.diagnosticTerminalType).toBe("completed");
+        const text = JSON.stringify(read.contentItems);
+        expect(text).toContain("Skill instructions incomplete:");
+        expect(text).toContain("read the rest");
+        expect(text).not.toContain("END OF SKILL");
       } else {
         const text = `Skill location: ${skill.filePath}\nResolve relative resource paths from the directory containing this SKILL.md.\n\n${skill.readContent}`;
         expect(read.contentItems).toEqual([{ type: "inputText", text }]);

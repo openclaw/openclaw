@@ -30,8 +30,6 @@ import { finalizeOpenClawTools } from "./openclaw-tools.finalize.js";
 import { resolveCapturedOpenClawToolsFsPolicy } from "./openclaw-tools.fs-policy.js";
 import { createHostedGatewayTools } from "./openclaw-tools.gateway.js";
 import {
-  isToolExplicitlyAllowedByFactoryPolicy,
-  mergeFactoryPolicyList,
   resolveImageToolFactoryAvailable,
   resolveOptionalMediaToolFactoryPlan,
 } from "./openclaw-tools.media-factory-plan.js";
@@ -39,7 +37,7 @@ import { resolveWebSearchToolContext } from "./openclaw-tools.model-context.js";
 import { prepareOpenClawTools } from "./openclaw-tools.preparation.js";
 import {
   applyNodesToolWorkspaceGuard,
-  shouldIncludeMessageToolForOpenClawTools,
+  resolveOptionalToolRegistrationPolicy,
   shouldIncludePrimarySessionToolForOpenClawTools,
   shouldIncludeProgressCardToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
@@ -389,7 +387,6 @@ function* createOpenClawToolsSteps(
     : ((yield {
         message: {
           ...options,
-          config: resolvedConfig ?? {},
           agentSessionKey:
             options?.messageToolTurnCapability?.sessionKey ?? options?.agentSessionKey,
           runSessionKey:
@@ -425,20 +422,14 @@ function* createOpenClawToolsSteps(
   });
   options?.recordToolPrepStage?.("openclaw-tools:nodes-tool");
   const embedded = isEmbeddedMode();
-  const explicitFactoryDenylist = mergeFactoryPolicyList(
-    resolvedConfig?.tools?.deny,
-    options?.pluginToolDenylist,
-  );
-  const scheduledWidgetExplicitlyAllowed = isToolExplicitlyAllowedByFactoryPolicy({
-    toolName: "show_widget",
-    allowlist: options?.runtimeToolAllowlist,
-    denylist: explicitFactoryDenylist,
-  });
+  const { includeMessageTool, scheduledWidgetExplicitlyAllowed } =
+    resolveOptionalToolRegistrationPolicy(options, embedded);
   const widgetBoardSessionKey = scheduledTargets?.boardSessionKey ?? sessionKey;
-  // Authorized recovery and capped scheduled turns can author boards without an inline renderer.
+  // A recorded widget surface can keep authoring its durable board on internal
+  // wakes. Tool policy and board authority still apply; this grants no renderer.
   const pinnedWidgetAuthoringAdmitted =
     (options?.pinnedWidgetAuthoring === true ||
-      (scheduledCaller && scheduledWidgetExplicitlyAllowed)) &&
+      (scheduledCaller ? scheduledWidgetExplicitlyAllowed : inlineWidgetClientAvailable)) &&
     !currentChannelWidgetPresenter &&
     Boolean(widgetBoardSessionKey) &&
     !isCronRunSessionKey(widgetBoardSessionKey);
@@ -448,11 +439,6 @@ function* createOpenClawToolsSteps(
     pinnedWidgetAuthoringAdmitted &&
     inlineWidgetClientAvailable &&
     options?.clientCaps?.includes("inline-widgets") !== true;
-  const includeMessageTool = shouldIncludeMessageToolForOpenClawTools(
-    options,
-    embedded,
-    explicitFactoryDenylist,
-  );
   const sessionLookupToolOptions = {
     agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
     sandboxed: options?.sandboxed,
@@ -483,6 +469,12 @@ function* createOpenClawToolsSteps(
       (options?.runSessionKey ?? options?.agentSessionKey) ? options?.sessionId : undefined,
     agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
     requesterTurnRunId: options?.runId,
+    // A scheduled owner run carries no sender bit; its children record the owner
+    // bit the occurrence was admitted with, as the run's own memory audience does.
+    senderIsOwner: scheduledTargets?.spawnSenderIsOwner ?? options?.senderIsOwner,
+    ...(scheduledTargets?.spawnSenderIsOwner
+      ? { assertSenderOwnerCurrent: scheduledTargets.assertOwnerCurrent }
+      : {}),
     completionOwnerKey: options?.runSessionKey,
     currentMessagingTarget: options?.currentMessagingTarget ?? options?.currentChannelId,
     currentChannelId: options?.nativeChannelId ?? options?.currentChannelId,

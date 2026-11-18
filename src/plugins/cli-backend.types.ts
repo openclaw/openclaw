@@ -224,7 +224,7 @@ export type CliBackendMessageInjection = {
 /** Graceful end of the admitted turn without retiring its reusable native session. */
 export type CliBackendTurnInterrupt = {
   /** Request the turn end; its execution stream must then finish normally. */
-  interrupt(reason: "yield"): Promise<void>;
+  interrupt(reason: "yield" | "source_reply"): Promise<void>;
 };
 
 /** Turn-only context that must not become an operator-authored native transcript row. */

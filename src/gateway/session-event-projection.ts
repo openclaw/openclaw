@@ -46,7 +46,7 @@ type PublicationDelivery = {
   variants: Array<SessionEventProjection | undefined>;
   envelope: PublicationEnvelope;
   plan: ReturnType<ConnectionSessionRows["prepareDelivery"]>;
-  serializeSession: () => string;
+  serializeSession: () => Buffer;
   delivered: (client: GatewayClient) => void;
 };
 
@@ -80,9 +80,10 @@ function prepareEnvelopeSerialization(
     }
   }
   const suffix = prefix + flush();
+  const sharedEnvelope = segments.length === 0 ? Buffer.from(suffix) : undefined;
   return (
     recipient: Record<string, unknown>,
-    serializeSession: () => string,
+    serializeSession: () => Buffer,
     serializeMessage?: () => Buffer,
   ): ReturnType<NonNullable<SessionEventProjection["serializePayload"]>> => {
     let encoded = "";
@@ -91,10 +92,10 @@ function prepareEnvelopeSerialization(
       encoded += segment.prefix + (field ? `${field},` : "");
     }
     encoded += suffix;
-    const session = `"session":${serializeSession()}}`;
+    const envelope = sharedEnvelope ?? Buffer.from(encoded);
     return serializeMessage
-      ? [Buffer.from(encoded), serializeMessage(), Buffer.from(session)]
-      : [Buffer.from(encoded + session)];
+      ? [envelope, serializeMessage(), serializeSession()]
+      : [envelope, serializeSession()];
   };
 }
 
@@ -103,7 +104,8 @@ export function prepareSessionEventProjection(
   projection: SessionRowProjection,
   read?: SessionRowReadView,
   prepared?: {
-    ancestors: ReturnType<SessionRowProjection["ancestorRows"]>;
+    /** Omission resolves lazily; explicit undefined means ancestry could not be certified. */
+    ancestors?: ReturnType<SessionRowProjection["ancestorRows"]>;
     /** The transcript publisher owns the message graph for synchronous fanout. */
     encodeMessage?: true;
     /** The producer owns a plain envelope with stable fields throughout synchronous fanout. */
@@ -174,7 +176,10 @@ export function prepareSessionEventProjection(
           }
         : undefined;
     const presentRecipient = prepareSessionRowPublication(projection, Date.now(), rows);
-    const ancestors = prepared ? prepared.ancestors : projection.ancestorRows(record, read);
+    const ancestors =
+      prepared && "ancestors" in prepared
+        ? prepared.ancestors
+        : projection.ancestorRows(record, read);
     const enrichment = { includeDerivedTitles: true, includeLastMessage: true };
     const ancestorRevision = randomUUID();
     const audiences = new Map<
@@ -188,6 +193,7 @@ export function prepareSessionEventProjection(
         hiddenAncestors: Array<{ key: string; histories: Map<object, object> }>;
         ancestorInvalidations: Map<object, object> | undefined;
         deliveries: [WeakMap<object, PublicationDelivery>, WeakMap<object, PublicationDelivery>];
+        sessionEncodings: Map<string, Buffer>;
       }
     >();
     const diff = createSessionRowDeltaDiffer();
@@ -255,6 +261,7 @@ export function prepareSessionEventProjection(
           hiddenAncestors,
           ancestorInvalidations: ancestorRows ? undefined : new Map(),
           deliveries: [new WeakMap(), new WeakMap()],
+          sessionEncodings: new Map(),
         };
         if (contentKey !== undefined) {
           audiences.set(contentKey, audience);
@@ -320,21 +327,30 @@ export function prepareSessionEventProjection(
         if (prepared?.reuseEnvelope) {
           audience.envelope = envelope;
         }
-        let sessionJSON = plan.rows?.encoded[0];
+        let sessionBytes: Buffer | undefined;
         delivery = {
           variants: [],
           envelope,
           plan,
           serializeSession: () => {
-            if (sessionJSON === undefined) {
-              const encoded = serializeSessionRow(row);
-              const wire = plan.rows?.wire[0];
-              // Patches already carry their encoding; full wrappers vary only by history.
-              sessionJSON = wire
-                ? `${JSON.stringify({ key: wire.key, agentId: wire.agentId, version: wire.version }).slice(0, -1)},"full":${encoded}${"retain" in wire ? ',"retain":false' : ""}}`
-                : encoded;
+            if (!sessionBytes) {
+              let sessionJSON = plan.rows?.encoded[0];
+              if (sessionJSON === undefined) {
+                const encoded = serializeSessionRow(row);
+                const wire = plan.rows?.wire[0];
+                // Patches already carry their encoding; full wrappers vary only by history.
+                sessionJSON = wire
+                  ? `${JSON.stringify({ key: wire.key, agentId: wire.agentId, version: wire.version }).slice(0, -1)},"full":${encoded}${"retain" in wire ? ',"retain":false' : ""}}`
+                  : encoded;
+              }
+              // Different roster histories can deliver identical bytes in this audience.
+              sessionBytes = audience.sessionEncodings.get(sessionJSON);
+              if (!sessionBytes) {
+                sessionBytes = Buffer.from(`"session":${sessionJSON}}`);
+                audience.sessionEncodings.set(sessionJSON, sessionBytes);
+              }
             }
-            return sessionJSON;
+            return sessionBytes;
           },
           delivered: (viewer) => connection.references(viewer).deliver(plan),
         };

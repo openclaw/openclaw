@@ -1,6 +1,5 @@
 import Foundation
 
-// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 /// Strict JSON for the protocol's integer-only signed schemas, with RFC 8785 key/string encoding.
 /// Floating-point values are intentionally refused: none of the supported signed schemas permits them.
 indirect enum OpenClawIDCanonicalJSON: Sendable, Equatable {

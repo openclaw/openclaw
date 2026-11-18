@@ -2,14 +2,23 @@ import CryptoKit
 import Foundation
 import Security
 
-// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 /// Atomic create-if-absent storage. A missing item differs from inaccessible/corrupt storage.
 public protocol OpenClawIDNodeIdentityStore: Sendable {
     func loadOrCreateSeed() async throws -> Data
 }
 
-// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
-/// Device-only Keychain owner for W, separate from native pairing and owner/member identities.
+/// Which OpenClaw ID key a Keychain item holds. Each has its own service, so a node worker's W
+/// can never be loaded as an owner or member device's D or W.
+public enum OpenClawIDKeyPurpose: String, Sendable {
+    /// W_node: the only key a node worker sees.
+    case node = "ai.openclaw.node-enrollment"
+    /// D: an owner or member device's signing key.
+    case device = "ai.openclaw.openclaw-id-device"
+    /// W: an owner or member device's own peer key.
+    case devicePeer = "ai.openclaw.openclaw-id-peer"
+}
+
+/// Device-only Keychain owner for one OpenClaw ID key, separate from native pairing identities.
 public actor OpenClawIDNodeIdentityKeychainStore: OpenClawIDNodeIdentityStore {
     private let service: String
     private let account: String
@@ -17,10 +26,24 @@ public actor OpenClawIDNodeIdentityKeychainStore: OpenClawIDNodeIdentityStore {
 
     /// A dedicated per-enrollment node identity on every Apple platform, including iOS.
     /// Never reuse the phone's operator/client-pairing key or its Keychain namespace.
-    public init(enrollmentID: UUID, accessGroup: String? = nil) {
-        self.service = "ai.openclaw.node-enrollment"
+    public init(enrollmentID: UUID, purpose: OpenClawIDKeyPurpose = .node, accessGroup: String? = nil) {
+        self.service = purpose.rawValue
         self.account = enrollmentID.uuidString
         self.accessGroup = accessGroup
+    }
+
+    /// Deletes the key when its device or node is removed. A missing item is already deleted.
+    public func delete() throws {
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: self.service, kSecAttrAccount as String: self.account,
+            kSecAttrSynchronizable as String: false,
+        ]
+        if let accessGroup { query[kSecAttrAccessGroup as String] = accessGroup }
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw OpenClawIDNodeEnrollmentError.keychain(status)
+        }
     }
 
     /// Creates W only for a genuinely missing item; concurrent creators retain the winning key.
@@ -59,7 +82,6 @@ public actor OpenClawIDNodeIdentityKeychainStore: OpenClawIDNodeIdentityStore {
     }
 }
 
-// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 /// Swift-owned W signing material. It is never Codable and has no public seed getter.
 public struct OpenClawIDNodeIdentity: Sendable {
     private let key: Curve25519.Signing.PrivateKey
@@ -83,6 +105,7 @@ public struct OpenClawIDNodeIdentity: Sendable {
         self.key = try Curve25519.Signing.PrivateKey(rawRepresentation: seed)
     }
 
+    // periphery:ignore - Used only by the opt-in native iroh build (OPENCLAW_IROH_NATIVE), which the Periphery scans do not compile.
     /// Module-only native adapter handoff. Never expose this to JSONL, configuration or diagnostics.
     func withNativeSeed<T>(_ body: (Data) async throws -> T) async rethrows -> T {
         // CryptoKit can share its key storage with rawRepresentation; wipe only an owned copy.

@@ -112,6 +112,45 @@ it("retains a configured offline outbound-only adapter without an inbound channe
   expect(sendText).toHaveBeenCalledTimes(1);
 });
 
+it("uses runtime configuration for omitted-config discovery without freezing invocation settings", async () => {
+  const cfg: OpenClawConfig = { ...config, channels: { signal: { enabled: true } } };
+  setRuntimeConfigSnapshot(cfg);
+  const sendText = vi.fn(async () => ({
+    channel: "signal" as const,
+    messageId: "runtime-receipt",
+  }));
+  const plugin = {
+    ...createChannelTestPluginBase({
+      id: "signal",
+      config: {
+        resolveAccount: (runtimeConfig) => ({
+          enabled: runtimeConfig.channels?.signal?.enabled === true,
+        }),
+        isConfigured: (account) => account.enabled,
+      },
+    }),
+    outbound: { deliveryMode: "direct" as const, sendText },
+  };
+  setActivePluginRegistry(createTestRegistry([{ pluginId: "signal", source: "test", plugin }]));
+  const tool = createOpenClawTools({ agentSessionKey: sessionKey }).find(
+    (candidate) => candidate.name === "message",
+  );
+  expect(tool).toBeDefined();
+  const updatedConfig: OpenClawConfig = {
+    ...cfg,
+    channels: { signal: { enabled: true, defaultAccount: "updated" } },
+  };
+  setRuntimeConfigSnapshot(updatedConfig);
+  const result = await tool!.execute("runtime-send", {
+    action: "send",
+    channel: "signal",
+    target: "+15550000001",
+    message: "Runtime-configured route",
+  });
+  expect(sendText).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cfg: updatedConfig }));
+  expect(JSON.stringify(result)).toContain("runtime-receipt");
+});
+
 it.each([
   { enabled: true, configured: false },
   { enabled: false, configured: true },

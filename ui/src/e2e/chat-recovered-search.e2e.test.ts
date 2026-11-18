@@ -47,7 +47,7 @@ suite.define(() => {
         ],
       });
       // Search recovery uses the settled roster's message scope, independent of boot ordering.
-      await page.goto(`${suite.server.baseUrl}activity`);
+      await page.goto(`${suite.server.baseUrl}sessions`);
       await page
         .locator(
           `.sidebar-recent-session[data-session-key="${sessionKey}"] a.sidebar-recent-session__link`,
@@ -75,7 +75,7 @@ suite.define(() => {
         /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? "Meta+f" : "Control+f",
       );
       await page.keyboard.press(shortcut);
-      const search = pane.getByRole("textbox", { name: "Search messages", exact: true });
+      const search = pane.getByRole("textbox", { name: "Search loaded messages", exact: true });
       await search.fill(keyword);
       // The unrelated prompt leaving the DOM proves the filter has committed.
       await expect.poll(() => prompt.count()).toBe(0);
@@ -154,7 +154,7 @@ suite.define(() => {
           },
         ],
       });
-      await page.goto(`${suite.server.baseUrl}activity`);
+      await page.goto(`${suite.server.baseUrl}sessions`);
       await page
         .locator(
           `.sidebar-recent-session[data-session-key="${sessionKey}"] a.sidebar-recent-session__link`,
@@ -177,7 +177,7 @@ suite.define(() => {
         /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? "Meta+f" : "Control+f",
       );
       await page.keyboard.press(shortcut);
-      const search = pane.getByRole("textbox", { name: "Search messages", exact: true });
+      const search = pane.getByRole("textbox", { name: "Search loaded messages", exact: true });
       await search.fill("Titel: fix(review)");
       await expect.poll(() => prompt.count()).toBe(0);
       await expect.poll(marked).toEqual([

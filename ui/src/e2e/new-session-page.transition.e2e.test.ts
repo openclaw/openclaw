@@ -74,7 +74,8 @@ async function expectPlainJson(prompt: Locator, message: string) {
   const text = prompt.locator(".chat-text");
   await text.locator("pre code").waitFor({ state: "visible" });
   await pollLocatorText(text.locator("pre code")).toBe(message);
-  expect(await text.locator("button, details, .code-block-wrapper").count()).toBe(0);
+  // Human JSON stays literal: its only control is the wrap toggle, shown while a row soft-wraps.
+  expect(await text.locator("button:not(.code-block-wrap), details").count()).toBe(0);
 }
 
 async function expectListedKeys(page: Page, keys: string[]) {
@@ -257,9 +258,9 @@ async function assertCreateRecovery(
   expect(cardBox?.height).toBeGreaterThan(30);
   await expectDecodedThumbnail(submittedPrompt.locator("img.chat-message-image"));
   await pollLocatorText(startup.locator('.chat-working-indicator[role="status"]')).toContain(
-    "Starting…",
+    "Starting",
   );
-  await pollLocatorText(announcement).toContain("Starting…");
+  await pollLocatorText(announcement).toContain("Starting");
   expect(new URL(page.url()).pathname).toBe("/new");
   expect(await message.isVisible()).toBe(false);
   expect(await placeSelect.isVisible()).toBe(false);
@@ -618,7 +619,7 @@ suite.define(() => {
       await expect.poll(() => submittedPrompt.isVisible()).toBe(true);
       await pollLocatorText(submittedPrompt).toContain("keep progress moving");
       await pollLocatorText(startup.locator('.chat-working-indicator[role="status"]')).toContain(
-        "Starting…",
+        "Starting",
       );
       await captureProof(page, "00-create-pending.png");
       await expectPendingNewSessionPresentation(page);

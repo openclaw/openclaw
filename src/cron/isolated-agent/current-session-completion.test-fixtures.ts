@@ -138,7 +138,9 @@ async function createCompletionFixture(
     agentId: "main",
     agentSessionKey: "agent:main:cron:report-job",
     sourceSessionKey: sessionKey,
-    sourceSessionGeneration: generation,
+    // Run preparation links an automation's creating conversation by key alone.
+    sourceSessionGeneration:
+      sessionTarget === "isolated" ? { sessionId, lifecycleRevision: undefined } : generation,
     runSessionKey: "agent:main:cron:report-job:run:report-run",
     sessionId: "report-run",
     lifecycleRevision: "run-generation",

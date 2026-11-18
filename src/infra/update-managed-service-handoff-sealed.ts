@@ -37,6 +37,7 @@ export { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownersh
 export { resolveImmutableSqliteFileUri } from "./node-sqlite.js";
 export { procCgroupMembershipMatches } from "./update-managed-service-handoff-scope.js";
 export { packageActivationIdentity } from "./package-update-activation-paths.js";
+export { resolveUpdateInstallRoot } from "./update-install-root.js";
 export {
   recoverInterruptedManagedUpdate,
   readManagedHandoffGatewayStop,

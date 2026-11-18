@@ -6,6 +6,7 @@ import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { buildGitHubExecLaunchArgv } from "../github-exec-launch.js";
 import { CLEARED_GITHUB_CREDENTIALS } from "../github-host.js";
 import type { PreparedGitHubToolEnvironment } from "../github-tool-identity.types.js";
+import type { WorkspaceStateGuard } from "../workspace-state-store.worker-contract.js";
 import type { SandboxBackendCommandParams } from "./backend-handle.types.js";
 import type {
   CreateSandboxBackendParams,
@@ -56,6 +57,7 @@ async function createContainerSandboxBackend(
   params: CreateSandboxBackendParams,
   operatorAuthority?: AdmittedRunOperatorAuthority,
   githubIdentity?: PreparedGitHubToolEnvironment,
+  stateGuard?: WorkspaceStateGuard,
 ): Promise<SandboxBackendHandle> {
   using phases = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.backend.target");
   const assertCurrent = () => {
@@ -70,7 +72,10 @@ async function createContainerSandboxBackend(
   }
   const dockerTarget = engine.id === "docker" ? await captureDockerPersistentTarget() : undefined;
   assertCurrent();
-  const configuredEngine = dockerTarget ? bindDockerPersistentTarget(dockerTarget) : engine;
+  const configuredEngine = {
+    ...(dockerTarget ? bindDockerPersistentTarget(dockerTarget) : engine),
+    stateGuard,
+  };
   phases.mark("attempt.setup.sandbox.backend.container");
   return await ensureSandboxContainer(
     {
@@ -91,7 +96,9 @@ async function createContainerSandboxBackend(
     },
     async ({ containerName, containerId, configHash, mountPlan, currentConfig, podmanTarget }) => {
       assertCurrent();
-      const boundEngine = podmanTarget ? bindPodmanSandboxEngine(podmanTarget) : configuredEngine;
+      const boundEngine = podmanTarget
+        ? { ...bindPodmanSandboxEngine(podmanTarget), stateGuard }
+        : configuredEngine;
       // Allocation pins the generation under its lifecycle lock; never rediscover it
       // by reusable name after another admission or recreation can acquire the lock.
       phases.mark("attempt.setup.sandbox.backend.mount_snapshot");
@@ -138,6 +145,7 @@ async function createContainerSandboxBackend(
             input: command.stdin,
             allowFailure: command.allowFailure,
             signal: command.signal,
+            assertCurrent: assertCommandCurrent,
           },
         );
       };
@@ -179,6 +187,7 @@ async function createContainerSandboxBackend(
           }
           const envFile = await createContainerEnvFile(containerEnv);
           try {
+            await stateGuard?.prepareHost?.();
             assertCurrent();
             const argv = buildSandboxContainerEngineArgv(boundEngine, ["exec", "-i"]);
             if (usePty) {
@@ -213,6 +222,8 @@ async function createContainerSandboxBackend(
                 : argv,
               env: hostEnv,
               stdinMode: usePty || stdin ? "pipe-open" : "pipe-closed",
+              prepareCurrent: stateGuard?.prepareHost,
+              assertCurrent,
               finalizeToken: envFile.cleanup satisfies ContainerExecFinalizeToken,
             };
           } catch (error) {
@@ -384,12 +395,14 @@ export async function createDockerSandboxBackend(
   params: CreateSandboxBackendParams,
   operatorAuthority?: AdmittedRunOperatorAuthority,
   githubIdentity?: PreparedGitHubToolEnvironment,
+  stateGuard?: WorkspaceStateGuard,
 ): Promise<SandboxBackendHandle> {
   return await createContainerSandboxBackend(
     DOCKER_SANDBOX_ENGINE,
     params,
     operatorAuthority,
     githubIdentity,
+    stateGuard,
   );
 }
 
@@ -397,19 +410,25 @@ export async function createPodmanSandboxBackend(
   params: CreateSandboxBackendParams,
   operatorAuthority?: AdmittedRunOperatorAuthority,
   githubIdentity?: PreparedGitHubToolEnvironment,
+  stateGuard?: WorkspaceStateGuard,
 ): Promise<SandboxBackendHandle> {
   return await createContainerSandboxBackend(
     PODMAN_SANDBOX_ENGINE,
     params,
     operatorAuthority,
     githubIdentity,
+    stateGuard,
   );
 }
 
 function createContainerSandboxBackendManager(
   engine: SandboxContainerEngine,
 ): SandboxBackendManager & {
-  stopRuntime(entry: SandboxRegistryEntry, assertCurrent: () => void): Promise<void>;
+  stopRuntime(
+    entry: SandboxRegistryEntry,
+    assertCurrent: () => void,
+    prepareCurrent?: () => Promise<void>,
+  ): Promise<void>;
 } {
   const resolveTarget = (entry: SandboxRegistryEntry) => {
     if (engine.id !== "podman") {
@@ -433,7 +452,7 @@ function createContainerSandboxBackendManager(
       : engine;
   return {
     // The registry owner holds runtime admission, the entry lock, and allocation's lifecycle queue.
-    async stopRuntime(entry, assertCurrent) {
+    async stopRuntime(entry, assertCurrent, prepareCurrent) {
       const target = resolveTarget(entry);
       await validateSandboxContainerEngineTarget(engine, target);
       assertCurrent();
@@ -446,10 +465,15 @@ function createContainerSandboxBackendManager(
       if (state.exists && (state.running || state.paused)) {
         const signal = AbortSignal.timeout(30_000);
         if (state.paused) {
-          await execContainer(runtimeEngine, ["unpause", state.id], { assertCurrent, signal });
+          await execContainer(runtimeEngine, ["unpause", state.id], {
+            assertCurrent,
+            prepareCurrent,
+            signal,
+          });
         }
         await execContainer(runtimeEngine, ["stop", "--time", "0", state.id], {
           assertCurrent,
+          prepareCurrent,
           signal,
         });
       }

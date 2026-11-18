@@ -2,7 +2,6 @@ import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { isToolResultError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { sanitizeInlineImageDataUrl } from "openclaw/plugin-sdk/inline-image-data-url-runtime";
 import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   estimateToolResultTextChars,
   sliceToolResultTextToBudget,
@@ -23,12 +22,7 @@ export function enforceWholeSkillResult(
     (total, item) => total + (item.type === "text" ? estimateToolResultTextChars(item.text) : 0),
     0,
   );
-  // The skill producer can page model text while retaining the complete body in details.
-  // A page fitting this budget is still not a successful whole-skill delivery.
-  const instructions = asOptionalRecord(result.details)?.content;
-  const text = result.content.map((item) => (item.type === "text" ? item.text : "")).join("");
-  const whole = typeof instructions !== "string" || text.includes(instructions);
-  return whole && budget <= maxChars
+  return budget <= maxChars
     ? result
     : failedToolResult(
         `This Codex turn cannot deliver the whole skill within its ${maxChars}-character weighted output budget. No instructions were returned; use a harness with a larger instruction budget.`,
