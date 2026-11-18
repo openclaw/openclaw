@@ -1106,11 +1106,14 @@ report with no timed files: exit 1, empty stdout and the specific diagnostic.
 The shared report-parser tests protect a separate contract; they do not
 replace this CLI-boundary proof. Production and shared helpers are unchanged.
 
-An isolated execution of the original hook loses both failed and unattempted
-roots and performs no retry. The shared owner preserves the same error,
-removes the healthy root, retains the failed root and succeeds on retry.
-Actual Vitest-hook and clean CLI qualification are pending in the native PR
-workspace.
+Injection through the actual registered Vitest hook confirms that the original
+cleanup loses both failed and unattempted roots and performs no retry. The
+shared owner preserves the same error, removes the healthy root, retains the
+failed root and succeeds on retry. Both injected runs intentionally fail the
+single case at teardown; both clean runs pass it. Temporary instrumentation
+was restored byte for byte. Scoped scripts-test typecheck, lint, formatting
+and both line-cap ratchets pass. Independent preservation and local
+ClawSweeper reviews found no actionable defects.
 
 ## Pending qualification and proof repairs
 
