@@ -294,6 +294,29 @@ export class RealtimeTalkInputOwner {
     return media;
   }
 
+  /**
+   * Takes ownership of an already-open external stream without reacquiring the
+   * microphone. Barge-in hands the monitor's live stream to the next capture so
+   * the interrupting utterance keeps recording across the handoff with no gap.
+   */
+  adoptExternal(media: MediaStream): MediaStream {
+    this.stop();
+    const controller = new AbortController();
+    this.controller = controller;
+    this.media = media;
+    const onEnded = () => {
+      if (this.controller !== controller) {
+        return;
+      }
+      this.stop();
+      this.onEnded(t("chat.composer.microphoneStopped"));
+    };
+    for (const track of media.getTracks()) {
+      listen(track, "ended", onEnded, { signal: controller.signal });
+    }
+    return media;
+  }
+
   async open(inputDeviceId: string | undefined): Promise<MediaStream> {
     this.stop();
     const controller = new AbortController();

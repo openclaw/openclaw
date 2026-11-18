@@ -206,6 +206,8 @@ export class ComposerDictationSession {
       sessionKey?: string;
       inputDeviceId?: string;
       silenceTimeoutMs?: number;
+      adoptStream?: MediaStream;
+      seedAudio?: Float32Array[];
     },
   ) {}
 
@@ -285,7 +287,9 @@ export class ComposerDictationSession {
         this.reportFailure(t("chat.composer.dictationDisconnected"));
       }
     });
-    const media = await this.input.open(inputDeviceId);
+    const media = this.options?.adoptStream
+      ? this.input.adoptExternal(this.options.adoptStream)
+      : await this.input.open(inputDeviceId);
     if (this.stopped || this.failed) {
       return;
     }
@@ -305,6 +309,14 @@ export class ComposerDictationSession {
       this.queueAudio(samples);
       this.detectSilence(samples);
     });
+    // Barge-in handoff: replay the buffered onset so the interrupting correction
+    // reaches transcription even if it finished before this session was admitted.
+    if (this.options?.seedAudio) {
+      for (const frame of this.options.seedAudio) {
+        this.queueAudio(frame);
+        this.detectSilence(frame);
+      }
+    }
     this.callbacks.onReady();
   }
 

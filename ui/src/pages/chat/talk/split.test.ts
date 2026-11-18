@@ -34,7 +34,7 @@ const config = (provider?: string, interruptOnSpeech?: boolean) => ({
       provider,
       realtime: { mode: "stt-tts" },
       silenceTimeoutMs: 100,
-      ...(interruptOnSpeech ? { interruptOnSpeech: true } : {}),
+      ...(interruptOnSpeech !== undefined ? { interruptOnSpeech } : {}),
     },
   },
 });
@@ -273,7 +273,7 @@ it.each([
 ])(
   "routes configured split Talk through STT, chat and Gateway speech (provider: $provider)",
   async ({ provider, leaf }) => {
-    const h = harness(provider);
+    const h = harness(provider, false);
     h.state.chatDisplayedLeafEntryId = leaf;
     await h.state.toggleRealtimeTalk();
     expect(h.state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("listening");
@@ -598,8 +598,8 @@ function feedMonitorSpeech(value: number, frames = 2) {
   }
 }
 
-it("barsges into reply playback when interruptOnSpeech is enabled", async () => {
-  const h = harness(undefined, true);
+it("barsges in by default, preserves the triggering speech, and keeps listening", async () => {
+  const h = harness();
   await h.state.toggleRealtimeTalk();
   const sent = observeSend(h);
   h.utterance();
@@ -607,28 +607,54 @@ it("barsges into reply playback when interruptOnSpeech is enabled", async () => 
   h.answer("A long reply the user talks over.");
   await h.speech.promise;
   await speechStarted.promise;
-  // The barge-in monitor owns the newest script processor while the reply plays.
+  const micCallsDuringPlayback = tracks.length;
   feedMonitorSpeech(0.3);
   await vi.advanceTimersByTimeAsync(0);
   expect(expectDefined(audios[0], "reply playback").pause).toHaveBeenCalled();
   await h.nextCapture.promise;
+  await vi.advanceTimersByTimeAsync(0);
   expect(h.state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("listening");
+  // The next capture adopts the monitor's live stream: no new microphone acquisition.
+  expect(tracks).toHaveLength(micCallsDuringPlayback);
+  // The buffered onset is replayed into the new transcription session.
+  expect(h.request).toHaveBeenCalledWith("talk.session.appendAudio", {
+    sessionId: "capture-2",
+    audioBase64: expect.any(String),
+  });
   await h.state.toggleRealtimeTalk();
 });
 
-it("ignores speech during playback when interruptOnSpeech is not enabled", async () => {
+it("retains Read aloud supersession after a barge-in", async () => {
   const h = harness();
   await h.state.toggleRealtimeTalk();
   const sent = observeSend(h);
   h.utterance();
   await sent;
-  h.answer("A reply that plays to the end.");
+  h.answer("A reply interrupted by speech.");
   await h.speech.promise;
   await speechStarted.promise;
-  // No barge-in monitor opens a microphone, so playback owns the only processor.
-  expect(tracks).toHaveLength(1);
-  expectDefined(audios[0], "reply playback").dispatchEvent(new Event("ended"));
+  feedMonitorSpeech(0.3);
+  await vi.advanceTimersByTimeAsync(0);
   await h.nextCapture.promise;
-  expect(expectDefined(audios[0], "reply playback").pause).toHaveBeenCalled();
+  // Read aloud must still supersede Talk after barge-in (shared ownership retained).
+  const playback = new GatewaySpeechPlayback();
+  onTestFinished(() => playback.stop());
+  playback.prepare(expectDefined(h.state.client, "current Gateway client"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("idle");
+});
+
+it("cancels the barge-in microphone when Talk stops during playback", async () => {
+  const h = harness();
   await h.state.toggleRealtimeTalk();
+  const sent = observeSend(h);
+  h.utterance();
+  await sent;
+  h.answer("A reply playing when the user stops.");
+  await h.speech.promise;
+  await speechStarted.promise;
+  const monitorTrack = expectDefined(tracks.at(-1), "barge-in microphone track");
+  await h.state.toggleRealtimeTalk();
+  expect(monitorTrack.stop).toHaveBeenCalled();
+  expect(h.state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("idle");
 });

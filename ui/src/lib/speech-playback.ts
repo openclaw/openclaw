@@ -57,6 +57,15 @@ export class GatewaySpeechPlayback {
     this.superseded = undefined;
   }
 
+  /**
+   * Cancels the speech currently playing without relinquishing shared ownership.
+   * Barge-in uses this so Talk keeps its activePlayback registration and the
+   * superseded callback, letting a later Read aloud still supersede the call.
+   */
+  interruptSpeech(): void {
+    this.cancelPlayback();
+  }
+
   private cancelPlayback(): void {
     this.generation += 1;
     this.cancel?.();
