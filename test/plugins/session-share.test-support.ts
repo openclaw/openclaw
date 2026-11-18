@@ -42,6 +42,7 @@ export function commandFixture(groups: string[] = ["Team"], agents?: OpenClawCon
   return {
     config,
     runtime,
+    gatewayHandlers: registry.registry.gatewayHandlers,
     commands,
     select: (share: unknown) => {
       config.plugins!.entries!["session-share"]!.config = { share };
