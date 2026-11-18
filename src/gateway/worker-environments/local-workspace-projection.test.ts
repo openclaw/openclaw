@@ -29,7 +29,6 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import { proveResumedBaseRefresh } from "./local-workspace-base-refresh.test-support.js";
 import { decodeLocalWorkspaceTree } from "./local-workspace-cas.js";
 import { readLocalWorkspaceTree } from "./local-workspace-cas.kernel.js";
 import { registerSandboxCheckpointTests } from "./local-workspace-checkpoint.test-support.js";
@@ -58,6 +57,7 @@ import {
   proveWorkerOwnedArchive,
 } from "./local-workspace-incremental.test-support.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
+import { registerLocalWorkspaceReconciliationTests } from "./local-workspace-reconciliation.test-support.js";
 import { proveRejectedWorkspaceCheckpoint } from "./local-workspace-recovery.test-support.js";
 import {
   proveConcurrentWorkspacePreparation,
@@ -608,8 +608,7 @@ it.each(["archive", "interrupted eviction"] as const)(
 it("retains both sides and a durable pending result when edits conflict", () =>
   proveWarmWorkspaceConflictRecovery(owner));
 
-it("resumes an interrupted base refresh from the files it already applied", () =>
-  proveResumedBaseRefresh({ owner, root, repo, canonical, log: checkpointLog }));
+registerLocalWorkspaceReconciliationTests(() => ({ owner, root, repo, canonical }), checkpointLog);
 
 it("replaces rejected v31 storage when a full rescan matches the unchanged accepted root", async () => {
   const projection = await prepare();

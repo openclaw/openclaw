@@ -193,6 +193,7 @@ struct ChatFileAdmissionTests {
             outbox: store,
             modelPickerStore: ChatModelPickerStore(defaults: defaults))
         defer { model.detachTransport() }
+        await settleComposerDraft(model)
         model.input = "Keep this draft"
         let data = maximumBytes == nil ? Data(count: 10 * 1024 * 1024) : Data("file".utf8)
         model.attachments = ["first.pdf", "second.pdf"].map {

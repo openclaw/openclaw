@@ -177,6 +177,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
     for (let retry = 0; retry < 3; retry++) {
       const input = makeNormalizationInput(
         makeAttempt({
+          pressure: "overflow",
           route: "truncate_tool_results_only",
           source: "mid-turn",
           handled: true,
@@ -203,6 +204,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
         onModelRequest: (_model, context) => {
           requests.push(structuredClone(context.messages));
           throw new MidTurnPrecheckSignal({
+            pressure: "overflow",
             route: "compact_only",
             estimatedPromptTokens: 932_476,
             promptBudgetBeforeReserve: 922_000,

@@ -14,6 +14,8 @@ import {
 import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
+import { waitForGitReleaseSuccessor } from "../../infra/git-release.js";
+import { readPackageReleaseSlotSync } from "../../infra/package-release-slot-path.js";
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import {
@@ -462,6 +464,25 @@ export async function maybeRestartService(
   if (!activation.opts.json) {
     defaultRuntime.log("");
     defaultRuntime.log(theme.heading("Restarting service..."));
+  }
+  // A Git release's Gateway notices its link moved and restarts into the new release
+  // itself. A native restart from inside its service job (update.run) would end this updater.
+  if (
+    preserveDefinition &&
+    activation.result.mode === "git" &&
+    readPackageReleaseSlotSync(activation.result.root ?? "")
+  ) {
+    recordPhase("restarting");
+    await waitForGitReleaseSuccessor(activation.serviceEnv, run?.deadline?.signal);
+    assertCurrent();
+    const outcome = await verifyRestartedGateway(
+      normalizeOptionalString(expectedIdentity?.version),
+      normalizeOptionalString(expectedIdentity?.buildId),
+      { requireRunningService: true },
+    );
+    if (outcome) {
+      return outcome;
+    }
   }
 
   try {

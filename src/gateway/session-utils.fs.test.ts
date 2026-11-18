@@ -223,9 +223,9 @@ describe("artifact usage", () => {
   }
   const usage = () => readLatestSessionUsageFromTranscriptFileAsync(id, storePath);
 
-  test.each(["generated", "relative", "absolute"])(
+  test.for(["generated", "relative", "absolute", "indirect-link"])(
     "aggregates assistant usage without synchronous filesystem calls (%s)",
-    async (mode) => {
+    async (mode, context) => {
       writeUsage([
         assistant({
           provider: "anthropic",
@@ -235,16 +235,35 @@ describe("artifact usage", () => {
         assistant({ usage: { input: 2400, output: 250, cacheRead: 900, cost: { total: 0.006 } } }),
         assistant({ provider: "openclaw", model: "command" }),
       ]);
+      let selectedStorePath = storePath;
+      let alias: string | undefined;
+      if (mode === "indirect-link") {
+        if (process.platform === "win32") {
+          context.skip();
+        }
+        const main = path.join(tmpDir, id, "agents", "main", "sessions");
+        const worker = path.join(tmpDir, id, "agents", "worker", "sessions");
+        fs.mkdirSync(main, { recursive: true });
+        fs.mkdirSync(path.join(worker, "child"), { recursive: true });
+        fs.copyFileSync(path.join(tmpDir, `${id}.jsonl`), path.join(main, `${id}.jsonl`));
+        writeRecords(path.join(worker, `${id}.jsonl`), [
+          { message: assistant({ usage: { input: 999, output: 999 } }) },
+        ]);
+        fs.symlinkSync(path.join(worker, "child"), path.join(main, "link"), "dir");
+        alias = path.join(main, "alias.jsonl");
+        fs.symlinkSync(`link/../${id}.jsonl`, alias);
+        selectedStorePath = path.join(main, "sessions.json");
+      }
       using measured = observeMainThreadFs();
       const sessionFile =
         mode === "generated"
           ? undefined
           : mode === "relative"
             ? `${id}.jsonl`
-            : path.join(tmpDir, `${id}.jsonl`);
+            : (alias ?? path.join(tmpDir, `${id}.jsonl`));
       const snapshot = await readLatestSessionUsageFromTranscriptFileAsync(
         id,
-        storePath,
+        selectedStorePath,
         sessionFile,
       );
       expect(snapshot).toMatchObject({

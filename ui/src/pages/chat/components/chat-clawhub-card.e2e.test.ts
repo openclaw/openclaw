@@ -528,6 +528,7 @@ describeControlUiE2e("Chat plugin installation status", () => {
         if (!attempt) {
           await capture("connecting");
           await page.setViewportSize(mobileViewport);
+          await waitForControlUiFrameLayout([surface]);
           await capture("connecting-mobile");
           const actions = (await surface.locator(".chat-clawhub-card__actions").boundingBox())!;
           const cardBounds = (await surface.boundingBox())!;

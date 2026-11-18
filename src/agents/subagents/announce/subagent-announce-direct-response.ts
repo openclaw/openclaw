@@ -223,6 +223,8 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
         delivered: false,
         path: "direct",
         reason: automaticEvidence.mayHaveSent ? undefined : "delivery_suppressed",
+        // Consumption cannot credit a completed answer with an unconfirmed channel receipt.
+        ...(requesterCompletedSuccessfully ? { finalAssistantVisibleText: "" } : {}),
         error: automaticEvidence.mayHaveSent
           ? "automatic completion delivery could not be confirmed"
           : (automaticEvidence.suppressionReason ?? "automatic completion delivery suppressed"),

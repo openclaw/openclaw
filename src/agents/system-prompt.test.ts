@@ -524,6 +524,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(onRenderedSkillsPrompt).toHaveBeenCalledWith(scenario.listed ? SKILLS : "");
     expect(prompt).toContain("read the complete instructions before task actions");
     if (!scenario.listed) {
+      expect(prompt).toContain("Before specialized or unfamiliar tasks");
       expect(prompt).toContain("search with `skills.search(query)` inside `exec`");
       expect(prompt).toContain('use `skills.read("<name>")` inside `exec`');
     }

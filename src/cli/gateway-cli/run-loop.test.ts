@@ -15,6 +15,7 @@ import {
   registerGracefulGatewayShutdownTests,
   registerShutdownCompletionTests,
 } from "./run-loop-shutdown-completion.test-support.js";
+import { registerGatewayStartupSignalTests } from "./run-loop-startup-signals.test-support.js";
 import { registerGatewayStartupFailureTests } from "./run-loop-startup.test-support.js";
 import { registerHostedUpdateStopTests } from "./run-loop-stop.test-support.js";
 import { registerUpdateRespawnTests } from "./run-loop-update-respawn.test-support.js";
@@ -299,6 +300,7 @@ describe("runGatewayLoop", () => {
   });
 
   registerGatewayStartupFailureTests(mocks.gatewayLog, fixtures);
+  registerGatewayStartupSignalTests(fixtures);
 
   registerGracefulGatewayShutdownTests(fixtures);
 

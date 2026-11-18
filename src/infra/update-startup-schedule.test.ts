@@ -18,6 +18,7 @@ let autoRun = await import("./update-startup-auto-run.js");
 let { createGatewayUpdateCheck } = await import("./update-startup-scheduler.js");
 let { runGatewayUpdateCheck } = await import("./update-startup.js");
 let { getUpdateSchedule } = await import("./update-status-state.js");
+let hostMemory = await import("./host-memory.js");
 
 async function importUpdateFixtureModules() {
   ({ sessionChanges } = await import("../sessions/session-row-changes.js"));
@@ -31,6 +32,7 @@ async function importUpdateFixtureModules() {
   ({ createGatewayUpdateCheck } = await import("./update-startup-scheduler.js"));
   ({ runGatewayUpdateCheck } = await import("./update-startup.js"));
   ({ getUpdateSchedule } = await import("./update-status-state.js"));
+  hostMemory = await import("./host-memory.js");
 }
 
 const { checkTelemetryUpdateMock, refreshRemoteModelCatalogMock, versionMock } = await vi.hoisted(
@@ -176,8 +178,7 @@ it("uses sub-hourly windows, skips clock jumps, and rearms hot schedule changes"
 
 it("defers automatic update and catalog checks until constrained memory recovers", async () => {
   vi.mocked(checkUpdateStatus).mockClear();
-  vi.spyOn(process, "constrainedMemory").mockReturnValue(1024 * 1024 * 1024);
-  const available = vi.spyOn(process, "availableMemory").mockReturnValue(128 * 1024 * 1024);
+  const lowMemory = vi.spyOn(hostMemory, "isConstrainedProcessLowOnMemory").mockReturnValue(true);
   const applyRemoteCatalogUpdate = vi.fn(async () => "unchanged" as const);
   check = createGatewayUpdateCheck({
     lifecycle,
@@ -192,7 +193,7 @@ it("defers automatic update and catalog checks until constrained memory recovers
   expectNoCalls(checkUpdateStatus, refreshRemoteModelCatalogMock, applyRemoteCatalogUpdate);
   await clock.advanceBy(60_000);
   expectNoCalls(checkUpdateStatus, refreshRemoteModelCatalogMock, applyRemoteCatalogUpdate);
-  available.mockReturnValue(1024 * 1024 * 1024);
+  lowMemory.mockReturnValue(false);
   await clock.advanceBy(59_999);
   expectNoCalls(checkUpdateStatus, refreshRemoteModelCatalogMock, applyRemoteCatalogUpdate);
   await clock.advanceBy(1);

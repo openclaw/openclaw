@@ -259,6 +259,13 @@ prepared tree and checks the affected target paths for conflicts. It does not
 build another target manifest that the checkpoint would discard; rollback
 journals and pending-conflict recovery retain their existing ownership.
 
+Reconciliation journals contain the old bytes of changed paths needed for rollback,
+not a history of accepted checkpoints. Acceptance clears the journal together with
+publication of the accepted baseline. Large local rollback packs use a separate
+worker-prepared publication buffer transferred to the database worker; the original
+remains available for recovery. Oversized-mutation diagnostics inspect payloads in
+that worker, keeping pack serialization and diagnostic parsing off the Gateway thread.
+
 The hourly maintenance job owns manifest cleanup; archive-triggered passes do
 not repeat the global scan. Cleanup records pending work in the existing
 machine-state table when the workspace writer prepares content or changes a
@@ -341,6 +348,34 @@ can overlap, so their sum is not the total preparation duration.
 
 `provisionEstimate` measures included-file discovery and byte estimation before checkout;
 `provisionInspect` measures fresh selection before copying, after source custody is reacquired.
+
+Linux provisioning records `clonedFiles`/`clonedBytes` and
+`copiedFiles`/`copiedBytes` in `copyDetails` when GNU coreutils 9.2 or newer
+reports the transfer method. `reflinkFallbackReason` records the first reported
+clone fallback. `reflinkFallbackRootHash` and `reflinkFallbackPrefixHash` identify
+the resolved source checkout and the first fallback file’s top-level path component,
+respectively (first 16 hexadecimal characters of SHA-256; no literal paths).
+`reflinkFallbackErrno` classifies the report as `EOPNOTSUPP`, `EINVAL`, `EXDEV`,
+or `unknown`. When older coreutils reports only `unsupported`, one clone-only
+probe of the still-pinned source writes into private staging. Its separate
+`reflinkFallbackProbeErrno` records the error class, `unknown`, or
+`clone-succeeded`; a probe cannot establish the original attempt’s errno and
+never retries byte copying. Older tools or incomplete reports use
+`unreportedFiles`/`unreportedBytes`; they are never counted as confirmed clones.
+Byte counts are admitted logical source sizes for completed copy batches, not physical
+storage writes. Cross-filesystem and incompatible filesystem-policy copies may
+still fall back to copying bytes. These counters describe included-file
+provisioning, separately from native template snapshots.
+
+Native template copies record `nativeCloneCount` in `templateDetails`. On Linux,
+`nativeCloneWriteBytes` sums the worker's `/proc/self/io` `write_bytes` increase
+during completed clone calls. This is kernel IO accounting at page-dirtying time,
+not measured device traffic, logical tree size, or evidence of a byte-copy fallback. It excludes
+worker startup, Git checkout/index writes, and failed clone calls. A Btrfs snapshot
+can incur metadata writes while sharing file contents. Operations without IO
+accounting, including macOS clones, increment `nativeCloneUnmeasuredCount` instead
+of reporting zero. Native copies require cloning; unsupported clones fail rather
+than silently copying the tree.
 
 Repository-backed creation discovers unmanaged Git branches and checkout paths before waiting for capacity admission. Reservation still checks current managed names, owners, and pending slots under the allocation lease. Git enforces branch and path conflicts when creating the checkout, including external changes after discovery. Each admission retry refreshes its Git inventory.
 
@@ -707,6 +742,11 @@ the writer queue and rechecks the current session and permissions before committ
 
 Unarchiving, or an authorized human message that reopens the archived session, restores the original branch HEAD plus saved dirty and untracked files before admitting work. A restore failure leaves the session archived. If the original repository or its snapshot is missing, or the 30-day snapshot retention has expired, recover the original repository/snapshot or start a new task; OpenClaw does not substitute an empty checkout for the saved work.
 
+If an unarchived session's worktree was removed by cleanup or deletion, a new chat
+turn reports the removal before sandbox preparation. Use **Restore** on
+**Settings > Worktrees** (`worktrees.restore`), or start a new session. Sending
+another message does not automatically restore a removed checkout.
+
 `sessions.create` may include an absolute `cwd` to run directly in another Gateway folder or to choose the source checkout together with `worktree: true`. Connections with `operator.write` may use a Gateway `cwd` contained in any configured agent workspace; realpath containment prevents symlinks from escaping that boundary. Gateway paths outside those workspaces require `operator.admin`. Ordinary worktree chat creation remains `operator.write` and stays anchored to the configured workspace. For a Gateway source, New Session dispatches the completed worktree session to paired devices or cloud profiles instead of passing a paired-node working directory to creation. The separate `repository: { url, ref? }` create input starts a remote-owned repository session without a Gateway path or `worktree: true`.
 
 `sessions.create` also accepts `worktreeBaseRef` and `worktreeName` alongside `worktree: true` to pick the base ref and the worktree name (the branch becomes `openclaw/<name>`); both stay at `operator.write`. If `worktreeName` is omitted, the session label or generated first-message title supplies the readable branch name, with a two-word, crustacean-themed fallback if naming fails or exceeds the 30-second wait. Raw first-message text is never a branch-name fallback. A title that arrives later updates the session without renaming its existing branch. For a new session with an initial message or task, creation returns the admitted session and run before worktree preparation finishes. The chat shows the submitted message and repository-update, checkout, and setup progress, including after reopening the session; failures remain visible and retryable in the same session. The agent starts only after the finalized worktree is bound. Creation without an initial turn still waits for preparation and returns the worktree in the create result. The bound checkout is persisted on the session row as `worktree: { id, branch, repoRoot }`, so session lists can show its checkout and branch. Ordinary session deletion waits for cleanup; if it cannot finish, `worktreePreserved` identifies the active worktree record that needs attention and reports one bounded reason: owner mismatch, active use or competing cleanup, a foreign Git lock, snapshot failure, or another cleanup failure. These reasons describe cleanup and ownership, not whether the checkout is dirty or has unpushed commits.
@@ -765,6 +805,7 @@ OpenClaw applies these cleanup rules:
 - Scratch cleanup never follows symlinks: a symlinked scratch root is refused, while expired links inside scratch are unlinked without touching their targets. Nested clone object files with multiple hardlinks use their containing Git object directory's modification time for expiry; Git refreshing a shared pack elsewhere does not renew the scratch clone's lifetime. New links still update the directory's age. Removing scratch entries also invalidates the parent worktree's nested-repository deferral so idle cleanup can retry. Each pass enumerates at most 4,096 top-level names and inspects at most 256 candidates, with separate limits of 2 million filesystem entries for age scanning and removal, to depth 64. Recursive scratch scans and deletion run in a filesystem worker. The Gateway decides expiry and custody, then atomically renames each expired directory within scratch before handing its device/inode identity to the worker for rechecking. New runs can use the original path while the worker deletes the claimed tree. Interrupted claims remain discoverable by ordinary scratch cleanup after restart; no separate journal is needed. Pressure is checked at each pause. Deletion streams through the tree and pauses 100 milliseconds after every 128 removals. An incomplete scan retains the entry and reports a deferral. The next pass resumes the directory iterator; an entry exceeding the full scan or depth limit is deferred so later entries remain reachable. The cleanup receipt and health log include scratch entries and bytes removed, live-run skips, and deferred inspections; `openclaw worktrees gc --job <id>` shows the latest receipt.
 - At run end, it removes a worktree without Git force only when `git status --porcelain` is empty and `git log HEAD --not --remotes --oneline` finds no unpushed commits. It also checks the captured contents for edits hidden by index flags. Otherwise it retains the checkout and records why.
 - Background cleanup snapshots and removes unlocked Workboard- and session-owned worktrees idle for more than 7 days, even when dirty. A stable per-worktree delay of up to one additional hour spreads age-based expiry. Session worktrees whose owner is archived or absent are eligible without waiting 7 days. Failed owner lookups defer idle cleanup. Run `openclaw worktrees gc` to request cleanup and see its progress.
+- Run workspace preparation and run-lease acquisition/release record worktree activity. Writes are coalesced over five minutes using the persisted timestamp, so idle expiry and capacity ordering reflect recent use rather than only creation time.
 - The same background owner enforces `worktreeMaxCount`, default `4096`, using the [capacity eviction policy](#capacity-and-eviction). Manual worktrees and unsaved data are eligible when enforcing the cap.
 - Snapshot records remain restorable for 30 days. Cleanup then deletes the snapshot ref and registry row.
 - Live owner leases protect active runs from eviction. Ordinary idle cleanup also preserves foreign or unrecognized Git worktree locks.
@@ -1078,7 +1119,9 @@ openclaw worktrees retire-snapshot <id> --expected-ref <ref> --expected-oid <oid
 
 The Control UI **Worktrees** page under Settings provides creation with a base-branch picker, ordinary removal and restoration, and garbage collection. It shows each worktree's owner (manual, Workboard, or the owning session with a link into its chat), and offers a force retry when a removal reports a failed snapshot.
 
-Leave **Base branch** empty to fetch and use the remote default branch, or the primary checkout's current `HEAD` commit when no `origin` remote is configured. Branch suggestions do not select a base; choosing or entering a branch or commit uses that exact ref without fetching. Clearing the field restores automatic selection. Automatic selection also fast-forwards a clean, strictly older local default branch. For repositories with `origin`, failed fetches use the cached remote default with a warning; unavailable remote defaults require repairing `origin` or choosing an explicit ref.
+In **Worktrees → New worktree**, choose a repository from existing managed-worktree records or enter another path. **Base branch** offers discovered branches and custom branch, tag, or commit references. Changing repositories clears the previous branch selection and its suggestions; choosing either field does not create a checkout until you click **Create**.
+
+Choose **Automatic base** to fetch and use the remote default branch, or the primary checkout's current `HEAD` commit when no `origin` remote is configured. Branch suggestions do not select a base; choosing or entering a branch or commit uses that exact ref without fetching. Clearing the field restores automatic selection. Automatic selection also fast-forwards a clean, strictly older local default branch. For repositories with `origin`, failed fetches use the cached remote default with a warning; unavailable remote defaults require repairing `origin` or choosing an explicit ref.
 
 `worktrees list --json` includes optional `cleanup` metadata for a recorded removal
 failure: `state` is `preserved` (automatic retries stopped) or `retrying` (retry

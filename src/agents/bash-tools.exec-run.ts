@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { ToolInterruptedByUser } from "../../packages/agent-core/src/tool-interruption.js";
 import { resolveStateDir } from "../config/paths.js";
 import { createAbortError } from "../infra/abort-signal.js";
+import { captureDiagnosticToolExecutionAwaiting } from "../infra/diagnostic-tool-execution-liveness.js";
 import {
   loadExecApprovalsReadOnlyAsync,
   maxAsk,
@@ -490,6 +491,20 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             ? preparedRunEnvironment.localIdentityEnv.GH_CONFIG_DIR
             : undefined;
 
+        const subagentSession =
+          notifyOnExit && allowBackground ? await resolveSubagentSession() : false;
+        const timeoutSec =
+          params.timeoutSeconds ??
+          (startsService ? serviceTimeoutSec(subagentSession) : defaultTimeoutSec);
+        const deadlineSource = params.timeoutSeconds === undefined ? "default" : "explicit";
+        captureDiagnosticToolExecutionAwaiting()(() => [
+          {
+            kind: "exec",
+            phase: "preparing",
+            deadlineSource: timeoutSec === null || timeoutSec <= 0 ? "none" : deadlineSource,
+          },
+        ]);
+
         if (host === "gateway" && !bypassApprovals) {
           gatewayApproval = await processGatewayAllowlist({
             ...hostApprovalParams(),
@@ -534,8 +549,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           );
         }
 
-        const subagentSession =
-          notifyOnExit && allowBackground ? await resolveSubagentSession() : false;
         assertSourceActive();
         run = await runExecProcess({
           command: params.command,
@@ -565,9 +578,8 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           agentId,
           eventRouting: defaults?.eventRouting,
           notifyDeliveryContext,
-          timeoutSec:
-            params.timeoutSeconds ??
-            (startsService ? serviceTimeoutSec(subagentSession) : defaultTimeoutSec),
+          timeoutSec,
+          deadlineSource,
           processContinuationAvailable: allowBackground,
           startupSignal: signal,
           onUpdate,

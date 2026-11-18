@@ -148,7 +148,7 @@ function assertSameLink(
 }
 
 /** Remove leftover temporary links; only symbolic links are removed, never recursively. */
-async function sweepPackageReleaseTemporaryLinks(globalRoot: string): Promise<string[]> {
+export async function sweepPackageReleaseTemporaryLinks(globalRoot: string): Promise<string[]> {
   const names = (await fs.readdir(globalRoot).catch(ignoreMissingPath)) ?? [];
   const removed: string[] = [];
   for (const name of names.filter((entry) => entry.startsWith(TEMPORARY_LINK_PREFIX))) {

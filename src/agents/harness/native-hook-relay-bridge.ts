@@ -35,6 +35,7 @@ import {
   isJsonObject,
   normalizePositiveInteger,
   readNonEmptyString,
+  readOptionalNonEmptyString,
 } from "./native-hook-relay-utils.js";
 
 const MAX_NATIVE_HOOK_BRIDGE_BODY_BYTES = 5_000_000;
@@ -83,6 +84,7 @@ export function registerNativeHookRelayBridge(
     pending: listening.promise,
     cancelStartup: () =>
       listening.reject(new Error(NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR)),
+    remoteToolUses: new Set(),
   };
   server.on("request", (req, res) => {
     void handleNativeHookRelayBridgeRequest(req, res, {
@@ -281,6 +283,8 @@ export async function handleNativeHookRelayBridgeRequest(
   const requestAbort = createHttpRequestAbortSignal(req, res);
   const fail = (statusCode: number, error: string) =>
     writeNativeHookRelayBridgeJson(res, statusCode, { ok: false, error });
+  let event: unknown;
+  let toolUseId: string | undefined;
   try {
     if (req.method !== "POST" || (!auth.remote && req.url !== "/invoke")) {
       fail(404, "not found");
@@ -307,6 +311,7 @@ export async function handleNativeHookRelayBridgeRequest(
           })
         ).toString("utf8");
     const payload = readNativeHookRelayBridgePayload(JSON.parse(body));
+    event = payload.event;
     if (payload.provider !== auth.provider || payload.relayId !== auth.relayId) {
       fail(403, "native hook relay bridge target mismatch");
       return;
@@ -318,6 +323,19 @@ export async function handleNativeHookRelayBridgeRequest(
     ) {
       fail(410, NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR);
       return;
+    }
+    if (auth.remote && (event === "pre_tool_use" || event === "post_tool_use")) {
+      // Codex runs each tool hook once per tool use and the remote client never
+      // retries, so a second callback for the same tool use is a replay.
+      toolUseId = isJsonObject(payload.rawPayload)
+        ? readOptionalNonEmptyString(payload.rawPayload.tool_use_id)
+        : undefined;
+      const key = `${event}:${toolUseId}`;
+      if (!toolUseId || auth.bridge.remoteToolUses.has(key)) {
+        fail(409, "Native hook callback already received");
+        return;
+      }
+      auth.bridge.remoteToolUses.add(key);
     }
     const result = await runInDetachedAsyncContext(() =>
       auth.invokeRelay({ ...payload, requireGeneration: true }, requestAbort.signal),
@@ -337,6 +355,20 @@ export async function handleNativeHookRelayBridgeRequest(
     );
   } finally {
     requestAbort.cleanup();
+    if (auth.remote) {
+      // Remote callbacks cross a network boundary: record every outcome.
+      const fields = {
+        relayId: auth.relayId,
+        event: typeof event === "string" ? event : undefined,
+        toolUseId,
+        status: requestAbort.signal.aborted ? "aborted" : res.statusCode,
+      };
+      if (fields.status === 200) {
+        log.info("native hook remote callback", { consoleMessage: false, ...fields });
+      } else {
+        log.warn("native hook remote callback refused", fields);
+      }
+    }
   }
 }
 
