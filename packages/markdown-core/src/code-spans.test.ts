@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCodeSpanIndex } from "./code-spans.js";
+import { buildCodeSpanIndex, createInlineCodeState } from "./code-spans.js";
 import { findMarkdownCodeRegions } from "./reasoning-tags.js";
 
 describe("buildCodeSpanIndex", () => {
@@ -24,6 +24,44 @@ describe("buildCodeSpanIndex", () => {
       ),
     ).toEqual([false, true, true, false, true]);
   });
+
+  it("keeps an inline backtick run intact when a chunk boundary splits it", () => {
+    const text = "`` ``";
+    const expected = buildCodeSpanIndex(text);
+    const first = buildCodeSpanIndex("`", createInlineCodeState());
+    const second = buildCodeSpanIndex("` ``", first.inlineState);
+
+    expect(expected.isInside(2)).toBe(true);
+    expect(second.isInside(1)).toBe(expected.isInside(2));
+    expect(second.inlineState.open).toBe(false);
+  });
+
+  it("carries a split backtick run across an empty chunk", () => {
+    const first = buildCodeSpanIndex("`", createInlineCodeState());
+    const empty = buildCodeSpanIndex("", first.inlineState);
+    const last = buildCodeSpanIndex("` ``", empty.inlineState);
+
+    expect(last.isInside(1)).toBe(true);
+    expect(last.inlineState.open).toBe(false);
+  });
+
+  it.each(["x````b", "``a`b``", "\\` literal", "`one` ``two``"])(
+    "matches the one-shot index for one-character chunks: %j",
+    (text) => {
+      const expected = buildCodeSpanIndex(text);
+      let state = createInlineCodeState();
+      for (let offset = 0; offset < text.length; offset += 1) {
+        const chunk = text.charAt(offset);
+        const index = buildCodeSpanIndex(chunk, state);
+        expect(index.isInside(0), `offset ${offset} in ${JSON.stringify(text)}`).toBe(
+          expected.isInside(offset),
+        );
+        state = index.inlineState;
+      }
+      expect(state.open).toBe(expected.inlineState.open);
+      expect(state.ticks).toBe(expected.inlineState.ticks);
+    },
+  );
 });
 
 describe("markdown-core code spans", () => {

@@ -6,6 +6,8 @@ export type InlineCodeState = {
   open: boolean;
   /** Backtick run length required to close the current inline code span. */
   ticks: number;
+  /** A trailing run whose length can still change when the next chunk starts with backticks. */
+  pendingRun?: { length: number; open: boolean; ticks: number };
   /** Whether the previous chunk ended in prose with an unpaired backslash. */
   escaped?: boolean;
 };
@@ -26,13 +28,49 @@ export function buildCodeSpanIndex(
   const { spans: fenceSpans, state: nextFenceState } = scanFenceSpans(text, fenceState);
   const initialState = inlineState ?? createInlineCodeState();
   const inlineSpans: CodeSpan[] = [];
-  let open = initialState.open;
-  let ticks = initialState.ticks;
+  const pendingRun = initialState.pendingRun;
+  const hasInput = text.length > 0;
+  let open = pendingRun && hasInput ? pendingRun.open : initialState.open;
+  let ticks = pendingRun && hasInput ? pendingRun.ticks : initialState.ticks;
   let openStart = open ? 0 : -1;
   // Outside code, a backslash escapes the next backtick (CommonMark); inside code it is literal.
   let escaped = !open && initialState.escaped === true;
 
   let i = 0;
+  let nextPendingRun = hasInput ? undefined : pendingRun;
+
+  if (pendingRun && text.length > 0) {
+    const runStart = 0;
+    let leadingRunLength = 0;
+    while (leadingRunLength < text.length && text[leadingRunLength] === "`") {
+      leadingRunLength += 1;
+    }
+    const runLength = pendingRun.length + leadingRunLength;
+    if (!open) {
+      open = true;
+      ticks = runLength;
+      openStart = runStart;
+    } else if (runLength === ticks) {
+      if (leadingRunLength > 0) {
+        inlineSpans.push({ start: runStart, end: leadingRunLength });
+      }
+      open = false;
+      ticks = 0;
+      openStart = -1;
+    } else {
+      openStart = runStart;
+    }
+    i = leadingRunLength;
+    if (i === text.length) {
+      nextPendingRun = {
+        length: runLength,
+        open: pendingRun.open,
+        ticks: pendingRun.ticks,
+      };
+    }
+    escaped = false;
+  }
+
   // The scanner emits ordered, disjoint fences and the input cursor only advances.
   // Retire each fence once instead of searching all prior fences at every character.
   let fenceIndex = 0;
@@ -64,6 +102,8 @@ export function buildCodeSpanIndex(
     }
 
     const runStart = i;
+    const runWasOpen = open;
+    const ticksBeforeRun = ticks;
     let runLength = 0;
     while (i < text.length && text[i] === "`") {
       runLength += 1;
@@ -74,14 +114,14 @@ export function buildCodeSpanIndex(
       open = true;
       ticks = runLength;
       openStart = runStart;
-      continue;
-    }
-
-    if (runLength === ticks) {
+    } else if (runLength === ticks) {
       inlineSpans.push({ start: openStart, end: i });
       open = false;
       ticks = 0;
       openStart = -1;
+    }
+    if (i === text.length) {
+      nextPendingRun = { length: runLength, open: runWasOpen, ticks: ticksBeforeRun };
     }
   }
 
@@ -90,7 +130,12 @@ export function buildCodeSpanIndex(
   }
 
   return {
-    inlineState: { open, ticks, ...(escaped ? { escaped } : {}) },
+    inlineState: {
+      open,
+      ticks,
+      ...(nextPendingRun ? { pendingRun: nextPendingRun } : {}),
+      ...(escaped ? { escaped } : {}),
+    },
     fenceState: nextFenceState,
     // Each scanner emits ordered, disjoint spans; inline spans can enclose fences.
     // Search separately so overlap between the lists cannot hide a containing span.
