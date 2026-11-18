@@ -557,11 +557,10 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  height: 28px;
+  min-height: 28px;
   padding: 0 8px;
   color: var(--muted);
   font-size: 13px;
-  white-space: nowrap;
 }
 
 .cron-tray-note__text svg {
@@ -1606,11 +1605,9 @@
   }
 
   .cron-tray-note__text {
-    height: auto;
     margin-inline-start: auto;
     padding: 0;
     font-size: inherit;
-    white-space: normal;
     text-align: end;
   }
 

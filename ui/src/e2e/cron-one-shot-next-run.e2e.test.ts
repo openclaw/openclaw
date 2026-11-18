@@ -82,6 +82,29 @@ suite.define(() => {
         await expect
           .poll(() => summary.textContent())
           .toContain("Next activity at 10/30/2026, 12:10 PM");
+
+        await page.setViewportSize({ width: 700, height: 900 });
+        const reason = "Automation deferred while its agent is busy";
+        job.state = {
+          ...job.state,
+          admissionDeferred: {
+            reason,
+            sinceMs: Date.parse("2026-10-30T12:00:00Z"),
+            attempts: 2,
+            retryAtMs: Date.parse("2026-10-30T12:10:00Z"),
+          },
+        };
+        await gateway.setMethodResponse("cron.list", cronList([job], "one-shot-waiting"));
+        await gateway.setMethodResponse("cron.get", job);
+        await gateway.emitGatewayEvent("cron", { jobId: job.id, action: "updated" });
+        await expect.poll(() => summary.textContent()).toContain(reason);
+        await expect
+          .poll(async () => {
+            const clock = await page.locator(".cron-prompt__clock").boundingBox();
+            const runControls = await page.locator(".cron-prompt__run-controls").boundingBox();
+            return clock && runControls && runControls.y < clock.y + clock.height;
+          })
+          .toBe(true);
       },
     );
   });
