@@ -13,9 +13,9 @@ import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createProgressiveList } from "../../lib/reactive/progressive-list.ts";
 import { renderPluginCompatibilityNotices } from "./overview.tsx";
-import { PluginArtTile } from "./plugin-art-tile.tsx";
 import { renderPluginStateWord } from "./plugin-card.tsx";
 import { pluginRowKey, renderPluginRowMessage } from "./plugin-row-message.tsx";
+import { PluginArtTile } from "./presentation.tsx";
 import { PluginRetryError } from "./settings-retry-error.tsx";
 import type { InventoryProps } from "./settings-view.tsx";
 

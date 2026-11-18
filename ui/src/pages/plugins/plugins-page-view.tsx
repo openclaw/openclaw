@@ -33,7 +33,6 @@ import { renderPluginCatalogResults as PluginCatalogResults } from "./catalog-re
 import "./custom-elements.ts";
 import { renderPluginConsentDialog as PluginConsentDialog } from "./consent-dialog.tsx";
 import { pluginDetailLocation, type InstalledPluginDetailTab } from "./detail-tabs.ts";
-import { PluginArtTile } from "./plugin-art-tile.tsx";
 import {
   pluginRowKey,
   renderPluginRowMessage as PluginRowMessageView,
@@ -42,6 +41,7 @@ import { PluginsHubHeader } from "./plugins-hub-header.tsx";
 import { pluginsHubPanel, type PluginsHubTab } from "./plugins-hub.ts";
 import { installRequestForDiscoveryDetail } from "./plugins-page-model.ts";
 import type { PluginsPageModel } from "./plugins-page.ts";
+import { PluginArtTile } from "./presentation.tsx";
 import { renderPluginSettingsInventory as PluginSettingsInventory } from "./settings-inventory.tsx";
 import {
   pluginAdvancedSchema,

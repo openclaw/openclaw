@@ -25,7 +25,7 @@ import type {
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { PluginArtTile } from "./plugin-art-tile.tsx";
+import { PluginArtTile } from "./presentation.tsx";
 import { ReasonedDisabledControl } from "./reasoned-disabled-control.tsx";
 
 registerEnglishCatalog(registerPluginManagementEnglish);

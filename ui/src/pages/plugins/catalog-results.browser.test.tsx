@@ -12,7 +12,7 @@ import {
 import { renderPluginDetailShell } from "./detail-shell.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import { renderPluginContentCapabilities } from "./overview.tsx";
-import { PluginArtTile } from "./plugin-art-tile.tsx";
+import { PluginArtTile } from "./presentation.tsx";
 import baseStyles from "../../styles/base.css?inline";
 import carapaceStyles from "../../styles/carapace-control-ui.css?inline";
 import componentStyles from "../../styles/components.css?inline";

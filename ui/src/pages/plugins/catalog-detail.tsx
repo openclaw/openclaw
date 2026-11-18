@@ -25,9 +25,9 @@ import {
   renderPluginPublisher,
   renderPluginAskAction,
 } from "./overview.tsx";
-import { PluginArtTile } from "./plugin-art-tile.tsx";
 import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.tsx";
 import type { PluginDetailRead } from "./plugins-detail-reads.ts";
+import { PluginArtTile } from "./presentation.tsx";
 import { ReasonedDisabledControl } from "./reasoned-disabled-control.tsx";
 import { PluginRecommendedPrompts } from "./recommended-prompts.tsx";
 

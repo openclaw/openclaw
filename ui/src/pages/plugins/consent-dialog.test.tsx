@@ -6,8 +6,8 @@ import { buildCapabilityConsentErrorDetails } from "../../../../packages/gateway
 import { i18n } from "../../i18n/index.ts";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { renderPluginConsentDialog as PluginConsentDialog } from "./consent-dialog.tsx";
-import { PluginArtTile } from "./plugin-art-tile.tsx";
 import { createInspectResult } from "./plugins-page.test-support.ts";
+import { PluginArtTile } from "./presentation.tsx";
 
 type ConsentProps = Parameters<typeof PluginConsentDialog>[0];
 

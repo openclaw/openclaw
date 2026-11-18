@@ -28,7 +28,6 @@ import {
   renderPluginPublisher,
   renderPluginAskAction,
 } from "./overview.tsx";
-import { PluginArtTile } from "./plugin-art-tile.tsx";
 import {
   pluginRowKey,
   renderPluginRowMessage,
@@ -36,6 +35,7 @@ import {
 } from "./plugin-row-message.tsx";
 import type { PluginDetailRead } from "./plugins-detail-reads.ts";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
+import { PluginArtTile } from "./presentation.tsx";
 import { PluginRecommendedPrompts } from "./recommended-prompts.tsx";
 import {
   pluginSettingsNodeOptions,

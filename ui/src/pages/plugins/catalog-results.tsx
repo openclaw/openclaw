@@ -25,7 +25,6 @@ import { PluginCatalogGrid } from "./catalog-grid.tsx";
 import { PluginCatalogSkeleton, renderCatalogGridSkeleton } from "./catalog-skeleton.tsx";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
-import { PluginArtTile } from "./plugin-art-tile.tsx";
 import {
   renderPluginAuthor,
   PluginCardSummary,
@@ -35,7 +34,7 @@ import {
 import type { PluginDiscoveryIntent, PluginDiscoveryState } from "./plugin-discovery.ts";
 import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.tsx";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
-import { resolvePluginCatalogIconUrl } from "./presentation.ts";
+import { PluginArtTile, resolvePluginCatalogIconUrl } from "./presentation.tsx";
 
 export type PluginCatalogResultsProps = PluginDiscoveryState & {
   registerInstallAction?: PluginInstallActionProps["registerInstallAction"];
