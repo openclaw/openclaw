@@ -88,32 +88,66 @@ export function getLastAssistantUsage(entries: SessionTreeEntry[]): Usage | unde
   return undefined;
 }
 
+export type CompactionContextUsageFact = {
+  barrier: boolean;
+  usageTokens?: number;
+};
+
+export function collectCompactionContextUsageFact(
+  message: AgentMessage,
+): CompactionContextUsageFact {
+  const usage = getAssistantUsage(message);
+  return {
+    barrier: isUnavailableContextBarrier(message),
+    usageTokens:
+      usage && usage.contextUsage?.state !== "unavailable"
+        ? calculateContextTokens(usage)
+        : undefined,
+  };
+}
+
 /** Estimate context tokens for messages using provider usage when available. */
 export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEstimate {
+  return estimateContextTokensFromFacts({
+    length: messages.length,
+    usageAt: (index) => {
+      const message = messages[index];
+      return message ? collectCompactionContextUsageFact(message) : undefined;
+    },
+    estimateAt: (index) => {
+      const message = messages[index];
+      if (!message) {
+        throw new TypeError("Compaction context contains a missing message");
+      }
+      return estimateTokens(message);
+    },
+  });
+}
+
+/** Readers supply collected scalar facts; array callers estimate only the required tail. */
+export function estimateContextTokensFromFacts(facts: {
+  length: number;
+  usageAt: (index: number) => CompactionContextUsageFact | undefined;
+  estimateAt: (index: number) => number;
+}): ContextUsageEstimate {
   let usageTokens = 0;
   let lastUsageIndex: number | null = null;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages.at(i);
-    if (!message) {
-      continue;
-    }
-    if (isUnavailableContextBarrier(message)) {
-      // Synthetic CLI markers invalidate older usage without contributing a
-      // replacement. Estimate the whole transcript instead of scanning past it.
+  for (let i = facts.length - 1; i >= 0; i--) {
+    const fact = facts.usageAt(i);
+    if (fact?.barrier) {
+      // Synthetic CLI markers invalidate older usage without supplying a replacement.
       break;
     }
-    const usage = getAssistantUsage(message);
-    if (usage && usage.contextUsage?.state !== "unavailable") {
-      usageTokens = calculateContextTokens(usage);
+    if (fact?.usageTokens !== undefined) {
+      usageTokens = fact.usageTokens;
       lastUsageIndex = i;
       break;
     }
   }
   let trailingTokens = 0;
-  for (const message of lastUsageIndex === null ? messages : messages.slice(lastUsageIndex + 1)) {
-    trailingTokens += estimateTokens(message);
+  for (let i = lastUsageIndex === null ? 0 : lastUsageIndex + 1; i < facts.length; i++) {
+    trailingTokens += facts.estimateAt(i);
   }
-
   return {
     tokens: usageTokens + trailingTokens,
     usageTokens,

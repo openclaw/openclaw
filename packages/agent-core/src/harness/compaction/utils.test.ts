@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import type { Message } from "@openclaw/llm-core";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../../types.js";
 import { convertToLlm } from "../messages.js";
 import { estimateTokens } from "./compaction.js";
@@ -13,12 +14,101 @@ import {
 } from "./shard-fixtures.test-support.js";
 import {
   computeFileLists,
+  createConversationEntryCollector,
   createFileOps,
   extractFileOpsFromMessages,
   formatFileOperations,
   mergeSummaryFileOperations,
+  renderConversationEntriesWithinBudget,
   serializeConversation,
+  serializeConversationEntry,
+  serializeConversationWithinBudget,
+  type ConversationEntryDescriptor,
 } from "./utils.js";
+
+function serializationFixture(): Message[] {
+  const messages: Message[] = [];
+  for (let index = 0; index < 32; index++) {
+    messages.push(
+      user(`ask-${index} ${"漢字𠀀🚀 constraint ".repeat(90)} END-${index}`, index, {
+        senderId: `sender-${index % 2}`,
+      }),
+      assistant([
+        textBlock(`reply-${index} ${"evidence ".repeat(80)}`),
+        toolCall("exec", { cmd: `empty-${index}` }, "repeated"),
+        toolCall("exec", { cmd: `command-${index} ${"𠀀🚀".repeat(200)}` }, "repeated"),
+      ]),
+      toolResult("", { toolCallId: "repeated" }),
+      user("intervening", index),
+      toolResult(
+        [
+          ...(index < 12 ? [{ type: "image" as const, data: "AA==", mimeType: "image/png" }] : []),
+          textBlock(`result-${index} ${"output ".repeat(500)} ERROR: failed-${index}`),
+        ],
+        { toolCallId: "repeated", toolName: "exec" },
+      ),
+    );
+  }
+  messages.push(
+    { ...user("runtime secret"), runtimeContext: {} } as Message,
+    assistant([toolCall("exec", { cmd: "aborted" }, "repeated")]),
+    assistant("replacement turn"),
+    toolResult("orphan result", { toolCallId: "repeated", toolName: "exec" }),
+    user(`${"LATEST 漢🚀 ".repeat(2_000)} END-LATEST`),
+  );
+  return messages;
+}
+
+it("renders row descriptors lazily with exact pre-refactor text, gaps and trim counts", () => {
+  const messages = serializationFixture();
+  const collect = createConversationEntryCollector();
+  const descriptors: ConversationEntryDescriptor[] = [];
+  for (const [source, message] of messages.entries()) {
+    // Keep only facts: a worker discards this row and every transient text variant.
+    descriptors.push(...collect(message, source).map(({ descriptor }) => descriptor));
+  }
+  expect(descriptors).toHaveLength(165);
+  expect(
+    descriptors.filter(({ source }) => source === 1).map(({ partIndex }) => partIndex),
+  ).toEqual([0, 1]);
+  expect(JSON.stringify(descriptors)).not.toMatch(/constraint|evidence|output|runtime secret/);
+  // SHA-256 covers the complete BoundedConversation captured before this extraction.
+  const goldens = [
+    [0, "2a8f964a25b22d957fa92f0ede2d4459304d1243ca0c495ded87615910073788"],
+    [300, "2a8f964a25b22d957fa92f0ede2d4459304d1243ca0c495ded87615910073788"],
+    [4_000, "37151a8ccda31343fa0afda6a2b0f9b4146752f576ea98d87934b269456108d0"],
+    [9_000, "a5467c7f0de24faa0bc2cbb4cf43943ae3ac46f91f41853aa4edb18650b12754"],
+    [20_000, "ef2b41b33456d2de7f068fb7873fb835e91f53f58d7e006573728102d1a79d22"],
+    [160_000, "22de94d236399127a490cce2f187713171fe34ca50583d45efc6a898f54ba33d"],
+    [1_000_000, "bf6186f20d3d79bc789e9dbc2479aed7069a5711737c68a195f0b73bb8f4f1db"],
+  ] as const;
+  for (const [budget, hash] of goldens) {
+    let reads = 0;
+    const result = renderConversationEntriesWithinBudget(
+      descriptors,
+      budget,
+      (descriptor, variant) => {
+        if (++reads > 32 && budget <= 4_000) {
+          throw new Error("Small sample eagerly hydrated the source");
+        }
+        const message = messages[descriptor.source];
+        assert(message);
+        return serializeConversationEntry(message, descriptor, variant);
+      },
+    );
+    expect(
+      createHash("sha256").update(JSON.stringify(result)).digest("hex"),
+      `budget ${budget}`,
+    ).toBe(hash);
+    expect(result).toEqual(serializeConversationWithinBudget(messages, budget));
+    if (budget <= 300) {
+      expect(reads).toBe(0);
+    }
+    if (budget === 1_000_000) {
+      expect(result.text).toBe(serializeConversation(messages));
+    }
+  }
+});
 
 function serializeToolResult(text: string): string {
   return serializeConversation([toolResult(text, { toolName: "test-tool" })]);

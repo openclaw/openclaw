@@ -4,7 +4,11 @@ import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
+  collectMessageTokenPressureFact,
   createFreshLlmBoundaryTokenEstimator,
+  createLlmBoundaryTokenEstimatorFromFacts,
+  estimateCompactionHistoryTokens,
+  estimateCompactionHistoryTokensFromFacts,
   createFixedRequestTokenEstimator,
   estimateMessageTokenPressure,
   estimateToolSchemaTokens,
@@ -20,6 +24,27 @@ beforeEach(() => {
 });
 
 describe("prepared context pressure", () => {
+  it("rounds once and credits only the last pending-user occurrence from scalar facts", () => {
+    const pending = (content: string) => ({
+      role: "user" as const,
+      content,
+      timestamp: 1,
+      idempotencyKey: "ask",
+    });
+    const messages: AgentMessage[] = [
+      pending("a".repeat(100)),
+      makeAgentAssistantMessage({ content: [{ type: "text", text: "b" }] }),
+      pending("aaaa"),
+    ];
+    const budget = { pendingTokens: 100, pendingUserTokens: 10, pendingUserIdempotencyKey: "ask" };
+    const facts = structuredClone(
+      messages.map((message) => collectMessageTokenPressureFact(message)),
+    );
+    expect(estimateCompactionHistoryTokens(messages, budget)).toBe(73);
+    messages.length = 0;
+    expect(estimateCompactionHistoryTokensFromFacts(facts, budget)).toBe(73);
+  });
+
   it("retains golden estimates for CJK, images, calls, and a large result across readers", () => {
     const messages = (
       [
@@ -45,6 +70,15 @@ describe("prepared context pressure", () => {
     const estimate = createFreshLlmBoundaryTokenEstimator({ systemPrompt: "sys" });
     expect(messages.map(estimateMessageTokenPressure)).toEqual([18, 2_012, 28, 35_020]);
     expect(estimate({ messages, prompt: "next" })).toBe(44_525);
+    const facts = structuredClone(
+      messages.map((message) => collectMessageTokenPressureFact(message)),
+    );
+    expect(
+      createLlmBoundaryTokenEstimatorFromFacts({ systemPrompt: "sys" })({
+        messages: facts,
+        prompt: "next",
+      }),
+    ).toBe(44_525);
     vi.mocked(cjk.estimateStringTokenPressure).mockClear();
     expect(messages.map(estimateMessageTokenPressure)).toEqual([18, 2_012, 28, 35_020]);
     expect(cjk.estimateStringTokenPressure).not.toHaveBeenCalled();
