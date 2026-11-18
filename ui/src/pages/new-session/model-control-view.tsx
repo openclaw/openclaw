@@ -77,11 +77,6 @@ export function NewSessionModelControlView(props: {
     },
   );
   const metadata = createMemo(() => read().promise);
-  const initialDefaultsPending = createMemo(() => {
-    updates().revision();
-    const roster = context()?.agents.state;
-    return props.previewInitialDefaults === true && roster?.agentsLoading && !roster.agentsList;
-  });
   const controls = createMemo(() => {
     updates().revision();
     defaults().revision();
@@ -91,6 +86,23 @@ export function NewSessionModelControlView(props: {
       context: context(),
       sending: sending(),
     });
+  });
+  const initialDefaultsPending = createMemo(() => {
+    const { connected, modelCatalogState } = controls();
+    if (!props.previewInitialDefaults || !connected) {
+      return false;
+    }
+    updates().revision();
+    const roster = context()?.agents.state;
+    // The agent can land before the first catalog read. Keep unknown labels
+    // reserved through that handoff, but never mask a retained or retired catalog.
+    return (
+      Boolean(roster?.agentsLoading && !roster.agentsList) ||
+      (agent() !== undefined &&
+        !modelCatalogState.hasSnapshot &&
+        !modelCatalogState.retired &&
+        (modelCatalogState.status === "idle" || modelCatalogState.status === "loading"))
+    );
   });
   return (
     <ChatModelControls

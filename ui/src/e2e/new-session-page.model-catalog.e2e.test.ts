@@ -21,12 +21,14 @@ const luna: ModelCatalogEntry = catalogModel("openai", "gpt-5.6-luna", "GPT-5.6 
 
 suite.define(() => {
   it.each([400, 820, 1280])(
-    "does not flash a default model while the first agent loads at %s px",
+    "keeps the loading placeholders through staggered agent and catalog replies at %s px",
     async (width) => {
       await suite.withPage(
         { viewport: { width, height: 900 }, reducedMotion: "reduce" },
         async ({ page }) => {
-          const gateway = await installMockGateway(page, { heldMethods: ["agents.list"] });
+          const gateway = await installMockGateway(page, {
+            heldMethods: ["agents.list", "models.list"],
+          });
           await page.goto(suite.server.baseUrl + "new");
           await gateway.waitForRequest("agents.list");
           const composer = page.locator(".new-session-page__composer");
@@ -45,13 +47,24 @@ suite.define(() => {
           const pendingChevrons = await chevrons.count();
           const actionsBefore = await actions.boundingBox();
           await gateway.resolveDeferred("agents.list");
+          await page
+            .locator(".agent-chat__welcome h2")
+            .getByText("OpenClaw", { exact: true })
+            .waitFor();
+          await gateway.waitForRequest("models.list");
+          await captureUiProof(suite, page, `model-defaults-${width}-catalog-pending.png`);
+          const catalogPendingLabel = await label.textContent();
+          const catalogPendingChevrons = await chevrons.count();
+          await gateway.resolveDeferred("models.list");
           await pollText(trigger).toContain("gpt-5.5");
           await effort.waitFor();
           await captureUiProof(suite, page, `model-defaults-${width}-ready.png`);
           expect(await actions.boundingBox()).toEqual(actionsBefore);
           expect(pendingLabel).not.toContain("Default model");
+          expect(catalogPendingLabel).toBe("");
           expect(pendingEffort).not.toBeNull();
           expect(pendingChevrons).toBe(0);
+          expect(catalogPendingChevrons).toBe(0);
           await pollCount(chevrons).toBe(2);
         },
       );
@@ -207,12 +220,15 @@ suite.define(() => {
         )
         .toBe("false");
       const actions = page.locator(".new-session-page__composer .agent-chat__composer-actions");
-      const loadingModelBox = await modelTrigger.boundingBox();
+      const loadingModelControls = await page
+        .locator(".new-session-page__composer .chat-controls__model-settings")
+        .boundingBox();
       const loadingActionsBox = await actions.boundingBox();
-      expect(loadingModelBox).not.toBeNull();
+      expect(loadingModelControls).not.toBeNull();
       expect(loadingActionsBox).not.toBeNull();
       expect(
-        (loadingActionsBox?.x ?? 0) - ((loadingModelBox?.x ?? 0) + (loadingModelBox?.width ?? 0)),
+        (loadingActionsBox?.x ?? 0) -
+          ((loadingModelControls?.x ?? 0) + (loadingModelControls?.width ?? 0)),
       ).toBeLessThan(16);
 
       await gateway.waitForRequest("models.list");
