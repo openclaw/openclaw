@@ -310,18 +310,15 @@ describe("createExecApprovalIosPushDelivery", () => {
     ];
     const nodes = ["ios-production", "ios-sandbox"];
     mockPairedIosOperators(...nodes.map((id) => pairedIosOperator(approvalScopes, id)));
-    mocks.registrations.mockImplementation(
-      async (nodeIds: string[]) =>
-        new Map(
-          nodeIds.map((nodeId) => [
-            nodeId,
-            {
-              ...relayApnsRegistration(nodeId),
-              relayOrigin: origins[nodes.indexOf(nodeId)],
-              environment: nodeId === "ios-production" ? "production" : "sandbox",
-            },
-          ]),
-        ),
+    mocks.registrations.mockImplementation(async (nodeIds: readonly string[]) =>
+      nodeIds.map((nodeId) => ({
+        nodeId,
+        registration: {
+          ...relayApnsRegistration(nodeId),
+          relayOrigin: origins[nodes.indexOf(nodeId)],
+          environment: nodeId === "ios-production" ? "production" : "sandbox",
+        },
+      })),
     );
     mocks.relayConfig.mockImplementation((_env, _gateway, options) =>
       resolveApnsRelayConfigFromEnv({}, {}, options),
