@@ -114,7 +114,11 @@ function runtimeDependencies(root, seen = new Set()) {
   return seen;
 }
 
-function normalizeStagedCodexVoiceHost(packageRoot) {
+// codex-voice-host serves only the Codex TUI's realtime voice (codex-rs/tui ->
+// codex-realtime-webrtc -> VoiceHost); the app-server OpenClaw runs never starts
+// it. Its published copies also carry LC_RPATHs into the Bazel build tree, so the
+// staged runtime leaves the whole voice payload out instead of shipping it.
+function removeStagedCodexVoiceHelper(packageRoot) {
   const codex = dependencyRoot(path.join(packageRoot, "dist/extensions/codex"), "@openai/codex");
   if (!codex) {
     return;
@@ -124,23 +128,11 @@ function normalizeStagedCodexVoiceHost(packageRoot) {
     ["x64", "x86_64-apple-darwin"],
   ]) {
     const platform = dependencyRoot(codex, `@openai/codex-darwin-${architecture}`);
-    const host =
-      platform &&
-      path.join(platform, "vendor", target, "codex-resources/voice/bin/codex-voice-host");
-    if (!host || !fs.existsSync(host)) {
-      continue;
-    }
-    const commands = execFileSync("/usr/bin/otool", ["-l", host], { encoding: "utf8" });
-    for (const [, rpath] of commands.matchAll(/^\s*path (.+) \(offset \d+\)$/gm)) {
-      // Codex also carries a portable ../lib path. Drop only missing Bazel
-      // build-tree paths from the installed copy before the app is signed.
-      if (
-        rpath.startsWith("@loader_path/../../_solib_darwin_") &&
-        rpath.includes("/voice/native_link_macos_") &&
-        !fs.existsSync(path.resolve(path.dirname(host), rpath.slice("@loader_path/".length)))
-      ) {
-        execFileSync("/usr/bin/install_name_tool", ["-delete_rpath", rpath, host]);
-      }
+    if (platform) {
+      fs.rmSync(path.join(platform, "vendor", target, "codex-resources/voice"), {
+        recursive: true,
+        force: true,
+      });
     }
   }
 }
@@ -222,7 +214,7 @@ export function stampDesktopRuntimePlugins(packageRoot, plan) {
     }
   }
   if (plan.pluginIds.includes("codex")) {
-    normalizeStagedCodexVoiceHost(packageRoot);
+    removeStagedCodexVoiceHelper(packageRoot);
   }
   build.stagedOfficialPlugins = { commit: plan.commit, pluginIds: plan.pluginIds };
   fs.writeFileSync(file, `${JSON.stringify(build, null, 2)}\n`);

@@ -138,36 +138,44 @@ it.each([
   }
 });
 
-it.runIf(process.platform === "darwin")("normalizes only staged voice rpaths", async () => {
-  const { auditMacRuntimePortability } =
-    await import("../../scripts/lib/mac-runtime-portability.mjs");
-  const root = temps.make("desktop-runtime-codex-native-");
-  const commit = "a".repeat(40);
-  writeJson(root, "dist/build-info.json", { commit });
-  writePlugin(root, "codex");
-  for (const name of ["codex", "codex-darwin-arm64"]) {
-    writeJson(root, `node_modules/@openai/${name}/package.json`, {});
-  }
-  const voice = path.join(
-    root,
-    "node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-resources/voice",
-  );
-  mkdirSync(path.join(voice, "lib"), { recursive: true });
-  mkdirSync(path.join(voice, "bin"));
-  const host = path.join(voice, "bin/codex-voice-host");
-  const rpaths = [
-    "@loader_path/../../_solib_darwin_arm64/voice/native_link_macos_aarch64",
-    "@loader_path/../lib",
-  ];
-  const args = ["-x", "c", "-", "-o", host, ...rpaths.map((rpath) => `-Wl,-rpath,${rpath}`)];
-  execFileSync("/usr/bin/clang", args, { input: "int main(void) { return 0; }\n" });
-  const original = readFileSync(host);
-  stampDesktopRuntimePlugins(root, { commit, pluginIds: [] });
-  expect(readFileSync(host)).toEqual(original);
-  expect(() => auditMacRuntimePortability(root, host)).toThrow("Nonportable LC_RPATH");
-  stampDesktopRuntimePlugins(root, { commit, pluginIds: ["codex"] });
-  expect(auditMacRuntimePortability(root, host)).toBe(1);
-});
+it.runIf(process.platform === "darwin")(
+  "leaves the TUI-only voice helper out of staged Codex",
+  async () => {
+    const { auditMacRuntimePortability } =
+      await import("../../scripts/lib/mac-runtime-portability.mjs");
+    const root = temps.make("desktop-runtime-codex-native-");
+    const commit = "a".repeat(40);
+    writeJson(root, "dist/build-info.json", { commit });
+    writePlugin(root, "codex");
+    for (const name of ["codex", "codex-darwin-arm64"]) {
+      writeJson(root, `node_modules/@openai/${name}/package.json`, {});
+    }
+    const voice = path.join(
+      root,
+      "node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-resources/voice",
+    );
+    mkdirSync(path.join(voice, "lib"), { recursive: true });
+    mkdirSync(path.join(voice, "bin"));
+    const compile = (output: string, rpaths: string[]) =>
+      execFileSync(
+        "/usr/bin/clang",
+        ["-x", "c", "-", "-o", output, ...rpaths.map((rpath) => `-Wl,-rpath,${rpath}`)],
+        { input: "int main(void) { return 0; }\n" },
+      );
+    const entrypoint = path.join(root, "entrypoint");
+    compile(entrypoint, []);
+    // LC_RPATH set of codex-voice-host in @openai/codex-darwin-arm64 0.169.0 and 0.170.0.
+    compile(path.join(voice, "bin/codex-voice-host"), [
+      "@loader_path/../../_solib_darwin_arm64/voice/native_link_macos_aarch64",
+      "@loader_path/codex-voice-host.runfiles/_main/_solib_darwin_arm64/voice/native_link_macos_aarch64",
+      "@loader_path/../lib",
+    ]);
+    stampDesktopRuntimePlugins(root, { commit, pluginIds: [] });
+    expect(() => auditMacRuntimePortability(root, entrypoint)).toThrow("Nonportable LC_RPATH");
+    stampDesktopRuntimePlugins(root, { commit, pluginIds: ["codex"] });
+    expect(auditMacRuntimePortability(root, entrypoint)).toBe(1);
+  },
+);
 
 it.each(["2026.10.2-beta.1", "2026.10.2-alpha.1", "2026.10.33"])(
   "recognizes exact release version %s",
