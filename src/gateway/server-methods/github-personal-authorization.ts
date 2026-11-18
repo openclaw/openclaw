@@ -106,12 +106,21 @@ export async function prepareGitHubPublicationOptionsRead(
   purpose: "options" | "shared-observation" = "options",
 ) {
   const authority = readGatewayRequestMutationAuthority(options);
-  signal?.throwIfAborted();
+  const requestSignal = options.signal;
+  const runSignal = options.client?.internal?.operatorRunAuthority?.signal;
+  const assertCurrent = () => {
+    signal?.throwIfAborted();
+    requestSignal?.throwIfAborted();
+    runSignal?.throwIfAborted();
+  };
+  assertCurrent();
   authority.assertCurrent();
   const profileReference = options.client?.authenticatedUserProfile?.profileId;
-  const profile = profileReference
-    ? captureResidentUserProfileAccess(profileReference).assertCurrent()
+  const profileAccess = profileReference
+    ? captureResidentUserProfileAccess(profileReference)
     : undefined;
+  const profile = profileAccess?.assertCurrent();
+  const personalOwner = profile?.id;
   const eligibleClient = currentGitHubClient(
     options,
     "operator.sessions.read",
@@ -119,18 +128,25 @@ export async function prepareGitHubPublicationOptionsRead(
       ? { profileId: profile.id, role: profile.role ?? null, githubLogin: profile.githubLogin }
       : undefined,
   );
-  const assertCurrent = () => signal?.throwIfAborted();
   const personal: PersonalEligibility =
     purpose === "shared-observation" ||
     !eligibleClient ||
     !hasCurrentPersonalGatewaySource(options.client, options.context) ||
     !operatorScopeSatisfied("operator.read", eligibleClient.connect.scopes ?? [])
       ? { kind: "ineligible" }
-      : !profile
+      : !personalOwner || !profileAccess
         ? { kind: "absent" }
         : {
             kind: "eligible",
-            action: preparePersonalGitHubAction(profile.id, signal),
+            action: {
+              owner: personalOwner,
+              assertCurrent: () => {
+                assertCurrent();
+                if (profileAccess.assertCurrent().id !== personalOwner) {
+                  throw new Error("My GitHub owner changed; retry from your current profile.");
+                }
+              },
+            },
           };
   const preparedSession =
     purpose === "shared-observation"
@@ -234,19 +250,6 @@ export async function prepareGitHubPublicationOptionsRead(
     release();
     throw error;
   }
-}
-
-/** The admitted profile owns every credential read; merging cannot redirect it. */
-function preparePersonalGitHubAction(owner: string, signal?: AbortSignal): PersonalGitHubAction {
-  const binding = captureResidentUserProfileAccess(owner);
-  const assertCurrent = () => {
-    signal?.throwIfAborted();
-    if (binding.assertCurrent().id !== owner) {
-      throw new Error("My GitHub owner changed; retry from your current profile.");
-    }
-  };
-  assertCurrent();
-  return { owner, assertCurrent };
 }
 
 async function bindPersonalGitHubSessionAction(

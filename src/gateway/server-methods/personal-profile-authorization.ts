@@ -100,6 +100,10 @@ export async function preparePersonalProfileAction(
   assertCurrent: () => void;
 }> {
   const { client, context } = options;
+  const signal = AbortSignal.any(
+    [options.signal, callerSignal].filter((source): source is AbortSignal => source !== undefined),
+  );
+  signal.throwIfAborted();
   if (!hasCurrentPersonalGatewaySource(client, context)) {
     throw new Error("Personal profile requires a current authenticated human Gateway connection.");
   }
@@ -110,6 +114,7 @@ export async function preparePersonalProfileAction(
     );
   }
   const profile = await prepareUserProfileSelectionAuthority(profileReference);
+  signal.throwIfAborted();
   if (!profile) {
     throw new Error(
       "Personal profile requires a verified durable user profile; sign in and try again.",
@@ -120,8 +125,6 @@ export async function preparePersonalProfileAction(
     throw new Error("Personal profile requires an authenticated Gateway connection.");
   }
   const owner = profile.profileId;
-  // The transport's signal can revoke access; only action-owned cancellation survives admission.
-  const signal = callerSignal ?? AbortSignal.any([]);
   const assertCurrent = () => {
     signal.throwIfAborted();
     // Never follow a merged profile to somebody else's credentials.
