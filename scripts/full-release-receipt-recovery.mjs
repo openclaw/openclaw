@@ -182,7 +182,12 @@ export function receiptRecoveryChildInputs(role, admission, binding, workflowSou
     }
   }
   optional("qualification_baselines_json", lane.qualification_baselines_json);
-  return releaseChildDispatchInputs(workflowSource, args);
+  const inputs = releaseChildDispatchInputs(workflowSource, args);
+  // Older immutable CI workflows predate the Gateway-only mobile selector.
+  if (role === "normalCi" && Object.hasOwn(inputs, "include_mobile")) {
+    inputs.include_mobile = "false";
+  }
+  return inputs;
 }
 
 export function receiptRecoverySourceRequest(admission, producer) {

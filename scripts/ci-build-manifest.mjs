@@ -237,14 +237,8 @@ if (
     "The main validation tier requires canonical same-revision manual or scheduled validation with full scope",
   );
 }
-// Extended-stable ships only the Gateway, not candidate-source mobile apps.
-const candidateVersion = parseReleaseVersion(String(packageJson.version ?? ""));
-const skipMobileValidation =
-  eventName === "workflow_dispatch" &&
-  !releaseGate &&
-  isCanonicalRepository &&
-  candidateVersion !== null &&
-  classifyReleaseTrain(candidateVersion) === "extended-stable";
+// Gateway release qualification excludes candidate-source mobile apps.
+const skipMobileValidation = process.env.OPENCLAW_CI_INCLUDE_MOBILE === "false";
 const npmQualification = releaseScope === "npm-beta" || releaseScope === "npm-stable";
 // Stable tags also ship the macOS app, and its post-tag validation is too late
 // to block the tag, so only beta defers macOS Swift proof.

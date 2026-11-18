@@ -13,12 +13,16 @@ import {
 } from "../../scripts/full-release-publication-contract.mjs";
 import {
   authenticateReceiptRecovery,
+  receiptRecoveryChildInputs,
   revalidateReceiptRecoveryRuns,
   validateReceiptRecoveryRequest,
   verifyOriginalReceiptQualification,
 } from "../../scripts/full-release-receipt-recovery.mjs";
 import * as candidateReuse from "../../scripts/lib/full-release-candidate-reuse.mjs";
-import { releaseChildReuseSha256 } from "../../scripts/lib/full-release-child-request.mjs";
+import {
+  releaseChildDispatchInputs,
+  releaseChildReuseSha256,
+} from "../../scripts/lib/full-release-child-request.mjs";
 import * as childReuse from "../../scripts/lib/full-release-child-reuse.mjs";
 import {
   RECEIPT_RECOVERY_WORKFLOW,
@@ -66,6 +70,62 @@ afterEach(() => {
 });
 
 describe("receipt-backed aggregate recovery", () => {
+  it.skipIf(process.platform === "win32")(
+    "reconstructs the current Gateway dispatch and retains older input defaults",
+    () => {
+      const { old, recovery } = fixture();
+      const source = readFileSync(".github/workflows/ci.yml", "utf8");
+      const workflow = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"));
+      const step = workflow.jobs.normal_ci.steps.find(
+        (entry: { name: string }) => entry.name === "Dispatch CI",
+      );
+      const branch = step.run.split('case "$CHILD_WORKFLOW_KIND" in')[1].split(";;")[0];
+      const request = old.admission.receipt.request;
+      const lane = JSON.parse(request.inputs.trusted_workflow_json).laneInputs;
+      const dispatched = spawnSync(
+        "/bin/bash",
+        [
+          "-eu",
+          "-c",
+          'dispatch_child() { shift 2; printf "%s\\n" "$@"; }; case ci in' + branch + ";; esac",
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            TARGET_REF: request.inputs.ref,
+            TARGET_SHA: request.candidateSha,
+            TARGET_CONTEXT_REF: request.inputs.target_context_ref,
+            CI_RELEASE_SCOPE: "npm-beta",
+            QUALIFICATION_BASELINES_JSON: lane.qualification_baselines_json ?? "",
+            GITHUB_RUN_ID: "1",
+            GITHUB_RUN_ATTEMPT: "1",
+            GITHUB_STEP_SUMMARY: "/dev/null",
+          },
+        },
+      );
+      expect(dispatched.status, dispatched.stderr).toBe(0);
+      const actual = releaseChildDispatchInputs(source, dispatched.stdout.trim().split("\n"));
+      expect(actual.include_mobile).toBe("false");
+      expect(
+        receiptRecoveryChildInputs(
+          "normalCi",
+          old.admission.receipt,
+          recovery.candidateBinding,
+          source,
+        ),
+      ).toEqual(actual);
+      const historical = source.replace(/ {6}include_mobile:\n(?: {8}.*\n)+/u, "");
+      expect(
+        receiptRecoveryChildInputs(
+          "normalCi",
+          old.admission.receipt,
+          recovery.candidateBinding,
+          historical,
+        ),
+      ).not.toHaveProperty("include_mobile");
+    },
+  );
+
   it.each(["failed seal", "reordered seal", "changed observations", "valid"] as const)(
     "authenticates aggregate seal and observation bytes before original qualification: %s",
     async (fault) => {
