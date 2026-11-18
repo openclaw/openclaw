@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, onTestFailed, vi, type MockInstance } from "vitest";
+import { expect, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createExecTool } from "../agents/bash-tools.js";
 import { createAgentHarnessHostCapabilities } from "../agents/harness/host-capability.js";
@@ -54,6 +54,7 @@ export async function runTalkNodePermissionParity({
   rpc,
   waitForDispatchEnd,
   expectRevokedWriter,
+  setFailureReporter,
   publicOnly = false,
 }: TalkParityFixture & {
   publicOnly?: boolean;
@@ -65,9 +66,10 @@ export async function runTalkNodePermissionParity({
   connectionId: string;
   rpc: (method: string, params: Record<string, unknown>) => Promise<Record<string, unknown>>;
   expectRevokedWriter: (runId: string, isCurrent: () => boolean) => void;
+  setFailureReporter: (report: () => void) => void;
 }) {
   const diagnostic = { cell: "setup", lastCompletedAwait: "none", cleanup: "none" };
-  onTestFailed(() => {
+  setFailureReporter(() => {
     console.error("[talk-node-parity]", JSON.stringify({ publicOnly, ...diagnostic }));
   });
   const scope = { agentId, sessionKey: canonicalKey, sessionId, storePath };
