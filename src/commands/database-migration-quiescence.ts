@@ -6,7 +6,6 @@ import {
 import { createConfigIO } from "../config/io.js";
 import { resolveGatewayAuthForConfig } from "../gateway/auth-resolve.js";
 import { callGateway } from "../gateway/call.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { readGatewayLockProcessStartTime } from "../infra/gateway-lock-process.js";
 import {
   readActiveGatewayLockIdentity,
@@ -14,6 +13,7 @@ import {
   resolveGatewayLockPaths,
   type GatewayLockIdentity,
 } from "../infra/gateway-lock.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/path-existence.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 
 const RPC_TIMEOUT_MS = 10_000;

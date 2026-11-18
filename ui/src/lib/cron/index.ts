@@ -89,33 +89,6 @@ function requireCronConfigRevision(revision: string | null | undefined): string 
   throw new Error(t("cron.missingConfigRevision"));
 }
 
-export function updateCronJobsFilter(
-  state: CronState,
-  patch: Partial<
-    Pick<
-      CronState,
-      | "cronJobsQuery"
-      | "cronJobsEnabledFilter"
-      | "cronJobsScheduleKindFilter"
-      | "cronJobsLastStatusFilter"
-      | "cronJobsTriggerFilter"
-      | "cronJobsSortBy"
-      | "cronJobsSortDir"
-    >
-  >,
-) {
-  if (patch.cronJobsQuery !== undefined) {
-    state.cronJobsQuery = patch.cronJobsQuery;
-  }
-  state.cronJobsEnabledFilter = patch.cronJobsEnabledFilter ?? state.cronJobsEnabledFilter;
-  state.cronJobsScheduleKindFilter =
-    patch.cronJobsScheduleKindFilter ?? state.cronJobsScheduleKindFilter;
-  state.cronJobsLastStatusFilter = patch.cronJobsLastStatusFilter ?? state.cronJobsLastStatusFilter;
-  state.cronJobsTriggerFilter = patch.cronJobsTriggerFilter ?? state.cronJobsTriggerFilter;
-  state.cronJobsSortBy = patch.cronJobsSortBy ?? state.cronJobsSortBy;
-  state.cronJobsSortDir = patch.cronJobsSortDir ?? state.cronJobsSortDir;
-}
-
 function clearCronEditState(state: CronState) {
   retireCronSelectedJobRead(state);
   state.cronError = null;
@@ -161,19 +134,17 @@ function buildFailureAlert(
   const accountId = form.failureAlertAccountId.trim();
   const to = form.failureAlertTo.trim();
   return {
+    ...sourceConfig,
     after: after > 0 ? Math.floor(after) : existingConfig?.after !== undefined ? null : undefined,
     channel: normalizePersistedDeliveryChannel(form.failureAlertChannel, {
       preserveLast: Boolean(sourceConfig?.channel),
     }),
     to: to || (existingConfig?.to ? null : undefined),
-    ...(cooldownMs !== undefined
-      ? { cooldownMs }
-      : existingConfig?.cooldownMs !== undefined
-        ? { cooldownMs: null }
-        : {}),
+    cooldownMs: cooldownMs ?? (existingConfig?.cooldownMs !== undefined ? null : undefined),
     mode: form.failureAlertDeliveryMode || (existingConfig?.mode !== undefined ? null : undefined),
     accountId: accountId || (existingConfig?.accountId ? null : undefined),
-    includeSkipped: sourceConfig?.includeSkipped,
+    threadId:
+      form.failureAlertThreadId ?? (existingConfig?.threadId !== undefined ? null : undefined),
   };
 }
 
@@ -181,7 +152,7 @@ type CronSaveResult = { saved: false } | { saved: true; jobId: string };
 
 export async function addCronJob(state: CronState): Promise<CronSaveResult> {
   let result: CronSaveResult = { saved: false };
-  await withCronBusy(state, undefined, async (client, _reportFeedback, isCurrent) => {
+  await withCronBusy(state, undefined, async (client, reportFeedback, isCurrent) => {
     const form = normalizeCronFormState(state.cronForm);
     if (form !== state.cronForm) {
       state.cronForm = form;
@@ -355,6 +326,9 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
         state.cronCreateOpen = false;
       }
       result = { saved: true, jobId: ("job" in response ? response.job : response).id };
+      if (response.warning) {
+        reportFeedback(response.warning, "cronNotice");
+      }
     }
     await reloadCronJobsSnapshot(state);
     if (!isCurrent()) {
@@ -450,13 +424,13 @@ export async function toggleCronJob(
   return updated;
 }
 
-export async function runCronJob(state: CronState, jobId: string, mode: "force" | "due" = "force") {
+export async function runCronJob(state: CronState, jobId: string) {
   const job =
     state.cronEditingJob?.id === jobId
       ? state.cronEditingJob
       : (state.cronJobs.find((candidate) => candidate.id === jobId) ?? { id: jobId, name: jobId });
   return withCronBusy(state, job, async (client, reportFeedback, isCurrent) => {
-    const result = await client.request<CronRunResult>("cron.run", { id: jobId, mode });
+    const result = await client.request<CronRunResult>("cron.run", { id: jobId, mode: "force" });
     if (!isCurrent()) {
       return;
     }

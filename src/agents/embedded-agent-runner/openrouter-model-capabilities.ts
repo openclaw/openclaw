@@ -16,6 +16,7 @@ import {
 import type { PluginStateEntry } from "../../plugin-state/plugin-state-store.types.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
+import { resolveDefaultModelMaxTokens } from "../defaults.js";
 import { registerPreparedModelRuntimeClose } from "../prepared-model-runtime.lifecycle.js";
 import { readProviderJsonArrayFieldResponse } from "../provider-http-errors.js";
 
@@ -148,6 +149,7 @@ function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
   if (inputModalities.includes("image")) {
     input.push("image");
   }
+  const contextWindow = model.top_provider?.context_length ?? model.context_length ?? 128_000;
   const supportedParameters = Array.isArray(model.supported_parameters)
     ? model.supported_parameters
     : undefined;
@@ -158,12 +160,12 @@ function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
     reasoning: supportedParameters?.includes("reasoning") ?? false,
     ...normalizeOpenRouterModelReasoning(model.reasoning),
     ...(supportedParameters ? { supportsTools: supportedParameters.includes("tools") } : {}),
-    contextWindow: model.top_provider?.context_length ?? model.context_length ?? 128_000,
+    contextWindow,
     maxTokens:
       model.top_provider?.max_completion_tokens ??
       model.max_completion_tokens ??
       model.max_output_tokens ??
-      8192,
+      resolveDefaultModelMaxTokens(contextWindow),
     cost: normalizeOpenRouterModelPricing(model.pricing) ?? {
       input: 0,
       output: 0,

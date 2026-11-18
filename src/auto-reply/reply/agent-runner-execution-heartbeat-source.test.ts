@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { extractMessagingToolSourceReplyPayload } from "../../agents/embedded-agent-messaging-extraction.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import { createOpenClawToolsAsync } from "../../agents/openclaw-tools.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
@@ -45,6 +47,18 @@ describe.each(["cli", "embedded"] as const)("%s source delivery", (runtime) => {
       followupRun.originatingChannel = "webchat";
       followupRun.originatingTo = sessionKey;
       followupRun.originatingChatType = "direct";
+      setRuntimeConfigSnapshot(followupRun.run.config);
+      await replaceSessionEntry(
+        { agentId: followupRun.run.agentId, sessionKey },
+        {
+          sessionId: followupRun.run.sessionId,
+          updatedAt: 1,
+          ...deriveSessionMetaPatch({
+            sessionKey,
+            ctx: { Provider: "webchat", GatewayClientCaps: [] },
+          }),
+        },
+      );
       let sourceReply:
         | Awaited<
             ReturnType<Awaited<ReturnType<typeof createOpenClawToolsAsync>>[number]["execute"]>

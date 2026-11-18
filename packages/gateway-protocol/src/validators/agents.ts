@@ -210,3 +210,18 @@ export const validateModelsProbeParams = createProtocolValidator(
   S.ModelsProbeParamsSchema,
   Checks.isModelsProbeParams,
 );
+
+export const validateToolUsageStatusParams = createProtocolValidator(
+  S.ToolUsageStatusParamsSchema,
+  Checks.isToolUsageStatusParams,
+);
+
+export const validateToolUsageImportParams = createProtocolValidator(
+  S.ToolUsageImportParamsSchema,
+  Checks.isToolUsageImportParams,
+);
+
+export const validateToolUsageResetParams = createProtocolValidator(
+  S.ToolUsageResetParamsSchema,
+  Checks.isToolUsageResetParams,
+);

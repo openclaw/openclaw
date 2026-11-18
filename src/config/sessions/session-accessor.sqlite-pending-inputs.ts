@@ -29,6 +29,7 @@ import { SessionPendingInputCustodyError } from "./session-pending-input-custody
 import {
   collectForeignLiveSessionPendingInputEntries,
   copySessionPendingInputWorkerFacts,
+  hydratePendingInputWorkerOwner,
   publishConsumedSessionPendingInputSources,
   publishSessionPendingInputWorkerReceipt,
 } from "./session-pending-input-live-owner.js";
@@ -85,16 +86,7 @@ export function runWithSessionPendingInputWorkerCustody<T>(
   assertCurrent: () => void,
   run: () => T,
 ): { value: T; receipt: SessionPendingInputWorkerReceipt } {
-  const hydrate = (current: SessionPendingInputWorkerFacts): SessionPendingInputOwner => ({
-    ...current,
-    workerDatabasePath: current.databasePath,
-    sources: current.sources?.map(hydrate),
-    assertCurrent,
-    finish: () => {
-      throw new Error("Worker custody cannot finish its host owner");
-    },
-  });
-  const owner = hydrate(facts);
+  const owner = hydratePendingInputWorkerOwner(facts, assertCurrent);
   const value = workerCustody.run({ owner, assertCurrent, consumed: new Set() }, () =>
     owners.current.run(owner, () =>
       relocation === undefined
@@ -145,7 +137,7 @@ registerAgentEventLifecycleRotationHandler("session-pending-inputs", () => {
   const failures: unknown[] = [];
   for (const owner of owners.live.values()) {
     try {
-      owner.finish("cancelled");
+      owner.finish("cancelled", "reset");
     } catch (error) {
       failures.push(error);
     }
@@ -169,7 +161,11 @@ export function releaseSessionPendingInputOwner(owner: SessionPendingInputOwner)
   // Timers can retain this owner through their async frame after settlement.
   // Keep replay facts, but release the admission and staging closures.
   owner.assertCurrent = assertPendingInputOwnerActive.bind(undefined, owner);
+  owner.assertReadCurrent = owner.assertCurrent;
+  owner.assertMentionInvitationCurrent = undefined;
   owner.finish = () => {};
+  owner.release = () => {};
+  owner.relinquish = () => {};
   owner.authority = undefined;
   owner.promotedOwner = undefined;
 }
@@ -217,6 +213,9 @@ function assertPendingInputOwnerCurrent(
   } else {
     owner.assertCurrent();
   }
+  if (!owner.consumed) {
+    owner.assertMentionInvitationCurrent?.();
+  }
 }
 
 export function assertSessionPendingInputLifetimeCurrent(owner: SessionPendingInputOwner): void {
@@ -232,14 +231,11 @@ export function assertSessionPendingInputLifetimeCurrent(owner: SessionPendingIn
 
 /** Capture the calling owner before physical database discovery yields. */
 export function captureForeignLiveSessionPendingInputReader() {
-  const currentOwner = owners.current.getStore();
-  return (scope: { databasePath: string; sessionId: string; sessionKey: string }) =>
-    collectForeignLiveSessionPendingInputEntries({
-      scope,
-      liveOwners: owners.live.values(),
-      currentOwner,
-      assertLifetimeCurrent: assertSessionPendingInputLifetimeCurrent,
-    });
+  return collectForeignLiveSessionPendingInputEntries.bind(undefined, {
+    readLiveOwners: () => owners.live.values(),
+    currentOwner: owners.current.getStore(),
+    assertActive: assertPendingInputOwnerActive,
+  });
 }
 
 export function runWithSessionPendingInput<T>(owner: SessionPendingInputOwner, run: () => T): T {
@@ -297,13 +293,13 @@ export function hasRegisteredSessionPendingInputOwner(
   );
 }
 
-/** Durable queued text is visible only while its ordinary input owner is live. */
-export function listLiveSessionPendingInputIds(
+/** Live owners identify queued inputs already held by this process. */
+export function listLiveSessionPendingInputs(
   databasePath: string,
   sessionKey: string,
   sessionId: string,
   queuedOnly = false,
-): string[] {
+): Pick<SessionPendingInputOwner, "inputId">[] {
   return [...owners.live.values()]
     .filter(
       (owner) =>
@@ -313,7 +309,7 @@ export function listLiveSessionPendingInputIds(
         (!queuedOnly || (!owner.consumed && !owner.settling)) &&
         (owner.settling || isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration)),
     )
-    .map((owner) => owner.inputId);
+    .map((owner) => ({ inputId: owner.inputId }));
 }
 
 /** Called after the exact IDs commit in the session marker, before shutdown cancellation. */
@@ -375,11 +371,10 @@ export function writeSessionInputCompletion(
   if (retained && isFinalInputCompletion(retained.outcome)) {
     return retained.outcome;
   }
-  const succeeded = classifyAgentRunTerminalOutcome(outcome) === "success";
   const completedAt = Date.now();
   const completionState = {
     outcome_json: JSON.stringify(outcome),
-    succeeded: succeeded ? 1 : 0,
+    succeeded: classifyAgentRunTerminalOutcome(outcome) === "success" ? 1 : 0,
     completed_at: completedAt,
   };
   executeSqliteQuerySync(
@@ -490,7 +485,10 @@ export function readSessionPendingInputByKey(
   const actor = readSessionActorTransactionState(database, scope);
   if (actor) {
     const row = actor.pendingInputs.get(idempotencyKey);
-    return row && { ...row };
+    if (row) {
+      return { ...row };
+    }
+    // The resident map covers unconsumed custody, not retained source history.
   }
   if (!hasSessionPendingInputsSchema(database.db)) {
     return undefined;
@@ -518,9 +516,9 @@ export function resolveSessionPendingInputAppend(
     return undefined;
   }
   const idempotencyKey = record.idempotencyKey.trim();
-  const row = preparedInputs
-    ? preparedInputs.get(idempotencyKey)
-    : readSessionPendingInputByKey(database, scope, idempotencyKey);
+  const row =
+    preparedInputs?.get(idempotencyKey) ??
+    readSessionPendingInputByKey(database, scope, idempotencyKey);
   const owner = owners.current.getStore();
   // A bound-session mirror shares source correlation, never its pending custody.
   const ownsInput =
@@ -593,7 +591,7 @@ export function resolveSessionPendingInputAppend(
     const inputs =
       preparedInputs ?? readSessionActorTransactionState(database, scope)?.pendingInputs;
     const acceptedByKey = new Map(
-      (inputs
+      (inputs && owner.sources.every((source) => inputs.has(source.idempotencyKey))
         ? owner.sources.flatMap((source) => inputs.get(source.idempotencyKey) ?? [])
         : executeSqliteQuerySync(
             database.db,
@@ -637,6 +635,13 @@ export function resolveSessionPendingInputAppend(
       inputId: transcriptInputId,
       message: parseSessionPendingInputMessage(owner.messageJson),
       alreadyPromoted,
+      ...(!alreadyPromoted
+        ? {
+            mentionInvitations: owner.sources.flatMap((source) =>
+              source.mentionInvitation ? [source.mentionInvitation] : [],
+            ),
+          }
+        : {}),
       sourceInputIds: sources.map((source) => source.input_id),
       ...(alreadyPromoted && stageRelocation ? { stageRelocation } : {}),
     };
@@ -650,6 +655,7 @@ export function resolveSessionPendingInputAppend(
     inputId: transcriptInputId,
     message: parseSessionPendingInputMessage(row?.message_json ?? owner.messageJson),
     alreadyPromoted: !row,
+    ...(row && owner.mentionInvitation ? { mentionInvitations: [owner.mentionInvitation] } : {}),
     ...(!row && stageRelocation ? { stageRelocation } : {}),
   };
 }
@@ -676,7 +682,7 @@ export function consumeSessionPendingInput(
       database.db,
       getSessionKysely(database.db)
         .updateTable("session_pending_inputs")
-        .set({ consumed_event_id: pending.inputId })
+        .set({ consumed_event_id: pending.inputId, origin_source_json: null })
         .where("input_id", "in", [...pending.sourceInputIds])
         .where("state", "=", "queued")
         .where("consumed_event_id", "is", null),
@@ -705,11 +711,8 @@ export function consumeSessionPendingInput(
         continue;
       }
       actor.pendingInputs = writableSessionActorMap(actor.pendingInputs);
-      if (pending.sourceInputIds) {
-        actor.pendingInputs.set(key, { ...row, consumed_event_id: pending.inputId });
-      } else {
-        actor.pendingInputs.delete(key);
-      }
+      // Retain source receipts in SQLite only; replay uses the indexed reader.
+      actor.pendingInputs.delete(key);
     }
   }
   // Outer commit publishes this fact before observers; rollback leaves finish responsible.

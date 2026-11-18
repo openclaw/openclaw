@@ -35,7 +35,7 @@ import { createCronViewJob, createCronViewRun, cronRunsResponse } from "./view.t
 import "./cron-page.tsx";
 
 const cleanups: Array<() => unknown> = [];
-const refreshMethods = ["cron.status", "cron.list", "cron.runs"];
+const refreshMethods = ["cron.status", "cron.list"];
 const schedulerStatus = (jobs = 0) => ({ enabled: true, triggersEnabled: true, jobs });
 
 function deferred<T>(fallback: T) {
@@ -48,6 +48,7 @@ const gate = () => deferred<void>(undefined);
 
 async function openDraft(page: CronTestPage, name: string, prompt: string) {
   click(page, testId("cron-new-task"));
+  await import("./view-detail.tsx");
   await waitForElement(page, "fieldset.cron-editor");
   fillInput(page, "#cron-name", name);
   fillInput(page, "#cron-payload-text", prompt);
@@ -443,16 +444,19 @@ it("coalesces a cron event burst into one trailing refresh of the current page",
       };
       return replies[method] ?? { models: [] };
     },
-    [...refreshMethods, "channels.status"],
+    [...refreshMethods, "cron.runs"],
   );
   const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
   const channels = createChannelCapability(gateway);
   const context = { ...createContext(gateway), acquireChannels: () => channels };
-  const page = createPage(context);
+  const page = createPage(context, { render: true });
   cleanups.push(() => channels.dispose());
   await page.settle();
+  page.routeSearch = "?activity";
+  await page.settle();
   emitEvent(gateway, "cron", {}, 20);
-  expectCalls(request, ["cron.status", "cron.runs", "cron.list", "channels.status"], 1);
+  expectCalls(request, ["cron.status", "cron.runs", "cron.list"], 1);
+  expect(callsFor(request, "channels.status")).toHaveLength(0);
   resume();
   held.resolve();
   await waitForCronPage(() => {
@@ -461,42 +465,7 @@ it("coalesces a cron event burst into one trailing refresh of the current page",
     expect(page.cron.cronRuns).toEqual([freshRun]);
   });
   expectCalls(request, ["cron.status", "cron.runs", "cron.list"], 2);
-  expect(callsFor(request, "channels.status")).toHaveLength(1);
-});
-
-it("lets manual Refresh supersede held status and run-history reads", async () => {
-  const held = gate();
-  const calls = { "cron.status": 0, "cron.runs": 0 };
-  const fallback = createRequest();
-  const request = vi.fn(async (method: string) => {
-    if (method !== "cron.status" && method !== "cron.runs") {
-      return fallback(method);
-    }
-    const revision = ++calls[method];
-    if (revision === 1) {
-      await held.promise;
-    }
-    return method === "cron.status"
-      ? schedulerStatus(revision)
-      : cronRunsResponse([createCronViewRun({ ts: revision, jobId: "job" })]);
-  });
-  const { page } = mountCronPage(request);
-  await waitForCronPage(() => expect(page.cron.cronLoading).toBe(false));
-  await page.settle();
-  expect(calls).toEqual({ "cron.status": 1, "cron.runs": 1 });
-  const refresh = page.querySelector<HTMLButtonElement>(".cron-refresh");
-  expect(refresh).not.toBeNull();
-  refresh?.click();
-  expect(calls).toEqual({ "cron.status": 2, "cron.runs": 2 });
-  await waitForCronPage(() => {
-    expect(page.cron.cronStatus?.jobs).toBe(2);
-    expect(page.cron.cronRuns[0]?.ts).toBe(2);
-  });
-  held.resolve();
-  await settle();
-  expect(page.cron.cronStatus?.jobs).toBe(2);
-  expect(page.cron.cronRuns[0]?.ts).toBe(2);
-  expect(calls).toEqual({ "cron.status": 2, "cron.runs": 2 });
+  expect(callsFor(request, "channels.status")).toHaveLength(0);
 });
 
 it.each(["disconnect", "reconnect", "agent scope", "gateway source", "unmount"])(
@@ -702,6 +671,11 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
       agents: [{ id: "main" }],
     };
     const edited = publication === "roster after same-scope intent" || changingCatalog;
+    // The link opens the automation's history; its settings open from Edit.
+    const openSettings = async () => {
+      (await waitForElement(page, testId("cron-edit"))).click();
+      await page.settle();
+    };
     try {
       await page.settle();
       expect(agentSelection.state.scopeId).toBeNull();
@@ -712,6 +686,7 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
       await page.settle();
       if (edited) {
         lookup.resolve(job);
+        await openSettings();
         await waitForElement(page, "#cron-name");
         if (changingCatalog) {
           await expectModels(page, ["previous-model"]);
@@ -730,6 +705,9 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
       await agents.ensureList();
       expect(agentSelection.state.scopeId).toBe("main");
       lookup.resolve(job);
+      if (!edited) {
+        await openSettings();
+      }
       if (changingCatalog) {
         await waitForCronPage(() =>
           expect(page.textContent).toContain("Current agent catalog unavailable"),
@@ -771,12 +749,13 @@ it("refreshes off-page condition activity without replacing unsaved settings", a
   });
   const { page, gateway } = mountCronPage(request);
   page.routeSearch = `?job=${selected.id}`;
+  const previousHeader = (await waitForElement(page, ".cron-detail-meta")).textContent;
+  (await waitForElement(page, testId("cron-edit"))).click();
   await waitForElement(page, "#cron-name");
   fillInput(page, "#cron-name", "Unsaved automation");
   await page.settle();
   const definition = page.cron.cronEditingJob;
   const draft = page.cron.cronForm;
-  const previousHeader = text(page, ".cron-detail-meta");
   emitEvent(gateway, "cron", { jobId: selected.id, action: "finished" }, 2);
   pending.resolve({
     ...selected,
@@ -786,7 +765,6 @@ it("refreshes off-page condition activity without replacing unsaved settings", a
   });
   trailing.resolve({ ...selected, state: { triggerEvalCount: 9 } });
   await waitForCronPage(() => {
-    expect(text(page, ".cron-detail-meta")).not.toBe(previousHeader);
     expect(page.cron.cronEditingJob?.state?.triggerEvalCount).toBe(9);
   });
   expect(reads).toBe(3);
@@ -796,10 +774,10 @@ it("refreshes off-page condition activity without replacing unsaved settings", a
   expect(text(page, ".cron-detail-title")).toContain("Saved automation");
   expect(page.cron.cronForm).toBe(draft);
   expect(inputValue(page, "#cron-name")).toBe("Unsaved automation");
-  page
-    .querySelector<HTMLElement>(testId("cron-detail-tab-history"))!
-    .dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+  // Leaving the settings shows the refreshed runtime facts in the header and history.
+  page.querySelector<HTMLElement>(testId("cron-cancel"))!.click();
   await waitForCronPage(() => expect(text(page, ".cron-condition-activity__metric dd")).toBe("9"));
+  expect(text(page, ".cron-detail-meta")).not.toBe(previousHeader);
 });
 
 function controlVisibility(initial: DocumentVisibilityState = "visible") {
@@ -835,7 +813,7 @@ it("defers a hidden mount and reconnect, then catches up once with the current s
   await settle();
   expectCalls(request, refreshMethods, 1);
   expect(request).toHaveBeenCalledWith("cron.list", expect.objectContaining({ agentId: "writer" }));
-  expect(context.acquireChannels(createChannelCapability).refresh).toHaveBeenCalledTimes(1);
+  expect(context.acquireChannels(createChannelCapability).refresh).not.toHaveBeenCalled();
   page.remove();
   request.mockClear();
   visibility("hidden");
@@ -877,9 +855,7 @@ it.each([true, false])(
     expect(request.mock.calls.findLast(([method]) => method === "cron.list")?.[1]).toMatchObject({
       query: "keep my filter",
     });
-    expect(request.mock.calls.findLast(([method]) => method === "cron.runs")?.[1]).toMatchObject({
-      query: "keep my history filter",
-    });
+    expect(callsFor(request, "cron.runs")).toHaveLength(0);
   },
 );
 
@@ -907,36 +883,4 @@ it("rebinds hidden catch-up to the replacement Gateway", async () => {
   expectCalls(request, refreshMethods, 1);
   expect(oldRequest).not.toHaveBeenCalled();
   expect(request).toHaveBeenCalledWith("cron.list", expect.objectContaining({ agentId: "writer" }));
-});
-
-it("finishes an accepted create-and-run chain while hidden without background readbacks", async () => {
-  const visibility = controlVisibility();
-  const saved = gate();
-  const request = cronRpc({
-    "cron.add": async () => {
-      await saved.promise;
-      return { id: "created-job" };
-    },
-    "cron.run": () => ({ ok: true, enqueued: true, runId: "synthetic-run" }),
-  });
-  const { page } = mountCronPage(request);
-  await waitForCronPage(() => expect(page.cron.cronStatus).not.toBeNull());
-  await openDraft(page, "Synthetic task", "Synthetic prompt");
-  click(page, testId("cron-submit-run"));
-  await waitForCronPage(() =>
-    expect(request.mock.calls.some(([method]) => method === "cron.add")).toBe(true),
-  );
-  visibility("hidden");
-  request.mockClear();
-  saved.resolve();
-  await waitForCronPage(() => expect(page.cron.cronBusy).toBe(false));
-  expect(request).toHaveBeenCalledExactlyOnceWith("cron.run", {
-    id: "created-job",
-    mode: "force",
-  });
-  expect(page.cron.cronNotice).toContain("Run queued. Run ID: synthetic-run");
-  expect(page.cron.cronCreateOpen).toBe(false);
-  visibility("visible");
-  await settle();
-  expectCalls(request, refreshMethods, 1);
 });

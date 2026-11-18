@@ -8,15 +8,15 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createOneTimeTicketStore } from "../../shared/one-time-ticket-store.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
-import {
-  getRemoteControlUiIngressContext,
-  hasCurrentRemoteControlUiIngress,
-} from "../ingress-attribution.js";
+import { getRemoteControlUiIngressContext } from "../ingress-attribution.js";
 import { startWebSocketKeepalive } from "../websocket-keepalive.js";
 import { connectRfbAttachment, type DesktopRfbAttachment } from "./attachment.js";
 import { mintDesktopAudioObserver } from "./audio-bridge.js";
 import type { DesktopAudioSource } from "./managed-linux-audio.js";
-import type { DesktopObserveRequester } from "./observe-requester.js";
+import {
+  hasCurrentDesktopObserveRequester,
+  type DesktopObserveRequester,
+} from "./observe-requester.js";
 import {
   preauthenticateRfb,
   RfbAuthenticationRejectedError,
@@ -187,12 +187,7 @@ export function handleDesktopObserveUpgrade(
   const token = resource.searchParams.get("token") ?? "";
   const ingress = getRemoteControlUiIngressContext(req);
   const entry = observerTokens.consume(token);
-  const isCurrent = () =>
-    hasCurrentRemoteControlUiIngress(ingress) &&
-    (!ingress ||
-      entry?.requester?.remoteIngressPrincipal?.assertCurrent ===
-        ingress.resolvePrincipal().assertCurrent) &&
-    entry?.requester?.isCurrent() !== false;
+  const isCurrent = () => hasCurrentDesktopObserveRequester(entry?.requester, req);
   if (!entry || !isCurrent()) {
     entry?.audio?.close();
     rejectWebSocketUpgrade(socket, { status: 401 });

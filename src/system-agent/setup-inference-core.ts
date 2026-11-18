@@ -47,8 +47,6 @@ export const SETUP_INFERENCE_TEST_TIMEOUT_MS = 90_000;
  */
 export const SETUP_INFERENCE_REMOTE_TEST_TIMEOUT_MS = 30_000;
 
-export const SETUP_INFERENCE_TEST_PROMPT = "Reply with the single word OK. Do not use tools.";
-
 const PROVIDER_AUTO_SETUP_KIND_PREFIX = "provider-auto:";
 const SAVED_AUTH_SETUP_KIND_PREFIX = "saved-auth:";
 

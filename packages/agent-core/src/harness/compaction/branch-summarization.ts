@@ -23,7 +23,7 @@ import { buildSummaryCheckpointPrompt } from "./summary-checkpoint-prompt.js";
 import {
   computeFileLists,
   createFileOps,
-  extractFileOpsFromMessage,
+  extractFileOpsFromMessages,
   extractSummaryText,
   type FileOperations,
   formatFileOperations,
@@ -87,6 +87,7 @@ export function prepareBranchEntries(
 ): BranchPreparation {
   const messages: AgentMessage[] = [];
   const fileOps = createFileOps();
+  const fileMessages: AgentMessage[] = [];
   let totalTokens = 0;
   for (const entry of entries) {
     if (entry.type === "branch_summary" && !entry.fromHook && entry.details) {
@@ -98,7 +99,7 @@ export function prepareBranchEntries(
     if (!message) {
       continue;
     }
-    extractFileOpsFromMessage(message, fileOps);
+    fileMessages.push(message);
 
     // Budget the summary input, where tool output is bounded and reasoning is omitted.
     const rendered = serializeConversation(convertToLlm([message]));
@@ -115,6 +116,7 @@ export function prepareBranchEntries(
     totalTokens += tokens;
   }
 
+  extractFileOpsFromMessages(fileMessages.toReversed(), fileOps);
   return { messages: messages.toReversed(), fileOps, totalTokens };
 }
 

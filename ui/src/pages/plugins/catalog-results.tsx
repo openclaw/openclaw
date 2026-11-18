@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Errored, For, latest, Loading, onSettled, Repeat, Reveal } from "solid-js";
+import { createMemo, Errored, For, latest, Loading, Repeat, Reveal } from "solid-js";
 import { comparePluginCatalogEntries } from "../../../../packages/plugin-package-contract/src/catalog-order.js";
 import {
   CatalogDiscoveryChip,
@@ -8,12 +8,12 @@ import {
   CatalogDiscoverySection,
 } from "../../components/solid/catalog-discovery.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
 import { SettingsSection, SettingsUnavailable } from "../../components/solid/settings-ui.tsx";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PageReadResult } from "../../lib/page-request.ts";
-import { isPhoneLayout } from "../../lib/phone-layout.ts";
 import type {
   PluginCatalogItem,
   PluginDiscoveryEntry,
@@ -205,24 +205,16 @@ function CatalogCard(props: {
 
 function renderError(error: string, onRetry: () => void, warning = false): JSX.Element {
   return (
-    <div
-      class={[
-        "callout",
-        warning ? "warning" : "danger",
-        "oc-banner",
-        { "oc-banner-error": !warning },
-      ]}
-      role={warning ? "status" : "alert"}
+    <InlineAlert
+      tone={warning ? "warning" : "danger"}
+      action={
+        <button type="button" class="btn btn--sm" onClick={() => onRetry()}>
+          {t("pluginsPage.tryAgain")}
+        </button>
+      }
     >
-      <span>{formatUiExternalText(error)}</span>
-      <button
-        type="button"
-        class="btn btn--sm oc-action oc-action-secondary oc-banner-action"
-        onClick={() => onRetry()}
-      >
-        {t("pluginsPage.tryAgain")}
-      </button>
-    </div>
+      {formatUiExternalText(error)}
+    </InlineAlert>
   );
 }
 
@@ -429,7 +421,7 @@ function RawResults(props: CatalogResultsState): JSX.Element {
           <SettingsUnavailable message={t("pluginsPage.discoveryOffline")} />
         </SettingsSection>
       ) : items().length === 0 ? (
-        renderCatalogEmptyState()
+        !props.remoteError && renderCatalogEmptyState()
       ) : (
         <>
           {props.query.trim() && official().length > 0 && community().length > 0 ? (
@@ -547,39 +539,15 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
     }
     return null;
   };
-  let input!: HTMLInputElement;
-  // Focusing the search on a phone would open the keyboard on arrival.
-  const focusOnArrival = !isPhoneLayout();
-  onSettled(() => {
-    if (!focusOnArrival) {
-      return undefined;
-    }
-    input.dataset.autofocused = "true";
-    input.focus();
-    let secondFrame = 0;
-    const firstFrame = requestAnimationFrame(() => {
-      secondFrame = requestAnimationFrame(() => {
-        if (input.isConnected) {
-          input.focus();
-        }
-      });
-    });
-    return () => {
-      cancelAnimationFrame(firstFrame);
-      cancelAnimationFrame(secondFrame);
-    };
-  });
   return (
     <section class="plugin-catalog-results" aria-label={t("pluginsPage.exploreTitle")}>
       <CatalogDiscoverySearch>
         <input
           type="search"
           class="settings-input"
-          autofocus={focusOnArrival}
           aria-label={t("pluginsPage.searchPlugins")}
           placeholder={t("pluginsPage.searchPlugins")}
           value={props.query}
-          ref={(element) => (input = element)}
           onInput={(event) => props.onQueryChange(event.currentTarget.value)}
         />
       </CatalogDiscoverySearch>

@@ -1,11 +1,8 @@
-import { createMemo, onSettled, Show } from "solid-js";
-import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
+import { createMemo, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import "../../../components/tooltip.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { restoreChatModelRefreshFocus } from "./chat-model-picker-search-view.ts";
 
 registerEnglishCatalog(registerModelControlsEnglish);
 
@@ -19,55 +16,12 @@ type ChatModelCatalogStateProps = {
   emptyLabel?: string;
 };
 
-export function ChatModelCatalogRefresh(props: { state: ModelCatalogState | undefined }) {
-  const label = createMemo(() => {
-    if (
-      !props.state ||
-      (props.state.status !== "loading" &&
-        !(props.state.status === "ready" && props.state.pendingProviders?.length))
-    ) {
-      return undefined;
-    }
-    const providers = props.state.pendingProviders?.map(providerDisplayLabel).join(", ");
-    return providers
-      ? t("chat.modelControls.refreshingProviderModels", { providers })
-      : t("chat.modelControls.refreshingModels");
-  });
-  return (
-    <Show when={label()}>
-      {(text) => {
-        let indicator: HTMLSpanElement | undefined;
-        onSettled(() => () => {
-          // Capture focus before this disappearing control is removed from the DOM.
-          if (indicator?.contains(indicator.ownerDocument.activeElement)) {
-            restoreChatModelRefreshFocus(
-              indicator.closest(".chat-controls__model-picker") ?? undefined,
-            );
-          }
-        });
-        return (
-          <span
-            ref={(element) => {
-              indicator = element;
-            }}
-            class="chat-controls__model-refresh"
-            data-chat-model-refresh
-            role="status"
-          >
-            <openclaw-tooltip prop:content={text()} prop:describe={false} open-on-click>
-              <button
-                class="chat-controls__model-refresh-details"
-                type="button"
-                aria-label={text()}
-              >
-                <span class="btn__spinner" aria-hidden="true" />
-                <span>{text()}</span>
-              </button>
-            </openclaw-tooltip>
-          </span>
-        );
-      }}
-    </Show>
+export function isModelCatalogLoading(state: ModelCatalogState | undefined) {
+  return Boolean(
+    state &&
+    (state.status === "idle" ||
+      state.status === "loading" ||
+      (state.status === "ready" && state.pendingProviders?.length)),
   );
 }
 
@@ -103,11 +57,7 @@ export function ChatModelCatalogState(props: ChatModelCatalogStateProps) {
     }
     const status = state.status;
     const checking = Boolean(state.pendingProviders?.length);
-    // A usable catalog refreshes in the search field without moving the model rows.
-    if (
-      (status === "ready" && props.hasSelectableOptions && !checking) ||
-      (props.hasOptions && (status === "loading" || (status === "ready" && checking)))
-    ) {
+    if (isModelCatalogLoading(state) || (status === "ready" && props.hasSelectableOptions)) {
       return undefined;
     }
     const label =
@@ -124,7 +74,7 @@ export function ChatModelCatalogState(props: ChatModelCatalogStateProps) {
                   ? "chat.modelControls.noPermittedModels"
                   : "chat.modelControls.noModelsAvailable",
               ))
-            : t("chat.modelControls.loadingModels");
+            : undefined;
     return { status, checking, label };
   });
   return (
@@ -142,20 +92,7 @@ export function ChatModelCatalogState(props: ChatModelCatalogStateProps) {
           aria-live="polite"
         >
           <span class="chat-controls__model-catalog-state-label">
-            <Show
-              when={value().status === "error"}
-              fallback={
-                <Show
-                  when={
-                    value().status === "loading" ||
-                    value().status === "idle" ||
-                    (value().status === "ready" && value().checking)
-                  }
-                >
-                  <span class="btn__spinner" aria-hidden="true" />
-                </Show>
-              }
-            >
+            <Show when={value().status === "error"}>
               <Icon name="alertTriangle" />
             </Show>
             <span>{value().label}</span>
@@ -164,7 +101,12 @@ export function ChatModelCatalogState(props: ChatModelCatalogStateProps) {
             <CatalogAction {...props} action="retry" />
           </Show>
           <Show
-            when={value().status === "ready" && !props.hasSelectableOptions && props.onModelSetup}
+            when={
+              value().status === "ready" &&
+              !value().checking &&
+              !props.hasSelectableOptions &&
+              props.onModelSetup
+            }
           >
             <CatalogAction {...props} action="setup" />
           </Show>

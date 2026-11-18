@@ -4,7 +4,7 @@ import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../../test/vitest/vitest.timeout
 import { pinnedBunEnv, requirePinnedBun } from "./pinned-bun.mts";
 import { resolveRepoRoot } from "./repo-root.mjs";
 import { resolveTestRuntime } from "./test-runtime.mts";
-import { resolveVitestNodeArgs } from "./vitest-process-env.mts";
+import { resolveVitestNodeArgs } from "./vitest-node-args.mts";
 
 type VitestTestCommand = {
   command: string;

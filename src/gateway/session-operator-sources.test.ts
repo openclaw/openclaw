@@ -10,11 +10,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
+import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import {
   pairedOperator,
   persistDevices,
   recoveryFixture,
 } from "./operator-run-recovery.test-support.js";
+import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { recordSessionOperatorSource } from "./session-operator-sources.js";
 import { triggerSessionPatchHook } from "./session-patch-hooks.js";
 import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
@@ -162,3 +165,75 @@ it("keeps recorded sources out of reset and patch hook payloads", async () => {
   expect(JSON.stringify(seen)).not.toContain("operatorSources");
   expect(entry.operatorSources).toBe(sources);
 });
+
+it.each([
+  { enforced: false, preserve: false },
+  { enforced: false, preserve: true },
+  { enforced: true, preserve: false },
+  { enforced: true, preserve: true },
+])(
+  "retains member agent and session authority for session turns ($enforced, $preserve)",
+  ({ enforced, preserve }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+      const profile = ensureProfileForEmail("member-source@example.test");
+      const principal = {
+        kind: "member" as const,
+        peerKey: `iroh:${"ab".repeat(32)}`,
+        accountId: "member",
+        role: "limited",
+        authority: { clawId: "claw", rootPub: "root", listedSeq: 1 },
+      };
+      const config: OpenClawConfig = {
+        gateway: {
+          roles: {
+            ...(enforced ? { default: "reader" } : {}),
+            definitions: {
+              limited: {
+                scopes: ["operator.read", "operator.write"],
+                agents: ["main"],
+                sessions: { others: "none" },
+              },
+              reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "view" } },
+            },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(config);
+      setOpenClawIdTunnelPrincipalLookup(() => principal);
+      try {
+        const fixture = await recoveryFixture(stateDir, profile.id, {
+          config,
+          scopes: ["operator.read", "operator.write"],
+          openclawIdPrincipal: principal,
+        });
+        await recordSessionOperatorSource({
+          ...fixture.target,
+          authority: fixture.sourceAuthority,
+          log,
+        });
+        const admitted = await prepareSessionPrincipalRunAuthority({
+          context: fixture.context,
+          profileId: profile.id,
+          ...fixture.target,
+          sessionPrincipal: true,
+          ...(preserve ? { preserveRecordedSource: true as const } : {}),
+        });
+        try {
+          const client = createOperatorClient({
+            profileId: profile.id,
+            scopes: [...admitted.authority.scopes],
+          });
+          client.internal = { operatorRunAuthority: admitted.authority };
+          expect(
+            authorizeGatewaySessionCreation({ cfg: config, client, agentId: "foreign" }),
+          ).toMatchObject({ code: "FORBIDDEN" });
+          expect(admitted.authority.rolePolicy?.sessionAccessCap).toBe("none");
+          expect(admitted.authority.openclawIdPrincipal).toEqual(principal);
+        } finally {
+          admitted.release();
+        }
+      } finally {
+        setOpenClawIdTunnelPrincipalLookup(undefined);
+      }
+    }),
+);

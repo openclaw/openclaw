@@ -8,7 +8,6 @@ import {
   resetTranscriptSession,
 } from "../pages/chat/components/chat-thread-interactions.ts";
 import { installDialogPolyfill, waitForRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
-import { installSessionTitleRegistrar } from "./markdown-link-display.ts";
 import {
   enhanceMarkdownTables,
   handleMarkdownTableInteraction,
@@ -16,6 +15,7 @@ import {
 } from "./markdown-tables.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { SessionLinkTitler } from "./session-link-titling.ts";
+import { installSessionTitleRegistrar } from "./session-progress-hovercard-target.ts";
 
 const writeText = vi.fn(async (_text: string) => undefined);
 
@@ -39,13 +39,31 @@ const MutationObserverMock = vi.fn(function (_callback: MutationCallback) {
   return { disconnect: vi.fn(), observe: vi.fn() };
 });
 const ResizeObserverMock = vi.fn(function (
-  _callback: (entries: Pick<ResizeObserverEntry, "target">[]) => void,
+  _callback: (
+    entries: Pick<ResizeObserverEntry, "target" | "contentRect" | "borderBoxSize">[],
+  ) => void,
 ) {
   return { disconnect: vi.fn(), observe: vi.fn(), unobserve: vi.fn() };
 });
 
-function deliverTableResize(target: HTMLElement): void {
-  ResizeObserverMock.mock.calls.at(-1)?.[0]([{ target }]);
+function deliverTableResize(
+  target: HTMLElement,
+  tableWidth = 300,
+  viewportWidth = 100,
+  observerIndex = -1,
+): void {
+  ResizeObserverMock.mock.calls.at(observerIndex)?.[0]([
+    {
+      target,
+      contentRect: new DOMRect(0, 0, viewportWidth, 100),
+      borderBoxSize: [{ inlineSize: viewportWidth, blockSize: 100 }],
+    },
+    {
+      target: query(target, "table"),
+      contentRect: new DOMRect(0, 0, tableWidth - 2, 100),
+      borderBoxSize: [{ inlineSize: tableWidth, blockSize: 100 }],
+    },
+  ]);
 }
 
 const interactiveOptions = {
@@ -150,7 +168,32 @@ describe("Markdown table interactions", () => {
     }
   });
 
-  it("updates retained table overflow without mutation-time layout", async () => {
+  it("keeps the table scroll offset across nested and replacement enhancement owners", () => {
+    vi.useFakeTimers();
+    const { owner, shell, viewport } = interactiveOwner();
+    const inner = query(owner, ".chat-text");
+    enhanceMarkdownTables(inner);
+    cleanups.push(() => releaseMarkdownTables(inner));
+    deliverTableResize(viewport);
+    vi.advanceTimersToNextFrame();
+    viewport.scrollLeft = 200;
+    viewport.dispatchEvent(new Event("scroll"));
+    const masks = () => [
+      shell.classList.contains("markdown-table--can-scroll-left"),
+      shell.classList.contains("markdown-table--can-scroll-right"),
+    ];
+    expect(masks()).toEqual([true, false]);
+    deliverTableResize(viewport, 300, 100, 0);
+    vi.advanceTimersToNextFrame();
+    expect(masks()).toEqual([true, false]);
+    releaseMarkdownTables(inner);
+    enhanceMarkdownTables(inner);
+    deliverTableResize(viewport);
+    vi.advanceTimersToNextFrame();
+    expect(masks()).toEqual([true, false]);
+  });
+
+  it("updates retained table overflow from resize entries without reading layout", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("MutationObserver", originalMutationObserver);
     const { owner, shell, viewport } = interactiveOwner(`${table}\n\n${table}`);
@@ -165,13 +208,16 @@ describe("Markdown table interactions", () => {
     await Promise.resolve();
     expect(changedWidth).not.toHaveBeenCalled();
     expect(otherWidth).not.toHaveBeenCalled();
-    deliverTableResize(viewport);
+    const readStyle = vi.fn(window.getComputedStyle.bind(window));
+    vi.stubGlobal("getComputedStyle", readStyle);
+    deliverTableResize(viewport, 100);
     expect(changedWidth).not.toHaveBeenCalled();
     expect(otherWidth).not.toHaveBeenCalled();
     expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(true);
     vi.advanceTimersToNextFrame();
-    expect(changedWidth).toHaveBeenCalled();
+    expect(changedWidth).not.toHaveBeenCalled();
     expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
+    expect(readStyle).not.toHaveBeenCalledWith(viewport);
 
     changedWidth.mockClear();
     query(shell, ".markdown-table__copy").replaceChildren(document.createElement("span"));
@@ -185,6 +231,7 @@ describe("Markdown table interactions", () => {
     vi.useFakeTimers();
     const { owner, shell, viewport } = interactiveOwner();
     viewport.scrollLeft = 100;
+    viewport.dispatchEvent(new Event("scroll"));
     deliverTableResize(viewport);
     viewport.scrollLeft = 0;
     viewport.dispatchEvent(new Event("scroll"));
@@ -192,10 +239,11 @@ describe("Markdown table interactions", () => {
     expect(shell.classList.contains("markdown-table--can-scroll-left")).toBe(false);
 
     viewport.scrollLeft = 100;
-    deliverTableResize(viewport);
+    viewport.dispatchEvent(new Event("scroll"));
+    deliverTableResize(viewport, 100);
     releaseMarkdownTables(owner);
     vi.advanceTimersToNextFrame();
-    expect(shell.classList.contains("markdown-table--can-scroll-left")).toBe(false);
+    expect(shell.classList.contains("markdown-table--can-scroll-left")).toBe(true);
   });
 
   it("discovers nested tables in code and releases removed tables even after they are emptied", async () => {

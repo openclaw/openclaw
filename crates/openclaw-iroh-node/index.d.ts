@@ -56,7 +56,7 @@ export declare class Endpoint {
 export declare class HomeRelayWatcher {
   /**
    * Resolves with the status: at once on the first call, then after each change.
-   * Resolves null once the endpoint is gone.
+   * Resolves null once the endpoint is closed.
    */
   next(): Promise<Array<HomeRelayStatus> | null>
 }
@@ -104,6 +104,8 @@ export interface BindOptions {
   bindAddr?: string
   /** When false, no IP transports are bound: relay-only (like the browser). Default true. */
   ipTransports?: boolean
+  /** QUIC connection keep-alive interval in milliseconds (nonzero). */
+  keepAliveMs?: number
 }
 
 /** How a connection ended, as returned by `Connection.closed()`. */

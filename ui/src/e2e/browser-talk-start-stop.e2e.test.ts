@@ -606,7 +606,7 @@ suite.define(() => {
       await waitForTalkReady(page);
       await page.getByRole("button", { name: "Tap to talk" }).click();
       await expect
-        .poll(() => page.getByRole("alert").locator(".agent-chat__talk-status-text").textContent())
+        .poll(() => page.locator(".agent-chat__composer-alert[role=status]").textContent())
         .toBe("Microphone access is blocked. Allow it in browser site settings to list inputs.");
       expect(await gateway.getRequests("talk.client.create")).toHaveLength(0);
       expect(await gateway.getRequests("talk.session.close")).toHaveLength(0);

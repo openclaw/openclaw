@@ -10,7 +10,6 @@ import { resolveSessionWorkStartError } from "./lifecycle.js";
 import {
   resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
-  resolveSessionTranscriptPathInDir,
   validateSessionId,
 } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
@@ -63,6 +62,16 @@ const pendingDelivery = {
 };
 
 it.each<NormalizationCase>([
+  [
+    "retained ISO endedAt with an explicit offset and exact millisecond precision",
+    { endedAt: "2026-06-11T19:50:58.538000+02:00" },
+    { endedAt: 1_781_200_258_538 },
+  ],
+  [
+    "retained ISO endedAt at the Unix epoch without fractional seconds",
+    { endedAt: "1970-01-01T00:00:00Z" },
+    { endedAt: 0 },
+  ],
   [
     "legacy numeric strings",
     { spawnDepth: "2", inputTokens: "32", runtimeMs: "0", estimatedCostUsd: "0.25" },
@@ -163,9 +172,9 @@ describe("session path safety", () => {
       expect(normalizePersistedSessionEntryShape(session({ sessionId }))).toMatchObject(
         session({ sessionId }),
       );
-      expect(resolveSessionTranscriptPathInDir(sessionId, defaultSessionsDir)).toBe(
-        path.resolve(defaultSessionsDir, `${sessionId}.jsonl`),
-      );
+      expect(
+        resolveSessionFilePathCore(sessionId, undefined, { sessionsDir: defaultSessionsDir }),
+      ).toBe(path.resolve(defaultSessionsDir, `${sessionId}.jsonl`));
     }
   });
 
@@ -186,20 +195,6 @@ describe("session path safety", () => {
       expect(() => validateSessionId(sessionId), sessionId).toThrow(/Invalid session ID/);
       expect(normalizePersistedSessionEntryShape(session({ sessionId }))).toBeUndefined();
     }
-  });
-
-  it("resolves transcript path inside an explicit sessions dir", () => {
-    expect(resolveSessionTranscriptPathInDir("sess-1", defaultSessionsDir, "topic/a+b")).toBe(
-      path.resolve(defaultSessionsDir, "sess-1-topic-topic%2Fa%2Bb.jsonl"),
-    );
-  });
-
-  it("rejects topic-qualified transcript filenames over 255 bytes", () => {
-    const sessionId = "会".repeat(82);
-    expect(validateSessionId(sessionId)).toBe(sessionId);
-    expect(() => resolveSessionTranscriptPathInDir(sessionId, "/tmp/sessions", 1)).toThrow(
-      /Invalid session transcript filename/,
-    );
   });
 
   it("falls back to derived path when sessionFile is outside known agent sessions dirs", () => {

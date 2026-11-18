@@ -147,8 +147,7 @@ export function enqueueFollowupRun(
       if (isDiscardableRoomEvent(run)) {
         discardOverflowRoomEvent(run, "queue-cap-new", queue);
       } else {
-        run.onQueueDisposition?.("queue-cap-new");
-        completeFollowupRunLifecycle(run);
+        settleFollowupQueueRefusal(queue, run);
       }
       return false;
     }
@@ -210,6 +209,15 @@ export function enqueueFollowupRun(
           }
           return onAbandoned?.();
         };
+        const onDropped = lifecycle.onDropped;
+        if (onDropped) {
+          lifecycle.onDropped = (reason) => {
+            if (mailbox.recentSources.get(recentMessageIdKey)?.inputInstance === inputInstance) {
+              mailbox.recentSources.delete(recentMessageIdKey);
+            }
+            return onDropped(reason);
+          };
+        }
       }
     }
     if (runFollowup) {
@@ -254,6 +262,30 @@ export function enqueueFollowupRun(
   }
 }
 
+function settleFollowupQueueRefusal(
+  queue: ReturnType<typeof getFollowupQueue>,
+  run: FollowupRun,
+): void {
+  let protectedPendingCount = 0;
+  for (const item of queue.items) {
+    if (!queue.inFlight.has(item) && item.protectFromQueueOverflow === true) {
+      protectedPendingCount += 1;
+    }
+  }
+  // Protected work can fill the cap even after every evictable source is removed.
+  // That is retryable backpressure under every policy, including drop:new.
+  const reason =
+    queue.dropPolicy === "new" && protectedPendingCount < queue.cap ? "queue-cap-new" : "queue-cap";
+  if (reason === "queue-cap-new") {
+    run.userTurnTranscriptRecorder?.finishPendingInput?.("cancelled", "overflow");
+  }
+  run.onQueueDisposition?.(reason);
+  completeFollowupRunLifecycle(
+    run,
+    reason === "queue-cap-new" ? { kind: "dropped", reason } : undefined,
+  );
+}
+
 function isDiscardableRoomEvent(run: FollowupRun): boolean {
   return (
     run.currentInboundEventKind === "room_event" &&
@@ -273,6 +305,7 @@ function discardOverflowRoomEvent(
   if (run.controllerInput) {
     run.controllerInput.payload = "unbound";
   }
+  run.userTurnTranscriptRecorder?.finishPendingInput?.("cancelled", "overflow");
   run.onQueueDisposition?.(disposition);
   diagnosticLogger.info("followup queue discarded ambient room event at capacity", {
     sessionId: run.run.sessionId,
@@ -359,8 +392,9 @@ function applyFollowupQueueOverflow(
         if (item.controllerInput) {
           item.controllerInput.payload = "unbound";
         }
+        item.userTurnTranscriptRecorder?.finishPendingInput?.("cancelled", "overflow");
         item.onQueueDisposition?.("queue-cap-old");
-        completeFollowupRunLifecycle(item);
+        completeFollowupRunLifecycle(item, { kind: "dropped", reason: "queue-cap-old" });
       }
     },
     isProtected: (item) => item.protectFromQueueOverflow === true,
@@ -401,8 +435,7 @@ function applyFollowupQueueOverflow(
     }
   }
   if (!shouldEnqueue) {
-    run.onQueueDisposition?.(queue.dropPolicy === "new" ? "queue-cap-new" : "queue-cap");
-    completeFollowupRunLifecycle(run);
+    settleFollowupQueueRefusal(queue, run);
   }
   return shouldEnqueue;
 }
@@ -548,9 +581,8 @@ export function reserveSteerCandidate(
         return "steer";
       } catch (error) {
         const cancelled = isFollowupRunAborted(run) || input.abortSignal.aborted;
-        // Failed original execution authority is cancellation, not a new
-        // runnable fallback. No native handoff has occurred in this frame.
-        finish(true);
+        // No native handoff occurred; only recorded cancellation ends queued custody.
+        finish(cancelled);
         if (cancelled) {
           return "cancelled";
         }

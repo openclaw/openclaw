@@ -67,9 +67,7 @@ struct SessionDashboardScreen: View {
                         self.dismiss()
                     },
                     accessCookie: accessCookieAdmission.cookie,
-                    accessAdmissionIsCurrent: authorization.map { authorization in
-                        { authorization.isCurrent() }
-                    },
+                    accessAdmissionIsCurrent: authorization?.isCurrent,
                     accessResponseCheck: authorization?.checkResponse,
                     onAccessCookieBoundaryFailure: { self.failedAccessBoundaryIdentity = webContentIdentity })
                     .id(webContentIdentity)

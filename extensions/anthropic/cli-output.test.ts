@@ -41,10 +41,25 @@ const end = { kind: "compaction", phase: "end" };
 const lifecycleCases = [
   [statusEvent({ status: "compacting" }), { kind: "compaction", phase: "start" }],
   [statusEvent({ status: null, compact_result: "failed" }), { ...end, completed: false }],
-  [{ compact_result: "success" }, { ...end, completed: true }],
-  [{ type: "system", subtype: "compact_boundary" }, null],
+  [statusEvent({ status: null, compact_result: "success" }), null],
+  [
+    {
+      type: "system",
+      subtype: "compact_boundary",
+      compact_metadata: { trigger: "manual", pre_tokens: 33_905, post_tokens: 6_173 },
+    },
+    { ...end, completed: true, trigger: "manual", tokensBefore: 33_905, tokensAfter: 6_173 },
+  ],
+  [
+    {
+      type: "system",
+      subtype: "compact_boundary",
+      compact_metadata: { trigger: "other", pre_tokens: "1", post_tokens: -1 },
+    },
+    { ...end, completed: true },
+  ],
 ];
-it("projects native compaction lifecycle without inferring from the boundary", () => {
+it("ends a native compaction at its boundary with the reported sizes", () => {
   for (const [event, expected] of lifecycleCases) {
     expect(backend.parseJsonlLifecycleEvent?.(JSON.stringify(event), context)).toEqual(expected);
   }

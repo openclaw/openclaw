@@ -13,10 +13,10 @@ import {
   readSessionTranscriptFailureRunId,
   readSessionTranscriptRunId,
 } from "../../sessions/transcript-events.js";
+import { isVisibleTranscriptRecord } from "../../sessions/transcript-record-visibility.js";
 import {
   isAssistantResultEventForRun,
   isVisibleAssistantResultEventForRun,
-  isVisibleTranscriptRecord,
 } from "../../sessions/transcript-visible-record.js";
 import {
   isSilentAssistantTranscriptMessage,

@@ -41,6 +41,8 @@ const TELEGRAM_PRESENTATION_CAPABILITIES = {
       maxActions: 100,
       maxActionsPerRow: 3,
       supportsStyles: false,
+      // Older clients show a message with a disabled button as unsupported, so
+      // native disabled buttons follow the same richMessages opt-in as tables.
       supportsDisabled: false,
     },
     selects: {
@@ -55,8 +57,13 @@ const TELEGRAM_PRESENTATION_CAPABILITIES = {
 export function resolveTelegramPresentationCapabilities(params: {
   richMessages: boolean;
 }): typeof TELEGRAM_PRESENTATION_CAPABILITIES {
+  const { limits } = TELEGRAM_PRESENTATION_CAPABILITIES;
   return params.richMessages
-    ? { ...TELEGRAM_PRESENTATION_CAPABILITIES, tables: true }
+    ? {
+        ...TELEGRAM_PRESENTATION_CAPABILITIES,
+        tables: true,
+        limits: { ...limits, actions: { ...limits.actions, supportsDisabled: true } },
+      }
     : TELEGRAM_PRESENTATION_CAPABILITIES;
 }
 
@@ -154,6 +161,7 @@ export function canonicalizeTelegramPresentationPayload(
   const telegramData = payload.channelData?.telegram as
     | (Record<string, unknown> & {
         buttons?: Parameters<typeof resolveTelegramInlineButtons>[0]["buttons"];
+        typedCallbackOwner?: unknown;
       })
     | undefined;
   if (!normalizedPresentation) {
@@ -173,7 +181,10 @@ export function canonicalizeTelegramPresentationPayload(
   const interactive = normalizeLegacyInteractiveReply(payload.interactive);
   const buttonOptions: TelegramButtonBuildOptions = {
     allowWebAppButtons: options?.allowWebAppButtons === true,
+    supportsDisabled: richTables,
     questionOptionIndices: resolveAskUserQuestionOptionIndices(payload),
+    // Set by prepareSendPayload, so it persists with queued deliveries.
+    ...(telegramData?.typedCallbackOwner === "agent" ? { typedCallbackOwner: "agent" } : {}),
   };
   const existingButtons = resolveTelegramInlineButtons(
     {
@@ -227,7 +238,7 @@ export function canonicalizeTelegramPresentationPayload(
       presentation: { blocks: nativeControlBlocks },
       capabilities: {
         limits: {
-          actions: { maxLabelLength: 64 },
+          actions: { maxLabelLength: 64, supportsDisabled: richTables },
           selects: { maxLabelLength: 64 },
         },
       },
@@ -329,6 +340,7 @@ export function resolveFinalTelegramPresentationText(params: {
   const droppedControls: TelegramDroppedControl[] = [];
   const buttonOptions: TelegramButtonBuildOptions = {
     allowWebAppButtons: params.allowWebAppButtons === true,
+    supportsDisabled: true,
     questionOptionIndices: resolveAskUserQuestionOptionIndices(params.payload),
   };
   // SAFETY: untyped channelData buttons are only forwarded for resolver precedence; this path never reads their entries.

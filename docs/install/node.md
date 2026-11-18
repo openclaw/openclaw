@@ -15,7 +15,7 @@ OpenClaw requires **Node 24.16.0+ on the 24.x line, or Node 26.1.0+** with a WAL
 node -v
 ```
 
-`v26.12.1` or newer is the recommended default. `v24.22.1` or newer 24.x is also supported and is the LTS line used by CI. These releases reject the keys compromised in the October 2026 eMudhra incident. Compatible Node 24.16.0+ and 26.1.0+ releases below these recommended security patch levels remain accepted, with prominent warnings during updates, Doctor, and security audit. Node 22, 23, 25, Node 24 before 24.16.0, and Node 26 before 26.1.0 are unsupported. If Node is missing or outside this range, pick an install method below.
+`v26.12.1` or newer is the recommended default. `v24.22.1` or newer 24.x is also supported and is the LTS line used by CI. These releases reject the keys compromised in the October 2026 eMudhra incident. Compatible Node 24.16.0+ and 26.1.0+ releases below these recommended security patch levels remain accepted. Startup prefers an already-installed patched Node; otherwise it prints one security warning to stderr and continues without downloading a runtime solely for this recommendation. Doctor, updates, and security audit also report the risk. Node 22, 23, 25, Node 24 before 24.16.0, and Node 26 before 26.1.0 are unsupported. If Node is missing or outside this range, pick an install method below.
 
 Node 27 is accepted, including well-formed development labels such as
 `v27.0.0-head` and `27.0.0-nightly20261018f88a1d25e9`. Prereleases on majors

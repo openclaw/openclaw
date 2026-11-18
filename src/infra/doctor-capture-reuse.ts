@@ -390,6 +390,11 @@ async function compareCurrentSources(
     }
   };
   for (const [pathname, kind] of resources) {
+    // Capture records declared sidecar roots through their database image.
+    if (sidecars.has(pathname)) {
+      roots.delete(pathname);
+      continue;
+    }
     await inspect(pathname, kind);
   }
   for (const pathname of databasePaths) {

@@ -1,11 +1,12 @@
 import { createMemo } from "solid-js";
 import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
+import { syncComposerInput } from "../../../lib/composer-input.ts";
 import { clearCompositionEnd } from "../../../lib/ime.ts";
+import { createMentionComposerBinding } from "../../../lib/reactive/composer-editor.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { insertComposerDictation } from "../composer-dictation.ts";
 import { handleChatAttachmentPaste } from "./chat-attachments.ts";
 import {
   handleTextareaOverflowInteraction,
@@ -34,19 +35,22 @@ export function renderComposerTextarea(
     const draft = context().visibleDraft;
     const dictation = context().dictation;
     return dictation?.active
-      ? insertComposerDictation(
-          state.dictationSelection?.value ?? draft,
-          dictation.transcript,
-          state.dictationSelection?.start ?? draft.length,
-          state.dictationSelection?.end ?? draft.length,
-        ).value
+      ? (dictation.placeTranscript(dictation.transcript, state.dictationSelection, {
+          start: draft.length,
+          end: draft.length,
+          value: draft,
+        })?.value ?? draft)
       : draft;
   });
   const valueRef = liveValue(() => {
     const next = value();
     // The native IME preview owns the field until composition commits.
     return ownerState.composerComposing && element ? element.value : next;
-  });
+  }, syncComposerInput);
+  const editorRef = createMentionComposerBinding(
+    () => composer.getMentions?.() ?? composer.mentions ?? [],
+    ownerState.mentionMenu.selectedAvatarUrls,
+  );
   const textareaRef = elementRef<HTMLTextAreaElement>((node) => {
     element = node;
     valueRef(node);
@@ -61,7 +65,8 @@ export function renderComposerTextarea(
   return (
     <>
       <textarea
-        ref={[textareaRef]}
+        data-composer-mentions={JSON.stringify(composer.mentions)}
+        ref={[textareaRef, editorRef]}
 
         dir={detectTextDirection(value())}
         disabled={!context().canCompose}

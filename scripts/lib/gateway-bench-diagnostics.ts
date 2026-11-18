@@ -84,6 +84,7 @@ const PHASES = [
 ] as const;
 
 const MAX_HISTOGRAMS = 256;
+const MAX_GC_EVENTS = 10_000;
 const MAX_DURATION_MS = 3_600_000;
 const HISTOGRAM_SCALE = 1_000;
 
@@ -122,7 +123,7 @@ function summarizeMetrics(metrics: Record<string, Metric>) {
   );
 }
 
-/** Bounded numeric aggregates for the benchmark's main isolate; profiles cover workers. */
+/** Bounded numeric diagnostics for the benchmark's main isolate; profiles cover workers. */
 export function startGatewayBenchDiagnostics() {
   // Heap capacity and process age expose GC phase differences without forcing collection.
   const heapSpacesBefore = getHeapSpaceStatistics();
@@ -236,6 +237,8 @@ export function startGatewayBenchDiagnostics() {
     return () => source.unsubscribe(listener);
   });
   const gc: Record<string, Metric> = {};
+  const gcEvents: Array<{ startedAtEpochMs: number; durationMs: number; kind: string }> = [];
+  let droppedGcEvents = 0;
   const collectGc = (
     entries: readonly { startTime: number; duration: number; detail?: unknown }[],
   ) => {
@@ -254,6 +257,15 @@ export function startGatewayBenchDiagnostics() {
                   ? "weakCallback"
                   : "unknown";
         add(gc, `${name}DurationMs`, entry.duration);
+        if (gcEvents.length < MAX_GC_EVENTS) {
+          gcEvents.push({
+            startedAtEpochMs: performance.timeOrigin + entry.startTime,
+            durationMs: entry.duration,
+            kind: name,
+          });
+        } else {
+          droppedGcEvents += 1;
+        }
       }
     }
   };
@@ -294,6 +306,8 @@ export function startGatewayBenchDiagnostics() {
       droppedHistogramSamples,
       histogram: { maxHistograms: MAX_HISTOGRAMS, maxDurationMs: MAX_DURATION_MS, figures: 2 },
       gc: summarizeMetrics(gc),
+      gcEvents,
+      droppedGcEvents,
       groups: [...groups.values()].map((group) => ({
         channel: group.channel,
         operation: group.operation,

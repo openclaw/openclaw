@@ -4,8 +4,10 @@ import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { sessionParticipantIdentityKey } from "../lib/chat/sender-label.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { SidebarPanelFilter, SidebarPanelHeader } from "./app-sidebar-panel-headers.tsx";
+import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
-import { Icon } from "./solid/icon.tsx";
+import { InlineAlert } from "./solid/inline-alert.tsx";
+import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
 import { Picker } from "./solid/select-picker.tsx";
 import { renderSessionOwnerAvatar } from "./solid/session-presentation.tsx";
 
@@ -108,7 +110,14 @@ export function countSidebarSessionFilters(host: Pick<SessionListHost, "sessions
   return Number(host.sessionsStatusFilter !== "active");
 }
 
-export function renderSessionListToolbar(host: SessionListHost & { onToggleSidebar?: () => void }) {
+export function renderSessionListToolbar(
+  host: SessionListHost &
+    Pick<
+      AppSidebarRenderHost,
+      "basePath" | "expandedAgentId" | "readNewSessionAccess" | "requestOpenNewSession"
+    > & { onToggleSidebar?: () => void },
+) {
+  const newSessionAccess = createMemo(() => host.readNewSessionAccess());
   const statusLabel = () =>
     host.sessionsStatusFilter === "active"
       ? t("common.active")
@@ -125,28 +134,32 @@ export function renderSessionListToolbar(host: SessionListHost & { onToggleSideb
         label={`${t("chat.sidebar.sortSessions")} · ${statusLabel()}`}
         description={`${t("sessionsView.status")}: ${statusLabel()}`}
       />
+      <NewSessionLink
+        basePath={host.basePath}
+        agentId={host.expandedAgentId()}
+        class="sidebar-session-toolbar__button sidebar-new-session"
+        label={t("agentChip.newConversation")}
+        showShortcut
+        disabledReason={(() => {
+          const access = newSessionAccess();
+          return access.allowed ? undefined : access.reason;
+        })()}
+        onOpen={(agentId, target) => host.requestOpenNewSession(agentId, target)}
+      />
     </SidebarPanelHeader>
   );
 }
 export function renderSessionListError(host: Pick<SessionListHost, "sessionData">) {
   return host.sessionData.sessionListError ? (
-    <div
-      class="sidebar-session-error callout danger callout--dismissible"
-      role="alert"
+    <InlineAlert
+      tone="danger"
+      class="sidebar-session-error"
       data-sidebar-session-error=""
+      onDismiss={() => host.sessionData.dismissSessionListError()}
+      dismissLabel={t("chat.actions.dismissError")}
     >
-      <span class="callout__content">{host.sessionData.sessionListError}</span>
-      <openclaw-tooltip prop:content={t("chat.actions.dismissError")}>
-        <button
-          class="callout__dismiss"
-          type="button"
-          onClick={() => host.sessionData.dismissSessionListError()}
-          aria-label={t("chat.actions.dismissError")}
-        >
-          <Icon name="x" />
-        </button>
-      </openclaw-tooltip>
-    </div>
+      {host.sessionData.sessionListError}
+    </InlineAlert>
   ) : undefined;
 }
 

@@ -70,6 +70,19 @@ function shallowRelease(tag = "v2026.10.2") {
   return { root, origin, commit };
 }
 
+it("fetches a missing release tag without re-shallowing a linked checkout", () => {
+  const { root, origin, commit } = shallowRelease();
+  git(root, "fetch", "--unshallow", "--no-tags", "origin");
+  const linked = path.join(temps.make("desktop-linked-"), "checkout");
+  git(root, "worktree", "add", "--detach", linked);
+  vi.stubEnv("RELEASE_TAG", "v2026.10.2");
+  expect(desktopRuntimeReleaseTag(linked, "2026.10.2", commit)).toBe("v2026.10.2");
+  expect(git(root, "rev-parse", "--is-shallow-repository")).toBe("false");
+  expect(git(linked, "rev-list", "--count", "HEAD")).toBe(
+    git(origin, "rev-list", "--count", "HEAD"),
+  );
+});
+
 it.each([
   ["v2026.10.2", true, false],
   ["v2026.10.2", false, false],

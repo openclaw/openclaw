@@ -110,6 +110,10 @@ it.each([1440, 1366, 768, 390])(
     expect(container.scrollWidth).toBeLessThanOrEqual(container.clientWidth);
     for (const row of panel.querySelectorAll<HTMLElement>("button")) {
       expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth);
+      const a = row.getBoundingClientRect(),
+        b = panel.getBoundingClientRect();
+      expect(Math.abs(a.x + a.width / 2 - b.x - b.width / 2)).toBeLessThanOrEqual(1);
+      expect(["start", "left"]).toContain(getComputedStyle(row).textAlign);
     }
   },
 );

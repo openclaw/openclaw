@@ -47,7 +47,7 @@ jobs:
           )
         )
       }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       authorized: ${{ steps.permission.outputs.authorized }}
     steps:
@@ -84,7 +84,6 @@ jobs:
       skip-notice: Comment mentioned Mantis but did not request the Discord thread attachment scenario.
       dispatch-params: >-
         ${{ github.event_name == 'workflow_dispatch' && toJSON(inputs) || '{"baseline_ref":"synthetic-reverted-thread-filepath-fix"}' }}
-      runner: blacksmith-8vcpu-ubuntu-2404
     secrets:
       MANTIS_GITHUB_APP_ID: ${{ secrets.MANTIS_GITHUB_APP_ID }}
       MANTIS_GITHUB_APP_PRIVATE_KEY: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
@@ -93,7 +92,7 @@ jobs:
     name: Validate selected candidate
     needs: resolve_request
     if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       candidate_revision: ${{ steps.validate.outputs.candidate-revision }}
     steps:
@@ -115,7 +114,7 @@ jobs:
     name: Run Discord thread attachment before/after
     needs: [resolve_request, validate_candidate]
     if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 120
     environment: qa-live-shared
     outputs:

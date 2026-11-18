@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { domProbe } from "../dom-probe.ts";
 import { mountRoster, roster, session, sessionKeys, settleRoster } from "./roster.test-support.ts";
@@ -35,6 +35,78 @@ function expectChipPin(sidebar: HTMLElement) {
 }
 
 describe("AppSidebar agent roster pins", () => {
+  it("hides a snoozed current pin, keeps it discoverable, and restores its saved order on wake", async () => {
+    const rows = [
+      thread("main", "before", 3),
+      thread("main", "snoozed", 2),
+      thread("main", "after", 1),
+    ];
+    const target = rows[1]!;
+    const { sidebar, sessions, result } = await mountRoster(roster, rows);
+    const entries = rows.map((row) => "session:" + row.key);
+    sidebar.sidebarEntries = entries;
+    sidebar.sessionKey = target.key;
+    await settleRoster(sidebar);
+    expect(pinnedKeys(sidebar)).toEqual(rows.map((row) => row.key));
+
+    const publish = async (snoozedUntil: number | undefined) => {
+      result.sessions = rows.map((row) =>
+        row.key === target.key ? { ...row, snoozedUntil } : row,
+      );
+      sessions.publishList({ result: { ...result } });
+      await settleRoster(sidebar);
+    };
+    await publish(Date.now() + 3_600_000);
+    expect(pinnedKeys(sidebar)).toEqual([rows[0]!.key, rows[2]!.key]);
+    expect(sessionKeys(sidebar)).not.toContain(target.key);
+    expect(sidebar.sidebarEntries).toEqual(entries);
+
+    for (const filter of ["snoozed", "all"] as const) {
+      sidebar.sessionsStatusFilter = filter;
+      await settleRoster(sidebar);
+      expect(pinnedKeys(sidebar)).not.toContain(target.key);
+      expect(sessionKeys(sidebar).filter((key) => key === target.key)).toEqual([target.key]);
+    }
+    sidebar.sessionsStatusFilter = "active";
+    await publish(undefined);
+    expect(pinnedKeys(sidebar)).toEqual(rows.map((row) => row.key));
+    expect(sidebar.sidebarEntries).toEqual(entries);
+  });
+
+  it("wakes a snoozed pin outside the loaded roster from the reactive clock", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    vi.setSystemTime(10_000);
+    const before = thread("main", "before", 3);
+    const target = thread("working", "snoozed", 2, {
+      sessionId: "off-roster-snooze",
+      snoozedUntil: 11_500,
+    });
+    const after = thread("main", "after", 1);
+    const rows = [before, target, after];
+    const { sidebar, request, sessions } = await mountRoster(
+      roster,
+      [before, after],
+      "ws://gateway.test",
+      [target],
+    );
+    const entries = rows.map((row) => "session:" + row.key);
+    sidebar.sidebarEntries = entries;
+    await settleRoster(sidebar);
+    expect(pinnedKeys(sidebar)).toEqual([before.key, after.key]);
+    const requests = request.mock.calls.length;
+    const lists = sessions.list.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await settleRoster(sidebar);
+    expect(pinnedKeys(sidebar)).toEqual(rows.map((row) => row.key));
+    expect(sidebar.sidebarEntries).toEqual(entries);
+    expect(request).toHaveBeenCalledTimes(requests);
+    expect(sessions.list).toHaveBeenCalledTimes(lists);
+  });
+
   it("lists cross-agent pins in saved order in the Pinned section, not the rail", async () => {
     const avatarRoute = "/avatar/working?v=pinned-roster";
     const parentKey = "agent:working:pinned";

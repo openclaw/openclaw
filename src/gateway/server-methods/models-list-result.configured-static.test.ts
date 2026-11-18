@@ -149,7 +149,7 @@ it("projects utility runtimes for API, subscription, unavailable, and disabled s
     );
     expect(result.defaultModels).toEqual({
       automaticUtilityModel: "openai/gpt-5.5",
-      utilityRuntime: { id: "openclaw", kind: "api", label: "OpenClaw Default" },
+      utilityRuntime: { id: "codex", kind: "harness", label: "OpenAI Codex" },
     });
     const pinnedConfig = agentConfig(
       { ...cfg.agents?.defaults, utilityModel: "openai/gpt-5.5@openai:utility" },

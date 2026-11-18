@@ -7,7 +7,8 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import * as gatewayLock from "../../infra/gateway-lock.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
-import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { toPublicUpdateRun } from "../../infra/update-run-record.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -289,7 +290,7 @@ describe("mutable update execution", () => {
         packageTargetVersion: "2026.9.2",
       });
 
-      expect(mocks.validateCanary).toHaveBeenCalledOnce();
+      expect(mocks.checkCandidate).toHaveBeenCalledOnce();
       expect(execution).toMatchObject({
         mutationStarted: false,
         result: { status: "error", reason: "database-schema-preflight" },
@@ -521,6 +522,155 @@ describe("mutable update execution", () => {
           expect(execution?.failure?.detail).toContain("exclusive state ownership");
           expect(execution?.failure?.detail).toMatch(/Stop the Gateway through its service owner/);
         }
+      }),
+  );
+
+  it.each(
+    (["git", "package"] as const).flatMap((kind) =>
+      (["absent", "owned", "unresolved"] as const).map((verdict) => ({ kind, verdict })),
+    ),
+  )(
+    "refuses a held PostgreSQL owner before $kind validation when $verdict service cannot stop",
+    async ({ kind, verdict }) =>
+      withTestDir({ prefix: "postgres-capture-early-" }, async (root) => {
+        const params = { ...(await runParams(root, kind)), shouldRestart: verdict === "absent" };
+        const { env } = params.opts.run;
+        await writeFixtureJson(path.join(root, "openclaw.json"), {
+          database: {
+            engine: "postgres",
+            postgres: { connection: "postgresql://synthetic.invalid/update-capture" },
+          },
+        });
+        // An absent service or --no-restart cannot release the held owner.
+        mocks.maybeStopService.mockImplementation(async () => ({
+          ...inspectOrStopService("inspect"),
+          running: verdict !== "absent",
+          serviceEnv: env,
+          serviceUpdateVerdict:
+            verdict === "absent"
+              ? { kind: "absent" }
+              : { kind: verdict, root, fingerprint: "fixture", refreshDefinition: false },
+        }));
+        const acquire = gatewayLock.acquireGatewayLock;
+        vi.spyOn(gatewayLock, "acquireGatewayLock").mockImplementation(async (options) =>
+          options?.role === "sqlite-maintenance" ? null : acquire(options),
+        );
+        const events: string[] = [];
+        let refusal = "";
+        mocks.runGitUpdate.mockImplementation(
+          async (options: Parameters<typeof updateGitInstall>[0]) => {
+            await options.inspectGitTarget({ schemaVersions: { state: 15, agent: 19 } });
+            await options.validateCandidate!(root);
+            events.push("validated");
+            return { ...successfulUpdate, mode: "git" };
+          },
+        );
+        // The package runner reports a thrown validation error as its own failed step.
+        mocks.runPackageUpdate.mockImplementation(async (options: PackageInstallUpdateParams) => {
+          try {
+            await options.validateCandidate(root);
+          } catch (error) {
+            refusal = String(error);
+            return { ...successfulUpdate, status: "error", reason: "global-install-failed" };
+          }
+          events.push("validated");
+          return successfulUpdate;
+        });
+        const execution = await withUpdateCommandExecutor(
+          params.opts.run.runId,
+          async (executor) => {
+            params.opts.run.executorFence = await executor.enter(root);
+            return execute(params);
+          },
+        );
+
+        expect(mocks.checkCandidate).not.toHaveBeenCalled();
+        expect(events).toEqual([]);
+        expect(execution, JSON.stringify(execution?.failure)).toMatchObject({
+          mutationStarted: false,
+          result: { status: "error", reason: "database-engine-preflight" },
+        });
+        expect(kind === "git" ? execution?.failure?.detail : refusal).toContain(
+          "exclusive state ownership",
+        );
+      }),
+  );
+
+  it.each(["owned", "unresolved"] as const)(
+    "keeps candidate validation when a running %s service will release the owner",
+    async (verdict) =>
+      withTestDir({ prefix: "postgres-capture-managed-" }, async (root) => {
+        const params = await runParams(root, "package");
+        mocks.nativeSupport.mockResolvedValue(true);
+        const { env } = params.opts.run;
+        await writeFixtureJson(path.join(root, "openclaw.json"), {
+          database: {
+            engine: "postgres",
+            postgres: { connection: "postgresql://synthetic.invalid/update-capture" },
+          },
+        });
+        mocks.maybeStopService.mockImplementation(async ({ phase }) => {
+          const state = { ...inspectOrStopService(phase), serviceEnv: env };
+          if (verdict === "unresolved") {
+            state.serviceUpdateVerdict = { kind: "unresolved", root, fingerprint: "fixture" };
+          }
+          return state;
+        });
+        const acquire = gatewayLock.acquireGatewayLock;
+        vi.spyOn(gatewayLock, "acquireGatewayLock").mockImplementation(async (options) =>
+          options?.role === "sqlite-maintenance" && !mocks.serviceStopped ? null : acquire(options),
+        );
+        const events: string[] = [];
+        mocks.runPackageUpdate.mockImplementation(async (options: PackageInstallUpdateParams) => {
+          await options.validateCandidate(root);
+          events.push("validated");
+          return successfulUpdate;
+        });
+        const execution = await withUpdateCommandExecutor(
+          params.opts.run.runId,
+          async (executor) => {
+            params.opts.run.executorFence = await executor.enter(root);
+            return execute(params);
+          },
+        );
+
+        expect(events, JSON.stringify(execution?.failure)).toEqual(["validated"]);
+        expect(execution?.result.reason).not.toBe("database-engine-preflight");
+      }),
+  );
+
+  it.each([true, false])(
+    "records a checkout activation on its run before reserving plugin recovery (%s)",
+    async (checkout) =>
+      withTestDir({ prefix: "git-activation-record-" }, async (root) => {
+        const params = await runParams(root, "git");
+        const activation = { sha: "a".repeat(40), buildId: "build-new", previousBuildId: null };
+        let reservation: unknown;
+        mocks.runGitUpdate.mockImplementation(
+          async (options: Parameters<typeof updateGitInstall>[0]) => {
+            const transaction = {
+              backupRoot: root,
+              ...(checkout ? { readGitActivation: async () => activation } : {}),
+              rollback: async () => {
+                throw new Error("unused");
+              },
+              complete: async () => undefined,
+            };
+            // The fixture admitted no core identities, so the cohort reservation refuses.
+            reservation = await Promise.resolve(options.onTransaction?.(transaction)).catch(String);
+            return { ...successfulUpdate, mode: "git" };
+          },
+        );
+        await withUpdateCommandExecutor(params.opts.run.runId, async (executor) => {
+          params.opts.run.executorFence = await executor.enter(root);
+          return execute(params);
+        });
+
+        expect(reservation).toMatch(/Plugin cohort rollback requires the admitted core/);
+        const run = getUpdateRun(params.opts.run.runId, params.opts.run);
+        expect(run?.origin.gitActivation).toEqual(checkout ? activation : undefined);
+        // Public history projections keep their shape.
+        expect(run && toPublicUpdateRun(run).origin).not.toHaveProperty("gitActivation");
       }),
   );
 });

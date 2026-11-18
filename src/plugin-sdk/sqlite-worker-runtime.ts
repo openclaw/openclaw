@@ -1,27 +1,23 @@
 // SQLite backends use native primitives without loading host database lifecycle owners.
 import type { DatabaseSync } from "node:sqlite";
 import type { PostgresSqlConnection } from "../infra/sql-connection.js";
+import type {
+  SqliteWorkerTransactionOptions,
+  SyncReturnGuard,
+  SynchronousSqliteCallback,
+} from "../infra/sqlite-transaction-types.js";
 import {
   runSqliteDeferredTransactionSync as runDeferredTransaction,
   runSqliteImmediateTransactionSync as runImmediateTransaction,
   runSqliteReadSnapshotSync as runReadSnapshot,
   runSqliteSingleStatementSync as runSingleStatement,
-  type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
 import { ensureOpenClawAgentStandingIntentsSchema as ensureStandingIntentsSchema } from "../state/openclaw-agent-standing-intents-schema.js";
 
-type SyncReturnGuard<Result> = [Extract<Result, PromiseLike<unknown>>] extends [never]
-  ? unknown
-  : never;
-
-export type SynchronousSqliteCallback<Result> = () => Result & NoInfer<SyncReturnGuard<Result>>;
-
-export type SqliteWorkerTransactionOptions<CommitResult = void> = Omit<
-  SqliteTransactionOptions,
-  "withCommit"
-> & {
-  withCommit?: ((commit: () => void) => CommitResult) & NoInfer<SyncReturnGuard<CommitResult>>;
-};
+export type {
+  SqliteWorkerTransactionOptions,
+  SynchronousSqliteCallback,
+} from "../infra/sqlite-transaction-types.js";
 
 type WorkerTransaction = <Result, CommitResult = void>(
   database: DatabaseSync | PostgresSqlConnection,
@@ -91,3 +87,5 @@ export { bindSqliteWorkerDatabase } from "../infra/sqlite-worker-binding.js";
 export { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 export { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 export { stageOpenClawAgentDatabaseSchemaExtension } from "../state/openclaw-agent-db-schema-extension.worker.js";
+
+export { observeConnection as observeSqliteConnection } from "../infra/database-engine/observation.js";

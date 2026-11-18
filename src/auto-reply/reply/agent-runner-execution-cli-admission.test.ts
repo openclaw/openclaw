@@ -170,6 +170,42 @@ it.each([true, false])(
   },
 );
 
+it("counts the native compactions a CLI turn completed toward the session", async () => {
+  const { turn } = await sessionFixture("agent:main:native-compactions", {
+    lifecycleRevision: "current",
+  });
+  useCliFallback();
+  const context = buildPreparedCliRunContext();
+  const output = {
+    text: "done",
+    nativeCompaction: {
+      compactionCount: 2,
+      compactionTokensBefore: 69_162,
+      compactionTokensAfter: 7_617,
+    },
+  };
+  state.runCliAgentMock.mockResolvedValueOnce(
+    buildCliRunResult({
+      context,
+      output,
+      preparedReply: prepareCliRunTerminalReply(context, output),
+      effectiveCliSessionId: "native-session",
+      bindingFlushOk: true,
+      usedHistoryPrompt: false,
+      userTurnHandled: true,
+      sessionBindingDisabled: false,
+      preparedContextAgentMeta: {},
+    }),
+  );
+  const { outcome } = await (await getRawExecuteAgentTurnForTest())(turn);
+  assert(outcome.kind === "settled");
+  expect(outcome.autoCompactionCount).toBe(2);
+  expect(outcome.compaction).toMatchObject({
+    count: 2,
+    durable: [{ kind: "durable", count: 2, target: outcome.sessionWriter }],
+  });
+});
+
 it("reads cold CLI fallback metadata while another connection holds a shared-state write transaction", async () => {
   const sessionKey = "agent:main:cli-read-contention";
   const binding = { sessionId: "existing-native-session" };

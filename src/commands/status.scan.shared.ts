@@ -15,9 +15,11 @@ import type { GatewayProbeAuth, GatewayProbeResult } from "../gateway/probe.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
 import { readMemorySearchManagerStatus } from "../memory-host-sdk/host/types.js";
-import type { ActiveMemoryProviderResult, MemoryHealth } from "../plugins/memory-provider-types.js";
+import type { MemoryHealth } from "../plugins/memory-provider-runtime-types.js";
+import type { ActiveMemoryProviderResult } from "../plugins/memory-provider-types.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 import type { MemoryPluginStatus } from "../status/memory-plugin.js";
@@ -96,6 +98,7 @@ export async function resolveGatewayProbeSnapshot(params: {
   const originScopedDeviceAuth =
     mode === "remote" || Boolean(process.env.OPENCLAW_GATEWAY_URL?.trim());
   const shouldProbe = params.opts.skipProbe !== true && !remoteUrlMissing;
+  const signal = getAsyncWorkSignal();
   const gatewayProbeAuthResolution = shouldProbe
     ? await import("./status.gateway-probe.js").then(({ resolveGatewayProbeAuthResolution }) =>
         resolveGatewayProbeAuthResolution(params.cfg, params.env),
@@ -112,14 +115,12 @@ export async function resolveGatewayProbeSnapshot(params: {
               timeoutMs: remainingTimeoutMs(),
               deadlineMs: params.opts.gatewayProbeDeadlineMs,
               onProgress: params.opts.onProgress,
+              signal,
               ...gatewayProbeAuthResolution.auth,
             }),
         )
       : undefined;
-  const canDiagnose =
-    readiness?.healthy ||
-    readiness?.waitOutcome === "plugin-errors" ||
-    readiness?.waitOutcome === "channel-errors";
+  const canDiagnose = readiness?.healthy || readiness?.waitOutcome === "channel-errors";
   const unavailableProbe = (): GatewayProbeResult => ({
     ok: false,
     url: gatewayConnection.url,
@@ -159,10 +160,13 @@ export async function resolveGatewayProbeSnapshot(params: {
                     env: params.env,
                     timeoutMs,
                     detailLevel: params.opts.detailLevel ?? "presence",
+                    signal,
                   });
             })
             .catch(() => null)
         : null;
+  // An interrupted probe reports "aborted"; stop instead of rendering it as Gateway state.
+  signal?.throwIfAborted();
   const fallbackBudget = {
     timeoutMs: remainingTimeoutMs(),
     gatewayProbeDeadlineMs: params.opts.gatewayProbeDeadlineMs,
@@ -198,9 +202,14 @@ export async function resolveGatewayProbeSnapshot(params: {
             timeoutMs,
             mode: GATEWAY_CLIENT_MODES.BACKEND,
             clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+            signal,
           });
         })
-        .catch(() => null);
+        .catch(() => {
+          // A Ctrl+C cancels the pending fallback read; keep the canonical abort outcome.
+          signal?.throwIfAborted();
+          return null;
+        });
       if (status) {
         const auth = gatewayProbe.auth;
         gatewayProbe = {
@@ -236,7 +245,6 @@ export async function resolveGatewayProbeSnapshot(params: {
     gatewayReachable,
     localGatewayHealthy:
       readiness?.healthy === true &&
-      !readiness.activatedPluginErrors?.length &&
       !readiness.channelProbeErrors?.length &&
       gatewayProbe?.ok === true,
     gatewaySelf,

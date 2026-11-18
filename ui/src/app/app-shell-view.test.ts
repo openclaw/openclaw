@@ -1,13 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { createRouter, definePage } from "@openclaw/uirouter";
-import { render } from "@solidjs/testing-library";
-import { createComponent, createRoot, flush, onSettled } from "solid-js";
+import { createRoot, flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
-import { GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayBrowserClient, type GatewayBrowserClientOptions } from "../api/gateway.ts";
 import * as settingsSidebar from "../components/settings-sidebar-shell.tsx";
-import { ApplicationProvider } from "../lib/reactive/context.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { ChatRouteData } from "../pages/chat/session-route-data.ts";
 import "../plugins/control-ui-view.solid.tsx";
@@ -17,11 +15,10 @@ import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { equalShellRouteState, selectShellRouteState } from "./app-host-route-state.ts";
-import { ShellOwner } from "./app-host.tsx";
 import { readShellView } from "./app-shell-view-state.ts";
-import { ApplicationShell } from "./app-shell-view.tsx";
-import { bootstrapApplication } from "./bootstrap.ts";
+import { mountShell } from "./app-shell-view.test-support.ts";
 import { createSolidControlUiReadiness } from "./control-ui-readiness-solid.ts";
+import { captureGatewayClients } from "./gateway-store.test-support.ts";
 import { NATIVE_HISTORY_STATE_EVENT } from "./native-web-chrome.ts";
 import { registerRouteElement } from "./route-elements.ts";
 import { loadSettings } from "./settings.ts";
@@ -51,67 +48,6 @@ function mockPhone() {
     "matchMedia",
     vi.fn(() => Object.assign(new EventTarget(), { matches: true })),
   );
-}
-
-async function mountShell(waitForSidebar = true) {
-  const runtime = bootstrapApplication();
-  const { owner, dispose } = createRoot((disposeRoot) => ({
-    owner: new ShellOwner(document.createElement("openclaw-app-shell"), runtime),
-    dispose: disposeRoot,
-  }));
-  owner.routeState = { routeId: "chat" };
-  document.body.append(owner.element);
-  const view = render(
-    () => {
-      onSettled(() => owner.mountPresentation());
-      return createComponent(ApplicationProvider, {
-        host: owner.element,
-        value: runtime.context,
-        get children() {
-          return createComponent(ApplicationShell, { host: owner });
-        },
-      });
-    },
-    {
-      container: owner.element,
-    },
-  );
-  onTestFinished(() => {
-    view.unmount();
-    owner.disconnect();
-    dispose();
-    runtime.stop();
-  });
-  await Promise.resolve();
-  if (waitForSidebar) {
-    await vi.dynamicImportSettled();
-  }
-  flush();
-  const refresh = () => {
-    owner.invalidate();
-    flush();
-  };
-  const query: typeof view.container.querySelector = view.container.querySelector.bind(
-    view.container,
-  );
-  const settle = async (withTopbar = false) => {
-    refresh();
-    await owner.navigationSidebar.updateComplete;
-    if (withTopbar) {
-      await query<SolidBridgeElement<object>>("openclaw-app-topbar")!.updateComplete;
-    }
-    flush();
-  };
-  const route = (routeId: NonNullable<ShellOwner["routeState"]["routeId"]>) => {
-    owner.routeState = { routeId };
-    refresh();
-  };
-  const gateway = () => {
-    const initial = runtime.context.gateway.snapshot;
-    const snapshot = vi.spyOn(runtime.context.gateway, "snapshot", "get");
-    return (patch: Partial<typeof initial>) => snapshot.mockReturnValue({ ...initial, ...patch });
-  };
-  return { owner, runtime, view, query, refresh, settle, route, gateway };
 }
 
 it("publishes readiness when the retained sidebar's delayed module commits", async () => {
@@ -423,7 +359,7 @@ it("keeps one sidebar through drawer and settings takeover transitions", async (
 
   owner.routeState = { routeId: "appearance" };
   refresh();
-  expect(query("openclaw-app-sidebar")).toBeNull();
+  expect(query("openclaw-app-sidebar")).toBe(sidebar);
   expect(owner.navigationSidebar).toBe(sidebar);
 
   owner.routeState = { routeId: "chat" };
@@ -471,6 +407,18 @@ it("commits mobile drawer changes without republishing the full shell", async ()
 
 it("keeps the mobile New Session action live across selection and access changes", async () => {
   mockMobile(() => true);
+  const connections: GatewayBrowserClientOptions[] = [];
+  vi.spyOn(GatewayBrowserClient.prototype, "start").mockImplementation(() => {});
+  vi.spyOn(GatewayBrowserClient.prototype, "request").mockImplementation(async (method) => {
+    if (method === "sessions.list") {
+      return { sessions: [] };
+    }
+    if (method === "users.self") {
+      return { profile: null };
+    }
+    throw new Error(`Unexpected Gateway request: ${method}`);
+  });
+  captureGatewayClients((_client, options) => connections.push(options));
   const { owner, runtime, query, refresh } = await mountShell();
   owner.routeState = { routeId: "sessions" };
   const context = runtime.context;
@@ -478,18 +426,16 @@ it("keeps the mobile New Session action live across selection and access changes
     ...context.theme.settings,
     sidebarAgentsMode: "chip",
   });
-  const connected = {
-    ...context.gateway.snapshot,
-    phase: "connected" as const,
-    client: new GatewayBrowserClient({ url: "ws://gateway.example.test" }),
-    hello: {
-      type: "hello-ok" as const,
+  const connect = () => {
+    context.gateway.connect();
+    connections.at(-1)!.onHello?.({
+      type: "hello-ok",
       protocol: 3,
       auth: { role: "operator", scopes: ["operator.sessions.write"] },
       features: { methods: ["sessions.create"] },
-    },
+    });
   };
-  const snapshot = vi.spyOn(context.gateway, "snapshot", "get").mockReturnValue(connected);
+  connect();
   const selection = vi.spyOn(context.agentSelection, "state", "get");
   selection.mockReturnValue({ ...context.agentSelection.state, selectedId: "writer" });
   const navigate = vi.spyOn(context, "navigate").mockImplementation(() => undefined);
@@ -511,7 +457,7 @@ it("keeps the mobile New Session action live across selection and access changes
   navigate.mockClear();
 
   // The synchronous permission owner wins even before the next render commits.
-  snapshot.mockReturnValue({ ...connected, phase: "stopped" });
+  context.gateway.stop();
   action.click();
   expect(navigate).not.toHaveBeenCalled();
   refresh();
@@ -519,7 +465,7 @@ it("keeps the mobile New Session action live across selection and access changes
   expect(action.hasAttribute("href")).toBe(false);
   expect(action.getAttribute("aria-disabled")).toBe("true");
 
-  snapshot.mockReturnValue(connected);
+  connect();
   refresh();
   await topbar.updateComplete;
   expect(query(".header-new-session")).toBe(action);
@@ -788,7 +734,7 @@ it("briefly reveals collapsed status transitions without reserving footer space"
   publish({ ...connected, phase: "reconnecting", offlineStable: true });
   await settle();
   expect(flag()?.hasAttribute("data-open")).toBe(true);
-  expect(flag()?.textContent).toContain("Reconnecting…");
+  expect(flag()?.textContent).toContain("Reconnecting");
   publish(connected);
   await settle();
   expect(flag()?.hasAttribute("data-open")).toBe(true);

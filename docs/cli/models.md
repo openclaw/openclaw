@@ -115,10 +115,12 @@ Options:
 | `--probe-profile <id>`    | Check specific auth profile ids (repeat or comma-separated).                                                  |
 | `--probe-timeout <ms>`    | Per-check timeout.                                                                                            |
 | `--probe-concurrency <n>` | Concurrent checks.                                                                                            |
-| `--probe-max-tokens <n>`  | Maximum tokens per check (best effort).                                                                       |
+| `--probe-max-tokens <n>`  | Optional output-token cap per check (best effort). Unset sends no cap, like chat.                             |
 | `--agent <id>`            | Configured agent id; overrides `OPENCLAW_AGENT_DIR`.                                                          |
 
-`--probe-timeout` requires a positive number; `--probe-concurrency` and `--probe-max-tokens` require positive integers. Omit these options to use their defaults (`8000`, `2`, and `8`, respectively); explicitly empty values are rejected.
+`--probe` needs exclusive ownership of the state directory. It refuses while a Gateway owns it; omit `--probe`, or stop the Gateway first.
+
+`--probe-timeout` requires a positive number; `--probe-concurrency` and `--probe-max-tokens` require positive integers. Omit `--probe-timeout` and `--probe-concurrency` to use their defaults (`8000` and `2`). Omit `--probe-max-tokens` to send no cap: reasoning models can spend a small cap on thinking and return no visible reply, which the check reports as `format`. Explicitly empty values are rejected.
 
 Check rows can come from auth profiles, env credentials, or `models.json`. Check status buckets: `ok`, `auth`, `rate_limit`, `billing`, `timeout`, `format`, `unknown`, `no_model`.
 
@@ -130,6 +132,7 @@ Check detail/reason codes to expect when a check never reaches a model call:
 
 - `excluded_by_auth_order`: a stored profile exists, but explicit `auth.order.<provider>` omitted it, so the check reports the exclusion instead of trying it.
 - `missing_credential`, `invalid_expires`, `expired`, `unresolved_ref`: profile is present but not eligible or resolvable.
+- `refresh_failed`: an OAuth refresh failed in a way OpenClaw cannot safely retry. Sign in again (Control UI **Models** → **Sign in again** on the account, or `openclaw models auth login --provider <id>`).
 - `ineligible_profile`: profile is incompatible with provider config for another reason.
 - `no_model`: provider auth exists, but OpenClaw could not resolve a model candidate that can be tested for that provider.
 
@@ -491,7 +494,7 @@ Use either `openclaw models auth --agent <id> <subcommand>` or `openclaw models 
 For OpenAI models, `--provider openai` defaults to ChatGPT/Codex account login. Use `--method api-key` only when you want to add an OpenAI API-key profile, usually as a backup for Codex subscription limits. Run `openclaw doctor --fix` to migrate older legacy OpenAI Codex prefix auth/profile state to `openai`.
 
 See [OpenAI authentication](/providers/openai/authentication) to compare Codex
-OAuth, device code, API keys, and Sign in with ChatGPT (Beta) (`--method siwc`),
+OAuth, device code, API keys, and Sign in with ChatGPT (`--method siwc`),
 including model access, hosted plugins, and shared versus personal setup.
 
 Examples:

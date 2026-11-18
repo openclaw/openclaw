@@ -29,7 +29,7 @@ import {
 } from "../plugins/provider-hook-runtime.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
-import type { ImageDescriptionRequest } from "./types.js";
+import type { ImageDescriptionRequest } from "./provider-types.js";
 
 type ImageRuntimeParams = Omit<
   ImageDescriptionRequest,

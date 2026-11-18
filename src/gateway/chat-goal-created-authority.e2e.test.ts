@@ -201,9 +201,9 @@ it(
           }
         } else if (scenario.parentCalls === 5) {
           expect(scenario.revoke).toBe(false);
-          expect((JSON.stringify(output) ?? "").replaceAll("\\", "")).toContain(
-            'cannot create sessions for agent "sibling"',
-          );
+          expect(typeof output === "string" ? JSON.parse(output) : output).toMatchObject({
+            status: "forbidden",
+          });
           reply("The delegated item is done. The remaining Goal item is unfinished.");
         } else if (scenario.parentCalls === 6) {
           expect(scenario.revoke).toBe(false);
@@ -428,7 +428,13 @@ it(
         if (scenario.revoke) {
           // The administrator may still inspect the canonical history; only the
           // revoked requester's publication stream is required to be silent.
-          // Role changes refresh projected avatar URLs, not durable message identity/content.
+          // Cancellation cannot unconsume the child result already admitted to this turn.
+          const child = scenario.childRunId && getSubagentRunByRunId(scenario.childRunId);
+          expect(child && child.delivery).toMatchObject({
+            status: "delivered",
+            requesterDelivery: { state: "consumed" },
+          });
+          // Role changes refresh projected avatar URLs, not prior durable message content.
           expect(transcriptContent(history.messages)).toEqual(
             transcriptContent(beforeHistory?.messages),
           );

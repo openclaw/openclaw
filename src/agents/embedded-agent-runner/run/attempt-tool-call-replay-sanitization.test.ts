@@ -103,6 +103,7 @@ function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): Agent
 
 it("classifies paired replay once across sanitization and transport, rechecking mutations", () => {
   const classify = vi.spyOn(pairing, "classifyToolUseResultPairing");
+  const extract = vi.spyOn(pairing, "extractToolCallsFromAssistant");
   try {
     const messages = [
       imageCall("call_a"),
@@ -117,6 +118,8 @@ it("classifies paired replay once across sanitization and transport, rechecking 
     const prepared = sanitizeOpenAIResponsesReplayForStream(messages);
     expect(transformTransportMessages(prepared as Context["messages"], model)).toEqual(prepared);
     expect(classify).toHaveBeenCalledTimes(1);
+    expect(prepared).toBe(messages);
+    expect(extract).not.toHaveBeenCalled();
     requireToolResultMessage(prepared[1]).toolCallId = "orphan";
     const repaired = transformTransportMessages(prepared as Context["messages"], model);
     expect(classify).toHaveBeenCalledTimes(2);
@@ -124,6 +127,7 @@ it("classifies paired replay once across sanitization and transport, rechecking 
     expect(JSON.stringify(repaired)).not.toContain("saved output");
   } finally {
     classify.mockRestore();
+    extract.mockRestore();
   }
 });
 

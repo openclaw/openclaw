@@ -9,6 +9,7 @@ import {
   buildCloudflareAccessHeaders,
   type CloudflareAccessCredentials,
 } from "../../packages/gateway-client/src/cloudflare-access.js";
+import { parseUnixGatewayUrl } from "../../packages/gateway-client/src/unix-target.js";
 import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "../gateway/worker-environments/workspace-inventory-limits.js";
 import type { Root } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -125,7 +126,10 @@ export async function withNodeWorkerTransferHttpRequest<T>(
   params: NodeWorkerTransferHttpRequest,
   consume: (response: IncomingMessage) => Promise<T>,
 ): Promise<T> {
-  const url = transferUrl(params.gatewayUrl, params.routePath);
+  const unix = parseUnixGatewayUrl(params.gatewayUrl);
+  const url = unix
+    ? new URL(`http://localhost${unix.path.replace(/\/$/u, "")}${params.routePath}`)
+    : transferUrl(params.gatewayUrl, params.routePath);
   if (params.cloudflareAccess && url.protocol !== "https:") {
     throw new NodeWorkerTransferHttpError(
       "cloudflare-access-requires-tls",
@@ -141,6 +145,7 @@ export async function withNodeWorkerTransferHttpRequest<T>(
   }
   const transport = url.protocol === "https:" ? https : http;
   const request = transport.request(url, {
+    ...(unix ? { socketPath: unix.socketPath } : {}),
     method: params.method,
     headers: {
       ...params.headers,

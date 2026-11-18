@@ -90,6 +90,19 @@ overrides, never alternate release identities. No release arguments are required
 pnpm ios:release:archive -- --version 2026.7.2 --revision 1 --build-number 3
 ```
 
+Store and TestFlight CI archives reuse Xcode's content-addressed compilation cache.
+Only compiler-cache storage is transferred; DerivedData, signed archives, IPAs,
+and signing material are excluded. Transfers are optional and time-limited, so a
+cache miss still compiles and validates the release normally. The cache is shared
+by both destinations and separated by Xcode build, runner OS, and architecture;
+the compiler invalidates entries when its inputs change.
+
+Local releases use the same archive path. To retain compiler results locally, set
+`OPENCLAW_IOS_COMPILATION_CACHE_DIR` to a dedicated directory, such as
+`$HOME/Library/Caches/openclaw/ios-release-cas`. Leave it unset to use the ordinary
+archive behavior. Deleting that dedicated directory discards only cached compiler
+results. Archive/export validation and upload behavior are unchanged.
+
 ## TestFlight distribution
 
 Run **iOS Store Release** with operation **testflight** from `main`:
@@ -294,6 +307,14 @@ and content hashes. Both the CLI and GitHub Action upload the same saved text.
 Missing or mismatched artifacts fail before upload; the store path never falls
 back to a changelog. A changed public baseline during preparation stops the
 attempt before its first store write.
+
+For a new upload, notes generation runs alongside archive and export on the same
+runner, after any Store screenshot capture. Both tasks use the frozen source and
+release plan. Upload and metadata staging require a successful archive and
+validated notes. If the build fails, the lane waits for the notes process to
+finish within its existing generation budget before collecting artifacts and
+returning the failure. Distributing an existing build and staging recovery do
+not start an archive.
 
 Generation first shortlists up to ten changed files from a compact inventory and
 commit subjects. Focused endpoint diffs support the notes; current source and

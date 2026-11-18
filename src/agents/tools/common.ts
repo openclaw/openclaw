@@ -33,8 +33,16 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
    * tool results alone never grant it.
    */
   canDeliverSourceReply?: boolean;
-  /** Tool-owned execution and transport wait budget, before any harness completion grace. */
-  getExecutionTimeoutMs?: (args: unknown) => number | undefined;
+  /**
+   * Tool-owned execution and transport wait budget, before any harness completion grace.
+   * Embedded execution publishes this as a liveness allowance without adding a timer.
+   * Its optional context supplies the remaining parent budget (the default agent
+   * budget for an unlimited parent); other harnesses may resolve their own lifetime.
+   */
+  getExecutionTimeoutMs?: (
+    args: unknown,
+    context?: { parentTimeoutMs: number },
+  ) => number | undefined;
   prepareBeforeToolCallParams?: (
     params: unknown,
     ctx: { toolCallId?: string; hookContext?: unknown; signal?: AbortSignal },
@@ -282,10 +290,15 @@ export function readStringArrayParam(
   key: string,
   options: StringParamOptions = {},
 ) {
-  const { required = false, label = key } = options;
+  const { required = false, label = key, allowEmpty = false } = options;
   const values = normalizeSingleOrTrimmedStringList(readSnakeCaseParamRaw(params, key));
   if (values.length > 0) {
     return values;
+  }
+  // Callers that replace a collection (for example Discord applied tags) need an
+  // explicit empty array to survive instead of collapsing to undefined.
+  if (allowEmpty && Array.isArray(readSnakeCaseParamRaw(params, key))) {
+    return [];
   }
   if (required) {
     throw new ToolInputError(`${label} required`);

@@ -10,6 +10,7 @@ const data = workerData as {
   files: PluginFilesLocation;
   config: import("./real-vault.js").StoreConfig;
   signal: SharedArrayBuffer;
+  watch: boolean;
 };
 // The host's plugin SDK resolver is installed on the main thread only. Reuse the
 // exact module files the main thread resolved so both threads load one SDK.

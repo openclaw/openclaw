@@ -1,3 +1,8 @@
+import {
+  composerInputElement,
+  composerInputFocusElement,
+  readComposerEditor,
+} from "../lib/composer-input.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { bindOverlayAnchor } from "./overlay-anchor.ts";
 import type { Overlay } from "./overlay-lifecycle.ts";
@@ -83,8 +88,8 @@ function bindTextarea(
   document.body.append(mirror);
   // Named CSS anchors must share the native popup's tree scope.
   anchorParent.append(anchor);
-  overlay.bindTrigger(textarea);
-  overlay.setReturnTarget(textarea);
+  overlay.bindTrigger(composerInputFocusElement(textarea));
+  overlay.setReturnTarget(composerInputFocusElement(textarea));
   const unbind = bindOverlayAnchor(popup, anchor, "top-start");
   let frame: number | null = null;
   let start = 0;
@@ -104,7 +109,7 @@ function bindTextarea(
   }
 
   const resizeObserver = new ResizeObserver(invalidateStyles);
-  resizeObserver.observe(textarea);
+  resizeObserver.observe(composerInputElement(textarea));
   const listeners = [
     listen(document, "scroll", schedule, true),
     window && listen(window, "resize", invalidateStyles),
@@ -116,6 +121,26 @@ function bindTextarea(
     frame = null;
     if (!textarea.isConnected || !popup.isConnected) {
       close();
+      return;
+    }
+    const editor = readComposerEditor(textarea);
+    if (editor) {
+      const token = editor.coordsAtPos(Math.max(0, Math.min(start, textarea.value.length)));
+      const rect = editor.scrollElement.getBoundingClientRect();
+      if (!token || token.bottom <= rect.top || token.top >= rect.bottom) {
+        onOutOfView();
+        overlay.retire();
+        return;
+      }
+      Object.assign(anchor.style, {
+        left: token.left + "px",
+        top: token.top + "px",
+        width: "0px",
+        height: token.bottom - token.top + "px",
+      });
+      overlay.bindTrigger(editor.focusElement);
+      overlay.setReturnTarget(editor.focusElement);
+      overlay.request(true);
       return;
     }
     if (stylesDirty) {

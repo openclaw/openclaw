@@ -4,8 +4,10 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, nextEventLoopTurn, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isPidAlive } from "../shared/pid-alive.js";
+import { readCommandProcessFailure } from "./exec-result.js";
 import * as execSpawn from "./exec-spawn.js";
 import { runCommandWithTimeout } from "./exec.js";
 
@@ -15,6 +17,88 @@ const unbufferedExecSpawn: {
 } = execSpawn;
 
 describe("child input admission", () => {
+  it.for(["retired", "cancelled", "exited"] as const)(
+    "withholds input and joins preparation when its child is %s",
+    async (kind, { signal }) => {
+      const effect = path.join(tempDirs.make("openclaw-prepared-input-"), "effect");
+      const entered = createDeferred();
+      const resume = createDeferred();
+      const abort = new AbortController();
+      let pid: number | undefined;
+      let active = true;
+      let childCleanup: Promise<unknown> | undefined;
+      const retain = execSpawn.retainCommandProcessCleanup;
+      const observeCleanup = vi
+        .spyOn(execSpawn, "retainCommandProcessCleanup")
+        .mockImplementation((cleanup) => {
+          childCleanup = cleanup;
+          retain(cleanup);
+        });
+      const releaseSource = vi.fn();
+      const work = runCommandWithTimeout(
+        [
+          process.execPath,
+          "-e",
+          kind === "exited"
+            ? "process.exit(0)"
+            : `process.stdin.on('data',()=>{require('node:fs').writeFileSync(${JSON.stringify(effect)},'effect');process.exit(0)});setInterval(()=>{},1000)`,
+        ],
+        {
+          input: "withheld",
+          signal: abort.signal,
+          killProcessTree: true,
+          timeoutMs: 5_000,
+          prepareInput: async (childPid) => {
+            pid = childPid;
+            entered.resolve();
+            await resume.promise;
+          },
+          beforeInput: () => {
+            if (!active) {
+              throw new Error("input owner retired");
+            }
+          },
+        },
+      )
+        .finally(releaseSource)
+        .catch((error: unknown) => error);
+      try {
+        await withinTest(
+          Promise.race([
+            entered.promise,
+            work.then(() => {
+              throw new Error("Child finished without preparing its input");
+            }),
+          ]),
+          signal,
+        );
+        active = false;
+        if (kind === "cancelled") {
+          abort.abort(new Error("input cancelled"));
+        }
+        if (kind !== "retired") {
+          expect(childCleanup).toBeDefined();
+          await withinTest(childCleanup!, signal);
+          expect(isPidAlive(pid!)).toBe(false);
+          await nextEventLoopTurn();
+          expect(releaseSource).not.toHaveBeenCalled();
+        }
+        resume.resolve();
+        const failure = await work;
+        expect(failure).toBeInstanceOf(Error);
+        expect(readCommandProcessFailure(failure)?.inputReleased).toBe(false);
+        expect(existsSync(effect)).toBe(false);
+        expect(isPidAlive(pid!)).toBe(false);
+        expect(releaseSource).toHaveBeenCalledOnce();
+      } finally {
+        resume.resolve();
+        abort.abort();
+        await work;
+        observeCleanup.mockRestore();
+      }
+    },
+  );
+
   it("publishes input only after binding the actual spawned PID and argv", async () => {
     let admittedPid: number | undefined;
     let admittedArgv: readonly string[] | undefined;

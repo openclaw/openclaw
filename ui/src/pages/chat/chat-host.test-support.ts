@@ -350,7 +350,10 @@ export function makeChatHost(
   const resolvedHost = Object.assign(
     Object.create(createChatErrorState()) as ChatErrorState,
     host,
-    { sessions: resolvedSessions },
+    {
+      sessions: resolvedSessions,
+      readChatAgentsList: () => resolvedHost.agentsList ?? null,
+    },
   ) as TestChatHost;
   for (const sessionKey of Object.keys(pendingSettingsPatches ?? {})) {
     void patchChatSessionSettings(resolvedHost, sessionKey, {}).catch(() => undefined);

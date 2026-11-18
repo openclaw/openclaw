@@ -253,7 +253,7 @@ it("rejects retained agent and independent-creation input after acceptance", asy
     });
     expect(await listSessionPendingInputs(scope)).toEqual({
       total: 1,
-      items: [{ ...pending.items[0], state: "cancelled" }],
+      items: [{ ...pending.items[0], state: "cancelled", endCause: "failed" }],
     });
     expect(sessionAccessor.loadTranscriptEventsSync(scope)).toEqual(transcript);
     expect(await listSessionPendingInputs(createdScope)).toEqual(createdPending);

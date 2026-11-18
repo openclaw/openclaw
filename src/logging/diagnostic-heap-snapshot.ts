@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { writeHeapSnapshot } from "node:v8";
-import { resolveStateDir } from "../config/state-dir.js";
 import { observeRuntimeProfileCapability } from "../infra/runtime-capabilities.js";
+import { reserveDiagnosticProfileFile } from "./diagnostic-profile-file.js";
 import {
   captureDiagnosticProfile,
   createInspectorProfileCapture,
@@ -38,19 +37,13 @@ export async function captureDiagnosticHeapSnapshot(options: {
             if (process.memoryUsage().heapUsed > MAX_HEAP_BYTES) {
               throw new ProfileFailure("heap-too-large");
             }
-            const directory = path.join(resolveStateDir(), "diagnostics");
-            await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-            if (options.signal.aborted || !options.hasAuthority()) {
-              throw new ProfileFailure("cancelled");
-            }
-            const filename = path.join(
-              directory,
-              `heap-${new Date().toISOString().replaceAll(":", "-")}.heapsnapshot`,
-            );
-            // Reserve privately before native capture opens the file, including with a permissive umask.
-            const file = await fs.open(filename, "wx", 0o600);
-            ownedPath = filename;
-            await file.close();
+            const file = await reserveDiagnosticProfileFile("heap", () => {
+              if (options.signal.aborted || !options.hasAuthority()) {
+                throw new ProfileFailure("cancelled");
+              }
+            });
+            ownedPath = file.path;
+            await file.handle.close();
           },
           start: async () => {
             const heapUsedBefore = process.memoryUsage().heapUsed;

@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
@@ -44,7 +45,7 @@ export async function assertNoCredentialFiles(root: string) {
   }
 }
 
-export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
+export async function fixture(fixtureOptions: { setupRecipe?: boolean; bulk?: boolean } = {}) {
   const root = await fs.realpath(tempDirs.make("repository-git-pack-"));
   const source = path.join(root, "source");
   const remote = path.join(root, "remote.git");
@@ -63,6 +64,9 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
   };
   const ancestor = await commit("ancestor", "old");
   const oldBlob = await requireGit(source, ["rev-parse", "HEAD:input.txt"]);
+  if (fixtureOptions.bulk) {
+    await fs.writeFile(path.join(source, "bulk.bin"), randomBytes(128 * 1024));
+  }
   if (fixtureOptions.setupRecipe !== false) {
     await fs.mkdir(path.join(source, ".openclaw"));
     await fs.writeFile(
@@ -205,10 +209,16 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
       },
     },
   };
-  const preparePack = (signal = new AbortController().signal, temporaryRoot = scratch) =>
+  const preparePack = (
+    signal = new AbortController().signal,
+    temporaryRoot = scratch,
+    retainedCommit?: string,
+    selectedCommit = baseCommit,
+  ) =>
     prepareRepositoryWorkerGitPack({
       url: URL,
-      baseCommit,
+      baseCommit: selectedCommit,
+      retainedCommit,
       token: TOKEN,
       temporaryRoot,
       signal,
@@ -216,11 +226,11 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
     });
   const operation = (
     ownerSignal?: AbortSignal,
-    prepareRepositoryGitPack: RepositoryPackProducer = ({ temporaryRoot, signal }) =>
-      preparePack(signal, temporaryRoot),
+    prepareRepositoryGitPack?: RepositoryPackProducer,
+    selectedCommit = baseCommit,
   ) =>
     createWorkerProjectPreparation({
-      project,
+      project: { ...project, baseCommit: selectedCommit },
       namespace: "gateway",
       preparation: {
         key: "b".repeat(64),
@@ -233,7 +243,10 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
       setupAuthorized: true,
       requireCurrent: () => {},
       revalidateRepositorySource: async () => {},
-      prepareRepositoryGitPack,
+      prepareRepositoryGitPack:
+        prepareRepositoryGitPack ??
+        (({ temporaryRoot, signal, retainedCommit }) =>
+          preparePack(signal, temporaryRoot, retainedCommit, selectedCommit)),
     });
   const scripts: string[] = [];
   const runScript = async (script: string) => {
@@ -244,11 +257,15 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
       env: { PATH: process.env.PATH, HOME: home, USERPROFILE: home },
     });
   };
+  const uploadBytes: number[] = [];
   const transport = {
     runScript,
     runScriptWithBudget: async (createScript: (timeoutMs: number) => string) =>
       runScript(createScript(30_000)),
-    upload: async (from: string, to: string) => fs.copyFile(from, to),
+    upload: async (from: string, to: string) => {
+      uploadBytes.push((await fs.stat(from)).size);
+      await fs.copyFile(from, to);
+    },
   };
   return {
     root,
@@ -268,6 +285,7 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
     fetches,
     failedDiagnostics,
     scripts,
+    uploadBytes,
     preparePack,
     operation,
     transport,
