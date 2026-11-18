@@ -5,7 +5,6 @@ import {
   createEffect,
   createMemo,
   createProjection,
-  createSignal,
   lazy,
   Loading,
   onCleanup,
@@ -13,6 +12,8 @@ import {
   Show,
 } from "solid-js";
 import { sidebarViewForPage } from "../app-navigation.ts";
+import { pluginTabKey, pluginTabRefFromSearch } from "../app-route-paths.ts";
+import { selectShellRouteState } from "../app/app-host-route-state.ts";
 import { projectApplicationConfig } from "../lib/reactive/application.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { i18nRevision } from "../lib/reactive/i18n.ts";
@@ -23,7 +24,7 @@ import { createTimeout } from "../lib/reactive/timers.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
-import { navigationSectionForPage } from "../plugins/navigation-sections.ts";
+import { navigationSectionForPage, pluginPageKeyForRoute } from "../plugins/navigation-sections.ts";
 import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
 import { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 import { createSessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
@@ -87,17 +88,49 @@ function AppSidebarContent(
   const owner = sidebarOwners.get(host) ?? new AppSidebarOwner(context, host);
   sidebarOwners.set(host, owner);
   owner.bindContext(context);
-  // The page decides the sidebar however it was reached: rail, link or history.
-  const [pluginRevision, setPluginRevision] = createSignal(0);
-  onSettled(() => context.plugins.subscribe(() => setPluginRevision((value) => value + 1)));
-  const pluginSection = createMemo(() => {
-    pluginRevision();
-    return Boolean(
-      navigationSectionForPage(
-        context.plugins.registrations("navigation"),
-        props.activePluginTabId,
-      ),
-    );
+  onSettled(() => {
+    let previousPage = "";
+    const synchronizePage = () => {
+      const state = selectShellRouteState(context.router.getState());
+      const route = state.routeId;
+      if (!route) {
+        return;
+      }
+      const pluginRef =
+        route === "plugin"
+          ? pluginTabRefFromSearch(
+              state.location?.search ?? "",
+              state.location?.pathname,
+              context.basePath,
+            )
+          : undefined;
+      const pluginKey = pluginPageKeyForRoute(
+        route,
+        pluginRef && pluginTabKey(pluginRef),
+        context.gateway.snapshot.hello?.controlUiTabs ?? [],
+      );
+      const section = Boolean(
+        navigationSectionForPage(context.plugins.registrations("navigation"), pluginKey),
+      );
+      const page = `${route}\n${pluginKey}\n${section}`;
+      if (page === previousPage) {
+        return;
+      }
+      previousPage = page;
+      const view = sidebarViewForPage(route, pluginKey, section);
+      if (view && owner.navigationView !== view) {
+        owner.navigationView = view;
+        owner.invalidate();
+      }
+    };
+    // Route events cannot coalesce: a quick Back may return before the shell paints.
+    synchronizePage();
+    const stops = [
+      context.router.subscribe(synchronizePage),
+      context.plugins.subscribe(synchronizePage),
+      context.gateway.subscribe(synchronizePage),
+    ];
+    return () => stops.forEach((stop) => stop());
   });
   owner.attention = createSessionAttention(
     context,
@@ -340,20 +373,8 @@ function AppSidebarContent(
       narration()?.();
       narrationState();
       scroll.capture();
-      return props.activeRouteId
-        ? `${props.activeRouteId}\n${props.activePluginTabId}\n${pluginSection()}`
-        : "";
     },
-    (page, previous) => {
-      // The page decides the sidebar however it was reached: rail, link or history.
-      const route = props.activeRouteId;
-      const view = route
-        ? sidebarViewForPage(route, props.activePluginTabId, pluginSection())
-        : undefined;
-      if (view && page !== previous && owner.navigationView !== view) {
-        owner.navigationView = view;
-        owner.invalidate();
-      }
+    () => {
       owner.sessionData.refreshPresentation();
       owner.commitRender();
       if (owner.isConnected) {

@@ -6,6 +6,7 @@ import { createComponent, createRoot, flush, onSettled } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
 import { GatewayBrowserClient, type GatewayBrowserClientOptions } from "../api/gateway.ts";
+import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import * as settingsSidebar from "../components/settings-sidebar-shell.tsx";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
@@ -1004,4 +1005,40 @@ it("does not discover a fallback Home while the route shows a session recovery n
   expect(readShellView(owner).sidebarProperties.sessionKey).toBe("");
   owner.routeState = { routeId: "chat", committedSessionKey: "agent:main:main" };
   expect(readShellView(owner).sidebarProperties.sessionKey).toBe("agent:main:main");
+});
+
+it("restores the Sessions sidebar after a rapid router round trip through People", async () => {
+  sidebarImport.resolve();
+  await import("../components/app-sidebar.tsx");
+  const { owner, runtime, query, settle } = await mountShell();
+  owner.connect();
+  await runtime.router.navigate("sessions", runtime.context);
+  await settle();
+  // SAFETY: mountShell has loaded the registered sidebar and settled its bridge.
+  const sidebar = owner.navigationSidebar as AppSidebarElement;
+  expect(sidebar.activeRouteId).toBe("sessions");
+  expect(sidebar.navigationView).toBe("sessions");
+
+  const returned = Promise.withResolvers<void>();
+  const routes: Array<{ route: string | undefined; bridge: string | undefined }> = [];
+  let returning = false;
+  const stop = runtime.router.subscribe((state) => {
+    const route = selectShellRouteState(state).routeId;
+    routes.push({ route, bridge: sidebar.activeRouteId });
+    if (route === "activity" && !returning) {
+      returning = true;
+      void runtime.router
+        .navigate("sessions", runtime.context)
+        .then(returned.resolve, returned.reject);
+    }
+  });
+  onTestFinished(() => {
+    stop();
+  });
+  query<HTMLButtonElement>('[data-navigation-view="online"]')!.click();
+  await returned.promise;
+  await settle();
+  expect(routes.some(({ route }) => route === "activity")).toBe(true);
+  expect(sidebar.activeRouteId).toBe("sessions");
+  expect(sidebar.navigationView, JSON.stringify(routes)).toBe("sessions");
 });

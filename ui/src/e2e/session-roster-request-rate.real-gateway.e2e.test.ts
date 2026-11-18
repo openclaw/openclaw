@@ -24,9 +24,7 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { rethrowWithControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -161,28 +159,6 @@ suite.define(() => {
         const lists: Array<{ id: string; params: SessionsListParams }> = [];
         const responses = new Set<string>();
         const labels = new Set<string>();
-        const classifyRoute = (url: string) => {
-          const pathname = new URL(url).pathname;
-          return pathname === "/sessions"
-            ? "sessions"
-            : pathname === "/activity"
-              ? "activity"
-              : "other";
-        };
-        const navigationStarted = Date.now();
-        const navigationHistory: Array<{ route: string; elapsedMs: number }> = [];
-        page.on("framenavigated", (frame) => {
-          if (frame !== page.mainFrame()) {
-            return;
-          }
-          navigationHistory.push({
-            route: classifyRoute(frame.url()),
-            elapsedMs: Date.now() - navigationStarted,
-          });
-          if (navigationHistory.length > 16) {
-            navigationHistory.shift();
-          }
-        });
         page.on("websocket", (socket) => {
           socket.on("framesent", ({ payload }) => {
             const frame = JSON.parse(payload.toString()) as RequestFrame;
@@ -296,7 +272,6 @@ suite.define(() => {
         await roster.getByText("Trailing rate update 2", { exact: true }).waitFor();
         await expect.poll(() => selected.textContent()).toContain("Trailing rate update 2");
         // Counts belong to Online; opening it must still fetch them on demand.
-        const beforeOnlineRoute = classifyRoute(page.url());
         await page.clock.resume();
         await sidebar.locator('[data-navigation-view="online"]').click();
         await expect
@@ -308,64 +283,8 @@ suite.define(() => {
           .toBe(true);
         await expect.poll(() => lists.every((request) => responses.has(request.id))).toBe(true);
         // People opens Activity; going back returns to this page beside the Sessions list.
-        const beforeBackRoute = classifyRoute(page.url());
         await page.goBack();
-        const afterBackRoute = classifyRoute(page.url());
-        try {
-          await selected.waitFor();
-        } catch (error) {
-          await rethrowWithControlUiE2eFailureFacts(page, error, "rosterBackRead", async () => {
-            const state = await page.evaluate((sessionKey) => {
-              const host = document.querySelector<AppSidebarElement>("openclaw-app-sidebar");
-              const rows = [...(host?.querySelectorAll<HTMLElement>("[data-session-key]") ?? [])];
-              const visible = (row: HTMLElement) =>
-                row.getClientRects().length > 0 && getComputedStyle(row).visibility !== "hidden";
-              const matches = rows.filter((row) => row.dataset.sessionKey === sessionKey);
-              const ownerLabel = host?.querySelector("#sidebar-session-owner-title")?.textContent;
-              return {
-                route: host?.activeRouteId === "sessions" ? "sessions" : "other",
-                view:
-                  ["sessions", "online", "pages", "automations", "customize", "plugin"].find(
-                    (view) => view === host?.navigationView,
-                  ) ?? "unknown",
-                navigationVisible: host?.navigationVisible ?? null,
-                navigationCollapsed: host?.navigationCollapsed ?? null,
-                mode:
-                  ["chip", "roster"].find((mode) => mode === host?.sidebarAgentsMode) ?? "unknown",
-                ownerPresentation:
-                  ["All owners", "Involving me", "My sessions"].find((label) =>
-                    ownerLabel?.includes(label),
-                  ) ?? "other",
-                historyLength: window.history.length,
-                rows: rows.length,
-                visibleRows: rows.filter(visible).length,
-                selectedRows: matches.length,
-                selectedVisible: matches.some(visible),
-              };
-            }, key);
-            const request = lists.findLast(
-              ({ params }) => params.source === "sidebar" && params.spawnedBy === undefined,
-            );
-            return {
-              rosterBack: {
-                ...state,
-                beforeOnlineRoute,
-                beforeBackRoute,
-                afterBackRoute,
-                navigationHistory,
-                pendingLists: lists.filter(({ id }) => !responses.has(id)).length,
-                lastRequestedOwner: !request
-                  ? "unobserved"
-                  : request.params.ownerId === undefined
-                    ? "all"
-                    : request.params.ownerId === viewerId
-                      ? "viewer"
-                      : "other",
-                lastRequestedInvolvingMe: request?.params.involvingMe ?? null,
-              },
-            };
-          });
-        }
+        await selected.waitFor();
         await expect.poll(() => lists.every((request) => responses.has(request.id))).toBe(true);
         await pauseVirtualClock(page);
         const beforeOther = lists.length;
