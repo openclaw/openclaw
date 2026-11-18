@@ -30,6 +30,35 @@ import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
 import { isDirectCronOwnerClient, isHumanCronMutation } from "./cron-human-owner.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./shared-types.js";
 
+/** Resolve the grant's dispatch ceiling without rechecking source or role liveness. */
+export function authorizeGatewayMethodScopes(
+  method: string,
+  scopes: readonly string[],
+  params: unknown,
+  methodRegistry: GatewayMethodRegistryView,
+) {
+  const registeredScope = methodRegistry.getScope(method);
+  let scopeAuth = isOperatorScope(registeredScope)
+    ? authorizeOperatorScopesForRequiredScope(
+        registeredScope,
+        scopes,
+        methodRegistry.getSessionAccess?.(method)?.allowOwnSessionScope
+          ? "operator.sessions.write"
+          : resolveSessionMethodScope(method, params),
+        method,
+      )
+    : authorizeOperatorScopesForMethod(method, scopes, params);
+  if (!scopeAuth.allowed && isInProcessSessionRun(method, params)) {
+    scopeAuth = authorizeOperatorScopesForRequiredScope(
+      scopeAuth.missingScope,
+      scopes,
+      "operator.sessions.write",
+      method,
+    );
+  }
+  return scopeAuth;
+}
+
 export function authorizeGatewayMethod(
   method: string,
   client: GatewayRequestOptions["client"],
@@ -100,24 +129,7 @@ export function authorizeGatewayMethod(
   if (registeredScope === APPROVALS_SCOPE && isHostPluginApprovalCall(method, client)) {
     return { error: null };
   }
-  let scopeAuth = isOperatorScope(registeredScope)
-    ? authorizeOperatorScopesForRequiredScope(
-        registeredScope,
-        scopes,
-        methodRegistry.getSessionAccess?.(method)?.allowOwnSessionScope
-          ? "operator.sessions.write"
-          : resolveSessionMethodScope(method, params),
-        method,
-      )
-    : authorizeOperatorScopesForMethod(method, scopes, params);
-  if (!scopeAuth.allowed && isInProcessSessionRun(method, params)) {
-    scopeAuth = authorizeOperatorScopesForRequiredScope(
-      scopeAuth.missingScope,
-      scopes,
-      "operator.sessions.write",
-      method,
-    );
-  }
+  const scopeAuth = authorizeGatewayMethodScopes(method, scopes, params, methodRegistry);
   if (!scopeAuth.allowed) {
     // Handlers recheck the stored human owner at the mutation commit boundary.
     if (isHumanCronMutation(method) && isDirectCronOwnerClient(client)) {
