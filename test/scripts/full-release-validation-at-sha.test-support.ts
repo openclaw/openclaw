@@ -100,6 +100,7 @@ export function createDispatchFixture(
     targetSource?: Record<string, string>;
     omitPurpose?: boolean;
     toolingLagFetchFailure?: boolean;
+    toolingLagComparisonFailure?: boolean;
     unreachableContributionRecord?: boolean;
     activeConcurrencyRun?: boolean;
     completedConcurrencyHistory?: number;
@@ -326,6 +327,10 @@ if (args[0] === "fetch" && args.includes("refs/heads/main:refs/remotes/origin/ma
     console.error("fixture origin/main fetch failed");
     process.exit(1);
   }
+}
+if (args[0] === "diff" && args.includes("--shortstat") && ${JSON.stringify(options.toolingLagComparisonFailure ?? false)}) {
+  console.error("fixture tooling comparison failed");
+  process.exit(1);
 }
 if (args.includes("https://github.com/openclaw/openclaw.git")) {
   if (${JSON.stringify(options.bareShaFetchFailure ?? false)}) {
