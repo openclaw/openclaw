@@ -9,6 +9,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { makeStallingStream } from "../infra/http-body.test-support.js";
 import * as jsonFiles from "../infra/json-files.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   createMarketplaceInstallInput,
   expectMarketplaceInstallSuccess,
@@ -576,6 +577,42 @@ describe("marketplace archive downloads", () => {
     }
     if (kind.endsWith("length")) {
       expect(getReader).not.toHaveBeenCalled();
+    }
+  });
+
+  it("reports HTTP failures without waiting for a capture tee", async () => {
+    const cancel = vi.fn();
+    const response = streamingResponse(cancel, 503);
+    const capture = response.clone();
+    const cancellationEntered = createDeferredCore();
+    const body = response.body!;
+    const cancelBody = body.cancel.bind(body);
+    vi.spyOn(body, "cancel").mockImplementation((reason) => {
+      cancellationEntered.resolve();
+      return cancelBody(reason);
+    });
+    const release = respond(
+      response,
+      archiveUrl,
+      vi.fn(async () => {
+        await capture.body?.cancel();
+      }),
+    );
+    const pending = install();
+    try {
+      await cancellationEntered.promise;
+      const result = await Promise.race([
+        pending,
+        new Promise<undefined>((resolve) => {
+          setImmediate(() => resolve(undefined));
+        }),
+      ]);
+      expectDownloadFailure(result, "HTTP 503");
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(cancel).toHaveBeenCalledTimes(1);
+    } finally {
+      await capture.body?.cancel();
+      await pending;
     }
   });
 
