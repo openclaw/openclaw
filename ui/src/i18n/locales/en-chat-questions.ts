@@ -7,7 +7,6 @@ const enChatQuestions = {
       showSecret: "Show secret",
       hideSecret: "Hide secret",
       resourcePreview: "Preview resource",
-      addResources: "Add resources",
       resourceUploadTooLarge: "Selected resources exceed the upload limits.",
       other: "Type your own answer here",
       multilineHint: "Enter adds a line · {shortcut} to continue",

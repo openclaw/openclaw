@@ -30,7 +30,6 @@ const enChatMedia = {
       seek: "Seek media",
       mute: "Mute",
       unmute: "Unmute",
-      volume: "Volume",
       download: "Download {filename}",
       preparing: "Preparing playback…",
       openVideo: "Expand {filename} in the media overlay",

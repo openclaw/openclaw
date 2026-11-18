@@ -22,8 +22,6 @@ const enChatCommandResults = {
       compaction: {
         failed: "Couldn’t compact this session. Try again.",
         failedWithReason: "Couldn’t compact this session. Try again.\n\n{reason}",
-        tokenSummary: " ({before} → {after} tokens)",
-        succeeded: "Context compacted",
         skipped: "Compaction skipped.",
         skippedWithReason: "Compaction skipped.\n\n{reason}",
       },
