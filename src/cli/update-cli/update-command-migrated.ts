@@ -166,7 +166,10 @@ export async function inspectActivatedUpdateState(
       ? undefined
       : "state-migrated-no-rollback";
   } catch (error) {
-    if (params.candidateOpenedState === false && result.root) {
+    // An owner that already recorded data at risk keeps its route.
+    const recordedRisk =
+      result.recovery?.serviceRestartSafe === false && result.recovery.dataAtRisk;
+    if (params.candidateOpenedState === false && result.root && !recordedRisk) {
       // No candidate has opened live state, so an unreadable store is no evidence of change.
       result.steps.push(
         inconclusiveInspectionStep(result.root, error, gitRelease, result.status === "ok"),
