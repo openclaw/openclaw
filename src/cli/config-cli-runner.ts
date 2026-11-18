@@ -119,12 +119,13 @@ export async function runConfigOperations(params: {
   databaseOnly?: true;
   /**
    * Replaces the local file write when another process owns the state root.
-   * Receives the authored config before and after the change; may return a reload hint.
+   * Receives the authored config before and after the change; may return a reload hint and
+   * the owner's billing-route warnings.
    */
   commit?: (change: {
     previous: OpenClawConfig;
     next: OpenClawConfig;
-  }) => Promise<string | undefined>;
+  }) => Promise<{ hint?: string; warnings: readonly string[] }>;
 }) {
   const { runtime, operations, options } = params;
   if (
@@ -527,7 +528,11 @@ export async function runConfigOperations(params: {
       unsetPaths: resolveManagedUnsetPathsForWrite(unsetPaths),
       env: resolutionEnv,
     });
-    committedHint = await params.commit(change);
+    const committed = await params.commit(change);
+    committedHint = committed.hint;
+    for (const warning of committed.warnings) {
+      runtime.error(warning);
+    }
     if (change.clearedSessionStoreOwner) {
       // The local writer reports this itself; the Gateway's writer reports only to its own log.
       runtime.error(

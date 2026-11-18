@@ -241,6 +241,9 @@ Inside saved pages:
 - `[[path/to/page|Label]]`, `[[Title]]`, `[[Alias]]`, and relative Markdown `.md`
   links resolve against the authorized catalog. Wikilink paths may omit `.md`.
   Links to a merged page resolve to its survivor.
+- Native Markdown links strip literal fragments before decoding filenames:
+  `plan%23v2.md` and `plan%23v2.md#Details` both target `plan#v2.md`.
+  Ordinary `plan.md#Details` and wiki-link fragments keep their existing meaning.
 - Ambiguous and missing targets stay unlinked and are diagnosed; they do not
   invalidate the page.
 - Code, image destinations, raw HTML, and generated

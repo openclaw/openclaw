@@ -137,6 +137,7 @@ type CodexThreadConfigurationParams = JsonObject & {
   sandbox?: CodexSandboxMode | null;
   cyberAccessProgram?: "standard" | "daybreakBlue" | "daybreakRed";
   serviceTier?: CodexServiceTier | null;
+  baseInstructions?: string;
   developerInstructions?: string;
 };
 
@@ -183,7 +184,6 @@ export type CodexThreadForkParams = CodexThreadConfigurationParams & {
   cwd?: string | null;
   permissions?: string | null;
   config?: JsonObject | null;
-  baseInstructions?: string;
   ephemeral?: boolean;
   threadSource?: string | null;
   excludeTurns?: boolean;

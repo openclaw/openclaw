@@ -1,3 +1,4 @@
+import { parseCompactionDetails } from "../../../../packages/agent-core/src/harness/compaction/compaction-details.js";
 import {
   captureSessionActorStorageOwner,
   readCapturedSessionActorEntry,
@@ -38,6 +39,7 @@ import {
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
 import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
+import type { EmbeddedAgentCompactResult } from "../types.js";
 import { mergeUsageIntoAccumulator, type UsageAccumulator } from "../usage-accumulator.js";
 import { attachCompactionAccountingRecorder } from "./compaction-accounting-bridge.js";
 import type { resolveCompactionLiveModelSelection } from "./compaction-live-model-selection.js";
@@ -81,7 +83,6 @@ export type EmbeddedRunCompactionRecoveryInput = {
     target?: ContextEngineSessionTarget;
   };
   prepareCompactedTranscriptRetry: (assertActive: () => void) => Promise<void>;
-  armPostCompactionGuard: () => void;
   usageAccumulator: UsageAccumulator;
 } & ReturnType<typeof createEmbeddedRunCompactionRuntime>;
 
@@ -100,14 +101,13 @@ export async function compactEmbeddedRunForRecovery(
   recovery: RecoveryCompactionRequest,
 ) {
   const owner = input.prepareRecoveryOwner();
-  const emitProgress = (phase: "start" | "end", completed?: boolean) => {
+  const emitProgress = (
+    phase: "start" | "end",
+    end?: { completed: boolean; qualityDegraded?: true; summaryRefused?: true },
+  ) => {
     const event = {
       stream: "compaction" as const,
-      data: {
-        phase,
-        itemId: recovery.diagId,
-        ...(completed === undefined ? {} : { completed }),
-      },
+      data: { phase, itemId: recovery.diagId, ...end },
       ...(input.runParams.sessionKey ? { sessionKey: input.runParams.sessionKey } : {}),
     };
     emitAgentEvent({ runId: input.runParams.runId, ...event });
@@ -117,7 +117,7 @@ export async function compactEmbeddedRunForRecovery(
       callback: () => input.runParams.onAgentEvent?.(event),
     });
   };
-  let completed = false;
+  let end: Parameters<typeof emitProgress>[1] = { completed: false };
   emitProgress("start");
   try {
     if (recovery.trigger === "overflow") {
@@ -143,10 +143,18 @@ export async function compactEmbeddedRunForRecovery(
       log.info(`[memory-flush] overflow checkpoint ${outcome}`);
     }
     const result = await executeRecoveryCompaction(input, recovery, owner);
-    completed = result.result.ok && result.result.compacted;
+    if (result.result.ok && result.result.compacted) {
+      // Channel notices read the degraded/refused facts from this end event alone.
+      const details = parseCompactionDetails(result.result.result?.details);
+      end = {
+        completed: true,
+        ...(details?.qualityDegraded ? { qualityDegraded: true } : {}),
+        ...(details?.summaryRefused ? { summaryRefused: true } : {}),
+      };
+    }
     return result;
   } finally {
-    emitProgress("end", completed);
+    emitProgress("end", end);
   }
 }
 
@@ -220,6 +228,7 @@ async function executeRecoveryCompaction(
     maxAttempts: recovery.maxAttempts,
   };
   let observedCompactions = 0;
+  let failure: EmbeddedAgentCompactResult["failure"];
   const runtimeSettings = input.buildRuntimeSettings({
     tokenBudget: recovery.tokenBudget,
     ...(recovery.trigger === "overflow" ? { degradedReason: "context_overflow" } : {}),
@@ -245,7 +254,7 @@ async function executeRecoveryCompaction(
     runtimeContext,
     runtimeSettings,
   };
-  let result: CompactionResult;
+  let result: CompactionResult & Pick<EmbeddedAgentCompactResult, "failure">;
   try {
     result = await compactContextEngineWithSafetyTimeout(
       {
@@ -274,6 +283,9 @@ async function executeRecoveryCompaction(
                   observedCompactions += 1;
                   input.state.observeContextAccounting({ kind: "compaction", tokensAfter });
                 },
+                recordFailure: (recorded) => {
+                  failure = recorded;
+                },
               });
             }
             return input.contextEngine.compact(backendParams);
@@ -296,6 +308,8 @@ async function executeRecoveryCompaction(
     // Post-commit failure is not an unperformed compaction. Retry the observed
     // current context, but never adopt a failed backend's successor proposal.
     result = { ok: result.ok, compacted: true, reason: result.reason };
+  } else if (!result.compacted && failure) {
+    result = { ...result, failure };
   }
   const successor = resolveCompactionSuccessorTranscript(result);
   const target = result.result?.sessionTarget;
@@ -348,6 +362,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
   hookRunner: PreparedEmbeddedRunInput["hookRunner"];
   hookContext: PreparedEmbeddedRunInput["hookContext"];
   sessionPromptState: SessionPromptState;
+  isTurnTainted?: () => boolean;
 }) {
   const { runParams: params, contextEngine, hookRunner, hookContext, sessionPromptState } = input;
   const abortSignal = params.abortSignal;
@@ -540,6 +555,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
   const resolveActiveHookContext = () => ({
     ...hookContext,
     sessionId: sessionPromptState.sessionId,
+    ...(input.isTurnTainted ? { turnTainted: input.isTurnTainted() } : {}),
   });
   const adoptCompactionTranscript = async (
     compactResult: CompactionResult,

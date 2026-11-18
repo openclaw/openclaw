@@ -9,8 +9,8 @@ const enChatOutputs = {
     loading: "Loading outputs…",
     updating: "Updating outputs…",
     loadingDashboard: "Loading dashboard…",
-    emptyTitle: "No outputs yet",
-    emptyDescription: "Files and dashboards from the session appear here.",
+    emptyTitle: "No outputs yet.",
+    emptyDescription: "Files and dashboards from this session appear here.",
   },
 } satisfies TranslationMap;
 

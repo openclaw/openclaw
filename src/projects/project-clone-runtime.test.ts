@@ -1,20 +1,25 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
   recordCommandProcessFailure,
 } from "../process/exec-result.js";
 import * as processExec from "../process/exec.js";
+import { resolveSessionRunError } from "../sessions/session-run-error-format.js";
 import {
   cloneProjectCheckout,
   ProjectCloneError,
   readProjectCheckoutRemoteHead,
   refreshProjectCheckout,
+  unshallowProjectCheckout,
 } from "./project-clone-runtime.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -65,6 +70,124 @@ function uncertainFailure() {
     cleanup: "uncertain",
   });
 }
+
+it("links an unmatched real Git failure to its retained process diagnostics", async () => {
+  const root = dirs.make("openclaw-clone-diagnostic-");
+  const file = path.join(root, "gateway.log");
+  setLoggerOverride({ level: "warn", consoleLevel: "silent", file });
+  try {
+    // Invalid inherited Git configuration fails before any network access.
+    const error = await capture(
+      cloneProjectCheckout(
+        { url: projectUrl, target: path.join(root, "checkout") },
+        { env: { GIT_CONFIG_COUNT: "invalid" } },
+      ),
+    );
+    expect(error).toBeInstanceOf(ProjectCloneError);
+    if (!(error instanceof ProjectCloneError)) {
+      throw error;
+    }
+    expect(error).toMatchObject({
+      failure: "clone_failed",
+      message: expect.stringMatching(/Diagnostic ID: [a-f0-9-]{36}/u),
+    });
+    await flushLogger();
+    const records = await fs.readFile(file, "utf8");
+    expect(records).toContain("GIT_CONFIG_COUNT");
+    expect(records).toContain("exitCode");
+    expect(error.message).not.toContain("GIT_CONFIG_COUNT");
+    const diagnosticId = /Diagnostic ID: ([a-f0-9-]{36})/u.exec(error.message)?.[1];
+    expect(diagnosticId).toBeDefined();
+    expect(records).toContain(diagnosticId);
+    expect(resolveSessionRunError({ error: String(error) }, "failed")).toContain(
+      `Diagnostic ID: ${diagnosticId}`,
+    );
+    await expectMissing(path.join(root, "checkout"));
+  } finally {
+    await flushLogger();
+    setLoggerOverride(null);
+    resetLogger();
+  }
+});
+
+it("explains repository access denial without exposing Git transport output", async () => {
+  const target = targetPath();
+  mockGit().mockResolvedValue({
+    ...failedClone,
+    stderr:
+      "remote: Write access to repository not granted.\nfatal: unable to access private repository: The requested URL returned error: 403",
+  });
+  await expect(clone(target)).rejects.toMatchObject({
+    failure: "auth_required",
+    message:
+      "GitHub denied access to this repository. Ask the Gateway operator to check the configured GitHub credential and repository access before retrying.",
+  });
+  await expectMissing(target);
+});
+
+it.each(["inventory", "publication"] as const)(
+  "retains native Git diagnostics when refresh fails during ref %s",
+  async (phase) => {
+    const root = dirs.make("openclaw-refresh-diagnostic-");
+    const source = path.join(root, "source");
+    const target = path.join(root, "checkout");
+    const git = promisify(execFile);
+    await git("git", ["init", "-b", "main", source]);
+    await git("git", [
+      "-C",
+      source,
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "initial",
+    ]);
+    await cloneProjectCheckout({ url: source, target });
+    const fault =
+      phase === "inventory"
+        ? path.join(target, ".git", "packed-refs")
+        : path.join(target, ".git", "refs", "remotes", "origin", "main.lock");
+    await fs.mkdir(path.dirname(fault), { recursive: true });
+    await fs.writeFile(fault, phase === "inventory" ? "invalid packed ref\n" : "");
+    const file = path.join(root, "gateway.log");
+    setLoggerOverride({ level: "warn", consoleLevel: "silent", file });
+    try {
+      const error = await capture(refreshProjectCheckout({ url: source, target }));
+      expect(error).toBeInstanceOf(ProjectCloneError);
+      if (!(error instanceof ProjectCloneError)) {
+        throw error;
+      }
+      expect(error.failure).toBe("clone_failed");
+      const summary = resolveSessionRunError({ error: String(error) }, "failed");
+      expect(summary).not.toContain(" ... ");
+      expect(summary).toContain(
+        phase === "inventory"
+          ? "Git could not read repository branches."
+          : "Git could not update repository branches.",
+      );
+      expect(summary).toContain("Send again");
+      const diagnosticId = /Diagnostic ID: ([a-f0-9-]{36})/u.exec(error.message)?.[1];
+      expect(diagnosticId).toBeDefined();
+      expect(summary).toContain(`Diagnostic ID: ${diagnosticId}`);
+      expect(error.message).not.toContain(target);
+      await flushLogger();
+      const records = await fs.readFile(file, "utf8");
+      expect(records).toContain(diagnosticId);
+      expect(records).toContain(phase === "inventory" ? "packed-refs" : "main.lock");
+      expect(records).toContain("exitCode");
+      // Correct only the fixture's filesystem fault; the same checkout can retry.
+      await fs.unlink(fault);
+      await expect(refreshProjectCheckout({ url: source, target })).resolves.toBeUndefined();
+    } finally {
+      await flushLogger();
+      setLoggerOverride(null);
+      resetLogger();
+    }
+  },
+);
 
 it("preserves an existing checkout when its target cannot be inspected", async () => {
   const target = dirs.make("openclaw-clone-target-");
@@ -169,6 +292,9 @@ it.each(["probe", "fetch", "repair", "uncertain", "auth"] as const)(
       if (phase === "uncertain") {
         throw failure;
       }
+      if (argv.includes("config")) {
+        return { ...successfulGit, code: 1 };
+      }
       if (phase === "auth") {
         return { ...failedClone, stderr: "Authentication failed" };
       }
@@ -221,11 +347,11 @@ it.each(["fetch", "repair", "inventory", "success", "auth failure", "cleanup fai
     const published: (string | Uint8Array | undefined)[] = [];
     mockGit().mockImplementation(async (argv, options): Promise<processExec.SpawnResult> => {
       const cwd = argv[argv.indexOf("-C") + 1];
+      if (argv.includes("--show-object-format")) {
+        return gitOutput(`sha1\n${path.join(target, ".git", "shallow")}`);
+      }
       if (argv.includes("--git-path")) {
         return gitOutput(objects);
-      }
-      if (argv.includes("--show-object-format")) {
-        return gitOutput("sha1");
       }
       if (argv.includes("config")) {
         return { ...successfulGit, code: 1 };
@@ -310,6 +436,82 @@ it.each(["uncertain", "present", "absent"] as const)(
       await expect(observed).rejects.toBeInstanceOf(CommandProcessCleanupError);
     } else {
       await expect(observed).resolves.toBe(outcome === "present" ? pinnedCommit : undefined);
+    }
+  },
+);
+
+it.each(["success", "revoked", "uncertain"] as const)(
+  "publishes repaired history only after admitted fetch completes (%s)",
+  async (outcome) => {
+    const target = dirs.make("openclaw-unshallow-");
+    const objects = path.join(target, ".git", "objects");
+    const shallow = path.join(target, ".git", "shallow");
+    await fs.mkdir(objects, { recursive: true });
+    await fs.writeFile(shallow, pinnedCommit);
+    vi.spyOn(os, "tmpdir").mockReturnValue(target);
+    let staging = "";
+    let fetched = false;
+    const revoked = new Error("synthetic lease revoked");
+    const token = "synthetic-admitted-token";
+    const admitted = vi.fn();
+    mockGit().mockImplementation(async (argv, options) => {
+      if (argv.includes("--show-object-format")) {
+        return gitOutput(`sha1\n${path.join(target, ".git", "shallow")}`);
+      }
+      if (argv.includes("--git-path")) {
+        return gitOutput(objects);
+      }
+      if (argv.includes("init")) {
+        staging = argv[argv.indexOf("-C") + 1]!;
+      }
+      if (argv.includes("fetch")) {
+        await expectFile(shallow, pinnedCommit);
+        await expectFile(`${shallow}.lock`, "");
+        expect(argv).not.toContain(token);
+        expect(typeof options === "number" ? undefined : options.env).toMatchObject({
+          GIT_CONFIG_KEY_0: "http.https://github.com/.extraHeader",
+          GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`,
+        });
+        await fs.unlink(path.join(staging, "shallow"));
+        fetched = true;
+        return gitOutput("", outcome === "uncertain");
+      }
+      return successfulGit;
+    });
+    const error = await capture(
+      unshallowProjectCheckout(
+        { target, url: projectUrl },
+        {
+          token,
+          async startRun<T>(run: () => T): Promise<Awaited<T>> {
+            admitted();
+            return await run();
+          },
+          assertCurrent() {
+            if (fetched && outcome === "revoked") {
+              throw revoked;
+            }
+          },
+        },
+      ),
+    );
+    expect(admitted).toHaveBeenCalled();
+    await expectMissing(`${shallow}.lock`);
+    if (outcome === "success") {
+      expect(error).toBeUndefined();
+      await expectMissing(shallow);
+    } else {
+      await expectFile(shallow, pinnedCommit);
+      if (outcome === "revoked") {
+        expect(error).toBe(revoked);
+      } else {
+        expect(hasCommandProcessCleanupError(error)).toBe(true);
+      }
+    }
+    if (outcome === "uncertain") {
+      expect((await fs.stat(staging)).isDirectory()).toBe(true);
+    } else {
+      await expectMissing(staging);
     }
   },
 );

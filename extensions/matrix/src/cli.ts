@@ -1,3 +1,4 @@
+import os from "node:os";
 import type { Command } from "commander";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { registerMatrixAccountCommands } from "./cli-account.js";
@@ -8,6 +9,7 @@ import * as cli from "./cli-shared.js";
 import { registerMatrixVerificationCommands } from "./cli-verification.js";
 import { listMatrixOwnDevices, pruneMatrixStaleGatewayDevices } from "./matrix/actions/devices.js";
 import { applyMatrixProfileUpdate } from "./profile-update.js";
+import { getMatrixRuntime } from "./runtime.js";
 
 function printMatrixOwnDevices(devices: Awaited<ReturnType<typeof listMatrixOwnDevices>>): void {
   if (devices.length === 0) {
@@ -128,5 +130,13 @@ export function registerMatrixCli(params: { program: Command }): void {
         errorPrefix: "Device cleanup failed",
       });
     });
-  registerMatrixDoctorCommands(root);
+  registerMatrixDoctorCommands({
+    program: root.command("doctor"),
+    get stateDir() {
+      return getMatrixRuntime().state.resolveStateDir(process.env, os.homedir);
+    },
+    context: {
+      openPluginStateKeyedStore: (options) => getMatrixRuntime().state.openKeyedStoreV2(options),
+    },
+  });
 }

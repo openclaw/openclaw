@@ -34,8 +34,9 @@ function mergeModelCatalogHooks(
 }
 
 export type PluginTypedHookPolicy = {
-  allowPromptInjection?: boolean;
+  allowPromptModification?: boolean;
   allowConversationAccess?: boolean;
+  allowModelRequest?: boolean;
   timeoutMs?: number;
   timeouts?: Record<string, number>;
 };

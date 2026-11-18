@@ -256,7 +256,7 @@ export function ChatCommentController(view: {
     } catch (error) {
       if (editorOwner === owner && canChange(signal)) {
         retireEditor();
-        showToast({ message: formatUiError(error) });
+        showToast({ severity: "error", message: formatUiError(error) });
       }
       return;
     }

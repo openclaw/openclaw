@@ -64,6 +64,7 @@ export const WORKBOARD_CARD_TOOL_NAMES = [
   "workboard_release",
   "workboard_comment",
   "workboard_proof",
+  "workboard_verify",
   "workboard_worker_log",
   "workboard_protocol_violation",
   "workboard_unblock",

@@ -27,6 +27,7 @@ import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.j
 type MutationCommand = SqliteWorkerCommand<
   Pick<
     PublicationWorkerOperations,
+    | "githubPublications.personalRestart"
     | "githubPublications.personal"
     | "githubPublications.repository"
     | "githubPublications.shared"
@@ -86,7 +87,9 @@ export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerC
       const expectedKind =
         commandSnapshot.type === "githubPublications.insert"
           ? commandSnapshot.input.kind
-          : commandSnapshot.type.slice("githubPublications.".length);
+          : commandSnapshot.type === "githubPublications.personalRestart"
+            ? "personal"
+            : commandSnapshot.type.slice("githubPublications.".length);
       const readReceipt = (facts: unknown): PublicationMutationReceipt => {
         if (
           !isRecord(facts) ||

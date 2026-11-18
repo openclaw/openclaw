@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import OpenClawChatUI
 import OpenClawProtocol
+import UIKit
 
 @MainActor
 @Observable
@@ -12,6 +13,7 @@ final class IOSChatViewModelOwner {
     private(set) var presentationAgentID = "main"
     private(set) var presentationAgentName = "Main"
     private(set) var presentationAgentBadge = "M"
+    private(set) var presentationAgentAvatar: UIImage?
     private(set) var hasVerifiedOfflineRoutingIdentity = false
     private var transportAgentID = ""
     private var routingContract = ""
@@ -68,6 +70,8 @@ final class IOSChatViewModelOwner {
         }
         // Resolving the default agent replaces its transport without changing the draft's owner.
         let draft = isDefaultAgentHydration ? self.viewModel?.input : nil
+        let previousPresentation = self.ownerID == ownerID && controlUIInputs != nil &&
+            self.controlUIInputs == controlUIInputs ? self.viewModel : nil
         // Initial route hydration changes transport, but the same draft keeps its native editor.
         if draft == nil { self.presentationID = UUID() }
         self.viewModel?.detachTransport()
@@ -106,6 +110,7 @@ final class IOSChatViewModelOwner {
                 }
             },
             diagnosticsLog: { message in GatewayDiagnostics.log(message) })
+        if let previousPresentation { viewModel.inheritTranscriptPresentation(from: previousPresentation) }
         self.viewModel = viewModel
         if let draft { viewModel.input = draft }
         self.hydratedComposerModel = draft != nil ? viewModel.composerModelResolver() : nil
@@ -155,6 +160,7 @@ final class IOSChatViewModelOwner {
         self.presentationAgentBadge = AgentIdentityPresentation.badge(
             avatarText: agent?.identity?["emoji"]?.value as? String,
             displayName: self.presentationAgentName)
+        self.presentationAgentAvatar = appModel.agentAvatarImage(for: self.presentationAgentID)
         self.hasVerifiedOfflineRoutingIdentity = appModel.hasVerifiedChatOfflineRoutingIdentity
     }
 

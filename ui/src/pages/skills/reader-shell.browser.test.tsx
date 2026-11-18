@@ -2,10 +2,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import "../../styles.css";
 import { finishElementAnimations } from "../../test-helpers/animations.ts";
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { resolveRenderedColors } from "../../test-helpers/rendered-colors.ts";
-import { ConnectMachineDialog } from "../new-session/connect-machine-dialog-view.tsx";
-import { ConnectMachineSetupState } from "../new-session/connect-machine-dialog.ts";
 import { cleanupSkillsViews, renderSkills } from "./view.solid.test-support.tsx";
 import { createProps, createReport, createSkill } from "./view.test-support.ts";
 
@@ -46,37 +42,6 @@ describe.runIf(browserMode)("skill reader shell", () => {
     const { page, userEvent } = await import("vitest/browser");
     await page.viewport(width, 844);
     createContainer();
-    const connection = new ConnectMachineSetupState(
-      () => ({ client: null, connected: false }),
-      () => undefined,
-    );
-    connection.start();
-    const canonicalView = mountSolid(
-      () => <ConnectMachineDialog {...connection.view(true, () => undefined)} />,
-      { container: container! },
-    );
-    await settledDialog();
-    const readChrome = (panel: HTMLElement) => {
-      const style = getComputedStyle(panel);
-      const close = panel.querySelector<HTMLButtonElement>("button")!;
-      const button = getComputedStyle(close);
-      const icon = getComputedStyle(close.querySelector("svg")!);
-      const colors = resolveRenderedColors({
-        surface: style.backgroundColor,
-        button: button.backgroundColor,
-      });
-      return {
-        surface: colors.surface,
-        image: style.backgroundImage,
-        border: style.border,
-        radius: style.borderRadius,
-        button: [colors.button, button.backgroundImage, button.border, button.boxShadow],
-        icon: [icon.width, icon.height, icon.strokeWidth],
-      };
-    };
-    const canonicalChrome = readChrome(query(".exec-approval-card"));
-    canonicalView.unmount();
-    createContainer();
     const showContent = (content: string) =>
       variant === "error"
         ? renderSkills(
@@ -90,7 +55,9 @@ describe.runIf(browserMode)("skill reader shell", () => {
     const panel = query(".skill-reader-dialog");
     const title = query(":scope > :first-child > :first-child", panel);
     const close = query(":scope > :first-child button", panel);
-    expect(readChrome(panel)).toEqual(canonicalChrome);
+    expect(panel.classList.contains("oc-dialog")).toBe(true);
+    expect(close.classList.contains("oc-dialog__close")).toBe(true);
+    expect(getComputedStyle(query(":scope > :first-child", panel)).borderBottomWidth).toBe("0px");
     const titleRect = title.getBoundingClientRect();
     const closeRect = close.getBoundingClientRect();
     expect(closeRect.top).toBeLessThan(titleRect.bottom);

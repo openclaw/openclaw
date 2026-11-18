@@ -85,9 +85,7 @@ it("refreshes catalog warnings when the shell invalidates after the page receive
   }
   invalidateChatMetadataStore(client);
   await waitForCronPage(() =>
-    expect(page.textContent).toContain(
-      "Some models could not be refreshed. Open Models to try again.",
-    ),
+    expect(page.textContent).toContain("Couldn’t refresh some models. Open Models to try again."),
   );
 });
 

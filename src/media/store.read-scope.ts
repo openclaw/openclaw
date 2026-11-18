@@ -9,6 +9,7 @@ import {
 } from "@openclaw/fs-safe/advanced";
 import { syncDirectoryBestEffort } from "../infra/directory-durability.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
+import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import {
   type captureChannelReadScope,
@@ -21,7 +22,7 @@ type ReadScope = NonNullable<ReturnType<typeof captureChannelReadScope>>;
 
 const exitCleanups = resolveGlobalSingleton(Symbol.for("openclaw.readMediaExitCleanup"), () => {
   const callbacks = new Set<() => void>();
-  process.once("exit", () => {
+  registerProcessExitCleanup(() => {
     for (const cleanup of callbacks) {
       try {
         cleanup();

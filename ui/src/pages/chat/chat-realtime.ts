@@ -156,7 +156,7 @@ export function attachChatRealtimeActions(
       return undefined;
     }
     if (!state.client || !state.connected) {
-      state.lastError = "Gateway not connected";
+      state.lastError = t("chat.sendErrors.disconnected");
       state.chatError = state.lastError;
       return undefined;
     }

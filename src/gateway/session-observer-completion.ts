@@ -1,3 +1,4 @@
+import { isFailoverError, readDirectErrorCode } from "../agents/failover/error.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-selection.js";
 import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -24,6 +25,13 @@ const observerLog = createSubsystemLogger("gateway/session-observer");
 const SESSION_OBSERVER_MODEL_TIMEOUT_MS = 30_000;
 const REJECTED_OUTPUT_MAX_CHARS = 160;
 
+/** One deadline covers the whole utility chain, so every configured candidate needs a call's worth. */
+function resolveObserverDeadlineMs(cfg: OpenClawConfig, agentId: string | undefined): number {
+  const setting = readUtilityModelSetting(cfg, agentId);
+  const candidates = setting.kind === "disabled" ? 1 : setting.fallbacks.length + 1;
+  return SESSION_OBSERVER_MODEL_TIMEOUT_MS * Math.max(1, candidates);
+}
+
 export function reportSessionObserverDegradation(
   state: SessionObserverState,
   error: unknown,
@@ -41,6 +49,29 @@ export function reportSessionObserverDegradation(
   const guidance = hasFallbacks
     ? "Configured utilityModel.fallbacks did not restore assessments; check their availability and timeouts or choose a capable utility model."
     : "To restore assessments, choose a capable utility model or add capable utilityModel.fallbacks.";
+  const failure = isFailoverError(error) ? error : undefined;
+  const attempts =
+    failure?.attempts ??
+    (selection && (failure?.reason ?? readDirectErrorCode(error)) === "model_not_found"
+      ? [{ provider: selection.provider, model: selection.modelId, reason: "model_not_found" }]
+      : []);
+  const missing = attempts
+    ?.filter((attempt) => attempt.reason === "model_not_found")
+    .map((attempt) => attempt.provider + "/" + attempt.model);
+  const details = [
+    ...(missing?.length
+      ? ["Unavailable model IDs: " + [...new Set(missing)].join(", ") + "."]
+      : []),
+    ...(attempts.length > 1
+      ? [
+          "Utility fallbacks exhausted (" +
+            attempts
+              .map((attempt) => attempt.provider + "/" + attempt.model + ": " + attempt.reason)
+              .join("; ") +
+            ").",
+        ]
+      : []),
+  ].join(" ");
   const notice = {
     runId: state.runId,
     sessionKey: state.sessionKey,
@@ -48,14 +79,16 @@ export function reportSessionObserverDegradation(
     stream: "notice",
     data: {
       phase: "warning",
-      message: `Session observer assessments stopped for this run after utility model${modelLabel} failed repeatedly. ${guidance}`,
+      message: `Session observer assessments stopped for this run after utility model${modelLabel} failed repeatedly.${details ? ` ${details}` : ""} ${guidance}`,
     },
   };
-  const owner = getAgentRunContextOwnership(state.runId)?.exclusiveClaimId;
-  if (owner) {
-    emitAgentEventForOwner(notice, owner);
-  } else {
-    emitAgentEvent(notice);
+  if (utility.kind === "explicit" || (utility.kind === "auto" && utility.fallbacks.length > 0)) {
+    const owner = getAgentRunContextOwnership(state.runId)?.exclusiveClaimId;
+    if (owner) {
+      emitAgentEventForOwner(notice, owner);
+    } else {
+      emitAgentEvent(notice);
+    }
   }
   observerLog.warn("session observer disabled after consecutive failures", {
     sessionKey: state.sessionKey,
@@ -100,27 +133,20 @@ export function createSessionObserverCompletion(params: {
     const cfg = params.getConfig();
     const controller = new AbortController();
     state.activeController = controller;
-    let timeout = setTimeout(() => controller.abort(), SESSION_OBSERVER_MODEL_TIMEOUT_MS);
+    const timeout = setTimeout(
+      () => controller.abort(),
+      resolveObserverDeadlineMs(params.getConfig(), state.agentId),
+    );
     const ownedWork = new AsyncWorkScope();
     try {
       const execute = async () => {
         const prepared = await ensurePrepared(state, cfg);
-        const utility = readUtilityModelSetting(cfg, state.agentId);
-        const fallbackCount = utility.kind === "disabled" ? 0 : utility.fallbacks.length;
-        if (fallbackCount > 0 && !controller.signal.aborted) {
-          // Preparation has its own cap. Each candidate can then use its full
-          // timeout on either JSON attempt, with room for fallback handoffs.
-          clearTimeout(timeout);
-          timeout = setTimeout(
-            () => controller.abort(),
-            2 * (fallbackCount + 1) * SESSION_OBSERVER_MODEL_TIMEOUT_MS + 10_000,
-          );
-        }
         let lastRejectedText = "";
         for (let attempt = 0; attempt < 2; attempt += 1) {
           if (!params.isCurrent(state) || controller.signal.aborted) {
             throw new Error("session observer state is no longer active");
           }
+          let parsed: ReturnType<typeof normalizeSessionObserverModelOutput> = null;
           const result = await params.completeModel({
             ...prepared,
             purpose: "session-observer",
@@ -131,8 +157,18 @@ export function createSessionObserverCompletion(params: {
             abortSignal: controller.signal,
             answerTokenBudget: 300,
             streamParams: { temperature: 0.2 },
+            classifyResult: ({ result: candidateResult }) => {
+              parsed = normalizeSessionObserverModelOutput(candidateResult.text);
+              return parsed
+                ? undefined
+                : {
+                    message: "session observer returned invalid JSON",
+                    code: "invalid_response",
+                    preserveResultOnExhaustion: true,
+                  };
+            },
           });
-          const parsed = normalizeSessionObserverModelOutput(result.text);
+          parsed ??= normalizeSessionObserverModelOutput(result.text);
           if (parsed) {
             return parsed;
           }

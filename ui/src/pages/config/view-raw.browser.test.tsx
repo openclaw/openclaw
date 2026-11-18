@@ -137,7 +137,7 @@ describe("config raw editing and redaction", () => {
     );
     expect(banner.querySelector("code")?.textContent).toBe("gateway.opaque");
     expect(findButton(populated.container, "Form").getAttribute("title")).toBe(
-      "Form view can't safely edit some fields",
+      "Some fields need Raw mode",
     );
     findButton(banner, "Open Raw editor").click();
     expect(onFormModeChange).toHaveBeenCalledWith("raw");
@@ -215,7 +215,7 @@ describe("config raw editing and redaction", () => {
         const button = findButton(container, "Saving…");
         expect(button.disabled).toBe(true);
         expect(button.getAttribute("aria-busy")).toBe("true");
-        expect(button.querySelectorAll(".config-action-spinner")).toHaveLength(1);
+        expect(button.querySelectorAll(".btn__spinner")).toHaveLength(1);
         expect(element(container, ".config-raw-field textarea", HTMLTextAreaElement).disabled).toBe(
           true,
         );

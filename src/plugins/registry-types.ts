@@ -47,6 +47,7 @@ import type {
 import type { PluginProviderRegistration } from "./provider-plugin.types.js";
 import type {
   ContextEngineRegistration,
+  LearnContributionRegistration,
   MemoryCorpusSupplementRegistration,
   MemoryPluginCapabilityRegistration,
   MemoryPromptPreparationRegistration,
@@ -156,7 +157,8 @@ export type PluginServiceRegistration = PluginRegistrationOwner & {
   readonly id: string;
   service:
     | import("./types.js").OpenClawPluginService
-    | import("./types.js").OpenClawPluginServiceV2;
+    | import("./types.js").OpenClawPluginServiceV2
+    | import("./types.js").OpenClawPluginServiceV3;
   origin: PluginOrigin;
   trustedOfficialInstall?: boolean;
 };
@@ -354,6 +356,7 @@ export type PluginRegistry = {
   memoryCorpusSupplements: MemoryCorpusSupplementRegistration[];
   memoryPromptPreparations: MemoryPromptPreparationRegistration[];
   memoryPromptSupplements: MemoryPromptSupplementRegistration[];
+  learnContributions: LearnContributionRegistration[];
   sessionDiscussionProviders: Map<
     string,
     {

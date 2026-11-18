@@ -61,7 +61,7 @@ it("reuses timing history for reordered selections", () => {
   ).not.toBe(sample.config);
 });
 
-it("persists include-pattern timing metadata", () => {
+it("stores selected-shard durations under the shard timing key", () => {
   const f = fixture("selected");
   const sample = f.sample(1234, { includePatterns: ["a.test.ts"], watchMode: false });
   const selectedConfig = `${config}#selected`;

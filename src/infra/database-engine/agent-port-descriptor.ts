@@ -9,6 +9,10 @@ import {
 } from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
 import { readTranscriptPayload } from "../../config/sessions/transcript-payload.js";
 import { deriveTranscriptPredicateFields } from "../../config/sessions/transcript-predicate-fields.js";
+import {
+  AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION,
+  withoutAgentPostgresActiveEventFacts,
+} from "../../state/openclaw-agent-active-event-facts-schema.js";
 import { withoutAgentPostgresColdArchiveChunks } from "../../state/openclaw-agent-cold-archive-chunks-schema.js";
 import { withoutAgentPostgresColdNavigation } from "../../state/openclaw-agent-cold-navigation-schema.js";
 import {
@@ -44,8 +48,16 @@ import {
   LEGACY_MEMORY_REVISION_SQLITE_TRIGGERS,
   withLegacyAgentPostgresMemoryRevisionTriggers,
 } from "../../state/openclaw-agent-memory-revision-migration.js";
+import {
+  AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION,
+  withoutAgentPostgresPendingInputEndings,
+} from "../../state/openclaw-agent-pending-input-endings-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import { agentTranscriptSearchSchema } from "../../state/openclaw-agent-search-schema.js";
+import {
+  AGENT_TOOL_USAGE_SCHEMA_VERSION,
+  withoutAgentPostgresToolUsage,
+} from "../../state/openclaw-agent-tool-usage-schema.js";
 import { withLegacyAgentPostgresTrajectoryStorage } from "../../state/openclaw-agent-trajectory-storage-migration.js";
 import { withLegacyAgentPostgresWriteLayout } from "../../state/openclaw-agent-write-layout-migration.js";
 import { ensureColumn } from "../../state/openclaw-state-db-schema-helpers.js";
@@ -190,11 +202,14 @@ export async function loadAgentPortDescriptor(
     // Schema 30 appends columns; 31–36 and 38 change only PostgreSQL search, triggers, or indexes.
     // Schema 37 adds a cold archive companion table; 39 relaxes the transcript payload CHECK.
     // Schema 40 adds creation receipts; predecessors retain their receipt-free catalog.
+    // Schema 41 adds active event facts; predecessors retain their unknown-row fallback.
+    // Schema 42 adds usage counters; predecessors retain their counter-free catalog.
+    // Schema 43 adds pending-input endings and reserved provenance columns.
     // Pin the remaining shared layout so future DDL gets its own descriptor.
     if (
       backup ||
-      OPENCLAW_AGENT_SCHEMA_VERSION !== 40 ||
-      ![27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39].includes(sourceVersion)
+      OPENCLAW_AGENT_SCHEMA_VERSION !== 43 ||
+      ![27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing agent PostgreSQL backup descriptor for version ${sourceVersion}`,
@@ -207,11 +222,22 @@ export async function loadAgentPortDescriptor(
   const historical = sourceVersion !== agentEngineSchema.version;
   const legacyColdArchive = sourceVersion < AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION;
   const legacyCreation = sourceVersion < AGENT_CREATION_OPERATIONS_SCHEMA_VERSION;
+  const legacyActiveFacts = sourceVersion < AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION;
+  const legacyToolUsage = sourceVersion < AGENT_TOOL_USAGE_SCHEMA_VERSION;
+  const legacyPendingEndings = sourceVersion < AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION;
   const legacyTrajectory = sourceVersion < 30;
   const catalog = agentPostgresRuntime.expectedCatalog.filter(
     (fact) =>
+      !(
+        legacyPendingEndings &&
+        fact.table === "session_pending_inputs" &&
+        isColumn(fact) &&
+        ["end_cause", "origin_source_json"].includes(fact.value.name)
+      ) &&
+      !(legacyToolUsage && fact.table === "agent_tool_usage") &&
       !(legacyColdArchive && fact.table === "session_transcript_cold_archive_chunks") &&
       !(legacyCreation && fact.table === "session_creation_operations") &&
+      !(legacyActiveFacts && fact.table === "session_transcript_active_event_facts") &&
       (!legacyTrajectory ||
         fact.table !== "trajectory_runtime_events" ||
         !isColumn(fact) ||
@@ -230,8 +256,10 @@ export async function loadAgentPortDescriptor(
       ...metadata.tables
         .filter(
           ({ name }) =>
+            !(legacyToolUsage && name === "agent_tool_usage") &&
             !(legacyColdArchive && name === "session_transcript_cold_archive_chunks") &&
-            !(legacyCreation && name === "session_creation_operations"),
+            !(legacyCreation && name === "session_creation_operations") &&
+            !(legacyActiveFacts && name === "session_transcript_active_event_facts"),
         )
         .map(({ name, identities }) => ({
           name,
@@ -476,7 +504,16 @@ export async function loadAgentPortDescriptor(
   const withoutLegacyColdArchive = (sql: string) =>
     legacyColdArchive ? withoutAgentPostgresColdArchiveChunks(sql) : sql;
   const withoutLaterSchema = (sql: string) => {
-    const creation = legacyCreation ? withoutAgentPostgresCreationOperations(sql) : sql;
+    const pendingInputs = legacyPendingEndings ? withoutAgentPostgresPendingInputEndings(sql) : sql;
+    const toolUsage = legacyToolUsage
+      ? withoutAgentPostgresToolUsage(pendingInputs)
+      : pendingInputs;
+    const activeFacts = legacyActiveFacts
+      ? withoutAgentPostgresActiveEventFacts(toolUsage)
+      : toolUsage;
+    const creation = legacyCreation
+      ? withoutAgentPostgresCreationOperations(activeFacts)
+      : activeFacts;
     return sourceVersion < AGENT_COLD_NAVIGATION_SCHEMA_VERSION
       ? withoutAgentPostgresColdNavigation(creation)
       : creation;

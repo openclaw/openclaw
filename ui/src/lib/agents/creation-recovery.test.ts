@@ -106,13 +106,13 @@ describe("agent creation outcome recovery", () => {
     const { create, request, harness, started } = await fixture();
     request.mockRejectedValueOnce(new Error("Response lost"));
     request.mockResolvedValueOnce(absentAgent);
-    await expect(create()).rejects.toThrow("hasn't confirmed");
+    await expect(create()).rejects.toThrow("hasn’t confirmed");
     const attemptedId = started.mock.calls[0]![0];
     harness.publish(false);
     request.mockResolvedValueOnce({ defaultId: "main", agents: [] });
     harness.publish(true);
     request.mockRejectedValueOnce(new Error("Read unavailable"));
-    await expect(create()).rejects.toThrow("hasn't confirmed");
+    await expect(create()).rejects.toThrow("hasn’t confirmed");
     request.mockResolvedValueOnce(savedAgent(attemptedId));
     await expect(create()).resolves.toHaveProperty("agentId", attemptedId);
     expect(started.mock.calls).toEqual([[attemptedId], [attemptedId], [attemptedId]]);
@@ -134,7 +134,7 @@ describe("agent creation outcome recovery", () => {
     const { create, request, harness, started } = await fixture();
     request.mockRejectedValueOnce(new Error("Response lost"));
     request.mockResolvedValueOnce(absentAgent);
-    await expect(create()).rejects.toThrow("hasn't confirmed");
+    await expect(create()).rejects.toThrow("hasn’t confirmed");
     const originalId = started.mock.calls[0]![0];
     const otherRequest = vi
       .fn<(method: string, params?: unknown) => Promise<unknown>>()
@@ -147,7 +147,7 @@ describe("agent creation outcome recovery", () => {
       gatewayUrl: "ws://other.test",
     } as unknown as GatewayBrowserClient;
     harness.publish(true, otherClient);
-    await expect(create()).rejects.toThrow("hasn't confirmed");
+    await expect(create()).rejects.toThrow("hasn’t confirmed");
     expect(started.mock.calls[1]![0]).not.toBe(originalId);
     expect(otherRequest).not.toHaveBeenCalledWith(
       "agents.create",

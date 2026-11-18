@@ -185,6 +185,7 @@ export async function loadSessionFiles(
   return {
     repository: await resolveRepositoryWorkspaceAccess(loaded, context, assertSourceCurrent),
     readPath: preparedPath,
+    readRoot: preparedPath.readRoot,
     root: loaded.root,
     fileRoot: loaded.fileRoot,
     diffCwd: loaded.diffCwd,

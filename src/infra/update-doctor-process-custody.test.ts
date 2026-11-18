@@ -302,7 +302,7 @@ it.each(["unavailable root", "missing bound database", "inaccessible command sto
 );
 
 describe.skipIf(process.platform === "win32")("Unix custody reconciliation", () => {
-  it.each(["reservation-before-ipc", "retired-before-ipc"])(
+  it.each(["reservation-before-ipc", "retired-before-ipc", "retired-before-slot-removal"])(
     "reconciles %s against durable custody, not the IPC namespace",
     async (cut) => {
       const ctx = await nativeFixture("run", ["original", "candidate"]);
@@ -322,7 +322,11 @@ describe.skipIf(process.platform === "win32")("Unix custody reconciliation", () 
             databaseIdentity: ctx.native.databaseIdentity,
           },
           slots:
-            cut === "retired-before-ipc" ? [{ id: 1, identity: { pid: 4242, startedAt: 1 } }] : [],
+            cut === "retired-before-ipc"
+              ? [{ id: 1, identity: { pid: 4242, startedAt: 1 } }]
+              : cut === "retired-before-slot-removal"
+                ? [{ id: 1 }]
+                : [],
         }),
       );
       const doctorNative = await nativeCustody.createManagedCommandProcessCustody({

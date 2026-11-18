@@ -4,6 +4,7 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -54,13 +55,11 @@ describe("outbound acknowledgement worker", () => {
 
   it("settles a generation-bound owner without host data SQL after cold reopen", async () => {
     const { stateDir, id, claimId } = await claimedDelivery({
-      sessionGeneration: {
+      sessionGeneration: chatRef({
         agentId: "main",
         storePath: path.join(fixtures.tmpDir(), "agent.sqlite"),
         sessionKey: "agent:main:test",
-        sessionId: "test",
-        lifecycleRevision: null,
-      },
+      }),
     });
     expect(claimId).toEqual(expect.any(String));
     await closeOpenClawStateDatabaseAsync();

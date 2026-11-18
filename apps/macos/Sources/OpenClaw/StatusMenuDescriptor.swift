@@ -15,6 +15,8 @@ struct StatusMenuDescriptor {
         var mainSessionKey = "main"
         var approvals: [ExecApprovalQueueItem] = []
         var gateways: [DashboardGatewayMenuItem] = []
+        var removal: MacOpenClawIDRemoval?
+        var openClawIDAvailable = false
         var now = Date()
     }
 
@@ -76,6 +78,7 @@ struct StatusMenuDescriptor {
 
     enum Action: String {
         case dashboard
+        case openClawIDSignIn
         case quickChat
         case talkMode
         case allSessions
@@ -138,6 +141,9 @@ struct StatusMenuDescriptor {
     private static func sessionSection(from snapshot: Snapshot) -> Section {
         guard snapshot.connection == .connected else {
             let approvals = snapshot.approvals.map { Entry(.approval($0)) }
+            if snapshot.connection == .unconfigured, snapshot.removal != nil {
+                return Section(id: "sessions", entries: approvals)
+            }
             return Section(id: "sessions", entries: approvals + [Entry(.placeholder(
                 self.connectionMessage(snapshot.connection)))])
         }
@@ -173,7 +179,11 @@ struct StatusMenuDescriptor {
     }
 
     private static func actionSection(from snapshot: Snapshot) -> Section {
-        var entries = [Entry(.action(.dashboard))]
+        var entries: [Entry] = []
+        if snapshot.connection == .unconfigured, snapshot.openClawIDAvailable {
+            entries.append(Entry(.action(.openClawIDSignIn)))
+        }
+        entries.append(Entry(.action(.dashboard)))
         if snapshot.quickChatEnabled {
             entries.append(Entry(.action(.quickChat)))
         }

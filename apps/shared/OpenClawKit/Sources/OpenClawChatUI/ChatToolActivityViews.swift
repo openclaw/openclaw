@@ -49,6 +49,17 @@ struct ChatToolActivityItem: Identifiable, Equatable {
         }
     }
 
+    var statusTitle: LocalizedStringResource {
+        // Missing execution status is not missing output. Keep unknown outcomes
+        // neutral while allowing the recorded result to be opened.
+        if self.displayState == .unavailable,
+           self.resultText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        {
+            return "Outcome unknown"
+        }
+        return self.displayState.title
+    }
+
     var isError: Bool {
         self.displayState == .failed
     }
@@ -218,7 +229,7 @@ private struct ChatToolActivityRowContent: View {
     }
 
     private var accessibilityValue: String {
-        let status = String(localized: self.item.displayState.title)
+        let status = String(localized: self.item.statusTitle)
         return self.detailLine.map { "\(status), \($0)" } ?? status
     }
 
@@ -306,6 +317,10 @@ private struct ChatToolActivityRowContent: View {
                             .textSelection(.enabled)
                     }
 
+                    Text(self.item.statusTitle)
+                        .font(OpenClawChatTypography.caption)
+                        .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : .secondary)
+
                     if self.isResultTruncated {
                         Button {
                             self.showsFullResult.toggle()
@@ -374,9 +389,9 @@ private struct ChatToolActivityRowContent: View {
 
             Spacer(minLength: 0)
 
-            // The local title replaces the Gateway warning, so unknown outcomes still need a visible cue.
+            // Preserve the native collapsed cues when a local title replaces the Gateway warning.
             if self.isDesktopLayout || self.item.displayState == .unavailable {
-                Text(self.item.displayState.title)
+                Text(self.item.statusTitle)
                     .font(OpenClawChatTypography.caption)
                     .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : .secondary)
                     .fixedSize()
@@ -549,11 +564,16 @@ struct ChatToolActivityList: View {
             }
             let quiet = self.items.indices.filter { !self.items[$0].isVisible }
             if !quiet.isEmpty {
-                DisclosureGroup("Tool details") {
+                DisclosureGroup {
                     ForEach(quiet, id: \.self) { index in
                         ChatToolActivityRow(item: self.items[index]).equatable()
                     }
+                } label: {
+                    Text("Tool details")
+                        .font(OpenClawChatTypography.caption)
+                        .foregroundStyle(.secondary)
                 }
+                .tint(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

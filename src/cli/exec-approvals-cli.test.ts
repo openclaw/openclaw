@@ -5,9 +5,13 @@ import { Readable } from "node:stream";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { callGatewayCli } from "../gateway/call.js";
+import { sendMinimalGatewayResponse } from "../gateway/minimal-gateway.test-helpers.js";
 import { SESSION_EXEC_OVERRIDES_NOTE } from "../infra/exec-approvals-effective.js";
 import * as execApprovals from "../infra/exec-approvals.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
+import { closeActiveGatewayServers, startGateway } from "./gateway-backed-exit.test-helpers.js";
 
 const {
   callGatewayFromCli,
@@ -23,6 +27,7 @@ const {
 } = await import("./exec-approvals-cli.test-support.js");
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(closeActiveGatewayServers);
 
 function createMcpToolGrant(tool = "publish_page") {
   return { server: "project-docs", tool, source: "allow-always" as const, addedAt: Date.now() };
@@ -31,11 +36,8 @@ function createMcpToolGrant(tool = "publish_page") {
 const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 
 function expectGatewayCall(index: number, method: string, params: unknown) {
-  expect(callGatewayFromCli.mock.calls[index]?.slice(0, 3)).toEqual([
-    method,
-    expect.objectContaining({ timeout: "60000" }),
-    params,
-  ]);
+  const expected = [method, expect.objectContaining({ timeout: "10000" }), params];
+  expect(callGatewayFromCli.mock.calls[index]?.slice(0, 3)).toEqual(expected);
 }
 
 function writtenJson(): Record<string, unknown> {
@@ -71,16 +73,13 @@ describe("exec approvals CLI", () => {
   beforeEach(resetExecApprovalsCliMocks);
 
   it.each([
-    ["gateway", ["--gateway"], "exec.approvals.get"],
-    ["node", ["--node", "macbook"], "exec.approvals.node.get"],
-  ] as const)("routes get command to %s mode", async (target, args, method) => {
+    ["gateway", ["--gateway"]],
+    ["node", ["--node", "macbook"]],
+  ] as const)("annotates %s policy reads once", async (_target, args) => {
     await runApprovalsCommand(["approvals", "get", ...args]);
-
-    expectGatewayCall(0, method, target === "node" ? { nodeId: "node-1" } : {});
-    expectGatewayCall(1, "config.get", {});
-    expect(runtimeLogs.filter((line) => line.includes(SESSION_EXEC_OVERRIDES_NOTE))).toHaveLength(
-      1,
-    );
+    expect(callGatewayFromCli.mock.calls[0]?.[1]).toMatchObject({ timeout: "60000" });
+    const notes = runtimeLogs.filter((line) => line.includes(SESSION_EXEC_OVERRIDES_NOTE));
+    expect(notes).toHaveLength(1);
     expect(runtimeErrors).toHaveLength(0);
   });
 
@@ -220,26 +219,32 @@ describe("exec approvals CLI", () => {
     expect(runtimeErrors).toHaveLength(0);
   });
 
-  it("writes host-native node approvals with the current hash", async () => {
-    const policyPath = policyFile(nativePolicy);
-    callGatewayFromCli.mockImplementation(
-      async (method: string, _opts: unknown, params?: unknown) => {
-        if (method === "exec.approvals.node.get") {
-          return nativeSnapshot;
+  it.each([2, 3])("keeps native result after RPC %i", async (interruptAt) => {
+    const work = new AsyncWorkScope();
+    const update = { nodeId: "node-1", native: nativePolicy, baseHash: nativeSnapshot.hash };
+    const saved = { ...nativeSnapshot, ...nativePolicy, hash: "sha256:saved" };
+    let requests = 0;
+    const gateway = await startGateway(
+      (ws, frame) => {
+        const writing = frame.method === "exec.approvals.node.set";
+        if (++requests === interruptAt) {
+          work.beginClose();
         }
-        return { method, params };
+        const payload = writing ? { ok: true } : requests === 1 ? nativeSnapshot : saved;
+        sendMinimalGatewayResponse(ws, frame.id, payload);
       },
+      () => ({}),
     );
-
-    await runApprovalsCommand([...nativeFileArgs(policyPath), "--json"]);
-
-    expect(callGatewayFromCli.mock.calls[1]?.[0]).toBe("exec.approvals.node.set");
-    expect(callGatewayFromCli.mock.calls[1]?.[2]).toEqual({
-      nodeId: "node-1",
-      native: nativePolicy,
-      baseHash: "sha256:current",
-    });
+    const connection = { url: gateway.url, token: "test", config: {}, deviceIdentity: null };
+    callGatewayFromCli.mockImplementation((method, _opts, params) =>
+      callGatewayCli({ ...connection, method, params }),
+    );
+    const args = [...nativeFileArgs(policyFile(update.native)), "--json"];
+    await work.run(() => runApprovalsCommand(args));
+    expectGatewayCall(0, "exec.approvals.node.get", { nodeId: "node-1" });
+    expectGatewayCall(1, "exec.approvals.node.set", update);
     expect(callGatewayFromCli.mock.calls[2]?.[0]).toBe("exec.approvals.node.get");
+    expect(writtenJson()).toEqual(saved);
     expect(runtimeErrors).toHaveLength(0);
   });
 

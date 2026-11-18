@@ -22,9 +22,10 @@ export class ChatPaneNativeSessionActions {
   ): HeaderMenuSessionAction[] {
     const enabled = context.nativeConversation?.supportsSessionActions;
     const pluginActions = enabled && row ? pluginSessionMenuActions(context.plugins, row) : [];
+    const stopAction = resolveCloudWorkerStopAction(row?.placement);
     const canStop = Boolean(
       enabled &&
-      resolveCloudWorkerStopAction(row?.placement) &&
+      stopAction &&
       isGatewayMethodAdvertised(context.gateway.snapshot, "sessions.reclaim"),
     );
     return this.memo.read(
@@ -32,6 +33,7 @@ export class ChatPaneNativeSessionActions {
         ...pluginActions.flatMap(({ id, label, disabled }) => [id, label, disabled]),
         canStop,
         row?.key,
+        stopAction?.copyKey,
         context,
         stopDisabledReason,
         i18n.getLocale(),
@@ -45,11 +47,11 @@ export class ChatPaneNativeSessionActions {
           icon: "plug",
           onActivate: () => onAction({ kind: "plugin", id: action.id }),
         })),
-        ...(canStop
+        ...(canStop && stopAction
           ? [
               {
                 id: "stop-cloud-worker",
-                label: t("sessionsView.stopCloudWorker"),
+                label: t(stopAction.copyKey),
                 icon: "stop" as const,
                 variant: "danger" as const,
                 disabled: Boolean(stopDisabledReason),

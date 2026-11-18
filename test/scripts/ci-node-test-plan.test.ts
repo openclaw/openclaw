@@ -33,7 +33,10 @@ import {
   isReleaseOnlyRuntimeTestFile,
 } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import * as proofTestInventory from "../../scripts/lib/ci-proof-test-inventory.mts";
-import { createNativeSoloTimingKey } from "../../scripts/lib/ci-test-timings-schema.mts";
+import {
+  createNativeSoloTimingKey,
+  type CiTimingProfile,
+} from "../../scripts/lib/ci-test-timings-schema.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import { isExclusiveCiTestConfig } from "../../scripts/lib/local-check-runtime.mts";
 import * as buildPrerequisites from "../../scripts/lib/vitest-build-prerequisites.mts";
@@ -56,6 +59,7 @@ import {
 } from "../vitest/vitest.agents-paths.mjs";
 import { createAgentsSupportVitestConfig } from "../vitest/vitest.agents-support.config.ts";
 import { createAutoReplyReplyVitestConfig } from "../vitest/vitest.auto-reply-reply.config.ts";
+import { createBoundaryVitestConfig } from "../vitest/vitest.boundary.config.ts";
 import { cliProcessTestFiles } from "../vitest/vitest.cli-process-paths.mjs";
 import { createCliProcessVitestConfig } from "../vitest/vitest.cli-process.config.ts";
 import { databaseWorkerCoreTestFiles } from "../vitest/vitest.database-worker-core-paths.mjs";
@@ -293,6 +297,7 @@ describe("Control UI release-only inventories", () => {
   const entry = "ui/src/e2e/chat-session-entry.e2e.test.ts";
   const staleBuild = "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts";
   const teamScale = "ui/src/e2e/team-scale-cold-load.e2e.test.ts";
+  const mantis = "ui/src/e2e/mantis-chat-proof.e2e.test.ts";
   const automationManagement =
     "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts";
   const reconnectContinuity = "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts";
@@ -452,7 +457,7 @@ describe("Control UI release-only inventories", () => {
     {
       name: "directly edited release matrices",
       full: false,
-      edited: [entry, staleBuild, teamScale, ...releaseOnlyRealGateway],
+      edited: [entry, staleBuild, teamScale, mantis, ...releaseOnlyRealGateway],
     },
     {
       name: "full selection with one edited release suite",
@@ -463,7 +468,7 @@ describe("Control UI release-only inventories", () => {
     const groups = createUiTestShardGroups({
       includeReleaseOnlyTests: false,
       includeReleaseOnlyE2eTests: full,
-      uiE2eFiles: full ? [embed, entry, staleBuild, teamScale] : undefined,
+      uiE2eFiles: full ? [embed, entry, staleBuild, teamScale, mantis] : undefined,
       changedPaths: [...edited, "ui/src/e2e", "ui/src/pages/usage/usage-page.tsx"],
     });
     expect(groups.ui[0]?.includePatterns).not.toContain(sidebar);
@@ -476,7 +481,7 @@ describe("Control UI release-only inventories", () => {
     for (const file of [embed, entry]) {
       expect(groups.e2e[0]?.includePatterns).toContain(file);
     }
-    for (const file of [staleBuild, teamScale]) {
+    for (const file of [staleBuild, teamScale, mantis]) {
       expect(groups.e2e[0]?.includePatterns?.includes(file)).toBe(edited.includes(file));
     }
     expectRealGatewayCoverage(
@@ -628,9 +633,14 @@ function mockPackingEntries(entries: readonly PackingEntry[], timingName = (name
 }
 
 describe("scripts/lib/ci-node-test-plan.mts", () => {
-  it.each([false, true])(
-    "keeps the scheduled main inventory within its reserved compact capacity (extra group: %s)",
-    (extraGroup) => {
+  it.each(
+    ["hybrid", "github"].flatMap((runnerBackend) =>
+      [false, true].map((extraGroup) => ({ runnerBackend, extraGroup })),
+    ),
+  )(
+    "keeps the scheduled main inventory within its reserved compact capacity ($runnerBackend, extra group: $extraGroup)",
+    ({ runnerBackend, extraGroup }) => {
+      vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", "bun-all");
       const original = fullSuiteVitestShards.slice();
       if (extraGroup) {
         // A new isolated group must not exhaust main's capacity on arrival.
@@ -653,7 +663,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           compactMode: "pull-request",
           compactNodeJobCap: 77 - workerRows.length,
           mainValidation: true,
-          runnerBackend: "hybrid",
+          runnerBackend,
         });
         const jobs = [...compactRows, ...workerRows];
         expect(jobs.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
@@ -1352,7 +1362,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           file === pricedFile ? 53 : fileSeconds(file),
         );
       }
-      const timings: Record<"blacksmith" | "github", Record<string, number>> = {
+      const timings: Record<CiTimingProfile, Record<string, number>> = {
         blacksmith: indivisible
           ? {
               "agentic-agents-embedded-base-1": 66,
@@ -1365,6 +1375,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             }
           : { [owner]: 120 },
         github: { [owner]: 160 },
+        boat: {},
       };
       spyTimings().mockImplementation((profile) => timings[profile]);
       vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
@@ -1464,7 +1475,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(predicted(measured)).toBe(
         runnerBackend === "blacksmith" ? 240 : runnerBackend === "hybrid" ? 435 : 440,
       );
-      expectPlanFiles(measured, files);
+      expectPlanFiles(
+        measured,
+        files.filter((file) => file !== e2eModel && file !== fastModel),
+      );
       expectEvery(
         measured.flatMap(jobGroups).filter((group) => group.shard_name.startsWith(models)),
         (group) => group.timing_key?.startsWith(`${models}-parallel`),
@@ -1474,13 +1488,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           .flatMap(jobGroups)
           .filter((group) => group.shard_name.startsWith(models));
         expect(modelGroups).toHaveLength(2);
-        expect(
-          modelGroups.map(
-            (group) =>
-              group.includePatterns?.filter((file) => file !== e2eModel && file !== fastModel)
-                .length,
-          ),
-        ).toEqual([1, 1]);
+        expect(modelGroups.map((group) => group.includePatterns?.length)).toEqual([1, 1]);
         modelGroups.forEach((group, index) => {
           seconds[group.timing_key!] = index === 0 ? 180 : 190;
         });
@@ -1653,9 +1661,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
 
     useFixtureProjects((candidate) => candidate === config);
 
-    let overlays: Record<"blacksmith" | "github", Readonly<Record<string, number>>> = {
+    let overlays: Record<CiTimingProfile, Readonly<Record<string, number>>> = {
       blacksmith: { [owner]: 165 },
       github: { [owner]: 253 },
+      boat: {},
     };
     spyTimings().mockImplementation((profile) => overlays[profile]);
     const options = compactOptions("hybrid", "pull-request");
@@ -1697,6 +1706,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const partialA = swappedGeneration(0, 1);
     const partialB = swappedGeneration(2, 3);
     overlays = {
+      boat: {},
       github: { [owner]: 100 },
       blacksmith: {
         [owner]: 100,
@@ -2073,7 +2083,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
-  it("selects provisioning and closure guards without replacing source test owners", () => {
+  it("limits provisioning to copied inputs while retaining source closure guards", () => {
     const guards = [
       // Provisioning inspects templates through the fork-owned SQLite broker.
       ["test/scripts/pr-worktree-provision.test.ts", configPath("infra")],
@@ -2095,9 +2105,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const newModule = "src/plugins/unrelated-new-plugin.ts";
     const newModuleTargets = resolvePolicyTestTargets([newModule]);
     const testOnlyTargets = resolvePolicyTestTargets(["src/plugins/unrelated-new-plugin.test.ts"]);
+    expect(newModuleTargets).not.toContain(guards[0][0]);
+    expect(newModuleTargets).toContain(guards[1][0]);
+    expect(newModuleTargets).toContain("test/scripts/pr-wrapper-source-closure.test.ts");
     for (const [guard] of guards) {
-      expect(newModuleTargets).toContain(guard);
       expect(testOnlyTargets).not.toContain(guard);
+    }
+    for (const changedPath of ["test/setup.ts", "test/vitest/vitest.tooling.config.ts"]) {
+      expect(resolvePolicyTestTargets([changedPath]), changedPath).toContain(guards[0][0]);
     }
     expect(isPolicyTestOwnedPath(newModule)).toBe(false);
     expect(isPolicyTestOwnedPath(manifest)).toBe(true);
@@ -2382,11 +2397,15 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       }));
       const options = compactOptions(profile, "push");
       const unmeasured = bundleTests(options);
-      const initialGroup = unmeasured
+      const supportGroups = unmeasured
         .flatMap(jobGroups)
-        .find((group) => group.shard_name === shardName);
+        .filter((group) => group.shard_name.startsWith("agentic-agents-support-hosted-"));
+      const initialGroup = supportGroups.find((group) => group.shard_name === shardName);
       expect(initialGroup?.timing_key).toMatch(
-        /^agentic-agents-support#selector-.+#generation-.+#part-2-of-2#include-.+$/u,
+        new RegExp(
+          `^agentic-agents-support#selector-.+#generation-.+#part-2-of-${supportGroups.length}#include-.+$`,
+          "u",
+        ),
       );
       const timingKey = initialGroup!.timing_key!;
       directTimings = { [timingKey]: 1 };
@@ -2699,7 +2718,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const configs = new Set([configPath("cli"), configPath("cli-process")]);
     const restore = selectFixtureProjects((config) => configs.has(config));
     const timings = spyTimings().mockReturnValue({
-      "agentic-cli": 136,
+      "agentic-cli": 130,
     });
     const options = compactOptions("hybrid", "pull-request");
     try {
@@ -2812,8 +2831,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(planFiles(selected)).toEqual([fast]);
   });
 
-  it("retains recovery contracts in their main, PR, and manual Node tiers", () => {
-    const proofFiles = ["src/gateway/server.codex-failure-recovery.test.ts"];
+  it("retains recovery and feature transport contracts in their main, PR, and manual Node tiers", () => {
+    const proofFiles = [
+      "src/gateway/server.codex-failure-recovery.test.ts",
+      "src/gateway/server.feature-session-actions.test.ts",
+    ];
     const files = (mode: "push" | "pull-request") => planFiles(committedPlan(mode));
     const mainFiles = files("push");
     const prFiles = files("pull-request");
@@ -2823,6 +2845,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(prFiles.filter((target) => target === file)).toHaveLength(1);
       const rawConfig = required(buildVitestRunPlans([file])[0]?.config);
       const config = resolveCanonicalNodeTestConfig(file, rawConfig) ?? rawConfig;
+      expect(config).toBe(configPath("gateway-server-isolated"));
       expect(
         manual.filter(
           (shard) =>
@@ -2888,6 +2911,30 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       }
     }
   });
+
+  it.each([undefined, "blacksmith", "hybrid"])(
+    "prices fully measured tooling selections without discarded siblings on %s",
+    (runnerBackend) => {
+      const target = "test/scripts/update-restart-module-outcome.test.ts";
+      // Unknown files must cost more than startup headroom regardless of which
+      // siblings the current checkout places in the target's tooling stripe.
+      vi.spyOn(shardMetadata, "estimateVitestToolingFileSeconds").mockReturnValue(60);
+      const timings = vi
+        .spyOn(testTimings, "readToolingFileTimings")
+        .mockReturnValue({ [target]: 1 });
+      const measured = required(selectTests([target], { runnerBackend }));
+      expectPlanFiles(measured, [target]);
+      expect(sumSeconds(measured)).toBe(25);
+      expectEvery(measured, (job) => job.planConcurrency === 1);
+      expectEvery(measured.flatMap(jobGroups), (group) => workers(group) === "2");
+
+      timings.mockReturnValue({});
+      const unknown = required(selectTests([target], { runnerBackend }));
+      expectPlanFiles(unknown, [target]);
+      expect(sumSeconds(unknown)).toBeGreaterThan(25);
+      expect(sumSeconds(unknown)).toBeGreaterThanOrEqual(60);
+    },
+  );
 
   it("keeps precise tooling selection through hosted overflow refusal", () => {
     const tooling = defaultShards.filter((shard) => /^core-tooling-\d+$/u.test(shard.shardName));
@@ -2970,22 +3017,42 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
-  it("shares one prepared runtime across affordable github groups", () => {
+  it("shares one prepared runtime across affordable github groups", async () => {
     const runnerBackend = "github";
-
+    const config = configPath("infra");
     const targets = [
       PRIVATE_QA_TOOLING_TEST,
-      "src/infra/update-candidate-canary.integration.test.ts",
+      "src/infra/update-managed-service-handoff-lifecycle.test.ts",
     ];
-    spyTimings().mockReturnValue(
-      Object.fromEntries(defaultShards.map((shard) => [shard.shardName, 1])),
-    );
-    const plan = selectTests(targets, { runnerBackend });
+    // Keep the misc and system-runtime owners distinct so affordable groups
+    // exercise build sharing instead of coalescing into one prerequisite group.
+    vi.resetModules();
+    mockPlanShards(() => [fixtureShard("core-runtime", [config])]);
+    mockOriginal("database", { databaseWorkerCoreTestFiles: [] });
+    mockOriginal("inventory", {
+      listScopedOwnerTestFiles: ({ root }) => (root === "src/infra" ? targets : []),
+      listNodeTestConfigFiles: (candidate) => (candidate === config ? targets : []),
+    });
+    mockPlanTimings(() => ({
+      "core-runtime-infra-misc": 1,
+      "core-runtime-infra-system-runtime": 1,
+    }));
+    const { createSelectedNodeTestShardBundles: select } = await loadPlanModule([
+      "database",
+      "inventory",
+    ]);
+    const plan = select(targets, { runnerBackend });
     expect(plan).not.toBeNull();
     const readers = plan!.filter((shard) => !shard.requiresDist);
     const reader = only(readers);
     expect(reader).toMatchObject({ pretestBuildMode: "private-qa", planConcurrency: 1 });
     expect(reader.predictedSeconds).toBeLessThanOrEqual(210);
+    expect(reader.groups).toHaveLength(2);
+    expect(
+      reader.groups
+        .map((group) => required(group.pretestBuildMode))
+        .toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(["private-qa", "runtime"]);
     expectEvery(reader.groups, (group) => group.pretestBuildMode);
     expectSameEntries(reader.groups.flatMap(optionalPatterns), targets);
   });
@@ -3242,6 +3309,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         isDatabaseWorkerCoreTestFile: () => false,
       });
       mockTrackedFiles((root: string) => (root === "src/infra" ? files : []));
+      await mockFastPaths();
       mockPlanTimings(() =>
         Object.fromEntries(entries.map(([, owner, seconds]) => [owner, seconds])),
       );
@@ -3293,11 +3361,16 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     shards: typeof fullSuiteVitestShards;
     timings: Record<string, number>;
     fileTimings?: Readonly<Record<string, number>>;
+    githubFileTimings?: Readonly<Record<string, number>>;
     fileSeconds: (file: string) => number;
+    expectedSourcePatterns?: { file: string; patterns: string[] };
     options: {
       compactMode: "push" | "pull-request";
       runnerBackend?: string;
       includeReleaseOnlyPluginShards: false;
+      includeReleaseOnlyToolingShards?: boolean;
+      includePrExemptRuntimeTests?: boolean;
+      includeProofTests?: boolean;
       compactNodeJobCap?: number;
     };
   }) {
@@ -3306,7 +3379,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     mockFixture("timings", () => ({
       ...testTimings,
       readCompactGroupTimings: () => params.timings,
-      ...(params.fileTimings ? { readToolingFileTimings: () => params.fileTimings! } : {}),
+      ...(params.fileTimings
+        ? {
+            readToolingFileTimings: (profile?: CiTimingProfile) =>
+              profile === "github"
+                ? (params.githubFileTimings ?? params.fileTimings!)
+                : params.fileTimings!,
+          }
+        : {}),
     }));
     mockFixture("metadata", () => ({
       ...shardMetadata,
@@ -3314,7 +3394,19 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }));
     mockTrackedFiles((rootDir: string) => (rootDir === "test" ? params.files.toSorted() : []));
     return await withPlanModule(
-      ({ createNodeTestShardBundles: createPlan }) => {
+      ({ createNodeTestShardBundles: createPlan, createNodeTestShards: createShards }) => {
+        if (params.expectedSourcePatterns) {
+          const expected = params.expectedSourcePatterns;
+          const sources = createShards({
+            ...params.options,
+            includeReleaseOnlyToolingShards: true,
+          });
+          expect(
+            sources
+              .filter((source) => source.includePatterns?.includes(expected.file))
+              .map((source) => source.includePatterns),
+          ).toEqual([expected.patterns]);
+        }
         // These fixtures exercise a caller's 90-row reservation independently
         // of the profile ceiling; explicit tighter reservations remain authoritative.
         return createPlan({
@@ -3325,6 +3417,78 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       ["metadata", "fast"],
     );
   }
+
+  it.each<{
+    label: string;
+    runnerBackend?: string;
+    compactMode?: "push" | "pull-request";
+    retainedSeconds?: number;
+    githubSeconds?: number;
+    known?: boolean;
+    discardSiblings?: boolean;
+    expectedSeconds: number;
+  }>([
+    { label: "scaled Blacksmith fallback", expectedSeconds: 32 },
+    { label: "direct GitHub timing", githubSeconds: 30, expectedSeconds: 30 },
+    { label: "startup floor", retainedSeconds: 1, expectedSeconds: 25 },
+    { label: "unknown retained file", known: false, expectedSeconds: 128 },
+    {
+      label: "nonbinding retained cost",
+      retainedSeconds: 80,
+      expectedSeconds: 128,
+    },
+    {
+      label: "unchanged selection",
+      retainedSeconds: 80,
+      discardSiblings: false,
+      expectedSeconds: 128,
+    },
+    { label: "Blacksmith parent floor", runnerBackend: "blacksmith", expectedSeconds: 80 },
+    { label: "hybrid parent floor", runnerBackend: "hybrid", expectedSeconds: 80 },
+    { label: "pull-request parent floor", compactMode: "pull-request", expectedSeconds: 128 },
+  ])("prices implicit reduced tooling with $label", async (params) => {
+    const retained = "test/vitest-pr-exempt-retention.test.ts";
+    // Two workers pair equal-cost files: fill fifteen pairs and one singleton first.
+    const discarded =
+      params.discardSiblings === false
+        ? []
+        : Array.from({ length: 31 }, (_, index) => `test/scripts/release-only-${index}.test.ts`);
+    const retainedSeconds = params.retainedSeconds ?? 20;
+    const discardedSeconds = 80;
+    const jobs = await createToolingFixturePlan({
+      files: [...discarded, retained],
+      shards: [
+        fixtureShard("core-tooling", [configPath("tooling")], configPath("full-core-tooling")),
+      ],
+      timings: {},
+      fileTimings: {
+        ...Object.fromEntries(discarded.map((file) => [file, discardedSeconds])),
+        ...(params.known === false ? {} : { [retained]: retainedSeconds }),
+      },
+      githubFileTimings:
+        params.githubSeconds === undefined ? {} : { [retained]: params.githubSeconds },
+      fileSeconds: (file) => (file === retained ? retainedSeconds : discardedSeconds),
+      expectedSourcePatterns: {
+        file: retained,
+        patterns: discarded.length ? [discarded.toSorted().at(-1)!, retained] : [retained],
+      },
+      options: {
+        compactMode: params.compactMode ?? "push",
+        runnerBackend: params.runnerBackend ?? "github",
+        includeReleaseOnlyPluginShards: false,
+        includeReleaseOnlyToolingShards: false,
+        includePrExemptRuntimeTests: true,
+        includeProofTests: true,
+      },
+    });
+    expectPlanFiles(jobs, [retained]);
+    const job = only(jobs);
+    expect(job.predictedTestSeconds).toBeCloseTo(params.expectedSeconds);
+    expect(job.planConcurrency).toBe(1);
+    expect(workers(only(job.groups))).toBe("2");
+    expect(job.requiresDist).toBe(false);
+    expect(job.pretestBuildMode).toBeUndefined();
+  });
 
   it.each([undefined, "blacksmith"])(
     "preserves compiler/artifact capacity (%s)",
@@ -3771,7 +3935,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(hasTooling(automatic)).toBe(false);
     const files = automatic.flatMap(optionalPatterns);
     expectNone(files, (file) => file.startsWith("test/scripts/"));
-    expect(files).toContain("src/infra/home-dir.test.ts");
+    expect(automatic.flatMap((shard) => shard.configs)).toContain(configPath("boundary"));
+    expect(listMatchedTestFiles(createBoundaryVitestConfig({}, []))).toContain(
+      "src/infra/home-dir.test.ts",
+    );
   });
 
   it.each([
@@ -3944,9 +4111,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       owner: "infra",
       prefix: "core-runtime-infra-",
       config: configPath("infra"),
-      expectedFiles: () => [
-        ...new Set([...listTestFiles("src/infra"), ...databaseWorkerCoreTestFiles]),
-      ],
+      expectedFiles: () => listMatchedTestFiles(createInfraVitestConfig({})),
     },
     {
       owner: "cron",
@@ -3991,6 +4156,7 @@ function expectImpacts(
 describe("CI changed Node test plan", () => {
   it.each([
     ["ui/src/main.ts", true],
+    ["src/gateway/control-ui-route-preloads.ts", true],
     ["ui/src/pages/chat/chat-gateway.test.ts", false],
     // Erased TSX header imports do not bring Gateway server code into the UI runtime.
     ["packages/gateway-client/src/index.ts", false],

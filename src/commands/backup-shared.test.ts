@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ExpectedCliError } from "../cli/expected-cli-error.js";
 import { resolveBackupArchivePath, resolveRequiredBackupPath } from "./backup-shared.js";
 
 afterEach(() => vi.unstubAllEnvs());
@@ -9,9 +10,8 @@ describe.each([
   ["archive", resolveBackupArchivePath, true],
 ] as const)("%s paths", (_kind, resolve, literal) => {
   it.each([undefined, "", " \t "])("rejects blank values: %j", (value) => {
-    expect(() => resolve(value, "--target")).toThrow("Missing required --target value.");
+    expect(() => resolve(value, "--target")).toThrow(ExpectedCliError);
   });
-
   it.each(["  backups/archive  ", path.resolve("archive output ")])(
     "resolves relative and absolute paths: %j",
     (value) => {

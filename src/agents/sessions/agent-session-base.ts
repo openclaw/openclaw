@@ -27,8 +27,7 @@ import type {
 } from "./agent-session-types.js";
 import { replaceAgentMessageInPlace } from "./agent-session-utils.js";
 import { formatNoApiKeyFoundMessage } from "./auth-guidance.js";
-import { createBackgroundResultPlacement } from "./background-result-placement.js";
-import type { CompactionRequestBudget } from "./compaction/request-budget.js";
+import type { CompactionRequestBudget } from "./compaction/preparation.types.js";
 import {
   type ExtensionCommandContextActions,
   type ExtensionErrorListener,
@@ -102,7 +101,7 @@ export abstract class AgentSessionBase {
   protected extensionErrorListener?: ExtensionErrorListener;
   protected extensionErrorUnsubscriber?: () => void;
   private readonly cleanupProviderSessionResourcesOnDispose: boolean;
-  private readonly disposeBackgroundResultPlacement: () => void;
+  protected abstract readonly disposeBackgroundResultPlacement: () => void;
 
   protected sessionModelRegistry: ModelRegistry;
 
@@ -130,9 +129,6 @@ export abstract class AgentSessionBase {
     this.resolveCompactionThinkingLevel = config.resolveCompactionThinkingLevel;
     this.cleanupProviderSessionResourcesOnDispose =
       config.cleanupProviderSessionResourcesOnDispose ?? true;
-    const placement = createBackgroundResultPlacement(this.sessionManager);
-    setInternalBeforeRequest(this.agent, placement.beforeRequest);
-    this.disposeBackgroundResultPlacement = placement.dispose;
   }
 
   get modelRegistry(): ModelRegistry {

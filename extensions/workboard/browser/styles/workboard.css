@@ -2786,6 +2786,9 @@
   color: var(--text);
   font-size: 0.92rem;
   line-height: 1.65;
+  /* Reading text keeps macOS stem darkening; app chrome keeps the body's antialiased smoothing. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 .workboard-detail__properties {
@@ -3039,6 +3042,9 @@ workboard-inline-text {
   font-size: 0.85rem;
   line-height: 1.55;
   cursor: text;
+  /* Same notes prose as .workboard-detail__description, in its editable state. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 /* The base role="button" rule turns selection off; the value opts back in. */

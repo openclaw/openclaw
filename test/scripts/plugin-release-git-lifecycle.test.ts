@@ -75,6 +75,7 @@ const modes = {
     SOURCE_REF: sha,
     TRUSTED_PUBLISHER_PREFLIGHT: "false",
     WORKFLOW_REF: "refs/heads/main",
+    WORKFLOW_REF_NAME: "main",
     WORKFLOW_SHA: workflowSha,
   }),
   "npm-preflight-read": modeConfig(
@@ -138,6 +139,25 @@ posixIt.for(
       code,
       pluginSourcePackage: code ? "" : packageJson,
     });
+  },
+);
+
+posixIt.for(["npm-preflight-read", "npm-publish-read"] as const)(
+  "%s retries a timed-out exact-source fetch before reading the package once",
+  { timeout: 55_000 },
+  async (mode, { signal }) => {
+    const report = await pluginRun(signal, mode, {
+      fetchResults: ["hang", 0],
+      commandResults: {
+        [`show ${sha}:${packageDir}/package.json`]: { code: 0, output: packageJson },
+      },
+    });
+    expect(report, report.output).toMatchObject({ code: 0, pluginSourcePackage: packageJson });
+    expect(report.fetches.map(({ args }) => args.at(-1))).toEqual([sha, sha]);
+    expect(report.output).toContain("fetch failed on attempt 1; retrying");
+    expect(gitCommands(report).filter((args) => args[0] === "show")).toEqual([
+      ["show", `${sha}:${packageDir}/package.json`],
+    ]);
   },
 );
 

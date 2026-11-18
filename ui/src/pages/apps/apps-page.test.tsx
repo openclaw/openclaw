@@ -153,7 +153,10 @@ it("loads app view and conversation alongside discovery, retries errors, and ret
   );
   const pane = container.querySelector("openclaw-chat-pane")!;
   expect(pane.className).toBe("mcp-app-conversation");
+  expect(container.querySelector(".hub-page-header")).toBeNull();
+  expect(mounted.queryByRole("button", { name: "Close app" })).toBeNull();
   expect(pane.paneId).toBe("plugin-app");
+  expect(pane.active).toBe(true);
   expect(pane.presentationId).toBe("plugin-app:agent:main:one");
   setSearch("?server=parts&tool=library&path=/updated");
   await waitForSolid(() => expect(pane.mcpAppLaunch?.deepLink).toBe("/updated"));
@@ -207,6 +210,8 @@ describe("AppsPage", () => {
     const page = getQueriesForElement(container);
     expect(page.getByRole("heading", { level: 1, name: "Apps" })).toBeTruthy();
     expect(container.querySelectorAll("h1")).toHaveLength(1);
+    expect(page.getByRole("heading", { name: "Plugins and ClawHub" })).toBeTruthy();
+    expect(page.getByText("Chrome extension")).toBeTruthy();
     expect(page.getByRole("heading", { level: 2, name: "Take OpenClaw everywhere" })).toBeTruthy();
   });
 });

@@ -40,7 +40,7 @@ describe("inline image data URL sanitizer", () => {
   });
 
   it("canonicalizes valid unpadded image data URLs", () => {
-    const unpaddedPng = PNG_1X1.replace(/=+$/u, "");
+    const unpaddedPng = PNG_1X1.replace(/[=]+$/u, "");
     expect(sanitizeInlineImageDataUrl(`data:image/png;base64,${unpaddedPng}`)).toBe(
       `data:image/png;base64,${PNG_1X1}`,
     );

@@ -81,6 +81,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Qwen Cloud](/providers/qwen)
 - [Radius](/providers/radius)
 - [Requesty (unified router)](/providers/requesty)
+- [Rerank (any /rerank endpoint as a Decision model)](/providers/rerank)
 - [Runway](/providers/runway)
 - [SenseAudio](/providers/senseaudio)
 - [SGLang (local models)](/providers/sglang)

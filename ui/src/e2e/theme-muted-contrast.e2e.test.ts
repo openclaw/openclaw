@@ -10,18 +10,10 @@ import { openPicker, pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { configSnapshot, settingsPageOptions } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+// Palette tests cover every family; render the default and high-contrast palettes here.
 const themeCases = [
   ["claw", "dark", "light"],
-  ["knot", "openknot", "openknot-light"],
-  ["dash", "dash", "dash-light"],
-  ["absolutely", "absolutely", "absolutely-light"],
-  ["tide", "tide", "tide-light"],
   ["beacon", "beacon", "beacon-light"],
-  ["phosphor", "phosphor", "phosphor-light"],
-  ["crt", "crt", "crt-light"],
-  ["manuscript", "manuscript", "manuscript-light"],
-  ["rose", "rose", "rose-light"],
-  ["miami", "miami", "miami-light"],
 ] as const;
 const appearances = themeCases.flatMap(([family, dark, light]) => [
   { family, mode: "dark" as const, resolved: dark },

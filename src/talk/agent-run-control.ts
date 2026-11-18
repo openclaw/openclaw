@@ -111,6 +111,7 @@ type RealtimeVoiceAgentControlDeps = {
       isInboundUserMessage?: boolean;
       taskSuggestionDeliveryMode?: undefined;
       toolAuthorityOverlay?: ReplyToolAuthorityOverlay;
+      inputRequesterDeviceId?: string;
       userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
     },
   ) => Promise<RealtimeVoiceAgentQueueOutcome>;
@@ -310,6 +311,8 @@ export async function controlRealtimeVoiceAgentRun(
     debounceMs: 0,
     isInboundUserMessage: true,
     toolAuthorityOverlay,
+    // The prepared caller authority carries the paired device that spoke this input.
+    inputRequesterDeviceId: toolAuthorityOverlay?.approvalReviewerDeviceId,
     // Talk cannot present task suggestions, so spoken user input must not inherit
     // a capable TUI run's model-facing task tools.
     taskSuggestionDeliveryMode: undefined,
@@ -321,6 +324,7 @@ export async function controlRealtimeVoiceAgentRun(
       await params.prepareToolAuthorityOverlay?.(overlay);
     }
     options.toolAuthorityOverlay = overlay;
+    options.inputRequesterDeviceId = overlay?.approvalReviewerDeviceId;
   };
   const canInject = () => {
     options.toolAuthorityOverlay?.operatorAuthority?.assertCurrent();
@@ -338,6 +342,7 @@ export async function controlRealtimeVoiceAgentRun(
       compatAssertCurrent: () => {
         const overlay = params.getToolAuthorityOverlay?.();
         options.toolAuthorityOverlay = overlay;
+        options.inputRequesterDeviceId = overlay?.approvalReviewerDeviceId;
         if (overlay && legacyOwner && !legacyOwner.matchesCaller(overlay)) {
           throw new Error("The original Talk caller authority no longer matches");
         }

@@ -10,7 +10,7 @@ import { createTerminalController } from "./terminal-controller.test-support.ts"
 import { createTerminalPanelUpload, type TerminalPanelUpload } from "./terminal-panel-upload.ts";
 
 const MAX_TERMINAL_UPLOAD_BYTES = 16 * 1024 * 1024;
-const invalidNativePath = "Cannot safely insert the uploaded native file path";
+const invalidNativePath = "Couldn’t insert the file path. Check the path and try again.";
 
 function dropUpload(path: string, shell: string, uploadPathStyle?: "native", oversized = false) {
   const base = createApplicationConfigCapability({ resourceBasePath: "" });
@@ -92,12 +92,12 @@ it.each([
 });
 
 it.each([
-  ["C:\\Temp\\x$(touch pwned).txt", "wsl.exe", undefined, "unsupported shell: wsl.exe"],
-  ["/tmp/report.pdf", "claude --resume 12345678…", undefined, "unsupported shell"],
+  ["C:\\Temp\\x$(touch pwned).txt", "wsl.exe", undefined, "file path into wsl.exe"],
+  ["/tmp/report.pdf", "claude --resume 12345678…", undefined, "Use a supported shell"],
   ["relative.pdf", "native CLI", "native", invalidNativePath],
   ["/tmp/report\nnext.pdf", "native CLI", "native", invalidNativePath],
   ['C:\\Temp\\bad"path.pdf', "native CLI", "native", invalidNativePath],
-  ["C:\\Users\\bang!\\report.pdf", "cmd.exe", undefined, "path containing % or ! into cmd.exe"],
+  ["C:\\Users\\bang!\\report.pdf", "cmd.exe", undefined, "Rename the file without % or !"],
 ] as const)("refuses unsafe insertion for %s in %s", async (path, shell, style, message) => {
   const { upload, terminal } = dropUpload(path, shell, style);
   await expectUploadFailure(upload, expect.stringContaining(message));

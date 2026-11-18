@@ -17,6 +17,10 @@ it("keeps ask_user native-control requirements visible to the model", () => {
   expect(description).toContain("native controls");
   expect(description).toContain("Put every selectable choice in `options`");
   expect(description).toContain("Use `multiSelect` only");
+  expect(description).toContain("observed external prerequisite");
+  expect(description).toContain("Do not invent approval or manual prerequisites");
+  expect(description).toContain("not the current user-requested turn");
+  expect(description).toContain("finish the turn first");
 });
 
 it("distinguishes secret config references from egress permission without offering plaintext", () => {
@@ -61,9 +65,6 @@ it("distinguishes sessions_send local context selection from exact external addr
   expect(description).toContain('`targetDisposition: "queued"` or `"steered"`');
   expect(description).toContain("neither proves target completion");
   expect(description).toContain("Ordinary peer sends start a separate turn.");
-  expect(description).toContain(
-    "A zero-wait send to your own busy child or an eligible run-scoped target may use its active input queue.",
-  );
   expect(description).toContain("An idle recipient or a default self-send starts a new turn");
   expect(description).toContain(
     "mode:followup always starts a separate turn and preserves its independent reply",

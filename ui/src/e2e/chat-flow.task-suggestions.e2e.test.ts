@@ -179,6 +179,83 @@ suite.define(() => {
     },
   );
 
+  it.each([
+    { width: 390, height: 844 },
+    { width: 820, height: 950 },
+  ])(
+    "keeps failure details reachable with suggested tasks at $width×$height",
+    async ({ width, height }) => {
+      const failureDetail =
+        "The request was interrupted because storage is busy. Check the retained input before trying again.";
+      const { page, gateway } = await openTasks(
+        [makeTask({ id: "recovery_first" }), makeTask({ id: "recovery_second" })],
+        {
+          historyMessages: [
+            { role: "user", content: "Review the pending workspace changes.", timestamp: 1 },
+            {
+              role: "custom",
+              customType: "run-failed-before-reply",
+              display: true,
+              content: "Your request could not be completed.",
+              timestamp: 2,
+              openclawRunError: {
+                runId: "failed-review",
+                summary: "Your request could not be completed.",
+                desktopSummary: failureDetail,
+              },
+            },
+          ],
+        },
+        { locale: "en-US", serviceWorkers: "block", viewport: { width, height } },
+      );
+      const tray = page.locator(".task-suggestions");
+      await tray.waitFor(visible);
+      const failure = page.locator(".chat-run-failure__toggle");
+      await failure.click({ timeout: 3_000 });
+      await page
+        .locator(".chat-run-failure__panel:popover-open")
+        .getByText(failureDetail, { exact: true })
+        .waitFor(visible);
+      await page.keyboard.press("Escape");
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const draft = "Keep this draft while reviewing the failure.";
+      await composer.fill(draft);
+      await tray.getByRole("button", { name: "Next suggested task" }).click();
+      const card = tray.locator(".task-suggestion:visible");
+      await exactText(card, "Show instructions").click();
+      await exactText(card, "Delete the stale adapter in src/example.ts and update tests.").waitFor(
+        visible,
+      );
+      await findButton(card, optionsLabel).click();
+      await card
+        .getByRole("menuitem", { name: "Start in this session", exact: true })
+        .waitFor(visible);
+      await page.keyboard.press("Escape");
+      await findButton(card, startLabel).click({ trial: true });
+      await failure.click({ timeout: 3_000 });
+      await page
+        .locator(".chat-run-failure__panel:popover-open")
+        .getByText(failureDetail, { exact: true })
+        .waitFor(visible);
+      await page.keyboard.press("Escape");
+      await gateway.setMethodResponse("taskSuggestions.list", { suggestions: [] });
+      for (const taskId of ["recovery_first", "recovery_second"]) {
+        await gateway.emitGatewayEvent("task.suggestion", {
+          action: "resolved",
+          taskId,
+          resolution: "dismissed",
+        });
+      }
+      await tray.waitFor({ state: "detached" });
+      await failure.click({ timeout: 3_000 });
+      await page.locator(".chat-run-failure__panel:popover-open").waitFor(visible);
+      expect(await composer.inputValue()).toBe(draft);
+      expect(await gateway.getRequests("taskSuggestions.accept")).toHaveLength(0);
+      expect(await gateway.getRequests("taskSuggestions.dismiss")).toHaveLength(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    },
+  );
+
   it("keeps copy available when only listing is advertised", async () => {
     const { page, gateway } = await openTasks([makeTask({ id: "task_list_only" })], {
       featureMethods: listMethods,

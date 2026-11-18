@@ -7,7 +7,6 @@ import {
   hasSessionAutoModelFallbackProvenance,
 } from "../../agents/agent-scope.js";
 import {
-  createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
   isFreshChannelCronAuthorityTurn,
 } from "../../agents/cron-creator-authority-context.js";
@@ -23,15 +22,14 @@ import {
 } from "../../agents/tool-policy.js";
 import { readChannelContextAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
 import { copyChildSessionPublication } from "../../channels/message-access/child-session-publication.js";
-import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity-inbound.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
-import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { getGatewayLocalUserIngress } from "../../gateway/local-user-ingress.js";
-import { normalizeAccountId } from "../../routing/account-id.js";
 import {
   isSessionPersonalBootstrapTurn,
   readSessionInputProfileId,
+  resolveTurnPersonalProfiles,
 } from "../../sessions/session-participant-input.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import { readUserTurnRequesterOrigin } from "../../sessions/user-turn-transcript-admission.js";
@@ -41,7 +39,6 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { buildChannelUserTurnSender } from "../../sessions/user-turn-transcript.metadata.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
-import { isConfiguredCommandOwner } from "../command-auth.js";
 import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { getGroupThreadTurn } from "../group-thread-context.js";
 import { getRequesterProfile, transferRequesterProfile } from "../requester-profile.js";
@@ -55,6 +52,7 @@ import {
   suppressUnresolvedPromptMedia,
   updateRoomEventAmbientTranscriptWatermark,
 } from "./get-reply-run-helpers.js";
+import { createReplyCronAuthorityFactory } from "./get-reply-run.cron-requester.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { normalizeMessageTimestampMs } from "./message-timestamp.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
@@ -351,6 +349,9 @@ export async function executePreparedReplyRun(
           // An unstarted occurrence may be re-admitted after a policy publication.
           // Existing completion custody permits that exact source input to resume.
           trackInputCompletion: opts?.internalEventExecution ? true : undefined,
+          // Durable ingress retries the same channel message under a fresh run ID.
+          reclaimCancelledSourceTurn:
+            sourceTurnId && !opts?.internalEventExecution ? true : undefined,
           target: () => ({
             sessionId: preparedSessionState.sessionId,
             sessionKey: sessionKey ?? preparedSessionState.sessionId,
@@ -401,36 +402,16 @@ export async function executePreparedReplyRun(
     freshChannelCronAuthorityTurn && command.senderIsOwner
       ? (opts?.runId ?? crypto.randomUUID())
       : undefined;
-  const channelRequester =
-    freshChannelCronAuthorityTurn && messageProvider === "discord" && sessionCtx.SenderId
-      ? {
-          version: 1 as const,
-          channel: messageProvider,
-          accountId: normalizeAccountId(replyRoute.accountId),
-          senderId: sessionCtx.SenderId,
-        }
-      : undefined;
   const inheritedCronCreatorAuthorityCapability = opts?.cronCreatorAuthorityCapability;
-  const cronOwner = {
-    channel: messageProvider,
-    accountId: replyRoute.accountId,
-    senderId: normalizeOptionalString(command.senderId),
-  };
-  const isCurrentChannelOwner = () =>
-    channelOwnerAuthority?.isCurrent() ?? isConfiguredCommandOwner(getRuntimeConfig(), cronOwner);
-  // Capture the authenticated source, never the later drain runner's identity.
-  // Queued input resolves ownership at its new admission, including owner promotion.
   const createChannelCronAuthority =
     !inheritedCronCreatorAuthorityCapability && freshChannelCronAuthorityTurn && messageProvider
-      ? (runId: string, isCurrentOwner = isCurrentChannelOwner) =>
-          createCronCreatorAuthorityCapability(
-            runId,
-            { kind: "external", channel: messageProvider },
-            { source: "channel-owner", isCurrent: isCurrentOwner },
-            undefined,
-            channelRequester,
-            { isCurrent: isCurrentOwner, ...cronOwner },
-          )
+      ? createReplyCronAuthorityFactory(sessionCtx, {
+          channel: messageProvider,
+          senderId: sessionCtx.SenderId,
+          accountId: ctx.AccountId ?? sessionCtx.AccountId,
+          replyAccountId: replyRoute.accountId,
+          commandSenderId: command.senderId,
+        })
       : undefined;
   const followupRun = {
     createChannelCronAuthority,
@@ -518,9 +499,11 @@ export async function executePreparedReplyRun(
       messageProvider,
       mediaNormalizationOwner: opts?.mediaNormalizationOwner,
       clientCaps: ctx.GatewayClientCaps,
-      bootstrapUserProfileId: personalBootstrapEligible
-        ? sessionPersonalProfileId(preparedSessionState.sessionEntry)
-        : undefined,
+      ...resolveTurnPersonalProfiles(
+        sessionKey,
+        preparedSessionState.sessionEntry,
+        personalBootstrapEligible,
+      ),
       gatewayUiCommandTarget: ctx.GatewayUiCommandTarget,
       toolBindings: ctx.GatewayRunToolBindings,
       chatType: replyRoute.chatType,
@@ -580,7 +563,9 @@ export async function executePreparedReplyRun(
       thinkingCatalog,
       thinkLevel: resolvedThinkLevel,
       thinkingExplicit: params.thinkingExplicit,
-      cyberAccessProgram: preparedSessionState.sessionEntry?.cyberAccessProgram,
+      cyberAccessProgram:
+        opts?.scheduledAutomation?.job.cyberAccessProgram ??
+        preparedSessionState.sessionEntry?.cyberAccessProgram,
       thinkLevelOverride,
       ...(() => {
         if (useFastReplyRuntime) {
@@ -653,7 +638,7 @@ export async function executePreparedReplyRun(
   };
   const sourceReplyDeliveryRuntimeOptions = opts as SourceReplyDeliveryRuntimeOptions | undefined;
   if (!inputProvenance || inputProvenance.kind === "external_user") {
-    transferRequesterProfile(ctx, followupRun);
+    transferRequesterProfile(ctx, followupRun, followupRun.run);
     bindReplyInputChannel(
       followupRun.run,
       ctx.SenderIsBot ? undefined : (ctx.Provider ?? ctx.Surface),

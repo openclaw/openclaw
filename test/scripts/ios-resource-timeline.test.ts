@@ -137,7 +137,7 @@ describe("iOS resource timeline workload boundary", () => {
           }
           else {
             const runtime = "/Library/Developer/CoreSimulator/Volumes/iOS_private/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS.simruntime/Contents/Resources/RuntimeRoot";
-            const row = (pid, ppid, rate, rss, state, command) => [pid, ppid, (now * rate / 1_000).toFixed(2), rss, state, command].join(" ");
+            const row = (pid, ppid, rate, rss, state, command, recent = rate * 100) => [pid, ppid, (now * rate / 1_000).toFixed(2), rss, state, ...(args.at(-1).includes("%cpu=") ? [recent] : []), command].join(" ");
             const cryptex = "/private/var/run/com.apple.security.cryptexd/mnt/com.apple.iPhoneOS.SimulatorRuntime-v24.1.434.0.private-runtime/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS.simruntime/Contents/Resources/RuntimeRoot";
             stdout = [
               row(42, 1, 1, 1024, "R", "/usr/bin/xcodebuild"),
@@ -153,6 +153,7 @@ describe("iOS resource timeline workload boundary", () => {
               row(89, 80, 0.001, 1, "S", runtime + "/usr/libexec/private-non-ascii-é"),
               row(101, 80, 0.001, 1, "S", runtime + "/usr/libexec/" + "private-oversize-".repeat(8)),
               row(102, 80, 0.001, 1, "S", "/private/app-container/duetexpertd"),
+              row(200 + processProbeTimes.length, 80, 0.001, 1, "R", runtime + "/usr/libexec/photoanalysisd", 225.5),
               ...Array.from({ length: 8 }, (_, i) => row(90 + i, 1, 0.1 + i / 100, 2048, "S", "/usr/libexec/cfprefsd")),
             ].join("\\n");
           }
@@ -243,18 +244,25 @@ describe("iOS resource timeline workload boundary", () => {
       }
       expect(samples[1].processes.map((row: { pid: number }) => row.pid)).not.toContain(83);
       expect(samples[1].processSummary).toMatchObject({
-        count: 21,
-        runnableCount: 2,
+        count: 22,
+        runnableCount: 3,
         uninterruptibleCount: 1,
       });
       const groups = samples[1].processSummary.groups;
-      for (const [role, count, cpuDeltaMs, origin] of [
-        ["CoreSpotlightService", 2, 45_900, "simulator-runtime"],
-        ["modelcatalogd", 1, 90, "simulator-runtime"],
-        ["launchd_sim", 1, 0, "xcode"],
-        ["duetexpertd", 1, 36_000, "simulator-runtime"],
+      for (const [role, count, cpuDeltaMs, origin, cpuRecentPercent] of [
+        ["CoreSpotlightService", 2, 45_900, "simulator-runtime", 51],
+        ["modelcatalogd", 1, 90, "simulator-runtime", 0.1],
+        ["launchd_sim", 1, 0, "xcode", 0],
+        ["duetexpertd", 1, 36_000, "simulator-runtime", 40],
       ]) {
-        expect(groups).toContainEqual({ role, count, cpuDeltaMs, origin, cpuObservedCount: count });
+        expect(groups).toContainEqual({
+          role,
+          count,
+          cpuDeltaMs,
+          origin,
+          cpuObservedCount: count,
+          cpuRecentPercent,
+        });
       }
       expect(groups.filter((group: { role: string }) => group.role === "duetexpertd")).toHaveLength(
         1,
@@ -273,6 +281,27 @@ describe("iOS resource timeline workload boundary", () => {
           (group: { cpuObservedCount: number }) => group.cpuObservedCount === 0,
         ),
       ).toBe(true);
+      for (const sample of [
+        samples[0],
+        samples[1],
+        attempted[4],
+        ...(closeLate ? [attempted[6]] : []),
+      ]) {
+        expect(
+          sample.processes.find((row: { role: string }) => row.role === "photoanalysisd"),
+        ).toMatchObject({
+          cpuRecentPercent: 225.5,
+          cpuPercent: null,
+          cpuDeltaMs: null,
+          rssBytes: 1024,
+        });
+        expect(sample.processSummary.groups[0]).toMatchObject({
+          role: "photoanalysisd",
+          cpuRecentPercent: 225.5,
+          cpuObservedCount: 0,
+          cpuDeltaMs: 0,
+        });
+      }
       endRecord(output, 23);
     },
   );
