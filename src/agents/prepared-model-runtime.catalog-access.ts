@@ -37,6 +37,7 @@ import {
   retainPreparedModelCatalogPublication,
 } from "./prepared-model-runtime.catalog-publication.js";
 import {
+  createCatalogInventoryPublisher,
   listChangedPreparedCatalogProviders,
   preparedProviderCatalogCredentials,
   preparedProviderCatalogSource,
@@ -92,15 +93,13 @@ export async function createFullModelCatalogAccess(
     params.isCurrent,
     params.retirementSignal,
     params.agentFacts.input.config,
-    () => {
-      if (params.catalogOwner) {
-        notifyPreparedModelRuntimePublication({
-          phase: "catalog-observation",
-          modelFactsChanged: false,
-          agentId: params.catalogOwner.agentId,
-        });
-      }
-    },
+    () =>
+      params.catalogOwner &&
+      notifyPreparedModelRuntimePublication({
+        phase: "catalog-observation",
+        modelFactsChanged: false,
+        agentId: params.catalogOwner.agentId,
+      }),
   );
   const readUsage = createPreparedRuntimeAuthProfileUsageReader(
     params.agentFacts.input.agentDir,
@@ -112,6 +111,7 @@ export async function createFullModelCatalogAccess(
   const projectInventory = createPreparedModelCatalogProjection({ ...params, normalizeProvider });
   const project = (...args: Parameters<typeof projectInventory>) =>
     attempt.withRefreshStatus(projectInventory(...args));
+  const publishInventory = createCatalogInventoryPublisher(params.inventoryOwner);
   const {
     retainedInventory,
     providerSources,
@@ -247,7 +247,7 @@ export async function createFullModelCatalogAccess(
       ...next,
       catalog: retainPreparedModelCatalogPublication(next.catalog, previous.catalog),
     };
-    params.inventoryOwner.catalogInventory = published.inventory;
+    publishInventory(published.inventory);
     return { previous, current: published, staticCatalog };
   };
   const acquireProviderCatalog = async (

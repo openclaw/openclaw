@@ -497,70 +497,117 @@ describe("legacy provider catalog retention", () => {
     expect(result.entries.map(({ id }) => id).toSorted()).toEqual(expected);
   });
 
-  it("does not treat native-first configured rows as a completed provider acquisition", async () => {
-    const configured = {
-      id: "configured",
-      name: "Configured",
-      reasoning: false,
-      input: ["text" as const],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 32768,
-      maxTokens: 4096,
-    };
-    const native = { provider: "custom", id: "native", name: "Native", nativeRuntime: "fixture" };
-    mocks.modelRegistry.getAll.mockReturnValue([{ ...configured, provider: "custom" }]);
-    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
-      const registry = createEmptyPluginRegistry();
-      registry.agentHarnesses.push({
-        pluginId: "fixture",
-        source: "fixture",
-        harness: {
-          id: "fixture",
-          label: "Fixture",
-          supports: () => ({ supported: true }),
-          runAttempt: vi.fn(),
-          loadModelCatalog: async () => [native],
-        },
+  it.each([false, true])(
+    "keeps provider acquisition ownership across native-only publication (replaced=%s)",
+    async (replaced) => {
+      const configured = {
+        id: "configured",
+        name: "Configured",
+        reasoning: false,
+        input: ["text" as const],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32768,
+        maxTokens: 4096,
+      };
+      const native = { provider: "custom", id: "native", name: "Native", nativeRuntime: "fixture" };
+      mocks.modelRegistry.getAll.mockReturnValue([{ ...configured, provider: "custom" }]);
+      mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
+        const registry = createEmptyPluginRegistry();
+        registry.agentHarnesses.push({
+          pluginId: "fixture",
+          source: "fixture",
+          harness: {
+            id: "fixture",
+            label: "Fixture",
+            supports: () => ({ supported: true }),
+            runAttempt: vi.fn(),
+            loadModelCatalog: async () => [native],
+          },
+        });
+        return registry;
       });
-      return registry;
-    });
-    const config: OpenClawConfig = {
-      agents: { entries: { pro: { model: "custom/configured" } } },
-      models: {
-        providers: {
-          custom: {
-            baseUrl: "https://catalog.example.invalid/v1",
-            api: "openai-completions",
-            models: [configured],
+      const config: OpenClawConfig = {
+        agents: { entries: { pro: { model: "custom/configured" } } },
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://catalog.example.invalid/v1",
+              api: "openai-completions",
+              models: [configured],
+            },
           },
         },
-      },
-    };
-    const owner = await publishPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config), {
-      catalogMode: "static",
-      provenance: "standalone",
-    });
-    await owner.loadNativeModelCatalog!({
-      provider: "custom",
-      modelId: "native",
-      runtime: "fixture",
-    });
-    const stored = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
-    expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
-    expect(stored.catalogInventory?.providers.size).toBe(0);
-    expect(stored.catalogInventory?.catalog.entries).toContainEqual(
-      expect.objectContaining({ provider: "custom", id: "configured" }),
-    );
-    mocks.runPreparedModelCatalogWorker.mockResolvedValue({
-      entries: [],
-      routeVariants: [],
-      staticEntries: [starter],
-      providerOutcomes: [{ provider: "custom", status: "unavailable" }],
-    });
-    const result = await owner.loadFullModelCatalog!({ refresh: true });
-    expect(result.entries).toContainEqual(expect.objectContaining(starter));
-    expect(result.authoritative).toBe(false);
-  });
+      };
+      const input = fixture.agentInput("pro", config);
+      let owner = await publishPreparedModelRuntimeSnapshot(input, {
+        catalogMode: "static",
+        provenance: "standalone",
+      });
+      if (replaced) {
+        const accountA = { provider: "custom", id: "account-a-only", name: "Account A" };
+        mocks.runPreparedModelCatalogWorker.mockResolvedValue(makeCatalog([accountA]));
+        expect((await owner.loadFullModelCatalog!()).entries).toContainEqual(
+          expect.objectContaining(accountA),
+        );
+        mocks.authStorage.getAll.mockReturnValue({
+          custom: { type: "api_key", key: "replacement-key" },
+        });
+        owner = await publishPreparedModelRuntimeSnapshot(input, {
+          catalogMode: "static",
+          provenance: "standalone",
+          force: true,
+        });
+        mocks.runPreparedModelCatalogWorker.mockClear();
+        await owner.loadNativeModelCatalog!({
+          provider: "custom",
+          modelId: "native",
+          runtime: "missing-fixture",
+        });
+        expect(
+          resolvePreparedModelRuntimeOwnerBySnapshot(owner)!.catalogInventory?.providers.has(
+            "custom",
+          ),
+        ).toBe(true);
+      }
+      await owner.loadNativeModelCatalog!({
+        provider: "custom",
+        modelId: "native",
+        runtime: "fixture",
+      });
+      const stored = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
+      expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
+      expect(stored.catalogInventory?.providers.size).toBe(0);
+      expect([...(stored.catalogInventory?.acquiredProviderIds ?? [])]).toEqual(
+        replaced ? ["custom"] : [],
+      );
+      expect(
+        stored.catalogInventory?.catalog.entries.some(({ id }) => id === "account-a-only"),
+      ).not.toBe(true);
+      expect(stored.catalogInventory?.catalog.entries).toContainEqual(
+        expect.objectContaining({ provider: "custom", id: "configured" }),
+      );
+      if (replaced) {
+        owner = await publishPreparedModelRuntimeSnapshot(input, {
+          catalogMode: "static",
+          provenance: "standalone",
+          force: true,
+        });
+        expect(
+          owner.readFullModelCatalog!()?.entries.some(({ id }) => id === "account-a-only"),
+        ).not.toBe(true);
+        expect(stored.catalogInventory?.acquiredProviderIds?.has("custom")).toBe(true);
+      }
+      mocks.runPreparedModelCatalogWorker.mockResolvedValue({
+        entries: [],
+        routeVariants: [],
+        staticEntries: [starter],
+        providerOutcomes: [{ provider: "custom", status: "unavailable" }],
+      });
+      const result = await owner.loadFullModelCatalog!({ refresh: true });
+      expect(result.entries).toContainEqual(expect.objectContaining(starter));
+      expect(result.authoritative).toBe(false);
+    },
+  );
 
   describe("failed provider discovery retry", () => {
     const unavailable = makeCatalog([], {
