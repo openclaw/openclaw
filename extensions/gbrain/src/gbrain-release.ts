@@ -36,7 +36,11 @@ async function getText(url: string): Promise<string> {
   });
   try {
     if (!response.ok) {
-      throw new Error(`${url} returned HTTP ${response.status}`);
+      throw new Error(
+        response.status === 403 || response.status === 429
+          ? `GitHub refused ${url} (HTTP ${response.status}); its unauthenticated API limit for this network is used up and resets within an hour.`
+          : `${url} returned HTTP ${response.status}.`,
+      );
     }
     return await response.text();
   } finally {
@@ -80,16 +84,8 @@ export async function installGbrainRelease(asset: string, destination: string): 
   if (!/^\d+(\.\d+){2,3}$/.test(version)) {
     throw new Error(`GBrain's stable channel names no release (${STABLE_VERSION_URL}).`);
   }
-  const releaseInfo = await getJson(
-    `https://api.github.com/repos/${REPO}/releases/tags/v${encodeURIComponent(version)}`,
-  );
-  const assets = Array.isArray(releaseInfo?.assets) ? releaseInfo.assets : [];
-  const downloadUrl = assets
-    .map((entry) => asOptionalRecord(entry))
-    .find((entry) => entry?.name === asset)?.browser_download_url;
-  if (typeof downloadUrl !== "string") {
-    throw new Error(`GBrain ${version} has no ${asset} release binary.`);
-  }
+  // The release download URL is fixed by GitHub; only the attestation needs its API.
+  const downloadUrl = `https://github.com/${REPO}/releases/download/v${version}/${asset}`;
 
   await mkdir(path.dirname(destination), { recursive: true });
   const staged = `${destination}.download-${process.pid}`;
@@ -105,7 +101,11 @@ export async function installGbrainRelease(asset: string, destination: string): 
     });
     try {
       if (!response.ok || !response.body) {
-        throw new Error(`Downloading ${asset} returned HTTP ${response.status}.`);
+        throw new Error(
+          response.status === 404
+            ? `GBrain ${version} has no ${asset} release binary.`
+            : `Downloading ${asset} returned HTTP ${response.status}.`,
+        );
       }
       await pipeline(
         // SAFETY: undici returns the WHATWG stream that node:stream/web describes.
