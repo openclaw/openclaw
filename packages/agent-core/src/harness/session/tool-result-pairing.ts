@@ -201,13 +201,14 @@ export function collectToolPairingMessageFact(
     };
   }
   if (message.role === "assistant" && Array.isArray(message.content)) {
+    const stopReason = message.stopReason;
     return {
       role: "assistant",
       calls: message.content.flatMap((block, contentIndex) => {
         const call = readToolCall(block);
         return call ? [{ ...call, contentIndex }] : [];
       }),
-      failed: message.stopReason === "error" || message.stopReason === "aborted",
+      failed: stopReason === "error" || stopReason === "aborted",
     };
   }
   return { role: "other" };
