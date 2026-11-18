@@ -625,11 +625,10 @@ async function executeAgentTurnOutcome(
             run.cwd = workspace.cwd;
           }
           const scheduledJob = run.scheduledAutomation?.job;
-          const binding = scheduledJob?.inferenceBinding;
-          if (scheduledJob && binding) {
+          if (scheduledJob) {
             scheduledInference = await prepareCronRunInference({
               job: scheduledJob,
-              binding,
+              agentId: run.agentId ?? "main",
               cfg: selectLiveRuntimeConfig(executionParams.followupRun.run.config),
               agentDir: executionParams.followupRun.run.agentDir,
             });

@@ -225,7 +225,12 @@ function createCronPayloadSchema(params: {
               script: Type.Optional(Type.String({ description: "Headless code-mode script" })),
             }
           : {}),
-        model: nullableStringSchema("Model override, or null to clear"),
+        model: nullableStringSchema(
+          "Model override. Append @profile to pin the billing account; null clears the override",
+        ),
+        modelRuntime: nullableStringSchema(
+          "Runtime to use for a pinned model account, or null to clear",
+        ),
         thinking: Type.Optional(Type.String({ description: "Thinking override" })),
         timeoutSeconds: Type.Optional(
           Type.Union([Type.Number({ minimum: 0 }), Type.Null()], {

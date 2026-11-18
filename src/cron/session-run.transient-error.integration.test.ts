@@ -24,7 +24,6 @@ import {
   loopbackProviderConfig,
 } from "./cross-provider-fallback.test-support.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
-import { captureCronInferenceBinding } from "./inference-binding.runtime.js";
 import { resolveCronRunErrorReason } from "./run-error-reason.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
 import { applyJobResult } from "./service/timer-outcomes.js";
@@ -123,14 +122,6 @@ it.each(["server_error", "rate_limit_exceeded"])(
           );
           const startedAt = Date.now();
           const model = "openai/gpt-4.1@openai:test";
-          const inferenceBinding = await captureCronInferenceBinding({
-            cfg,
-            agentId: "main",
-            model,
-          });
-          if (!inferenceBinding) {
-            throw new Error("Expected a recorded inference account");
-          }
           const job = {
             ...makeCronJob({
               id: "transient-continuation",
@@ -142,7 +133,6 @@ it.each(["server_error", "rate_limit_exceeded"])(
               state: { runningAtMs: startedAt, nextRunAtMs: startedAt },
               payload: { kind: "agentTurn", message: "Continue the report.", model },
             }),
-            inferenceBinding,
           };
           const result = await runCronSessionTurn({
             occurrence: TEST_SCHEDULED_OCCURRENCE,

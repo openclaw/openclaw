@@ -133,14 +133,6 @@ vi.mock("../../config/config.js", async () => {
   };
 });
 
-// Credential capture is exercised by cron.inference-binding.test.ts and
-// isolated-agent.auth-continuity.integration.test.ts. These delivery/management
-// validation fixtures intentionally have no inference account.
-vi.mock("../../cron/inference-binding.runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../cron/inference-binding.runtime.js")>()),
-  captureCronInferenceBinding: async () => undefined,
-}));
-
 // mock-isolation: Validation fixtures do not read live session delivery metadata.
 vi.mock("../../cron/delivery-preview.js", () => ({
   resolveCronDeliveryFailurePreview: async () => undefined,
@@ -2162,62 +2154,8 @@ describe("cron method validation", () => {
     expect(accepted.context.cron.update).toHaveBeenCalled();
     expectCronSuccess(accepted.respond);
 
-    // Control: an embedded-runtime reference still needs its stored account.
-    const refused = await invokeCronUpdate(
-      { id: "cron-1", patch: cliModelPatch(`${embeddedModelRef}@missing-profile`) },
-      createCronJob(),
-    );
-    expect(refused.context.cron.update).not.toHaveBeenCalled();
-    expectResponseError(refused.respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "is unavailable",
-    });
-  });
-
-  it("keeps explicit native-account validation when automatic routing defaults to CLI", async () => {
-    const cfg = cliBackedModelConfig("auto");
-    cfg.auth = {
-      order: { anthropic: ["anthropic:cli"] },
-      profiles: {
-        "anthropic:cli": { provider: "claude-cli", mode: "oauth" },
-        "anthropic:missing-api": { provider: "anthropic", mode: "api_key" },
-      },
-    };
-    setRuntimeConfig(cfg);
-
-    const refused = await invokeCronUpdate(
-      { id: "cron-1", patch: cliModelPatch(`${cliBackedModelRef}@anthropic:missing-api`) },
-      createCronJob(),
-    );
-    expect(refused.context.committedUpdates).toEqual([]);
-    expectResponseError(refused.respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "is unavailable",
-    });
-  });
-
-  // A bound job keeps its rejection: the store would otherwise clone its recorded
-  // account onto the CLI route while the same patch replaces the model.
-  it("keeps the stored account rejection when a bound job moves to a CLI-backed model", async () => {
-    setRuntimeConfig(cliBackedModelConfig());
-
-    const bound = await invokeCronUpdate(
-      { id: "cron-1", patch: cliModelPatch(`${cliBackedModelRef}@selected-profile`) },
-      Object.assign(createCronJob(), {
-        inferenceBinding: {
-          version: 1 as const,
-          provider: "anthropic",
-          profileId: "anthropic:stored-account",
-          authorizationId: "9f2b1c0d4e5a67890123456789abcdef0123456789abcdef0123456789abcdef",
-          authRequirement: "api-key" as const,
-          source: "user" as const,
-        },
-      }),
-    );
-    expect(bound.context.cron.update).not.toHaveBeenCalled();
-    expectResponseError(bound.respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "is unavailable",
+    expect(accepted.context.committedUpdates[0]?.patch.payload).toMatchObject({
+      model: `${cliBackedModelRef}@selected-profile`,
     });
   });
 

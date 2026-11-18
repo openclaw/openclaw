@@ -90,7 +90,6 @@ export function resolveCronJobGrantDefinitionRevision(job: CronStoredJob): strin
     enabled: _enabled,
     state: _state,
     ownerProfileId: _ownerProfileId,
-    ownerTransferPending: _ownerTransferPending,
     ...definition
   } = storedDefinition;
   return hashCronJobDefinition(definition);

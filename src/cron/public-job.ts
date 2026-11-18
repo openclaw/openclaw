@@ -5,8 +5,6 @@ export function toPublicCronJob(job: CronStoredJob): CronJob {
   const {
     pluginCommand: _pluginCommand,
     operatorSource: _operatorSource,
-    inferenceBinding: _inferenceBinding,
-    ownerTransferPending: _ownerTransferPending,
     sourceConversation: _sourceConversation,
     streamSandbox: _streamSandbox,
     streamOperatorSource: _streamOperatorSource,

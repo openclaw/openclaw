@@ -58,7 +58,7 @@ import {
 import {
   assertValidCronUpdatePatch,
   captureCronCreatorSession,
-  captureCronUpdatedInferenceBinding,
+  authorizeCronModelPin,
   normalizeCronUpdateRequest,
 } from "./cron-input-validation.js";
 import {
@@ -181,7 +181,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         ? undefined
         : callerScope && { ...callerScope, manageAll: undefined };
     let capture: ReturnType<typeof resolveCronCreatorAuthorityCapture>;
-    let inference: Awaited<ReturnType<typeof captureCronUpdatedInferenceBinding>>;
+    let assertInferenceSelectionCurrent: (() => void) | undefined;
     let operatorCapture: Awaited<ReturnType<typeof captureCronCreatorSession>> | undefined;
     // The native process is authorized by whoever approves it now; the payload keeps its requester.
     let processSource: OperatorRunRecoverySnapshot | undefined;
@@ -316,13 +316,17 @@ export const cronHandlers: GatewayRequestHandlers = {
           context,
         });
       }
-      inference = runtimeAuthority
-        ? undefined
-        : await captureCronUpdatedInferenceBinding(nextJob, patch, cfg, {
-            client,
-            context,
-            signal,
-          });
+      if (
+        patch.agentId !== undefined ||
+        (patch.payload && ("model" in patch.payload || "modelRuntime" in patch.payload))
+      ) {
+        assertInferenceSelectionCurrent = await authorizeCronModelPin(nextJob, {
+          client,
+          context,
+          signal,
+          hasCurrentClientAuthority,
+        });
+      }
     } catch (err) {
       operatorCapture?.disposeOperatorSource?.();
       targetAccess?.release();
@@ -339,7 +343,7 @@ export const cronHandlers: GatewayRequestHandlers = {
           assertOwnerSelectionCurrent?.();
           targetAccess?.assertCurrent();
           capture?.assertCurrent();
-          inference?.assertInferenceSelectionCurrent();
+          assertInferenceSelectionCurrent?.();
           operatorCapture?.assertOperatorSourceCurrent?.();
         },
         hasCurrentClientAuthority,
@@ -358,9 +362,6 @@ export const cronHandlers: GatewayRequestHandlers = {
                 : resolveCronScheduledToolPolicyForCaller(callerScope),
             toolsAllowExecTarget: callerScope?.toolsAllowExecTarget,
           }
-        : {}),
-      ...(inference?.inferenceBinding !== undefined
-        ? { inferenceBinding: inference.inferenceBinding }
         : {}),
       commitGuard,
       ...(capture ? { captureRuntimeAuthority: capture.captureRuntimeAuthority } : {}),
@@ -513,7 +514,6 @@ export const cronHandlers: GatewayRequestHandlers = {
     } finally {
       operatorCapture?.disposeOperatorSource?.();
       targetAccess?.release();
-      inference?.disposeInferenceAuthorization();
     }
     context.logGateway.info("cron: job updated", { jobId });
     respond(

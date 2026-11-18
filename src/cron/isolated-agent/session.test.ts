@@ -31,7 +31,7 @@ function resolveWithStoredEntry(params?: {
   forceNew?: boolean;
   fresh?: boolean;
   exactRunSession?: boolean;
-  inferenceCaptured?: boolean;
+  inferenceRuntimePinned?: boolean;
 }) {
   const sessionKey = params?.sessionKey ?? "webhook:stable-key";
   const sourceSessionKey = params?.sourceSessionKey;
@@ -55,7 +55,7 @@ function resolveWithStoredEntry(params?: {
     nowMs: NOW_MS,
     forceNew: params?.forceNew,
     exactRunSession: params?.exactRunSession,
-    inferenceCaptured: params?.inferenceCaptured,
+    inferenceRuntimePinned: params?.inferenceRuntimePinned,
     store,
     lifecycleTimestamps: {},
   });
@@ -309,7 +309,7 @@ it.each([
       sessionKey: "agent:main:cron:job-1",
       ...(source ? { sourceSessionKey: "agent:main:dashboard:parent" } : {}),
       forceNew: true,
-      inferenceCaptured: captured,
+      inferenceRuntimePinned: captured,
       entry: { thinkingLevel: "high", ...selection },
     });
     // Preferences other than inference keep following the copied row.

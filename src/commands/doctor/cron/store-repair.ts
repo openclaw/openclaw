@@ -4,7 +4,6 @@ import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
-import type { CronInferenceBinding } from "../../../cron/inference-binding.js";
 import { resolveCronOperatorExecutionRevision } from "../../../cron/service/jobs-tool-policy.js";
 import { noteCronJobsStoreCommit } from "../../../cron/store.js";
 import { resolveCronJobGrantDefinitionRevision } from "../../../cron/store/job-config-codec.js";
@@ -197,12 +196,16 @@ function definitionEvidence(jobs: readonly PluginDoctorCronJob[]) {
   }));
 }
 
-/** Only adds an inference restriction; retains authored fields, runtime state and approval terms. */
+/** Translate stored inference settings without rewriting runtime state. */
 export async function repairCronInferenceBindingsForDoctor(
   scope: DoctorCronScope,
   authority: PluginDoctorRepairAuthority,
   inventory: PluginDoctorCronInventory,
-  changes: readonly { job: PluginDoctorCronJob; binding: CronInferenceBinding }[],
+  changes: readonly {
+    job: PluginDoctorCronJob;
+    definition: Record<string, unknown>;
+    paused: boolean;
+  }[],
 ): Promise<{ changed: number; backupPath?: string; warnings?: string[] }> {
   authority.assertCurrent();
   if (changes.length === 0) {
@@ -216,7 +219,8 @@ export async function repairCronInferenceBindingsForDoctor(
       selected.has(key) ||
       !inventory.jobs.some((row) => isDeepStrictEqual(row, job)) ||
       !job.definition ||
-      job.definition.inferenceBinding !== undefined
+      (job.definition.inferenceBinding === undefined &&
+        job.definition.ownerTransferPending === undefined)
     ) {
       throw new Error("Inference migration requires distinct inspected legacy cron definitions.");
     }
@@ -232,28 +236,46 @@ export async function repairCronInferenceBindingsForDoctor(
       }
     },
     write(db) {
-      for (const { job, binding } of changes) {
+      for (const { job, definition, paused } of changes) {
         const row = loadCronRows(db, job.storeKey, new Set([job.id]), {
           includeGrantDefinitionProjection: true,
         })[0];
-        const previous = row && rowToCronJob(row, job.definition!);
-        if (!row || !previous) {
+        if (!row || !job.definition) {
           throw new Error(`Cannot migrate cron inference account for ${job.id}.`);
         }
-        const next = { ...previous, inferenceBinding: binding };
-        const source = previous.operatorSource;
-        // Offline adoption only restricts inference; keep the original authenticated
-        // source bound to that definition without reviving an already stale capture.
-        if (source?.executionRevision === resolveCronOperatorExecutionRevision(previous)) {
+        const { inferenceBinding, ownerTransferPending, ...original } = job.definition;
+        const previous = rowToCronJob(row, original);
+        const next = paused ? null : rowToCronJob(row, definition);
+        if (previous) {
+          if (inferenceBinding !== undefined) {
+            Object.assign(previous, { inferenceBinding });
+          }
+          if (ownerTransferPending !== undefined) {
+            Object.assign(previous, { ownerTransferPending });
+          }
+        }
+        const source = previous?.operatorSource;
+        // An exact account conversion keeps the original authenticated source
+        // bound to its definition without reviving an already stale capture.
+        if (
+          source &&
+          previous &&
+          next &&
+          source.executionRevision === resolveCronOperatorExecutionRevision(previous)
+        ) {
           next.operatorSource = {
             ...source,
             executionRevision: resolveCronOperatorExecutionRevision(next),
           };
         }
         const validProjection =
+          previous &&
+          next &&
           row.grant_definition_revision === resolveCronJobGrantDefinitionRevision(previous) &&
           row.grant_definition_updated_at === row.updated_at;
         if (
+          previous &&
+          next &&
           validProjection &&
           typeof row.grant_definition_generation === "number" &&
           inventory.jobs.filter((entry) => entry.id === job.id).length === 1
@@ -271,11 +293,10 @@ export async function repairCronInferenceBindingsForDoctor(
             .updateTable("cron_jobs")
             .set({
               job_json: JSON.stringify({
-                ...job.definition,
-                inferenceBinding: binding,
-                ...(next.operatorSource ? { operatorSource: next.operatorSource } : {}),
+                ...definition,
+                ...(next?.operatorSource ? { operatorSource: next.operatorSource } : {}),
               }),
-              ...(validProjection
+              ...(next && validProjection
                 ? { grant_definition_revision: resolveCronJobGrantDefinitionRevision(next) }
                 : {}),
             })

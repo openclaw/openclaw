@@ -235,16 +235,16 @@ export type ScheduledInferenceRuntimeFacts = Readonly<{
 }>;
 
 // A recorded runtime replaces the legacy pick, and the job's scheduled model replaces the
-// model a copied creating conversation selects; a binding without one keeps both picks.
+// model a copied creating conversation selects; a pin without one keeps both picks.
 function labelInference(
   result: Extract<ScheduledExecutionContextResult, { status: "ready" }>,
   runtimes: ScheduledInferenceRuntimeFacts,
 ): Readonly<{ label: ScheduledDivergenceLabel; legacy: string; context: string }> | undefined {
   const { inference } = result.facts;
-  if (inference.kind !== "bound") {
+  if (inference.kind !== "pinned") {
     return undefined;
   }
-  const recorded = inference.binding.runtime;
+  const recorded = inference.runtime;
   if (recorded) {
     const { models } = runtimes;
     const same = recorded === runtimes.legacy && (!models || models.legacy === models.context);

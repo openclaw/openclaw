@@ -21,7 +21,6 @@ import {
 } from "../../agents/media-generation-activity.js";
 import { resolveCyberAccessProgramForProvider } from "../../agents/model-catalog-access-programs.js";
 import { findModelByNativeAlias, findModelInCatalog } from "../../agents/model-catalog-lookup.js";
-import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
@@ -293,13 +292,6 @@ export async function runCliFallbackCandidate(
                   : undefined,
             )
           : await resolveLiveProfile();
-        if (turn.followupRun.run.scheduledAutomation && !scheduledInference && authProfileId) {
-          throw createUnrecordedScheduledAccountRefusal({
-            runtime: params.cliExecutionProvider,
-            modelRef: `${params.provider}/${params.model}`,
-            profileId: authProfileId,
-          });
-        }
         const diagnosticOwner = params.deferredLifecycle.handoffToCli();
         // A forked child carries the parent's binding with a one-shot fork marker;
         // honor it here or the child resumes inside the parent's native thread.
@@ -521,6 +513,12 @@ export async function runCliFallbackCandidate(
                     }),
                 }),
             authProfileId,
+            nativeAuthOnly: scheduledInference?.usesNativeCliAccount(
+              params.provider,
+              params.cliExecutionProvider,
+            )
+              ? true
+              : undefined,
             // The CLI owner rechecks this after awaits and before credential/transport effects.
             assertCurrent: scheduledInference
               ? () => {
@@ -528,10 +526,6 @@ export async function runCliFallbackCandidate(
                   scheduledInference.assertCurrent(params.provider);
                 }
               : undefined,
-            nativeAuthOnly:
-              turn.followupRun.run.scheduledAutomation && !params.scheduledInference
-                ? true
-                : undefined,
             mediaImageLayout: params.currentTurnImages.mediaImageLayout,
             messageChannel: turn.followupRun.originatingChannel,
             messageProvider: hookMessageProvider,

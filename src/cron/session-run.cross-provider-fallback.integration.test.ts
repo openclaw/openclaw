@@ -25,7 +25,6 @@ import {
   QUOTA_EXHAUSTED_BODY,
 } from "./cross-provider-fallback.test-support.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
-import { captureCronInferenceBinding } from "./inference-binding.runtime.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
 import { runCronSessionTurn } from "./session-run.js";
 import type { CronStoredJob } from "./types.js";
@@ -133,10 +132,6 @@ it.each(["live", "primary-revoked"] as const)(
             },
           );
           const model = "openai/gpt-4.1@openai:primary";
-          const binding = await captureCronInferenceBinding({ cfg, agentId: "main", model });
-          if (!binding) {
-            throw new Error("Expected a recorded primary account");
-          }
           if (kind === "primary-revoked") {
             expect(
               await removeAuthProfilesAcrossOwnerStores({ profileIds: ["openai:primary"] }),
@@ -158,7 +153,6 @@ it.each(["live", "primary-revoked"] as const)(
               delivery: { mode: "none" },
               payload: { kind: "agentTurn", message: "Reply.", model },
             }),
-            inferenceBinding: binding,
           };
           const result = await runCronSessionTurn({
             occurrence: TEST_SCHEDULED_OCCURRENCE,

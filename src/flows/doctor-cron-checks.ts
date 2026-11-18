@@ -17,7 +17,7 @@ export const legacyCronStoreCheck: CoreHealthCheck = {
 
 export const cronInferenceCheck: CoreHealthCheck = {
   id: "core/doctor/cron-inference-accounts",
-  description: "Legacy automations can retain an authorized inference account.",
+  description: "Saved automation accounts can move to explicit model selections.",
   async detect(ctx) {
     const { maybeRepairCronInferenceBindings } =
       await import("../commands/doctor/cron/inference-binding-migration.js");
@@ -33,8 +33,7 @@ export const cronInferenceCheck: CoreHealthCheck = {
       message,
       path: resolveOpenClawStateSqlitePath(ctx.env),
       requirement: "cron-inference-account",
-      fixHint:
-        "Run openclaw doctor --fix to record the planned eligible account; otherwise follow the account selection command in the finding.",
+      fixHint: "Run openclaw doctor --fix to convert saved automation accounts.",
     }));
   },
 };

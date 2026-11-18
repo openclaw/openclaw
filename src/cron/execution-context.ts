@@ -4,6 +4,7 @@
  * requester check, then pass the results in as facts.
  */
 import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { isRuntimeToolAllowed } from "../agents/tool-policy-match.js";
 import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
 import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
@@ -13,7 +14,6 @@ import {
   type RestartRecoveryOperatorSource,
 } from "../gateway/operator-run-recovery-source.codec.js";
 import { hasTransferredCronOwner } from "./human-owner.js";
-import type { CronInferenceBinding } from "./inference-binding.js";
 import { resolveCronRunAdmissionSource } from "./run-authority.js";
 import type { CronRuntimeAuthority } from "./runtime-authority.js";
 import {
@@ -111,7 +111,7 @@ type ScheduledResourceScopes = Readonly<{
 }>;
 
 type ScheduledInferenceAccount =
-  | Readonly<{ kind: "bound"; binding: CronInferenceBinding }>
+  | Readonly<{ kind: "pinned"; profileId: string; runtime?: string }>
   | Readonly<{ kind: "runtime"; authority: CronRuntimeAuthority }>
   | Readonly<{ kind: "runtime-recovery-required" }>
   | Readonly<{ kind: "none" }>;
@@ -186,7 +186,6 @@ type BuilderJob = Pick<
   | "createdActor"
   | "toolsAllowProvenance"
   | "toolsAllowExecTarget"
-  | "inferenceBinding"
   | "runtimeAuthority"
   | "runtimeAuthorityRecoveryRequired"
 >;
@@ -355,14 +354,17 @@ function resolveAutomationsScope(
 }
 
 function resolveInference(job: BuilderJob): ScheduledInferenceAccount {
-  if (job.inferenceBinding) {
-    return { kind: "bound", binding: job.inferenceBinding };
-  }
   if (job.runtimeAuthority) {
     return { kind: "runtime", authority: job.runtimeAuthority };
   }
   if (job.runtimeAuthorityRecoveryRequired) {
     return { kind: "runtime-recovery-required" };
+  }
+  if (job.payload.kind === "agentTurn" && job.payload.model) {
+    const { profile } = splitTrailingAuthProfile(job.payload.model);
+    if (profile) {
+      return { kind: "pinned", profileId: profile, runtime: job.payload.modelRuntime ?? undefined };
+    }
   }
   return { kind: "none" };
 }

@@ -90,7 +90,14 @@ function mergePayloadFields(existing: CronPayload, patch: CronPayloadPatch): Cro
     if (typeof patch.message === "string") {
       next.message = patch.message;
     }
-    for (const field of ["model", "thinking"] as const) {
+    if (
+      patch.model !== undefined &&
+      patch.model !== next.model &&
+      patch.modelRuntime === undefined
+    ) {
+      delete next.modelRuntime;
+    }
+    for (const field of ["model", "modelRuntime", "thinking"] as const) {
       if (typeof patch[field] === "string") {
         next[field] = patch[field];
       } else if (patch[field] === null) {
