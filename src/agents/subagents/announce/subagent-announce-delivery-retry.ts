@@ -58,7 +58,7 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
   /Session "[^"]+" is archived\. Restore it before starting new work\./i,
-  /^managed worktree was removed:/i,
+  /^managed worktree was removed: .+$/,
 ];
 
 // The Gateway refused the request itself; resending the same handoff gets the same answer.

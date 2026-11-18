@@ -306,9 +306,6 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   recovery evidence does not establish successful consumption.
   Before that result exists, the original private completion owner resumes its
   interrupted input; its own pending recovery claim does not block the replay.
-  A removed managed worktree permanently refuses completion delivery instead of
-  retrying it on every sweep. The child’s saved result remains available; restoring
-  the worktree does not automatically replay that settled delivery.
   The outbound durable delivery queue keeps its own transport retry policy.
   Delivery bookkeeping for executions that ended before the current batch's
   earliest child was created cannot block its continuation.
