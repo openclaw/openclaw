@@ -5,10 +5,7 @@ import { cronScriptFailureMetadata } from "../script-failure.js";
 import type { CronStoredJob } from "../types.js";
 import { abortErrorMessage, cronAbortErrorClassification } from "./execution-errors.js";
 import type { CronServiceState } from "./state.js";
-import {
-  type ExecuteJobCoreOptions,
-  resolveMainSessionCronDeliveryContext,
-} from "./timer-execution-timeout.js";
+import type { ExecuteJobCoreOptions } from "./timer-execution-timeout.js";
 import { wake } from "./wake.js";
 
 /** Runs a script payload for an admitted occurrence, then its notify and wake effects. */
@@ -97,44 +94,31 @@ export async function executeScriptCronJob(
   }
 
   const notify = result.notify?.trim() ? result.notify : undefined;
-  if ((job.sessionTarget === "main" && notify) || result.wake) {
+  if (result.wake) {
     const agentId = resolveCronJobEffectiveAgentId(
       job,
       state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
     );
-    const deliveryContext =
-      job.sessionTarget === "main"
-        ? await resolveMainSessionCronDeliveryContext(state, job)
-        : undefined;
     await options?.assertRunCurrent?.();
     abortSignal?.throwIfAborted();
     options?.deliveryAttemptFence?.assertCurrent();
-    const eventOptions = { agentId, ...(deliveryContext ? { deliveryContext } : {}) };
-    if (job.sessionTarget === "main" && notify && !result.wake) {
-      state.deps.enqueueSystemEvent(notify, {
-        ...eventOptions,
-        contextKey: `cron:${job.id}:script`,
-      });
+    if (!expectedTarget) {
+      return {
+        status: "error" as const,
+        error:
+          "Script follow-up has no original session target; inspect its result and request a fresh follow-up",
+      };
     }
-    if (result.wake) {
-      if (!expectedTarget) {
-        return {
-          status: "error" as const,
-          error:
-            "Script follow-up has no original session target; inspect its result and request a fresh follow-up",
-        };
-      }
-      const wakeResult = await wake(state, {
-        mode: result.wake,
-        text: notify ?? `script job ${job.name} completed`,
-        agentId,
-        sessionKey: job.sessionKey,
-        expectedTarget,
-        commitGuard: assertCurrent,
-      });
-      if (!wakeResult.ok) {
-        return { status: "error" as const, error: wakeResult.reason ?? "Wake was refused" };
-      }
+    const wakeResult = await wake(state, {
+      mode: result.wake,
+      text: notify ?? `script job ${job.name} completed`,
+      agentId,
+      sessionKey: job.sessionKey,
+      expectedTarget,
+      commitGuard: assertCurrent,
+    });
+    if (!wakeResult.ok) {
+      return { status: "error" as const, error: wakeResult.reason ?? "Wake was refused" };
     }
   }
   return {

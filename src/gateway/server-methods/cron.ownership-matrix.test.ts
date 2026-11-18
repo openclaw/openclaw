@@ -510,9 +510,9 @@ describe("cron ownership access matrix", () => {
       enabled: true,
       declarationKey: "daily-check",
       schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
+      sessionTarget: "session:agent:main:main",
       wakeMode: "now",
-      payload: { kind: "systemEvent", text: "replacement" },
+      payload: { kind: "agentTurn", message: "replacement" },
     };
     const matches = (job: CronJob) =>
       cronJobMatchesDeclarationScope({ job, input, callerScope, defaultAgentId: "ops" });
@@ -648,7 +648,10 @@ describe("cron ownership access matrix", () => {
       "scoped",
       {
         id: dormant.id,
-        patch: { sessionTarget: "main", payload: { kind: "systemEvent", text: "Check status" } },
+        patch: {
+          sessionTarget: "session:agent:main:main",
+          payload: { kind: "agentTurn", message: "Check status" },
+        },
       },
       dormant.context,
     );

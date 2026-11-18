@@ -16,9 +16,9 @@ import { CronAddResultSchema, CronJobSchema } from "./schema/cron.js";
 const minimalAddParams = {
   name: "daily-summary",
   schedule: { kind: "every", everyMs: 60_000 },
-  sessionTarget: "main",
+  sessionTarget: "session:agent:main:main",
   wakeMode: "next-heartbeat",
-  payload: { kind: "systemEvent", text: "tick" },
+  payload: { kind: "agentTurn", message: "tick" },
 } as const;
 const add = (overrides: Record<string, unknown> = {}) => ({ ...minimalAddParams, ...overrides });
 const update = (patch: Record<string, unknown>, overrides: Record<string, unknown> = {}) => ({
@@ -50,7 +50,7 @@ describe("cron protocol validators", () => {
     ["schedule", "cron", "expr", "0 * * * *", undefined, "'expr'"],
     ["schedule", "on-exit", "command", "true", [], "string"],
     ["schedule", "stream", "command", ["tail", "/tmp/log"], [], "items"],
-    ["payload", "systemEvent", "text", "tick", 1, "string"],
+    ["payload", "agentTurn", "message", "tick", 1, "string"],
     ["payload", "agentTurn", "message", "report", 1, "string"],
     ["payload", "command", "argv", ["true"], [], "items"],
     ["payload", "script", "script", "return 1", 1, "string"],
@@ -72,8 +72,8 @@ describe("cron protocol validators", () => {
   it.each([
     ["schedule", {}, ["stream", "every"]],
     ["schedule", { kind: "not-a-schedule" }, ["stream", "every"]],
-    ["payload", {}, ["systemEvent", "agentTurn"]],
-    ["payload", { kind: "not-a-payload" }, ["systemEvent", "agentTurn"]],
+    ["payload", {}, ["agentTurn", "command"]],
+    ["payload", { kind: "not-a-payload" }, ["agentTurn", "command"]],
   ] as const)("reports allowed %s kinds for %j", (field, value, allowed) => {
     for (const [validate, input] of addAndUpdate({ [field]: value })) {
       expect(validate(input)).toBe(false);

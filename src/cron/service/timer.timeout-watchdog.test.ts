@@ -61,9 +61,9 @@ function agentJob(id: string, timeoutSeconds: number) {
 
 function sessionEventJob(id: string, overrides: Partial<CronJob> = {}) {
   return dueJob(id, {
-    sessionTarget: "main",
+    sessionTarget: "session:agent:main:main",
     wakeMode: "now",
-    payload: { kind: "systemEvent", text: "check scheduled work" },
+    payload: { kind: "agentTurn", message: "check scheduled work" },
     schedule: { kind: "every", everyMs: 60_000, anchorMs: SCHEDULED_AT - 60_000 },
     ...overrides,
   });
@@ -386,7 +386,7 @@ it.each(["finite", "unlimited", "trigger evaluating"] as const)(
         ? dueJob(`session-deadline-${mode}`, {
             agentId: "ops",
             sessionKey: "agent:ops:main",
-            sessionTarget: "main",
+            sessionTarget: "session:agent:main:main",
             wakeMode: "now",
             payload: {
               kind: "agentTurn",

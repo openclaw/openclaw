@@ -38,12 +38,21 @@ export function decodeDoctorHeartbeatJobRows(rows: readonly CronJobReadRow[]): D
       return [];
     }
     const payload = definition.payload;
+    // The retired cron envelope is decoded only for Doctor’s earlier heartbeat repair.
+    const definitionForDoctor: Record<string, unknown> = {
+      ...definition,
+      ...(definition.sessionTarget === "main" ? { sessionTarget: "isolated" } : {}),
+    };
+    if (legacyRow && isRecord(payload) && payload.kind === "systemEvent") {
+      const { text, kind: _kind, ...tools } = payload;
+      definitionForDoctor.payload = { ...tools, kind: "agentTurn", message: text };
+    }
     if (isRecord(payload) && payload.kind === "heartbeat") {
       const legacyPayload = LegacyHeartbeatPayloadSchema.parse(payload);
       // Reuse the canonical envelope decoder. Only the retired discriminator is
       // translated for validation; the result stays in this migration-only type.
       const decoded = rowToCronJob(row, {
-        ...definition,
+        ...definitionForDoctor,
         payload: { ...legacyPayload, kind: "agentTurn", message: "Legacy heartbeat" },
       });
       if (!decoded) {
@@ -59,7 +68,7 @@ export function decodeDoctorHeartbeatJobRows(rows: readonly CronJobReadRow[]): D
         },
       ];
     }
-    const decoded = rowToCronJob(row, definition);
+    const decoded = rowToCronJob(row, definitionForDoctor);
     if (!decoded && legacyRow) {
       throw new Error(`Automation ${row.job_id} is invalid; its source was retained.`);
     }

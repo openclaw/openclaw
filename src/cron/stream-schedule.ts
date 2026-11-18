@@ -121,9 +121,6 @@ export function truncateCronStreamBatch(text: string, maxBytes: number): string 
 
 /** Append event text through the same payload seam used by trigger messages. */
 export function appendCronPayloadText(payload: CronPayload, text: string): CronPayload {
-  if (payload.kind === "systemEvent") {
-    return { ...payload, text: `${payload.text}\n\n${text}` };
-  }
   if (payload.kind === "agentTurn") {
     return { ...payload, message: `${payload.message}\n\n${text}` };
   }

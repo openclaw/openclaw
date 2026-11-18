@@ -27,7 +27,6 @@ import { stringLiteralUnion } from "./string-literal-union.js";
 
 /** Session target accepted by cron jobs. */
 const CronSessionTargetSchema = Type.Union([
-  Type.Literal("main"),
   Type.Literal("isolated"),
   Type.Literal("current"),
   Type.String({ pattern: "^session:.+" }),
@@ -208,12 +207,6 @@ const CronActiveHoursSchema = closedObject({
   timezone: Type.Optional(NonEmptyString),
 });
 
-const CronSystemEventPayloadSchema = closedObject({
-  kind: Type.Literal("systemEvent"),
-  text: NonEmptyString,
-  toolsAllow: Type.Optional(Type.Array(Type.String())),
-  toolsAllowIsDefault: Type.Optional(Type.Boolean()),
-});
 const CronAgentTurnPayloadSchema = cronAgentTurnPayloadSchema({
   message: NonEmptyString,
   model: Type.String(),
@@ -235,7 +228,6 @@ const CronScriptPayloadSchema = cronScriptPayloadSchema({
 
 /** Full cron payload for new jobs. */
 const CronPayloadSchema = Type.Union([
-  CronSystemEventPayloadSchema,
   CronAgentTurnPayloadSchema,
   CronCommandPayloadSchema,
   CronScriptPayloadSchema,
@@ -243,12 +235,6 @@ const CronPayloadSchema = Type.Union([
 
 /** Partial cron payload for job updates. */
 const CronPayloadPatchSchema = Type.Union([
-  closedObject({
-    kind: Type.Literal("systemEvent"),
-    text: Type.Optional(NonEmptyString),
-    toolsAllow: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
-    toolsAllowIsDefault: Type.Optional(Type.Boolean()),
-  }),
   cronAgentTurnPayloadSchema({
     message: Type.Optional(NonEmptyString),
     model: Type.Union([Type.String(), Type.Null()]),

@@ -3,7 +3,7 @@ import type { CronPayload, CronPayloadPatch } from "../types.js";
 import { mergeCronPayload } from "./payload-merge.js";
 
 type MergeCase = [string, CronPayload, CronPayloadPatch, CronPayload];
-const event = { kind: "systemEvent", text: "before" } as const;
+const event = { kind: "agentTurn", message: "before" } as const;
 const agent = { kind: "agentTurn", message: "after" } as const;
 const command = { kind: "command", argv: ["echo", "after"] } as const;
 const tools = { toolsAllow: ["read", "cron"] };
@@ -34,7 +34,7 @@ const mergeCases = [
   [
     "preserves systemEvent toolsAllow when omitted",
     { ...event, ...tools },
-    { kind: "systemEvent", text: "after" },
+    { kind: "agentTurn", message: "after" },
     { ...event, text: "after", ...tools },
   ],
   [

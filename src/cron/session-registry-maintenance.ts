@@ -74,9 +74,6 @@ async function readRunningCronJobIds(cronStorePath: string): Promise<RunningCron
     const ids = new Set<string>();
     for (const job of runningJobs) {
       ids.add(job.id.toLowerCase());
-      if (job.sessionTarget === "main") {
-        continue;
-      }
       const explicitSessionSegment = resolveExplicitCronSessionSegment(job.sessionKey);
       if (explicitSessionSegment) {
         ids.add(explicitSessionSegment);

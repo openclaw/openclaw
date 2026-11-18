@@ -131,9 +131,9 @@ function systemEventJob(id: string, schedule: CronJob["schedule"]) {
     name: id,
     enabled: true,
     schedule,
-    sessionTarget: "main" as const,
+    sessionTarget: "session:agent:main:main" as const,
     wakeMode: "next-heartbeat" as const,
-    payload: { kind: "systemEvent" as const, text: id },
+    payload: { kind: "agentTurn" as const, message: id },
   };
 }
 
@@ -470,7 +470,7 @@ describe("CronService read operations", () => {
     await addJob(cronB, "second");
     expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(["first", "second"]);
     await cronB.update("first", {
-      payload: { kind: "systemEvent", text: "updated by sibling" },
+      payload: { kind: "agentTurn", message: "updated by sibling" },
     });
     await expect(cronA.run("first", "force")).resolves.toEqual({ ok: true, ran: true });
     expect(runSessionEvent).toHaveBeenCalledWith(
@@ -487,7 +487,7 @@ describe("CronService read operations", () => {
     const atMs = Date.parse("2025-12-13T00:00:01.000Z");
     await first.cron.add({
       ...systemEventJob("shared store job", { kind: "at", at: new Date(atMs).toISOString() }),
-      payload: { kind: "systemEvent", text: "hello" },
+      payload: { kind: "agentTurn", message: "hello" },
     });
 
     const aliasedStorePath = `${path.dirname(storePath)}/../${path.basename(path.dirname(storePath))}/${path.basename(storePath)}`;
@@ -556,8 +556,8 @@ describe("CronService read operations", () => {
         recurringJob("long-running-job", now),
         {
           ...recurringJob("later-job", now + 10_000),
-          sessionTarget: "main",
-          payload: { kind: "systemEvent", text: "later work" },
+          sessionTarget: "session:agent:main:main",
+          payload: { kind: "agentTurn", message: "later work" },
         },
       ],
     });

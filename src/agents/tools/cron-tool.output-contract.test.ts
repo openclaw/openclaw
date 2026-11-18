@@ -34,9 +34,9 @@ const job: CronJob = {
   createdAtMs: 1_800_000_000_000,
   updatedAtMs: 1_800_000_000_000,
   schedule: { kind: "every", everyMs: 60_000 },
-  sessionTarget: "main",
+  sessionTarget: "session:agent:main:main",
   wakeMode: "next-heartbeat",
-  payload: { kind: "systemEvent", text: "Check unpaid invoices" },
+  payload: { kind: "agentTurn", message: "Check unpaid invoices" },
   state: { scheduleErrorCount: 3, lastError: "schedule error: bad cron expr" },
 };
 const compactSourceJob: CronJob = {

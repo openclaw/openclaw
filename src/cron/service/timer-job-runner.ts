@@ -346,9 +346,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
 
     // Ordinary turns report admission separately for the shorter setup watchdog.
     const deferTimeoutUntilExecutionStart =
-      job.payload.kind === "agentTurn" ||
-      job.payload.kind === "systemEvent" ||
-      job.payload.kind === "command";
+      job.payload.kind === "agentTurn" || job.payload.kind === "command";
     const watchdog =
       jobTimeoutMs === undefined
         ? undefined

@@ -266,7 +266,7 @@ function normalizeSessionTarget(raw: unknown) {
   }
   const trimmed = raw.trim();
   const lower = normalizeLowercaseStringOrEmpty(trimmed);
-  if (lower === "main" || lower === "isolated" || lower === "current") {
+  if (lower === "isolated" || lower === "current") {
     return lower;
   }
   // Custom session targets must still pass the same session-id safety gate used
@@ -373,8 +373,6 @@ export function normalizeCronJobInput(
     const normalized = normalizeSessionTarget(base.sessionTarget);
     if (normalized) {
       next.sessionTarget = normalized;
-    } else {
-      delete next.sessionTarget;
     }
   }
 
@@ -436,9 +434,7 @@ export function normalizeCronJobInput(
       // Agent turns bind to the creating conversation by default: the run carries
       // that chat's context and announces its result there. Callers without session
       // context are downgraded to isolated by resolveCronCurrentSessionTarget.
-      if (kind === "systemEvent") {
-        next.sessionTarget = "main";
-      } else if (kind === "agentTurn") {
+      if (kind === "agentTurn") {
         next.sessionTarget = "current";
       } else if (kind === "command" || kind === "script") {
         next.sessionTarget = "isolated";

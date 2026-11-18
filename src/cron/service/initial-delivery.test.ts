@@ -23,7 +23,7 @@ function createInput(
 it.each([
   ["isolated", { kind: "script", script: "return { notify: 'hello' }" }, { mode: "announce" }],
   ["main", { kind: "agentTurn", message: "hello" }, undefined],
-  ["isolated", { kind: "systemEvent", text: "tick" }, undefined],
+  ["isolated", { kind: "agentTurn", message: "tick" }, undefined],
 ] as const)("resolves initial delivery for %s %j", (target, payload, expected) => {
   expect(resolveInitialCronDelivery(createInput(target, payload))).toEqual(expected);
 });

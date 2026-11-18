@@ -34,9 +34,9 @@ async function startEveryJob(text: string) {
     name: text,
     enabled: true,
     schedule: { kind: "every", everyMs: 10_000 },
-    sessionTarget: "main",
+    sessionTarget: "session:agent:main:main",
     wakeMode: "next-heartbeat",
-    payload: { kind: "systemEvent", text },
+    payload: { kind: "agentTurn", message: text },
   });
   return { ...fixture, store, clock, job, wake };
 }
@@ -80,7 +80,7 @@ describe("CronService interval/cron jobs fire on time", () => {
       expect(runSessionEvent).toHaveBeenCalledWith(
         expect.objectContaining({
           text,
-          job: expect.objectContaining({ id: job.id, sessionTarget: "main" }),
+          job: expect.objectContaining({ id: job.id, sessionTarget: "session:agent:main:main" }),
         }),
       );
     } finally {
@@ -113,9 +113,9 @@ describe("CronService interval/cron jobs fire on time", () => {
         createdAtMs: nowMs,
         updatedAtMs: nowMs,
         schedule,
-        sessionTarget: "main",
+        sessionTarget: "session:agent:main:main",
         wakeMode: "now",
-        payload: { kind: "systemEvent", text },
+        payload: { kind: "agentTurn", message: text },
         state: { nextRunAtMs: nowMs + dueInMs },
       })),
     });

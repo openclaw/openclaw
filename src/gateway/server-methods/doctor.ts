@@ -266,12 +266,12 @@ function isManagedDreamingJob(job: CronJob): boolean {
   if (description?.includes(MANAGED_MEMORY_DREAMING_CRON_TAG)) {
     return true;
   }
-  // Older managed jobs may lack the tag, so fall back to the exact system-event signature.
+  // Older managed jobs may lack the tag, so fall back to the exact task prompt.
   const name = normalizeOptionalString(job.name);
   return (
     name === MANAGED_MEMORY_DREAMING_CRON_NAME &&
-    job.payload.kind === "systemEvent" &&
-    normalizeOptionalString(job.payload.text) === MEMORY_DREAMING_SYSTEM_EVENT_TEXT
+    job.payload.kind === "agentTurn" &&
+    normalizeOptionalString(job.payload.message) === MEMORY_DREAMING_SYSTEM_EVENT_TEXT
   );
 }
 

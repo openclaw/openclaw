@@ -39,9 +39,9 @@ function mainWatcher(name: string, overrides: Partial<CronJobCreate> = {}): Cron
   return watcher({
     name,
     schedule: { kind: "cron", expr: "* * * * * *", tz: "UTC", staggerMs: 0 },
-    sessionTarget: "main",
+    sessionTarget: "session:agent:main:main",
     wakeMode: "next-heartbeat",
-    payload: { kind: "systemEvent", text: name },
+    payload: { kind: "agentTurn", message: name },
     ...overrides,
   });
 }
@@ -317,7 +317,7 @@ async function pendingWatcher(overrides: Partial<CronJobCreate>) {
 describe("cron trigger evaluation", () => {
   installHarnessCleanup();
   it.each([
-    { sessionTarget: "main", mutation: "remove" },
+    { sessionTarget: "session:agent:main:main", mutation: "remove" },
     { sessionTarget: "isolated", mutation: "disable" },
   ] as const)(
     "cancels a pending $sessionTarget condition on $mutation before it can fire",
@@ -326,7 +326,7 @@ describe("cron trigger evaluation", () => {
         sessionTarget,
         payload:
           sessionTarget === "main"
-            ? { kind: "systemEvent", text: "condition payload" }
+            ? { kind: "agentTurn", message: "condition payload" }
             : { kind: "agentTurn", message: "condition payload" },
         state: { triggerState: { owner: "previous evaluation" } },
       });
@@ -402,8 +402,8 @@ describe("cron trigger evaluation", () => {
     });
     const job = await h.cron.add(
       watcher({
-        sessionTarget: "main",
-        payload: { kind: "systemEvent", text: "base message" },
+        sessionTarget: "session:agent:main:main",
+        payload: { kind: "agentTurn", message: "base message" },
       }),
     );
     await runWhenDue(h.cron, job.id);
@@ -637,7 +637,10 @@ describe("cron trigger startup", () => {
     try {
       // The Gateway accepts cron.add while its scheduler start is still pending.
       const job = await cron.add(
-        watcher({ sessionTarget: "main", payload: { kind: "systemEvent", text: "quiet" } }),
+        watcher({
+          sessionTarget: "session:agent:main:main",
+          payload: { kind: "agentTurn", message: "quiet" },
+        }),
       );
       vi.setSystemTime(job.state.nextRunAtMs! + 5_000);
       await cron.start();
@@ -842,7 +845,7 @@ describe("cron trigger cadence", () => {
     const job = await h.cron.add(
       mainWatcher("expired quiet occurrence", {
         wakeMode: "now",
-        payload: { kind: "systemEvent", text: "must remain quiet" },
+        payload: { kind: "agentTurn", message: "must remain quiet" },
       }),
     );
     expect(await runWhenDue(h.cron, job.id)).toEqual({ ok: true, ran: true });

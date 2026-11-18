@@ -44,7 +44,6 @@ export function inputIdForField(key: string) {
 }
 export function collectBlockingFields(
   errors: CronFieldErrors,
-  form: CronFormState,
   deliveryMode: CronFormState["deliveryMode"],
 ): BlockingField[] {
   // SAFETY: This complete Record<CronFieldKey, string> contains only the validated form field keys.
@@ -54,11 +53,9 @@ export function collectBlockingFields(
       ? [
           {
             label: t(
-              key === "payloadText" && form.payloadKind === "systemEvent"
-                ? "cron.form.mainTimelineMessage"
-                : key === "deliveryTo" && deliveryMode === "webhook"
-                  ? "cron.form.webhookUrl"
-                  : CRON_FIELD_LABEL_KEYS[key],
+              key === "deliveryTo" && deliveryMode === "webhook"
+                ? "cron.form.webhookUrl"
+                : CRON_FIELD_LABEL_KEYS[key],
             ),
             message,
             inputId: inputIdForField(key),

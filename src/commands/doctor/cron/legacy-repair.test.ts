@@ -91,8 +91,8 @@ it(
     const canonical: CronJob = {
       ...job("canonical-at"),
       schedule: { kind: "at", at: "2026-04-01T10:00:00.000Z" },
-      sessionTarget: "main",
-      payload: { kind: "systemEvent", text: "tick" },
+      sessionTarget: "session:agent:main:main",
+      payload: { kind: "agentTurn", message: "tick" },
     };
     await saveJobs(storePath, canonical);
     const { cfg, state } = await loadRepairStateForStore(storePath);
@@ -610,5 +610,57 @@ it.each(["load", "commit"])(
         await expectMissing(file);
         expect(await fs.readFile(`${file}.migrated`)).toEqual(bytes);
       }
+    })(),
+);
+
+it.each(["per-sender", "global"] as const)(
+  "converts a stored system event in %s scope without replacing its job identity",
+  (scope) =>
+    withState(async (fixture) => {
+      const storePath = fixture.statePath("cron", "jobs.json");
+      const cfg = {
+        cron: { store: storePath },
+        session: { scope, mainKey: "home" },
+        agents: { entries: { ops: {} } },
+      } as OpenClawConfig;
+      const saved = job("calendar", {
+        agentId: "ops",
+        enabled: false,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        delivery: { mode: "webhook", to: "https://example.invalid/finished" },
+        state: { lastRunAtMs: 45, lastRunStatus: "ok" },
+      });
+      await saveJobs(storePath, saved);
+      openOpenClawStateDatabase()
+        .db.prepare(
+          "UPDATE cron_jobs SET job_json = json_set(job_json, '$.sessionTarget', 'main', '$.payload', json(?)) WHERE store_key = ? AND job_id = ?",
+        )
+        .run(
+          JSON.stringify({ kind: "systemEvent", text: " Check the calendar. ", toolsAllow: [] }),
+          cronStoreKey(storePath),
+          saved.id,
+        );
+      const before = expectDefined(await loadLegacyCronRepairState({ cfg, storePath }));
+      const repaired = await applyLegacyCronStoreRepair({ cfg, state: before });
+      expect(repaired.warnings).toEqual([]);
+      expect(repaired.changes).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("Saved pre-repair cron backup"),
+          expect.stringContaining("Converted calendar (calendar)"),
+        ]),
+      );
+      const [converted] = await readJobs(storePath);
+      expect(converted).toMatchObject({
+        id: saved.id,
+        agentId: "ops",
+        enabled: false,
+        schedule: saved.schedule,
+        state: saved.state,
+        delivery: saved.delivery,
+        sessionTarget: scope === "global" ? "session:global" : "session:agent:ops:home",
+        payload: { kind: "agentTurn", message: " Check the calendar. ", toolsAllow: [] },
+      });
+      const after = expectDefined(await loadLegacyCronRepairState({ cfg, storePath }));
+      expect((await applyLegacyCronStoreRepair({ cfg, state: after })).changes).toEqual([]);
     })(),
 );

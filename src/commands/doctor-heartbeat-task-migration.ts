@@ -14,7 +14,6 @@ import type { CronJobScratchState } from "../cron/scratch-contract.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import {
-  loadedCronStoreFromRows,
   loadCronRows,
   upsertCronJobRow,
   projectCronJobThroughStorageCodec,
@@ -22,6 +21,7 @@ import {
 import { loadCronRuntimeAuthorities } from "../cron/store/runtime-authority-store.js";
 import { replaceCronRuntimeAuthorityRows } from "../cron/store/save.kernel.js";
 import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
+import type { CronStoredJob as CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import {
@@ -30,6 +30,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { shortenHomePath } from "../utils.js";
 import { ensureHeartbeatMonitorJobs } from "./doctor-heartbeat-cadence-migration.js";
+import { decodeDoctorHeartbeatJobRows } from "./doctor-heartbeat-jobs.js";
 import { resolveLegacyHeartbeatConfig } from "./doctor-heartbeat-legacy.js";
 import { resolveLegacyHeartbeatSession } from "./doctor-heartbeat-session.js";
 import { isHeartbeatTaskCronJob } from "./doctor-heartbeat-task-identity.js";
@@ -124,7 +125,9 @@ export async function migrateStoredHeartbeatTaskJobs(
     ({ db }) => {
       const storeKey = resolveCronStoreKeyInDatabase(db, storePath, env);
       const rows = loadCronRows(db, storeKey);
-      const jobs = loadedCronStoreFromRows(rows).store.jobs;
+      const jobs = decodeDoctorHeartbeatJobRows(rows).filter(
+        (job): job is CronJob => job.payload.kind !== "heartbeat",
+      );
       loadCronRuntimeAuthorities({ db, storeKey, jobs });
       let converted = 0;
       for (const job of jobs) {

@@ -255,7 +255,7 @@ function armActor(
 }
 
 function isAgentWork(job: CronJob): boolean {
-  return job.payload.kind === "agentTurn" || job.payload.kind === "systemEvent";
+  return job.payload.kind === "agentTurn";
 }
 
 function boundedCatchup(

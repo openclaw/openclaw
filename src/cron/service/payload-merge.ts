@@ -56,11 +56,7 @@ export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch)
 
 function mergePayloadFields(existing: CronPayload, patch: CronPayloadPatch): CronPayload {
   const next = { ...existing };
-  if (patch.kind === "systemEvent" && next.kind === "systemEvent") {
-    if (typeof patch.text === "string") {
-      next.text = patch.text;
-    }
-  } else if (patch.kind === "command" && next.kind === "command") {
+  if (patch.kind === "command" && next.kind === "command") {
     if (Array.isArray(patch.argv)) {
       next.argv = patch.argv;
     }
@@ -117,7 +113,7 @@ function mergePayloadFields(existing: CronPayload, patch: CronPayloadPatch): Cro
   }
 
   applyToolsAllowPatch(next, patch, existing);
-  if ("timeoutSeconds" in patch && next.kind !== "systemEvent") {
+  if ("timeoutSeconds" in patch) {
     if (typeof patch.timeoutSeconds === "number") {
       next.timeoutSeconds = patch.timeoutSeconds;
     } else if (patch.timeoutSeconds === null) {
@@ -128,13 +124,6 @@ function mergePayloadFields(existing: CronPayload, patch: CronPayloadPatch): Cro
 }
 
 function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
-  if (patch.kind === "systemEvent") {
-    if (typeof patch.text !== "string" || patch.text.length === 0) {
-      throw new Error('cron.update payload.kind="systemEvent" requires text');
-    }
-    return { kind: "systemEvent", text: patch.text };
-  }
-
   if (patch.kind === "command") {
     if (!Array.isArray(patch.argv) || patch.argv.length === 0) {
       throw new Error('cron.update payload.kind="command" requires argv');

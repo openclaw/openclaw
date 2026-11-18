@@ -531,7 +531,7 @@ describe("CronService failure repair", () => {
     name: string;
     payload: CronJob["payload"];
   }>([
-    { name: "systemEvent", payload: { kind: "systemEvent", text: "check" } },
+    { name: "systemEvent", payload: { kind: "agentTurn", message: "check" } },
     { name: "script", payload: { kind: "script", script: "json({})" } },
   ])("requests repair for a $name job", ({ payload }) => {
     const { deferredNotifications } = applyError({ payload }, { error: "boom" });

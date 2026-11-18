@@ -24,7 +24,7 @@ const suite = createControlUiE2eSuite({
 function job(id: string, name: string) {
   return cronJob(id, name, {
     configRevision: `synthetic-${id}`,
-    payload: { kind: "systemEvent", text: "Synthetic run feedback check" },
+    payload: { kind: "agentTurn", message: "Synthetic run feedback check" },
   });
 }
 

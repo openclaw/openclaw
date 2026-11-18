@@ -111,8 +111,8 @@ async function startGatewayCron(
     name: `${label} stream source`,
     enabled: true,
     schedule: { kind: "stream", command: ["source"] },
-    payload: { kind: "systemEvent", text: "event" },
-    sessionTarget: "main",
+    payload: { kind: "agentTurn", message: "event" },
+    sessionTarget: "session:agent:main:main",
     wakeMode: "next-heartbeat",
   });
   return fixture;
@@ -205,9 +205,9 @@ describe("gateway cron stop-and-drain automation ownership", () => {
       name: "stopped before reservation",
       enabled: true,
       schedule: { kind: "at", at: new Date(original.clock.clock.now() + 1_000).toISOString() },
-      sessionTarget: "main",
+      sessionTarget: "session:agent:main:main",
       wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "must remain due" },
+      payload: { kind: "agentTurn", message: "must remain due" },
     });
     const sessionAgents = vi
       .spyOn(cronState.deps, "resolveSessionStoreAgentIds")

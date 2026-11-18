@@ -155,8 +155,6 @@ export function registerCronAddCommand(cron: Command) {
             }
 
             const resolvedPayload = await (async () => {
-              // System events require main; agent turns may also run in its shared conversation.
-              const systemEvent = normalizeOptionalString(opts.systemEvent) ?? "";
               const optionMessage = readNonBlankString(opts.message);
               const positionalMessage = readNonBlankString(messageArg);
               const commandShell = readNonBlankString(opts.command);
@@ -179,14 +177,13 @@ export function registerCronAddCommand(cron: Command) {
                 );
               }
               const chosen = [
-                Boolean(systemEvent),
                 Boolean(message),
                 Boolean(commandShell) || Boolean(commandArgv),
                 Boolean(scriptPath),
               ].filter(Boolean).length;
               if (chosen !== 1) {
                 throw new CronCliError(
-                  "Choose exactly one payload: --system-event, --message, --command, or --script",
+                  "Choose exactly one payload: --message, --command, or --script",
                 );
               }
               if (typeof opts.skipIfScratchEmpty === "boolean" && !message) {
@@ -198,16 +195,6 @@ export function registerCronAddCommand(cron: Command) {
                 throw new CronCliError(
                   "--include-reasoning/--no-include-reasoning require --message",
                 );
-              }
-              if (systemEvent) {
-                if (opts.timeoutSeconds !== undefined) {
-                  assertCronTimeoutSupported("systemEvent");
-                }
-                return {
-                  kind: "systemEvent" as const,
-                  text: systemEvent,
-                  ...(toolsAllow ? { toolsAllow } : {}),
-                };
               }
               if (scriptPath) {
                 if (opts.timeoutSeconds !== undefined) {
@@ -273,29 +260,16 @@ export function registerCronAddCommand(cron: Command) {
             })();
 
             const sessionSource = cmd.getOptionValueSource("session");
-            const isDeliveryPayload = resolvedPayload.kind !== "systemEvent";
-            const inferredSessionTarget = isDeliveryPayload ? "isolated" : "main";
             const sessionTarget =
-              sessionSource === "cli"
-                ? normalizeCronSessionTargetOption(opts.session)
-                : inferredSessionTarget;
+              sessionSource === "cli" ? normalizeCronSessionTargetOption(opts.session) : "isolated";
             if (!sessionTarget) {
-              throw new CronCliError("--session must be main, isolated, current, or session:<id>");
+              throw new CronCliError("--session must be isolated, current, or session:<id>");
             }
             if (opts.deleteAfterRun && opts.keepAfterRun) {
               throw new CronCliError("Choose --delete-after-run or --keep-after-run, not both");
             }
 
             await assertCronCliJobSpec({ sessionTarget, payload: resolvedPayload });
-            const supportsChatDelivery =
-              isDeliveryPayload &&
-              (sessionTarget !== "main" || resolvedPayload.kind === "agentTurn");
-            if ((opts.announce || typeof opts.deliver === "boolean") && !supportsChatDelivery) {
-              throw new CronCliError(
-                "--announce/--no-deliver require an agentTurn job or a non-main command or script job.",
-              );
-            }
-
             const accountId = normalizeOptionalString(opts.account);
             const threadId = parseCronThreadIdOption(opts.threadId);
             const hasThreadId = typeof threadId === "number";
@@ -307,23 +281,11 @@ export function registerCronAddCommand(cron: Command) {
               Boolean(accountId) ||
               hasThreadId;
 
-            if (hasChatDeliveryTarget && !supportsChatDelivery) {
-              throw new CronCliError(
-                "--channel, --to, --account, and --thread-id require an agentTurn job or a non-main command or script job with delivery.",
-              );
-            }
             if (hasWebhook && hasChatDeliveryTarget) {
               throw new CronCliError("--webhook cannot be combined with chat delivery options.");
             }
 
-            const deliveryMode = hasWebhook
-              ? "webhook"
-              : supportsChatDelivery &&
-                  (sessionTarget !== "main" || hasAnnounce || hasNoDeliver || hasChatDeliveryTarget)
-                ? hasNoDeliver
-                  ? "none"
-                  : "announce"
-                : undefined;
+            const deliveryMode = hasWebhook ? "webhook" : hasNoDeliver ? "none" : "announce";
 
             const optionName = normalizeOptionalString(opts.name);
             const positionalName = hasScheduleFlag ? normalizeOptionalString(nameArg) : undefined;

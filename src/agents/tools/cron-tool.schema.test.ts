@@ -455,7 +455,7 @@ describe("cron shorthand and schedule recovery", () => {
         id: "job",
         configRevision: "sha256:trigger",
         trigger: null,
-        payload: { kind: "systemEvent", text: "before" },
+        payload: { kind: "agentTurn", message: "before" },
       });
       const trigger = { script: "json({ fire: true })", once: false };
       await execute({ action: "update", jobId: "job", trigger });
@@ -480,7 +480,7 @@ describe("cron shorthand and schedule recovery", () => {
     });
 
     it("preserves canonical/padded conflicts for gateway rejection (#95407)", async () => {
-      const conflict = { "payload ": { kind: "systemEvent", text: "conflict" } };
+      const conflict = { "payload ": { kind: "agentTurn", message: "conflict" } };
       await execute({ action: "add", job: { ...job, ...conflict } });
       expectAdd({ payload: job.payload, ...conflict });
     });

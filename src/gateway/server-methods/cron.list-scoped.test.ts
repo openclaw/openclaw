@@ -224,7 +224,7 @@ describe("cron.list scoped SQLite snapshots", () => {
           "UPDATE cron_jobs SET enabled = ?, payload_kind = 'systemEvent', job_json = json_set(job_json, '$.enabled', json(?), '$.delivery.mode', 'not-a-route', '$.sessionTarget', 'main', '$.payload', json(?)) WHERE store_key = ? AND job_id = 'job-0000'",
           1,
           "true",
-          JSON.stringify({ kind: "systemEvent", text: "synthetic legacy job" }),
+          JSON.stringify({ kind: "agentTurn", message: "synthetic legacy job" }),
         );
         update(
           "UPDATE cron_jobs SET sort_order = 10, grant_definition_generation = 17, job_json = json_set(job_json, '$.notify', json('true'), '$.authoredNote', 'retain me') WHERE store_key = ? AND job_id = 'job-0000'",

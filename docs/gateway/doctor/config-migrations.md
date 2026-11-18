@@ -660,6 +660,20 @@ quarantine files, including linked files, and reports their deferred archival.
 The live Doctor phase imports those sources and archives them after package
 installation. This also protects updates started by supported older releases.
 
+## Retired main-session automation action
+
+Run `openclaw doctor --fix` after upgrading to convert jobs created with
+“Post to main session” or the old `main` automation target. Doctor backs up
+cron state, keeps job IDs, schedules, run history, scratch, and valid delivery
+settings, and reports each conversion. The reminder becomes a task prompt in the
+owning agent’s existing conversation, using `session:global` under global
+session scope. It is no longer shown to the model as a system notice.
+
+Jobs that cannot be continued safely, such as headless scripts that used the old
+main-session notification behavior, stay in the store paused with an explanation.
+Review and update those jobs before enabling them again. New jobs use an agent
+prompt with an explicit `session:<key>` to continue any existing conversation.
+
 ## Legacy cron delivery settings
 
 A stored delivery object must name its mode: `none`, `announce`, or `webhook`.

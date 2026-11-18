@@ -49,7 +49,7 @@ export function recoverDoctorHeartbeatRun(params: {
     ...job,
     payload:
       job.payload.kind === "heartbeat"
-        ? { ...job.payload, kind: "systemEvent" as const, text: "" }
+        ? { ...job.payload, kind: "agentTurn" as const, message: "Legacy heartbeat" }
         : job.payload,
   });
   const receiptRow = executeSqliteQuerySync(

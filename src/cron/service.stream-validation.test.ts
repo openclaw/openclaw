@@ -432,7 +432,7 @@ it("skips invalid main jobs with command payloads loaded from disk", async () =>
         createdAtMs: Date.now(),
         updatedAtMs: Date.now(),
         schedule: { kind: "at", at: "2025-12-13T00:00:01.000Z" },
-        sessionTarget: "main",
+        sessionTarget: "session:agent:main:main",
         wakeMode: "now",
         payload: { kind: "command", argv: ["echo", "invalid main payload"] },
         state: {},

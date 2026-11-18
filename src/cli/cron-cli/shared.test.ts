@@ -96,7 +96,7 @@ function makeJob(overrides: Partial<CronJob>): CronJob {
     createdAtMs: now,
     updatedAtMs: now,
     schedule: { kind: "at", at: new Date(now + 3600000).toISOString() },
-    payload: { kind: "systemEvent", text: "test" },
+    payload: { kind: "agentTurn", message: "test" },
     state: { nextRunAtMs: now + 3600000 },
     ...overrides,
   } as CronJob;

@@ -7,11 +7,7 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { watchAgentScope, watchSelectedAgent } from "../../lib/agents/index.ts";
 import { createChannelCapability } from "../../lib/channels/index.ts";
-import {
-  hasCronFormErrors,
-  normalizeCronFormState,
-  validateCronForm,
-} from "../../lib/cron/form.ts";
+import { hasCronFormErrors, validateCronForm } from "../../lib/cron/form.ts";
 import {
   addCronJob,
   cancelCronEdit,
@@ -462,7 +458,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       current,
       resolveCronEventPatch(current, patch),
     );
-    const next = normalizeCronFormState({ ...cron.cronForm, ...resolvedPatch }, resolvedPatch);
+    const next = { ...cron.cronForm, ...resolvedPatch };
     cron.cronForm = next;
     cron.cronFieldErrors = validateCronForm(cron.cronForm);
     if (requiresDirectoryReload(current, next)) {

@@ -24,9 +24,9 @@ describe("Cron issue regressions", () => {
       name: "hourly",
       enabled: true,
       schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
-      sessionTarget: "main",
+      sessionTarget: "session:agent:main:main",
       wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "tick" },
+      payload: { kind: "agentTurn", message: "tick" },
     });
     const offsetMs = topOfHourOffsetMs(created.id);
     expect(created.state.nextRunAtMs).toBe(Date.parse("2026-02-06T11:00:00.000Z") + offsetMs);
@@ -68,17 +68,17 @@ describe("Cron issue regressions", () => {
       name: "due-preserved",
       enabled: true,
       schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
-      sessionTarget: "main",
+      sessionTarget: "session:agent:main:main",
       wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "due-preserved" },
+      payload: { kind: "agentTurn", message: "due-preserved" },
     });
     const otherJob = await cron.add({
       name: "other-job",
       enabled: true,
       schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
-      sessionTarget: "main",
+      sessionTarget: "session:agent:main:main",
       wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "other" },
+      payload: { kind: "agentTurn", message: "other" },
     });
 
     const originalDueNextRunAtMs = dueJob.state.nextRunAtMs;
@@ -87,7 +87,7 @@ describe("Cron issue regressions", () => {
     vi.setSystemTime(now + 5 * 60_000);
 
     await cron.update(otherJob.id, {
-      payload: { kind: "systemEvent", text: "other-updated" },
+      payload: { kind: "agentTurn", message: "other-updated" },
     });
 
     const storeData = await loadCronStore(store.storePath);
@@ -104,9 +104,9 @@ describe("Cron issue regressions", () => {
       name: "disabled-cron",
       enabled: false,
       schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
-      sessionTarget: "main",
+      sessionTarget: "session:agent:main:main",
       wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "tick" },
+      payload: { kind: "agentTurn", message: "tick" },
     });
 
     await expect(
@@ -138,9 +138,9 @@ describe("Cron issue regressions", () => {
       createdAtMs: pastAt - 60_000,
       updatedAtMs: pastAt,
       schedule: { kind: "at", at: new Date(pastAt).toISOString() },
-      sessionTarget: "main",
+      sessionTarget: "session:agent:main:main",
       wakeMode: "now",
-      payload: { kind: "systemEvent", text: "⏰ Reminder" },
+      payload: { kind: "agentTurn", message: "⏰ Reminder" },
     } as const;
     const terminalStates: Array<{ id: string; state: CronJobState }> = [
       {

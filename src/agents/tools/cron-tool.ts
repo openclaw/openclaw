@@ -531,11 +531,11 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
               const contextMessages = readNonNegativeIntegerParam(params, "contextMessages") ?? 0;
               if (
                 "payload" in job &&
-                (job as { payload?: { kind?: string; text?: string } }).payload?.kind ===
-                  "systemEvent"
+                (job as { payload?: { kind?: string; message?: string } }).payload?.kind ===
+                  "agentTurn"
               ) {
-                const payload = (job as { payload: { kind: string; text: string } }).payload;
-                if (typeof payload.text === "string" && payload.text.trim()) {
+                const payload = (job as { payload: { kind: string; message: string } }).payload;
+                if (typeof payload.message === "string" && payload.message.trim()) {
                   const contextLines = await buildReminderContextLines({
                     agentSessionKey: opts?.agentSessionKey,
                     agentId: callerAgentId,
@@ -544,8 +544,8 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                     callGatewayTool: callGateway,
                   });
                   if (contextLines.length > 0) {
-                    const baseText = stripExistingContext(payload.text);
-                    payload.text = `${baseText}${REMINDER_CONTEXT_MARKER}${contextLines.join("\n")}`;
+                    const baseText = stripExistingContext(payload.message);
+                    payload.message = `${baseText}${REMINDER_CONTEXT_MARKER}${contextLines.join("\n")}`;
                   }
                 }
               }

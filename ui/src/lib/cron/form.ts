@@ -20,35 +20,10 @@ const CRON_CHANNEL_LAST = "last";
 
 function isCronFormSessionTarget(value: string): value is CronFormState["sessionTarget"] {
   return (
-    value === "main" ||
     value === "isolated" ||
     value === "current" ||
     (value.startsWith("session:") && value.length > "session:".length)
   );
-}
-
-export function normalizeCronFormState(
-  form: CronFormState,
-  changed: Partial<CronFormState> = {},
-): CronFormState {
-  let normalized = form;
-  if (!form.payloadLocked && form.payloadKind === "systemEvent" && form.sessionTarget !== "main") {
-    normalized =
-      changed.sessionTarget !== undefined
-        ? { ...normalized, payloadKind: "agentTurn" }
-        : { ...normalized, sessionTarget: "main" };
-  }
-  if (
-    normalized.deliveryMode !== "announce" ||
-    normalized.payloadKind === "agentTurn" ||
-    (normalized.sessionTarget !== "main" && normalized.payloadLocked)
-  ) {
-    return normalized;
-  }
-  return {
-    ...normalized,
-    deliveryMode: "none",
-  };
 }
 
 function parsesAsCron(expr: string, timezone?: string): boolean {
@@ -122,10 +97,7 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
     }
   }
   if (!form.payloadLocked && !form.payloadText.trim()) {
-    errors.payloadText =
-      form.payloadKind === "systemEvent"
-        ? "cron.errors.systemTextRequired"
-        : "cron.errors.agentMessageRequired";
+    errors.payloadText = "cron.errors.agentMessageRequired";
   }
   if (!form.payloadLocked && form.payloadKind === "agentTurn") {
     const timeoutRaw = form.timeoutSeconds.trim();
@@ -231,15 +203,13 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     payloadKind: payload.kind,
     payloadLocked,
     payloadText:
-      payload.kind === "systemEvent"
-        ? payload.text
-        : payload.kind === "agentTurn"
-          ? payload.message
-          : payload.kind === "command"
-            ? payload.argv.join(" ")
-            : payload.kind === "script"
-              ? payload.script
-              : "",
+      payload.kind === "agentTurn"
+        ? payload.message
+        : payload.kind === "command"
+          ? payload.argv.join(" ")
+          : payload.kind === "script"
+            ? payload.script
+            : "",
     payloadModel: agentTurn?.model ?? "",
     payloadThinking: agentTurn?.thinking ?? "",
     payloadLightContext: agentTurn?.lightContext === true,
@@ -286,5 +256,5 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   // Process-backed schedule kinds are shown read-only in the list and have no
   // editable schedule form fields; leave the cron/at/every fields at their defaults.
 
-  return normalizeCronFormState(next);
+  return next;
 }

@@ -79,6 +79,7 @@ type InvalidPersistedCronJobReason =
   | "invalid-execution-policy"
   | "unsatisfiable-schedule"
   | "invalid-trigger"
+  | "unsupported-definition"
   | "missing-payload"
   | "invalid-payload";
 
@@ -89,6 +90,15 @@ export function getInvalidPersistedCronJobReason(
   const id = candidate.id;
   if (typeof id !== "string" || !id.trim()) {
     return "missing-id";
+  }
+  const target = candidate.sessionTarget;
+  if (
+    target !== undefined &&
+    target !== "isolated" &&
+    target !== "current" &&
+    !(typeof target === "string" && target.startsWith("session:"))
+  ) {
+    return "unsupported-definition";
   }
   const lastMeaningfulResult = asRecord(candidate.state).lastMeaningfulResult;
   if (
@@ -279,25 +289,18 @@ export function getInvalidPersistedCronJobReason(
       ? null
       : "invalid-payload";
   }
-  if (
-    payloadKind !== "systemEvent" &&
-    payloadKind !== "agentTurn" &&
-    payloadKind !== "command" &&
-    payloadKind !== "script"
-  ) {
-    return "invalid-payload";
+  if (payloadKind !== "agentTurn" && payloadKind !== "command" && payloadKind !== "script") {
+    return "unsupported-definition";
   }
   const requiredText =
-    payloadKind === "systemEvent"
-      ? payloadRecord.text
-      : payloadKind === "agentTurn"
-        ? payloadRecord.message
-        : payloadKind === "script"
-          ? payloadRecord.script
-          : undefined;
+    payloadKind === "agentTurn"
+      ? payloadRecord.message
+      : payloadKind === "script"
+        ? payloadRecord.script
+        : undefined;
   if (
-    (payloadKind === "systemEvent" || payloadKind === "agentTurn" || payloadKind === "script") &&
-    (typeof requiredText !== "string" || (payloadKind !== "systemEvent" && !requiredText.trim()))
+    (payloadKind === "agentTurn" || payloadKind === "script") &&
+    (typeof requiredText !== "string" || !requiredText.trim())
   ) {
     return "invalid-payload";
   }

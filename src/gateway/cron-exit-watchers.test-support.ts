@@ -70,9 +70,9 @@ export function onExitJob(id: string, command = "true", enabled = true, cwd?: st
     createdAtMs: 1,
     updatedAtMs: 1,
     schedule: { kind: "on-exit", command, ...(cwd ? { cwd } : {}) },
-    sessionTarget: "main",
+    sessionTarget: "session:agent:main:main",
     wakeMode: "now",
-    payload: { kind: "systemEvent", text: "done" },
+    payload: { kind: "agentTurn", message: "done" },
     delivery: { mode: "none" },
     state: {},
   };

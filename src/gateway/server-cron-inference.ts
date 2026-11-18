@@ -35,7 +35,6 @@ async function describeCronInferenceMigration(
 ): Promise<string | undefined> {
   if (
     job.payload.kind !== "agentTurn" ||
-    job.sessionTarget === "main" ||
     job.inferenceBinding ||
     job.runtimeAuthority ||
     job.runtimeAuthorityRecoveryRequired

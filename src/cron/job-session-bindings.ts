@@ -94,9 +94,7 @@ export function resolveCronJobSessionBindings(
     bindings.set(key, parseAgentSessionKey(key)?.agentId ?? agentId);
   };
   try {
-    if (job.sessionTarget === "main") {
-      add("main");
-    } else if (job.sessionTarget === "isolated" || job.sessionTarget === "current") {
+    if (job.sessionTarget === "isolated" || job.sessionTarget === "current") {
       // Gateway execution runs isolated jobs — and stale persisted "current"
       // targets, which patches can store un-resolved — in the deterministic
       // cron:<jobId> session (server-cron.ts falls back to it for non-session

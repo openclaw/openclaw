@@ -56,9 +56,9 @@ const reminder = (text: string, wakeMode: "now" | "next-heartbeat" = "next-heart
   enabled: false,
   deleteAfterRun: false,
   schedule: { kind: "at" as const, at: new Date(Date.now() + 60_000).toISOString() },
-  sessionTarget: "main" as const,
+  sessionTarget: "session:agent:main:main" as const,
   wakeMode,
-  payload: { kind: "systemEvent" as const, text },
+  payload: { kind: "agentTurn" as const, message: text },
 });
 const sessionEntry = () => ({
   sessionId: "cron-restart-session",

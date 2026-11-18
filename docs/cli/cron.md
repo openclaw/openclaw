@@ -51,8 +51,7 @@ For agent or command jobs, `--timeout-seconds` accepts non-negative whole second
 Set `--timeout-seconds 0` on `add`/`create` or `edit` to disable the scheduler's
 wall-clock ceiling. Omitting the flag on creation keeps the default timeout;
 omitting it on edit leaves the stored timeout unchanged. Agent/provider timeouts,
-startup watchdogs, and command-runner limits still apply. System-event jobs reject
-`--timeout-seconds`; script jobs use `--script-timeout-seconds` instead.
+startup watchdogs, and command-runner limits still apply. Script jobs use `--script-timeout-seconds` instead.
 
 Use `--webhook <url>` when the job should POST the finished payload instead of delivering to a chat target:
 
@@ -162,7 +161,6 @@ An isolated agent-turn job created from a conversation also captures that conver
 
 <AccordionGroup>
   <Accordion title="Session keys">
-    - `main` binds to the agent's main session.
     - `isolated` creates a fresh transcript and session id for each run.
     - `current` binds to the active session at creation time.
     - `session:<id>` pins to an explicit persistent session key.
@@ -528,8 +526,6 @@ This searches job metadata, not message or script payloads; use `automations run
 <job-id> --query <text>` to search run summaries and errors instead.
 
 The human-readable Agent ID column shows the effective owner. JSON list rows preserve the declared `agentId` and include `effectiveAgentId`, which is `null` when ownership is unresolved.
-
-Existing main-session jobs can still be renamed, disabled, or rescheduled after their agent stops being the system default. Creating a main-session job or explicitly setting its agent, session target, or payload kind revalidates the current main-session rules.
 
 An unresolved owner does not stop the scheduler: that job is skipped with an explanation in `state.lastError`, while other jobs continue. Run `openclaw doctor --fix` to repair unresolved multi-agent legacy ownership, set `agents.defaults.systemAgent.agentId`, or use `openclaw cron edit <job-id> --agent <id>` to repair the job. Sole-agent rosters and legacy default markers honored by the runtime already resolve an owner and need no owner migration. The explanation stays on the job. No agent run-history entry is created, because no agent run starts.
 

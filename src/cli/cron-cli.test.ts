@@ -93,7 +93,7 @@ const ADD = [...CREATE, "--cron", "* * * * *"];
 const EDIT = ["cron", "edit", "job-1"];
 const RUN_WAIT = ["cron", "run", "job-1", "--wait"];
 const AGENT_ADD = [...ADD, "--message", "hello"];
-const EVENT_ADD = [...ADD, "--system-event", "tick"];
+const EVENT_ADD = [...ADD, "--message", "tick"];
 const telegramOptions = {
   "--deliver": true,
   "--channel": "telegram",
@@ -492,13 +492,13 @@ it("keeps the default-agent warning off JSON stdout and preserves an empty tool 
   });
 });
 
-it("creates a one-shot webhook system event with an explicit keep policy", async () => {
+it("creates a one-shot webhook reminder with an explicit keep policy", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
   const params = await addOptions(
     {
       "--at": "+30m",
-      "--system-event": "hi",
+      "--message": "hi",
       "--webhook": " https://example.invalid/openclaw ",
       "--keep-after-run": true,
     },
@@ -506,10 +506,10 @@ it("creates a one-shot webhook system event with an explicit keep policy", async
   );
   expect(params).toMatchObject({
     name: "Reminder",
-    sessionTarget: "main",
+    sessionTarget: "isolated",
     deleteAfterRun: false,
     schedule: { kind: "at", at: "2026-05-25T00:30:00.000Z" },
-    payload: { kind: "systemEvent", text: "hi" },
+    payload: { kind: "agentTurn", message: "hi" },
   });
   expect(params.delivery).toEqual({
     mode: "webhook",
@@ -522,13 +522,11 @@ it("creates a one-shot webhook system event with an explicit keep policy", async
   expect(defaultRuntime.error).not.toHaveBeenCalled();
 });
 
-it("creates exact system events with a tool allowlist", async () => {
-  expect(
-    await namedAdd("--system-event", "tick", "--exact", "--tools", "read,write"),
-  ).toMatchObject({
-    sessionTarget: "main",
+it("creates exact task prompts with a tool allowlist", async () => {
+  expect(await namedAdd("--message", "tick", "--exact", "--tools", "read,write")).toMatchObject({
+    sessionTarget: "isolated",
     schedule: { kind: "cron", staggerMs: 0 },
-    payload: { kind: "systemEvent", text: "tick", toolsAllow: ["read", "write"] },
+    payload: { kind: "agentTurn", message: "tick", toolsAllow: ["read", "write"] },
   });
 });
 
@@ -538,8 +536,8 @@ it("keeps invalid add target/payload guidance in JSON mode before RPC", async ()
     ...CREATE,
     ...flags({
       "--at": "+3m",
-      "--session": "current",
-      "--system-event": "resume",
+      "--session": "main",
+      "--message": "resume",
       "--json": true,
     }),
   ];
@@ -551,8 +549,7 @@ it("keeps invalid add target/payload guidance in JSON mode before RPC", async ()
       ok: false,
       error: {
         type: "cli_error",
-        message:
-          'cron sessionTarget "current" cannot run systemEvent: systemEvent only runs in the main session; for sessionTarget "current" use payload {kind:"agentTurn",message}',
+        message: "--session must be isolated, current, or session:<id>",
       },
     });
     expect(callGatewayFromCli).not.toHaveBeenCalled();
@@ -811,7 +808,7 @@ it.each([
     "Pass the automation message either positionally or with --message",
   ],
   [
-    [...ADD, "Positional", "--system-event", "tick"],
+    [...ADD, "Positional", "--message", "tick"],
     "Pass the automation name either positionally or with --name",
   ],
   [
@@ -820,8 +817,8 @@ it.each([
   ],
   [[...AGENT_ADD, "--command", "echo ok"], "Choose exactly one payload"],
   [
-    [...ADD, "--session", "main", "--system-event", "tick", "--thread-id", "42"],
-    "require an agentTurn job or a non-main command or script job with delivery",
+    [...ADD, "--session", "main", "--message", "tick", "--thread-id", "42"],
+    "--session must be isolated, current, or session:<id>",
   ],
   [[...AGENT_ADD, "--thread-id", "topic-42"], "--thread-id must be a positive integer"],
   [["cron", "list", "--agent", "   "], "--agent must not be blank"],
@@ -834,11 +831,11 @@ it.each([
   [["cron", "run", "job-1", "--wait", "--poll-interval", "0ms"], "invalid --poll-interval"],
   [[...EVENT_ADD, "--stagger", "1m", "--exact"], "Choose either --stagger or --exact"],
   [
-    [...CREATE, "--every", "10m", "--stagger", "30s", "--system-event", "tick"],
+    [...CREATE, "--every", "10m", "--stagger", "30s", "--message", "tick"],
     "--stagger/--exact are only valid for cron schedules",
   ],
   [
-    [...CREATE, "--every", "10m", "--tz", "UTC", "--system-event", "tick"],
+    [...CREATE, "--every", "10m", "--tz", "UTC", "--message", "tick"],
     "--tz is only valid with --cron or offset-less --at",
   ],
   [

@@ -413,18 +413,10 @@ async function executeMainSessionCronJob(
   options?: ExecuteJobCoreOptions,
   sessionPreparation?: CronSessionRunPreparation,
 ): Promise<CronJobExecutionResult> {
-  const text =
-    job.payload.kind === "agentTurn"
-      ? job.payload.message
-      : job.payload.kind === "systemEvent"
-        ? job.payload.text.trim()
-        : undefined;
-  if (!text) {
-    return {
-      status: "skipped",
-      error: "main job requires non-empty systemEvent or agentTurn text",
-    };
+  if (job.payload.kind !== "agentTurn") {
+    return { status: "error", error: "Continuing a session requires an agent prompt" };
   }
+  const text = job.payload.message;
   if (!state.deps.runSessionEvent) {
     return {
       status: "error",

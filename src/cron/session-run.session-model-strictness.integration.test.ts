@@ -507,7 +507,7 @@ describe("stored session model selections in scheduled session turns", () => {
         delivery: { mode: "none" },
         payload:
           params.payloadKind === "systemEvent"
-            ? { kind: "systemEvent", text: "Reply." }
+            ? { kind: "agentTurn", message: "Reply." }
             : { kind: "agentTurn", message: "Reply.", ...params.payload },
       });
       const conversation = {

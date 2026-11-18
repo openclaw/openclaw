@@ -61,6 +61,7 @@ import {
   canRepairCronDeliveryForDoctor,
   collectStoredCronCodexRuntimePolicyTargets,
   cronCodexRuntimePolicyTargetKey,
+  isLegacyMainAutomation,
   normalizeStoredCronJobs,
   recoverValidQuarantinedCronScheduleJobs,
   type CronCodexRuntimePolicyTarget,
@@ -154,16 +155,27 @@ export async function loadLegacyCronRepairState(params: {
       projectedOwnersByJobId.set(jobId, { kind: "explicit", agentId });
     }
   }
-  const invalidConfigRows: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
-  const currentJobs =
-    loaded.configJobs.length > 0
-      ? loaded.configJobs.map((job, index) =>
-          mergeRuntimeEntryIntoConfigJob({
-            job,
-            runtimeEntry: loaded.configJobRuntimeEntries[index],
-          }),
-        )
-      : (loaded.store.jobs as unknown as Array<Record<string, unknown>>);
+  const invalidConfigRows: QuarantinedCronConfigJob[] = [];
+  const indexedJobs = loaded.configJobs.map((job, index) => ({
+    sourceIndex: loaded.configJobIndexes[index] ?? index,
+    job: mergeRuntimeEntryIntoConfigJob({
+      job,
+      runtimeEntry: loaded.configJobRuntimeEntries[index],
+    }),
+  }));
+  for (const row of loaded.invalidConfigRows) {
+    if (row.job && isLegacyMainAutomation(row.job) && !row.raw) {
+      indexedJobs.push({
+        sourceIndex: row.sourceIndex,
+        job: mergeRuntimeEntryIntoConfigJob({ job: row.job, runtimeEntry: row }),
+      });
+    } else {
+      invalidConfigRows.push(row);
+    }
+  }
+  const currentJobs = indexedJobs
+    .sort((a, b) => a.sourceIndex - b.sourceIndex)
+    .map(({ job }) => job);
   for (const job of currentJobs) {
     const jobId = normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
     const sqlOwner = jobId ? sqlOwners.get(jobId) : undefined;
@@ -253,6 +265,7 @@ export async function applyLegacyCronStoreRepair(params: {
     params.normalized && quarantineRecovery.recoveredJobs.length === 0
       ? params.normalized
       : normalizeStoredCronJobs(state.rawJobs, {
+          cfg: params.cfg,
           migrateCodexModelRefs: params.migrateCodexModelRefs,
           shouldMigrateCodexRuntimePolicyTarget: (target) =>
             !blockedRuntimePolicyTargets.has(cronCodexRuntimePolicyTargetKey(target)),
@@ -405,7 +418,7 @@ export async function applyLegacyCronStoreRepair(params: {
     }
   }
 
-  changes.push(...retirementChanges);
+  changes.push(...normalized.mainSessionRepairs, ...retirementChanges);
   if (normalized.issues.reconciledOwnerAccount) {
     changes.push(
       `Reconciled ${pluralize(normalized.issues.reconciledOwnerAccount, "cron job owner account")} from persisted creator identity; existing tool permissions were preserved.`,

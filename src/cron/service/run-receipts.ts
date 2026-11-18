@@ -21,7 +21,7 @@ import {
   resolveCronJobMessageToolAuthorityInputs,
 } from "./jobs-tool-policy.js";
 import type { CronExecutionIdentityAdmission, CronServiceState } from "./state.js";
-import { runsDetachedFromMainSession } from "./timer-execution-timeout.js";
+import { runsDetachedFromSession } from "./timer-execution-timeout.js";
 
 export function createCronReceiptExecutionIdentity(
   state: CronServiceState,
@@ -110,7 +110,7 @@ export function markServiceCronJobActive(
       ? toAgentStoreSessionKey({ agentId: runReceipt.agentId, requestKey: sessionKey })
       : undefined,
     stateIdentityKey: context.admission.identity.key,
-    preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(job),
+    preserveAcrossGenerationAdvance: !runsDetachedFromSession(job),
     isMessageActionAuthorityCurrent: resolveCronJobMessageToolAuthorityInputs(job)
       ? isCurrent
       : undefined,

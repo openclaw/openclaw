@@ -6,7 +6,6 @@ const enCron = {
     job: {
       state: "{status} · next {next} · last {last}",
       pluginCommand: "Plugin command: /{command} ({plugin})",
-      system: "System: {text}",
       command: "Command: {command}",
       script: "Script: {script}",
       agent: "Agent: {message}",
@@ -43,7 +42,6 @@ const enCron = {
         "Script payloads cannot use condition triggers because both own the same saved state.",
       triggerScheduleUnsupported:
         "Condition triggers require an interval, cron, or stream schedule.",
-      systemTextRequired: "System text is required.",
       agentMessageRequired: "Agent message is required.",
       timeoutInvalid: "If set, timeout must be 0 or greater (0 disables this timeout).",
       deliveryModeRequired:
@@ -54,7 +52,6 @@ const enCron = {
       invalidIntervalAmount: "Invalid interval amount.",
       cronExprRequiredShort: "Cron expression required.",
       invalidStaggerAmount: "Invalid stagger amount.",
-      systemEventTextRequired: "System event text required.",
       agentMessageRequiredShort: "Agent message required.",
       nameRequiredShort: "Name required.",
     },
@@ -203,10 +200,8 @@ const enCron = {
       timezoneHelp: "Leave blank to use the time zone of the computer running OpenClaw.",
       activeHoursTimezoneHelp: "Leave blank to use your time zone.",
       runsIn: "Runs in",
-      mainSession: "Main session",
       isolatedSession: "Its own session",
-      sessionHelp:
-        "Main adds the task to the agent’s main session. Isolated starts a reply in a separate session.",
+      sessionHelp: "An automation can run in its own session or continue a specific conversation.",
       activeHours: "Only run during set hours",
       activeHoursHelp:
         "Scheduled runs outside these hours are skipped, and one-time runs wait. Manual runs follow it too. Hours can cross midnight.",
@@ -233,15 +228,12 @@ const enCron = {
       script: "Script",
       readOnlyPayloadHelp:
         "This task was created outside the app. You can’t edit its contents here, but saving other changes keeps them.",
-      systemEvent: "Post to main session",
       agentTurn: "Run agent task",
-      systemEventHelp: "Adds your text to the agent’s main timeline for reminders.",
       agentTurnHelp: "Starts an agent reply in a separate session using your prompt.",
       timeoutSeconds: "Time limit (seconds)",
       timeoutPlaceholder: "Default",
       timeoutHelp:
         "Stops the run if it takes longer. Leave blank for the default, or enter 0 for no limit.",
-      mainTimelineMessage: "Main timeline message",
       assistantTaskPrompt: "Prompt",
       promptPreview: "Prompt preview",
       deliveryModeLabel: "Send results",

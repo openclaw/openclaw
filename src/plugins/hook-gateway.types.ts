@@ -153,12 +153,9 @@ type PluginHookGatewayCronCreateInput = {
     expr: string;
     tz?: string;
   };
-  sessionTarget: string;
+  sessionTarget: "isolated" | "current" | `session:${string}`;
   wakeMode: string;
-  payload: {
-    kind: string;
-    text?: string;
-  };
+  payload: { kind: "agentTurn"; message: string };
 };
 
 type PluginHookGatewayCronUpdateInput = Partial<PluginHookGatewayCronCreateInput>;

@@ -77,7 +77,6 @@ SCHEDULE:
 TARGET+PAYLOAD:
 - "current" (agentTurn default) = this conversation's context, for watchers and delayed work. For user-requested standalone recurring duties, prefer a dedicated named session targeting "session:<key>", not Main/Home, unless requested otherwise. Current runs are detached with bounded chat context and their own identity, not resumed parent turns. While this conversation is current, the run works at this conversation's saved workspace root with its sandbox (otherwise the scheduled agent workspace); resetting the conversation ends the run. Cloud worker placement is not inherited. Reassigning the stable cron key cancels its in-flight turns. Verify checkout/tool access for repository work. Results go to the resolved destination (this conversation by default); delivery does not resume the original agent.
 - "isolated" = fresh detached session; standalone background work recorded in cron run history.
-- "main" = heartbeat lane; payload {kind:"systemEvent",text} (systemEvent default target).
 - "session:<key>" + agentTurn runs a turn inside that existing conversation (same history, saved workspace/worktree). To resume a conversation at a saved time (a reminder, or follow-up from another session), add an at + agentTurn job with sessionTarget "session:<your session key from Runtime>" and message = instructions for your next turn. If that one-shot turn still needs to wait, call next_check in:"5m" to rearm this same job after successful run completion (minimum 2s); target, payload, and tool cap stay unchanged. Without a proposal it completes normally.
 - {kind:"agentTurn",message,includeReasoning?}; includeReasoning includes reasoning only alongside a meaningful delivered result; timeoutSeconds 0=none.
 - Inherited MCP authority covers model-callable tools, not interactive app-view-only capabilities.${scriptPayloadLine}
@@ -94,7 +93,7 @@ FAILURE ALERTS: routed jobs notify on the first execution failure (1h cooldown; 
 
 Optional job policy: activeHours{start,end,timezone?} is an end-exclusive execution window (including manual runs); idleOnly:true waits for agent-wide quiet, including other cron jobs and foreground sessions, not just the target session; continuations may defer indefinitely on busy shared agents. false/unset uses normal admission. delivery.target:"owner" resolves the owner DM dynamically, never the last group; delivery.directPolicy:"block" prohibits DMs. agentTurn skipIfScratchEmpty skips an explicitly empty checklist, not missing scratch.
 
-Main-job wakeMode: "now"(default)|"next-heartbeat". contextMessages 0-10 embeds recent chat lines in reminder text.
+Job wakeMode: "now"(default)|"next-heartbeat". contextMessages 0-10 embeds recent chat lines in a task prompt.
 
 Inside a scheduled run only: ${buildCronSelfDescription({ activeRun: true, nextCheckEnabled: true })}${commandPolicySuffix}`;
 }

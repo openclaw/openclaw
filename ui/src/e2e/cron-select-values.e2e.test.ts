@@ -232,22 +232,14 @@ suite.define(() => {
       expect(await page.locator("#cron-delivery-channel").count()).toBe(0);
 
       await action.click();
-      await page.getByRole("option", { name: "Post to main session", exact: true }).click();
-      await expect.poll(() => pickerValue("#cron-payload-kind")).toBe("systemEvent");
-      await expect.poll(() => pickerValue("#cron-session-target")).toBe("main");
-      await expect
-        .poll(() =>
-          page
-            .getByText(
-              "Main adds the task to the agent’s main session. Isolated starts a reply in a separate session.",
-              { exact: true },
-            )
-            .isVisible(),
-        )
-        .toBe(true);
+      expect(
+        await page.getByRole("option", { name: "Post to main session", exact: true }).count(),
+      ).toBe(0);
+      await page.getByRole("option", { name: "Run agent task", exact: true }).click();
 
       const target = page.locator("#cron-session-target");
       await target.click();
+      expect(await page.getByRole("option", { name: "Main session", exact: true }).count()).toBe(0);
       await page.getByRole("option", { name: "Its own session", exact: true }).click();
       await expect.poll(() => pickerValue("#cron-session-target")).toBe("isolated");
       await expect.poll(() => pickerValue("#cron-payload-kind")).toBe("agentTurn");

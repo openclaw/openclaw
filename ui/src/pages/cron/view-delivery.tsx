@@ -32,7 +32,6 @@ function buildChannelOptions(data: CronProps): ChannelPickerOption[] {
 function DeliveryRows(
   props: CronProps & {
     isAgentTurn: boolean;
-    supportsAnnounce: boolean;
     selectedDeliveryMode: CronFormState["deliveryMode"];
     channelOptions: readonly ChannelPickerOption[];
   },
@@ -49,9 +48,7 @@ function DeliveryRows(
           ...(props.selectedDeliveryMode === ""
             ? [{ value: "", label: t("cron.form.selectDeliveryMode"), disabled: true }]
             : []),
-          ...(props.supportsAnnounce
-            ? [{ value: "announce", label: t("cron.form.announceDefault") }]
-            : []),
+          { value: "announce", label: t("cron.form.announceDefault") },
           { value: "webhook", label: t("cron.form.webhookPost") },
           { value: "none", label: t("cron.form.noneInternal") },
         ]}
@@ -173,7 +170,6 @@ export function Advanced(
   props: CronProps & {
     mode: CronPanelMode;
     isAgentTurn: boolean;
-    supportsAnnounce: boolean;
     selectedDeliveryMode: CronFormState["deliveryMode"];
   },
 ) {
@@ -263,10 +259,7 @@ export function Advanced(
               {...props}
               field="payloadKind"
               label={t("cron.form.action")}
-              options={[
-                { value: "systemEvent", label: t("cron.form.systemEvent") },
-                { value: "agentTurn", label: t("cron.form.agentTurn") },
-              ]}
+              options={[{ value: "agentTurn", label: t("cron.form.agentTurn") }]}
             />
           )}
           {props.isAgentTurn && props.form.payloadText.trim() ? (

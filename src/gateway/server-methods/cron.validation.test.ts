@@ -887,10 +887,10 @@ describe("cron method validation", () => {
     const { context, respond } = await invokeCronAdd({
       name: "main reminder",
       schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
+      sessionTarget: "session:agent:main:main",
       sessionKey: "agent:main:harness:codex:supervision:native-thread",
       wakeMode: "now",
-      payload: { kind: "systemEvent", text: "remind me" },
+      payload: { kind: "agentTurn", message: "remind me" },
     });
 
     expect(context.cron.add).toHaveBeenCalled();
@@ -1225,10 +1225,10 @@ describe("cron method validation", () => {
         name: "scoped job",
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "main",
+        sessionTarget: "session:agent:main:main",
         wakeMode: "next-heartbeat",
         agentId: "main",
-        payload: { kind: "systemEvent", text: "before replacement" },
+        payload: { kind: "agentTurn", message: "before replacement" },
         delivery: { mode: "none" },
       });
       const replacementEntered = createDeferred();

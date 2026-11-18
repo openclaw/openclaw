@@ -31,9 +31,9 @@ describe("#16156: cron.list() must not silently advance past-due recurring jobs"
         name: "every-minute",
         enabled: true,
         schedule: { kind: "cron", expr: "* * * * *" },
-        sessionTarget: "main",
+        sessionTarget: "session:agent:main:main",
         wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "cron-tick" },
+        payload: { kind: "agentTurn", message: "cron-tick" },
       });
 
       const firstDueAt = job.state.nextRunAtMs!;
@@ -56,7 +56,10 @@ describe("#16156: cron.list() must not silently advance past-due recurring jobs"
       expect(runSessionEvent).toHaveBeenCalledOnce();
       const execution = runSessionEvent.mock.calls[0]?.[0];
       expect(execution?.text).toBe("cron-tick");
-      expect(execution?.job).toMatchObject({ id: job.id, sessionTarget: "main" });
+      expect(execution?.job).toMatchObject({
+        id: job.id,
+        sessionTarget: "session:agent:main:main",
+      });
       expect(updated?.state.lastStatus).toBe("ok");
       expect(updated?.state.nextRunAtMs).toBeGreaterThan(firstDueAt);
     } finally {

@@ -68,8 +68,6 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
   const kindRaw = normalizeLowercaseStringOrEmpty(next.kind);
   if (kindRaw === "agentturn") {
     next.kind = "agentTurn";
-  } else if (kindRaw === "systemevent") {
-    next.kind = "systemEvent";
   } else if (kindRaw) {
     next.kind = kindRaw;
   }
@@ -154,12 +152,8 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
     next.message = next.text;
   }
   const kind = next.kind;
-  if (kind === "systemEvent" || kind === "agentTurn" || kind === "command" || kind === "script") {
-    if (kind !== "systemEvent") {
-      delete next.text;
-    } else {
-      delete next.timeoutSeconds;
-    }
+  if (kind === "agentTurn" || kind === "command" || kind === "script") {
+    delete next.text;
     if (kind !== "agentTurn") {
       delete next.message;
       delete next.model;

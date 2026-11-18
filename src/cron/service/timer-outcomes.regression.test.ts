@@ -570,10 +570,10 @@ it.each(["ok", "error"] as const)("force run preserves the every cadence after %
 
   const { job, apply } = outcomeFixture(nowMs, {
     schedule: { kind: "every", everyMs, anchorMs: lastScheduledRunMs - everyMs },
-    sessionTarget: "main",
+    sessionTarget: "session:agent:main:main",
     wakeMode: "next-heartbeat",
     delivery: undefined,
-    payload: { kind: "systemEvent", text: "daily check-in" },
+    payload: { kind: "agentTurn", message: "daily check-in" },
     state: { lastRunAtMs: lastScheduledRunMs, nextRunAtMs: expectedNextMs },
   });
 

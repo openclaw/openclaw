@@ -213,8 +213,8 @@ describe("WebChat automation creation through the tool and Gateway", () => {
           name: "basketball-reminder",
           enabled: false,
           schedule: { kind: "at", at },
-          sessionTarget: "main",
-          payload: { kind: "systemEvent", text: "Reminder: play basketball!" },
+          sessionTarget: "session:agent:main:main",
+          payload: { kind: "agentTurn", message: "Reminder: play basketball!" },
           deleteAfterRun: true,
         }),
       ]);

@@ -34,8 +34,8 @@ it("settles a migrated task through ordinary session execution without a heartbe
       name: "inbox",
       enabled: true,
       schedule: { kind: "every", everyMs: 60_000 },
-      payload: { kind: "systemEvent", text: "Check urgent inbox items" },
-      sessionTarget: "main",
+      payload: { kind: "agentTurn", message: "Check urgent inbox items" },
+      sessionTarget: "session:agent:main:main",
       wakeMode: "next-heartbeat",
     };
     const added = await cron.add(input);
@@ -53,7 +53,7 @@ it("settles a migrated task through ordinary session execution without a heartbe
     expect(cron.getJob(job.id)?.state.lastStatus).not.toBe("ok");
     expect(context.runSessionEvent).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        job: expect.objectContaining({ id: job.id, sessionTarget: "main" }),
+        job: expect.objectContaining({ id: job.id, sessionTarget: "session:agent:main:main" }),
         text: "Check urgent inbox items",
       }),
     );
@@ -62,7 +62,7 @@ it("settles a migrated task through ordinary session execution without a heartbe
     await expect(running).resolves.toMatchObject({ ok: true });
     expect(cron.getJob(job.id)?.state.lastStatus).toBe("ok");
     await expect(
-      cron.update(job.id, { payload: { kind: "systemEvent", text: "Check priority inbox" } }),
+      cron.update(job.id, { payload: { kind: "agentTurn", message: "Check priority inbox" } }),
     ).resolves.toMatchObject({ id: job.id });
     await expect(cron.remove(job.id)).resolves.toEqual({ ok: true, removed: true });
   } finally {

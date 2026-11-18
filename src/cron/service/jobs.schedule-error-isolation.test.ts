@@ -19,7 +19,7 @@ function createJob(expr = "0 * * * *", overrides: Partial<CronJob> = {}): CronJo
   return makeCronJob({
     id: "bad-job",
     schedule: { kind: "cron", expr },
-    sessionTarget: "main",
+    sessionTarget: "session:agent:main:main",
     ...overrides,
   });
 }

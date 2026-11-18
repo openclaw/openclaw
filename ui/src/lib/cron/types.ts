@@ -53,7 +53,7 @@ export type CronFormState = {
   triggerEnabled: boolean;
   triggerScript: string;
   triggerOnce: boolean;
-  sessionTarget: "main" | "isolated" | "current" | `session:${string}`;
+  sessionTarget: "isolated" | "current" | `session:${string}`;
   wakeMode: CronJob["wakeMode"];
   // System-owned payloads are always payloadLocked; the form only
   // displays it, never submits it.

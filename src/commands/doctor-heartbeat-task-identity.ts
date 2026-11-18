@@ -49,15 +49,10 @@ export function heartbeatTaskDeclarationKey(
   return `${HEARTBEAT_TASK_DECLARATION_PREFIX}${agentId}:${identity}`;
 }
 
-/** Migrated jobs keep public system-event payloads so cron tools can edit or remove them normally. */
+/** Doctor recognizes older heartbeat tasks by their reserved declaration key. */
 export function isHeartbeatTaskCronJob(job: DoctorCronJob): job is CronJob & {
   declarationKey: string;
-  payload: Extract<CronJob["payload"], { kind: "systemEvent" }>;
-  sessionTarget: "main";
+  payload: Extract<CronJob["payload"], { kind: "agentTurn" }>;
 } {
-  return (
-    isHeartbeatTaskDeclarationKey(job.declarationKey) &&
-    job.payload.kind === "systemEvent" &&
-    job.sessionTarget === "main"
-  );
+  return isHeartbeatTaskDeclarationKey(job.declarationKey) && job.payload.kind === "agentTurn";
 }

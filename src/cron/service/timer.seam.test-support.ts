@@ -11,9 +11,9 @@ export function createDueMainJob(params: { now: number; wakeMode: CronJob["wakeM
     createdAtMs: params.now - 60_000,
     updatedAtMs: params.now - 60_000,
     schedule: { kind: "every", everyMs: 60_000, anchorMs: params.now - 60_000 },
-    sessionTarget: "main",
+    sessionTarget: "session:agent:main:main",
     wakeMode: params.wakeMode,
-    payload: { kind: "systemEvent", text: "heartbeat seam tick" },
+    payload: { kind: "agentTurn", message: "heartbeat seam tick" },
     sessionKey: "agent:main:main",
     state: { nextRunAtMs: params.now - 1 },
   };
@@ -53,7 +53,7 @@ export function createDueCommandJob(params: { now: number }): CronJob {
 
 export function createDueScriptJob(params: {
   now: number;
-  sessionTarget?: "main" | "isolated";
+  sessionTarget?: "isolated";
   pacing?: CronJob["pacing"];
 }): CronJob {
   return {

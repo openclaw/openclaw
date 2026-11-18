@@ -304,8 +304,7 @@ export async function admitScheduledOccurrence(
       }
       // A child run takes its parent's persisted workspace binding and never runs
       // looser than its parent; in-session runs keep their own session's binding.
-      const childPlacement =
-        job.sessionTarget !== "main" && !resolveCronSessionTargetSessionKey(job.sessionTarget);
+      const childPlacement = !resolveCronSessionTargetSessionKey(job.sessionTarget);
       if (typeof live !== "string" && !pause && childPlacement && parent.entry) {
         const entry = parent.entry;
         childParent = {

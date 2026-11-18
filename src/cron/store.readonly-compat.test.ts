@@ -10,9 +10,9 @@ it("reads a pre-projection cron table without writable schema repair", async () 
     const job = makeCronJob({
       id: "legacy-reader",
       name: "Legacy reader",
-      sessionTarget: "main",
+      sessionTarget: "session:agent:main:main",
       wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "tick" },
+      payload: { kind: "agentTurn", message: "tick" },
     });
     const { state: jobState, updatedAtMs, ...jobDefinition } = job;
     await state.createDatabase(`

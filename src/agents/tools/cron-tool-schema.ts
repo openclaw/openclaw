@@ -52,8 +52,8 @@ const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "stream", "event"] as const;
 // model-facing schema must not advertise them.
 const CRON_SCHEDULE_KINDS_TRIGGERS_DISABLED = ["at", "every", "cron"] as const;
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
-const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script"] as const;
-const CRON_PAYLOAD_KINDS_TRIGGERS_DISABLED = ["systemEvent", "agentTurn"] as const;
+const CRON_PAYLOAD_KINDS = ["agentTurn", "script"] as const;
+const CRON_PAYLOAD_KINDS_TRIGGERS_DISABLED = ["agentTurn"] as const;
 const CRON_DELIVERY_MODES = ["none", "announce", "webhook"] as const;
 const CRON_RUN_MODES = ["due", "force"] as const;
 
@@ -211,7 +211,6 @@ function createCronPayloadSchema(params: {
           ],
           { description: "Payload kind" },
         ),
-        text: Type.Optional(Type.String({ description: "systemEvent text" })),
         message: Type.Optional(Type.String({ description: "agentTurn prompt" })),
         ...(params.management
           ? {
@@ -447,7 +446,7 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
         ...(triggersEnabled ? { trigger: createCronTriggerSchema() } : {}),
         sessionTarget: Type.Optional(
           Type.String({
-            description: "main | isolated | current (agentTurn default) | session:<id>",
+            description: "isolated | current (agentTurn default) | session:<key>",
           }),
         ),
         wakeMode: optionalStringEnum(CRON_WAKE_MODES, { description: "Wake timing" }),
@@ -528,7 +527,7 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
           description: 'Relative duration for action="next_check" (for example, "15m")',
         }),
       ),
-      text: Type.Optional(Type.String({ description: 'systemEvent text for action="wake"' })),
+      text: Type.Optional(Type.String({ description: 'Notice text for action="wake"' })),
       mode: optionalStringEnum(CRON_WAKE_MODES, {
         description: 'Wake mode for action="wake" (default next-heartbeat)',
       }),

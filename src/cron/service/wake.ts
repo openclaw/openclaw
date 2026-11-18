@@ -188,18 +188,15 @@ export async function wake(
     if (
       !target?.agentId ||
       !target.sessionKey ||
-      (candidate.payload.kind !== "agentTurn" &&
-        !(candidate.sessionTarget === "main" && candidate.payload.kind === "systemEvent")) ||
-      !(candidate.sessionTarget === "main" || candidate.sessionTarget.startsWith("session:")) ||
+      candidate.payload.kind !== "agentTurn" ||
+      !candidate.sessionTarget.startsWith("session:") ||
       runAtMs === undefined
     ) {
       continue;
     }
     const jobTarget = state.deps.resolveSessionEventTarget?.({
       agentId: candidate.agentId,
-      sessionKey: candidate.sessionTarget.startsWith("session:")
-        ? candidate.sessionTarget.slice(8)
-        : undefined,
+      sessionKey: candidate.sessionTarget.slice(8),
     });
     if (
       jobTarget?.agentId === target.agentId &&

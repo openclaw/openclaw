@@ -58,7 +58,7 @@ suite.define(() => {
         cronJob(id, name, {
           configRevision: `revision-${id}`,
           schedule: { kind: "cron", expr: "0 9 * * *" },
-          payload: { kind: "systemEvent", text: "Synthetic garden inventory reminder" },
+          payload: { kind: "agentTurn", message: "Synthetic garden inventory reminder" },
         });
       const a = job("garden-a", "Garden A");
       const b = job("garden-b", "Garden B");

@@ -320,9 +320,9 @@ describe("agent stream approval through the automation tool", () => {
           name: "Private operator watcher",
           enabled: true,
           schedule: approvedStreamJob().schedule,
-          sessionTarget: "main",
+          sessionTarget: "session:agent:main:main",
           wakeMode: "next-heartbeat",
-          payload: { kind: "systemEvent", text: "Operator-only stream" },
+          payload: { kind: "agentTurn", message: "Operator-only stream" },
         });
         const listed = await tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "list" });
         expect(JSON.stringify(listed)).toContain(stored.id);

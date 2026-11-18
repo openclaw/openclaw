@@ -96,8 +96,8 @@ export type ExecuteJobCoreOptions = {
 };
 
 /** Payloads that execute outside the main session own cancellable task-run state. */
-export function runsDetachedFromMainSession(job: CronJob): boolean {
-  return job.sessionTarget !== "main" || job.payload.kind === "script";
+export function runsDetachedFromSession(job: CronJob): boolean {
+  return !job.sessionTarget.startsWith("session:") || job.payload.kind !== "agentTurn";
 }
 
 export async function resolveMainSessionCronDeliveryContext(

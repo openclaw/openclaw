@@ -155,7 +155,7 @@ it("repairs a stale future trigger cron slot", () => {
   const result = runTimer({
     schedule: CRON_SCHEDULE,
     state: { nextRunAtMs: NOW + 7 * 24 * 60 * 60_000 + 30_000 },
-    payload: { kind: "systemEvent", text: "repair stale future slot" },
+    payload: { kind: "agentTurn", message: "repair stale future slot" },
     trigger: { script: "json({ fire: false })" },
   });
   expect(result.state.nextRunAtMs).toBe(NOW + 60_000);

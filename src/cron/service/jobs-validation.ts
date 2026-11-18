@@ -93,9 +93,13 @@ function assertCronScriptSyntax(script: string, subject: "script payload" | "tri
 export function assertSupportedJobSpec(
   job: Pick<CronJob, "sessionTarget"> & { payload: Pick<CronJob["payload"], "kind"> },
 ) {
-  if (typeof job.sessionTarget !== "string") {
+  if (
+    job.sessionTarget !== "isolated" &&
+    job.sessionTarget !== "current" &&
+    !job.sessionTarget?.startsWith("session:")
+  ) {
     throw new Error(
-      'cron job is missing sessionTarget; expected "main", "isolated", "current", or "session:<id>"',
+      'cron job is missing sessionTarget; expected "isolated", "current", or "session:<id>"',
     );
   }
   const isConversationTarget =
@@ -103,28 +107,14 @@ export function assertSupportedJobSpec(
   if (job.sessionTarget.startsWith("session:")) {
     assertSafeCronSessionTargetId(job.sessionTarget.slice(8));
   }
-  if (
-    job.sessionTarget === "main" &&
-    job.payload.kind !== "systemEvent" &&
-    job.payload.kind !== "agentTurn" &&
-    job.payload.kind !== "script"
-  ) {
+  if (job.payload.kind === "script" && job.sessionTarget !== "isolated") {
     throw new Error(
-      'cron sessionTarget "main" requires payload.kind="systemEvent", "agentTurn", or "script"',
-    );
-  }
-  if (
-    job.payload.kind === "script" &&
-    job.sessionTarget !== "main" &&
-    job.sessionTarget !== "isolated"
-  ) {
-    throw new Error(
-      `cron sessionTarget "${job.sessionTarget}" cannot run script payloads: scripts run headless and support only "main" or "isolated"; to run a turn in an existing conversation use payload {kind:"agentTurn",message} with sessionTarget "session:<key>"`,
+      `cron sessionTarget "${job.sessionTarget}" cannot run script payloads: scripts run headless and support only "isolated"; to run a turn in an existing conversation use payload {kind:"agentTurn",message} with sessionTarget "session:<key>"`,
     );
   }
   if (isConversationTarget && job.payload.kind !== "agentTurn" && job.payload.kind !== "command") {
     throw new Error(
-      `cron sessionTarget "${job.sessionTarget}" cannot run ${job.payload.kind}: systemEvent only runs in the main session; for sessionTarget "${job.sessionTarget}" use payload {kind:"agentTurn",message}`,
+      `cron sessionTarget "${job.sessionTarget}" cannot run ${job.payload.kind}: use payload {kind:"agentTurn",message} or {kind:"command",argv}`,
     );
   }
   if (
@@ -376,15 +366,6 @@ export function assertFailureDestinationSupport(
       failureDestination.mode === undefined)
   ) {
     return;
-  }
-  if (
-    job.sessionTarget === "main" &&
-    job.payload.kind !== "agentTurn" &&
-    job.delivery?.mode !== "webhook"
-  ) {
-    throw new Error(
-      'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
-    );
   }
   if (failureDestination.mode === "webhook") {
     const target = normalizeHttpWebhookUrl(failureDestination.to);

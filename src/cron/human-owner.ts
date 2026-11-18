@@ -27,10 +27,7 @@ export function cronExecutionActor(
 export function resolveCronOwnerTransferRecoveryError(
   job: Pick<CronStoredJob, "ownerTransferPending" | "payload">,
 ): string | undefined {
-  if (
-    job.ownerTransferPending &&
-    (job.payload.kind === "agentTurn" || job.payload.kind === "systemEvent")
-  ) {
+  if (job.ownerTransferPending && job.payload.kind === "agentTurn") {
     return "This automation needs fresh execution authority. Select an inference account or reauthorize it from an authenticated owner turn before running it.";
   }
   return undefined;

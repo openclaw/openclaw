@@ -51,7 +51,7 @@ export function registerCronRunWaitTests({
   });
 
   it.each([
-    { name: "main", job: { sessionTarget: "main" }, waits: false },
+    { name: "main", job: { sessionTarget: "session:agent:main:main" }, waits: false },
     {
       name: "aliased own session",
       job: { sessionTarget: "session:agent:ops:main" },

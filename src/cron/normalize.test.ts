@@ -12,7 +12,7 @@ type UnknownRecord = Record<string, unknown>;
 const CRON_SCHEDULE = { kind: "cron", expr: "* * * * *" };
 const EVERY_SCHEDULE = { kind: "every", everyMs: 60_000 };
 const AGENT_TURN = { kind: "agentTurn", message: "hello" };
-const SYSTEM_EVENT = { kind: "systemEvent", text: "hi" };
+const SYSTEM_EVENT = { kind: "agentTurn", message: "hi" };
 const AGENT_JOB = {
   name: "test",
   enabled: true,
@@ -21,7 +21,11 @@ const AGENT_JOB = {
   wakeMode: "now",
   payload: AGENT_TURN,
 };
-const MAIN_JOB = { sessionTarget: "main", wakeMode: "next-heartbeat", payload: SYSTEM_EVENT };
+const MAIN_JOB = {
+  sessionTarget: "session:agent:main:main",
+  wakeMode: "next-heartbeat",
+  payload: SYSTEM_EVENT,
+};
 const GROUP_SESSION = "agent:main:telegram:group:-100123";
 const DIRECT_SESSION = "agent:main:telegram:direct:42";
 const CUSTOM_SESSION = "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
@@ -437,5 +441,7 @@ it.each(payloads)("omits a cleared timeout when replacing the payload with $kind
   if (!patch?.payload) {
     throw new Error("expected normalized payload patch");
   }
-  expect(mergeCronPayload({ kind: "systemEvent", text: "before" }, patch.payload)).toEqual(payload);
+  expect(mergeCronPayload({ kind: "agentTurn", message: "before" }, patch.payload)).toEqual(
+    payload,
+  );
 });

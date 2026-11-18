@@ -418,37 +418,6 @@ export function applyJobPatch(
   if ("failureAlert" in patch) {
     job.failureAlert = mergeCronFailureAlert(job.failureAlert, patch.failureAlert);
   }
-  if (
-    job.sessionTarget === "main" &&
-    job.payload.kind !== "agentTurn" &&
-    job.delivery?.mode !== "webhook"
-  ) {
-    assertFailureDestinationSupport(job);
-    // Retargeting may discard inherited announce routes, but must not silently
-    // accept a newly authored delivery request before cleanup.
-    const authoredDelivery =
-      patch.delivery && mergeCronDelivery(undefined, patch.delivery, "announce");
-    if (
-      authoredDelivery &&
-      (patch.delivery?.mode !== undefined ||
-        authoredDelivery.target !== undefined ||
-        authoredDelivery.directPolicy !== undefined ||
-        authoredDelivery.channel !== undefined ||
-        authoredDelivery.to !== undefined ||
-        authoredDelivery.threadId !== undefined ||
-        authoredDelivery.accountId !== undefined ||
-        authoredDelivery.completionDestination !== undefined)
-    ) {
-      assertDeliverySupport({
-        sessionTarget: job.sessionTarget,
-        payload: job.payload,
-        delivery: authoredDelivery,
-      });
-    }
-    // Clear-only failure destinations retain their global-default opt-outs.
-    const failureDestination = job.delivery?.failureDestination;
-    job.delivery = failureDestination ? { mode: "none", failureDestination } : undefined;
-  }
   if (patch.state) {
     const statePatch = { ...patch.state } as Partial<CronJobState>;
     // Runtime state patches may report execution progress, but the scheduler

@@ -19,8 +19,7 @@ export function isCronExecutionIdle(
     return false;
   }
   const sessionKey =
-    (job.sessionTarget === "main" ? undefined : resolveCronDeliverySessionKey(job)) ??
-    resolveAgentMainSessionKey({ cfg, agentId });
+    resolveCronDeliverySessionKey(job) ?? resolveAgentMainSessionKey({ cfg, agentId });
   return ![...activeSessionOperations()].some((operation) => {
     const key = operation.key;
     if (key !== sessionKey && parseAgentSessionKey(key)?.agentId !== agentId) {
