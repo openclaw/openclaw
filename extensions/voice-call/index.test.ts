@@ -1,3 +1,8 @@
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Command } from "commander";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -689,12 +694,25 @@ describe("runtime lifecycle", () => {
     const aService = register("+15550000001");
     const concrete = aService.tool();
     const invoke = (tool: VoiceCallTestTool) => actor.run("requesting-caller", () => call(tool));
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock));
     const start = (service: ReturnType<typeof register>, name: string) =>
-      actor.run(name, () => service.service.start(serviceContext));
-    const readContext = (index: number) =>
-      actor.run("requesting-caller", () =>
+      actor.run(name, () => service.service.start({
+        ...serviceContext,
+        scheduler: {
+          ...scheduler,
+          schedule: (params) => scheduler.schedule({
+            ...params, run: () => actor.run(name, params.run),
+          }),
+        },
+      }));
+    const readContext = async (index: number) => {
+      const pending = actor.run("requesting-caller", () =>
         createRuntime.mock.calls[index]?.[0].runInServiceContext?.(() => actor.getStore()),
       );
+      await clock.advanceBy(1);
+      return await pending;
+    };
     expect(start(aService, "service-a")).toBeUndefined();
     await invoke(concrete);
     const cold = registerVoiceCall({ registrationMode: "tool-discovery" }).toolFactory({});
@@ -703,7 +721,7 @@ describe("runtime lifecycle", () => {
     await invoke(concrete);
     await invoke(cold);
     expect(a.initiateCall).toHaveBeenCalledTimes(3);
-    expect(readContext(0)).toBe("service-a");
+    expect(await readContext(0)).toBe("service-a");
     const stopped = aService.service.stop?.(serviceContext);
     await stopping.promise;
     expect(createRuntime).toHaveBeenCalledTimes(1);
@@ -717,7 +735,7 @@ describe("runtime lifecycle", () => {
     await gatewayCall(bService, "call-b");
     expect(b.initiateCall).toHaveBeenCalledTimes(4);
     expect(createRuntime.mock.calls[1]?.[0].config.toNumber).toBe("+15550000002");
-    expect([readContext(0), readContext(1)]).toEqual(["service-a", "service-b"]);
+    expect([await readContext(0), await readContext(1)]).toEqual(["service-a", "service-b"]);
     await bService.service.stop?.(serviceContext);
     expect(b.stop).toHaveBeenCalledOnce();
     expectError(await invoke(concrete), "requires service startup");

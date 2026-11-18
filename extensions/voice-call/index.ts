@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
@@ -33,6 +32,7 @@ import {
 } from "./src/config.js";
 import { TELEPHONY_DEFAULT_TTS_TIMEOUT_MS } from "./src/telephony-tts.js";
 import { VoiceCallToolSchema } from "./src/tool-schema.js";
+import { scheduleServiceDelivery } from "./src/service-delivery-context.js";
 
 const VOICE_CALL_WRITE_METHOD_SCOPE = { scope: "operator.write" as const };
 const VOICE_CALL_READ_METHOD_SCOPE = { scope: "operator.read" as const };
@@ -62,7 +62,7 @@ const VOICE_CALL_RUNTIME_COORDINATOR_KEY = Symbol.for("openclaw.voice-call.runti
 
 type VoiceCallRuntimeRegistration = {
   scheduler?: PluginServiceSchedulerV1;
-  runInServiceContext?: <T>(run: () => T) => T;
+  runInServiceContext?: <T>(run: () => T) => T | Promise<Awaited<T>>;
   serviceHealth?: Parameters<
     Parameters<OpenClawPluginApi["registerService"]>[0]["start"]
   >[0]["serviceHealth"];
@@ -549,8 +549,8 @@ export default definePluginEntry({
           return;
         }
         runtimeRegistration.scheduler = ctx.scheduler;
-        const serviceContext = AsyncLocalStorage.snapshot();
-        runtimeRegistration.runInServiceContext = (run) => serviceContext(run);
+        runtimeRegistration.runInServiceContext = (run) =>
+          scheduleServiceDelivery(ctx.scheduler, run);
         runtimeRegistration.serviceHealth = ctx.serviceHealth;
         runtimeCoordinator.current = runtimeRegistration;
         if (!config.enabled) {

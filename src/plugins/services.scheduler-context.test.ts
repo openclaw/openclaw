@@ -340,12 +340,11 @@ it("keeps standalone scheduled services free of an unbound Gateway resolver", as
       apiVersion: 2,
       id: "standalone",
       start({ scheduler: serviceScheduler }) {
-        const snapshot = AsyncLocalStorage.snapshot();
         serviceScheduler.schedule({
           id: "legacy-resource",
           delayMs: 1,
           run: () => {
-            serviceSnapshot = snapshot;
+            serviceSnapshot = AsyncLocalStorage.snapshot();
             expect(getBoundLegacyPluginSdkResourceHost()).toBe(resourceHost);
             createAuthRateLimiter().dispose();
           },

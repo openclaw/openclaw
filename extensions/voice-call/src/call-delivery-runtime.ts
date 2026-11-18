@@ -125,7 +125,7 @@ export function createCallDeliveryRuntime(params: {
     subagent: Pick<PluginRuntime["subagent"], "complete">;
   };
   manager: CallManager;
-  runInServiceContext: <T>(run: () => T) => T;
+  runInServiceContext: <T>(run: () => T) => T | Promise<Awaited<T>>;
   logger: PluginLogger;
 }): { observe: (call: CallRecord) => Promise<void>; stop: () => Promise<void> } {
   const abort = new AbortController();

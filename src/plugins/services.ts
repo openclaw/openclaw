@@ -645,8 +645,8 @@ async function startPreparedPluginServices({
             withPluginRetentionOwner({ serviceId: id }, () =>
               withPluginServiceScheduler(scheduling.scheduler, () => service.start(serviceContext)),
             );
-          // Reload may originate in an RPC or tool; service startup retains host context
-          // without the caller's root admission, authority, or generation.
+          // Startup remains part of the admitted reload transaction, including rollback
+          // while admission is paused. Long-lived work uses the service scheduler.
           await runPluginServiceStartup(() =>
             runServiceStart(async () =>
               withPluginHttpRouteRegistry(

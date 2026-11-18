@@ -198,7 +198,7 @@ export async function createVoiceCallRuntime(params: {
   ttsRuntime?: TelephonyTtsRuntime;
   logger?: PluginLogger;
   deliveryRuntime?: Pick<OpenClawPluginApi["runtime"], "gateway" | "subagent">;
-  runInServiceContext?: <T>(run: () => T) => T;
+  runInServiceContext?: <T>(run: () => T) => T | Promise<Awaited<T>>;
 }): Promise<VoiceCallRuntime> {
   params.scheduler.signal.throwIfAborted();
   const {
