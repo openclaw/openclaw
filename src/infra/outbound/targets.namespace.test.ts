@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { ChannelDirectoryEntry } from "../../channels/plugins/types.public.js";
+import type { ChannelDirectoryEntry, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { resetDirectoryCache } from "./target-resolver.js";
-import { resolveProactiveDeliveryTarget } from "./targets.js";
-import { createTestChannelPlugin, createTargetsTestRegistry } from "./targets.test-helpers.js";
+import { resolveOutboundTarget, resolveProactiveDeliveryTarget } from "./targets.js";
+import {
+  createGenericTargetTestPlugin,
+  createTargetsTestRegistry,
+} from "./targets.test-helpers.js";
 
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
@@ -12,20 +15,35 @@ beforeEach(() => {
 });
 afterEach(() => resetPluginRuntimeStateForTest());
 
+it.each([
+  ["alpha", "alpha"],
+  ["@alpha", "@alpha"],
+  ["alpha:@alpha", "@alpha"],
+  ["alpha:@current", "@current"],
+  ["alpha:123456789", "123456789"],
+  ["conversation:ref-1", "conversation:ref-1"],
+])("preserves explicit destination %s", async (to, expected) => {
+  setActivePluginRegistry(createTargetsTestRegistry());
+  expect(await resolveOutboundTarget({ channel: "alpha", to, mode: "explicit" })).toMatchObject({
+    ok: true,
+    to: expected,
+  });
+});
+
 it.each(["last", "alpha"])(
   "guards namespace direct delivery with %s channel selection",
   async (target) => {
     const normalizeTarget = vi.fn((raw: string) => `@${raw}`);
     const resolveTarget = vi.fn(({ to }: { to?: string }) => ({ ok: true as const, to: to ?? "" }));
-    const plugin = createTestChannelPlugin({
-      id: "alpha",
+    const plugin: ChannelPlugin = {
+      ...createGenericTargetTestPlugin("alpha"),
       messaging: { normalizeTarget, targetResolver: { looksLikeId: () => true } },
       outbound: {
         deliveryMode: "direct",
         resolveTarget,
         sendText: async () => ({ channel: "alpha", messageId: "sent-1" }),
       },
-    });
+    };
     setActivePluginRegistry(createTargetsTestRegistry([plugin]));
 
     const result = await resolveProactiveDeliveryTarget({
@@ -69,8 +87,8 @@ it.each([
         ? { ok: false as const, error: new Error("recipient not allowed") }
         : { ok: true as const, to: to === id ? rewritten : (to ?? "") },
     );
-    const plugin = createTestChannelPlugin({
-      id: "alpha",
+    const plugin: ChannelPlugin = {
+      ...createGenericTargetTestPlugin("alpha"),
       messaging: {
         targetPrefixes: ["alpha"],
         inferTargetChatType: ({ to }) =>
@@ -81,7 +99,7 @@ it.each([
         resolveTarget,
         sendText: async () => ({ channel: "alpha", messageId: "sent-1" }),
       },
-    });
+    };
     plugin.directory = {
       listGroups: async () => (kind === "group" ? [{ kind, id, name: "alpha" }] : []),
       listPeers: async () => (kind === "user" ? [{ kind, id, name: "alpha" }] : []),
@@ -108,13 +126,13 @@ it.each([
 );
 
 it("fails closed when namespace directory lookup fails", async () => {
-  const plugin = createTestChannelPlugin({
-    id: "alpha",
+  const plugin: ChannelPlugin = {
+    ...createGenericTargetTestPlugin("alpha"),
     outbound: {
       deliveryMode: "direct",
       sendText: async () => ({ channel: "alpha", messageId: "sent-1" }),
     },
-  });
+  };
   plugin.directory = {
     listGroups: async (): Promise<ChannelDirectoryEntry[]> => {
       throw new Error("directory unavailable");
