@@ -10,9 +10,7 @@ type RestartResumeMarker = NonNullable<InternalSessionEntry["resumeAfterRestart"
  */
 const GATEWAY_RESTART_RESUME_SCOPE_ENV = "OPENCLAW_GATEWAY_RESTART_RESUME_SCOPE";
 
-function resolveRestartResumeScope(
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
+function resolveRestartResumeScope(env: NodeJS.ProcessEnv = process.env): string | undefined {
   return env[GATEWAY_RESTART_RESUME_SCOPE_ENV]?.trim() || undefined;
 }
 
