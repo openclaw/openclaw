@@ -8,7 +8,6 @@ export type CustodianSetupActions = CustodianActions["setup"];
 
 /** Shared by the full page and the standalone compact surface. */
 export function createCustodianActions(getStore: () => CustodianSessionStore) {
-  const [verifying, setVerifying] = createOptimistic(false);
   const [answering, setAnswering] = createOptimistic(false);
   const [cancelling, setCancelling] = createOptimistic(false);
   const [sending, setSending] = createOptimistic(false);
@@ -18,9 +17,7 @@ export function createCustodianActions(getStore: () => CustodianSessionStore) {
 
   type Kind = "verification" | "wizard" | "cancellation" | "session";
   const present = action(function* (kind: Kind, pending: Promise<unknown>, retired: Promise<void>) {
-    if (kind === "verification") {
-      setVerifying(true);
-    } else if (kind === "wizard") {
+    if (kind === "wizard") {
       setAnswering(true);
     } else if (kind === "cancellation") {
       setCancelling(true);
@@ -35,6 +32,11 @@ export function createCustodianActions(getStore: () => CustodianSessionStore) {
     const setup = source.autoSetup;
     // Admission stays synchronous, including reserving the sign-in window in the user gesture.
     const pending = command(source);
+    // Verification already publishes pending and handles errors in the setup owner.
+    if (kind === "verification") {
+      await pending;
+      return;
+    }
     const currentEpoch = () => (kind === "session" ? source.operationEpoch : setup.operationEpoch);
     const epoch = currentEpoch();
     const lifetime = Promise.withResolvers<void>();
@@ -45,9 +47,6 @@ export function createCustodianActions(getStore: () => CustodianSessionStore) {
         return source.sending;
       }
       const phase = setup.wizard.state;
-      if (kind === "verification") {
-        return setup.pending;
-      }
       if (kind === "cancellation") {
         return phase.phase !== "idle";
       }
@@ -89,9 +88,6 @@ export function createCustodianActions(getStore: () => CustodianSessionStore) {
   }
 
   const setup = {
-    get verifying() {
-      return verifying();
-    },
     get answering() {
       return answering();
     },

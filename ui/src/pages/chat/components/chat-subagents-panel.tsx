@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { Errored, Loading, Show, createMemo, createSignal, isPending, latest } from "solid-js";
+import { Errored, Loading, Show, createMemo, createSignal, latest } from "solid-js";
 import type { ChatInputRegion } from "../../../app/chat-input-owner.ts";
 import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -79,7 +79,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
         !data().nativeSnapshot &&
         !data().nativeError &&
         !data().stopError &&
-        isPending(readiness.read),
+        data().loading,
     );
     const createMobileStop = (key: () => string) =>
       readiness.createStop(() => data().rows.find((row) => row.session.key === key()));
@@ -141,7 +141,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
     const Empty = () => (
       <Show when={!data().nativeSnapshot && !data().nativeError}>
         <Show
-          when={!data().hasResult && isPending(readiness.read)}
+          when={!data().hasResult && data().loading}
           fallback={
             data().hasResult &&
             !data().stopError && (
@@ -327,7 +327,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
                 finishedId={finishedId}
                 finishedOpen={finishedOpen()}
                 onToggleFinished={() => setFinishedOpen((value) => !value)}
-                loading={isPending(readiness.read)}
+                loading={data().loading}
                 emptyLoading={emptyLoading()}
                 onScrollPortRef={props.onScrollPortRef}
                 listRef={(element, firstButton) => {
@@ -376,7 +376,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
               sessionKey={props.sessionKey}
               agentId={props.agentId}
               rows={data().rows}
-              loading={isPending(readiness.read)}
+              loading={data().loading}
               emptyLoading={emptyLoading()}
               error={data().stopError}
               hasResult={data().hasResult}
@@ -400,10 +400,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
           fallback={
             <Show when={props.mobile === undefined}>
               <ReadBoundary>
-                <div
-                  class="chat-subagents__list"
-                  aria-busy={isPending(readiness.read) ? "true" : "false"}
-                >
+                <div class="chat-subagents__list" aria-busy={data().loading ? "true" : "false"}>
                   {data().stopError && (
                     <div class="chat-subagents__error" role="alert">
                       <span>{data().stopError}</span>
