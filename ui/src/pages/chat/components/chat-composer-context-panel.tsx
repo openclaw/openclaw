@@ -207,7 +207,8 @@ export function ChatComposerContextPanel(
       if (runCacheHitRate() !== null || (table.total()?.cacheHitRate ?? null) !== null) {
         shown.push("cache");
       }
-      if (showCosts()) {
+      // A cost column of dashes says nothing; show it once either scope has a figure.
+      if (showCosts() && (context().cost !== null || table.total() !== null)) {
         shown.push("cost");
       }
       return shown.length > 0 ? shown : ["input", "output"];

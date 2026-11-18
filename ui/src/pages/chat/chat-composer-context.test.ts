@@ -48,7 +48,8 @@ const part = (root: ParentNode, name: string) => root.querySelector(`.context-us
 const contextRingFor = (root: ParentNode) => root.querySelector(".context-ring");
 const compactButton = (root: ParentNode) =>
   root.querySelector<HTMLButtonElement>(".context-usage__actions .chat-context__compact");
-const statsTitle = (root: ParentNode) => part(root, 'usage [role="cell"][title]')?.getAttribute("title");
+const statsTitle = (root: ParentNode) =>
+  part(root, 'usage [role="cell"][title]')?.getAttribute("title");
 const defaultSessions = () => ({ sessions: [], defaults: { contextTokens: 200_000 } });
 const textContents = (root: ParentNode, selector: string) =>
   [...root.querySelectorAll(selector)].map((element) => element.textContent);
