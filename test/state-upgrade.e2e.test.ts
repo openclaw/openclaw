@@ -7,12 +7,16 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { readConfigCorpusFixture } from "../src/config/config-corpus.test-support.js";
 import { listDirectoryTreeStrictSync } from "../src/infra/directory-walk.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../src/state/openclaw-agent-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../src/state/openclaw-state-db-contract.js";
 import { UPGRADE_SET_ASIDE_SCOPE } from "../src/state/sqlite-copy-swap.js";
 import { createDoctorChain } from "../src/state/state-upgrade-doctor.js";
 import { ChainStepError } from "../src/state/state-upgrade-validate.js";
 import { upgradeStateDirectory } from "../src/state/state-upgrade.js";
 import { VERSION } from "../src/version.js";
+import type startupStateManifest from "./fixtures/state-corpus/2026.9.2/manifest.json";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 
 const corpusDir = fileURLToPath(new URL("./fixtures/state-corpus-populated/", import.meta.url));
@@ -155,6 +159,148 @@ function installCorpus(instance: Instance, release: string, gatewayOverride = {}
 }
 
 describe("Gateway start upgrades prior-release state by copy and swap", () => {
+  // Unlike the in-process startup corpus, do not run Doctor or normalize legacy
+  // config before the real CLI owns discovery, shadow validation, and publication.
+  it.each(["api-key-no-models.json", "crossclaw.json"])(
+    "2026.9.2 startup corpus %s through real Gateway",
+    async (configName) => {
+      const instance = await createOpenClawTestInstance({
+        name: `upgrade-2026.9.2-${configName}`,
+        startTimeoutMs: 300_000,
+      });
+      try {
+        const generated = JSON.parse(fs.readFileSync(instance.configPath, "utf8"));
+        const source = fileURLToPath(new URL("./fixtures/state-corpus/2026.9.2/", import.meta.url));
+        const manifest: typeof startupStateManifest = JSON.parse(
+          fs.readFileSync(path.join(source, "manifest.json"), "utf8"),
+        );
+        fs.cpSync(path.join(source, "state"), instance.stateDir, { recursive: true, force: true });
+        // Match prepareState's external fixture and config replacement exactly.
+        const pluginDir = path.join(instance.homeDir, "external-plugin");
+        fs.mkdirSync(pluginDir);
+        fs.writeFileSync(
+          path.join(pluginDir, "openclaw.plugin.json"),
+          JSON.stringify({
+            id: "fixture-extension",
+            configSchema: {
+              type: "object",
+              additionalProperties: false,
+              properties: { apiKey: { type: "string" } },
+            },
+          }),
+        );
+        fs.writeFileSync(
+          path.join(pluginDir, "index.ts"),
+          'export default { id: "fixture-extension", register() {} };\n',
+        );
+        const config = JSON.parse(readConfigCorpusFixture(configName), (_key, value: unknown) =>
+          typeof value === "string" && value.startsWith("/home/fixture/")
+            ? path.join(instance.homeDir, value.slice("/home/fixture/".length))
+            : value,
+        );
+        fs.writeFileSync(
+          instance.configPath,
+          JSON.stringify({
+            ...config,
+            gateway: {
+              ...config.gateway,
+              auth: generated.gateway.auth,
+              port: generated.gateway.port,
+            },
+            hooks: generated.hooks,
+          }),
+        );
+        const originalConfig = sha256(instance.configPath);
+        const before = new Map(sqliteFiles(instance.stateDir).map((file) => [file, sha256(file)]));
+        // startGateway requires the listening /readyz and settled /startupz owner.
+        await instance.startGateway();
+        const call = async (method: string, params: object = {}) => {
+          const result = await instance.cli([
+            "gateway",
+            "call",
+            method,
+            "--json",
+            "--params",
+            JSON.stringify(params),
+          ]);
+          expect(result.code, method + ": " + result.stderr).toBe(0);
+          return result.stdout;
+        };
+        expect(await call("agents.list")).toContain('"main"');
+        const cron = JSON.parse(await call("cron.list", { includeDisabled: true }));
+        expect(cron.jobs).toContainEqual(
+          expect.objectContaining({
+            ...manifest.cronJob,
+            schedule: expect.objectContaining(manifest.cronJob.schedule),
+          }),
+        );
+        for (const session of manifest.sessions) {
+          const history = await call("chat.history", { sessionKey: session.sessionKey });
+          expect(history).toContain(JSON.stringify(session.transcriptText).slice(1, -1));
+        }
+        await instance.stopGateway();
+        for (const [file, digest] of before) {
+          expect(sha256(file + ".pre-" + VERSION), file).toBe(digest);
+          const db = new DatabaseSync(file, { readOnly: true });
+          try {
+            expect(db.prepare("PRAGMA integrity_check").all(), file).toEqual([
+              { integrity_check: "ok" },
+            ]);
+            expect(db.prepare("PRAGMA user_version").get(), file).toEqual({
+              user_version: file.endsWith("openclaw-agent.sqlite")
+                ? OPENCLAW_AGENT_SCHEMA_VERSION
+                : OPENCLAW_STATE_SCHEMA_VERSION,
+            });
+          } finally {
+            db.close();
+          }
+        }
+        expect(sha256(instance.configPath + ".pre-" + VERSION)).toBe(originalConfig);
+        const state = new DatabaseSync(path.join(instance.stateDir, "state", "openclaw.sqlite"), {
+          readOnly: true,
+        });
+        try {
+          const row = state
+            .prepare("SELECT payload_json FROM diagnostic_events WHERE scope = ?")
+            .get("upgrade.report") as { payload_json: string };
+          const report = JSON.parse(row.payload_json);
+          expect(report).toMatchObject({ mode: "chain", conservationMismatches: [] });
+          const setAside = state
+            .prepare("SELECT count(*) AS n FROM diagnostic_events WHERE scope = ?")
+            .get(UPGRADE_SET_ASIDE_SCOPE) as { n: number };
+          expect(setAside.n).toBe(report.setAside);
+        } finally {
+          state.close();
+        }
+        const text = upgradedText(instance.stateDir);
+        for (const [id, profile] of Object.entries(manifest.profiles)) {
+          // Native CLI credentials are intentionally retired by the shipped chain.
+          if (CHAIN_RETIRED_VALUES.has(id)) {
+            continue;
+          }
+          for (const value of [id, ...Object.values(profile)]) {
+            if (typeof value === "string") {
+              expect(text, id).toContain(value);
+            }
+          }
+        }
+        for (const value of [
+          manifest.controlUi.userId,
+          ...Object.keys(manifest.controlUi.settings),
+          ...Object.values(manifest.controlUi.settings),
+        ]) {
+          expect(text).toContain(value);
+        }
+        expect(
+          fs.readdirSync(instance.stateDir).filter((name) => name.startsWith(".upgrade-")),
+        ).toEqual([]);
+      } finally {
+        await instance.cleanup();
+      }
+    },
+    600_000,
+  );
+
   it("starts with a completed retained old agent without changing its files", async () => {
     const instance = await createOpenClawTestInstance({
       name: "upgrade-retained-agent",
