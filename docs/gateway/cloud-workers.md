@@ -17,6 +17,8 @@ Open **New Session**, select a repository or **New workspace**, and choose **Clo
 
 The suggested `cloud` profile uses Linux, the smallest advertised standard class, a 4-hour total lifetime, and 45-minute idle timeout and suspend. Warm images are enabled. Edit it later in **Settings → Connections → Cloud environments**. If config reload is disabled, saving schedules a Gateway restart; wait for the profile to become active and retry selection.
 
+When editing an applied profile, **Device class** offers the provider’s advertised choices for the selected operating system when a matching catalog is available. Custom classes remain editable. Changing the backend, binary, or setup command keeps the draft but stops offering choices from the previous configuration until the updated profile is applied.
+
 ### First session
 
 For an eligible Linux repository, the first session provisions its own machine, prepares the selected commit and dependencies, installs the OpenClaw runtime, and starts snapshot capture before enrolling the node. The startup line shows **Preparing cloud environment…**, then **Saving snapshot…**. On supported AWS workers, upload can finish while the session runs; later sessions reuse the snapshot once available. See [first-capture requirements](/gateway/cloud-workers/warm-images#first-session-for-a-repository).
