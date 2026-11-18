@@ -19,13 +19,16 @@ export type AgentDatabaseWriteTiming = StoreWriterTiming & {
 // A second queue would admit a foreground writer while reclamation owns SQLite.
 export const agentDatabaseWriteAdmissionState = resolveGlobalSingleton(
   Symbol.for("openclaw.agentDatabaseWriteAdmission"),
-  () => ({
-    queues: new Map<
+  (): {
+    queues: Map<
       string,
       StoreWriterQueue & {
         holder?: AgentDatabaseWriteTiming;
       }
-    >(),
+    >;
+    acquisition?: Promise<void>;
+  } => ({
+    queues: new Map(),
   }),
 );
 

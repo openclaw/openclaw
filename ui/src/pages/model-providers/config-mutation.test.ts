@@ -47,7 +47,7 @@ describe("model provider config patches", () => {
     expect(modelProviderConfigMutationBlockedReason(context)).toBe(
       "You can view Models, but only admins can change them.",
     );
-    harness.publishPhase("disconnected");
+    harness.publishPhase("offline");
     expect(modelProviderConfigMutationBlockedReason(context)).toBe(
       "Reconnect to change model settings.",
     );

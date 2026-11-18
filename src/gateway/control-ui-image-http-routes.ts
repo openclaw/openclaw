@@ -5,6 +5,13 @@ import { parseControlUiUserBackgroundPath } from "./control-ui-user-background-r
 /** Resource owners stay lazy until their authenticated image route is requested. */
 export const CONTROL_UI_IMAGE_HTTP_ROUTES = [
   [
+    ["providerIcon"],
+    createLazyRuntimeNamedExport(
+      () => import("./provider-icon-http.js"),
+      "handleProviderIconHttpRequest",
+    ),
+  ],
+  [
     ["pluginIcon", "pluginActivityIcon", "catalogIcon", "linkFavicon"],
     createLazyRuntimeNamedExport(
       () => import("./plugin-icon-http.js"),

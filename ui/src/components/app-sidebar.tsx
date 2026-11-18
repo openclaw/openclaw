@@ -1,8 +1,19 @@
 import "../styles/sidebar-attention-floating.css";
 import { getObserver } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createProjection, onCleanup, onSettled } from "solid-js";
-import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
+import {
+  createEffect,
+  createMemo,
+  createProjection,
+  createSignal,
+  lazy,
+  Loading,
+  onCleanup,
+  onSettled,
+  Show,
+} from "solid-js";
+import { sidebarViewForPage } from "../app-navigation.ts";
+import { projectApplicationConfig } from "../lib/reactive/application.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { i18nRevision } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
@@ -12,6 +23,7 @@ import { createTimeout } from "../lib/reactive/timers.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
+import { navigationSectionForPage } from "../plugins/navigation-sections.ts";
 import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
 import { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 import { createSessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
@@ -23,8 +35,11 @@ import { createSessionAttention } from "./session-attention.ts";
 import { createSessionOwnerFilterQuery } from "./session-owner-filter.ts";
 import { createSidebarScroll } from "./sidebar-context-controller.ts";
 import { equalSidebarContext, selectSidebarContext } from "./sidebar-context-state.ts";
-import { createSidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
 import { createSidebarPeople } from "./sidebar-people.ts";
+
+const OpenClawIdNotifications = lazy(() => import("./openclaw-id/notifications.tsx"), {
+  export: "OpenClawIdNotifications",
+});
 
 export { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 
@@ -69,18 +84,28 @@ function AppSidebarContent(
 ): JSX.Element {
   host.style.display = "contents";
   const context = useApplication();
-  const catalog = createSidebarNavigationCatalog(context, () => props.navigationView, host);
-  const owner = sidebarOwners.get(host) ?? new AppSidebarOwner(catalog, context, host);
+  const owner = sidebarOwners.get(host) ?? new AppSidebarOwner(context, host);
   sidebarOwners.set(host, owner);
-  owner.navigationCatalog = catalog;
   owner.bindContext(context);
+  // The page decides the sidebar however it was reached: rail, link or history.
+  const [pluginRevision, setPluginRevision] = createSignal(0);
+  onSettled(() => context.plugins.subscribe(() => setPluginRevision((value) => value + 1)));
+  const pluginSection = createMemo(() => {
+    pluginRevision();
+    return Boolean(
+      navigationSectionForPage(
+        context.plugins.registrations("navigation"),
+        props.activePluginTabId,
+      ),
+    );
+  });
   owner.attention = createSessionAttention(
     context,
     owner.attentionQuestions,
     host,
     () => props.navigationVisible,
   );
-  const scroll = createSidebarScroll(owner);
+  const scroll = (owner.scroll = createSidebarScroll(owner));
   const contextual = createMemo(() => {
     const router = props.router;
     return router
@@ -153,8 +178,6 @@ function AppSidebarContent(
       snapshotModel();
       Object.values(props);
       contextual()?.read();
-      // Snapshot capture keeps observing Pages after its navigation view closes.
-      void catalog.dashboards;
       // Arm presence deadlines before preparation can project a row.
       people.capture();
       // Synchronous owners release boot snapshots and restore query state before row consumers read.
@@ -166,11 +189,7 @@ function AppSidebarContent(
     },
     { equals: false },
   );
-  createSessionOwnerFilterQuery(owner.sessionOwnerFilter, prepared, () =>
-    owner.sidebarAgentsMode === "roster"
-      ? rosterActivityStore(context).snapshot
-      : context.sessions.listSnapshot(owner.sessionData.sessionListQuery(owner.expandedAgentId())),
-  );
+  createSessionOwnerFilterQuery(owner.sessionOwnerFilter, prepared);
   const narrationEnabled = createMemo(() => {
     // Preparation reads narration while synchronizing the session projection.
     projection.revision();
@@ -199,6 +218,7 @@ function AppSidebarContent(
     },
   );
   onSettled(() => context.gateway.subscribeEvents((event) => owner.narration?.handleEvent(event)));
+  const applicationConfig = projectApplicationConfig(context.config);
   const presentationRevision = createParkedProjection(
     () => {
       Object.values(props);
@@ -320,8 +340,20 @@ function AppSidebarContent(
       narration()?.();
       narrationState();
       scroll.capture();
+      return props.activeRouteId
+        ? `${props.activeRouteId}\n${props.activePluginTabId}\n${pluginSection()}`
+        : "";
     },
-    () => {
+    (page, previous) => {
+      // The page decides the sidebar however it was reached: rail, link or history.
+      const route = props.activeRouteId;
+      const view = route
+        ? sidebarViewForPage(route, props.activePluginTabId, pluginSection())
+        : undefined;
+      if (view && page !== previous && owner.navigationView !== view) {
+        owner.navigationView = view;
+        owner.invalidate();
+      }
       owner.sessionData.refreshPresentation();
       owner.commitRender();
       if (owner.isConnected) {
@@ -354,7 +386,16 @@ function AppSidebarContent(
       disconnectSidebarOwner(host);
     };
   });
-  return content;
+  return (
+    <>
+      {content}
+      <Show when={applicationConfig.read().openclawIdEnabled}>
+        <Loading>
+          <OpenClawIdNotifications />
+        </Loading>
+      </Show>
+    </>
+  );
 }
 
 export type AppSidebarMethods = {
@@ -365,6 +406,7 @@ export type AppSidebarMethods = {
     sessionKey: string,
   ): ReturnType<AppSidebarOwner["findSidebarHovercardRowByKey"]> | undefined;
   promoteCreatedSession(sessionKey: string): void;
+  snapshotCaptureStatus(): string | undefined;
 };
 export type AppSidebarElement = SolidBridgeElement<AppSidebarProps, AppSidebarMethods>;
 
@@ -384,6 +426,7 @@ export const AppSidebar = defineSolidBridge<AppSidebarProps, AppSidebarMethods>(
       });
     },
     methods: {
+      snapshotCaptureStatus: (host) => sidebarOwners.get(host)?.snapshot.read().captureStatus,
       activeNavigationViewElement: (host) => sidebarOwners.get(host)?.activeNavigationViewElement(),
       dismissTransientMenus: dismissSidebarTransientMenus,
       expandedAgentId: (host) => sidebarOwners.get(host)?.expandedAgentId() ?? "",

@@ -10,6 +10,7 @@ import {
   clearSubagentPendingDelivery,
   completeRequesterSettleWakeState,
   transitionRequesterSettleWakeState,
+  recordRequesterDelivery,
 } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -84,7 +85,8 @@ function blockedPolicyDraft(
     entry.requesterSettleWake ??= { status: "pending", attemptCount: 0 };
   } else {
     entry.delivery.status = "failed";
-    entry.delivery.disposition = params.disposition ?? entry.delivery.disposition;
+    entry.delivery.disposition =
+      params.disposition ?? entry.delivery.disposition ?? "permanent_failure";
     entry.suppressCompletionDelivery = true;
   }
 }
@@ -103,6 +105,9 @@ function createRequesterSettleWakeMutationFixture(
     return mutatePolicyBatch(owners, params, (next) => {
       if (operation.kind === "transition") {
         transitionRequesterSettleWakeState(next, operation.state);
+        if (operation.requesterDelivery) {
+          recordRequesterDelivery(next, operation.requesterDelivery);
+        }
         return next;
       }
       return completeRequesterSettleWakeState(next) ? null : next;

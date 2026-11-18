@@ -48,9 +48,9 @@ prefer TypeScript." It writes the note to the appropriate file.
 ## What goes where
 
 `USER.md` is the compact user-model layer. Write stable preferences and profile
-facts as imperative directives with observed-date and active/superseded
-metadata. When a preference changes, supersede it in place instead of appending
-a contradictory active directive. See [User model](/concepts/user-model).
+facts as current imperative directives without date/status metadata. When a
+preference changes, replace it in place instead of keeping contradictory
+directives. Preserve useful dated history in daily memory, not `USER.md`. See [User model](/concepts/user-model).
 
 `MEMORY.md` is the compact, curated layer for durable non-profile facts,
 standing decisions, and short summaries that should be available at the start
@@ -204,6 +204,15 @@ The agent can answer directly when the conversation, bootstrap files, or supplie
 recall fully answers the question. It uses memory tools to retrieve missing facts
 when that context is absent or only answers part of the question. Partial, stale,
 or unavailable recall still requires disclosure.
+
+Automatic project recall has a one-second preparation budget, including provider
+startup and cleanup. If the budget expires, the turn continues without project
+candidates and the Gateway logs `project memory recall skipped` with the reason.
+Late results are discarded. The read may finish under the current turn's existing
+authority; the budget does not cancel storage work. Memory tools remain available
+for explicit retrieval.
+Cold or busy stores can therefore omit automatic recall on consecutive turns;
+explicit retrieval uses the memory tool's own lifetime rather than this budget.
 
 If `memory_search` reports that its storage scope closed, run
 `openclaw plugins reload memory-core`, or restart the Gateway, then retry.

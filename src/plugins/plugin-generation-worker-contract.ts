@@ -7,7 +7,7 @@ import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.ty
 import type { AdmissionState } from "./plugin-native-admission-state.js";
 import type { PluginSourceSnapshotDescriptor } from "./plugin-source-snapshot.types.js";
 
-export type PluginGenerationInspection =
+type PluginGenerationInspection =
   | {
       kind: "dependencies";
       entries: readonly { rootDir: string; entryFile: string }[];
@@ -28,8 +28,9 @@ export type GenerationWorkerInput = (
       storage: PluginSourceCaptureStorage;
       installRoots: PluginInstallRoots;
       readOnly: boolean;
-      scratch: string;
-      managedRoot?: string;
+      retainSourceCustody?: boolean;
+      sourceCustodyId?: number;
+      sourceCustodyDigest?: string;
       inspection?: PluginGenerationInspection;
       sourceSnapshot?: { descriptor: PluginSourceSnapshotDescriptor; stateDir: string };
       snapshotPublication?: { stateDir: string };
@@ -64,12 +65,10 @@ export type GenerationWorkerReply = (
     }
 ) & { released?: number[]; metrics?: PluginGenerationMetrics };
 export type GenerationWorkerCallback =
-  | { kind: "mapping"; id: number; captureId: number; filename: string; signal: Int32Array }
-  | { kind: "native-root"; id: number; signal: Int32Array }
+  | { kind: "native-root-reference"; id: number; directory: string; signal: Int32Array }
   | {
       kind: "callback-result";
       id: number;
-      filename?: string;
       root?: { id: number; directory: string };
       error?: string;
     }

@@ -14,6 +14,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasClaudeRawToolInvocation } from "./cli-output.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { prepareClaudeCliTransportArgs } from "./cli-runtime-args.js";
+import * as promptHooks from "./cli-runtime-prompt-context.js";
 import { createClaudeTurnStatus } from "./cli-runtime-status.js";
 import * as tasks from "./cli-runtime-tasks.js";
 import { createClaudeCliTransport } from "./cli-transport.js";
@@ -28,6 +29,7 @@ const IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
  */
 export type ClaudeCliExecuteContext = CliBackendExecuteContext & {
   assertPrivateInputCurrent?: () => void;
+  prepareCredentialUse?: () => Promise<void>;
 };
 type ClaudeCliTurn = {
   context: ClaudeCliExecuteContext;
@@ -115,7 +117,7 @@ function privateInputHolds(turn: ClaudeCliTurn): boolean {
 
 function carriesTurnContext(request: Record<string, unknown>, response: unknown): boolean {
   return (
-    request.callback_id === "UserPromptSubmit" &&
+    promptHooks.promptContextHookSlot(request.callback_id) >= 0 &&
     isRecord(response) &&
     isRecord(response.hookSpecificOutput) &&
     response.hookSpecificOutput.additionalContext !== undefined
@@ -195,15 +197,14 @@ async function handleRequest(
   }
   const input = request.input;
   const turn = activeTurn(session);
-  if (request.callback_id === "UserPromptSubmit" && input.hook_event_name === "UserPromptSubmit") {
+  const slot = promptHooks.promptContextHookSlot(request.callback_id);
+  if (slot >= 0 && input.hook_event_name === "UserPromptSubmit") {
     if (!turn || signal.aborted) {
       return {};
     }
     turn.promptSubmitted = true;
     const promptContext = resolvePromptContext(turn, input.prompt);
-    const additionalContext = [promptContext?.prependContext, promptContext?.appendContext]
-      .filter(Boolean)
-      .join("\n\n");
+    const additionalContext = promptHooks.promptContextHookValue(promptContext, slot);
     // Native can rewrite the prompt and rerun hooks; only its final pass is persisted.
     return additionalContext
       ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext } }
@@ -387,31 +388,12 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
     const input = turn && (!session.hasInputLifecycle || turn.inputStarted) ? turn : undefined;
     const inputUuid = input?.inputUuid ?? "";
     if (message.subtype === "background_tasks_changed") {
-      if (Array.isArray(message.tasks)) {
-        for (const task of message.tasks) {
-          if (!isRecord(task)) {
-            continue;
-          }
-          const id = tasks.recordTaskOwnership(session, task, inputUuid);
-          const parentTaskId = id ? session.runningDescendants.get(id) : undefined;
-          if (
-            id &&
-            input &&
-            !input.interrupted &&
-            session.taskOwners.get(id) === input.inputUuid &&
-            // Only children of held background work extend the input; foreground
-            // descendants still retire with their parent turn.
-            (parentTaskId === undefined ||
-              input.pendingBackgroundTaskIds.has(parentTaskId) ||
-              input.pendingBackgroundTaskIds.has(id)) &&
-            (task.task_type === "local_agent" ||
-              task.task_type === "local_workflow" ||
-              (task.task_type === "local_bash" && input.foregroundTaskIds.has(id)))
-          ) {
-            // Disappearing from a snapshot does not acknowledge the queued answer.
-            input.pendingBackgroundTaskIds.add(id);
-          }
-        }
+      const snapshot = Array.isArray(message.tasks) ? message.tasks.filter(isRecord) : [];
+      for (const task of snapshot) {
+        tasks.recordTaskOwnership(session, task, inputUuid);
+      }
+      if (input && !input.interrupted) {
+        tasks.acquireBackgroundTaskHolds(session, input, snapshot);
       }
     } else {
       taskId = tasks.recordTaskOwnership(session, message, inputUuid);
@@ -671,12 +653,14 @@ export async function* executeClaudeCli(
           secretInput,
           currentContext: () => session.currentTurn?.context,
           initialize: {
-            appendSystemPrompt: context.systemPrompt,
+            // Replace Claude Code's default prompt rather than appending to it, so the
+            // agent does not run under Claude Code's identity and coding-CLI guidance.
+            systemPrompt: context.systemPrompt,
             // Native snapshots must not override the host's refreshed prompt on resume.
             systemPromptSnapshot: false,
             excludeDynamicSections,
             hooks: {
-              UserPromptSubmit: [{ hookCallbackIds: ["UserPromptSubmit"] }],
+              UserPromptSubmit: [{ hookCallbackIds: promptHooks.PROMPT_CONTEXT_HOOK_IDS }],
               PreToolUse: [{ hookCallbackIds: ["PreToolUse"] }],
             },
           },
@@ -725,6 +709,7 @@ export async function* executeClaudeCli(
         }
         await transport.initialize();
       }
+      await context.prepareCredentialUse?.();
       context.assertCurrent?.();
       context.assertPrivateInputCurrent?.();
       if (session.closed || session.currentTurn !== turn) {
@@ -741,7 +726,7 @@ export async function* executeClaudeCli(
             throw new Error("The Claude CLI turn is no longer active.");
           }
           turn.interrupted = true;
-          // The host requests this only after consuming a successful yield tool result.
+          // The host requests this only after a consumed yield or final source-reply result.
           // Native interrupt would persist a false user stop in the resumable transcript.
           turn.sawTerminalResult = true;
           // Native output owns the session ID; the input ID may still name a fork's parent.

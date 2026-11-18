@@ -118,6 +118,7 @@ export function protectChatOutboxFromReload<T extends { item: ChatQueueItem }>(o
     () => options.inputs.size === 0,
     () =>
       showToast({
+        severity: "error",
         actionPrimary: true,
         message: t("chat.queue.memoryOnlyReloadBlocked"),
         actionLabel: t("chat.queue.memoryOnlyReview"),

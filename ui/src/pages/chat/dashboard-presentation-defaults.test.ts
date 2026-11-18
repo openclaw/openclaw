@@ -601,6 +601,7 @@ describe("dashboard shared default in the native Dashboard menu", () => {
     await select(menu, "dashboard-default-status");
     expect(patch).toHaveBeenCalledTimes(1);
     expect(showToast).toHaveBeenCalledWith({
+      severity: "success",
       message: t("chat.sidePanel.defaultSaved"),
       anchor: h.pane.element,
     });
@@ -625,6 +626,7 @@ describe("dashboard shared default in the native Dashboard menu", () => {
     await operation;
     expect(h.state.chatError).toContain("Dashboard default denied");
     expect(showToast).toHaveBeenCalledWith({
+      severity: "error",
       message: t("chat.sidePanel.defaultSaveError"),
       detail: new Error("Dashboard default denied"),
       anchor: h.pane.element,

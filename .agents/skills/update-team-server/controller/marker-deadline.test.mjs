@@ -12,14 +12,20 @@ const ownerPath = process.env.MARKER_DEADLINE_TEST_OWNER ??
 function fixtureRoot(t) {
   const root = mkdtempSync(join(tmpdir(), "team-marker-deadline-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, "journal"), { mode: 0o700 });
+  writeFileSync(join(root, "deploy.lock"), "", { mode: 0o600 });
   return root;
 }
 
 function runShell(root, script, env, timeout, maxBuffer = 256 * 1024) {
-  const result = spawnSync("bash", ["--noprofile", "--norc", "-c", script], {
+  const lockedScript = 'exec 9<>"$OPENCLAW_TEAM_LOCK_FILE"; /usr/bin/flock -n 9 || exit 75;\n' + script;
+  const result = spawnSync("bash", ["--noprofile", "--norc", "-c", lockedScript], {
     encoding: "utf8", timeout, maxBuffer,
     env: { PATH: "/usr/bin:/bin", HOME: root, LANG: "C", LC_ALL: "C",
       OPENCLAW_TEAM_OPERATOR_PROFILE: process.env.OPENCLAW_TEAM_OPERATOR_PROFILE,
+      OPENCLAW_TEAM_RELEASE_ROOT: root, OPENCLAW_TEAM_LOCK_FILE: join(root, "deploy.lock"),
+      OPENCLAW_TEAM_ROOT_UID: String(process.getuid()), OPENCLAW_TEAM_ROOT_GID: String(process.getgid()),
+      OPENCLAW_TEAM_ANCESTOR_BOUNDARY: root,
       FIXTURE_ROOT: root, FIXTURE_NODE: process.execPath, ...env },
   });
   assert.ifError(result.error);
@@ -437,7 +443,7 @@ proof() {
     compatibility)
       if [[ "$FIXTURE_FAULT" == stale-lease ]]; then touch "$serving_root/lease-expired"; fi
       if ((rollback_armed == 0)) && ((successor_started >= 0)); then record rollback-compatibility; else record activation-compatibility; fi ;;
-    journal-create) printf '{"phase":"A_PREPARED","originalWitness":"fixture"}' >"$journal_file" ;;
+    journal-create) cat >/dev/null; printf '{"phase":"A_PREPARED","originalWitness":"fixture"}' >"$journal_file" ;;
     journal-read) cat "$journal_file" ;;
     journal-phase) record "phase $3"; printf '{"phase":"%s","originalWitness":"fixture"}' "$3" >"$journal_file" ;;
     journal-field)
@@ -599,4 +605,99 @@ for (const [label, options, rejected] of [
 ]) {
   markerCase(`marker receipt: ${label}`, { fallbacks: ["fixture/fallback"], ...options },
     ({ events }) => assert.equal(events("native-run").length, 1), rejected && /stage=marker.reply-check/);
+}
+
+
+for (const scenario of ["settles", "startup-stuck", "channel-stuck", "channel-terminal", "malformed"]) {
+  test(`convergence samples startup after readiness: ${scenario}`, t => {
+    const root = fixtureRoot(t);
+    writeFileSync(join(root, "clock"), "0");
+    const functions = ["verification_failure", "verification_step", "verify_convergence", "wait_for_live"]
+      .map(name => ownerFunction(readFileSync(ownerPath, "utf8"), name)).join("\n");
+    const script = shellSetup + String.raw`
+SECONDS=0
+verification_budget=6
+verification_owned_pid=''
+state_database="$serving_root/state.sqlite"
+session_witness=witness
+proof() {
+  case "$1" in
+    probes|channels) "$node_bin" "$FIXTURE_LIBRARY" "$@" ;;
+    validate-release|gateway-runtime) : ;;
+    *) return 90 ;;
+  esac
+}
+record() { printf '%s\n' "$*" >> "$serving_root/events"; }
+capture_service_generation() { service_pid=123; service_generation=456; }
+assert_single_listener() { :; }
+assert_protected_identity() { :; }
+assert_policy() { :; }
+run_gateway() {
+  case "$*" in
+    *system.info*) printf '{"pid":123,"processInstanceId":"fixture-instance"}' ;;
+    *'gateway status'*)
+      # Startup settles while the status CLI is doing its work. Command
+      # substitution runs in a subshell, so the external clock is file-backed.
+      printf 1 > "$serving_root/clock" ;;
+    *channels.status*) printf '%s' "$FIXTURE_CHANNELS" ;;
+    *sessions.list*) record sessions ;;
+    *) return 90 ;;
+  esac
+}
+read_probe() {
+  local now; now="$(cat "$serving_root/clock")"
+  probe_status=200
+  case "$1" in
+    healthz) probe_body='{"ok":true,"status":"live"}' ;;
+    startupz)
+      if ((now == 0)) || [[ "$FIXTURE_SCENARIO" == startup-stuck ]]; then
+        probe_status=503; probe_body='{"ok":false,"status":"starting","pendingReason":"startup-sidecars","uptimeMs":0}'
+      else probe_body='{"ok":true,"status":"started","uptimeMs":1000}'; fi
+      [[ "$FIXTURE_SCENARIO" != malformed ]] || probe_body='{"ok":true}' ;;
+    readyz)
+      if [[ "$FIXTURE_SCENARIO" == startup-stuck ]]; then
+        probe_status=503; probe_body='{"ready":false,"failing":["startup-sidecars"],"uptimeMs":1000}'
+      elif [[ "$FIXTURE_SCENARIO" == channel-* ]]; then
+        probe_status=503; probe_body='{"ready":false,"failing":["discord"],"uptimeMs":1000}'
+      else probe_body='{"ready":true,"failing":[],"uptimeMs":1000}'; fi ;;
+    *) return 90 ;;
+  esac
+  [[ "$1" != readyz ]] || probe_body="${"$"}{probe_body%?},\"eventLoop\":$FIXTURE_EVENT_LOOP}"
+  record "$1 $probe_status"
+}
+verify_marker() { record marker; }
+sleep() { record "sleep $1"; SECONDS=$((SECONDS + $1)); }
+` + functions + String.raw`
+if wait_for_live "$serving_root" '{"buildId":"fixture"}'; then exit 0; else exit "$?"; fi
+`;
+    const eventLoop = { degraded: false, reasons: [], intervalMs: 1000, delayP99Ms: 0,
+      delayMaxMs: 0, utilization: 0.1, cpuCoreRatio: 0.1, degradedSinceMs: null };
+    const channels = { eventLoop, channelAccounts: Object.fromEntries(
+      JSON.parse(process.env.OPENCLAW_TEAM_OPERATOR_PROFILE).channels.map(([channel, accountId]) => [channel,
+        [{ accountId, configured: true, enabled: true, running: true, connected: true,
+          lifecycle: "ready", restartPending: false, lastError: null }]])) };
+    if (scenario.startsWith("channel-")) Object.assign(channels.channelAccounts.discord[0], {
+      connected: false, lifecycle: scenario === "channel-stuck" ? "recovering" : "failed",
+    });
+    const result = runShell(root, script, {
+      FIXTURE_LIBRARY: join(dirname(ownerPath), "release-lib.mjs"),
+      FIXTURE_SCENARIO: scenario, FIXTURE_CHANNELS: JSON.stringify(channels),
+      FIXTURE_EVENT_LOOP: JSON.stringify(eventLoop),
+    }, 20_000);
+    const rows = readFileSync(join(root, "events"), "utf8").trim().split("\n");
+    if (scenario === "settles") {
+      assert.equal(result.status, 0, result.stderr);
+      assert.doesNotMatch(result.stderr, /VERIFICATION_FAILED/);
+      assert.equal(rows.filter(row => row === "marker").length, 1);
+      assert.equal(rows.filter(row => row.startsWith("sleep")).length, 0, "ready on the first attempt");
+    } else {
+      assert.notEqual(result.status, 0);
+      assert.ok(!rows.includes("marker") && !rows.includes("sessions"));
+      assert.match(result.stderr, /stage=wait-for-live.budget/);
+      assert.match(result.stderr, scenario === "malformed" ? /startupz proof is malformed/
+        : scenario === "channel-terminal" ? /recovery is terminal or inconsistent/
+        : /stage=convergence.probe-result.*outcome=recovering/);
+      assert.equal(rows.filter(row => row.startsWith("sleep")).length, 3);
+    }
+  });
 }

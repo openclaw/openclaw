@@ -91,5 +91,9 @@
         }
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Check whether Firecrawl search and scraping are ready.",
+    "Research a question with Firecrawl and compare a few sources with citations."
+  ]
 }

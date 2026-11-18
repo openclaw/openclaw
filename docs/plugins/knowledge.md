@@ -115,6 +115,7 @@ optional.
 | `maintenance.enabled`       | boolean  | `true`            | Run the scheduled maintenance pass.                                                                                                          |
 | `maintenance.schedule`      | string   | `"30 3 * * *"`    | Five-field cron expression for the pass.                                                                                                     |
 | `maintenance.timezone`      | string   | Gateway host zone | IANA time zone for the schedule.                                                                                                             |
+| `recallGate`                | object   | absent            | Optional decision-model recall gate. Off when absent. See [Recall gate](/plugins/knowledge/memory-provider#recall-gate).                     |
 
 `operatorRead` and `writesEnabled` are plugin-wide gates. Changes to
 `plugins.entries.knowledge.config.stores` do not reload the plugin; Knowledge
@@ -165,6 +166,13 @@ The location does not depend on how the plugin was installed. Back up the
 registry, each store's `state.sqlite`, and its `vault/` directory together. A
 Markdown-only or Git-only copy is not a complete backup.
 
+Knowledge flushes file contents and synchronizes publication directories where
+the platform supports it. On Windows, directory flushing is not portable;
+Knowledge accepts only the filesystem helper's checked unsupported outcome,
+not other I/O errors. Journal recovery and exact retries handle interrupted
+processes, but a completed save is not a guarantee against loss of directory
+entries after a Windows power failure. Keep a complete backup of the store.
+
 ## Writes and authority
 
 - Agents publish through journaled operations with revision/hash preconditions
@@ -211,7 +219,7 @@ an autonomous ingestion engine.
 | ------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `knowledge-automation`          | Create and verify scheduled ingestion through the host scheduler with a retained authorized worker. |
 | `knowledge-capture`             | Save decisions, preferences, facts, and short notes with attribution and readback.                  |
-| `knowledge-claim-consolidation` | Review and consolidate claims: unlinked, on one page, or about one subject; supersede snapshots.    |
+| `knowledge-claim-consolidation` | Consolidate claims (unlinked, on one page, or about one subject) and review pages for currency.     |
 | `knowledge-correct`             | Correct or withdraw exact records and inspect affected knowledge.                                   |
 | `knowledge-entities`            | Resolve and enrich people, companies, projects, and concepts with sourced profiles.                 |
 | `knowledge-ingest`              | Ingest documents, articles, and conversations; learn lessons from sets of sources (`/learn`).       |

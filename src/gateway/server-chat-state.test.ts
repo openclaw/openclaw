@@ -30,7 +30,15 @@ function progressHarness(mode?: ReplayMode, timeOffset = 0, sessionKey?: string)
   });
   const event = (seq: number, stream: string, data: Record<string, unknown>) =>
     state.recordProgressEvent(context.runId, wire(seq, stream, data), mode);
-  const snapshot = () => state.runs.get("run-1")?.progressSnapshot;
+  const snapshot = () => {
+    const retained = state.runs.get("run-1")?.progressSnapshot;
+    return (
+      retained && {
+        byteLength: retained.byteLength,
+        events: projectInFlightRunSnapshot({ chatRunState: state, runId: "run-1" }).events ?? [],
+      }
+    );
+  };
   const expectEvents = (...expected: Array<[number, string, Record<string, unknown>]>) =>
     expect(snapshot()?.events.map(({ seq, stream, data }) => [seq, stream, data])).toMatchObject(
       expected,
@@ -88,6 +96,28 @@ function subscriptionHarness() {
 }
 
 describe("createChatRunState", () => {
+  it.each([undefined, "summary"] as const)(
+    "retains live-output interest markers through bounded %s recovery",
+    (mode) => {
+      const { tool, events } = progressHarness(mode);
+      tool(1, "start", "command", { name: "exec" });
+      tool(2, "update", "command", {
+        name: "exec",
+        outputOnly: true,
+        partialResult: { text: "first\nlast\n" },
+      });
+      const update = events()?.find((event) => event.data.phase === "update");
+      expect(update?.data).toMatchObject({ outputOnly: true, toolCallId: "command" });
+      if (mode === "summary") {
+        expect(update?.data).not.toHaveProperty("partialResult");
+      } else {
+        expect(update?.data.partialResult).toEqual({ text: "first\nlast\n" });
+      }
+      tool(3, "result", "command", { name: "exec", result: { text: "done" } });
+      expect(events()?.at(-1)?.data).not.toHaveProperty("outputOnly");
+    },
+  );
+
   it("replays complete prepared items and evicts raw and item siblings together", () => {
     const { send, events: getEvents } = progressHarness();
     const preamble = { itemId: "preamble", kind: "preamble", title: "Status" };
@@ -385,108 +415,129 @@ describe("createChatRunState", () => {
     ]);
   });
 
-  it("captures native JSON once, frozen and byte-exact", () => {
-    const { tool, snapshot: getSnapshot } = progressHarness();
-    let serializations = 0;
-    let reads = 0;
-    const details = {
-      toJSON: () => {
-        serializations += 1;
-        return {
-          get text() {
-            reads += 1;
-            return reads === 1 ? "é" : "changed";
-          },
-          omitted: undefined,
-          values: [undefined, Number.NaN],
-          literals: [true, false, null],
-        };
-      },
-    };
-    const numberHints: string[] = [];
-    const boxedNumber = Object.assign(Object(3), {
-      [Symbol.toPrimitive]: (hint: string) => {
-        numberHints.push(hint);
-        return -3.25;
-      },
-    });
-    const shared = { value: boxedNumber, text: Object("é"), enabled: Object(false) };
-    const revocable = Proxy.revocable(["last"], {
-      get(target, key, receiver) {
-        const value: unknown = Reflect.get(target, key, receiver);
-        if (key === "0") {
-          revocable.revoke();
-        }
-        return value;
-      },
-    });
-    using inspection = vi.spyOn(Object, "getPrototypeOf");
-    using traversal = vi.spyOn(jsonUtf8, "boundedJsonUtf8Bytes");
-    using literalEncoding = vi.spyOn(JSON, "stringify");
-    tool(1, "result", "done", {
-      result: { details, first: shared, again: shared, last: revocable.proxy },
-    });
-    const firstSnapshot = getSnapshot();
-    expect(traversal).not.toHaveBeenCalled();
-    expect(
-      literalEncoding.mock.calls.filter(([value]) => value === null || typeof value === "boolean"),
-    ).toHaveLength(0);
-    const capturedResult = firstSnapshot!.events[0]!.data.result;
-    const capturedInspections = inspection.mock.calls.filter(
-      ([value]) => value === capturedResult,
-    ).length;
-    inspection.mockRestore();
-    expect(capturedInspections).toBe(0);
-    expect(firstSnapshot?.byteLength).toBe(jsonBytes(firstSnapshot?.events[0]));
-    tool(2, "input_delta", "active", { diff: { added: 1, removed: 0 } });
-    expect([serializations, reads, numberHints]).toEqual([1, 1, ["number", "number"]]);
-    const snapshot = getSnapshot();
-    expect(snapshot?.events[0]?.data.result).toEqual({
-      details: { text: "é", values: [null, null], literals: [true, false, null] },
-      first: { value: -3.25, text: "é", enabled: false },
-      again: { value: -3.25, text: "é", enabled: false },
-      last: ["last"],
-    });
-    const captured = snapshot!.events[0]!.data.result as {
-      details: { text: string; values: null[] };
-    };
-    expect([
-      Reflect.set(captured, "details", {}),
-      Reflect.set(captured.details, "text", "changed"),
-      Reflect.set(captured.details.values, "0", "changed"),
-    ]).toEqual([false, false, false]);
-    expect(snapshot?.byteLength).toBe(
-      snapshot?.events.reduce((sum, entry) => sum + jsonBytes(entry), 0),
-    );
-  });
+  it.each([false, true])(
+    "captures native JSON once, frozen and byte-exact (output=%s)",
+    (outputOnly) => {
+      const { tool, snapshot: getSnapshot } = progressHarness();
+      const field = outputOnly ? "partialResult" : "result";
+      let serializations = 0;
+      let reads = 0;
+      const details = {
+        toJSON: () => {
+          serializations += 1;
+          return {
+            get text() {
+              reads += 1;
+              return reads === 1 ? "é" : "changed";
+            },
+            omitted: undefined,
+            values: [undefined, Number.NaN],
+            literals: [true, false, null],
+          };
+        },
+      };
+      const numberHints: string[] = [];
+      const boxedNumber = Object.assign(Object(3), {
+        [Symbol.toPrimitive]: (hint: string) => {
+          numberHints.push(hint);
+          return -3.25;
+        },
+      });
+      const shared = { value: boxedNumber, text: Object("é"), enabled: Object(false) };
+      const revocable = Proxy.revocable(["last"], {
+        get(target, key, receiver) {
+          const value: unknown = Reflect.get(target, key, receiver);
+          if (key === "0") {
+            revocable.revoke();
+          }
+          return value;
+        },
+      });
+      using inspection = vi.spyOn(Object, "getPrototypeOf");
+      using traversal = vi.spyOn(jsonUtf8, "boundedJsonUtf8Bytes");
+      using literalEncoding = vi.spyOn(JSON, "stringify");
+      tool(1, outputOnly ? "update" : "result", "done", {
+        ...(outputOnly ? { outputOnly: true } : {}),
+        [field]: { details, first: shared, again: shared, last: revocable.proxy },
+      });
+      const firstSnapshot = getSnapshot();
+      expect(traversal).not.toHaveBeenCalled();
+      expect(
+        literalEncoding.mock.calls.filter(
+          ([value]) => value === null || typeof value === "boolean" || typeof value === "string",
+        ),
+      ).toHaveLength(0);
+      const capturedResult = firstSnapshot!.events[0]!.data[field];
+      const capturedInspections = inspection.mock.calls.filter(
+        ([value]) => value === capturedResult,
+      ).length;
+      inspection.mockRestore();
+      expect(capturedInspections).toBe(0);
+      expect(firstSnapshot?.byteLength).toBe(jsonBytes(firstSnapshot?.events[0]));
+      tool(2, "input_delta", "active", { diff: { added: 1, removed: 0 } });
+      expect([serializations, reads, numberHints]).toEqual([1, 1, ["number", "number"]]);
+      const snapshot = getSnapshot();
+      expect(snapshot?.events[0]?.data[field]).toEqual({
+        details: { text: "é", values: [null, null], literals: [true, false, null] },
+        first: { value: -3.25, text: "é", enabled: false },
+        again: { value: -3.25, text: "é", enabled: false },
+        last: ["last"],
+      });
+      const captured = snapshot!.events[0]!.data[field] as {
+        details: { text: string; values: null[] };
+      };
+      expect([
+        Reflect.set(captured, "details", {}),
+        Reflect.set(captured.details, "text", "changed"),
+        Reflect.set(captured.details.values, "0", "changed"),
+      ]).toEqual([false, false, false]);
+      expect(snapshot?.byteLength).toBe(
+        snapshot?.events.reduce((sum, entry) => sum + jsonBytes(entry), 0),
+      );
+    },
+  );
 
   it.each([
-    { prefix: 'é🦞\n"\\\ud800', raw: false },
-    { prefix: "é", raw: true },
-  ])("retains the exact JSON byte limit and stops capture on overflow: %j", ({ prefix, raw }) => {
-    const encode = (text: string): unknown => {
-      if (!raw) {
-        return text;
-      }
-      if (!("rawJSON" in JSON) || typeof JSON.rawJSON !== "function") {
-        throw new Error("This contract requires native JSON.rawJSON support");
-      }
-      return JSON.rawJSON(JSON.stringify(text));
-    };
-    const { wire, tool, snapshot } = progressHarness();
-    const base = wire(1, "tool", { ...resultMetadata, result: { text: encode(prefix) } });
-    const text = prefix + "x".repeat(64 * 1024 - jsonBytes(base));
-    tool(1, "result", "done", { name: "read", result: { text: encode(text) } });
-    expect(snapshot()?.byteLength).toBe(64 * 1024);
-    expect(snapshot()?.events[0]?.data.result).toEqual({ text });
-    const laterRead = vi.fn();
-    tool(2, "result", "done", {
-      name: "read",
-      result: withUnreadTail("text", encode(`${text}x`), laterRead),
-    });
-    expect(laterRead).not.toHaveBeenCalled();
-    expect(snapshot()?.events[0]?.data).toEqual(resultMetadata);
-  });
+    {
+      prefix:
+        Array.from({ length: 32 }, (_, code) => String.fromCharCode(code)).join("") +
+        'é🦞"\\/\u2028\u2029\ud800\ud800\udc00\udfff',
+      raw: false,
+      outputOnly: false,
+    },
+    { prefix: "é", raw: true, outputOnly: false },
+    { prefix: "é🦞\ud800", raw: false, outputOnly: true },
+  ])(
+    "retains the exact JSON byte limit and stops capture on overflow: %j",
+    ({ prefix, raw, outputOnly }) => {
+      const encode = (text: string): unknown => {
+        if (!raw) {
+          return text;
+        }
+        if (!("rawJSON" in JSON) || typeof JSON.rawJSON !== "function") {
+          throw new Error("This contract requires native JSON.rawJSON support");
+        }
+        return JSON.rawJSON(JSON.stringify(text));
+      };
+      const { wire, tool, snapshot } = progressHarness();
+      const field = outputOnly ? "partialResult" : "result";
+      const metadata = outputOnly
+        ? { ...resultMetadata, phase: "update", outputOnly: true }
+        : resultMetadata;
+      const base = wire(1, "tool", { ...metadata, [field]: { text: encode(prefix) } });
+      const text = prefix + "x".repeat(64 * 1024 - jsonBytes(base));
+      tool(1, metadata.phase, "done", { ...metadata, [field]: { text: encode(text) } });
+      expect(snapshot()?.byteLength).toBe(64 * 1024);
+      expect(snapshot()?.events[0]?.data[field]).toEqual({ text });
+      const laterRead = vi.fn();
+      tool(2, metadata.phase, "done", {
+        ...metadata,
+        [field]: withUnreadTail("text", encode(`${text}x`), laterRead),
+      });
+      expect(laterRead).not.toHaveBeenCalled();
+      expect(snapshot()?.events[0]?.data).toEqual(metadata);
+    },
+  );
 
   const unreplayable: [label: string, result: () => unknown, field?: string][] = [
     ["container-only oversized", () => Array.from({ length: 32_768 }, () => ({})), "rows"],

@@ -20,6 +20,7 @@ import {
   readCurrentGitUpdateRecovery,
   recordGitRollbackOutcome,
 } from "./update-runner-git-recovery.js";
+import { updateGitRelease } from "./update-runner-git-release.js";
 import {
   createGitRuntimeTransaction,
   prepareGitRuntimePromotion,
@@ -30,7 +31,7 @@ import {
   runGitCleanCheckStep,
   readGitRollbackPreservation,
   runGitRollbackSteps,
-  runGitUpstreamStep,
+  runGitUpstreamSteps,
 } from "./update-runner-git-steps.js";
 import {
   fetchGitUpdateTarget,
@@ -57,6 +58,10 @@ export async function updateGitCheckout(params: {
   startedAt: number;
 }): Promise<UpdateRunResult> {
   const { opts, timeoutMs, startedAt } = params;
+  // POSIX checkouts update by switching a release link; the checkout is never written.
+  if (opts.gitReleases) {
+    return await updateGitRelease(params);
+  }
   const defaultCommandEnv = resolveGitUpdateCommandEnv(params.defaultCommandEnv);
   let gitRoot = params.gitRoot;
   const runCommand: CommandRunner = (argv, options) =>
@@ -525,19 +530,13 @@ export async function updateGitCheckout(params: {
     }
     createdDevBranchDuringUpdate =
       checkoutArgs.includes("-B") && preflight.localDevBranchExists === false;
-    if (createdDevBranchDuringUpdate && preflight.selectedDevUpstream) {
-      const upstreamArgs = [
-        "git",
-        "-C",
-        gitRoot,
-        "branch",
-        "--set-upstream-to",
+    if (createdDevBranchDuringUpdate) {
+      const upstreamStep = await runGitUpstreamSteps(
+        workStep("git-set-upstream", [], gitRoot),
         preflight.selectedDevUpstream,
-        DEV_BRANCH,
-      ];
-      const upstreamOptions = workStep("git-set-upstream", upstreamArgs, gitRoot);
-      const upstreamStep = await runGitUpstreamStep(upstreamOptions);
-      if (isFailedUpdateStep(upstreamStep)) {
+        preflight.selectedDevSource,
+      );
+      if (upstreamStep && isFailedUpdateStep(upstreamStep)) {
         return await rollbackError("checkout-failed");
       }
     }

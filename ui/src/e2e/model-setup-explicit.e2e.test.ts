@@ -69,14 +69,14 @@ suite.define(() => {
         } else {
           await openModelSetup(page, suite.server.baseUrl);
         }
-        await page.getByRole("heading", { name: "Available models" }).waitFor();
+        await page.locator('.model-setup h2:text-is("Available models")').waitFor();
         const choices = page.locator("[data-candidate-kind]");
         expect(await choices.first().textContent()).toContain("Anthropic");
         expect(await page.getByLabel("Show existing sessions").isChecked()).toBe(false);
         expect(await page.locator("openclaw-model-setup-page [data-selected]").count()).toBe(0);
         await button(page, "Check again").click();
         await gateway.waitForRequest(rpc.detect, { after: 1 });
-        await page.getByRole("heading", { name: "Available models" }).waitFor();
+        await page.locator('.model-setup h2:text-is("Available models")').waitFor();
         await expectRequestCounts(gateway, {
           [rpc.activate]: 0,
           [rpc.auth]: 0,

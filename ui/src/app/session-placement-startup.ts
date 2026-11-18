@@ -175,6 +175,7 @@ export function createApplicationPlacementStartup(
   };
   const stopReloadGuard = registerControlUiReloadGuard(canReload, () =>
     showToast({
+      severity: "error",
       message: t("newSession.placementReloadBlocked"),
       actionLabel: t("newSession.discardUnsavedAndReload"),
       onAction: captureDiscardAndReload(),

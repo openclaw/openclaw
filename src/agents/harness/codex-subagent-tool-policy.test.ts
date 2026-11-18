@@ -11,7 +11,11 @@ const codex = await loadBundledPluginFacade<{
   CODEX_NATIVE_TOOL_REQUIREMENTS: readonly string[];
   CODEX_TOOL_POLICY_SAFE_DENY_NAMES: readonly string[];
   buildCodexRuntimeThreadConfigForRun: (
-    params: { modelId: string; pluginHarnessToolPolicyRestricted: boolean },
+    params: {
+      modelId: string;
+      pluginHarnessToolPolicyRestricted: boolean;
+      pluginHarnessToolPolicySafeDeniedTools?: readonly string[];
+    },
     config: undefined,
     options: { nativeCodeModeEnabled: boolean; hostSystemAgentActive: boolean },
   ) => Record<string, unknown>;
@@ -25,9 +29,16 @@ const prepare = (
     codex.CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
     codex.CODEX_NATIVE_TOOL_REQUIREMENTS,
   );
-const threadConfig = (pluginHarnessToolPolicyRestricted: boolean) =>
+const threadConfig = (policy: {
+  toolPolicyRestricted: boolean;
+  safeDeniedToolNames?: readonly string[];
+}) =>
   codex.buildCodexRuntimeThreadConfigForRun(
-    { modelId: "test-model", pluginHarnessToolPolicyRestricted },
+    {
+      modelId: "test-model",
+      pluginHarnessToolPolicyRestricted: policy.toolPolicyRestricted,
+      pluginHarnessToolPolicySafeDeniedTools: policy.safeDeniedToolNames,
+    },
     undefined,
     { nativeCodeModeEnabled: true, hostSystemAgentActive: false },
   );
@@ -44,9 +55,19 @@ describe("Codex subagent native tool policy", () => {
       expect(isToolAllowedByPolicies(tool, policy.runtimePolicies), tool).toBe(false);
     }
     expect(policy.toolPolicyRestricted).toBe(false);
-    const config = threadConfig(policy.toolPolicyRestricted);
+    const config = threadConfig(policy);
     expect(config["features.code_mode"]).toBe(true);
     expect(config["agents.enabled"]).toBeUndefined();
+  });
+
+  it("restricts the whole native surface for an unaudited denial", async () => {
+    const policy = await prepare({
+      sessionKey: "agent:main:main",
+      sessionId: "policy-unaudited",
+      config: { tools: { deny: ["nodes"] } },
+    });
+    expect(policy.toolPolicyRestricted).toBe(true);
+    expect(threadConfig(policy)["features.code_mode"]).toBe(false);
   });
 
   it.each([
@@ -82,8 +103,12 @@ describe("Codex subagent native tool policy", () => {
     for (const tool of ["gateway", "openclaw", "sessions_send", "conversations_turn"]) {
       expect(isToolAllowedByPolicies(tool, policy.runtimePolicies), tool).toBe(false);
     }
-    const config = threadConfig(policy.toolPolicyRestricted);
-    expect(config["features.code_mode"]).toBe(false);
+    // Session and conversation denies keep the native shell and file surface,
+    // and are enforced by disabling native delegation (the native tools that
+    // can address other threads).
+    expect(policy.toolPolicyRestricted).toBe(false);
+    const config = threadConfig(policy);
+    expect(config["features.code_mode"]).toBe(true);
     for (const key of ["agents.enabled", "features.multi_agent", "features.multi_agent_v2"]) {
       expect(config[key], key).toBe(false);
     }
@@ -118,8 +143,6 @@ describe("Codex subagent native tool policy", () => {
     }
     expect(isToolAllowedByPolicies("exec", policy.runtimePolicies)).toBe(!testCase.restricted);
     expect(policy.toolPolicyRestricted).toBe(testCase.restricted);
-    expect(threadConfig(policy.toolPolicyRestricted)["features.code_mode"]).toBe(
-      !testCase.restricted,
-    );
+    expect(threadConfig(policy)["features.code_mode"]).toBe(!testCase.restricted);
   });
 });

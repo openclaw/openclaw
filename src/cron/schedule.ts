@@ -1,9 +1,9 @@
 /** Computes at/every/cron schedule timestamps with bounded Croner caching. */
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Cron, CronDate } from "croner";
 import { parseOffsetlessIsoDateTimeInTimeZone } from "../infra/format-time/parse-offsetless-zoned-datetime.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { resolveCronTimezone } from "./expression.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 import type { CronSchedule } from "./types.js";
@@ -12,14 +12,6 @@ const CRON_EVAL_CACHE_MAX = 512;
 const DAY_MS = 86_400_000;
 const cronEvalCache = new Map<string, Cron>();
 const cronTimezoneFormatters = new WeakMap<Cron, Intl.DateTimeFormat>();
-
-function resolveCronTimezone(tz?: string) {
-  const trimmed = normalizeOptionalString(tz) ?? "";
-  if (trimmed) {
-    return trimmed;
-  }
-  return Intl.DateTimeFormat().resolvedOptions().timeZone;
-}
 
 function resolveCachedCron(expr: string, timezone: string): Cron {
   const key = `${timezone}\u0000${expr}`;
@@ -347,21 +339,4 @@ export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): n
   return normalizedPreviousMs !== undefined && normalizedPreviousMs < nowMs
     ? normalizedPreviousMs
     : undefined;
-}
-
-/**
- * Checks whether a cron expression parses under the same croner rules the scheduler
- * applies, so callers can reject expressions the scheduler would throw on later.
- */
-export function isValidCronExpression(expr: string, timezone?: string): boolean {
-  const trimmed = expr.trim();
-  if (!trimmed) {
-    return false;
-  }
-  try {
-    void new Cron(trimmed, { timezone: resolveCronTimezone(timezone), catch: false });
-    return true;
-  } catch {
-    return false;
-  }
 }

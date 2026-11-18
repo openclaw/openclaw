@@ -9,7 +9,7 @@ import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js"
 import * as baselineCapture from "../infra/update-recovery-baseline-capture.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
-import * as registry from "../plugins/doctor-contract-registry.js";
+import * as preparation from "../plugins/doctor-contract-preparation.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { preserveDoctorOriginalState } from "./doctor-original-capture.js";
 
@@ -38,7 +38,7 @@ const captureDefaults = () => ({
 it("removes its failed unsealed capture after the backup work settles", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const originalConfig = fs.readFileSync(state.configPath);
-    vi.spyOn(registry, "preparePluginDoctorMigrationBackupResources").mockResolvedValue({
+    vi.spyOn(preparation, "preparePluginDoctorMigrationBackupResources").mockResolvedValue({
       resources: [],
       deferredPluginIds: new Set(),
       notices: [],

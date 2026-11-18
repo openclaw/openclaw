@@ -212,6 +212,7 @@ function installedRecoveryCurrent(value, sanitize) {
           "resume-retirement",
           "completed-status",
           "archive-completed",
+          "update-repair",
         ];
   if (
     (value.cut !== null && !retirementCuts.includes(value.cut)) ||
@@ -2433,7 +2434,7 @@ export function publishInstalledRecoveryDiagnostics(
       throw new Error();
     }
     const commands = summary.commands ?? [];
-    if (!Array.isArray(commands) || commands.length > 10) {
+    if (!Array.isArray(commands) || commands.length > 11) {
       throw new Error();
     }
     report.commands = commands.map((value) => {
@@ -2537,6 +2538,7 @@ export function publishInstalledRecoveryDiagnostics(
         ...(cut.startsWith("helper-") ? [] : ["resume-retirement"]),
         "completed-status",
         "archive-completed",
+        "update-repair",
         "next-update",
         "next-update-status",
       ];

@@ -27,7 +27,6 @@ import {
 } from "./node-workspace-transfer.test-support.js";
 import { memoryWorkspaceJournal } from "./tunnel.test-support.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
-import { ConcurrentWorkspacePathError } from "./workspace-reconcile.js";
 import {
   deleteStagedWorkerWorkspaceResult,
   workerWorkspaceResultRef,
@@ -380,8 +379,10 @@ it.each([
           () => undefined,
           (error: unknown) => error,
         );
-        expect.soft(collisionError).toBeInstanceOf(ConcurrentWorkspacePathError);
-        expect.soft(collisionError).toMatchObject({ message: expect.stringContaining("unowned") });
+        expect.soft(collisionError).toBeInstanceOf(Error);
+        expect.soft(collisionError).toMatchObject({
+          message: `Cloud input conflicts with an unowned Gateway directory: ${collision}. Keep the project directory unchanged and reattach the input.`,
+        });
         if (markerBefore) {
           await expect.soft(fs.readFile(markerPath)).resolves.toEqual(markerBefore);
           expect.soft((await fs.lstat(markerPath)).nlink).toBe(markerLinksBefore);

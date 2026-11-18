@@ -169,7 +169,7 @@ openclaw health
   - Model auth profiles: SQLite auth stores (shared: `~/.openclaw/state/openclaw.sqlite`; agent-local: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`)
   - Sessions and transcripts: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
   - Legacy/archive session artifacts: `~/.openclaw/agents/<agentId>/sessions/`
-  - Logs: `/tmp/openclaw/`
+  - Logs: `logs/` under the selected state directory (see [log locations](/logging#where-logs-live))
 
 ## Credential storage map
 

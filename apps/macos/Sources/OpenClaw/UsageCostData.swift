@@ -68,7 +68,12 @@ struct CostUsageMenuDateParser {
         // Older Gateway tzdata can use the existing fixed-offset contract for an unknown zone.
         let minutes = self.timeZone.secondsFromGMT() / 60
         let offset = String(format: "UTC%@%d:%02d", minutes < 0 ? "-" : "+", abs(minutes) / 60, abs(minutes) % 60)
-        return ["mode": "specific", "timeZone": self.timeZone.identifier, "utcOffset": offset]
+        return [
+            "agentScope": "all",
+            "mode": "specific",
+            "timeZone": self.timeZone.identifier,
+            "utcOffset": offset,
+        ]
     }
 
     func parse(_ value: String) -> Date? {

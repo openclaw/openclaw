@@ -8,6 +8,7 @@ import {
   hasCronShellToolAccess,
   parseCronAgentTurnCommandPrompt,
 } from "../../../cron/agent-turn-command-prompt.js";
+import { buildCronCommandShellArgv } from "../../../cron/command-shell.js";
 import { toCanonicalOpenAIModelRef } from "../shared/codex-route-model-ref.js";
 import {
   IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
@@ -266,7 +267,8 @@ export function migrateLegacyAgentTurnCommandPayload(payload: UnknownRecord): bo
   }
 
   payload.kind = "command";
-  payload.argv = ["sh", "-lc", parsed.command];
+  // Doctor repairs the cron store on the Gateway host, so this process names its shell.
+  payload.argv = buildCronCommandShellArgv(parsed.command, process.platform);
   if (parsed.cwd) {
     payload.cwd = parsed.cwd;
   }

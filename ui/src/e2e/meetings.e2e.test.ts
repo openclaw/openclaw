@@ -413,9 +413,7 @@ suite.define(() => {
 
       await trigger.click();
       await panel.waitFor();
-      await panel
-        .getByRole("searchbox", { name: "Provider ID", exact: true })
-        .fill("discord-voice");
+      await panel.getByRole("searchbox", { name: "Provider", exact: true }).fill("discord-voice");
       await panel.getByLabel("Started on or after", { exact: true }).fill("2026-08-01");
       await panel.getByRole("button", { name: "Filter", exact: true }).click();
       await page.waitForURL(/providerId=discord-voice/u);

@@ -5,6 +5,10 @@ import { removeRemoteNodeInfo } from "../skills/runtime/remote.js";
 import { clearNodePendingWork } from "./node-pending-work.js";
 import type { NodeRegistry } from "./node-registry.js";
 import { invalidateNodeWakeState } from "./node-wake-state.js";
+import {
+  isSameOpenClawIdTunnelPrincipal,
+  type OpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
 
 export type PendingNodeAction = {
   id: string;
@@ -13,6 +17,7 @@ export type PendingNodeAction = {
   paramsJSON?: string;
   idempotencyKey: string;
   enqueuedAtMs: number;
+  openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
 };
 
 const pendingNodeActionsById = resolveGlobalMap<string, PendingNodeAction[]>(
@@ -68,6 +73,7 @@ export function enqueuePendingNodeAction(params: {
   command: string;
   paramsJSON?: string;
   idempotencyKey: string;
+  openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
   ttlMs: number;
   maxPerNode: number;
 }): { action: PendingNodeAction; created: boolean } {
@@ -78,7 +84,11 @@ export function enqueuePendingNodeAction(params: {
     ttlMs: params.ttlMs,
     pairingGeneration: params.pairingGeneration,
   });
-  const existing = queue.find((entry) => entry.idempotencyKey === params.idempotencyKey);
+  const existing = queue.find(
+    (entry) =>
+      entry.idempotencyKey === params.idempotencyKey &&
+      isSameOpenClawIdTunnelPrincipal(entry.openclawIdPrincipal, params.openclawIdPrincipal),
+  );
   if (existing) {
     return { action: existing, created: false };
   }
@@ -89,6 +99,7 @@ export function enqueuePendingNodeAction(params: {
     paramsJSON: params.paramsJSON,
     idempotencyKey: params.idempotencyKey,
     enqueuedAtMs: nowMs,
+    openclawIdPrincipal: params.openclawIdPrincipal,
   };
   queue.push(action);
   if (queue.length > params.maxPerNode) {

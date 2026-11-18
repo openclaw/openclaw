@@ -148,7 +148,10 @@ export async function runDeferredSessionDelete(
     if (outcome.worktreePreserved) {
       const { formatPreservedWorktreesNotice } = await import("./worktree-preservation.ts");
       if (host.connection.isCurrent(scope)) {
-        showToast({ message: formatPreservedWorktreesNotice([outcome.worktreePreserved]) });
+        showToast({
+          severity: undefined,
+          message: formatPreservedWorktreesNotice([outcome.worktreePreserved]),
+        });
       }
     }
     if (outcome.deleted && host.connection.isCurrent(scope)) {

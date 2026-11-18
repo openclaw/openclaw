@@ -19,7 +19,7 @@ import {
   withRuntimeToolSchemaQuarantine,
   type RuntimeToolSchemaQuarantineRecorder,
 } from "../../tool-schema-quarantine.js";
-import { captureFinalEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool.js";
+import { captureFinalEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool-creator-cap.js";
 import { applyFinalEffectiveToolPolicy } from "../effective-tool-policy.js";
 import { log } from "../logger.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
@@ -85,7 +85,9 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     toolsEnabled &&
     params.attempt.trigger !== "memory" &&
     !params.attempt.disableTools &&
-    !params.isRawModelRun;
+    !params.isRawModelRun &&
+    runtimeCapabilityProfile.policy.globalPolicy?.deny?.some((name) => name.trim() === "*") !==
+      true;
   let clientTools = auxiliaryToolsEnabled ? params.attempt.clientTools : undefined;
   // Client functions share the attempt's authority; filter before their names
   // can reserve bundled tools or enter deferred catalogs and provider requests.
@@ -149,6 +151,17 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     ? await materializeBundleMcpToolsForRun({
         ...bundleMcpAcquisition,
         agentId: params.setup.sessionAgentId,
+        operatorConnect: params.attempt.config
+          ? {
+              cfg: params.attempt.config,
+              metadata: bundleMetadataSnapshot,
+              senderIsOwner: params.attempt.senderIsOwner,
+              chatType: params.attempt.chatType,
+              isTurnTainted: params.attempt.isTurnTainted,
+              toolOverrides: params.attempt.toolOverrides,
+              toolDenylist: runtimeCapabilityProfile.policy.explicitToolDenylist,
+            }
+          : undefined,
         reservedToolNames: [
           ...tools.map((tool) => tool.name),
           ...(clientTools?.map((tool) => tool.function.name) ?? []),

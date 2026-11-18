@@ -1,0 +1,51 @@
+.openclaw-id-welcome-step {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  width: min(100%, 34rem);
+  margin-inline: auto;
+  padding-inline: 12px;
+  box-sizing: border-box;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.openclaw-id-welcome-step p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.openclaw-id-welcome-step__account {
+  color: var(--muted);
+}
+
+.openclaw-id-welcome-step__ask {
+  margin-top: 8px;
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.openclaw-id-welcome-step__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  width: 100%;
+  margin-top: 10px;
+}
+
+.openclaw-id-welcome-step__row input[type="text"] {
+  flex: 1 1 14rem;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+}
+
+.openclaw-id-welcome-step__error {
+  margin-top: 8px;
+  color: var(--danger);
+}

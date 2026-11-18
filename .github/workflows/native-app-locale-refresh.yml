@@ -25,7 +25,6 @@ on:
       - scripts/native-app-i18n.ts
       - scripts/native-i18n-inventory.ts
       - scripts/native-i18n-locales.ts
-      - ui/src/i18n/.i18n/glossary.*.json
       - .github/actions/create-generated-pr-tokens/action.yml
       - .github/actions/publish-generated-pr/action.yml
       - .github/actions/publish-generated-pr/policy.py
@@ -298,7 +297,6 @@ jobs:
             scripts/native-app-i18n.ts
             scripts/native-i18n-inventory.ts
             scripts/native-i18n-locales.ts
-            ui/src/i18n/.i18n/glossary.*.json
             .github/actions/create-generated-pr-tokens/action.yml
             .github/actions/publish-generated-pr/action.yml
             .github/actions/publish-generated-pr/policy.py

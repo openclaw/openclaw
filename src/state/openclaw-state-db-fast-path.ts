@@ -2,9 +2,9 @@ import type { DatabaseSync } from "node:sqlite";
 import { readGatewayOwnerLeaseFromDatabase } from "../infra/gateway-owner-lease.read.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import { SqliteSnapshotCleanupError } from "../infra/sqlite-lifecycle-errors.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
-import { SqliteSnapshotCleanupError } from "../infra/sqlite-readonly-location-cleanup.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import {
   assertSqliteSchemaContains,
   createSqliteTableContractReader,
@@ -15,7 +15,7 @@ import { throwSqliteSchemaMismatches } from "../infra/sqlite-schema-issues.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { hasLegacyCronRunLogs } from "../infra/state-legacy-cron-presence.js";
-import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-attribution.js";
+import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-context.js";
 import { readAgentDatabaseLeaseProvenance } from "./openclaw-agent-db-lease-provenance.js";
 import {
   getStateRuntimeSchemaAdmission,
@@ -54,6 +54,7 @@ export async function needsOpenClawStateDatabaseSchemaRepair(
     prepared = await prepareSqliteReadOnlyLocation(pathname, {
       preserveSourceArtifacts: true,
       signal,
+      reuse: true,
     });
   } catch (error) {
     if (error instanceof SqliteSnapshotCleanupError) {

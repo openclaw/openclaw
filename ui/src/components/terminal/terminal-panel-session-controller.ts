@@ -581,10 +581,10 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
       recovery.persist();
       closeEmptyPanel();
     },
-    switchTo(tabId: string): void {
+    switchTo(tabId: string, focus = true): void {
       updateState({ activeId: tabId });
       const tab = state.tabs.find((entry) => entry.id === tabId);
-      void focusTerminalSession(tab, host.updateComplete);
+      void focusTerminalSession(tab, host.updateComplete, focus);
     },
   };
 

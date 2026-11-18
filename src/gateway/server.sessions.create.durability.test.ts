@@ -37,10 +37,10 @@ vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../state/openclaw-agent-execution.js")>();
   return {
     ...actual,
-    captureOpenClawAgentDatabaseExecution: (
-      ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
-    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution> => {
-      const owner = actual.captureOpenClawAgentDatabaseExecution(...args);
+    captureOpenClawAgentDatabaseExecutionAsync: async (
+      ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecutionAsync>
+    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecutionAsync> => {
+      const owner = await actual.captureOpenClawAgentDatabaseExecutionAsync(...args);
       return {
         ...owner,
         get fileIdentity() {

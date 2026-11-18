@@ -81,7 +81,7 @@ const managedUpdateHandoff = vi.hoisted(() => ({
   transfer: vi.fn(),
   cancel: vi.fn(),
 }));
-const candidateValidation = vi.hoisted(() => vi.fn());
+const candidateCheck = vi.hoisted(() => vi.fn());
 const retainUpdateRuntime = vi.hoisted(() => vi.fn<RetainUpdateRuntime>());
 const systemdPolicy = vi.hoisted(() =>
   vi.fn<typeof import("../daemon/systemd-maintenance.js").prepareSystemdGatewayMaintenance>(),
@@ -193,8 +193,14 @@ vi.mock("../infra/update-managed-service-handoff-current.js", async (importOrigi
 vi.mock("../infra/update-repair-agent.js", () => ({
   runUpdateRepairLoop: inferenceRepair,
 }));
-vi.mock("../infra/update-candidate-canary.js", () => ({
-  validateUpdateCandidateCanary: candidateValidation,
+// mock-isolation: the candidate check spawns a staged package worker these fixtures do not build.
+vi.mock("../infra/update-candidate-check.js", () => ({
+  checkUpdateCandidate: candidateCheck,
+}));
+// The activated-release boot is a process boundary like the candidate check above.
+vi.mock(import("../infra/update-activated-gateway-check.js"), async (original) => ({
+  ...(await original()),
+  checkActivatedGatewayStartup: async ({ result }) => result,
 }));
 // Runtime retention and publication have real owner/process coverage; CLI
 // orchestration must not copy or rebuild the checkout behind its simulated updater.
@@ -361,7 +367,7 @@ vi.mock("node:child_process", async () => {
     args[1] = sqliteHostArgv(args[1]);
     return true;
   };
-  return {
+  const mocked = {
     ...actual,
     // SQLite and directory-watch helpers need real IPC; updater/service children stay simulated.
     spawnSync: (...args: Parameters<typeof actual.spawnSync>) => {
@@ -406,6 +412,7 @@ vi.mock("node:child_process", async () => {
         : spawn(...args);
     },
   };
+  return { ...mocked, default: mocked };
 });
 
 // Synthetic CLI packages omit the candidate worker; native delegation is covered separately.
@@ -680,7 +687,7 @@ vi.mock("../commands/triage-failure.js", () => ({ triageAfterFailure }));
 export {
   commandTransport,
   managedUpdateHandoff,
-  candidateValidation,
+  candidateCheck,
   retainUpdateRuntime,
   systemdPolicy,
   sourceRuntimeCompletion,

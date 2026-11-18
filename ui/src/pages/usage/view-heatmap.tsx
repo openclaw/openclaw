@@ -1,7 +1,7 @@
 import { createMemo, createProjection, For, Show } from "solid-js";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { createMsFormatter, formatNumber } from "../../lib/reactive/format.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import { formatFullDate } from "./metrics.ts";
 import type { CostDailyEntry } from "./types.ts";
 
@@ -161,9 +161,13 @@ function HeatmapSvg(props: UsageHeatmapProps) {
       </For>
       <For each={cells}>
         {(day) => {
+          const dateLabel = createMemo(() => {
+            getLocale();
+            return formatFullDate(day.date);
+          });
           const tooltip = createMemo(
             () =>
-              `${formatFullDate(day.date)} · ${t("usage.heatmap.cellTokens", {
+              `${dateLabel()} · ${t("usage.heatmap.cellTokens", {
                 tokens: formatNumber(day.tokens, { maximumFractionDigits: 0 }),
               })}`,
           );

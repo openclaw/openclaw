@@ -7,7 +7,7 @@ import { planTargetedDockerLaneGroups } from "./plan-targeted-docker-lane-groups
 
 export const RELEASE_PACKAGE_ACCEPTANCE_LANES =
   "release-typed-onboarding doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor update-first-hop-compat published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape";
-export const QUALIFIED_PACKAGE_SMOKE_LANES =
+const QUALIFIED_PACKAGE_SMOKE_LANES =
   "npm-onboard-channel-agent published-upgrade-survivor plugins-offline plugin-update";
 
 const DOCKER_E2E_CHUNKS = [

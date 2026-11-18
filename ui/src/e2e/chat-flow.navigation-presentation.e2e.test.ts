@@ -166,11 +166,34 @@ suite.define(() => {
     expect(await distanceFromBottom(thread)).toBeLessThanOrEqual(8);
 
     const historyRequestsBeforeReturn = (await gateway.getRequests("chat.history")).length;
+    const retainedPane = page.locator(
+      ".chat-pane-cache__pane:not(.chat-pane-cache__pane--visible)",
+    );
+    const retainedElement = await retainedPane.elementHandle();
+    expect(await retainedPane.locator("*").count()).toBeGreaterThan(0);
+    await expect
+      .poll(() =>
+        retainedPane
+          .locator("*")
+          .evaluateAll((nodes) => nodes.filter((node) => node.checkVisibility()).length),
+      )
+      .toBe(0);
+    // A hidden resize must preserve the mounted transcript and its reader anchor.
+    await page.setViewportSize({ height: 720, width: 1100 });
+    await waitForChatScrollIdle(page);
+    await page.setViewportSize({ height: 720, width: 1280 });
+    await waitForChatScrollIdle(page);
     const finishReadingReturn = await watchNavigationFollowIntent(page, sessionA);
     await sessionLink(sessionA).click();
     await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionA));
     await waitForChatScrollIdle(page);
     expect(await gateway.getRequests("chat.history")).toHaveLength(historyRequestsBeforeReturn);
+    expect(
+      await page
+        .locator(".chat-pane-cache__pane--active")
+        .evaluate((node, retained) => node === retained, retainedElement),
+    ).toBe(true);
+    await retainedElement?.dispose();
 
     const restoredDistance = await distanceFromBottom(thread);
     const restoredAnchor = await readTopTranscriptAnchor(thread);
@@ -508,9 +531,13 @@ suite.define(() => {
       await expectTextContains(popover, "~190k / 200k · ~95%");
     } else {
       await expect.poll(() => popover.isVisible()).toBe(true);
-      for (const text of ["46k / 200k · 23%", "757.3k", "42.3k", "Cost", "$0.023"]) {
+      for (const text of ["46k / 200k · 23%", "Cost", "$0.023"]) {
         await expectTextContains(popover, text);
       }
+      // A priced run shows its cost; its token counts move into the row tooltip.
+      expect(await popover.locator(".context-usage__latest").first().getAttribute("title")).toBe(
+        "In 757.3k · Out 42.3k",
+      );
       const costBreakdown = await popover
         .locator(".context-usage__stats > div[title]")
         .getAttribute("title");
@@ -541,7 +568,7 @@ suite.define(() => {
       .poll(() => composer.evaluate((element) => element === document.activeElement))
       .toBe(true);
 
-    await page.getByRole("button", { name: "Command palette" }).click();
+    await page.getByRole("button", { name: "Search", exact: true }).click();
     const paletteInput = page.locator(".cmd-palette__input");
     await paletteInput.waitFor({ state: "visible", timeout: 10_000 });
     await expect
@@ -603,8 +630,10 @@ suite.define(() => {
     ]);
     await page.addInitScript(
       ({ storageKey, entry }) => {
+        localStorage.setItem("openclaw:sidebar:sessions:sort-mode", "created");
         const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
         localStorage.setItem(storageKey, JSON.stringify({ ...settings, railShortcuts: [entry] }));
+        localStorage.setItem("openclaw:sidebar:sessions:sort-mode", "created");
       },
       {
         storageKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),

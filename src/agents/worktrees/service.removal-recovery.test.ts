@@ -133,33 +133,49 @@ describe("interrupted ordinary worktree removal recovery", () => {
     expect(getRegistryWorktree(env, record.id)?.removedAt).toBeUndefined();
   };
 
-  it("reconstructs missing files without force, retires only its registration and retains the original capture", async () => {
-    const sibling = path.join(root, "sibling");
-    await git(repo, "worktree", "add", "--detach", sibling);
-    await fs.rename(sibling, `${sibling}-parked`);
-    await fs.unlink(path.join(record.path, "README.md"));
-    const run = commandExec.runCommandWithTimeout;
-    vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
-      if (argv.includes("worktree") && argv.includes("remove")) {
-        expect(argv).not.toContain("--force");
+  it.each(["capture", "head"])(
+    "reconstructs missing files without force and retains the original %s recovery point",
+    async (kind) => {
+      if (kind === "head") {
+        await git(repo, "update-ref", "-d", `refs/openclaw/snapshots/${record.id}`);
+        snapshot = head;
+        record = { ...record, snapshotRef: `refs/openclaw/snapshots/clean-v1/${record.id}` };
+        await git(repo, "update-ref", record.snapshotRef!, snapshot);
+        await git(repo, "update-ref", `refs/openclaw/removals/${record.id}`, snapshot);
+        await updateRegistryWorktree(env, record.id, { snapshotRef: record.snapshotRef });
       }
-      return await run(argv, options);
-    });
-    await expect(recover()).resolves.toMatchObject({
-      removed: true,
-      snapshotRef: record.snapshotRef ?? `refs/openclaw/snapshots/${record.id}`,
-    });
-    await expect(fs.stat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(admin)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(await git(repo, "branch", "--list", record.branch)).toBe("");
-    expect(await git(repo, "worktree", "list", "--porcelain")).toContain(sibling);
-    expect(await git(repo, "show", `${snapshot}:README.md`)).toBe("base");
-    expect(
-      await git(repo, "for-each-ref", "--format=%(refname)", `refs/openclaw/removals/${record.id}`),
-    ).toBe("");
-    expect(getRegistryWorktree(env, record.id)?.removedAt).toEqual(expect.any(Number));
-    await expect(recover()).resolves.toMatchObject({ removed: true });
-  });
+      const sibling = path.join(root, "sibling");
+      await git(repo, "worktree", "add", "--detach", sibling);
+      await fs.rename(sibling, `${sibling}-parked`);
+      await fs.unlink(path.join(record.path, "README.md"));
+      const run = commandExec.runCommandWithTimeout;
+      vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+        if (argv.includes("worktree") && argv.includes("remove")) {
+          expect(argv).not.toContain("--force");
+        }
+        return await run(argv, options);
+      });
+      await expect(recover()).resolves.toMatchObject({
+        removed: true,
+        snapshotRef: record.snapshotRef ?? `refs/openclaw/snapshots/${record.id}`,
+      });
+      await expect(fs.stat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(admin)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await git(repo, "branch", "--list", record.branch)).toBe("");
+      expect(await git(repo, "worktree", "list", "--porcelain")).toContain(sibling);
+      expect(await git(repo, "show", `${snapshot}:README.md`)).toBe("base");
+      expect(
+        await git(
+          repo,
+          "for-each-ref",
+          "--format=%(refname)",
+          `refs/openclaw/removals/${record.id}`,
+        ),
+      ).toBe("");
+      expect(getRegistryWorktree(env, record.id)?.removedAt).toEqual(expect.any(Number));
+      await expect(recover()).resolves.toMatchObject({ removed: true });
+    },
+  );
 
   it.each(["changed", "symlink", "directory"])(
     "preserves %s residual writes before any repair",

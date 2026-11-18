@@ -160,7 +160,6 @@ suite.define(() => {
         });
 
         await openModelSetup(page, suite.server.baseUrl);
-        await page.getByRole("heading", { name: "Available models", exact: true }).waitFor();
         await page.locator("[data-prepare-choice]").first().waitFor();
         const colors = await page
           .locator("[data-prepare-choice] [data-provider-icon]")

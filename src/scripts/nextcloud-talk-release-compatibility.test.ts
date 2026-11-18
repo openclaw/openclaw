@@ -4,10 +4,9 @@ import { afterEach, expect, it } from "vitest";
 import { syncPluginVersions } from "../../scripts/sync-plugin-versions.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { shouldSkipIncompatiblePackagePluginApi } from "../plugins/discovery-availability.js";
-import { validateOpenClawPackageInstallCompatibility } from "../plugins/install-shared.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install-types.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
-import { checkMinHostVersion } from "../plugins/min-host-version.js";
+import { validateOpenClawPackageInstallCompatibility } from "../plugins/package-compat.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -39,7 +38,7 @@ it("release-aligns the actual Nextcloud manifest before plugin-first publication
   for (const hostVersion of [oldHostVersion, releaseVersion]) {
     const compatible = hostVersion === releaseVersion;
     const result = validateOpenClawPackageInstallCompatibility({
-      runtime: { checkMinHostVersion, resolveCompatibilityHostVersion: () => hostVersion },
+      currentHostVersion: hostVersion,
       pluginId: "nextcloud-talk",
       packageMetadata: aligned.openclaw,
     });

@@ -153,6 +153,51 @@ describe("resident profile display and reference catalog", () => {
     expect(queries).not.toHaveBeenCalled();
   });
 
+  it("presents opaque proxy subjects without changing their authentication bindings", async () => {
+    const options = fixture();
+    const subject =
+      "https://identity.example.test/realms/team#00000000-0000-4000-8000-000000000003";
+    const profile = ensureProfileForEmail(subject, options);
+    expect(profile.displayName).toBeNull();
+    expect(
+      openOpenClawStateDatabase(options)
+        .db.prepare("SELECT display_name FROM user_profiles WHERE id = ?")
+        .get(profile.id),
+    ).toEqual({ display_name: null });
+    // Earlier versions saved the complete authentication subject as the default name.
+    setDisplayName(profile.id, subject, options);
+    const catalog = await prepareCatalog(options);
+    const bindings = options.bindings(profile.id);
+    expect(catalog.readCurrentAuthority(profile.id, true)?.listItem).toMatchObject({
+      displayName: null,
+      emails: [],
+    });
+    expect(options.display(profile.id).displayName).toBe(`Person ${profile.id.slice(0, 8)}`);
+    expect(options.access(profile.id).readCurrentFacts().emails).toEqual([subject]);
+    expect(ensureProfileForEmail(subject, options).id).toBe(profile.id);
+    expect(options.bindings(profile.id)).toEqual(bindings);
+
+    expect(setDisplayName(profile.id, "Test Person", options)).toMatchObject({
+      displayName: "Test Person",
+      emails: [],
+    });
+    expect(setAvatar(profile.id, new Uint8Array([1, 2, 3]), "image/png", options)).toMatchObject({
+      ok: true,
+      value: { displayName: "Test Person", emails: [] },
+    });
+    expect(options.access(profile.id).readCurrentFacts().emails).toEqual([subject]);
+    expect(options.bindings(profile.id)).toEqual(bindings);
+
+    linkEmail("person@example.test", profile.id, options);
+    expect(catalog.readCurrentAuthority(profile.id, true)?.listItem).toMatchObject({
+      displayName: "Test Person",
+      emails: ["person@example.test"],
+    });
+    expect(options.access(profile.id).readCurrentFacts().emails).toEqual(
+      [subject, "person@example.test"].toSorted(),
+    );
+  });
+
   it("does not join hydration from before a committed profile change", async () => {
     const options = fixture();
     const profile = ensureProfileForEmail("changing@example.test", options);

@@ -43,7 +43,7 @@ describe("check-changelog-attributions", () => {
     writeFileSync(path.join(repo, "CHANGELOG.md"), "# Changelog\n");
     writeFileSync(
       path.join(repo, "CHANGELOG", artifact),
-      "<!-- openclaw-docs-mirror-v1 -->\n- Fix. Thanks @steipete.\n",
+      "<!-- openclaw-docs-mirror-v1 -->\n- Fix. Thanks @steipete and @codex.\n",
     );
     const walk = directoryWalk.listDirectoryTreeStrictSync;
     vi.spyOn(directoryWalk, "listDirectoryTreeStrictSync").mockImplementation((root) =>
@@ -62,68 +62,65 @@ describe("check-changelog-attributions", () => {
     Object.defineProperty(process, "platform", { value: "win32" });
     try {
       await main();
-      expect(process.exitCode ?? 0).toBe(frozen ? 1 : 0);
-      if (frozen) {
-        expect(errors).toHaveBeenCalledWith(`- CHANGELOG/${artifact}:2 uses Thanks @steipete`);
-      }
+      expect(process.exitCode).toBe(1);
+      expect(errors).toHaveBeenCalledWith(`- CHANGELOG/${artifact}:2 uses Thanks @codex`);
     } finally {
       Object.defineProperty(process, "platform", { value: platform });
     }
   });
-  it.each([false, true])("rejects forbidden CLI credit through a symlink: %s", (symlink) => {
-    const repo = createRepoWithPrChangelogDiff("- Fix. Thanks @codex.");
+  it.each(["steipete", "codex"])("checks human and bot CLI credit: %s", (handle) => {
+    const repo = createRepoWithPrChangelogDiff(`- Fix. Thanks @${handle}.`);
     const scripts = path.resolve("scripts");
     const alias = path.join(repo, "script-alias");
     symlinkSync(scripts, alias, "junction");
-    const entry = path.join(symlink ? alias : scripts, "check-changelog-attributions.mts");
+    const entry = path.join(alias, "check-changelog-attributions.mts");
     const result = spawnSync(process.execPath, [entry], {
       cwd: repo,
       encoding: "utf8",
       timeout: 10_000,
     });
     expect(result.error).toBeUndefined();
-    expect(result.status).toBe(1);
+    expect(result.status).toBe(handle === "steipete" ? 0 : 1);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("Forbidden changelog thanks attribution:");
-    expect(result.stderr).toContain("- CHANGELOG.md:7 uses Thanks @codex");
+    if (handle === "codex") {
+      expect(result.stderr).toContain("- CHANGELOG.md:7 uses Thanks @codex");
+    } else {
+      expect(result.stderr).toBe("");
+    }
   });
 
-  it("flags forbidden bot, org, and maintainer thanks attributions", () => {
+  it("flags forbidden bot and organization thanks attributions", () => {
     const handles = [
       "codex",
-      "contributor and @OpenClaw",
+      "claude",
+      "steipete-oai",
+      "hugin-bot",
+      "roboclaw-bot",
+      "tideclaw-bot",
+      "openclaw-clawsweeper",
+      "OpenClaw",
       "clawsweeper",
       "dependabot[bot]",
       "app/worker",
     ];
     const lines = handles.map((handle) => `- Fix. Thanks @${handle}.`);
     expect(findForbiddenChangelogThanks(lines.join("\n"))).toEqual(
-      ["codex", "openclaw", "clawsweeper", "dependabot[bot]", "app/worker"].map(
-        (handle, index) => ({ line: index + 1, handle, text: lines[index] }),
-      ),
+      handles.map((handle, index) => ({
+        line: index + 1,
+        handle: handle.toLowerCase(),
+        text: lines[index],
+      })),
     );
   });
 
-  it("allows maintainer authorship before an external Thanks clause", () => {
-    const text = "- Fix. Authored by @steipete. Thanks @external-contributor.";
+  it("allows human maintainer authorship and thanks", () => {
+    const text = "- Fix. Authored by @steipete. Thanks @human-clawsweeper-fan.";
     expect(findForbiddenChangelogThanks(text)).toStrictEqual([]);
     expect(
       findForbiddenChangelogThanks("- Fix. Thanks @external-contributor and @steipete."),
-    ).toHaveLength(1);
+    ).toStrictEqual([]);
   });
 
-  it("allows external contributor thanks attributions", () => {
-    const text = "- Fix. Thanks @external-contributor and @human-clawsweeper-fan.";
-    expect(findForbiddenChangelogThanks(text)).toStrictEqual([]);
-  });
-
-  it("preserves bot-handle classification", () => {
-    expect(
-      ["dependabot[bot]", "human-clawsweeper-fan"].map((handle) =>
-        isForbiddenChangelogThanksHandle(handle),
-      ),
-    ).toEqual([true, false]);
-  });
   it.each(["", "null", "codex"])(
     "rejects non-human shell credit without treating %j as a bot",
     (handle) => {

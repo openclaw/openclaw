@@ -20,7 +20,6 @@ const enCron = {
     runQueued: "Run queued. Run ID: {runId}",
     adminRequired: "Only the owner with automation access or an admin can change this automation.",
     runNotStarted: {
-      notDue: "This automation is not due yet.",
       alreadyRunning: "This automation is already running.",
       recoveryPending: "The scheduler is recovering. Try again shortly.",
       invalidSpec: "Couldn’t start this automation. Check its schedule and instructions.",
@@ -34,7 +33,7 @@ const enCron = {
       scheduleAtInvalid: "Enter a valid date and time.",
       everyAmountInvalid: "Interval must be greater than 0.",
       triggerIntervalTooShort:
-        "Condition-triggered automations must run at least every 30 seconds.",
+        "Set an interval of at least 30 seconds for condition-triggered automations.",
       cronExprRequired: "Cron expression is required.",
       cronExprInvalid: "Enter 5 fields like 0 9 * * * or 6 fields like 0 0 9 * * *.",
       cronTzInvalid: "Enter a valid IANA timezone, such as America/New_York.",
@@ -82,11 +81,10 @@ const enCron = {
       deliverySection: "Delivery",
       active: "Active",
       paused: "Paused",
+      autoDisabled: "Auto-disabled",
     },
     actions: {
       runNow: "Start now",
-      runNowJob: "Start now: {name}",
-      runIfDue: "Start if due",
       pauseJob: "Pause: {name}",
       resumeJob: "Resume: {name}",
       clone: "Clone",
@@ -95,6 +93,19 @@ const enCron = {
       removeConfirmMessage:
         "This deletes the automation and stops future activity. This can’t be undone.",
       moreJob: "More actions for {name}",
+    },
+
+    attention: {
+      title: "Last run failed",
+      autoDisabledTitle: "Automatically stopped",
+      causeUnknown:
+        "No failure details were recorded. Review the run history for available evidence.",
+      nextRun: "Next run is scheduled for {time}.",
+      noNextRun: "No further run is scheduled.",
+      running: "A new run is in progress. Review its outcome before starting another run.",
+      effectsUnknown: "Check for completed actions before running again.",
+      reviewRun: "Review run",
+      errorDetails: "Error details",
     },
 
     jobs: {
@@ -126,20 +137,20 @@ const enCron = {
       noMatching: "No activity matches the current filters.",
       emptyTitle: "No activity yet.",
       emptyHint: "Start an automation to see its activity here.",
-      conditionActivity: "Condition activity",
-      conditionActivityHint: "Checks run on schedule before the payload starts.",
+      conditionActivity: "Condition checks",
+      conditionActivityHint: "Scheduled checks decide whether to start the task.",
       checks: "Checks",
       lastChecked: "Last checked",
-      lastFired: "Last fired",
+      lastFired: "Last matched",
       notChecked: "Not checked yet",
       neverFired: "Never",
-      emptyConditionTitle: "No payload runs yet",
+      emptyConditionTitle: "No run history to show",
       emptyConditionHint:
-        "The condition has been checked {count} times without matching. Activity history starts when the payload executes.",
+        "The condition has been checked {count} times. Scheduled checks with no match are not listed here.",
       emptyConditionHintOne:
-        "The condition has been checked once without matching. Activity history starts when the payload executes.",
+        "The condition has been checked once. Scheduled checks with no match are not listed here.",
       emptyConditionUnchecked:
-        "The condition has not been checked yet. Activity history starts when the payload executes.",
+        "The condition has not been checked yet. Scheduled checks with no match are not listed here.",
       loadMore: "Load more activity",
       loading: "Loading runs…",
       runStatusOk: "Completed",
@@ -234,7 +245,7 @@ const enCron = {
       command: "Command",
       script: "Script",
       readOnlyPayloadHelp:
-        "This task was created outside the Control UI. You can’t edit its contents here, but saving other changes keeps them.",
+        "This task was created outside the app. You can’t edit its contents here, but saving other changes keeps them.",
       systemEvent: "Post to main timeline",
       agentTurn: "Run agent task",
       systemEventHelp: "Adds your text to the agent’s main timeline for reminders.",
@@ -244,6 +255,7 @@ const enCron = {
       timeoutHelp: "Leave blank to use the default timeout for this reply.",
       mainTimelineMessage: "Main timeline message",
       assistantTaskPrompt: "Prompt",
+      promptPreview: "Prompt preview",
       deliveryModeLabel: "Mode",
       selectDeliveryMode: "Choose a delivery mode",
       announceDefault: "Announce summary",
@@ -263,13 +275,14 @@ const enCron = {
         "Optional condition checks, delivery guarantees, schedule jitter, and model controls.",
       conditionTrigger: "Condition trigger",
       conditionTriggerHelp:
-        "Run a quiet headless check before the task and call the model only when it matches.",
+        "On scheduled runs, check the condition without calling the model. Start the task only if it matches.",
       triggerConfigured: "Trigger configured",
       triggerScript: "Trigger script",
       triggerScriptHelp:
         "Runs unattended with this automation's tool policy. Return json({ fire, message?, state? }); limits: 30 seconds, 5 tool calls, 16 KB state.",
-      triggerOnce: "Disable after first match",
-      triggerOnceHelp: "Disable this automation after the first successful fired task.",
+      triggerOnce: "Disable after first successful triggered task",
+      triggerOnceHelp:
+        "A match alone does not disable this automation. The triggered task must finish successfully.",
       triggerDisabled: "Condition triggers are disabled by cron.triggers.enabled.",
       triggerDisabledConfigured:
         "Condition triggers are disabled. Existing configuration is preserved until you clear it.",
@@ -333,6 +346,7 @@ const enCron = {
     },
     jobState: {
       nextRelative: "Next {at}",
+      waiting: "Waiting: {reason} since {since}",
     },
     runEntry: {
       tokens: "{count} Tokens",
@@ -340,15 +354,12 @@ const enCron = {
       noSummary: "No summary.",
       deliverySuppression: "Delivery suppression: {reason}",
       runAt: "Started at",
-      transcript: "Conversation",
-      viewTranscript: "View transcript",
-      transcriptEmpty: "No messages in this activity yet.",
-      transcriptMissingMetadata:
-        "Couldn’t open this conversation. Its session information is missing.",
-      transcriptUnavailable:
-        "Couldn’t identify this conversation. Refresh the activity history and try again.",
+      conditionCheckFailed: "Condition check failed",
+      deliveryFailed: "Delivery failed: {error}",
+      deliveryNote: "Delivery: {error}",
+      showDetails: "Show details",
+      hideDetails: "Hide details",
       next: "Next {rel}",
-      due: "Due {rel}",
     },
     events: {
       label: "Event",
@@ -409,74 +420,19 @@ const enCron = {
       removed: "Scratch removed.",
       tooLarge: "Scratch exceeds the byte limit.",
     },
-    suggestions: {
-      title: "Starter automations",
-      schedules: {
-        weekdayMornings: "Weekdays at 9:00 AM",
-        everyMorning: "Daily at 8:00 AM",
-        weekly: "Mondays at 9:00 AM",
-        hourly: "Every hour",
-      },
-      ideas: {
-        repoPulse: {
-          name: "Repo pulse",
-          tagline: "Overnight issues, PRs, and CI failures, ranked by urgency.",
-          prompt:
-            "Review overnight activity in my repositories: new issues, pull requests, and CI failures. Summarize the three things that most need my attention today, each with a link and a one-line reason.",
-        },
-        standupGhostwriter: {
-          name: "Standup ghostwriter",
-          tagline: "Your standup update, drafted from yesterday's work.",
-          prompt:
-            "Draft my standup update from yesterday's commits, merged pull requests, and open review threads. Three bullets max: done, doing, blocked.",
-        },
-        hackerNewsScout: {
-          name: "Hacker News scout",
-          tagline: "Three links worth your coffee, with hot takes.",
-          prompt:
-            "Scan today's Hacker News front page for posts about AI agents, developer tooling, and TypeScript. Send me the three most interesting links, each with a one-line hot take.",
-        },
-        dependencyRadar: {
-          name: "Dependency radar",
-          tagline: "Outdated or vulnerable dependencies, with upgrade notes.",
-          prompt:
-            "Check my main project for outdated or vulnerable dependencies. List the notable updates with a one-line risk note each, and draft the upgrade command.",
-        },
-        watchdog: {
-          name: "Night watch",
-          tagline: "Hourly health check with a one-line verdict.",
-          prompt:
-            "Check that my services and gateway are healthy: scan recent logs for new errors, restarts, or unusual load. Reply with a single short all-clear line when everything is fine; if something looks broken, report what failed and where to start looking.",
-        },
-        polyglotMinute: {
-          name: "Polyglot minute",
-          tagline: "One useful foreign phrase with your morning coffee.",
-          prompt:
-            "Teach me one useful phrase in Japanese: the phrase, how to pronounce it, its literal meaning, and when to use it. Keep it under five lines.",
-        },
-      },
-    },
     list: {
-      viewLabel: "Automation views",
-      sessionFilter: "Automations attached to this session.",
-      showAll: "Show all automations",
-      searchPlaceholder: "Search automations",
       newTask: "New automation",
       filters: "Filters",
       shownOf: "{shown} of {total}",
       emptyTitle: "No automations yet",
       emptyHint: "Create an automation to schedule work for an agent.",
-      noMatching: "No automations match the current filters.",
       loadMore: "Load more",
       loading: "Loading automations…",
       schedulerOff: "Scheduler disabled",
-      refresh: "Refresh",
       refreshing: "Refreshing...",
       paused: "Paused",
-      autoDisabledRunFailures: "Auto-disabled · {count} run failures",
-      autoDisabledScheduleErrors: "Auto-disabled · {count} schedule errors",
       tasksTab: "Automations",
-      activityTab: "Activity history",
+      runHistory: "Run history",
     },
   },
 } satisfies TranslationMap;

@@ -153,7 +153,8 @@ function assertManifestSelectedScope(
   manifest: UpdateRecoveryBackupManifest,
   scopes: Map<string, Set<string>>,
 ) {
-  const stateDir = canonicalEntryPath(manifest.stateDir);
+  // Resolve directory aliases without rewriting sealed provenance or following the config entry.
+  const stateDir = resolvePathViaExistingAncestorSync(manifest.stateDir);
   const configPath = canonicalEntryPath(manifest.configPath);
   if (!scopes.get(stateDir)?.has(configPath)) {
     throw new Error("Update recovery backup belongs to another selected state or configuration.");

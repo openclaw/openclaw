@@ -470,6 +470,16 @@
       "file": "fragment-device_pairing_join_codes.postgres.sql"
     },
     {
+      "id": "device_pairing_browser_requests",
+      "tables": [
+        "device_pairing_browser_requests"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "version-additive",
+      "file": "fragment-device_pairing_browser_requests.postgres.sql"
+    },
+    {
       "id": "skill_workshop_changes",
       "tables": [
         "skill_workshop_changes"

@@ -310,13 +310,11 @@ it.each([
     expect(state.handleSendChat).toHaveBeenCalledTimes(allowed ? 1 : 0);
     if (restricted) {
       assert(pane.chatProps);
-      expect(pane.chatProps.modelRequiredReason).toBe(
-        "No models are permitted by your administrator.",
-      );
+      expect(pane.chatProps.modelRequiredReason).toBe("No models are permitted by your admin.");
       const container = createComposerContainer();
       renderComposerInto(container, pane.chatProps);
       expect(container.querySelector(".agent-chat__disabled-banner-detail")?.textContent).toBe(
-        "No models are permitted by your administrator.",
+        "No models are permitted by your admin.",
       );
       expect(container.querySelector(".agent-chat__disabled-banner button")).toBeNull();
       disposeComposer(container);
@@ -417,11 +415,11 @@ it.each([
       expect(initial.modelRequiredReason).toBeUndefined();
       expect(container.querySelector(".agent-chat__disabled-banner")).toBeNull();
       expect(container.querySelector("[data-chat-model-select]")?.getAttribute("aria-busy")).toBe(
-        "true",
+        "false",
       );
       expect(
         container.querySelector("[data-chat-model-select]")?.getAttribute("aria-label"),
-      ).toContain("Loading models…");
+      ).not.toContain("Loading models…");
       expect(container.textContent).not.toContain("primary-model");
       expect(container.textContent).not.toContain("cached-default");
       expect(container.querySelector("[data-chat-model-option]")).toBeNull();
@@ -444,7 +442,7 @@ it.each([
         !restricted && !cachedDefault ? "Set up a model" : undefined,
       );
       if (restricted) {
-        expect(settled.modelRequiredReason).toBe("No models are permitted by your administrator.");
+        expect(settled.modelRequiredReason).toBe("No models are permitted by your admin.");
         expect(container.querySelector(".agent-chat__disabled-banner button")).toBeNull();
         expect(container.textContent).not.toContain("primary-model");
         expect(container.textContent).not.toContain("cached-default");
@@ -520,7 +518,7 @@ describe("subagent composer", () => {
     { name: "archive", key: "agent:main:reply-owner", row: { archived: true } },
   ] satisfies { name: string; key: string; row?: Partial<GatewaySessionRow> }[])(
     "keeps copy but not Reply when $name replaces the composer",
-    ({ key, ...scenario }) => {
+    async ({ key, ...scenario }) => {
       installTranscriptDomMocks();
       const { pane, state, context } = createRefreshChatPane();
       state.sessionKey = key;
@@ -544,7 +542,9 @@ describe("subagent composer", () => {
       try {
         pane.render();
         renderChatPropsInto(container, pane.chatProps!, context);
-        expect(container.textContent).toContain("The workspace review is complete.");
+        await waitForSolid(() =>
+          expect(container.textContent).toContain("The workspace review is complete."),
+        );
         expect(container.querySelector("textarea")).toBeNull();
         expect(container.querySelector(".chat-reply-btn")).toBeNull();
         expect(container.querySelector(".chat-copy-btn")).not.toBeNull();
@@ -654,8 +654,11 @@ describe("subagent composer", () => {
         draw();
         expect(pane.chatProps?.canSend).toBe(true);
         expect(container.querySelector(".agent-chat__disabled-banner")).toBeNull();
-        const reply = container.querySelector<HTMLButtonElement>(".chat-reply-btn");
-        expect(reply).not.toBeNull();
+        const reply = await waitForSolid(() => {
+          const button = container.querySelector<HTMLButtonElement>(".chat-reply-btn");
+          expect(button).not.toBeNull();
+          return button;
+        });
         reply!.click();
         draw();
         await waitForSolid(() =>

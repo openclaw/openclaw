@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE } from "@openclaw/ai/diagnostics";
 import { APIError } from "openai/core/error";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -12,6 +11,7 @@ import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js
 import { sleepWithAbort } from "../../../infra/backoff.js";
 import { flushDiagnosticsTimeline } from "../../../infra/diagnostics-timeline.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
+import { forceFullGc } from "../../../test-utils/retention.js";
 import {
   buildEmbeddedRunnerAssistant,
   createMockUsage,
@@ -31,6 +31,7 @@ import {
   type TransportDropScenario,
 } from "./attempt-recovery.test-support.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import { buildEmbeddedRunPayloads } from "./payloads.js";
 import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
@@ -624,24 +625,24 @@ describe("recoverEmbeddedRunAttempt", () => {
     }
   });
 
-  // The controller owns the cap matrix; this boundary must forward replay safety.
-  it.each([true, false])("honors retry caps only when replay-safe=%s", async (replaySafe) => {
-    const expectedSleepMs = replaySafe ? undefined : 9_897_000;
-    const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
+  it("surfaces over-cap rate limits after tool work without replay or rotation", async () => {
+    const fixture = await recoverAfterTransportDrop({
       errorMessage: "429 rate_limit_exceeded; Retry-After: 9897",
       fallbackConfigured: true,
-      replaySafe,
+      replaySafe: false,
       providerRetryMaxDelayMs: 30_000,
       diagnostics: [],
     });
-    expect(recovery.action).toBe(expectedSleepMs === undefined ? "proceed" : "retry");
-    if (expectedSleepMs === undefined) {
-      expect(sleepWithAbort).not.toHaveBeenCalled();
-      expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
-    } else {
-      expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(expectedSleepMs, undefined);
-      expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
-    }
+    expect(fixture.recovery.action).toBe("proceed");
+    expect(sleepWithAbort).not.toHaveBeenCalled();
+    expect(fixture.continueFromCurrentTranscript).not.toHaveBeenCalled();
+    expect(await handleAssistantFailureAfterRecovery(fixture)).toMatchObject({ action: "proceed" });
+    expect(fixture.failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
+    const [payload] = buildEmbeddedRunPayloads({ ...fixture.attempt, sessionKey: "cap-test" });
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("openai/mock-1 is rate-limited.");
+    expect(payload?.text).toContain("retry in 3 hours");
+    expect(payload?.text).toContain("model picker");
   });
 
   it("exhausts sixteen rate-limited attempts with bounded history before rotation and failover", async () => {
@@ -695,7 +696,7 @@ describe("recoverEmbeddedRunAttempt", () => {
       fixture.continueFromCurrentTranscript.mockClear();
       if (retry === 2 || retry === 8 || retry === 15) {
         await nextTurn();
-        queryObjects(WeakRef);
+        forceFullGc();
         retainedBytes.push(histories.filter((history) => history.deref()).length * imageBytes);
       }
     }
