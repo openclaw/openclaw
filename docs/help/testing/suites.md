@@ -41,6 +41,14 @@ PR CI reports numeric ratchet violations as warnings too. The suppression
 baseline ratchet remains strict locally. See [surface ratchets](/ci/local-proof#surface-ratchets) for
 comparison bases and shrink-only maintenance.
 
+## Released mobile apps against a candidate Gateway
+
+The existing mobile release E2E suites build candidate apps against a published
+stable Gateway; they do not test the reverse direction. Released-app runtime
+coverage is currently blocked on verified public binaries and supported device
+automation. See [released app compatibility](/help/testing/released-app-compatibility)
+for the artifact boundaries and proposed independent release child.
+
 ## Runner exit status
 
 `pnpm test`, `scripts/test-projects.mts`, and `scripts/run-vitest.mjs` distinguish
