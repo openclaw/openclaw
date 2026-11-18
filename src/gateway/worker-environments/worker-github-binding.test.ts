@@ -18,9 +18,10 @@ import { recordCommittedSessionMetadataPublication } from "../../config/sessions
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RepositoryIntegration } from "../../plugins/repository-integration.types.js";
 import type { RepositoryCredentialSource } from "../github-user-identity.types.js";
-import { prepareWorkerGitHubBindingGrant } from "./worker-github-execution-identity.js";
+import { prepareWorkerGitHubExecutionGrant } from "./worker-github-execution-identity.js";
 const policy = vi.hoisted(() => ({ current: undefined as RepositoryIntegration | undefined }));
-vi.mock("../../plugins/repository-integration-runtime.js", () => ({
+vi.mock("../../plugins/repository-integration-runtime.js", async (original) => ({
+  ...(await original<typeof import("../../plugins/repository-integration-runtime.js")>()),
   getRepositoryIntegration: () => policy.current,
 }));
 import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.js";
@@ -232,11 +233,11 @@ describe("worker GitHub launch binding", () => {
     config = {};
     setRuntimeConfigSnapshot(config);
     mocks.nativeToken.mockRejectedValue(new Error("Optional host CLI is unavailable"));
-    await expect(prepareWorkerGitHubBindingGrant(session)).resolves.toBeUndefined();
+    await expect(prepareWorkerGitHubExecutionGrant(session)).resolves.toBeUndefined();
     expect(mocks.nativeToken).not.toHaveBeenCalled();
     expect(mocks.refresh).not.toHaveBeenCalled();
     await expect(
-      prepareWorkerGitHubBindingGrant({ ...session, expectedProfileId: profileId }),
+      prepareWorkerGitHubExecutionGrant({ ...session, expectedProfileId: profileId }),
     ).rejects.toThrow("Selected GitHub App changed");
   });
 
@@ -419,7 +420,7 @@ describe("worker GitHub launch binding", () => {
         mocks.verify.mockResolvedValue({ status: failure });
       }
       await expect(prepareWorkerGitHubBinding(session)).resolves.toBeUndefined();
-      await expect(prepareWorkerGitHubBindingGrant(session)).rejects.toBeInstanceOf(
+      await expect(prepareWorkerGitHubExecutionGrant(session)).rejects.toBeInstanceOf(
         GitHubIdentityError,
       );
       expect(mocks.nativeToken).not.toHaveBeenCalled();
@@ -824,7 +825,7 @@ describe("same-bound integrated worker credential renewal", () => {
     });
     const grant = throughTurn
       ? await bindPreparedGrant(undefined, () => {}, operator)
-      : await prepareWorkerGitHubBindingGrant({ ...session, operatorAuthority: operator });
+      : await prepareWorkerGitHubExecutionGrant({ ...session, operatorAuthority: operator });
     if (!grant) {
       throw new Error("Expected admitted grant");
     }

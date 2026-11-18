@@ -4,14 +4,14 @@ export { writeManagedGitHubProfileFiles } from "../agents/github-tool-profile-fi
 /** Keep node command discovery independent of Gateway execution owners. */
 export async function prepareWorkerGitHubBindingGrant(
   ...args: Parameters<
-    typeof import("../gateway/worker-environments/worker-github-execution-identity.js").prepareWorkerGitHubBindingGrant
+    typeof import("../gateway/worker-environments/worker-github-execution-identity.js").prepareWorkerGitHubExecutionGrant
   >
 ): ReturnType<
-  typeof import("../gateway/worker-environments/worker-github-execution-identity.js").prepareWorkerGitHubBindingGrant
+  typeof import("../gateway/worker-environments/worker-github-execution-identity.js").prepareWorkerGitHubExecutionGrant
 > {
   const runtime =
     await import("../gateway/worker-environments/worker-github-execution-identity.js");
-  return await runtime.prepareWorkerGitHubBindingGrant(...args);
+  return await runtime.prepareWorkerGitHubExecutionGrant(...args);
 }
 export type {
   WorkerGitHubBindingGrant,

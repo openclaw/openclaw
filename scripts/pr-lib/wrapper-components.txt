@@ -2249,6 +2249,7 @@ src/state/openclaw-state-db-schema-v38-repository-disk.ts
 src/state/openclaw-state-db-schema-v39-worker-retention.ts
 src/state/openclaw-state-db-schema-v40-worker-provision-source.ts
 src/state/openclaw-state-db-schema-v40-lazy-additions.ts
+src/state/openclaw-state-db-schema-v41-worker-loss-recovery.ts
 src/state/openclaw-state-db-schema-v22-columns.ts
 src/state/openclaw-state-db-schema-v24-indexes.ts
 src/state/openclaw-state-db-schema-v26-layout.ts
@@ -2343,6 +2344,7 @@ src/state/session-metadata-unavailable-error.ts
 src/state/session-repository-workspaces.authority.ts
 src/state/session-repository-workspaces.kernel.ts
 src/state/session-repository-workspaces.receipts.ts
+src/state/session-repository-workspaces.recovery.ts
 src/state/session-watch-cursor-provenance.ts
 src/state/sqlite-table-layout-migration.ts
 src/state/worker-operation-registry.ts

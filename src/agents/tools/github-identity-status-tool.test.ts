@@ -6,20 +6,33 @@ import * as gateway from "./in-process-gateway.js";
 afterEach(() => vi.restoreAllMocks());
 
 describe("github_identity_status tool", () => {
-  it("returns status and an operator next action", async () => {
+  it.each([
+    {
+      credentialKind: "managed-oauth",
+      credentialState: "configured_unavailable",
+      refreshState: "expired",
+      nextAction: "github_identity_settings",
+    },
+    {
+      credentialKind: "app-installation",
+      credentialState: "unverified",
+      refreshState: "not_applicable",
+      nextAction: "will be verified during an authorized operation, including scheduled automation",
+    },
+  ] as const)("returns status and a next action for $credentialKind", async (status) => {
     const callGatewayMock = vi.spyOn(gateway, "callInProcessGatewayTool").mockResolvedValue({
       agentId: "main",
       selectedScope: "agent" as const,
       selected: { scope: "agent" as const, configured: false, identity: null },
       effective: {
         source: "system-configured" as const,
-        credentialKind: "managed-oauth" as const,
-        credentialState: "configured_unavailable" as const,
+        credentialKind: status.credentialKind,
+        credentialState: status.credentialState,
         account: { login: "roboclaw-bot" },
         gitAuthor: { name: "roboclaw-bot", email: null },
         evidence: "none" as const,
         accessExpiresAtMs: 1_900_000_000_000,
-        refreshState: "expired" as const,
+        refreshState: status.refreshState,
         oauthScopes: ["repo", "workflow"],
         repositoryGrants: "unknown" as const,
       },
@@ -35,7 +48,11 @@ describe("github_identity_status tool", () => {
       agentId: "main",
       selectedScope: "agent",
     });
-    expect(JSON.stringify(result)).toContain("github_identity_settings");
+    expect(JSON.stringify(result)).toContain(status.nextAction);
+    if (status.credentialKind === "app-installation") {
+      expect(JSON.stringify(result)).not.toContain("github_identity_settings");
+      expect(JSON.stringify(result)).not.toContain("connect or reconnect");
+    }
   });
 
   it("gives manual guidance for an older Control UI", async () => {

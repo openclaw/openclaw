@@ -3,7 +3,7 @@ import path from "node:path";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
-import type { prepareWorkerGitHubBindingGrant } from "../gateway/worker-environments/worker-github-execution-identity.js";
+import type { prepareWorkerGitHubExecutionGrant } from "../gateway/worker-environments/worker-github-execution-identity.js";
 import { recordDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../infra/exec-approvals.js";
@@ -338,7 +338,7 @@ export async function runExecProcess({
   let terminateSandboxProcess: (() => Promise<void>) | undefined;
   let sandboxTermination: Promise<{ error: unknown } | undefined> | undefined;
   let secretEgressGrant: SecretEgressProcessGrant | undefined;
-  let githubGrant: Awaited<ReturnType<typeof prepareWorkerGitHubBindingGrant>>;
+  let githubGrant: Awaited<ReturnType<typeof prepareWorkerGitHubExecutionGrant>>;
   const githubStartup = new AbortController();
   const cancelGitHubStartup = () => githubStartup.abort(startupSignal?.reason);
   const onGitHubRevoked = () => {
@@ -602,9 +602,9 @@ export async function runExecProcess({
       if (startupSignal?.aborted) {
         cancelGitHubStartup();
       }
-      const { prepareWorkerGitHubBindingGrant } =
+      const { prepareWorkerGitHubExecutionGrant } =
         await import("../gateway/worker-environments/worker-github-execution-identity.js");
-      githubGrant = await prepareWorkerGitHubBindingGrant({
+      githubGrant = await prepareWorkerGitHubExecutionGrant({
         ...opts.githubApp,
         expectedProfileId: opts.githubApp.profileId,
         signal: githubStartup.signal,

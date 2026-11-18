@@ -17,6 +17,7 @@ import { captureSessionControllerSettlement } from "../sessions/session-controll
 import { listRpcSourceEntries } from "../sessions/session-controller.rpc-sources.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { captureRepositoryGoalDispatch } from "./repository-dispatch.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import {
   createGoalChatStartRequest,
@@ -279,6 +280,17 @@ export function registerWorkerGoalChatCases(
               }
             }
             await params.userTurnTranscriptRecorder?.persistApproved();
+            if (mode === "continue" && calls >= 3) {
+              // Automatic turns run after the input dispatch settled. Their fresh
+              // repository scope must survive both queue capture and runner admission.
+              expect(
+                captureRepositoryGoalDispatch(() => {
+                  if (operator.invalidated) {
+                    throw new Error("operator revoked");
+                  }
+                }),
+              ).toBeDefined();
+            }
             modelExecuted();
             if (calls === 1 || calls === 4 || mode === "preparation-failed") {
               await patchSessionEntryCore(scope(), (entry) => ({

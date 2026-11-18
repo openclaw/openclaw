@@ -30,7 +30,7 @@ import type {
 const log = createSubsystemLogger("gateway/worker-github");
 
 /** A native worker receives only the selected execution identity under its current operator and session. */
-export async function prepareWorkerGitHubBindingGrant(params: {
+export async function prepareWorkerGitHubExecutionGrant(params: {
   sessionId: string;
   sessionKey: string;
   agentId: string;

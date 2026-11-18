@@ -9,7 +9,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { setManagedCodexPluginRoot } from "./app-server/managed-binary.js";
 import { createCodexNodeWorkspaceEnvironment } from "./node-app-server-workspace-environment.js";
-vi.mock("./app-server/transport-process-registration.js", () => ({
+vi.mock("./app-server/transport-process-registration.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./app-server/transport-process-registration.js")>()),
   prepareCodexAppServerProcessRegistration: async () => async () => {},
   waitForCodexAppServerProcessRegistrationCleanup: async () => {},
 }));

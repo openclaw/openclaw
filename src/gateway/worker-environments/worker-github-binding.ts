@@ -42,7 +42,7 @@ import type {
   WorkerGitHubBindingGrant,
   WorkerGitHubBindingRefresh,
 } from "./worker-github-binding-contract.js";
-import { prepareWorkerGitHubBindingGrant } from "./worker-github-execution-identity.js";
+import { prepareWorkerGitHubExecutionGrant } from "./worker-github-execution-identity.js";
 
 function workspaceKey(
   workspace: Awaited<ReturnType<typeof prepareGitHubPublicationWorkspaceOwner>>["initial"],
@@ -348,7 +348,7 @@ export async function bindWorkerGitHubTurn(params: {
     if (!params.protocolFeatures.includes(WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE)) {
       throw new StaleWorkerBuildError();
     }
-    const grant = await prepareWorkerGitHubBindingGrant({
+    const grant = await prepareWorkerGitHubExecutionGrant({
       ...params.session,
       operatorAuthority: params.operatorAuthority,
       signal: params.signal,

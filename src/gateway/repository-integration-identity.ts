@@ -13,8 +13,8 @@ import type {
   RepositoryActor,
   RepositoryOperation,
 } from "../plugins/repository-integration.types.js";
+import type { GitHubPublicationRequesterSnapshot } from "../state/github-publication-requester.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
-import type { GitHubPublicationRequesterPolicyV2 } from "./github-publication-requester.js";
 export type RepositoryPublicationActor = RepositoryActor;
 export type RepositoryPublicationCredential = {
   claim: RepositoryOperation;
@@ -156,7 +156,10 @@ export async function withRepositoryIdentity<T>(
 
 /** Project the original admitted requester; plugin policy does not own session lifetimes. */
 export function repositoryPublicationPreflightActor(
-  requester: Pick<GitHubPublicationRequesterPolicyV2, "snapshot" | "repositoryCredentialSource">,
+  requester: {
+    snapshot: Pick<GitHubPublicationRequesterSnapshot, "actor">;
+    repositoryCredentialSource?: RepositoryActor["credentialSource"];
+  },
   sessionKey: string,
   assertCurrent: () => void,
 ): RepositoryPublicationActor | undefined {

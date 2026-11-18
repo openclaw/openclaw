@@ -61,8 +61,6 @@ export function githubCredentialEnvironmentExclusions(
     ? { ...CLEARED_GITHUB_CREDENTIALS }
     : {};
   credentialScrubEnv.GITHUB_APP_PRIVATE_KEY = "";
-  credentialScrubEnv.OPENCLAW_GITHUB_APP_PRIVATE_KEY = "";
-  credentialScrubEnv.OPENCLAW_GITHUB_EXECUTION_KIND = "";
   const excludedStoreNames: string[] = [];
   for (const value of values) {
     if (!isSecretRef(value)) {

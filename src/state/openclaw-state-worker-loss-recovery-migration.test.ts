@@ -117,9 +117,11 @@ it("retains the exact v40 PostgreSQL predecessor before adding loss metadata", a
 });
 
 it("keeps the v40 loss metadata upgrade in the bounded migration path", () => {
-  const { pathname, before } = legacy(false);
+  const { options, pathname, before } = legacy(false);
   using db = new DatabaseSync(pathname);
-  expect(migrateBoundedStateSchema(db, 40, { versionMigrationOnly: true })).toHaveLength(1);
+  expect(
+    migrateBoundedStateSchema(db, 40, { ...options, versionMigrationOnly: true }),
+  ).toHaveLength(1);
   expect(db.prepare("SELECT * FROM session_repository_workspaces").all()).toEqual(
     before.map((row) => Object.assign({}, row, { recovery_json: null })),
   );
