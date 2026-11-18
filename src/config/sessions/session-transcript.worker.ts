@@ -650,6 +650,9 @@ serveOwnedWorkerTasks(
               : request.kind,
             () => withSessionTranscriptProjectionReceipt(request.projectionReceipt, readRequest),
             request.validation,
+            request.creationClaim
+              ? { witness: request.creationClaim, assertCurrent: () => control.throwIfCancelled() }
+              : undefined,
           )
         : { ok: true, value: await readRequest() };
     } catch (error) {
