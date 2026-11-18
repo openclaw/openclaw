@@ -20,7 +20,7 @@ const bunFile = "src/process/spawn-broker/context.test.ts";
 const validatorFile = "src/agents/agent-tools.execution-validation.test.ts";
 const agentBunFile = "src/agents/agent-tools.policy.test.ts";
 const clawRouterFile = "src/decisions/clawrouter.integration.test.ts";
-const catalogWorkerFile = "src/agents/prepared-model-catalog-worker.reuse.integration.test.ts";
+const catalogWorkerFile = "src/agents/prepared-model-catalog-worker.integration.test.ts";
 const websocketFile = "packages/ai/src/transports/openai-responses-websocket.test.ts";
 const websocketBunFiles = [
   "packages/ai/src/transports/openai-responses-websocket-client.test.ts",

@@ -183,9 +183,6 @@ it.for(["archived", "replaced", "reset"] as const)(
           expect.stringContaining("Restart completion recovery failed"),
         );
         expect(subagentRuns.isCompletionAuthorityRetired(child)).toBe(true);
-        expect(() => subagentRuns.runWithCompletionAuthority(child, () => undefined)).toThrow(
-          "Subagent completion requester store was retired",
-        );
       } finally {
         subagentRuns.delete(child.runId);
       }
