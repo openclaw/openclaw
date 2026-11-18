@@ -140,6 +140,8 @@ export type AgentTurnParams = ReplyAgentTurnContext & {
   recoveryMemoryFlushAttempted?: boolean;
   /** The admitted queued delivery owner settles every terminal outcome. */
   completionSource?: "reply-dispatch";
+  /** Input admission owns durable completion when observation skips the runner. */
+  completeObservedTurn?: () => Promise<void>;
   replyThreading?: TemplateContext["ReplyThreading"];
   resolveVisibleReplyDelivery?: () => Promise<boolean>;
   typingSignals: TypingSignaler;

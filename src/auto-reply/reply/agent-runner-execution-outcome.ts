@@ -166,7 +166,20 @@ export async function runAgentTurnWithOutcome(
             requesterSessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
             report: params.opts?.onVisibleWorkSessions,
           },
-          run,
+          async (): Promise<AgentTurnExecutionResult> => {
+            const participation = await prepareGroupParticipationObservation(params);
+            const revision = participation?.snapshot?.revision;
+            if (
+              participation?.isObserving &&
+              revision !== undefined &&
+              participation.isCurrent(revision)
+            ) {
+              params.replyOperation?.freezeAbort();
+              await params.completeObservedTurn?.();
+              return { runId, outcome: { kind: "observed" } };
+            }
+            return run();
+          },
         ),
     );
     const automation = params.followupRun.run.scheduledAutomation;

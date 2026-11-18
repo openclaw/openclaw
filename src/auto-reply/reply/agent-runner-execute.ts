@@ -133,6 +133,7 @@ type ExecutePreparedReplyAgentRunInput = Omit<
     "blockReplyChunking" | "toolProgressDetail" | "transcriptCommandBody" | "typing" | "typingMode"
   > & {
     admitUserTurn: (recorder?: UserTurnTranscriptRecorder) => Promise<void>;
+    completeObservedTurn: () => Promise<void>;
     applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
     recordPendingDelivery: (delivery: PendingReplyDelivery) => Promise<void>;
     resolveVisibleReplyDelivery: () => Promise<boolean>;
