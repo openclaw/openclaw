@@ -259,6 +259,10 @@ export const PluginCatalogEntrySchema = closedObject({
   featured: Type.Optional(Type.Boolean()),
   featuredAt: Type.Optional(Type.Integer({ minimum: 0 })),
   order: Type.Optional(Type.Number()),
+  /** Manifest hint: list this bundled plugin with installed plugins while it is enabled. */
+  sidebar: Type.Optional(Type.Boolean()),
+  /** Install-record time in epoch milliseconds; bundled plugins have none. */
+  installedAt: Type.Optional(Type.Integer({ minimum: 0 })),
   /** Selected installed manifest declares a native Control UI entry; not a sandbox or grant. */
   hasNativeUi: Type.Optional(Type.Boolean()),
   /** True when the gateway can resolve a manifest or catalog icon for this plugin identity. */
