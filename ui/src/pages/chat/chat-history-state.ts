@@ -277,15 +277,13 @@ export function getAcceptedChatHistorySession(state: ChatState) {
     : undefined;
 }
 
-/** A successful scoped read can prove an ephemeral session is gone; roster absence cannot. */
-export function isExpiredIncognitoSession(
+/** A successful read on this connection can prove a session has no row; roster absence cannot. */
+export function isChatSessionProvenAbsent(
   state: ChatState,
   sessionKey = state.sessionKey,
 ): boolean {
   const accepted = chatHistoryRequests(state).acceptedHistory;
-  const creation = state.chatSubmissions?.creation;
   return (
-    isIncognitoSessionKey(sessionKey) &&
     accepted?.sessionId === null &&
     state.connected &&
     state.client === accepted.client &&
@@ -293,6 +291,20 @@ export function isExpiredIncognitoSession(
     state.connectionEpoch === accepted.connectionEpoch &&
     state.sessionKey === sessionKey &&
     accepted.sessionKey === sessionKey &&
+    (!isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
+      resolveUiSelectedSessionAgentId(state) === accepted.requestAgentId)
+  );
+}
+
+/** A successful scoped read can prove an ephemeral session is gone; roster absence cannot. */
+export function isExpiredIncognitoSession(
+  state: ChatState,
+  sessionKey = state.sessionKey,
+): boolean {
+  const creation = state.chatSubmissions?.creation;
+  return (
+    isIncognitoSessionKey(sessionKey) &&
+    isChatSessionProvenAbsent(state, sessionKey) &&
     !(creation?.sessionKey === sessionKey && !creation.admitted) &&
     !state.hasPendingInitialTurn?.(sessionKey)
   );
