@@ -142,6 +142,13 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   max-width: 100%;
 }
 
+.new-session-page .agent-chat__welcome-identity-copy > h2:not(.sr-only) {
+  /* Match the interactive name slot before the agent roster arrives. */
+  display: grid;
+  align-items: center;
+  min-height: 44px;
+}
+
 /* Reuse the existing agent menu at the identity, without a second small avatar. */
 .new-session-page .agent-chat__welcome-name {
   max-width: 100%;
@@ -322,10 +329,6 @@ span.new-session-page__select {
   border-radius: var(--radius-full);
   background: transparent;
   font-family: inherit;
-}
-
-.new-session-page__trigger::-webkit-details-marker {
-  display: none;
 }
 
 .new-session-page__trigger:hover:not(:disabled),
@@ -1555,6 +1558,37 @@ span.new-session-page__select {
   }
 }
 
+/* Keep the model and effort slots in place while their labels are unknown. */
+[data-model-pending] .chat-controls__inline-select-chevron,
+[data-model-pending] .chat-controls__effort-picker--reserved > summary {
+  visibility: hidden;
+}
+
+[data-model-pending] .chat-controls__effort-picker--reserved {
+  position: relative;
+  display: block;
+  visibility: visible;
+}
+
+[data-model-pending] .chat-controls__effort-picker--reserved::after {
+  position: absolute;
+  inset: calc(50% - 4px) 25% auto;
+}
+
+[data-model-pending] .chat-controls__inline-select-label:empty,
+[data-model-pending] .chat-controls__effort-picker--reserved::after,
+.new-session-page__trigger[aria-busy="true"] > .new-session-page__trigger-label::before {
+  display: block;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  content: "";
+}
+
+[data-model-pending] .chat-controls__inline-select-label:empty {
+  width: 6ch;
+}
+
 /* The context tray tucks behind the composer; each picker anchors its own menu. */
 .new-session-page__context-tray {
   --new-session-tray-radius: var(--composer-radius);
@@ -1655,7 +1689,7 @@ span.new-session-page__select {
 }
 
 .new-session-page__context-tray .new-session-page__trigger-label {
-  min-width: 0;
+  min-inline-size: 8ch;
   max-width: 300px;
 }
 
@@ -1733,9 +1767,7 @@ span.new-session-page__select {
 }
 
 .new-session-page__context-tray .new-session-page__picker-popover input,
-.new-session-page__context-tray .new-session-page__picker-popover input:hover,
-.new-session-page__context-tray .new-session-page__picker-popover input:focus,
-.new-session-page__context-tray .new-session-page__picker-popover input:focus-visible {
+.new-session-page__context-tray .new-session-page__picker-popover input:is(:hover, :focus) {
   /* A field stands a touch taller than the rows it sits with. */
   height: calc(var(--picker-row-height) + 2px);
   padding-inline: var(--picker-row-inset);
@@ -1747,8 +1779,7 @@ span.new-session-page__select {
   box-shadow: none;
 }
 
-.new-session-page__context-tray .new-session-page__picker-popover input:focus,
-.new-session-page__context-tray .new-session-page__picker-popover input:focus-visible {
+.new-session-page__context-tray .new-session-page__picker-popover input:focus {
   background: color-mix(in srgb, var(--chat-composer-surface) 60%, var(--new-session-tray-surface));
 }
 
@@ -1768,24 +1799,6 @@ span.new-session-page__select {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--text) 20%, transparent) transparent;
   scroll-padding-block: 28px 4px;
-}
-
-.new-session-page__picker-popover .new-session-page__picker-root::-webkit-scrollbar,
-.new-session-page__picker-popover .new-session-page__environment-list::-webkit-scrollbar {
-  width: 10px;
-  background: transparent;
-}
-
-.new-session-page__picker-popover .new-session-page__picker-root::-webkit-scrollbar-track,
-.new-session-page__picker-popover .new-session-page__environment-list::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.new-session-page__picker-popover .new-session-page__picker-root::-webkit-scrollbar-thumb,
-.new-session-page__picker-popover .new-session-page__environment-list::-webkit-scrollbar-thumb {
-  border: 3px solid transparent;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--text) 20%, transparent) padding-box;
 }
 
 .new-session-page__project-popover .new-session-page__picker-root {
@@ -2102,7 +2115,18 @@ span.new-session-page__select {
   }
 }
 
+.new-session-page__checkout-skeleton > .new-session-page__skeleton-bar {
+  animation: new-session-placeholder-pulse 1.4s ease-in-out infinite;
+}
+
+@media (width > 768px) {
+  span.new-session-page__select.new-session-page__checkout-loading {
+    display: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .new-session-page__checkout-skeleton > .new-session-page__skeleton-bar,
   .new-session-page__skeleton-row {
     animation: none;
   }

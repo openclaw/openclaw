@@ -51,6 +51,7 @@ import {
   type ConfiguredCloudWorkerProfile,
 } from "./cloud-worker-config.ts";
 import { CloudWorkerEnvironments } from "./cloud-worker-environments.tsx";
+import { CloudWorkerMachineClass } from "./cloud-worker-machine-class.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 const CLOUD_WORKERS_DOCS_URL = "https://docs.openclaw.ai/gateway/cloud-workers";
@@ -72,7 +73,10 @@ export function CloudWorkersPage() {
     saveLifetime = Promise.withResolvers<void>();
   }
   const configProjection = projectRuntimeConfig(context.runtimeConfig);
-  const [catalog, setCatalog] = createSignal<Map<string, ProfileSummary>>();
+  const [catalog, setCatalog] = createSignal<{
+    profiles: Map<string, ProfileSummary>;
+    appliedHash: ReturnType<typeof catalogReceipt>[3];
+  }>();
   const [catalogLoad, setCatalogLoad] = createSignal<{ promise: Promise<void> } | null>(null);
   const catalogCompletion = createMemo(() => catalogLoad()?.promise.then(() => null) ?? null);
   let previousCatalogReceipt: ReturnType<typeof catalogReceipt> | undefined;
@@ -180,7 +184,10 @@ export function CloudWorkersPage() {
               gateway.isCurrent(scope) &&
               context.runtimeConfig.state.configSnapshot?.appliedConfigHash === appliedHash
             ) {
-              setCatalog(new Map((result.profiles ?? []).map((profile) => [profile.id, profile])));
+              setCatalog({
+                profiles: new Map((result.profiles ?? []).map((profile) => [profile.id, profile])),
+                appliedHash,
+              });
             }
           },
           (error: unknown) => {
@@ -352,7 +359,7 @@ export function CloudWorkersPage() {
             t("cloudWorkersPage.operatingSystemFact", {
               value:
                 catalog()
-                  ?.get(profile.id)
+                  ?.profiles.get(profile.id)
                   ?.operatingSystems?.find((system) => system.id === profile.target)?.label ??
                 profile.target,
             }),
@@ -389,7 +396,7 @@ export function CloudWorkersPage() {
           </Show>
         }
       >
-        <Show when={catalog()?.has(profile.id)} fallback={unavailable()}>
+        <Show when={catalog()?.profiles.has(profile.id)} fallback={unavailable()}>
           <SettingsStatus kind={"ok"} label={t("cloudWorkersPage.advertised")} />
         </Show>
       </Show>
@@ -430,7 +437,6 @@ export function CloudWorkersPage() {
     field:
       | "id"
       | "backend"
-      | "machineClass"
       | "ttl"
       | "idleTimeout"
       | "binary"
@@ -469,8 +475,44 @@ export function CloudWorkersPage() {
 
   function Editor() {
     const editing = () => view.editor?.kind === "edit";
-    const systems = () =>
-      editing() ? (catalog()?.get(view.draft.id)?.operatingSystems ?? []) : [];
+    const advertised = createMemo(() => {
+      const snapshot = configProjection.read().state.configSnapshot;
+      const configured = profiles().find((profile) => profile.id === view.draft.id);
+      // Match resolved revisions; the raw-file hash is only the config write precondition.
+      if (
+        !editing() ||
+        !configured ||
+        !snapshot?.appliedConfigHash ||
+        snapshot.configRevisionHash !== snapshot.appliedConfigHash ||
+        catalog()?.appliedHash !== snapshot.appliedConfigHash ||
+        (["backend", "binary", "setup"] as const).some(
+          (key) => view.draft[key].trim() !== configured[key],
+        )
+      ) {
+        return undefined;
+      }
+      return { configured, summary: catalog()?.profiles.get(view.draft.id) };
+    });
+    const systems = () => advertised()?.summary?.operatingSystems ?? [];
+    const machines = createMemo(() => {
+      const current = advertised();
+      const options = current?.summary?.machines ?? [];
+      let os = view.draft.target;
+      if (current && !os && !current.configured.target) {
+        const advertisedSystems = current.summary?.operatingSystems;
+        os = advertisedSystems?.find((system) => system.default)?.id ?? "";
+        if (!advertisedSystems?.length) {
+          // The Gateway omits a singleton OS list; use its machine tags only if they agree.
+          const single = options.find((machine) => machine.os)?.os;
+          if (single && options.every((machine) => !machine.os || machine.os === single)) {
+            os = single;
+          }
+        }
+      }
+      return options
+        .filter((machine) => !machine.os || machine.os === os)
+        .map((machine) => ({ value: machine.id, label: machine.label }));
+    });
     const unadvertised = () =>
       Boolean(view.draft.target && !systems().some((system) => system.id === view.draft.target));
     return (
@@ -523,7 +565,18 @@ export function CloudWorkersPage() {
             }
           />
         </Show>
-        {renderDraftInput("machineClass")}
+        <SettingsRow
+          title={t("cloudWorkersPage.fields.machineClass")}
+          description={t("cloudWorkersPage.fields.machineClassHelp")}
+          control={
+            <CloudWorkerMachineClass
+              value={view.draft.machineClass}
+              options={machines()}
+              disabled={saving()}
+              onChange={(machineClass) => patchDraft({ machineClass })}
+            />
+          }
+        />
         {renderDraftInput("ttl", { placeholder: t("cloudWorkersPage.fields.ttlPlaceholder") })}
         {renderDraftInput("idleTimeout", {
           placeholder: t("cloudWorkersPage.fields.idleTimeoutPlaceholder"),

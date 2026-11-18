@@ -525,7 +525,7 @@ export function resolveCiTestRuntimeInventory(
   files: readonly string[],
   env: Record<string, string | undefined> | undefined,
   policy: CiTestRuntimePolicy,
-  execution?: Pick<TestSelection, "configs" | "includePatterns">,
+  execution?: Pick<TestSelection, "configs" | "includePatterns" | "targets">,
 ) {
   if (
     env?.OPENCLAW_VITEST_INCLUDE_FILE ||

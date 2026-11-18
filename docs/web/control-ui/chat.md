@@ -558,7 +558,7 @@ In Chat and New session, provider groups retain their expanded or collapsed stat
 
 Provider lists with fewer than ten choices show every option, including models outside the recommendations. Larger lists without recommendations initially show up to nine choices, keeping the current model and **Default** first when available. Choose **All models** to browse the rest, or search the complete catalog directly.
 
-On desktop, hover a model row to reveal its favorite star in the trailing column. On the selected row, the star replaces the check while hovered. Arrow-key navigation does not reveal stars. Favorites become available in the provider rail immediately, without closing the picker; model order within each provider stays stable until reopening. Removing the last favorite removes **Favorites** and returns to the selected model’s provider without changing the model.
+On desktop, hover a model row to reveal its favorite star in the trailing column. On the selected row, the star replaces the check while hovered. Arrow-key navigation does not reveal stars. Favorites become available in the provider rail immediately, without closing the picker; model order within each provider stays stable until reopening. Removing the last favorite removes **Favorites** and returns to the selected model’s provider without changing the model. To reorder models in **Favorites**, drag a model row, or focus the row and press **Alt+Up Arrow** or **Alt+Down Arrow**. The new order is saved with your favorites for that agent.
 
 Drag provider icons to reorder the rail, or focus an icon and press **Alt+Arrow**. The order is saved in this browser and survives reloading. While the picker is open and search is not focused, **/** focuses search and **1–9** selects the corresponding available option. The number labels stay hidden; context-window values remain visible.
 
@@ -1197,13 +1197,14 @@ to read it in **Review**. The card shows up to 400 lines and rereads the file
 each time it opens; the full-file view includes all lines. Press Escape to
 dismiss it.
 
-Clipboard text stays in the message input, including long pastes into an existing
-draft, and reaches the model as your message. Uploaded files retain their
-external-content boundary.
+A paste longer than 1,000 characters into a draft that already has text appears
+as a file-sized card in the composer. The card is only a composer view: when you
+send, its exact text is appended to your message, as **Show in text field**
+would, so the model receives it as your own words with no file upload.
 
-Saved pasted-text attachments from earlier clients still appear as a file-sized
-card in the composer and a compact chip in the transcript. Their labels show the
-first 30 characters of a plain-text excerpt, with HTML and Markdown formatting removed. Empty or unavailable excerpts
+The card label shows the first 30 characters of a plain-text excerpt, with HTML
+and Markdown formatting removed. Pasted-text attachments sent by earlier clients
+appear as a compact chip in the transcript with the same label. Empty or unavailable excerpts
 show **Pasted text**. In the transcript, chips sit above the text bubble alongside
 other attachments; multiple chips share a row and wrap when needed. Click the
 composer excerpt or icon, or a transcript chip, to open the existing attachment

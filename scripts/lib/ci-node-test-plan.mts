@@ -208,7 +208,7 @@ export function prepareNodeTestVolumes(context: NodeTestVolumeContext) {
     }
     return inventories.get(config);
   };
-  const project = (config: string, group: NodeTestShardGroup) => {
+  const project = (config: string, group: NodeTestShardGroup, targets?: readonly string[]) => {
     const owned = inventoryFor(config);
     if (!owned || group.includePatterns?.some((file) => !isPlainRepoRelativePath(file))) {
       return undefined;
@@ -229,7 +229,7 @@ export function prepareNodeTestVolumes(context: NodeTestVolumeContext) {
       files,
       { ...context.environment, ...group.env },
       context.runtimePolicy,
-      group,
+      targets ? { targets } : group,
     );
   };
   const environmentFor = (group: NodeTestShardGroup) =>
@@ -279,13 +279,13 @@ export function prepareNodeTestVolumes(context: NodeTestVolumeContext) {
       }
     }
   }
-  return (group: NodeTestShardGroup): NodeTestVolume => ({
+  return (group: NodeTestShardGroup, targets?: readonly string[]): NodeTestVolume => ({
     version: 1,
     revision: context.revision,
     policy: context.runtimePolicy,
     entries: group.configs.flatMap((config) => {
       const profile = profileFor(config, group);
-      return (project(config, group) ?? []).flatMap((selection) => {
+      return (project(config, group, targets) ?? []).flatMap((selection) => {
         if (!selection || selection.files.length === 0) {
           return [];
         }
@@ -3868,7 +3868,12 @@ function splitOversizedCompactGroup(
   const isCliProcess = group.shard_name === "agentic-cli-process";
   const isTooling = isParallelToolingGroup(group);
   const hostedFileLimit =
-    (hostedMain ? COMPACT_HOSTED_MAIN_MAX_FILES.get(group.shard_name) : undefined) ??
+    // Full dual-runtime dispatches use the compact PR layout too. Gateway methods
+    // exceeded an hour in that layout (FRV 44290065577); retain its existing
+    // 96-file hosted bound independently of the event selecting the layout.
+    (hostedMain || (runnerBackend === "github" && group.shard_name === "agentic-gateway-methods")
+      ? COMPACT_HOSTED_MAIN_MAX_FILES.get(group.shard_name)
+      : undefined) ??
     (runnerBackend === "github" && group.shard_name === "core-runtime-infra-storage-state"
       ? COMPACT_HOSTED_STORAGE_STATE_MAX_FILES
       : undefined);
@@ -4451,7 +4456,7 @@ export function createSelectedNodeTestShardBundles(
       onFallback?: (reason: string) => void;
       preparedTestPlans?: ReadonlyMap<string, ReturnType<typeof buildVitestRunPlans>>;
       volumeContext?: NodeTestVolumeContext;
-      onVolumePrepared?: (describe: (group: NodeTestShardGroup) => NodeTestVolume) => void;
+      onVolumePrepared?: (describe: ReturnType<typeof prepareNodeTestVolumes>) => void;
     } = {},
 ): CompactNodeTestShard[] | null {
   if (options.runnerBackend === "boat") {
@@ -5268,19 +5273,21 @@ function createCompactNodeTestShardBundles(
         !planned.group.requiresDist &&
         !isExclusiveCompactGroup(planned.group) &&
         runnerRank(planned.group) >= 0;
-      const dedicatedHostedMainGroup =
-        compactMode === "push" &&
+      const dedicatedHostedGroup =
         options.runnerBackend === "github" &&
-        (/^agentic-control-plane-agent-chat(?:-hosted-\d+)?$/u.test(planned.group.shard_name) ||
-          (/^agentic-gateway-methods(?:-hosted-\d+)?$/u.test(planned.group.shard_name) &&
-            (planned.group.includePatterns?.length ?? 0) > 32) ||
-          planned.group.includePatterns?.includes(HOSTED_MAIN_UPDATE_TEST));
+        // Hourly main validation keeps its separately bounded 77-row packing.
+        (((compactMode === "push" || !options.mainValidation) &&
+          /^agentic-gateway-methods(?:-hosted-\d+)?$/u.test(planned.group.shard_name) &&
+          (planned.group.includePatterns?.length ?? 0) > 32) ||
+          (compactMode === "push" &&
+            (/^agentic-control-plane-agent-chat(?:-hosted-\d+)?$/u.test(planned.group.shard_name) ||
+              planned.group.includePatterns?.includes(HOSTED_MAIN_UPDATE_TEST))));
       const key = JSON.stringify([
         sharesOrdinaryCapacity ? "ordinary" : planned.group.runner,
         shard.requiresDist,
         // Keep measured heavy children alone despite their stale packing estimates.
         // Small Gateway tails and its runtime prerequisite keep ordinary packing.
-        dedicatedHostedMainGroup ? planned.group.shard_name : undefined,
+        dedicatedHostedGroup ? planned.group.shard_name : undefined,
       ]);
       const groups = groupsByRunner.get(key);
       if (groups) {

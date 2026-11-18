@@ -2307,26 +2307,29 @@ div.shell.shell--onboarding {
   border-radius: 0;
 }
 
-/* Automations section: New automation, then grouped rows with a byline. */
+/* Automations section: New automation and Run history, then grouped rows with a byline. */
 .sidebar-automations {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
+/* A group starts a new shelf, like the Sessions group boundaries. */
 .sidebar-list-group {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin-block-start: 14px;
+  margin-block-start: var(--sidebar-group-gap);
 }
 
-/* Rows start where the group chevron does: a title in the text color over a quieter byline. */
+/* Each automation reads as one unit: a strong name tight over a quieter byline, with more
+   room between automations than inside one. The shared nav-item rules own the inline
+   padding (desktop and drawer), so the copy owns the vertical padding. */
 .sidebar-automations__row {
-  align-items: center;
-  gap: 8px;
-  height: auto;
-  padding: 6px 8px 6px calc(var(--sidebar-inset) + 2px);
+  --sidebar-automations-row-pad: 6px;
+  --sidebar-automations-name-line: calc(18px * var(--control-ui-text-scale));
+
+  align-items: flex-start;
 }
 
 .sidebar-automations__copy {
@@ -2335,6 +2338,7 @@ div.shell.shell--onboarding {
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+  padding-block: var(--sidebar-automations-row-pad);
 }
 
 .sidebar-automations__name,
@@ -2345,22 +2349,27 @@ div.shell.shell--onboarding {
 }
 
 .sidebar-automations__name {
-  color: var(--text);
-  font-size: 13px;
-  line-height: 18px;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-md);
+  font-weight: 500;
+  letter-spacing: -0.008em;
+  line-height: var(--sidebar-automations-name-line);
 }
 
 .sidebar-automations__byline {
   color: color-mix(in srgb, var(--muted) 80%, transparent);
-  font-size: 12px;
-  line-height: 16px;
+  font-size: var(--control-ui-text-sm);
+  line-height: calc(16px * var(--control-ui-text-scale));
 }
 
-/* A failed or auto-disabled automation carries a dot instead of a word. */
+/* A failed or auto-disabled automation carries a dot instead of a word, on the name's line. */
 .sidebar-automations__failed {
   flex: 0 0 6px;
   width: 6px;
   height: 6px;
+  margin-block-start: calc(
+    var(--sidebar-automations-row-pad) + (var(--sidebar-automations-name-line) - 6px) / 2
+  );
   border-radius: 50%;
   background: var(--danger);
 }
@@ -2738,7 +2747,7 @@ div.shell.shell--onboarding {
 }
 
 .sidebar-recent-sessions__group--dragging,
-.sidebar-recent-session--dragging,
+.reorder-dragging,
 .sidebar-zone-entry--dragging {
   opacity: 0.45;
 }
@@ -2753,15 +2762,9 @@ div.shell.shell--onboarding {
   box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
 }
 
-/* A row's rounded fill would bend an inset edge; draw the drop line straight in the row gap. */
-.sidebar-recent-session:is(.sidebar-zone-entry--drop-before, .sidebar-zone-entry--drop-after) {
-  box-shadow: none;
-}
-
-.sidebar-recent-session:is(
-    .sidebar-zone-entry--drop-before,
-    .sidebar-zone-entry--drop-after
-  )::before {
+/* Draw a straight insertion line in the gap between rounded rows. */
+.reorder-drop-before::before,
+.reorder-drop-after::before {
   content: "";
   position: absolute;
   inset-inline: 6px;
@@ -2771,12 +2774,12 @@ div.shell.shell--onboarding {
   pointer-events: none;
 }
 
-.sidebar-recent-session.sidebar-zone-entry--drop-before::before {
-  top: -2px;
+.reorder-drop-before::before {
+  top: var(--reorder-edge, -2px);
 }
 
-.sidebar-recent-session.sidebar-zone-entry--drop-after::before {
-  bottom: -2px;
+.reorder-drop-after::before {
+  bottom: var(--reorder-edge, -2px);
 }
 
 /* Rows keep their intrinsic height; capped menus scroll instead of squeezing multiline labels. */

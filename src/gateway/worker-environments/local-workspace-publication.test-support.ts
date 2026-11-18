@@ -54,9 +54,14 @@ export async function provePublicationPauseAttribution(
     return stage(...args);
   });
   const command = exec.runCommandBuffered;
+  let staged = 0;
   vi.spyOn(exec, "runCommandBuffered").mockImplementation(async (argv, options) => {
     if (argv[0] === "git" && argv.includes("add")) {
-      expect(paused).toBe(true);
+      expect(paused, "Canonical Git staging must not freeze the guest").toBe(false);
+      if (staged++ === 0) {
+        await fs.writeFile(path.join(projection, "source.txt"), "later guest edit\n");
+        await fs.writeFile(path.join(projection, "later.txt"), "later guest file\n");
+      }
       elapsed += 10_000;
     }
     return command(argv, options);
@@ -75,12 +80,23 @@ export async function provePublicationPauseAttribution(
   expect(
     await requireGit(owner.worktree.repoRoot, ["show", `${snapshot.workspaceTree}:source.txt`]),
   ).toBe("publication edit");
+  expect(
+    await requireGit(owner.worktree.repoRoot, ["ls-tree", snapshot.workspaceTree, "later.txt"]),
+  ).toBe("");
   const release = checkpointLog.mock.calls
     .map(([message]) => message)
     .find((message) => message.startsWith("Local workspace unpause: reason=publication"));
-  expect(release).toContain('phaseDurationsMs={"staging":2500,"operation.snapshotStage":10000}');
+  expect(release).toContain('phaseDurationsMs={"staging":2500}');
   expect(spans["attempt.setup.sandbox.workspace_selection.projection.staging"]).toBe(2_500);
   expect(
     spans["attempt.setup.sandbox.workspace_selection.projection.operation.snapshotStage"],
   ).toBe(10_000);
+  expect(await fs.readFile(path.join(projection, "source.txt"), "utf8")).toBe("later guest edit\n");
+  const next = await captureGitHubPublicationWorkspaceSnapshot({ cwd: owner.worktree.path });
+  expect(
+    await requireGit(owner.worktree.repoRoot, ["show", `${next.workspaceTree}:source.txt`]),
+  ).toBe("later guest edit");
+  expect(
+    await requireGit(owner.worktree.repoRoot, ["show", `${next.workspaceTree}:later.txt`]),
+  ).toBe("later guest file");
 }
