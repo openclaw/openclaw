@@ -147,3 +147,100 @@ it("releases a lease after its cleanup met another process's offline maintenance
     }
   });
 });
+
+it("releases a lease after another writer holds the lock longer than two seconds (#197083)", async () => {
+  await withOpenClawTestState({ label: "lease-long-writer-release" }, async (state) => {
+    const database = openOpenClawStateDatabase({ env: state.env });
+    let held: DatabaseSync | undefined;
+    const releaseWriter = () => {
+      if (held?.isOpen) {
+        held.exec("ROLLBACK");
+        held.close();
+      }
+    };
+    // Each contended release retry advances the clock one second; the writer
+    // commits three seconds after cleanup first met it.
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const backoffDelay = vi.spyOn(backoff, "computeBackoff").mockImplementation(() => {
+      now += 1_000;
+      if (now >= 3_000) {
+        releaseWriter();
+      }
+      return 1;
+    });
+    try {
+      await expect(
+        withOpenClawStateLease(
+          {
+            scope: "core:test",
+            key: "long-writer-release",
+            database: { scope: "shared", options: { env: state.env } },
+            leaseMs: 30_000,
+            waitMs: 5_000,
+          },
+          async () => {
+            held = new DatabaseSync(database.path);
+            held.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+            return "committed";
+          },
+        ),
+      ).resolves.toBe("committed");
+      expect(
+        database.db
+          .prepare("SELECT owner FROM state_leases WHERE scope = ? AND lease_key = ?")
+          .all("core:test", "long-writer-release"),
+      ).toEqual([]);
+    } finally {
+      backoffDelay.mockRestore();
+      clock.mockRestore();
+      releaseWriter();
+    }
+  });
+});
+
+it("retries a lock-contended lease release after the writer commits", async () => {
+  await withOpenClawTestState({ label: "lease-exhausted-release" }, async (state) => {
+    const database = openOpenClawStateDatabase({ env: state.env });
+    const held = new DatabaseSync(database.path);
+    const leaseOwners = () =>
+      database.db
+        .prepare("SELECT owner FROM state_leases WHERE scope = ? AND lease_key = ?")
+        .all("core:test", "exhausted-release");
+    const options = {
+      scope: "core:test",
+      key: "exhausted-release",
+      database: { scope: "shared" as const, options: { env: state.env } },
+      leaseMs: 30_000,
+    };
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const backoffDelay = vi.spyOn(backoff, "computeBackoff").mockImplementation(() => {
+      now += 1_000;
+      return 1;
+    });
+    try {
+      await expect(
+        withOpenClawStateLease({ ...options, waitMs: 0 }, async () => {
+          held.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+        }),
+      ).rejects.toThrow("database is locked");
+      backoffDelay.mockRestore();
+      clock.mockRestore();
+      expect(leaseOwners()).toHaveLength(1);
+      held.exec("ROLLBACK");
+      // Without a retried release, the stored lease holds every acquirer until it expires.
+      await expect(
+        withOpenClawStateLease({ ...options, waitMs: 10_000 }, async () => leaseOwners()),
+      ).resolves.toHaveLength(1);
+      expect(leaseOwners()).toEqual([]);
+    } finally {
+      backoffDelay.mockRestore();
+      clock.mockRestore();
+      if (held.isTransaction) {
+        held.exec("ROLLBACK");
+      }
+      held.close();
+    }
+  });
+});

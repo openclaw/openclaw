@@ -6,6 +6,7 @@ import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-con
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import type { SqliteTransactionOptions } from "../infra/sqlite-transaction.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 import { isStatePostgres } from "./openclaw-state-db-engine.js";
 import { runExistingOpenClawStateWriteTransaction } from "./openclaw-state-db-existing-write.js";
 import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
@@ -213,7 +214,7 @@ export async function releaseOpenClawStateLeaseBestEffort(
   params: Parameters<typeof releaseOpenClawStateLease>[0],
   execute?: () => Promise<void>,
 ): Promise<void> {
-  const deadline = performance.now() + LEASE_CONTENTION_RETRY_TIMEOUT_MS;
+  const startedAt = performance.now();
   let attempt = 0;
   while (true) {
     try {
@@ -225,10 +226,13 @@ export async function releaseOpenClawStateLeaseBestEffort(
       return;
     } catch (error) {
       const now = performance.now();
-      if (
-        (!isSqliteLockError(error) && !isStateDatabaseMaintenanceContention(error)) ||
-        now >= deadline
-      ) {
+      const lockContention = isSqliteLockError(error);
+      // A writer's transaction settles within the busy timeout every shared-state writer
+      // waits for; giving up sooner reports finished work as failed (#197083).
+      const deadline =
+        startedAt +
+        (lockContention ? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS : LEASE_CONTENTION_RETRY_TIMEOUT_MS);
+      if ((!lockContention && !isStateDatabaseMaintenanceContention(error)) || now >= deadline) {
         if (execute) {
           // The async resource owner retains failed cleanup for exact-owner retry.
           throw error;
