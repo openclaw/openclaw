@@ -209,7 +209,7 @@ export type SessionCreatedVia = NonNullable<SessionRow["createdVia"]>;
 // types.ts imports from here, never the reverse (madge cycle guard).
 export function buildSessionCreationStamp(params: {
   via: SessionCreatedVia;
-  surface?: "plugin-dock";
+  surface?: SessionRow["createdSurface"];
   actor?: SessionCreatedActor;
   now?: number;
   sandbox?: "required";
@@ -218,7 +218,7 @@ export function buildSessionCreationStamp(params: {
   inheritedGitContributorProfileIds?: string[];
 }): {
   createdVia: SessionCreatedVia;
-  createdSurface?: "plugin-dock";
+  createdSurface?: SessionRow["createdSurface"];
   createdActor?: SessionCreatedActor;
   createdAt: number;
   sandbox?: "required";

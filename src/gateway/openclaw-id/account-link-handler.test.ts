@@ -44,12 +44,17 @@ const personal = {
   authenticatedUserProfile: { profileId: "profile-josh" },
 };
 
+// Live connections; the device sign-in's custody check admits only these.
+const live = new Set<{ connId: string }>([personal]);
+// The issuer; the sign-in flow captures it when the handler module loads.
+let issuerFetch: ReturnType<typeof vi.fn>;
+
 let handlers: typeof import("../server-methods/openclaw-id.js").openclawIdHandlers;
 
 beforeAll(async () => {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
+    (issuerFetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = input instanceof Request ? input.url : input.toString();
       if (url.endsWith("/.well-known/openid-configuration")) {
         return Response.json({
@@ -78,7 +83,7 @@ beforeAll(async () => {
           email: "josh@id.test",
         }),
       });
-    }),
+    })),
   );
   // The sign-in flow captures fetch when the handler module loads.
   ({ openclawIdHandlers: handlers } = await import("../server-methods/openclaw-id.js"));
@@ -100,9 +105,8 @@ async function call(client: unknown, params: Record<string, unknown>) {
     },
     context: {
       getRuntimeConfig: () => config,
-      // The caller is a live connection, as the device sign-in's custody check requires.
       getClientConnIds: (match: (candidate: unknown) => boolean) =>
-        new Set(match(personal) ? [personal.connId] : []),
+        new Set([...live].filter(match).map((current) => current.connId)),
     },
   } as unknown as GatewayRequestHandlerOptions);
   return reply!;
@@ -172,5 +176,74 @@ describe("openclawId.account linking", () => {
       }
     }
     expect(store.unlink).not.toHaveBeenCalled();
+  });
+  it("links a held sign-in without a second device code, under the same checks (OCF-530)", async () => {
+    const fetchMock = issuerFetch;
+    const started = await call(personal, { action: "device_begin" });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
+    const signedIn = await call(personal, {
+      action: "device_poll",
+      state: (started.payload as { state: string }).state,
+    });
+    const held = (signedIn.payload as { idToken: string }).idToken;
+    fetchMock.mockClear();
+    store.link.mockClear();
+
+    expect(await call(personal, { action: "link_held", idToken: held })).toMatchObject({
+      ok: true,
+      payload: { account: { sub: "acct-owner" }, link: "linked" },
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(store.link).toHaveBeenCalledExactlyOnceWith(
+      { profileId: "profile-josh", accountId: "acct-owner", email: "josh@id.test" },
+      { assertCurrent: expect.any(Function) },
+    );
+    store.link.mockClear();
+
+    // A token the issuer never sent here, with the same claims, falls back to a device code.
+    const forged = held.replace(/\.[^.]*$/, ".forged");
+    expect((await call(personal, { action: "link_held", idToken: forged })).code).toBe(
+      "sign_in_not_held",
+    );
+    // Another profile's live connection cannot reuse it; it signs in itself.
+    const other = {
+      ...personal,
+      connId: "conn-other",
+      authenticatedUserProfile: { profileId: "profile-other" },
+    };
+    live.add(other);
+    expect((await call(other, { action: "link_held", idToken: held })).code).toBe(
+      "sign_in_not_held",
+    );
+    live.delete(other);
+    // Loopback, a connection without a personal profile, or one no longer live is refused.
+    for (const client of [
+      { internal: { isLocalClient: true } },
+      { ...personal, authenticatedUserProfile: undefined },
+      { ...personal, connId: "conn-closed" },
+    ]) {
+      expect((await call(client, { action: "link_held", idToken: held })).code).toBe(
+        "not_personal_connection",
+      );
+    }
+    // A profile reassigned before the write is refused.
+    const { preparePersonalProfileAction } =
+      await import("../server-methods/personal-profile-authorization.js");
+    vi.mocked(preparePersonalProfileAction).mockResolvedValueOnce({
+      owner: "profile-other",
+      signal: new AbortController().signal,
+      assertCurrent: () => {},
+    } as Awaited<ReturnType<typeof preparePersonalProfileAction>>);
+    expect((await call(personal, { action: "link_held", idToken: held })).code).toBe(
+      "not_personal_connection",
+    );
+    // With Labs off nothing is linked.
+    config.gateway.openclawId.enabled = false;
+    expect((await call(personal, { action: "link_held", idToken: held })).ok).toBe(false);
+    config.gateway.openclawId.enabled = true;
+    expect(store.link).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

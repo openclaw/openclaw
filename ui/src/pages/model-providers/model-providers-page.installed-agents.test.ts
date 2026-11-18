@@ -301,7 +301,7 @@ it("lists every reported agent with its installation status only when advertised
   expect(requestCount(request, "acpx.agents.list")).toBe(1);
 });
 
-it("distinguishes failed and pending discovery and lets Check again recover models", async () => {
+it("keeps pending discovery silent and lets Check again recover failed models", async () => {
   const { context, request } = createAgentsHarness(async () => ({
     agents: [
       agent("qwen", "Qwen Code"),
@@ -333,7 +333,8 @@ it("distinguishes failed and pending discovery and lets Check again recover mode
   await waitForSolid(() => {
     expect(agentRow(page, "qwen")?.textContent).toMatch(/sign-in required/i);
     expect(agentRow(page, "kilocode")?.textContent).toMatch(/models unavailable/i);
-    expect(agentText(page)).toMatch(/discovering models/i);
+    expect(agentText(page)).not.toMatch(/discovering models/i);
+    expect(agentText(page)).toMatch(/installed/i);
     expect(agentText(page)).not.toMatch(/sign.in/i);
   });
   expect(toggle(page).hasAttribute("aria-disabled")).toBe(false);

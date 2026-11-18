@@ -16,6 +16,7 @@ import {
 } from "../plugins/plugin-cache.js";
 import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
+import { PluginInvocationScope } from "../plugins/plugin-invocation-scope.js";
 import { resolveEffectiveThinkingProfile } from "../plugins/provider-thinking.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -53,6 +54,7 @@ import {
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   advancePreparedModelRuntimeConfig,
+  beginPreparedModelRuntimePluginDrain,
   loadPublishedGatewayReplyDispatchRuntime as loadPublishedDispatch,
   markPreparedModelRuntimeSnapshotsStale as markStale,
   prepareModelRuntimeSnapshot as prepare,
@@ -315,6 +317,36 @@ describe("configured plugin generation recovery", () => {
 });
 
 describe("auth publication generation recovery", () => {
+  it("publishes auth after the triggering plugin invocation closes", async () => {
+    const { registry, instance } = registeredInstance("auth-scope");
+    const { input, snapshot } = await publishOwner(["default"], registry);
+    const generation = resolvePreparedModelRuntimeOwnerBySnapshot(snapshot)!.pluginGeneration;
+    const scope = new PluginInvocationScope(registry, [instance]);
+    const drain = beginPreparedModelRuntimePluginDrain();
+    const credentials = { custom: { type: "api_key" as const, key: "updated" } };
+    mocks.authStorage.getAll.mockReturnValue(credentials);
+    mocks.resolveAmbientCredentials.mockImplementation(() => instance.run(() => ({})));
+    try {
+      scope.run(() => {
+        mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
+      });
+      scope.release();
+      drain.release();
+      const current = await prepare(input);
+      expect(current.isCurrent()).toBe(true);
+      expect(current.pluginRegistry).toBe(registry);
+      expect(resolvePreparedModelRuntimeOwnerBySnapshot(current)!.pluginGeneration).toBe(
+        generation,
+      );
+      expect(current.createStores().authStorage.getAll()).toEqual(credentials);
+      expect(snapshot.isCurrent()).toBe(false);
+      expect(mocks.warn).not.toHaveBeenCalled();
+    } finally {
+      scope.release();
+      drain.release();
+    }
+  });
+
   it.each(["auth failure", "superseded replacement"] as const)(
     "releases failed build graphs while keeping %s diagnostics for recovery",
     async (mode) => {
@@ -533,6 +565,27 @@ describe("auth publication generation recovery", () => {
     } finally {
       finish.resolve();
       await waiting.catch(() => {});
+    }
+  });
+
+  it("does not revive a plugin registry retired while auth publication waits", async () => {
+    const { registry, instance } = registeredInstance("retired-auth-scope");
+    const { input } = await publishOwner(["default"], registry);
+    const scope = new PluginInvocationScope(registry, [instance]);
+    const drain = beginPreparedModelRuntimePluginDrain();
+    try {
+      scope.run(() => {
+        mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
+      });
+      scope.release();
+      quiescePluginRegistry(registry);
+      expect(instance.acceptingCalls).toBe(false);
+      drain.release();
+      await expect(prepare(input)).rejects.toThrow("Prepared plugin generation has retired");
+      expect(instance.acceptingCalls).toBe(false);
+    } finally {
+      scope.release();
+      drain.release();
     }
   });
 

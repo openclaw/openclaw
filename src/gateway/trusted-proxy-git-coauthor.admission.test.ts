@@ -198,3 +198,86 @@ it("publishes profile invalidation for changed and cleared proxy details only", 
     }
   });
 });
+
+it("imports admitted proxy credit, preserves unrelated sign-ins and clears invalid claims", async () => {
+  const authConfig = {
+    mode: "trusted-proxy" as const,
+    trustedProxy: {
+      userHeader: "x-occ-identity",
+      gitCoauthor: {
+        nameHeader: "x-credit-name",
+        emailHeader: "x-credit-email",
+        emailVerifiedHeader: "x-credit-email-verified",
+      },
+    },
+  };
+  const headers = {
+    "x-credit-name": "Alice Example",
+    "x-credit-email": "alice@example.test",
+    "x-credit-email-verified": "true",
+  };
+
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const profile = await ensureCanonicalUserProfileForEmail(authResult.user);
+    const params = { authConfig, authResult, headers, profileId: profile.id };
+    const read = async () =>
+      (await getCanonicalUserPreferences(profile.id))?.entries[
+        GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY
+      ];
+    const identity = {
+      name: "Alice Example",
+      email: "alice@example.test",
+      policy: gitCoauthorOrganizationPolicy(
+        authConfig.trustedProxy.userHeader,
+        authConfig.trustedProxy.gitCoauthor,
+      ),
+    };
+    await syncTrustedProxyGitCoauthor({
+      ...params,
+      headers: {
+        ...headers,
+        "x-credit-name": " Alice Example ",
+        "x-credit-email": " ALICE@example.test ",
+      },
+    });
+    expect(await read()).toEqual(identity);
+    await syncTrustedProxyGitCoauthor({ ...params, authResult: { ok: true, method: "token" } });
+    expect(await read()).toEqual(identity);
+    await syncTrustedProxyGitCoauthor({ ...params, authConfig: undefined });
+    expect(await read()).toEqual(identity);
+
+    for (const claims of [
+      { ...headers, "x-credit-name": "" },
+      { ...headers, "x-credit-email": "" },
+      { ...headers, "x-credit-name": "Alice\nCo-authored-by: Mallory" },
+      { ...headers, "x-credit-name": "Alice\u2028Other" },
+      { ...headers, "x-credit-name": "Alice\u2029Other" },
+      { ...headers, "x-credit-name": "Alice <Other>" },
+      { ...headers, "x-credit-email": "alice@example.test\nOther" },
+      { ...headers, "x-credit-email": "Alice <alice@example.test>" },
+      { ...headers, "x-credit-email": "alice@example.test>" },
+      { ...headers, "x-credit-email-verified": "false" },
+      { ...headers, "x-credit-email-verified": undefined },
+      { ...headers, "x-credit-email": ["alice@example.test", "mallory@example.test"] },
+    ]) {
+      await syncTrustedProxyGitCoauthor(params);
+      expect(await read()).toEqual(identity);
+      await syncTrustedProxyGitCoauthor({ ...params, headers: claims });
+      expect(await read(), JSON.stringify(claims)).toBeUndefined();
+    }
+
+    const assertedMapping = { nameHeader: "x-credit-name", emailHeader: "x-credit-email" };
+    await syncTrustedProxyGitCoauthor({
+      ...params,
+      authConfig: {
+        ...authConfig,
+        trustedProxy: { ...authConfig.trustedProxy, gitCoauthor: assertedMapping },
+      },
+      headers: { "x-credit-name": "Alice Example", "x-credit-email": "alice@example.test" },
+    });
+    expect(await read()).toEqual({
+      ...identity,
+      policy: gitCoauthorOrganizationPolicy(authConfig.trustedProxy.userHeader, assertedMapping),
+    });
+  });
+});

@@ -11,6 +11,7 @@ export function createGatewayCloseEntrypoints(
   const run = <T>(operation: () => T): T =>
     pluginInstanceInvocation.exit(() => host.run(operation));
   return {
+    runClose: run,
     prepareClose: async (options?: GatewayCloseOptions) => {
       const close = await run(() => prepareClose(options));
       return () => run(close);

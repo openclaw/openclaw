@@ -3,9 +3,9 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "ui.seamColor":
     "Primary accent color used by UI surfaces for emphasis, badges, and visual identity cues. Use high-contrast values that remain readable across light/dark themes.",
   "ui.prefs.accent":
-    "Control UI accent: #RRGGBB for a custom color, or 'theme' for the selected theme’s palette. Overrides ui.seamColor; clear it to inherit the configured accent color or theme default.",
+    "Web app accent: #RRGGBB for a custom color, or 'theme' for the selected theme’s palette. Overrides ui.seamColor; clear it to inherit the configured accent color or theme default.",
   "ui.prefs.locale":
-    "Language for the Control UI, as a supported locale id such as en, de, or zh-CN. Leave unset to follow the browser or system language. Set it from Settings → Appearance → Language. It does not set the assistant's timezone (agents.defaults.userTimezone).",
+    "Language for the web app, as a supported locale id such as en, de, or zh-CN. Leave unset to follow the browser or system language. Set it from Settings → Appearance → Language. It does not set the assistant's timezone (agents.defaults.userTimezone).",
   tui: "Terminal UI display settings. Use this section for terminal-only presentation preferences without changing Gateway or other UI behavior.",
   "tui.footer":
     "Terminal UI footer display settings. Keep optional context compact so session, model, goal, and token information stay readable.",
@@ -65,6 +65,10 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Per-plugin environment variable map injected for that plugin runtime context only. Use this to scope provider credentials to one plugin instead of sharing global process environment.",
   "plugins.entries.*.config":
     "Plugin-defined configuration payload interpreted by that plugin's own schema and validation rules. Use only documented fields from the plugin to prevent ignored or invalid settings.",
+  "agents.entries.*.description":
+    "Optional agent purpose shown on the Control UI chat welcome screen.",
+  "agents.entries.*.recommendedPrompts":
+    "Optional plain-text prompts on the agent chat welcome when no recent chats are available. Up to three entries, each at most 128 Unicode code points after whitespace normalization. Clicking a prompt submits it; omitted or empty uses defaults.",
   "agents.entries.*.identity.avatar":
     "Agent avatar (workspace-relative path, http(s) URL, or data URI).",
   "agents.entries.*.nativeRuntimeConsent":
@@ -135,7 +139,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.pdfMaxPages":
     "Maximum number of PDF pages to process for the PDF tool (default: 20).",
   "agents.defaults.imageMaxDimensionPx":
-    "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
+    "Max image side length in pixels when sanitizing chat and tool-result image payloads (default: 1200).",
   "agents.defaults.imageQuality":
     'Image-tool media compression preference: "auto" adapts to provider/model limits and image count, "efficient" saves tokens and bytes, "balanced" keeps the current middle ground, and "high" preserves more detail for screenshots and document images.',
   "agents.defaults.compaction":
@@ -189,7 +193,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
     "Threshold distance to compaction (in tokens) that triggers pre-compaction memory flush execution. Use earlier thresholds for safer persistence, or tighter thresholds for lower flush frequency.",
   "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
-    'Forces pre-compaction memory flush when the model-visible transcript window reaches this threshold (bytes or strings like "2mb"). After compaction, this includes the retained tail and subsequent turns rather than discarded history. Use this to prevent long-session hangs even when token counters are stale; set to 0 to disable.',
+    'Forces pre-compaction memory flush when the model-visible chat history reaches this threshold (bytes or strings like "2mb"). After compaction, this includes the retained tail and subsequent turns rather than discarded history. Use this to prevent long-session hangs even when token counters are stale; set to 0 to disable.',
   "agents.defaults.embeddedAgent":
     "Embedded OpenClaw runner hardening controls for how workspace-local agent settings are trusted and applied in OpenClaw sessions.",
   "agents.defaults.embeddedAgent.projectSettingsPolicy":

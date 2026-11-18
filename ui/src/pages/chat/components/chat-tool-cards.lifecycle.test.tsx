@@ -7,7 +7,7 @@ import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import type { ToolCardOutput } from "../../../lib/chat/tool-cards.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import * as inlineCommandPresentation from "./chat-inline-command-presentation.tsx";
+import { inlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import { prepareGroupedMessage } from "./chat-message-bubble-presentation.ts";
 import { BubbleToolCards } from "./chat-message-bubble-tools.tsx";
@@ -15,6 +15,7 @@ import { ExpandedToolCardContent } from "./chat-message-deferred.tsx";
 import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 
 it("unwraps provider output in the compact trail without reformatting captured JSON", async () => {
+  const inlineCommands = await inlineCommandPresentation();
   const text = '{"id":9007199254740993,"state":"before","state":"after"}';
   const outputText = JSON.stringify([
     { type: "input_text", text: "Script completed\nWall time 0.8 seconds\nOutput:\n" },
@@ -35,7 +36,7 @@ it("unwraps provider output in the compact trail without reformatting captured J
       }}
       options={{
         messageKey: "literal-preview",
-        inlineCommands: inlineCommandPresentation,
+        inlineCommands,
         runActive: true,
         expanded: false,
         onToggleExpanded: vi.fn(),
@@ -148,12 +149,13 @@ it("remeasures each disclosure's own content on pointer and focus interactions",
 });
 
 it("keeps keyed bubble rows while forwarding replaced options and live disclosure overrides", async () => {
+  const inlineCommands = await inlineCommandPresentation();
   const initialToggle = vi.fn();
   const latestToggle = vi.fn();
   const options: GroupedMessageOptions & { showApprovalReviews: boolean } = {
     isStreaming: false,
     showReasoning: false,
-    inlineCommands: inlineCommandPresentation,
+    inlineCommands,
     runActive: true,
     showApprovalReviews: false,
     onToggleToolExpanded: initialToggle,
@@ -219,7 +221,7 @@ it("keeps keyed bubble rows while forwarding replaced options and live disclosur
     isStandaloneToolMessage: false,
     toolRenderOptions: {
       ...current.toolRenderOptions,
-      inlineCommands: inlineCommandPresentation,
+      inlineCommands,
       runActive: true,
       isToolExpanded: () => true,
     },

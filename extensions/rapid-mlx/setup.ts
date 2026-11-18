@@ -40,7 +40,7 @@ import {
 type Listing = NonNullable<Awaited<ReturnType<typeof listRapidMlxModels>>>;
 
 function automaticModels(listing: Listing) {
-  return listing.provider.models.filter((model) =>
+  return listing.chatModels.filter((model) =>
     listing.rows.some(
       (row) =>
         row.model.id === model.id &&
@@ -180,13 +180,13 @@ export async function configureRapidMlxInteractive(
     apiKey,
     replaceAuth: true,
   });
-  if (!listing?.provider.models.length) {
+  if (!listing?.chatModels.length) {
     throw new Error(unavailableMessage);
   }
   const modelId = await ctx.prompter.select({
     message: "Rapid-MLX chat model",
-    initialValue: selectPreferredLocalModelId(listing.provider.models.map((m) => m.id)),
-    options: listing.provider.models.map((model) => ({ value: model.id, label: model.name })),
+    initialValue: selectPreferredLocalModelId(listing.chatModels.map((m) => m.id)),
+    options: listing.chatModels.map((model) => ({ value: model.id, label: model.name })),
   });
   ctx.signal?.throwIfAborted();
   const credential = apiKey
@@ -258,7 +258,7 @@ async function prepareNonInteractive(ctx: NonInteractiveContext) {
     apiKey: resolved?.key ?? (replaceAuth ? "" : undefined),
     replaceAuth,
   });
-  if (!listing?.provider.models.some((model) => model.id === modelId)) {
+  if (!listing?.chatModels.some((model) => model.id === modelId)) {
     ctx.runtime.error(`${unavailableMessage} Requested model: ${modelId}.`);
     return null;
   }
@@ -425,12 +425,18 @@ async function listRapidMlxModels(params: {
       ...(request ? { request } : {}),
       models: existing?.models ?? [],
     };
-    // Use the shared chat projection; memory setup selects embedding models separately.
+    // Retain all catalog rows; setup offers likely chat models only.
     provider.models = buildOpenAICompatibleLiveModels(
       rows.map(({ model }) => model),
       provider,
     );
-    return { provider, rows };
+    return {
+      provider,
+      rows,
+      chatModels: provider.models.filter(
+        (model) => model.inference?.chat !== false && model.inference?.chatEvidence !== "unlikely",
+      ),
+    };
   } catch (error) {
     params.signal?.throwIfAborted();
     if (params.strict) {

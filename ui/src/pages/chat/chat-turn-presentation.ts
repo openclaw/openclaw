@@ -8,7 +8,6 @@ import {
   normalizeRoleForGrouping,
   resolveMessageRole,
 } from "../../lib/chat/message-normalizer.ts";
-import { readToolApprovalReviews } from "../../lib/chat/tool-approval-reviews.ts";
 import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import {
@@ -41,13 +40,13 @@ export function isActivityMessageGroup(group: MessageGroup, bubbleMode = false):
     return false;
   }
   const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message));
+  // Keep one activity owner as the first call gains live facts or more calls.
+  // Its renderer can simplify a settled singleton without replacing the owner.
   return (
     bubbleMode ||
     group.messages.length > 1 ||
-    cards.length > 1 ||
-    (cards.length === 0 &&
-      group.messages.some(({ message }) => hasVisiblePreparedActivity(message))) ||
-    cards.some((card) => readToolApprovalReviews(card.details).length > 0)
+    cards.length > 0 ||
+    group.messages.some(({ message }) => hasVisiblePreparedActivity(message))
   );
 }
 
@@ -109,8 +108,6 @@ export type WorkGroupRenderItem = {
   replyRunId?: string;
   /** No visible reply owns this rollup; nested execution identities must not frame it. */
   ownerless?: true;
-  /** Hidden group -> preceding preserved output; absent entries stay under the summary. */
-  previewAfterGroup?: ReadonlyMap<string, string>;
   durationMs: number | null;
 };
 
@@ -417,8 +414,6 @@ export function collapseCompletedTurnWork(
     }
     const groups: MessageGroup[] = [];
     const answers: TurnRenderItem[] = [];
-    const previewAfterGroup = new Map<string, string>();
-    let precedingAnswerKey: string | undefined;
     // CLI runtimes import tool rows and interim text without a run id; only the
     // persisted reply that follows them carries it. Such rows belong to that run.
     const workRunIds = new Set<string | undefined>();
@@ -441,12 +436,8 @@ export function collapseCompletedTurnWork(
           }
           workRunIds.add(runId);
         }
-        if (precedingAnswerKey) {
-          previewAfterGroup.set(item.key, precedingAnswerKey);
-        }
       } else {
         answers.push(item);
-        precedingAnswerKey = item.key;
       }
     }
     if (groups.length === 0) {
@@ -491,7 +482,6 @@ export function collapseCompletedTurnWork(
       // Above several runs' replies, work owned by none of them stays unframed
       // even when its rows share one run.
       ...(earlierRunReplies.size > 0 && !replyRunId ? { ownerless: true as const } : {}),
-      ...(previewAfterGroup.size > 0 ? { previewAfterGroup } : {}),
       durationMs,
     });
     result.push(...answers, ...turn.slice(segmentEnd + 1));
@@ -553,7 +543,9 @@ export function joinActivityRuns(
         : undefined;
   const before = groupsOf(first);
   const after = groupsOf(next);
-  return before && after ? activityRun([...before, ...after]) : undefined;
+  return before && after && !after[0]?.startsActivityGroup
+    ? activityRun([...before, ...after])
+    : undefined;
 }
 
 /** Presentation-only rollup for tool groups separated by projected turn boundaries. */
@@ -571,11 +563,14 @@ export function coalesceActivityRuns(
     if (!first) {
       return;
     }
-    result.push(groups.length === 1 ? first : activityRun(groups));
+    result.push(activityRun(groups));
     groups = [];
   };
   for (const item of items) {
     if (item.kind === "group" && isActivityGroup(item)) {
+      if (item.startsActivityGroup) {
+        flush();
+      }
       groups.push(item);
       continue;
     }

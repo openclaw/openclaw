@@ -169,7 +169,7 @@ overrides:
   chevrotain>lodash-es: 4.18.1
   '@chevrotain/cst-dts-gen>lodash-es': 4.18.1
   '@chevrotain/gast>lodash-es': 4.18.1
-  '@agentclientprotocol/codex-acp@2.3.0>@openai/codex': 0.164.0
+  '@agentclientprotocol/codex-acp@2.3.0>@openai/codex': 0.169.0
   '@codemirror/commands@6.11.1>@codemirror/view': 6.43.15
   '@codemirror/view@6.43.15>@codemirror/state': 6.7.6
   '@anthropic-ai/sdk': 0.137.0
@@ -299,7 +299,7 @@ importers:
         version: 0.4.2
       '@openclaw/proxyline':
         specifier: 0.4.1
-        version: 0.4.1(undici@8.12.3)
+        version: 0.4.1(undici@8.12.4)
       '@opentelemetry/semantic-conventions':
         specifier: 1.44.0
         version: 1.44.0
@@ -401,7 +401,7 @@ importers:
         version: 12.2.1
       openai:
         specifier: 7.47.0
-        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.3)(ws@8.22.0)(zod@4.6.7)
+        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.4)(ws@8.22.0)(zod@4.6.7)
       p-limit:
         specifier: 7.3.3
         version: 7.3.3
@@ -442,8 +442,8 @@ importers:
         specifier: 1.4.3
         version: 1.4.3
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
       web-push:
         specifier: 3.6.7
         version: 3.6.7(supports-color@10.2.2)
@@ -723,7 +723,7 @@ importers:
     dependencies:
       openai:
         specifier: 7.47.0
-        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.3)(ws@8.22.0)(zod@4.6.7)
+        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.4)(ws@8.22.0)(zod@4.6.7)
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -788,8 +788,8 @@ importers:
         specifier: 11.3.2
         version: 11.3.2(supports-color@10.2.2)
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -898,8 +898,8 @@ importers:
         specifier: 21.0.3
         version: 21.0.3
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
 
   extensions/buzz:
     dependencies:
@@ -1015,8 +1015,8 @@ importers:
   extensions/codex:
     dependencies:
       '@openai/codex':
-        specifier: 0.164.0
-        version: 0.164.0
+        specifier: 0.169.0
+        version: 0.169.0
       '@openclaw/fs-safe':
         specifier: 0.27.1
         version: 0.27.1
@@ -1240,8 +1240,8 @@ importers:
         specifier: 1.4.3
         version: 1.4.3
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
       ws:
         specifier: 8.22.0
         version: 8.22.0
@@ -1376,6 +1376,12 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/fish-audio-speech:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/gbrain:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1781,7 +1787,7 @@ importers:
         version: 21.2.0(patch_hash=c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68)
       openai:
         specifier: 7.47.0
-        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.3)(ws@8.22.0)(zod@4.6.7)
+        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.4)(ws@8.22.0)(zod@4.6.7)
       typebox:
         specifier: 1.4.3
         version: 1.4.3
@@ -2421,7 +2427,7 @@ importers:
     dependencies:
       '@slack/bolt':
         specifier: 5.1.0
-        version: 5.1.0(@types/express@5.0.6)(supports-color@10.2.2)(undici@8.12.3)
+        version: 5.1.0(@types/express@5.0.6)(supports-color@10.2.2)(undici@8.12.4)
       '@slack/types':
         specifier: 3.3.0
         version: 3.3.0
@@ -2435,8 +2441,8 @@ importers:
         specifier: 1.4.3
         version: 1.4.3
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -2545,8 +2551,8 @@ importers:
         specifier: 1.4.3
         version: 1.4.3
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -2941,7 +2947,7 @@ importers:
         version: 1.44.0
       openai:
         specifier: 7.47.0
-        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.3)(ws@8.22.0)(zod@4.6.7)
+        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.4)(ws@8.22.0)(zod@4.6.7)
       partial-json:
         specifier: 0.1.7
         version: 0.1.7
@@ -5113,43 +5119,43 @@ packages:
     resolution: {integrity: sha512-3zcN5Q3yEmeyxXBzqB6fXPQFzYa2ROsGFSr69W0ArXIAGJqxl/aFECOVPD2kbkYPm0U/EHxFKgclK3UA9WQg5A==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
 
-  '@openai/codex@0.164.0':
-    resolution: {integrity: sha512-TWj7UGyPRe3Pj/A3ddNAxs1te3a/W/xAd+J0LHrrFTmsSfahGMOLF/vn88D3QCIgAT3B1rm1y/Z3NYE0rx6cZQ==}
+  '@openai/codex@0.169.0':
+    resolution: {integrity: sha512-KhzYlkKPxoNssR8CEm45IjqnFWn7UtlF4CiD3tOJPea51xBs7MaHy0UQG9GSbCqk6Lrjn5QdJDV0QD1/FgWlGw==}
     engines: {node: '>=16'}
     hasBin: true
 
-  '@openai/codex@0.164.0-darwin-arm64':
-    resolution: {integrity: sha512-pDizgOUAtq3/k3AbUFHbaU19WpYKCja+oFpNSTLKrDQj4lTUNSDuTPJip4uQVn2/1EipQdpQrGMOQBVuI1znAA==}
+  '@openai/codex@0.169.0-darwin-arm64':
+    resolution: {integrity: sha512-5WsWFBbVP78D+6FvNo1MMVxLPZdmcoQlqVJFrF4qx/TmvneLnMQKtLyXkUo54XOTDfoYKpNouTJ/F7gTVA8FnQ==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [darwin]
 
-  '@openai/codex@0.164.0-darwin-x64':
-    resolution: {integrity: sha512-lIe+udnguPGzBezkgbkj2Eaz0YqOhNXT7jja136Fj0sXfI+UKNS2icmaK14GcoRAgeVEpDTtC1ftamWBPmD1zg==}
+  '@openai/codex@0.169.0-darwin-x64':
+    resolution: {integrity: sha512-K1FKSsSLl9v3z5TeagBQXyQRDBIGB5Jncy5dxsRxwT3aaTqN3AI8VrCfoxBxKMOOU9O2QX1vg7WkBwNVth/s9A==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [darwin]
 
-  '@openai/codex@0.164.0-linux-arm64':
-    resolution: {integrity: sha512-LL5iTQjyDL4YRX44EWqhIfEQ5uGnmgxkQBJSxjZSeJ8L1Og83pdlzUJW/PRJ76oaVwOVgh6HXwuPEiBNEHU4lg==}
+  '@openai/codex@0.169.0-linux-arm64':
+    resolution: {integrity: sha512-NZ/DaQUpcQmxmqee7Z9uC1rzw3GhSbooawcaTe1LN5Yk+WlinUKGdTXJgClRT/9ogQEEM9TWxYzvxPfj5G/xFg==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [linux]
 
-  '@openai/codex@0.164.0-linux-x64':
-    resolution: {integrity: sha512-XLAoaWsGOT2khzl+P4FYDPTkzAr9W0VFXFaVkqlFdkM0soa1gH/4S0wSD57Ek3HHwkirAEGz2/Mwehseh+l5Mg==}
+  '@openai/codex@0.169.0-linux-x64':
+    resolution: {integrity: sha512-o05NyAOCDygSPRo1yinzxvkRSdmsZyBD9E7mbpmjRanSfM8lypqWtQgEo4XfNkwhuCR2aFu8mlGOsQGFXVbVww==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [linux]
 
-  '@openai/codex@0.164.0-win32-arm64':
-    resolution: {integrity: sha512-Zkzt8HNmB/vOnlDo5D7IOlrt5rHaxYQB7iGbNP7bHcXZtrk6gaD7UriwaieGYJpcf8DqAT/0tqzY4xbs8ZwbmQ==}
+  '@openai/codex@0.169.0-win32-arm64':
+    resolution: {integrity: sha512-nTN9SpkacGohq60+I80R3t0R8Mhbnlt3OVYNahgAv1Gu77KFwhPc0vz9Ou/DAGDtYhKVWA/jiYXJXnlzkwb/JA==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [win32]
 
-  '@openai/codex@0.164.0-win32-x64':
-    resolution: {integrity: sha512-urWPhwh9YavuoAPIkmVYKBTtd5OtGVL4Ki0Fb28dhK/Mz6Pt4LSy+gbRrZFz5+RXrw9ubvXuXDCcd8beYcWhDg==}
+  '@openai/codex@0.169.0-win32-x64':
+    resolution: {integrity: sha512-nC+McFU8xRNL9tk3IhxcKdhcyOElwF/HhPO+gzSQCY7yjh3XdzSajX+MYWcHUVHWRHajfwn3/WgJYJK2wS+XWg==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [win32]
@@ -10744,8 +10750,8 @@ packages:
     resolution: {integrity: sha512-u4UB2/IrKdU6lFxumHmmo1a3fCQO5tzQllRorfoRS63txhrB7xTpSn1PftwC4qEHkOaqP95fCWW4lJzwErwzhQ==}
     engines: {node: '>=22.19.0'}
 
-  undici@8.12.3:
-    resolution: {integrity: sha512-+fdndUTwBP86cVjihTp21hZHo7d6oj1c/47XPA3lL8mM0XHs+C4EkcjmgRsFnFk2f/UONGDy9ItBItmXsLOQHw==}
+  undici@8.12.4:
+    resolution: {integrity: sha512-8Mx+uNKKER2bA4AdtedkqRbwUCIJFr2nJckXRe5yrDqzePqwLP7VNcctN8/XdmDSbF7mS+jJKIszlL+vbam1VA==}
     engines: {node: '>=22.19.0'}
 
   unhomoglyph@1.0.6:
@@ -11162,7 +11168,7 @@ snapshots:
   '@agentclientprotocol/codex-acp@2.3.0':
     dependencies:
       '@agentclientprotocol/sdk': 2.0.2(zod@4.6.7)
-      '@openai/codex': 0.164.0
+      '@openai/codex': 0.169.0
       cross-spawn: 7.0.6
       diff: 9.0.0
       open: 11.0.4
@@ -13274,31 +13280,31 @@ snapshots:
 
   '@npmcli/redact@5.0.0': {}
 
-  '@openai/codex@0.164.0':
+  '@openai/codex@0.169.0':
     optionalDependencies:
-      '@openai/codex-darwin-arm64': '@openai/codex@0.164.0-darwin-arm64'
-      '@openai/codex-darwin-x64': '@openai/codex@0.164.0-darwin-x64'
-      '@openai/codex-linux-arm64': '@openai/codex@0.164.0-linux-arm64'
-      '@openai/codex-linux-x64': '@openai/codex@0.164.0-linux-x64'
-      '@openai/codex-win32-arm64': '@openai/codex@0.164.0-win32-arm64'
-      '@openai/codex-win32-x64': '@openai/codex@0.164.0-win32-x64'
+      '@openai/codex-darwin-arm64': '@openai/codex@0.169.0-darwin-arm64'
+      '@openai/codex-darwin-x64': '@openai/codex@0.169.0-darwin-x64'
+      '@openai/codex-linux-arm64': '@openai/codex@0.169.0-linux-arm64'
+      '@openai/codex-linux-x64': '@openai/codex@0.169.0-linux-x64'
+      '@openai/codex-win32-arm64': '@openai/codex@0.169.0-win32-arm64'
+      '@openai/codex-win32-x64': '@openai/codex@0.169.0-win32-x64'
 
-  '@openai/codex@0.164.0-darwin-arm64':
+  '@openai/codex@0.169.0-darwin-arm64':
     optional: true
 
-  '@openai/codex@0.164.0-darwin-x64':
+  '@openai/codex@0.169.0-darwin-x64':
     optional: true
 
-  '@openai/codex@0.164.0-linux-arm64':
+  '@openai/codex@0.169.0-linux-arm64':
     optional: true
 
-  '@openai/codex@0.164.0-linux-x64':
+  '@openai/codex@0.169.0-linux-x64':
     optional: true
 
-  '@openai/codex@0.164.0-win32-arm64':
+  '@openai/codex@0.169.0-win32-arm64':
     optional: true
 
-  '@openai/codex@0.164.0-win32-x64':
+  '@openai/codex@0.169.0-win32-x64':
     optional: true
 
   '@openclaw/crabline@0.2.0(patch_hash=87093d75728e71110a39bd4729df86642a7974ebbbd2155fec2e074ce9a90f3d)':
@@ -13453,9 +13459,9 @@ snapshots:
       '@openclaw/proc-safe-win32-arm64-msvc': 0.4.2
       '@openclaw/proc-safe-win32-x64-msvc': 0.4.2
 
-  '@openclaw/proxyline@0.4.1(undici@8.12.3)':
+  '@openclaw/proxyline@0.4.1(undici@8.12.4)':
     dependencies:
-      undici: 8.12.3
+      undici: 8.12.4
 
   '@openclaw/uirouter@0.1.2': {}
 
@@ -14314,11 +14320,11 @@ snapshots:
 
   '@sindresorhus/transliterate@2.3.1': {}
 
-  '@slack/bolt@5.1.0(@types/express@5.0.6)(supports-color@10.2.2)(undici@8.12.3)':
+  '@slack/bolt@5.1.0(@types/express@5.0.6)(supports-color@10.2.2)(undici@8.12.4)':
     dependencies:
       '@slack/logger': 5.0.0
       '@slack/oauth': 4.0.0
-      '@slack/socket-mode': 3.1.0(undici@8.12.3)
+      '@slack/socket-mode': 3.1.0(undici@8.12.4)
       '@slack/types': 3.3.0
       '@slack/web-api': 8.3.0
       '@types/express': 5.0.6
@@ -14342,13 +14348,13 @@ snapshots:
       '@types/node': 26.6.6
       jsonwebtoken: 9.0.3
 
-  '@slack/socket-mode@3.1.0(undici@8.12.3)':
+  '@slack/socket-mode@3.1.0(undici@8.12.4)':
     dependencies:
       '@slack/logger': 5.0.0
       '@slack/web-api': 8.3.0
       '@types/node': 26.6.6
       eventemitter3: 5.0.4
-      undici: 8.12.3
+      undici: 8.12.4
 
   '@slack/types@3.3.0': {}
 
@@ -16839,7 +16845,7 @@ snapshots:
       parse5: 8.0.1
       saxes: 6.0.0
       tough-cookie: 6.0.2
-      undici: 8.12.3
+      undici: 8.12.4
       w3c-xmlserializer: 6.0.0
       webidl-conversions: 8.0.1
       whatwg-mimetype: 5.0.0
@@ -17871,13 +17877,13 @@ snapshots:
       - encoding
     optional: true
 
-  openai@7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.3)(ws@8.22.0)(zod@4.6.7):
+  openai@7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.4)(ws@8.22.0)(zod@4.6.7):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.92
       '@smithy/hash-node': 4.5.2
       '@smithy/signature-v4': 5.7.4
       google-auth-library: 10.9.1(supports-color@10.2.2)
-      undici: 8.12.3
+      undici: 8.12.4
       ws: 8.22.0
       zod: 4.6.7
 
@@ -19058,7 +19064,7 @@ snapshots:
 
   undici@8.11.2: {}
 
-  undici@8.12.3: {}
+  undici@8.12.4: {}
 
   unhomoglyph@1.0.6: {}
 

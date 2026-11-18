@@ -17,7 +17,13 @@ Session-list failures appear in the sidebar while that list is active and clear
 when it recovers or you change filters. A failed session action, such as a
 rename, keeps its error with that action instead of adding a list error.
 
-On phones, swipe right across the chat to open navigation. A deliberate swipe opens the full drawer while your finger is still down, rather than holding a partly clipped sidebar over the conversation. Short drags and vertical scrolling leave navigation closed. Tap outside the drawer to close it.
+On phones, swipe right starting within 32 CSS pixels of the chat’s left edge to
+open navigation, or tap **Expand sidebar** in the header. The opening strip starts
+after any device safe-area inset, including in landscape. Swipes farther inside
+the content stay with that content, such as a 3D viewer’s orbit controls.
+A deliberate edge swipe opens the full drawer while your finger is still down,
+rather than holding a partly clipped sidebar over the conversation. Short drags
+and vertical scrolling leave navigation closed. Tap outside the drawer to close it.
 
 To work directly in a folder on a paired device, select that specific device,
 then choose **Existing folder on** _device_ in the workspace picker. Admins
@@ -315,6 +321,8 @@ An unrecognized Git clone or refresh failure includes a **Diagnostic ID**. Give
 that ID to the Gateway operator to find the matching `projects/clone` file-log
 entry, which retains Git's exit status and process output. Raw Git output stays
 out of the shared conversation; the diagnostic ID does not grant log access.
+Refresh preparation and branch-update failures ask you to retry first by sending
+your message again; if they persist, give the diagnostic ID to the Gateway operator.
 
 Accepted browser messages, including initial prompts waiting for workspace
 preparation and follow-ups during a run, remain visible as normal message bubbles
@@ -502,6 +510,12 @@ Persistent child conversations and forks stay nested after their turns finish,
 including after a reload or Gateway restart. Archiving hides them from the
 **Active** list; restoring them brings them back under their parent.
 
+GitHub publication keeps internal records for its checkout, retries, and recovery.
+These stay out of the conversation tree and child counts by default, including
+records created before an update. Enable **Show system sessions** to inspect them.
+Publication results and pull requests remain attached to the original conversation;
+this display filter does not change permissions or publication authority.
+
 Choose **Show all** in the agent switcher to open the **Sessions** page across all agents and expand the compact agent roster. This clears any agent filter, even when the roster is already selected. The browser remembers the roster mode. Selecting an agent row opens its main conversation; use **Sessions** in that agent's options menu to browse only its conversations.
 
 Session-row owner avatars appear automatically when the signed-in user and session roster identify more than one human. With only one human, owner avatars stay hidden even when agents own or participate in sessions. Agent participants and undisplayed participant counts do not enable attribution. Session icons, channel avatars, and activity indicators keep their usual behavior.
@@ -665,8 +679,8 @@ The root menu keeps everyday actions together: **Pin/Unpin**, **Rename**, **Mark
 - In the sidebar session menu, **Snooze** offers **In 1 hour**, **In 3 hours**, **This evening** (18:00 local, when more than one hour away), **Tomorrow** (09:00 local), and **Next week** (next Monday at 09:00 local). On Sundays, Next week is omitted because it matches Tomorrow. Each preset shows its wake time in your locale. Active sessions eligible for pinning can be snoozed, except protected main and sentinel sessions; archived and nested child sessions cannot. A child moved to the top level can be snoozed. A snoozed session offers **Wake session** instead.
 - **Icon & color** opens one picker with color swatches, an icon grid, and **Reset to default**. It stays open while you change both; the sidebar reflects your changes.
 - **Move to group** includes **New group** and **Remove from group**. **Assign to** stays on the root menu when more than one eligible owner is available ([session ownership](/concepts/multi-user#assigning-an-owner)).
-  On phones, **Search groups** matches canonically equivalent accented names
-  without changing the stored group name; an unaccented query remains distinct.
+  **Search groups** matches canonically equivalent accented names without
+  changing the stored group name; an unaccented query remains distinct.
 - **Fork session** creates a separate session; while the agent is replying, it forks from the last completed message. Forks of local folder and project sessions keep that workspace, so existing file references continue to open. **Fork from here** keeps the same local workspace as well.
 - **Copy link** copies the session link in one step. **Advanced → Copy details** offers the preview link, conversation text as Markdown, and the session ID, without duplicating the common session link. The link requires normal Gateway authentication and session access; copying it does not grant access. Markdown loads the available conversation history, not just the messages currently visible. Both copied Markdown and `/export` downloads retain the conversation's sender labels, so messages from different participants remain distinguishable. Records without exportable text, such as tool calls without text output, are omitted.
 - In the Control UI, `/export` and `/export-session` load the available conversation history before downloading Markdown through your browser, even when older messages have not been scrolled into view. If history cannot be read completely or the conversation changes while paging, the export fails instead of downloading a partial file; retry the command. These commands take no file path. An argument leaves the draft intact and shows how to retry. The server-side HTML export available through other clients keeps its separate workspace-path behavior.
@@ -775,13 +789,15 @@ accompany text. There is no attachment picker in the palette.
 Type **@** to search eligible people by name or verified GitHub handle, just as
 in the chat composer. Use **↑/↓** or **Home/End**, then **Enter** or **Tab** to
 select a person; **Escape** dismisses the people picker before the palette.
-The compact **Will notify** row shows selected people once each, with **+N**
+The compact **Notify or invite** row shows selected people once each, with **+N**
 when space is tight. You can select up to ten mention references. Editing or
 deleting a selected name removes that reference; **Remove mention** clears all
 recipient selections without deleting the text. Pasted names and email addresses
 remain ordinary text. The picker replaces search results while open, and selected
 mentions keep the palette in composer mode. Mentions travel with the first message
-of the new session; they never share a session, invite people, or grant access.
+of the new session. For roles with `sessions.others: "invited"`, a selected
+mention from the creator or an admin grants membership when that message commits.
+It does not change session visibility or the recipient's operator scopes.
 
 - **Enter** selects a person while the people picker is open; otherwise it opens
   or runs the selected search result. With no result, Enter does not send.

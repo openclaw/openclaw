@@ -5,7 +5,7 @@ export type ActKind = BrowserActRequest["kind"];
 type BrowserActKindFacts = {
   hidden?: true;
   capability?: "supportsBatchActions" | "supportsVisualActions";
-  lightpanda?: true;
+  semanticCdp?: true;
   selector?: true;
   timeout?: "default" | "explicit";
   existingSessionTimeout?: true;
@@ -14,23 +14,23 @@ type BrowserActKindFacts = {
 // Insertion order is the model-facing enum order; insertText remains API-only.
 export const BROWSER_ACT_KIND_FACTS: Record<ActKind, BrowserActKindFacts> = {
   batch: { capability: "supportsBatchActions", selector: true },
-  click: { lightpanda: true, selector: true, timeout: "default", existingSessionTimeout: true },
+  click: { semanticCdp: true, selector: true, timeout: "default", existingSessionTimeout: true },
   clickCoords: {
     capability: "supportsVisualActions",
     timeout: "explicit",
     existingSessionTimeout: true,
   },
-  type: { lightpanda: true, selector: true, timeout: "default" },
-  press: { lightpanda: true },
+  type: { semanticCdp: true, selector: true, timeout: "default" },
+  press: { semanticCdp: true },
   hover: { capability: "supportsVisualActions", selector: true, timeout: "default" },
   scrollIntoView: { capability: "supportsVisualActions", selector: true, timeout: "default" },
   drag: { capability: "supportsVisualActions", selector: true, timeout: "default" },
-  select: { lightpanda: true, selector: true, timeout: "default" },
-  fill: { lightpanda: true, timeout: "default" },
+  select: { semanticCdp: true, selector: true, timeout: "default" },
+  fill: { semanticCdp: true, timeout: "default" },
   resize: { capability: "supportsVisualActions" },
-  wait: { lightpanda: true, selector: true, timeout: "default", existingSessionTimeout: true },
-  evaluate: { lightpanda: true, timeout: "default", existingSessionTimeout: true },
-  close: { lightpanda: true },
+  wait: { semanticCdp: true, selector: true, timeout: "default", existingSessionTimeout: true },
+  evaluate: { semanticCdp: true, timeout: "default", existingSessionTimeout: true },
+  close: { semanticCdp: true },
   insertText: { hidden: true },
 };
 

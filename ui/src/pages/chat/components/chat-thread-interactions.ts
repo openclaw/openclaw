@@ -9,7 +9,6 @@ import type {
 } from "../../../api/types.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
-import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button-state.ts";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
@@ -29,7 +28,6 @@ import type { PresentationValue } from "../../../lib/presentation.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import type { InlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 // Pane-local search, context menus, selection actions, and presentation resets.
-import type { TurnRecapWatch } from "../chat-progress.ts";
 import type { ChatToolMessageSource } from "../chat-run-presentation.ts";
 import type { SubagentRoster } from "../chat-spawned-subagent.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
@@ -68,7 +66,8 @@ registerChatMessageMetadataEnglish();
 export type ChatThreadState = Parameters<typeof createAsyncQuestionPresentation>[0] & {
   threadElement?: HTMLElement;
   commentPins?: ChatCommentPinsHandle;
-  turnRecapWatch: TurnRecapWatch | null;
+  observedWorkRun?: { sessionKey: string; runId: string };
+  readerExpandedWork?: { sessionKey: string; keys: ReadonlySet<string> };
   search: TranscriptSearchState;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
@@ -160,7 +159,6 @@ export type ChatThreadProps = Omit<
     toolMessages: unknown[];
     /** Existing pane owner, forwarded into the transcript's detached render root. */
     toolMessageSource?: ChatToolMessageSource;
-    latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
     guardianNotices?: ChatGuardianNotice[];
     streamSegments: ChatStreamSegment[];
     reasoning?: import("../tool-stream-contract.ts").ChatReasoning | null;
@@ -253,7 +251,6 @@ export function getTranscriptState(paneId: string): ChatThreadState {
   const state: ChatThreadState = {
     asyncQuestionDrafts: new Map(),
     asyncQuestionRevision: 0,
-    turnRecapWatch: null,
     search: new TranscriptSearchState(),
     transcriptRenderDependencies: [],
     transcriptRenderContext: {},
@@ -303,6 +300,8 @@ export function resetTranscriptSession(paneId: string, owner?: ParentNode): void
   }
   if (state) {
     state.asyncQuestionDrafts = new Map();
+    state.observedWorkRun = undefined;
+    state.readerExpandedWork = undefined;
     // Search input belongs to the outgoing transcript; pane preferences survive.
     state.search.reset();
   }
@@ -694,6 +693,21 @@ export function handleTranscriptContextMenu(
   }
   menu.style.left = `${Math.max(0, left)}px`;
   menu.style.top = `${Math.max(0, top)}px`;
+  const { signal } = owner.listeners;
+  // Keyboard dismissal is ready before focus enters the menu, independent of paint.
+  listen(
+    document,
+    "keydown",
+    (nextEvent) => {
+      if (nextEvent.key === "Escape") {
+        nextEvent.preventDefault();
+        nextEvent.stopPropagation();
+        removeReplyContextMenu();
+        props.onFocusComposer?.();
+      }
+    },
+    { signal },
+  );
   mounted.firstButton?.focus();
   requestAnimationFrame(() => {
     if (!menu.isConnected || activeReplyContextMenu !== owner) {
@@ -704,18 +718,8 @@ export function handleTranscriptContextMenu(
         removeReplyContextMenu();
       }
     };
-    const handleKeydown = (nextEvent: KeyboardEvent) => {
-      if (nextEvent.key === "Escape") {
-        nextEvent.preventDefault();
-        nextEvent.stopPropagation();
-        removeReplyContextMenu();
-        props.onFocusComposer?.();
-      }
-    };
-    const { signal } = owner.listeners;
     listen(document, "click", handleOutsideEvent, { signal });
     // Capture closes this owner even when the next menu stops event propagation.
     listen(document, "contextmenu", handleOutsideEvent, { capture: true, signal });
-    listen(document, "keydown", handleKeydown, { signal });
   });
 }

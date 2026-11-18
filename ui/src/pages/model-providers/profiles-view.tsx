@@ -7,6 +7,7 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { moveArrayEntry, type ArrayDropPosition } from "../../lib/array-order.ts";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
+import { isAccessTokenExpiry, isOAuthRefreshPending } from "../../lib/model-auth.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createPointerDrag } from "../../lib/reactive/pointer-drag.ts";
@@ -15,7 +16,7 @@ import { AccountLimits, type AccountUsageScope } from "./account-usage.tsx";
 import { modelProviderErrorMessage } from "./config-mutation.ts";
 import type { ModelProviderCard, ModelProviderPendingLogout } from "./data.ts";
 import {
-  isAccessTokenExpiry,
+  needsOAuthSignIn,
   profileAuthProblem,
   providerStatusCoversAccount,
 } from "./view-status.tsx";
@@ -61,6 +62,15 @@ export type ProviderProfilesViewProps = {
   profileOrders: Record<string, string[]>;
   onProfileOrderChange: (cardId: string, provider: string, profileIds: string[] | null) => void;
   onRequestLogout: (pending: ModelProviderPendingLogout) => void;
+  /** A provider sign-in is open or settling; only one runs at a time. */
+  loginBusy?: boolean;
+  /** Whether this provider offers a sign-in the Models page can start. */
+  canSignInAgain?: () => boolean;
+  /**
+   * Starts the provider's existing sign-in. The same account signs in under its
+   * existing profile id, replacing the failed grant; another account adds a row.
+   */
+  onSignInAgain?: () => void;
 };
 
 const DRAGGING_CLASS = "model-providers__profile--dragging";
@@ -135,6 +145,9 @@ function profileStatus(profile: ProviderProfile, providerAuthRejected: boolean, 
   const problem = profileAuthProblem(profile);
   if (problem) {
     return <SettingsStatus kind="danger" label={t(problem)} />;
+  }
+  if (isOAuthRefreshPending(profile)) {
+    return <SettingsStatus kind="muted" label={t("modelProviders.status.refreshing")} />;
   }
   if (
     isAccessTokenExpiry(profile) ||
@@ -566,6 +579,7 @@ function ProviderProfileRow(
     props.card.logoutTargets.find((target) => target.profileIds.includes(profile().profileId))
       ?.provider;
   const logoutLabel = () => t("modelProviders.logout.actionFor", { account: props.identity });
+  const canSignInAgain = () => needsOAuthSignIn(profile()) && props.canSignInAgain?.() === true;
   const logoutBlocked = () =>
     !props.canMutate ? (props.mutationBlockedReason ?? "") : logoutLabel();
   const reorderBlocked = () =>
@@ -667,6 +681,19 @@ function ProviderProfileRow(
       </span>
       <span class="model-providers__profile-actions">
         {firstApiKey() ? props.keyAction?.() : undefined}
+        {canSignInAgain() ? (
+          <button
+            type="button"
+            class="btn btn--sm"
+            data-models-sign-in-again={profile().profileId}
+            aria-label={t("modelProviders.profiles.signInAgainFor", { account: props.identity })}
+            title={!props.canMutate ? (props.mutationBlockedReason ?? "") : ""}
+            disabled={!props.canMutate || props.loginBusy}
+            onClick={() => props.onSignInAgain?.()}
+          >
+            {t("modelProviders.profiles.signInAgain")}
+          </button>
+        ) : undefined}
         {profile().logoutSupported === true && logoutProvider() ? (
           <button
             type="button"

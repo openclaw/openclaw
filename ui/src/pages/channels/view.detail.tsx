@@ -329,7 +329,7 @@ export function renderChannelDetail(params: {
           <button
             type="button"
             class="btn btn--sm"
-            title={params.props.canAdmin ? "" : t("channels.hub.adminRequired")}
+            title={params.props.canAdmin ? "" : t("channels.hub.adminRequiredTooltip")}
             disabled={!params.props.canAdmin || !params.props.channels.connected}
             onClick={() => params.onSetup()}
           >

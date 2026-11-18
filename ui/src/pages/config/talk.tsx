@@ -43,6 +43,8 @@ export type TalkCatalogState =
       ready: boolean;
       activeProvider: string | null;
       providers: readonly TalkRealtimeProviderOption[];
+      /** Speech-to-text group of the same catalog read. */
+      transcription?: TalkCatalogResult["transcription"];
     };
 
 type TalkViewProps = {
@@ -65,6 +67,11 @@ type TalkViewProps = {
   onProviderChange: (providerId: string | null) => void;
   onModelChange: (model: string | null) => void;
   onVoiceChange: (voice: string | null) => void;
+  /**
+   * Speech-to-text section, rendered from the same catalog read. The accessor
+   * keeps one mounted section across catalog re-reads.
+   */
+  transcription?: (catalog: () => TalkCatalogState) => JSX.Element;
   /** Embedded schema editor for the full `talk` section. */
   editor: JSX.Element;
 };
@@ -395,6 +402,18 @@ export function Talk(props: TalkViewProps) {
             </Loading>
           </Errored>
         </SettingsSection>
+        {props.transcription && (
+          <Errored
+            fallback={(error) => props.transcription!(() => ({ kind: "failed", error: error() }))}
+          >
+            <Loading
+              on={props.catalogScope}
+              fallback={props.transcription(() => ({ kind: "loading" }))}
+            >
+              {props.transcription(() => props.catalog)}
+            </Loading>
+          </Errored>
+        )}
       </SettingsPage>
       {props.editor}
     </section>

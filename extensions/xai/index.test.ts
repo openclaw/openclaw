@@ -227,18 +227,22 @@ describe("xai provider plugin", () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
       response: Response.json({
         data: [
-          ...chatModels.toReversed(),
-          "grok-4.20-multi-agent-0309",
-          "grok-imagine-image",
-          "grok-imagine-video",
-        ].map((id) => ({ id, object: "model" })),
+          ...chatModels
+            .toReversed()
+            .map((id) => ({ id, object: "model", capabilities: { chat: true } })),
+          { id: "grok-4.20-multi-agent-0309", object: "model", capabilities: { chat: true } },
+          { id: "grok-imagine-image", object: "model", modalities: { output: ["image"] } },
+          { id: "grok-imagine-video", object: "model", modalities: { output: ["video"] } },
+        ],
       }),
       finalUrl: "https://api.x.ai/v1/models",
       release,
     }));
 
     const provider = await buildLiveXaiProvider({ apiKey: "xai-key", fetchGuard });
-    expect(provider.models.map((model) => model.id)).toEqual(chatModels);
+    expect(
+      provider.models.filter((model) => model.inference?.chat !== false).map((model) => model.id),
+    ).toEqual(chatModels);
     const fetchParams = vi.mocked(fetchGuard).mock.calls[0]?.[0];
     expect(fetchParams?.url).toBe("https://api.x.ai/v1/models");
     expect(new Headers(fetchParams?.init?.headers).get("Authorization")).toBe("Bearer xai-key");

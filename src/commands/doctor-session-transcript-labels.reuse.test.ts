@@ -238,7 +238,7 @@ describe("update Doctor retained transcript scan reuse", () => {
     expect(result.receipts).toEqual([]);
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining("Found 1 session"),
-      "Session transcript labels",
+      "Chat history labels",
     );
   });
   it("does not certify a scan when the state alias changes during it", async () => {
@@ -380,7 +380,7 @@ describe("update Doctor retained transcript scan reuse", () => {
     expect(result.receipts).toEqual([]);
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining("Failed to read transcript"),
-      "Session transcript labels",
+      "Chat history labels",
     );
   });
   it("does not suppress repeated legacy-label findings", async () => {

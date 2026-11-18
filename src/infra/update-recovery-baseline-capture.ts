@@ -503,7 +503,11 @@ export function captureUpdateRecoveryBaseline(params: {
         creator,
         drivers,
         createdAt,
-        roots: [...roots].filter((pathname) => !rehearsal?.excludes(pathname)).toSorted(),
+        // A declared SQLite sidecar root is captured through its database image, like
+        // sidecars found inside directory roots; it has no entry of its own.
+        roots: [...roots]
+          .filter((pathname) => !sidecars.has(pathname) && !rehearsal?.excludes(pathname))
+          .toSorted(),
         excludedRoots: [
           ...new Set([
             ...(rehearsal?.paths ?? []),

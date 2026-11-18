@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 import {
@@ -11,10 +10,6 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import {
-  closeOpenClawStateDatabaseByPathAsync,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { gatewayDirectStopEntrypoints } from "../cli-entrypoint.test-support.js";
 import { formatCliProcessFailure } from "../cli-process-child.test-helpers.js";
@@ -45,33 +40,25 @@ const childScript = `
   import { writeSync } from "node:fs";
   import { runGatewayLoop } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.runLoop))};
   import { writeGatewayRestartIntentSync } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.restartIntent))};
+  import { beginGatewayBootLifecycle, completeGatewayBootLifecycle } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.bootLifecycle))};
   import { PluginRuntimeCloseRetainedError } from ${JSON.stringify(pathToFileURL(path.resolve("src/plugins/runtime-close-error.ts")).href)};
 
   const trace = (line) => writeSync(1, "process proof: " + line + "\\n");
-  if (process.argv[1] === "SIGUSR2") {
-    const { onWorkerRequestMetrics } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/infra/worker-request-diagnostics.ts")).href)});
-    const origin = performance.now();
-    const elapsed = (at = performance.now()) => Number((at - origin).toFixed(1));
-    process.once("SIGUSR2", () => trace("SIGUSR2-received atMs=" + elapsed()));
-    onWorkerRequestMetrics((kind, requestClass, phase, queueDepth, queueWaitMs, durationMs, timing) => {
-      if (kind !== "sqlite_writer") return;
-      trace("worker-timing " + JSON.stringify({
-        op: requestClass === "open" || requestClass === "close" ? requestClass : "execute",
-        requestClass,
-        phase,
-        atMs: elapsed(),
-        queueDepth,
-        queueWaitMs,
-        durationMs,
-        timingMs: Object.fromEntries(
-          Object.entries(timing ?? {}).map(([name, at]) => [name, elapsed(at)]),
-        ),
-      }));
-    });
-  }
   let starts = 0;
+  let bootId;
   const code = await runGatewayLoop({
     ownsProcessLifecycle: true,
+    // Match CLI startup: the child owns boot publication before reporting ready.
+    beginBoot: async (startedAtMs, previousOwner) => {
+      const boot = await beginGatewayBootLifecycle(process.env, startedAtMs, previousOwner);
+      assert(boot.id, "fixture boot publication failed");
+      bootId = boot.id;
+    },
+    completeBoot: (completion) => {
+      const completedBootId = bootId;
+      bootId = undefined;
+      return completeGatewayBootLifecycle(completedBootId, completion);
+    },
     onProcessResourcesSettled: (outcome) => {
       trace("custody:" + outcome);
     },
@@ -106,12 +93,6 @@ posixIt.for(["SIGTERM", "SIGUSR2", "historical-SIGTERM"] as const)(
   "settles child cleanup custody after %s without reusing the runtime",
   { timeout: 60_000 },
   async (stopSignal, { signal }) => {
-    // Temporary phase trace for the recurring SIGUSR2 timeout; remove when its cause is fixed.
-    const trace = (phase: string) => {
-      if (stopSignal === "SIGUSR2") {
-        fs.writeSync(2, `[sigusr2-phase] ${phase}\n`);
-      }
-    };
     const historical = stopSignal === "historical-SIGTERM";
     const fixtureDir = fixtures.make("openclaw-retained-shutdown-");
     const stateDir = path.join(fixtureDir, "state");
@@ -127,7 +108,6 @@ posixIt.for(["SIGTERM", "SIGUSR2", "historical-SIGTERM"] as const)(
       OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_NO_RESPAWN: "1",
-      ...(stopSignal === "SIGUSR2" ? { OPENCLAW_DIAGNOSTICS: "sqlite.worker-timing" } : {}),
       VITEST: undefined,
       ...(historical
         ? {
@@ -137,15 +117,6 @@ posixIt.for(["SIGTERM", "SIGUSR2", "historical-SIGTERM"] as const)(
           }
         : {}),
     };
-    if (stopSignal === "SIGUSR2") {
-      trace("preseed-open: begin");
-      const database = openOpenClawStateDatabase({ env });
-      trace("preseed-open: complete");
-      trace("preseed-close: begin");
-      await closeOpenClawStateDatabaseByPathAsync(database.path);
-      trace("preseed-close: complete");
-    }
-    trace("spawn: begin");
     const child = spawn(
       historical ? resolveTestNodeExecPath() : process.execPath,
       historical
@@ -161,13 +132,6 @@ posixIt.for(["SIGTERM", "SIGUSR2", "historical-SIGTERM"] as const)(
       },
     );
     const tracked = fixtures.ownChild(child);
-    if (stopSignal === "SIGUSR2") {
-      child.once("spawn", () => trace(`spawn: pid=${child.pid}`));
-      child.once("close", (code, exitSig) => trace(`child-close: code=${code} signal=${exitSig}`));
-      for (const name of ["stdout", "stderr"] as const) {
-        createInterface({ input: child[name] }).on("line", (line) => trace(`${name}: ${line}`));
-      }
-    }
     const ready = createDeferred();
     child.stdout?.on("data", () => {
       if (tracked.output.stdout.includes("process proof: gateway-ready\n")) {
@@ -175,10 +139,8 @@ posixIt.for(["SIGTERM", "SIGUSR2", "historical-SIGTERM"] as const)(
       }
     });
     await waitForFixture(ready.promise, tracked, signal);
-    trace("ready");
     const stoppedAt = Date.now();
     const sent = child.kill(historical ? "SIGTERM" : stopSignal);
-    trace(`signal-send: ${sent}`);
     expect(sent).toBe(true);
     const exit = await withinTest(tracked.closed, signal).catch((cause: unknown) => {
       throw new Error(formatCliProcessFailure({ reason: String(cause), ...tracked.output }), {

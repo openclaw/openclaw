@@ -131,7 +131,10 @@ suite.define(() => {
         has: page.locator(".settings-row__title").getByText("Agent code mode", { exact: true }),
       });
       await revealControl(rawOnly, ["Tools"]);
-      expect(await rawOnly.textContent()).toContain("Unsupported schema node. Use Raw mode.");
+      expect(await rawOnly.textContent()).toContain(
+        "Edit this setting in the Raw tab of Advanced settings.",
+      );
+      expect(await page.getByRole("button", { name: "Raw", exact: true }).count()).toBe(0);
       expect(await rawOnly.locator("input,select,textarea").count()).toBe(0);
 
       const agentKey = page.locator('input[aria-label="Key: main"]').first();

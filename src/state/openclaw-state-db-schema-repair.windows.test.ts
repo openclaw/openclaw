@@ -1,8 +1,8 @@
 import nodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as boundaryPath from "../infra/boundary-path.js";
 import { executeSqliteQuerySync as query, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import * as pathExistence from "../infra/path-existence.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { migrateAgentDatabaseRelativePaths as migrate } from "./openclaw-state-db-schema-repair.js";
@@ -21,7 +21,7 @@ vi.mock("node:path", async (importOriginal) => {
 beforeEach(() => {
   mockProcessPlatform("win32");
   // The in-memory migration rows use synthetic roots, including UNC hosts.
-  vi.spyOn(boundaryPath, "resolveIdentityPathViaExistingAncestorSync").mockImplementation(
+  vi.spyOn(pathExistence, "resolveIdentityPathViaExistingAncestorSync").mockImplementation(
     (root) => root,
   );
 });
