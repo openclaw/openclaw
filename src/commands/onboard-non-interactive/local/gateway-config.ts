@@ -142,8 +142,12 @@ export async function applyNonInteractiveGatewayConfig(params: {
           normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD))
         : normalizeOptionalString(input);
     if (!password) {
+      // Funnel always uses password auth, so pointing at token auth sends the
+      // operator back to the flag this run already overrode.
       return reject(
-        "Missing --gateway-password for password auth. Pass --gateway-password or use --gateway-auth token.",
+        tailscaleMode === "funnel"
+          ? "Missing --gateway-password for password auth. Tailscale Funnel requires password auth, so --gateway-auth token does not apply; pass --gateway-password or set OPENCLAW_GATEWAY_PASSWORD."
+          : "Missing --gateway-password for password auth. Pass --gateway-password or use --gateway-auth token.",
       );
     }
     auth = {
