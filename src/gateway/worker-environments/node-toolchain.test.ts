@@ -39,11 +39,11 @@ function fixture(
   tools: Record<string, string> = Object.fromEntries(
     ["node", "npm", "npx", "corepack"].map((name) => [name, "#!/bin/sh\necho v22.21.1\n"]),
   ),
-  releaseVersion = "22.21.1",
+  archiveVersion = "22.21.1",
 ) {
   const root = tempDirs.make("node-toolchain-");
   const bin = path.join(root, "bin");
-  const archiveRoot = "node-v" + releaseVersion + "-linux-x64";
+  const archiveRoot = "node-v" + archiveVersion + "-linux-x64";
   const release = path.join(root, archiveRoot);
   write(
     path.join(bin, "uname"),
