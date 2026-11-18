@@ -1,0 +1,2 @@
+# Three regression lines ensure blocked remote clients are directed to the trusted Gateway host.
+3
