@@ -168,19 +168,19 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
 
             {/* Carapace summary strip: fixed cells, so placeholders and loaded totals share one layout. */}
             <div class="usage-summary-strip">
-              <For each={metricBadges()}>
-                {([value, label, missingCost]) => (
+              <For each={metricBadges()} keyed={false}>
+                {(badge) => (
                   <div class="usage-metric-badge">
-                    <strong>{value}</strong>{" "}
+                    <strong>{badge()[0]}</strong>{" "}
                     <small>
-                      {label}
-                      <Show when={missingCost}>
+                      {badge()[1]}
+                      <Show when={badge()[2]}>
                         <openclaw-tooltip open-on-click>
                           <button
                             id="usage-summary-hint-cost"
                             type="button"
                             class="usage-summary-hint"
-                            aria-label={label}
+                            aria-label={badge()[1]}
                             onClick={(event) => event.currentTarget.focus()}
                           >
                             ?

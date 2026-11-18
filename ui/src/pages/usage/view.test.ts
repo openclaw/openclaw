@@ -226,6 +226,17 @@ describe("renderUsage", () => {
     },
   );
 
+  it("retains the cost hint button when a refresh changes the total but not the warning", () => {
+    const fixture = createRecordedCostUsage();
+    const { container, setData } = mountReactiveUsage(usageFixture(fixture));
+    const hint = container.querySelector("#usage-summary-hint-cost");
+    expect(hint).not.toBeNull();
+    setData((data) => ({ ...data, totals: { ...fixture.totals, totalCost: 5 } }));
+    flush();
+    expect(costSummary(container).value).toBe("$5.00");
+    expect(container.querySelector("#usage-summary-hint-cost")).toBe(hint);
+  });
+
   it("surfaces a provider-usage failure instead of hiding the panel", () => {
     const container = mountFixture({ providerUsageUnavailable: true });
 
