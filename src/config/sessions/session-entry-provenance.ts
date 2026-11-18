@@ -150,7 +150,7 @@ export function sessionPersonalProfileId(
   return assigned?.type === "human" ? assigned.id : sessionCreatorProfileId(entry?.createdActor);
 }
 
-/** Visible spawns default to the verified requester unless a different human owns the parent. */
+/** A new child belongs to its verified requester; the parent's assignment stays untouched. */
 export function inheritSpawnSessionOwner(
   source: { owner?: SessionOwnerAssignment; createdActor?: SessionCreatedActor } | undefined,
   assignedBy: SessionActor | undefined,
@@ -171,20 +171,19 @@ export function inheritSpawnSessionOwner(
   const resolvedOwnerId = !directMatch && owner?.id ? resolveProfileId(owner.id) : owner?.id;
   const resolvedRequesterId =
     !directMatch && requesterProfileId ? resolveProfileId(requesterProfileId) : requesterProfileId;
-  const assignmentActor =
-    resolvedRequesterId && (!owner || resolvedOwnerId === resolvedRequesterId)
+  const assignmentActor = resolvedRequesterId
+    ? {
+        type: "human" as const,
+        id: resolvedRequesterId,
+        ...(resolvedOwnerId === resolvedRequesterId && owner?.label ? { label: owner.label } : {}),
+      }
+    : assignedBy?.type === "agent" && assignedBy.id
       ? {
-          type: "human" as const,
-          id: resolvedRequesterId,
-          ...(owner?.label ? { label: owner.label } : {}),
+          type: "agent" as const,
+          id: assignedBy.id,
+          ...(assignedBy.label ? { label: assignedBy.label } : {}),
         }
-      : assignedBy?.type === "agent" && assignedBy.id
-        ? {
-            type: "agent" as const,
-            id: assignedBy.id,
-            ...(assignedBy.label ? { label: assignedBy.label } : {}),
-          }
-        : undefined;
+      : undefined;
   if (!assignmentActor) {
     return undefined;
   }
