@@ -15,6 +15,10 @@ import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as sessionReaders from "../../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  captureGatewayDeviceRevocation,
+  invalidateGatewayDeviceRevocation,
+} from "../../gateway/device-revocation.js";
 import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import {
   createContext,
@@ -24,7 +28,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -104,6 +108,72 @@ function prepareOperatorAdmission(run: FollowupRun, runId: string) {
 }
 
 describe("followup queue authority", () => {
+  it.for([false, true])(
+    "reauthorizes queued owner input after socket close (device revoked=%s)",
+    async (deviceRevoked, { signal }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const profile = ensureGatewayOwnerProfile("Queued owner");
+        const context = createContext();
+        context.resolveGatewayContext = () => context;
+        const connection = new AbortController();
+        const client = createOperatorClient({
+          profileId: profile.id,
+          scopes: ["operator.admin"],
+        });
+        client.connectionSignal = connection.signal;
+        client.internal = {
+          authenticatedOperator: true,
+          operatorRoleActor: { kind: "system" },
+        };
+        const device = captureGatewayDeviceRevocation(
+          context,
+          { deviceId: "queued-owner-device", role: "operator" },
+          () => !connection.signal.aborted,
+          connection.signal,
+        );
+        using _ = { [Symbol.dispose]: device.release };
+        const captured = await captureGatewayOperatorRunAuthority({
+          client,
+          context,
+          hasCurrentClientAuthority: device.isCurrent,
+          sourceAuthority: null,
+        });
+        if (!captured) {
+          throw new Error("expected captured owner authority");
+        }
+        const key = queueKey(`test-queued-owner-socket-close-${deviceRevoked}`);
+        const queued = webchatRun("queued owner request");
+        queued.operatorAuthority = captured.authority;
+        const effects: string[] = [];
+        const errors = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+        try {
+          enqueueFollowupRun(key, queued, createQueueSettings({ mode: "followup" }));
+          const settlement = queued.controllerInput!.settlement.promise;
+          const completed = deviceRevoked
+            ? expect(settlement).rejects.toThrow(/authority is no longer active/)
+            : expect(settlement).resolves.toBeUndefined();
+          connection.abort(new Error("dashboard reloaded"));
+          if (deviceRevoked) {
+            invalidateGatewayDeviceRevocation(context, "queued-owner-device", "operator");
+          }
+          scheduleFollowupDrain(key, async (run) => {
+            await admitFollowupRunLifecycle(run);
+            effects.push(run.prompt);
+          });
+          await withinTest(completed, signal);
+          expect(effects).toEqual(deviceRevoked ? [] : ["queued owner request"]);
+          expect(captured.authority.signal?.aborted).toBe(false);
+          expect(captured.authority.assertCurrent).not.toThrow();
+          expect(errors).toHaveBeenCalledTimes(deviceRevoked ? 1 : 0);
+        } finally {
+          clearFollowupQueue(key);
+          captured.release();
+          errors.mockRestore();
+        }
+      });
+    },
+  );
+
   it.for([
     "write scope removal",
     "agent policy restriction",

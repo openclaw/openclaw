@@ -595,6 +595,9 @@ not cancel an already-running turn or change its captured authority. If the role
 configured model policy changed while the input waited, even by widening it, that
 queued input is refused instead of changing its frozen ceiling. Re-send the
 message to start a fresh request with the current model policy.
+A dashboard reload or disconnected socket is not a revocation and does not by
+itself refuse queued work. Device revocation and current person permissions are
+still checked at the queued start.
 
 Direct model requests, title previews, and user-invoked model completion or
 decision tools apply their source's model policy.

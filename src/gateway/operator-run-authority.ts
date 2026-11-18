@@ -33,6 +33,7 @@ import { isBrowserOperatorUiClient, isWebchatClient } from "../utils/message-cha
 import { createChannelOperatorRevocation } from "./channel-operator-revocation.js";
 import {
   bindGatewayDeviceRevocation,
+  readGatewayDeviceRevocationGuard,
   readGatewayDeviceSourceAuthority,
   readGatewayDeviceSourceIdentity,
   readGatewayDeviceReconnectSourceIdentity,
@@ -384,6 +385,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
   const releaseDevice = retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
   const capturedAt = performance.now();
   const isSourceCurrent = readGatewayDeviceSourceAuthority(params.hasCurrentClientAuthority);
+  const isDeviceCurrent = readGatewayDeviceRevocationGuard(params.hasCurrentClientAuthority);
   const resolveGatewayContext = params.context.resolveGatewayContext;
   const gatewayContext = resolveGatewayContext?.();
   const getConfig = params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig;
@@ -610,7 +612,22 @@ export async function captureGatewayOperatorRunAuthority(input: {
         return releaseHold();
       },
       reauthorize: () => {
-        assertAdmissionCurrent();
+        if (
+          revoked ||
+          references === 0 ||
+          isDeviceCurrent?.() === false ||
+          (openclawIdPrincipal && !isOpenClawIdTunnelPrincipalCurrent(openclawIdPrincipal))
+        ) {
+          throw createOperatorAuthorityInactiveError(
+            references === 0
+              ? "closure-released"
+              : revoked
+                ? "closure-revoked"
+                : "source-invalidated",
+            "before-sources",
+            capturedAt,
+          );
+        }
         const profile = assertProfileCurrent();
         const currentRole = resolveAdmissionRole(
           profile.assignedRole,
