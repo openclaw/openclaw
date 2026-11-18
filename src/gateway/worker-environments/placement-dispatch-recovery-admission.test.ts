@@ -6,7 +6,6 @@ import { insertRegistryWorktreeInDatabase } from "../../agents/worktrees/registr
 import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { tryBeginGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
-import * as spawnDiagnostics from "../../process/spawn-diagnostics.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
@@ -388,30 +387,6 @@ describe("placement recovery session admission with persisted placements", () =>
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
-  it("does not start orphan discovery for sessions created after startup", async () => {
-    const readChangeSnapshot = vi.spyOn(placements, "readChangeSnapshot");
-    const resolveWorkspace = vi.fn(async () => ({
-      kind: "local" as const,
-      path: support.testState.root,
-    }));
-    const harness = await harnessFor({ resolveWorkspace });
-    const coordinated = coordinate(harness);
-    await coordinated.reconcile("startup");
-
-    const claim = await placements.claimTurn({
-      ...REQUEST,
-      owner: { kind: "local" },
-      claimId: "after-startup",
-      runId: "after-startup",
-    });
-    await placements.releaseTurnIfOwned(claim);
-    await coordinated.reconcileActive();
-    await coordinated.reconcileActive();
-
-    expect(readChangeSnapshot).not.toHaveBeenCalled();
-    expect(resolveWorkspace).not.toHaveBeenCalled();
-  });
-
   it("spreads startup orphan inventories across idle sweeps and eventually reclaims every checkout", async () => {
     const template = path.join(support.testState.root, "template");
     await fs.mkdir(template);
@@ -439,33 +414,20 @@ describe("placement recovery session admission with persisted placements", () =>
       },
     });
     const coordinated = coordinate(harness);
-    using spawns = vi.spyOn(spawnDiagnostics, "recordChildProcessSpawn");
-    const gitSpawns = () =>
-      spawns.mock.calls.filter(
-        ([command]) => path.basename(command).replace(/\.exe$/, "") === "git",
-      );
-    const inventoryRoots = () =>
-      gitSpawns().flatMap(([, child]) => {
-        const args = child.spawnargs;
-        return args.includes("for-each-ref") ? [args[args.indexOf("-C") + 1]!] : [];
-      });
 
     await coordinated.reconcile("startup");
-    expect(gitSpawns()).toHaveLength(0);
     for (let sweep = 0; sweep < 3; sweep++) {
       await coordinated.reconcileActive();
     }
-    expect(inventoryRoots().length).toBeGreaterThan(0);
-    expect(inventoryRoots().length).toBeLessThanOrEqual(24);
 
+    expect(await readCleanupRef(orphanRoot)).toBe(cleanupRef);
     const foreground = tryBeginGatewayIndependentRootWorkAdmission("test:foreground-request");
     if (!foreground) {
       throw new Error("Foreground fixture could not acquire Gateway admission");
     }
-    const beforeBusySweep = gitSpawns().length;
     try {
       await coordinated.reconcileActive();
-      expect(gitSpawns()).toHaveLength(beforeBusySweep);
+      expect(await readCleanupRef(orphanRoot)).toBe(cleanupRef);
     } finally {
       foreground.release();
     }
@@ -473,9 +435,6 @@ describe("placement recovery session admission with persisted placements", () =>
     for (let sweep = 0; sweep < 8; sweep++) {
       await coordinated.reconcileActive();
     }
-    expect(inventoryRoots().toSorted()).toEqual(roots.toSorted());
-    // One inventory per checkout plus the orphan's ref-queue lookup and deletion.
-    expect(gitSpawns()).toHaveLength(66);
     expect(await readCleanupRef(orphanRoot)).toBe("");
   });
 

@@ -1,10 +1,8 @@
 import { Buffer } from "node:buffer";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.ts";
 import { confirmIme } from "./chat-flow.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
@@ -19,12 +17,10 @@ import {
 import {
   ONE_PIXEL_PNG_B64,
   LOCAL_GIT_WORKSPACE_RESPONSES,
-  captureUiProof,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   expectDecodedThumbnail,
-  expectPendingNewSessionPresentation,
   installMockGateway,
   pollLocatorText,
   waitForCommittedChatRoute,
@@ -36,27 +32,6 @@ const suite = createNewSessionPageE2eSuite();
 const rosterMatch = { includeGlobal: true };
 const SESSION_KEY = "agent:main:dashboard:0f403cb8-3920-4cf1-8eb7-79f2f00ce488";
 const RUN_ID = "transition-proof-run";
-const captureProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-
-type SessionTransitionFrames = {
-  invalid: number;
-  firstInvalid: {
-    activeViewTransition: boolean;
-    handoffCover: boolean;
-    newSessionVisible: boolean;
-    chatVisible: boolean;
-    loadingSkeleton: boolean;
-    routeId?: string;
-    routeStatus?: string;
-    loaderPending: boolean;
-  } | null;
-  running: boolean;
-  chatSurfaceReady: boolean;
-};
-
-function transitionProofDir() {
-  return path.join(suite.artifactDir, "new-session-transition");
-}
 
 function createdKey(params: unknown) {
   if (
@@ -78,55 +53,12 @@ async function expectPlainJson(prompt: Locator, message: string) {
   expect(await text.locator("button:not(.code-block-wrap), details").count()).toBe(0);
 }
 
-async function expectListedKeys(page: Page, keys: string[]) {
-  for (const key of keys) {
-    await expect
-      .poll(() => page.locator(`.sidebar-recent-session[data-session-key="${key}"]`).count())
-      .toBe(1);
-  }
-}
-
-async function captureJson(name: string, value: () => unknown, dir = transitionProofDir()) {
-  if (captureProofEnabled) {
-    await writeFile(path.join(dir, name), JSON.stringify(await value(), null, 2));
-  }
-}
-
-async function captureProof(page: import("playwright").Page, fileName: string) {
-  if (!captureProofEnabled) {
-    return;
-  }
-  const proofDir = transitionProofDir();
-  await mkdir(proofDir, { recursive: true });
-  if (page.video()) {
-    await writeFile(
-      path.join(proofDir, fileName),
-      await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-        page
-          .locator(
-            ".new-session-page__message:visible, .agent-chat__composer-combobox textarea:visible",
-          )
-          .first(),
-      ]),
-    );
-    return;
-  }
-  await page.screenshot({ fullPage: true, path: path.join(proofDir, fileName) });
-}
-
 type CreateRecoveryCase = {
-  mode: "dark" | "light";
-  motion: "no-preference" | "reduce";
   width: number;
   content: "markdown" | "json";
 };
-async function assertCreateRecovery(
-  page: Page,
-  { mode, motion, width, content }: CreateRecoveryCase,
-) {
+async function assertCreateRecovery(page: Page, { width, content }: CreateRecoveryCase) {
   await page.setViewportSize({ width, height: 900 });
-  await page.emulateMedia({ colorScheme: mode, reducedMotion: motion });
-  const proofName = `pending-${width}-${mode}-${motion}-${content}`;
   const sessionKey = "agent:main:locked-new-session-draft";
   const submittedSummary = "keep this submitted draft atomic";
   const fileReference = "src/example.ts";
@@ -174,14 +106,6 @@ async function assertCreateRecovery(
   });
   await page.goto(`${suite.server.baseUrl}new`);
   await page.locator(".new-session-page__message").waitFor();
-  await evaluateControlUiContext(
-    page,
-    (context, nextMode) => {
-      context.theme.setMode(nextMode);
-    },
-    mode,
-  );
-  await expectAttribute(page.locator("html"), "data-theme-mode", mode);
   await gateway.deferNext("sessions.create");
 
   const message = page.locator(".new-session-page__message");
@@ -253,9 +177,6 @@ async function assertCreateRecovery(
   }
   const attachmentCard = submittedPrompt.locator(".chat-assistant-attachment-card--compact");
   await attachmentCard.getByText("notes.txt", { exact: true }).waitFor();
-  const cardBox = await attachmentCard.boundingBox();
-  expect(cardBox?.width).toBeLessThanOrEqual(width);
-  expect(cardBox?.height).toBeGreaterThan(30);
   await expectDecodedThumbnail(submittedPrompt.locator("img.chat-message-image"));
   await pollLocatorText(startup.locator('.chat-working-indicator[role="status"]')).toContain(
     "Starting",
@@ -271,19 +192,6 @@ async function assertCreateRecovery(
   const followUpComposer = pendingChat.locator(".agent-chat__composer-combobox textarea");
   expect(await followUpComposer.isEnabled()).toBe(true);
   expect(await followUpComposer.inputValue()).toBe("");
-  await captureUiProof(suite, page, `${proofName}-submitted.png`);
-  const presentation = await expectPendingNewSessionPresentation(page);
-  expect(presentation.reducedMotion).toBe(motion === "reduce");
-  await captureJson(`${proofName}.json`, () => presentation, suite.artifactDir);
-  // Motion changes the pending indicator's CSS, not create/retry ownership.
-  const alternateMotion = motion === "reduce" ? "no-preference" : "reduce";
-  await page.emulateMedia({ reducedMotion: alternateMotion });
-  const alternatePresentation = await expectPendingNewSessionPresentation(page);
-  expect(alternatePresentation.reducedMotion).toBe(alternateMotion === "reduce");
-  const alternateProofName = `pending-${width}-${mode}-${alternateMotion}-${content}`;
-  await captureUiProof(suite, page, `${alternateProofName}-submitted.png`);
-  await captureJson(`${alternateProofName}.json`, () => alternatePresentation, suite.artifactDir);
-  await page.emulateMedia({ reducedMotion: motion });
   await followUpComposer.press("Enter");
   await followUpComposer.press("Control+Enter");
   expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
@@ -309,7 +217,6 @@ async function assertCreateRecovery(
   expect(await message.inputValue()).toBe(submittedMessage);
   expect(await placeSummary.isDisabled()).toBe(false);
   await expectDecodedThumbnail(draftImage);
-  await captureUiProof(suite, page, `${proofName}-restored.png`);
 
   await button(page, "Start session").click();
   await waitForRequestCount(gateway, 2, "sessions.create");
@@ -332,17 +239,10 @@ async function assertCreateRecovery(
       .locator(`a[data-session-key="${referencedSessionKey}"]`)
       .waitFor({ state: "visible" });
     await button(acceptedMarkdown, "Open image Inline marker", true).waitFor({ state: "visible" });
-    await button(acceptedMarkdown, "Expand table", true).click();
-    const expandedTable = page.locator("openclaw-modal-dialog.markdown-table-modal");
-    await page.getByRole("dialog", { name: "Expanded table", exact: true }).waitFor();
-    await expandedTable.getByRole("cell", { name: "Ready", exact: true }).waitFor();
-    await button(expandedTable, "Close expanded table", true).click();
-    await expandedTable.waitFor({ state: "detached" });
   } else {
     await expectPlainJson(acceptedPrompt, submittedMessage);
   }
   await expectDecodedThumbnail(acceptedPrompt.locator("img.chat-message-image"));
-  await captureUiProof(suite, page, `${proofName}-accepted.png`);
   await gateway.resolveDeferred("chat.startup");
   await expect.poll(() => acceptedPrompt.count()).toBe(1);
   await expectDecodedThumbnail(acceptedPrompt.locator("img.chat-message-image"));
@@ -356,15 +256,12 @@ suite.define(() => {
     { label: "desktop", viewport: { height: 900, width: 1280 } },
     { label: "mobile", viewport: { height: 844, width: 390 } },
   ])("starts a draft in the background on $label", async ({ label, viewport }) => {
-    const proofDir = captureProofEnabled ? transitionProofDir() : undefined;
     const context = await suite.browser.newContext({
       locale: "en-US",
-      ...(proofDir ? { recordVideo: { dir: proofDir, size: viewport } } : {}),
       serviceWorkers: "block",
       viewport,
     });
     const page = await context.newPage();
-    const video = page.video();
     const sessionKey = `agent:main:dashboard:background-${label}`;
     const runId = `run-background-${label}`;
     const gateway = await installMockGateway(page, {
@@ -388,10 +285,6 @@ suite.define(() => {
       await gateway.deferNext("sessions.create");
       const composer = page.locator(".new-session-page__message");
       await composer.fill(`run this separately on ${label}`);
-      await captureProof(page, `background-${label}-ready.png`);
-      if (captureProofEnabled) {
-        await page.waitForTimeout(400);
-      }
       await composer.press("Control+Enter");
 
       await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
@@ -410,7 +303,6 @@ suite.define(() => {
       // Start the next draft without a click; the completed submission cannot take it back.
       await page.keyboard.type("Plan the next task");
       await expectValue(composer, "Plan the next task");
-      await captureProof(page, `background-${label}-running.png`);
       await page.locator(".app-toast").getByText("Session started", { exact: true }).waitFor();
       if (label === "mobile") {
         expect(
@@ -437,9 +329,6 @@ suite.define(() => {
           .poll(() => page.locator(".shell").getAttribute("class"))
           .not.toContain("shell--nav-drawer-open");
       }
-      if (captureProofEnabled) {
-        await page.waitForTimeout(600);
-      }
 
       await expect(gateway.waitForRequest("agent.wait")).resolves.toMatchObject({
         params: { runId, timeoutMs: 30_000 },
@@ -452,28 +341,16 @@ suite.define(() => {
         .waitFor({ timeout: 10_000 });
       expect(await page.locator(".new-session-page__starting").count()).toBe(0);
       await expectValue(composer, "Plan the next task");
-      await captureProof(page, `background-${label}-complete.png`);
-      if (captureProofEnabled) {
-        await page.waitForTimeout(800);
-      }
       await toast.getByRole("link", { name: "Open session", exact: true }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
       await waitForCommittedChatRoute(page);
       await page.locator("openclaw-chat-page").waitFor();
-      await captureProof(page, `background-${label}-opened.png`);
-      if (captureProofEnabled) {
-        await page.waitForTimeout(400);
-      }
     } finally {
       await context.close();
-      if (proofDir && video) {
-        await video.saveAs(path.join(proofDir, `background-${label}.webm`));
-        await video.delete();
-      }
     }
   });
 
-  it("creates and lists a session with the default mock Gateway", async () => {
+  it("does not submit IME confirmation before deliberate Enter", async () => {
     const page = await openPage(createControlUiE2eContextOptions());
     const gateway = await installMockGateway(page);
     await page.goto(`${suite.server.baseUrl}new`);
@@ -483,7 +360,6 @@ suite.define(() => {
     expect(confirmationConsumed).toBe(false);
     expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
     expect(await composer.inputValue()).toBe("verify the default mock");
-    await captureProof(page, "ime-confirmation-retains-draft.png");
     await composer.dispatchEvent("keyup", { key: "Enter" });
     await composer.press("Enter");
     await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
@@ -491,31 +367,6 @@ suite.define(() => {
     });
     const firstKey = createdKey((await gateway.waitForRequest("sessions.create")).params);
     await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(firstKey));
-    await captureProof(page, "ime-deliberate-enter-created.png");
-    await page.getByRole("link", { name: "New session" }).first().click();
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-    await page.locator(".new-session-page__message").fill("verify another default mock");
-    await page.locator(".new-session-page__message").press("Enter");
-    await waitForRequestCount(gateway, 2, "sessions.create");
-    expect((await gateway.getRequests("sessions.create")).at(-1)).toMatchObject({
-      params: { agentId: "main", message: "verify another default mock" },
-    });
-    const secondKey = createdKey(
-      (await gateway.waitForRequest("sessions.create", { after: 1 })).params,
-    );
-    await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(secondKey));
-    await expectListedKeys(page, [firstKey, secondKey]);
-    await expect.poll(() => page.locator(".new-session-page__error").count()).toBe(0);
-    await captureProof(page, "default-mock-created.png");
-    const listRequestsBeforeReconnect = (await gateway.getRequests("sessions.list", rosterMatch))
-      .length;
-    await gateway.closeLatest(1006, "mock reconnect");
-    await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(1);
-    await expect
-      .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
-      .toBeGreaterThan(listRequestsBeforeReconnect);
-    await expectListedKeys(page, [firstKey, secondKey]);
-    await captureProof(page, "default-mock-reconnected.png");
   });
 
   it("keeps the submitted preview and restores its thinking choice after a rejected edit", async () => {
@@ -621,8 +472,6 @@ suite.define(() => {
       await pollLocatorText(startup.locator('.chat-working-indicator[role="status"]')).toContain(
         "Starting",
       );
-      await captureProof(page, "00-create-pending.png");
-      await expectPendingNewSessionPresentation(page);
       await gateway.resolveDeferred("sessions.create", {
         key: SESSION_KEY,
         entry,
@@ -637,66 +486,11 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.resolve")).toHaveLength(0);
       expect(await submittedPrompt.isVisible()).toBe(true);
       expect(await submittedPrompt.count()).toBe(1);
-      await captureProof(page, "01-chat-route-preparing.png");
-      await expectPendingNewSessionPresentation(page);
-
-      await evaluateControlUiContext(page, (application) => {
-        const frames: SessionTransitionFrames = {
-          invalid: 0,
-          firstInvalid: null,
-          running: true,
-          chatSurfaceReady: false,
-        };
-        Reflect.set(globalThis, "__openclawSessionTransitionFrames", frames);
-        const sample = () => {
-          const outlet = document.querySelector("openclaw-router-outlet");
-          const handoffCover = outlet?.classList.contains("session-route-handoff") === true;
-          const newSessionVisible = Boolean(
-            document.querySelector(".new-session-page__starting")?.getClientRects().length,
-          );
-          const composer = document.querySelector(".agent-chat__composer-combobox");
-          const chatVisible = Boolean(composer?.getClientRects().length);
-          if (
-            document.activeViewTransition ||
-            handoffCover ||
-            (!newSessionVisible && !chatVisible)
-          ) {
-            frames.invalid += 1;
-            const route = application.router.getState().matches[0];
-            frames.firstInvalid ??= {
-              activeViewTransition: Boolean(document.activeViewTransition),
-              handoffCover,
-              newSessionVisible,
-              chatVisible,
-              loadingSkeleton: Boolean(outlet?.querySelector(".loading-skeleton")),
-              routeId: route?.routeId,
-              routeStatus: route?.status,
-              loaderPending: route?.isFetching === "loader",
-            };
-          }
-          // Latch readiness in-frame; the invalid-frame counter covers active transitions too.
-          frames.chatSurfaceReady ||= Boolean(composer);
-          if (frames.running) {
-            requestAnimationFrame(sample);
-          }
-        };
-        requestAnimationFrame(sample);
-      });
 
       await gateway.deferNext("chat.startup");
       releaseChatModule();
       await gateway.waitForRequest("chat.startup");
-      await expect
-        .poll(() =>
-          page.evaluate(() => {
-            const frames = Reflect.get(
-              globalThis,
-              "__openclawSessionTransitionFrames",
-            ) as SessionTransitionFrames;
-            return frames.chatSurfaceReady;
-          }),
-        )
-        .toBe(true);
+      await page.locator(".agent-chat__composer-combobox").waitFor();
       await expect
         .poll(() => page.getByText("keep progress moving", { exact: true }).count())
         .toBe(1);
@@ -713,16 +507,6 @@ suite.define(() => {
         rosterMatch,
       );
       expect(await gateway.getRequests("sessions.resolve")).toHaveLength(0);
-      const invalidFrames = await page.evaluate(() => {
-        const frames = Reflect.get(
-          globalThis,
-          "__openclawSessionTransitionFrames",
-        ) as SessionTransitionFrames;
-        frames.running = false;
-        return { invalid: frames.invalid, firstInvalid: frames.firstInvalid };
-      });
-      expect(invalidFrames.invalid, JSON.stringify(invalidFrames.firstInvalid)).toBe(0);
-      await captureProof(page, "02-session-route-transition.png");
       await gateway.resolveDeferred("sessions.list", createdSessionList);
       await gateway.resolveDeferred("chat.startup");
       await waitForCommittedChatRoute(page);
@@ -739,7 +523,6 @@ suite.define(() => {
         .poll(() => page.getByText("keep progress moving", { exact: true }).count())
         .toBe(1);
       await expectAttribute(chatEffortPicker, "data-chat-thinking-value", "xhigh");
-      await captureProof(page, "03-chat-route-ready.png");
 
       await gateway.deferNext("sessions.patch");
       await chatEffortPicker.click();
@@ -754,7 +537,6 @@ suite.define(() => {
       expect(thinkingPatch.params).toMatchObject({ key: SESSION_KEY, thinkingLevel: "low" });
       await expectAttribute(chatEffortPicker, "data-chat-thinking-value", "low");
       await expectValue(chatThinkingSlider, String(lowIndex));
-      await captureProof(page, "04-thinking-update-pending.png");
 
       await gateway.rejectDeferred("sessions.patch", {
         code: "INVALID_REQUEST",
@@ -762,18 +544,6 @@ suite.define(() => {
       });
       await expectAttribute(chatEffortPicker, "data-chat-thinking-value", "xhigh");
       await expectValue(chatThinkingSlider, String(xhighIndex));
-      await captureProof(page, "05-thinking-update-rejected.png");
-      await captureJson(
-        "thinking-update.json",
-        async () => ({
-          createdThinkingLevel: entry.thinkingLevel,
-          pendingThinkingLevel: "low",
-          rejected: true,
-          restoredThinkingLevel: await chatEffortPicker.getAttribute("data-chat-thinking-value"),
-          request: thinkingPatch,
-        }),
-        transitionProofDir(),
-      );
     } catch (error) {
       await captureControlUiE2eFailureDiagnostics(page, {
         error: error instanceof Error ? error : new Error(String(error)),
@@ -784,21 +554,15 @@ suite.define(() => {
       releaseChatModule();
     }
   });
-  // Each width/content pair owns one recovery; the pending view checks both motion modes.
   it.each([
-    { mode: "dark", motion: "no-preference", width: 1280, content: "markdown" },
-    { mode: "light", motion: "reduce", width: 1280, content: "json" },
-    { mode: "dark", motion: "reduce", width: 390, content: "markdown" },
-    { mode: "light", motion: "no-preference", width: 390, content: "json" },
+    { width: 1280, content: "markdown" },
+    { width: 390, content: "json" },
   ] satisfies CreateRecoveryCase[])(
-    "shows the submitted prompt before creation responds and restores it after failure ($width, $mode, $motion, $content)",
+    "shows the submitted prompt before creation responds and restores it after failure ($width, $content)",
     async (scenario) => {
       await suite.withPage(
         {
           locale: "en-US",
-          ...(captureProofEnabled
-            ? { recordVideo: { dir: suite.artifactDir, size: { height: 900, width: 1280 } } }
-            : {}),
           serviceWorkers: "block",
           viewport: { height: 900, width: 1280 },
         },

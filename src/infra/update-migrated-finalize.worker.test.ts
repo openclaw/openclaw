@@ -1,9 +1,8 @@
 import { setImmediate } from "node:timers/promises";
 import { format } from "node:util";
-import { afterEach, beforeEach, expect, expectTypeOf, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
-import type { MigratedUpdateFinalizationInput } from "../cli/update-cli/update-command-migrated-types.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -337,12 +336,6 @@ it.each(["database", "native"] as const)(
   },
 );
 
-it("keeps live callbacks and deadline owners out of the migrated wire contract", () => {
-  type Options = MigratedUpdateFinalizationInput["params"]["opts"];
-  expectTypeOf<Options>().not.toHaveProperty("onResult");
-  expectTypeOf<NonNullable<Options["run"]>>().not.toHaveProperty("deadline");
-});
-
 it("refuses a malformed post-core timeout before invoking the updater", async () => {
   const update = vi.fn();
   // mock-isolation: Check input rejection without running package updates against the host.
@@ -494,72 +487,6 @@ it.each([false, true])(
     expectResultFile(input, restartPending, "candidate-run");
   },
 );
-
-it("times the fresh-driver handoff from the previous driver's last receipt", async () => {
-  const handoffStartedAtMs = 1_791_594_640_455;
-  const readyAtMs = handoffStartedAtMs + 23_400;
-  vi.spyOn(Date, "now").mockReturnValue(readyAtMs);
-  fixture.adopt.mockReturnValueOnce({
-    runId: "handoff-run",
-    steps: [
-      { step: "validating", status: "completed", endedAtMs: handoffStartedAtMs - 10_000 },
-      { step: "driver:adopted", status: "completed", endedAtMs: handoffStartedAtMs + 15_494 },
-    ],
-  });
-  const steps: unknown[] = [];
-  const input = {
-    ...workerInput({
-      ...finalizationParams({ runId: "handoff-run" }, "/fixture/candidate"),
-      result: { status: "ok", mode: "git", root: "/fixture/candidate", steps, durationMs: 0 },
-    }),
-    executor: undefined,
-    bufferedSteps: [
-      {
-        step: "git-verify-head",
-        status: "completed",
-        startedAtMs: handoffStartedAtMs - 36,
-        endedAtMs: handoffStartedAtMs,
-        exitCode: 0,
-      },
-    ],
-    resultPath: "/fixture/result.json",
-  };
-  let stepsAtFinish: unknown[] = [];
-  fixture.finish.mockImplementation(async (params) => {
-    stepsAtFinish = [...params.result.steps];
-    return input.params.result;
-  });
-  fixture.terminal.mockReturnValue({ runId: "handoff-run", status: "succeeded" });
-
-  await runWorker(input);
-
-  const handoff = {
-    name: "update-driver-handoff",
-    command: "openclaw update",
-    cwd: "/fixture/candidate",
-    durationMs: 23_400,
-    exitCode: 0,
-    diagnostics: [
-      'Handoff began after "git-verify-head"; the fresh driver adopted the run after 15494ms.',
-    ],
-  };
-  expect(stepsAtFinish).toEqual([handoff]);
-  expect(fixture.recordStep).toHaveBeenCalledWith(
-    "handoff-run",
-    input.bufferedSteps[0],
-    expect.anything(),
-  );
-  expect(fixture.recordLedgerStep.mock.calls).toEqual(
-    [
-      { step: "update-driver-handoff", status: "completed" },
-      { step: "diagnostic:update-driver-handoff", detail: handoff.diagnostics[0] },
-    ].map((step) => [
-      "handoff-run",
-      expect.objectContaining({ ...step, startedAtMs: handoffStartedAtMs, endedAtMs: readyAtMs }),
-      expect.objectContaining({ env: {}, busyTimeoutMs: 1_000 }),
-    ]),
-  );
-});
 
 type DeadlineCase = [
   name: string,

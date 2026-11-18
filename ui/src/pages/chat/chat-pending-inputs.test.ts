@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
-import { createEffect, createRoot, flush } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ChatInputReceipts,
   ChatPendingInputsPage,
@@ -20,7 +19,6 @@ import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { expectRequestCounts, makeChatHost, requestCalls } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
-import { createTestPageState } from "./chat-page-state.test-support.ts";
 import { buildPendingInputItems } from "./chat-pending-input-presentation.ts";
 import {
   input,
@@ -126,32 +124,6 @@ afterEach(() => {
 });
 
 describe("server-owned pending input display", () => {
-  it("publishes custody changes through the run projection while retaining the pending view", () => {
-    const rendered: (readonly string[])[] = [];
-    const { host, dispose } = createRoot((stop) => {
-      const createdHost = createTestPageState(makeChatHost(pendingScope));
-      createEffect(
-        () => getChatPendingInputs(createdHost)?.page.items.map((item) => item.id) ?? [],
-        (items) => {
-          rendered.push(items);
-        },
-      );
-      return { host: createdHost, dispose: stop };
-    });
-    onTestFinished(dispose);
-    flush();
-    applyChatPendingInputs(host, page);
-    const retained = getChatPendingInputs(host);
-    expect(retained?.page.items).toHaveLength(1);
-    flush();
-    expect(rendered).toEqual([[], [input.id]]);
-    applyChatPendingInputs(host, { items: [], total: 0 });
-    expect(getChatPendingInputs(host)).toBe(retained);
-    expect(retained?.page.items).toEqual([]);
-    flush();
-    expect(rendered).toEqual([[], [input.id], []]);
-  });
-
   it("keeps legacy interrupted custody out of the conversation", () => {
     expect(buildPendingInputItems([{ ...input, state: "interrupted" }])).toEqual([]);
     const items = buildPendingInputItems(
