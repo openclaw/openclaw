@@ -65,15 +65,16 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}settings/worktrees`);
-      const base = page.getByLabel("Base branch", { exact: true });
-      const branches = page.locator("#worktrees-create-branches");
-      for (const value of [undefined, "main", ""]) {
+      const base = page.getByRole("button", { name: /^Base branch:/ });
+      for (const value of [undefined, "main", "Automatic base"]) {
         await page.getByRole("button", { name: "New worktree", exact: true }).click();
+        await base.click();
         if (value === undefined) {
-          await branches.locator('option[value="main"]').waitFor({ state: "attached" });
-          expect(await base.inputValue()).toBe("");
+          await page.getByRole("option", { name: "main", exact: true }).waitFor();
+          await page.keyboard.press("Escape");
+          expect(await base.textContent()).toContain("Automatic base");
         } else {
-          await base.fill(value);
+          await page.getByRole("option", { name: value, exact: true }).click();
         }
         await page.getByRole("button", { name: "Create", exact: true }).click();
         await base.waitFor({ state: "hidden" });
