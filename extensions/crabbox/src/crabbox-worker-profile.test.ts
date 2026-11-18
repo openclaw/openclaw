@@ -1,3 +1,4 @@
+import type { WorkerProfile } from "openclaw/plugin-sdk/plugin-entry";
 import { expect, it } from "vitest";
 import {
   buildCrabboxAllocationArgs,
@@ -61,7 +62,7 @@ it("uses native Azure aliases for both configured and placement-selected sizes",
   }
 });
 
-it.each([
+it.each<WorkerProfile>([
   { provider: "azure-sandbox", type: null },
   { provider: "azure-sandbox", type: "not-a-size" },
   { provider: "aws", type: "XL" },
