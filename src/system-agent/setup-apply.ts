@@ -126,7 +126,11 @@ export async function applySystemAgentSetup(
   const [
     { applySecurityAcknowledgement, readSetupConfigFileSnapshot, resolveQuickstartGatewayDefaults },
     onboardHelpers,
-    { applyLocalSetupWorkspaceConfig, resolveOnboardingWorkspaceConflict },
+    {
+      applyLocalSetupWorkspaceConfig,
+      describeSetupToolProfile,
+      resolveOnboardingWorkspaceConflict,
+    },
     { transformConfigWithPendingPluginInstalls },
   ] = await Promise.all([
     import("../wizard/setup.shared.js"),
@@ -445,9 +449,11 @@ export async function applySystemAgentSetup(
     }
   }
 
+  const toolProfileLine = describeSetupToolProfile(nextConfig, onboardingTarget.agentId);
   const lines: string[] = [
     ...sessionMigrationWarnings,
     `Workspace: ${shortenHomePath(effectiveWorkspace)}`,
+    ...(toolProfileLine ? [toolProfileLine] : []),
   ];
 
   const runCommittedFollowUp = async <T>(

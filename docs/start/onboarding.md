@@ -84,8 +84,10 @@ Use a strong modern model and strict tool policy or sandboxing when enabling
 hooks, webhooks, or other untrusted content feeds.
 
 Local setup defaults to `tools.profile: "full"` only if no profile is set.
-Existing profiles and tool policies stay unchanged. A full tool profile does
-not grant execution permissions. See [Tool profiles](/gateway/config-tools/tool-policy#tool-profiles).
+Existing profiles and tool policies stay unchanged. Setup ends with a
+`Tool profile:` line that names the profile, where it is set, what it allows,
+any other tool settings that change it, and how to add a tool. A full tool profile does not grant execution
+permissions. See [Tool profiles](/gateway/config-tools/tool-policy#tool-profiles).
 These rules apply to automatic setup too.
 
 <Frame>
