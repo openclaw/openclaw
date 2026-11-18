@@ -1,0 +1,6 @@
+# Opt-in trace origin (#200906). The bounded origin contract needs proof at four
+# distinct boundaries that cannot share fixtures: exporter privacy and metric
+# exclusion with the real OTel SDK, message dispatch public/private separation,
+# queued current-turn attribution, CLI run lifecycle, and a real Slack HTTP
+# ingress through dispatch to an exported OTLP span with capture off and on.
+73
