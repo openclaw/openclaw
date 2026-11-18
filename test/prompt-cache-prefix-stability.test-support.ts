@@ -1,5 +1,6 @@
 // One Gateway session through every mid-session trigger: each provider request must extend the
-// previous one byte for byte, except at a compaction.
+// previous one byte for byte, except at a compaction (explicit, or the provider's own). Its hidden
+// subagent, which later receives a parent turn, must stay append-only too.
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -12,18 +13,9 @@ import { listenProofProvider, useRuntimeProofFixture } from "./runtime-proof.tes
 const TOKEN = "prefix-stability-token";
 const TARGET = "agent:main:prefix-stability-target";
 const SENDER = "agent:main:prefix-stability-sender";
-const CONTEXT_WINDOW = 200_000;
-// Sent exec output (~56k chars each) beyond the aggregate tool-result budget of 2 chars per token.
-const SENT_OUTPUTS = 14;
-// Parallel results that carry the next request past the window from just under the
-// proactive-compaction threshold (75% of the window).
-const BURST_OUTPUTS = 4;
-const BURST_MEASURED_TOKENS = CONTEXT_WINDOW * 0.75 - 10;
 
-export type Api = "anthropic-messages" | "openai-completions";
-type Call = { tool: string; args: Record<string, unknown> };
-// `inputTokens` is the provider-measured context occupancy the reply reports.
-type Reply = ({ text: string } | { calls: Call[] }) & { inputTokens?: number };
+export type Api = "anthropic-messages" | "openai-completions" | "openai-responses";
+type Reply = { text: string; compaction?: true } | { tool: string; args: Record<string, unknown> };
 type WireRequest = { system: string; tools: string; messages: string[]; text: string };
 
 // Cache markers move to the newest message on every request, and the newest message carries
@@ -48,6 +40,18 @@ function withoutCacheMarkers(value: unknown): unknown {
 }
 
 function readWireRequest(api: Api, body: Record<string, unknown>): WireRequest {
+  if (api === "openai-responses") {
+    const system = JSON.stringify(body.instructions ?? null);
+    const messages = ((body.input as unknown[] | undefined) ?? []).map((item) =>
+      JSON.stringify(item),
+    );
+    return {
+      system,
+      tools: JSON.stringify(body.tools ?? []),
+      messages,
+      text: `${system}\n${messages.join("\n")}`,
+    };
+  }
   const all = (body.messages as Array<{ role?: unknown }> | undefined) ?? [];
   // Chat Completions sends the system prompt as leading system messages.
   const lead =
@@ -68,27 +72,22 @@ function readWireRequest(api: Api, body: Record<string, unknown>): WireRequest {
 /** Messages after the newest assistant reply: the current input, carriers and tool results. */
 function lastMessage(request: WireRequest): string {
   const assistant = request.messages.findLastIndex((message) =>
-    message.startsWith('{"role":"assistant"'),
+    /"role":"assistant"|"type":"(function_call|compaction)"/.test(message),
   );
   return request.messages.slice(assistant + 1).join("\n");
 }
 
 function writeReply(api: Api, response: ServerResponse, reply: Reply, ordinal: number) {
   response.writeHead(200, { "content-type": "text/event-stream; charset=utf-8" });
-  const inputTokens = reply.inputTokens ?? 10;
   if (api === "anthropic-messages") {
-    const blocks =
+    const block =
       "text" in reply
-        ? [{ start: { type: "text", text: "" }, delta: { type: "text_delta", text: reply.text } }]
-        : reply.calls.map((call, index) => ({
-            start: {
-              type: "tool_use",
-              id: `toolu_${ordinal}_${index}`,
-              name: call.tool,
-              input: {},
-            },
-            delta: { type: "input_json_delta", partial_json: JSON.stringify(call.args) },
-          }));
+        ? { type: "text", text: "" }
+        : { type: "tool_use", id: `toolu_${ordinal}`, name: reply.tool, input: {} };
+    const delta =
+      "text" in reply
+        ? { type: "text_delta", text: reply.text }
+        : { type: "input_json_delta", partial_json: JSON.stringify(reply.args) };
     const events = [
       {
         type: "message_start",
@@ -99,20 +98,66 @@ function writeReply(api: Api, response: ServerResponse, reply: Reply, ordinal: n
           model: "claude-opus-5",
           content: [],
           stop_reason: null,
-          usage: { input_tokens: inputTokens, output_tokens: 0 },
+          usage: { input_tokens: 10, output_tokens: 0 },
         },
       },
-      ...blocks.flatMap(({ start, delta }, index) => [
-        { type: "content_block_start", index, content_block: start },
-        { type: "content_block_delta", index, delta },
-        { type: "content_block_stop", index },
-      ]),
+      { type: "content_block_start", index: 0, content_block: block },
+      { type: "content_block_delta", index: 0, delta },
+      { type: "content_block_stop", index: 0 },
       {
         type: "message_delta",
         delta: { stop_reason: "text" in reply ? "end_turn" : "tool_use", stop_sequence: null },
         usage: { output_tokens: 5 },
       },
       { type: "message_stop" },
+    ];
+    response.end(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(""));
+    return;
+  }
+  if (api === "openai-responses") {
+    const items = [
+      // The provider compacts the request it received and returns the checkpoint first.
+      ...("compaction" in reply && reply.compaction
+        ? [{ type: "compaction", id: `cmp_${ordinal}`, encrypted_content: `checkpoint-${ordinal}` }]
+        : []),
+      "text" in reply
+        ? {
+            type: "message",
+            id: `msg_${ordinal}`,
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: reply.text, annotations: [] }],
+          }
+        : {
+            type: "function_call",
+            id: `fc_${ordinal}`,
+            call_id: `call_${ordinal}`,
+            name: reply.tool,
+            arguments: JSON.stringify(reply.args),
+            status: "completed",
+          },
+    ];
+    const events = [
+      ...items.flatMap((item, index) => [
+        { type: "response.output_item.added", output_index: index, item },
+        { type: "response.output_item.done", output_index: index, item },
+      ]),
+      {
+        type: "response.completed",
+        response: {
+          id: `resp_${ordinal}`,
+          object: "response",
+          status: "completed",
+          model: "gpt-5.4",
+          output: items,
+          usage: {
+            input_tokens: 10,
+            input_tokens_details: { cached_tokens: 0 },
+            output_tokens: 5,
+            total_tokens: 15,
+          },
+        },
+      },
     ];
     response.end(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(""));
     return;
@@ -124,27 +169,21 @@ function writeReply(api: Api, response: ServerResponse, reply: Reply, ordinal: n
       created: 0,
       model: "gpt-5.4-mini",
       choices: [{ index: 0, delta, finish_reason: finish }],
-      ...(finish
-        ? {
-            usage: {
-              prompt_tokens: inputTokens,
-              completion_tokens: 5,
-              total_tokens: inputTokens + 5,
-            },
-          }
-        : {}),
+      ...(finish ? { usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } } : {}),
     })}\n\n`;
   const delta =
     "text" in reply
       ? { role: "assistant", content: reply.text }
       : {
           role: "assistant",
-          tool_calls: reply.calls.map((call, index) => ({
-            index,
-            id: `call_${ordinal}_${index}`,
-            type: "function",
-            function: { name: call.tool, arguments: JSON.stringify(call.args) },
-          })),
+          tool_calls: [
+            {
+              index: 0,
+              id: `call_${ordinal}`,
+              type: "function",
+              function: { name: reply.tool, arguments: JSON.stringify(reply.args) },
+            },
+          ],
         };
   response.end(
     `${chunk(delta, null)}${chunk({}, "text" in reply ? "stop" : "tool_calls")}data: [DONE]\n\n`,
@@ -152,8 +191,12 @@ function writeReply(api: Api, response: ServerResponse, reply: Reply, ordinal: n
 }
 
 function buildProvider(api: Api, baseUrl: string) {
-  const id = api === "anthropic-messages" ? "claude-opus-5" : "gpt-5.4-mini";
-  const providerId = api === "anthropic-messages" ? "fake-anthropic" : "fake-completions";
+  const routes: Record<Api, readonly [providerId: string, id: string]> = {
+    "anthropic-messages": ["fake-anthropic", "claude-opus-5"],
+    "openai-completions": ["fake-completions", "gpt-5.4-mini"],
+    "openai-responses": ["fake-responses", "gpt-5.4"],
+  };
+  const [providerId, id] = routes[api];
   const model: ModelDefinitionConfig = {
     id,
     name: `Fake ${id}`,
@@ -161,7 +204,7 @@ function buildProvider(api: Api, baseUrl: string) {
     reasoning: false,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: CONTEXT_WINDOW,
+    contextWindow: 200_000,
     maxTokens: 4096,
   };
   const config: ModelProviderConfig = {
@@ -214,64 +257,62 @@ export function usePrefixStabilityJourney() {
   return async (api: Api) => {
     const fixture = await createFixture(`openclaw-prefix-stability-${api}-`, TOKEN, "1");
     const targetRequests: WireRequest[] = [];
+    // The hidden subagent: its spawn task turn has no inter-session provenance, later turns do.
+    const childRequests: WireRequest[] = [];
+    let childKey: string | undefined;
     const seen: string[] = [];
-    // Target request indexes that follow a compaction summary: the allowed rebuild points.
-    const rebuilds = new Set<number>();
-    let outputs = 0;
     let ordinal = 0;
-    const call = (tool: string, args: Record<string, unknown>): Reply => ({
-      calls: [{ tool, args }],
-    });
     const script = (request: WireRequest): Reply => {
       const latest = lastMessage(request);
-      const hasToolResult = /tool_result|"role":"tool"/.test(latest);
+      const hasToolResult = /tool_result|"role":"tool"|function_call_output/.test(latest);
       if (request.tools === "[]") {
-        rebuilds.add(targetRequests.length);
         return { text: "Summary: the session ran the probe journey." };
       }
       if (request.text.includes(`session=${SENDER}`)) {
         return hasToolResult || !latest.includes("forward a ping")
           ? { text: "REPLY_SKIP" }
-          : call("sessions_send", {
-              sessionKey: TARGET,
-              message: "INTER-SESSION ping",
-              timeoutSeconds: 0,
-            });
+          : {
+              tool: "sessions_send",
+              args: { sessionKey: TARGET, message: "INTER-SESSION ping", timeoutSeconds: 0 },
+            };
+      }
+      // The request's own session leads its system prompt; later text can name the child.
+      const session = /session=(\S+)/.exec(request.text)?.[1];
+      const child = session?.startsWith("agent:main:subagent:") ? session : undefined;
+      if (child) {
+        childKey ??= child;
+        if (child === childKey) {
+          childRequests.push(request);
+        }
+        return { text: "child-done" };
       }
       if (!request.text.includes(`session=${TARGET}`)) {
         return { text: "child-done" };
       }
       targetRequests.push(request);
-      const output = () => ({
-        tool: "exec",
-        args: { command: `seq ${++outputs}00000 ${outputs}08000` },
-      });
-      if (latest.includes("STEP-OUTPUT") && !hasToolResult) {
-        return { calls: [output()] };
-      }
-      if (hasToolResult && outputs > 0 && outputs < SENT_OUTPUTS) {
-        return { calls: [output()] };
-      }
-      if (hasToolResult && outputs === SENT_OUTPUTS + BURST_OUTPUTS) {
-        return { text: "outputs read" };
-      }
-      if (hasToolResult && outputs === SENT_OUTPUTS) {
-        return {
-          calls: Array.from({ length: BURST_OUTPUTS }, output),
-          inputTokens: BURST_MEASURED_TOKENS,
-        };
-      }
       if (hasToolResult) {
         return { text: "acknowledged" };
       }
+      if (latest.includes("STEP-CHILD-FOLLOWUP") && childKey) {
+        return {
+          tool: "sessions_send",
+          args: { sessionKey: childKey, message: "CHILD-FOLLOWUP ping", timeoutSeconds: 0 },
+        };
+      }
       if (latest.includes("STEP-EXEC")) {
-        return call("exec", { command: "sleep 1; echo exec-finished", background: true });
+        return {
+          tool: "exec",
+          args: { command: "sleep 1; echo exec-finished", background: true },
+        };
+      }
+      if (latest.includes("STEP-PROVIDER-COMPACT")) {
+        return { text: `ok ${targetRequests.length}`, compaction: true };
       }
       if (latest.includes("STEP-SPAWN")) {
-        return call("sessions_spawn", {
-          task: "CHILD-TASK reply child-done",
-          expectsCompletionMessage: true,
-        });
+        return {
+          tool: "sessions_spawn",
+          args: { task: "CHILD-TASK reply child-done", expectsCompletionMessage: true },
+        };
       }
       return { text: `ok ${targetRequests.length}` };
     };
@@ -304,6 +345,7 @@ export function usePrefixStabilityJourney() {
           },
         },
         {
+          diagnostics: { cacheTrace: { enabled: true } },
           plugins: { enabled: false },
           tools: {
             codeMode: { enabled: false },
@@ -366,6 +408,9 @@ export function usePrefixStabilityJourney() {
         // A subagent settles back into the session.
         await send(TARGET, "STEP-SPAWN start a child");
         await until(() => targetRequests.some((r) => lastMessage(r).includes("child-done")));
+        // The parent sends a later turn into its hidden subagent.
+        await send(TARGET, "STEP-CHILD-FOLLOWUP ping the child");
+        await until(() => childRequests.some((r) => lastMessage(r).includes("CHILD-FOLLOWUP")));
         // Inter-session input from another session.
         await send(SENDER, "forward a ping to the target");
         await until(() => targetRequests.some((r) => lastMessage(r).includes("INTER-SESSION")));
@@ -379,23 +424,63 @@ export function usePrefixStabilityJourney() {
         await send(TARGET, "TARGET after skill");
         await fs.appendFile(path.join(fixture.workspaceDir, "AGENTS.md"), "- Prefer bullets.\n");
         await send(TARGET, "TARGET after workspace edit");
+        // The provider compacts on its own (Responses server-side compaction): its checkpoint
+        // replaces the history it summarized from the next request on, an allowed rebuild point.
+        const providerCompactionAt =
+          api === "openai-responses"
+            ? await (async () => {
+                await send(TARGET, "STEP-PROVIDER-COMPACT continue");
+                const at = targetRequests.length;
+                await send(TARGET, "TARGET after provider compaction");
+                return at;
+              })()
+            : undefined;
         // Explicit compaction is the one allowed rebuild point in this journey.
         await client.request("sessions.compact", { key: TARGET }, { timeoutMs: 65_000 });
         await settle();
         const compactionAt = targetRequests.length;
         await send(TARGET, "TARGET after compaction");
         expect(targetRequests.length).toBeGreaterThan(compactionAt);
-        // Sent tool results exceed their aggregate budget, then parallel results carry the
-        // next request past the window. Reclaiming space must compact, not trim results the
-        // provider already cached.
-        await send(TARGET, "STEP-OUTPUT read the large outputs");
         const breaks = prefixBreaks(targetRequests);
-        expect(rebuilds.has(compactionAt), [...rebuilds].join(",")).toBe(true);
-        expect(rebuilds.size, [...rebuilds].join(",")).toBe(2);
         expect(
           breaks.map(({ at }) => at),
           JSON.stringify(breaks, null, 2),
-        ).toEqual([...rebuilds]);
+        ).toEqual(
+          providerCompactionAt === undefined
+            ? [compactionAt]
+            : [providerCompactionAt, compactionAt],
+        );
+        if (providerCompactionAt !== undefined) {
+          // The cache observer attributes the provider checkpoint to compaction, not to drift.
+          const trace = await fs.readFile(
+            path.join(fixture.stateDir, "logs", "cache-trace.jsonl"),
+            "utf8",
+          );
+          const attributed = trace
+            .split("\n")
+            .filter(Boolean)
+            .map(
+              (line) =>
+                JSON.parse(line) as {
+                  stage?: string;
+                  sessionKey?: string;
+                  options?: { changes?: Array<{ detail?: string }> | null };
+                },
+            )
+            .filter(
+              (event) =>
+                event.stage === "cache:result" &&
+                event.sessionKey === TARGET &&
+                event.options?.changes?.some(
+                  ({ detail }) =>
+                    detail === "provider compaction checkpoint replaced earlier history",
+                ),
+            );
+          expect(attributed).toHaveLength(1);
+        }
+        expect(childRequests.length).toBeGreaterThan(1);
+        const childBreaks = prefixBreaks(childRequests);
+        expect(childBreaks, JSON.stringify(childBreaks, null, 2)).toEqual([]);
       } catch (error) {
         throw new Error(`${String(error)}\n${seen.join("\n")}`, { cause: error });
       }

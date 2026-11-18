@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -595,11 +594,8 @@ function resolveAggregateElisionMarkers(
   ) {
     return undefined;
   }
-  // Avoid pointing recovery at already-deleted spill files.
-  if (!existsSync(spill.path)) {
-    return undefined;
-  }
-  // The original footer already disclosed this path, so preserving it adds no disclosure.
+  // Publication owns this path. Preserve the disclosed pointer without probing the
+  // filesystem during prompt projection; a later read can report an expired artifact.
   const kind = spill.truncated ? "partial" : "full";
   const count = spill.truncated
     ? ` (${spill.chars === undefined ? "capped content" : `first ${spill.chars} chars`})`
@@ -886,10 +882,6 @@ function buildToolResultReplacementPlan(params: {
   maxChars: number;
   aggregateBudgetChars: number;
   protectTrailingToolResults?: boolean;
-  /**
-   * Results before the last assistant message are already in the provider's cached prefix.
-   * Only a rejected prompt may rewrite them; predicted pressure goes to compaction instead.
-   */
   preserveSentToolResults?: boolean;
 }) {
   // Plan on message positions; transcript entry IDs belong only to the rewrite boundary.
@@ -905,14 +897,23 @@ function buildToolResultReplacementPlan(params: {
       aggregateReducibleChars: 0,
     };
   }
-  const trailingStart =
+  const lastAssistant =
     params.protectTrailingToolResults || params.preserveSentToolResults
-      ? params.messages.findLastIndex((message) => message.role === "assistant") + 1
-      : params.messages.length;
+      ? params.messages.findLastIndex((message) => message.role === "assistant")
+      : -1;
+  const trailingStart = params.protectTrailingToolResults
+    ? lastAssistant + 1
+    : params.messages.length;
+  // The latest assistant separates consumed results from the current tool batch.
+  // With no assistant boundary, do not assume orphan results are unsent.
+  const eligibleStart = params.preserveSentToolResults
+    ? lastAssistant < 0
+      ? params.messages.length
+      : lastAssistant + 1
+    : 0;
   const candidates = params.messages.flatMap((message, index) => {
     const textLength = textLengths[index]!;
-    const sent = params.preserveSentToolResults && index < trailingStart;
-    return message.role === "toolResult" && textLength > 0 && !sent
+    return index >= eligibleStart && message.role === "toolResult" && textLength > 0
       ? [{ index, source: message, message, textLength, aggregateTextLength: textLength }]
       : [];
   });
@@ -1045,11 +1046,17 @@ export function estimateToolResultReductionPotential(params: {
   preserveSentToolResults?: boolean;
 }) {
   const { maxChars, aggregateBudgetChars } = resolveToolResultBudgets(params);
-  const plan = buildToolResultReplacementPlan({ ...params, maxChars, aggregateBudgetChars });
+  const plan = buildToolResultReplacementPlan({
+    ...params,
+    maxChars,
+    aggregateBudgetChars,
+  });
+  const maxReducibleChars = plan.oversizedReducibleChars + plan.aggregateReducibleChars;
+
   return {
     oversizedCount: plan.oversizedReplacementCount,
     aggregateReducibleChars: plan.aggregateReducibleChars,
-    maxReducibleChars: plan.oversizedReducibleChars + plan.aggregateReducibleChars,
+    maxReducibleChars,
   };
 }
 
@@ -1095,6 +1102,10 @@ export async function truncateOversizedToolResultsInSessionManager(params: {
       aggregateBudgetChars,
     });
     const replacements = branch.flatMap((entry, index) => {
+      // Replaying an existing projection is not an authorized history edit.
+      if (params.preserveSentToolResults && !plan.changedIndices.has(index)) {
+        return [];
+      }
       const message = plan.messages[index]!;
       return entry.message === message || JSON.stringify(entry.message) === JSON.stringify(message)
         ? []
@@ -1174,6 +1185,7 @@ export function sessionLikelyHasOversizedToolResults(params: {
   messages: AgentMessage[];
   contextWindowTokens: number;
   maxCharsOverride?: number;
+  preserveSentToolResults?: boolean;
 }): boolean {
   const estimate = estimateToolResultReductionPotential(params);
   return estimate.oversizedCount > 0 || estimate.aggregateReducibleChars > 0;

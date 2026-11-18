@@ -168,6 +168,30 @@ describe("preemptive-compaction", () => {
     expect(decision.route).not.toBe("fits");
   });
 
+  it("routes predicted overflow from already-sent tool results to compaction", () => {
+    const sentOutput = "alpha beta gamma delta epsilon ".repeat(500);
+    const messages = [
+      makeAssistantHistory("read previous reports"),
+      ...Array.from({ length: 8 }, () => makeToolResultMessage(sentOutput)),
+      makeAssistantHistory("reports received"),
+    ];
+    const decision = resolveProjectedRequestPressure({
+      context: { messages },
+      previousRequest: { requestIndex: 1, messageCount: messages.length, contextTokens: 41_000 },
+      contextTokenBudget: 40_000,
+      reserveTokens: 0,
+    });
+
+    expect(decision).toMatchObject({
+      pressureSource: "provider_context_usage",
+      promptBudgetBeforeReserve: 40_000,
+      route: "compact_only",
+      toolResultReducibleChars: 0,
+    });
+    // The request estimator adds 12 framing tokens to the synthetic usage anchor.
+    expect([decision.estimatedPromptTokens, decision.overflowTokens]).toEqual([41_012, 1_012]);
+  });
+
   const verboseHistory =
     "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu ".repeat(40);
   const verboseSystem =
@@ -497,40 +521,6 @@ describe("preemptive-compaction", () => {
     expect(potential.maxReducibleChars).toBeGreaterThan(desiredOverflowTokens * 4);
     expect(result.route).toBe("truncate_tool_results_only");
     expect(result.shouldCompact).toBe(false);
-  });
-
-  it("compacts instead of trimming tool results the provider already cached", () => {
-    // Earlier runs sent these results in full; only a new run's input follows them.
-    const medium = "alpha beta gamma delta epsilon ".repeat(500);
-    const messages: AgentMessage[] = [
-      makeAssistantHistory("short history"),
-      ...Array.from({ length: 8 }, () => makeToolResultMessage(medium)),
-      makeAssistantHistory("done"),
-    ];
-    const reserveTokens = 2_000;
-    const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
-      messages,
-      systemPrompt: "sys",
-      prompt: "next run",
-    });
-    const contextTokenBudget = estimatedPromptTokens - 500 + reserveTokens;
-    // The whole history could still be trimmed under the aggregate budget...
-    expect(
-      estimateToolResultReductionPotential({ messages, contextWindowTokens: contextTokenBudget })
-        .aggregateReducibleChars,
-    ).toBeGreaterThan(500 * 4 * 2);
-
-    const result = shouldPreemptivelyCompactBeforePrompt({
-      messages,
-      systemPrompt: "sys",
-      prompt: "next run",
-      contextTokenBudget,
-      reserveTokens,
-    });
-
-    // ...but that rewrites the cached prefix and recurs on the next run near the budget.
-    expect(result.route).toBe("compact_only");
-    expect(result.toolResultReducibleChars).toBe(0);
   });
 
   it("estimates CJK tool results at roughly one token per character", () => {
