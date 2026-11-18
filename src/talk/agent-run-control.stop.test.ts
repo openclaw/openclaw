@@ -11,7 +11,10 @@ import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
 import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import { testing as replyTesting } from "../sessions/session-controller.test-support.js";
-import { controlRealtimeVoiceAgentRun as controlRun } from "./agent-run-control.js";
+import {
+  controlRealtimeVoiceAgentRun as controlRun,
+  controlTalkAgentRun,
+} from "./agent-run-control.js";
 
 const sessionKey = "agent:main:discord-voice";
 const turn = { sessionKey, sessionId: "voice-session", agentId: "main", storePath: "/tmp/talk" };
@@ -255,4 +258,70 @@ it.each(["controller signal", "native run"] as const)(
       await Promise.all([first.running, second.running]);
     }
   },
+);
+
+it.each(["allowed", "wrong caller", "revoked", "reassigned"] as const)(
+  "rereads async caller authority for the exact run before enqueue (%s)",
+  (scenario) =>
+    withVoiceTurn(async (op) => {
+      const project = (overlay: { senderIsOwner: boolean }) =>
+        overlay.senderIsOwner ? "voice-policy" : "guest-policy";
+      await op.bindToolAuthoritySnapshotAsync({
+        fingerprint: () => "voice-policy",
+        fingerprintAsync: async () => "voice-policy",
+        project,
+        projectAsync: async (overlay) => project(overlay),
+      });
+      await op.bindToolAuthorityRouteAsync({ provider: "synthetic", model: "test" });
+      const messages: string[] = [];
+      const handle = {
+        ...createEmbeddedRunHandle({
+          runId: "voice",
+          guarded: true,
+          queueMessage: async (text) => {
+            messages.push(text);
+          },
+        }),
+        kind: "embedded" as const,
+        cancel: () => {},
+      };
+      const detach = attachRun(op, handle);
+      op.setPhase("running");
+      let current = true;
+      let reads = 0;
+      try {
+        const result = await controlTalkAgentRun({
+          sessionKey,
+          runTarget: target("voice", op.abortSignal, () => current && !op.abortSignal.aborted),
+          mode: "steer",
+          text: "Use the release branch",
+          getToolAuthorityOverlayAsync: async () => {
+            reads += 1;
+            // Selection reads current authority; the injection's own read observes the change.
+            if (reads > 1 && scenario === "revoked") {
+              throw new Error("Caller access changed");
+            }
+            if (reads > 1 && scenario === "reassigned") {
+              current = false;
+            }
+            return {
+              senderIsOwner: scenario !== "wrong caller",
+              disableTools: false,
+              traceAuthorized: false,
+            };
+          },
+        });
+        expect(reads).toBeGreaterThan(1);
+        expect(messages).toEqual(scenario === "allowed" ? ["Use the release branch"] : []);
+        expect(result).toMatchObject(
+          scenario === "allowed"
+            ? { ok: true, queued: true }
+            : scenario === "wrong caller"
+              ? { ok: false, queued: false, reason: "tool_authority_mismatch" }
+              : { ok: false },
+        );
+      } finally {
+        detach();
+      }
+    }),
 );
