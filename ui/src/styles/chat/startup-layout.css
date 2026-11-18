@@ -192,6 +192,20 @@ div.chat-thread:where(.chat-thread--annotations) {
   margin-inline: var(--chat-composer-side-inset, 16px);
 }
 
+.creation-composer__loading {
+  height: 96px;
+  max-width: var(--chat-thread-max-width, 48rem);
+  width: calc(100% - 32px);
+  margin: 0 auto 16px;
+  border-radius: var(--radius-xl);
+  opacity: 0.35;
+}
+
+.new-session-page__starting-status {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
 /* Blank transcript space keeps native selection and click-to-deselect behavior. */
 .chat-thread,
 .chat-text,
