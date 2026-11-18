@@ -2450,10 +2450,7 @@ that outcome. A milestone with no eligible delivery target is recorded as skippe
 instead of retried on every recovery check.
 
 If the update cannot start, the bot records and explains why and provides the manual command when available.
-The agent relays the returned recovery instructions to the operator. Manual
-update commands run in a terminal outside the Gateway service; the agent must
-not execute them in the shell of the Gateway hosting its session. A missing
-owner permission requires owner setup, and an externally supervised installation
+A missing owner permission requires owner setup, and an externally supervised installation
 uses its deployment owner's update workflow.
 
 For installations updated by OpenClaw itself, chat, CLI, Control UI, and automatic updates share a durable run ID.
@@ -2480,8 +2477,7 @@ External-chat updates through `/update` or the tool require `commands.restart`
 (enabled by default), including managed installations. The slash command also
 follows command-access restrictions; tool calls follow tool policy. Chat updates use the hosting installation's
 configured update channel and install method.
-Agents use runtime-supervised maintenance rather than an unsupervised shell
-stop/update/start sequence or package swap. The runtime retains restart ownership
+The runtime retains restart ownership
 before stopping the Gateway. Non-owner requests remain refused, and chat restarts
 honor `commands.restart` just like chat updates. Cleanup does not depend on that
 flag because it does not restart the Gateway.

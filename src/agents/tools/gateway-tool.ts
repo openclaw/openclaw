@@ -109,8 +109,8 @@ export function createGatewayTool(options?: {
     label: "Gateway",
     name: "gateway",
     description: allowConfigReads
-      ? "Read gateway config/schema. Owner request/operator schedule: update.run, restart, update.cleanup. Use runtime-owned actions."
-      : "Owner request/operator schedule: update.run, restart, update.cleanup. Cleanup permanently retires eligible rollback copies; dryRun previews. Use runtime-owned actions.",
+      ? "Read gateway config/schema. Owner request/operator schedule: update.run, restart, update.cleanup."
+      : "Owner request/operator schedule: update.run, restart, update.cleanup. Cleanup permanently retires eligible rollback copies; dryRun previews.",
     parameters: allowConfigReads ? GatewayToolSchema : GatewayUpdateToolSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
