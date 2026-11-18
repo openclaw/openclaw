@@ -54,11 +54,12 @@ describe("WebChat reply media workspace ownership", () => {
     cfg: OpenClawConfig,
     entry: Partial<SessionEntry>,
     requesterContext?: Parameters<typeof seedWebchatReplyMediaScope>[0]["requesterContext"],
+    sessionKey = TEST_SESSION_KEY,
   ) {
     const scope = await seedWebchatReplyMediaScope({
       cfg,
       agentId: "main",
-      sessionKey: TEST_SESSION_KEY,
+      sessionKey,
       requesterContext,
       sessionEntry: { sessionId: "media-session", updatedAt: 1, ...entry },
     });
@@ -239,6 +240,32 @@ describe("WebChat reply media workspace ownership", () => {
     const [limitedPayload] = await normalize(limited, [source]);
     expect(limitedPayload?.mediaUrls).toBeUndefined();
     expect(limitedPayload?.text).toContain("owner.png: Delivery failed.");
+  });
+
+  it("keeps the owner waiver on the main session the Control UI opens by default", async () => {
+    const { cfg } = createMediaTestContext({ allowRead: true });
+    cfg.tools = { ...cfg.tools, toolsBySender: { "*": { deny: ["read"] } } };
+    const selected = testState.statePath("worktrees", "owner-main-session");
+    const source = await writeMedia(path.join(selected, "probe.png"));
+    const requester = { Provider: "webchat", Surface: "webchat", SenderId: "owner" };
+    const owner = await seedScope(
+      cfg,
+      { sessionRoot: selected, permissionMode: "full" },
+      { ...requester, GatewayClientScopes: ["operator.admin", "operator.write"] },
+      "agent:main:main",
+    );
+    const [ownerPayload] = await normalize(owner, [source]);
+    await expectImage(ownerPayload?.mediaUrls?.[0]);
+
+    const limited = await seedScope(
+      cfg,
+      { sessionRoot: selected, permissionMode: "full" },
+      { ...requester, GatewayClientScopes: ["operator.read", "operator.write"] },
+      "agent:main:main",
+    );
+    const [limitedPayload] = await normalize(limited, [source]);
+    expect(limitedPayload?.mediaUrls).toBeUndefined();
+    expect(limitedPayload?.text).toContain("probe.png: Delivery failed.");
   });
 
   it("preserves unmounted sandbox containment in full mode", async () => {

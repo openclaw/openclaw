@@ -241,6 +241,9 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
       // Production reply-media call sites omit the provider when the session key is set.
       { sessionKey: "agent:main:webchat:owner", senderIsOwner: true },
       { messageProvider: "webchat", senderIsOwner: true },
+      // The Control UI's default main session has no channel segment; the surface the
+      // Gateway authenticated is the fact that marks it as the internal surface.
+      { sessionKey: "agent:main:main", requesterSurface: "webchat", senderIsOwner: true },
     ]) {
       const result = resolveAgentScopedOutboundMediaAccess({
         cfg,
@@ -265,6 +268,10 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     {
       name: "a WebChat requester without the owner fact",
       identity: { sessionKey: "agent:main:webchat:owner" },
+    },
+    {
+      name: "an owner on the main session with no authenticated surface",
+      identity: { sessionKey: "agent:main:main", senderIsOwner: true },
     },
   ])("keeps the sender wildcard for $name", ({ identity }) => {
     const result = resolveAgentScopedOutboundMediaAccess({

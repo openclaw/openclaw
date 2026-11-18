@@ -85,6 +85,10 @@ function resolveRequesterPolicyContext(requester?: WebchatReplyMediaRequesterCon
     groupChannel: requester?.GroupChannel,
     groupSpace: requester?.GroupSpace,
     messageProvider,
+    // The Control UI opens agent:main:main by default, whose key carries no channel
+    // segment; keep the surface the client authenticated so the owner check does not
+    // depend on reconstructing it from the session key.
+    requesterSurface: messageProvider,
     // Same scope rule as command-auth: an operator.admin client on the internal
     // surface owns the turn, so the media read skips the toolsBySender overlay the
     // turn's own tools already skip. Every other requester keeps the sender policy.

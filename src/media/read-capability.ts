@@ -55,6 +55,11 @@ type OutboundHostMediaPolicyContext = {
   requesterSenderE164?: string | null;
   /** Owner authority on an internal surface; tools already skip the sender overlay there. */
   senderIsOwner?: boolean;
+  /**
+   * Surface the caller authenticated the requester on. Session-scoped staging omits the
+   * provider, and a main-session key has no channel segment to reconstruct it from.
+   */
+  requesterSurface?: string;
 };
 
 function getManagedMediaLocalRoots(mediaSources?: readonly string[]): readonly string[] {
@@ -165,9 +170,10 @@ function resolveAgentScopedMediaAccess(
   // otherwise fall back to native reads from those roots.
   // An owner turn on an internal surface already skips the sender overlay for tools
   // (senderPolicyMode "never"); its reply media must read under the same authority.
-  // Session-scoped call sites omit the provider, so read the channel from the session
-  // key the same way the sender policy resolver prefers its route.
+  // Prefer the surface the caller authenticated. Session-scoped staging omits the
+  // provider, so fall back to the route the sender policy resolver prefers.
   const requesterProvider =
+    params.requesterSurface ??
     parseSessionDeliveryRoute(params.sessionKey)?.channel ??
     params.messageProvider ??
     sessionKeyChannel(params.sessionKey);

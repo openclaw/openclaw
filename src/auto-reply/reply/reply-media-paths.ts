@@ -152,6 +152,8 @@ type ReplyMediaSourcePreparationParams = {
   requesterSenderE164?: string;
   /** Owner authority for this turn; owner-internal media reads skip the sender overlay. */
   senderIsOwner?: boolean;
+  /** Surface the caller authenticated; kept because a session key drops the provider. */
+  requesterSurface?: string;
   sandboxRoot?: string;
   sandboxContainerWorkdir?: string;
   mediaAccess?: OutboundMediaAccess;
@@ -267,6 +269,7 @@ export function createReplyMediaSourcePreparer(
       requesterSenderUsername: params.requesterSenderUsername,
       requesterSenderE164: params.requesterSenderE164,
       senderIsOwner: params.senderIsOwner,
+      requesterSurface: params.requesterSurface,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
