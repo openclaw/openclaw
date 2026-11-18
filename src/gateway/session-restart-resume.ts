@@ -488,7 +488,7 @@ async function resumeRestartStore(
       const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId;
       let authority: Awaited<ReturnType<typeof prepareSessionSystemTurnAuthority>> | undefined;
       let interrupted = false;
-      let scopeChanged = false;
+      let scopeChanged: { sessionId: string } | undefined;
       try {
         await waitForAgentInputAdmission(agentId, {
           sessionKey,
@@ -527,11 +527,13 @@ async function resumeRestartStore(
               (!selected.activeWriterRunId ||
                 !hasAgentRunContextExecutionOwner(selected.activeWriterRunId));
             // A marker from another scope belongs to an ended deployment generation, such
-            // as an explicit stop. Clear it without resuming; discovery left its queued
-            // inputs to the orphaned-input settlement above.
+            // as an explicit stop. Clear it without resuming; its queued inputs are settled
+            // below, like a crash's.
             scopeChanged =
               selected.resumeAfterRestart !== undefined &&
-              !isRestartResumeMarkerInScope(selected.resumeAfterRestart, scope);
+              !isRestartResumeMarkerInScope(selected.resumeAfterRestart, scope)
+                ? { sessionId: selected.sessionId }
+                : undefined;
             const recovered: InternalSessionEntry["resumeAfterRestart"] =
               selected.resumeAfterRestart ??
               (parked ||
@@ -587,6 +589,13 @@ async function resumeRestartStore(
           },
         });
         if (!resumed) {
+          if (scopeChanged) {
+            // The cleared marker no longer keeps custody of the input queued behind it.
+            await interruptOrphanedSessionPendingInputs(
+              { ...target, sessionKey, sessionId: scopeChanged.sessionId },
+              () => signal.throwIfAborted(),
+            );
+          }
           summary.record(
             agentId,
             sessionKey,
