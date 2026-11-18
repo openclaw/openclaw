@@ -23,6 +23,12 @@ function namespace(identity: Identity, hostId: string): Identity {
   };
 }
 
+class SourceConfigurationChangedError extends Error {
+  constructor() {
+    super("Session Share source configuration changed; restart the service.");
+  }
+}
+
 type Source = {
   hostId: string;
   label: string;
@@ -60,7 +66,6 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
     };
   };
   const assertCurrent = (source: Source, generation: number) => {
-    source.assertConfigured();
     if (
       !source.connected ||
       source.generation !== generation ||
@@ -92,7 +97,7 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
             context.scheduler.signal.throwIfAborted();
             retired ||= !isDeepStrictEqual(sourceConfig(id), binding);
             if (retired) {
-              throw new Error("Session Share source configuration changed; restart the service.");
+              throw new SourceConfigurationChangedError();
             }
           };
           const url = new URL(String(value.url));
@@ -198,6 +203,7 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
             try {
               query.signal?.throwIfAborted();
               const generation = source.generation;
+              source.assertConfigured();
               assertCurrent(source, generation);
               const raw = await source.client.request("session-share.list", {
                 limit: sessionCatalogPaging.boundedLimit(query.limitPerHost),
@@ -219,13 +225,16 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
                     : session,
                 ),
               });
-            } catch {
+            } catch (error) {
               query.signal?.throwIfAborted();
               return Object.assign(common, {
                 sessions: [],
                 error: {
                   code: "SOURCE_UNAVAILABLE",
-                  message: "Shared Gateway unavailable. Refresh the catalog.",
+                  message:
+                    error instanceof SourceConfigurationChangedError
+                      ? error.message
+                      : "Shared Gateway unavailable. Refresh the catalog.",
                 },
               });
             }
@@ -238,6 +247,7 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
         throw new Error("Shared Gateway is unavailable. Refresh the catalog.");
       }
       const generation = source.generation;
+      source.assertConfigured();
       assertCurrent(source, generation);
       try {
         const raw = await source.client.request("session-share.read", {
@@ -262,8 +272,10 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
               : item,
           ),
         };
-      } catch {
-        throw new Error("Shared Gateway read failed. Refresh the catalog.");
+      } catch (error) {
+        throw error instanceof SourceConfigurationChangedError
+          ? error
+          : new Error("Shared Gateway read failed. Refresh the catalog.");
       }
     },
   };

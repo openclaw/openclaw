@@ -50,107 +50,74 @@ afterEach(() => {
 });
 
 it("polls only selected outbound sources and rejects retired connections without leaking errors", async () => {
-  vi.useFakeTimers();
-  let config: OpenClawConfig = {
-    plugins: {
-      entries: {
-        "session-share": {
-          config: {
-            gateways: {
-              team: {
-                deviceIdentityKey: "session-share-test",
-                url: "wss://team.example.test",
-                deviceToken: { source: "env", provider: "default", id: "TEST" },
-                cloudflareAccess: {
-                  clientId: { source: "env", provider: "default", id: "CF_ID" },
-                  clientSecret: { source: "env", provider: "default", id: "CF_SECRET" },
-                },
-              },
-            },
-          },
-        },
+  const f = await createSource();
+  const { catalog, client } = f;
+  expect(client.options).toMatchObject({
+    deviceIdentity: { deviceId: "session-share-test" },
+    url: "wss://team.example.test/",
+    scopes: ["operator.session-share.read"],
+    sharedStateMode: "read-only",
+    deviceToken: "synthetic-secret",
+    edgeAuthHeaders: {
+      "CF-Access-Client-Id": "synthetic-secret",
+      "CF-Access-Client-Secret": "synthetic-secret",
+    },
+  });
+  expect(client.options.token).toBeUndefined();
+  (client.options.onHelloOk as () => void)();
+  const session = {
+    threadId: "agent:main:one",
+    status: "idle",
+    archived: false,
+    canContinue: false,
+    canArchive: false,
+    createdActor: {
+      type: "human",
+      identity: {
+        type: "remote",
+        pluginId: "session-share",
+        domain: "node:spoof",
+        idKind: "profile",
+        id: "person",
       },
     },
   };
-  const registerService = vi.fn<OpenClawPluginApi["registerService"]>();
-  const api = createTestPluginApi({
-    registerService,
-    runtime: createPluginRuntimeMock({ config: { current: () => config } }),
+  client.request.mockResolvedValue({ sessions: [session] });
+  expect(await catalog.list({ hostIds: ["node:team"] })).toEqual([]);
+  const first = await catalog.list({ search: "one", limitPerHost: 10 });
+  expect(first[0]?.sessions[0]?.createdActor?.identity).toMatchObject({ domain: "gateway:team" });
+  expect(client.request).toHaveBeenCalledWith("session-share.list", {
+    searchTerm: "one",
+    limit: 10,
   });
-  const catalog = createSessionShareGatewayCatalog(api);
-  const service = registerService.mock.calls[0]![0];
-  if (service.apiVersion !== 2) {
-    throw new Error("Expected service v2");
-  }
-  const scheduler = createTestPluginServiceScheduler();
-  try {
-    await service.start({ config, logger: api.logger, stateDir: "/unused", scheduler });
-    const client = transport.clients[0]!;
-    expect(client.options).toMatchObject({
-      deviceIdentity: { deviceId: "session-share-test" },
-      url: "wss://team.example.test/",
-      scopes: ["operator.session-share.read"],
-      sharedStateMode: "read-only",
-      deviceToken: "synthetic-secret",
-      edgeAuthHeaders: {
-        "CF-Access-Client-Id": "synthetic-secret",
-        "CF-Access-Client-Secret": "synthetic-secret",
-      },
-    });
-    expect(client.options.token).toBeUndefined();
-    (client.options.onHelloOk as () => void)();
-    const session = {
-      threadId: "agent:main:one",
-      status: "idle",
-      archived: false,
-      canContinue: false,
-      canArchive: false,
-      createdActor: {
-        type: "human",
-        identity: {
-          type: "remote",
-          pluginId: "session-share",
-          domain: "node:spoof",
-          idKind: "profile",
-          id: "person",
-        },
-      },
-    };
-    client.request.mockResolvedValue({ sessions: [session] });
-    expect(await catalog.list({ hostIds: ["node:team"] })).toEqual([]);
-    const first = await catalog.list({ search: "one", limitPerHost: 10 });
-    expect(first[0]?.sessions[0]?.createdActor?.identity).toMatchObject({ domain: "gateway:team" });
-    expect(client.request).toHaveBeenCalledWith("session-share.list", {
-      searchTerm: "one",
-      limit: 10,
-    });
-    client.request.mockImplementationOnce(async () => {
-      (client.options.onClose as () => void)();
-      return { sessions: [session] };
-    });
-    expect((await catalog.list({}))[0]).toMatchObject({
-      sessions: [],
-      error: { code: "SOURCE_UNAVAILABLE" },
-    });
-    (client.options.onHelloOk as () => void)();
-    client.request.mockRejectedValueOnce(new Error("synthetic-secret"));
-    expect(JSON.stringify(await catalog.list({}))).not.toContain("synthetic-secret");
-    client.request.mockImplementationOnce(async () => {
-      config = {};
-      return { threadId: "agent:main:one", items: [] };
-    });
-    await expect(
-      catalog.read({ hostId: "gateway:team", threadId: "agent:main:one" }),
-    ).rejects.toThrow("Shared Gateway read failed");
-  } finally {
-    await service.stop?.({ config, logger: api.logger, stateDir: "/unused", scheduler });
-    await scheduler.stop();
-  }
-  expect(transport.clients[0]?.stopAndWait).toHaveBeenCalledOnce();
+  client.request.mockImplementationOnce(async () => {
+    (client.options.onClose as () => void)();
+    return { sessions: [session] };
+  });
+  expect((await catalog.list({}))[0]).toMatchObject({
+    sessions: [],
+    error: { code: "SOURCE_UNAVAILABLE" },
+  });
+  (client.options.onHelloOk as () => void)();
+  client.request.mockRejectedValueOnce(new Error("synthetic-secret"));
+  expect(JSON.stringify(await catalog.list({}))).not.toContain("synthetic-secret");
+  client.request.mockImplementationOnce(async () => {
+    f.replace({});
+    return { threadId: "agent:main:one", items: [] };
+  });
+  await expect(
+    catalog.read({ hostId: "gateway:team", threadId: "agent:main:one" }),
+  ).resolves.toMatchObject({ threadId: "agent:main:one" });
+  const calls = client.request.mock.calls.length;
+  expect((await catalog.list({}))[0]?.error?.message).toContain("restart the service");
+  await expect(
+    catalog.read({ hostId: "gateway:team", threadId: "agent:main:one" }),
+  ).rejects.toThrow("restart the service");
+  expect(client.request).toHaveBeenCalledTimes(calls);
 });
 
-async function createSource() {
-  let config: OpenClawConfig = {
+function createSourceConfig(): OpenClawConfig {
+  return {
     secrets: { providers: { fixture: { source: "env", allowlist: ["TOKEN"] } } },
     plugins: {
       entries: {
@@ -173,17 +140,25 @@ async function createSource() {
       },
     },
   };
+}
+
+function catalogFixture(current: () => OpenClawConfig) {
   const registerService = vi.fn<OpenClawPluginApi["registerService"]>();
   const api = createTestPluginApi({
     registerService,
-    runtime: createPluginRuntimeMock({ config: { current: () => config } }),
+    runtime: createPluginRuntimeMock({ config: { current } }),
   });
   const catalog = createSessionShareGatewayCatalog(api);
   const service = registerService.mock.calls[0]![0];
   if (service.apiVersion !== 2) {
     throw new Error("Expected service v2");
   }
-  const scheduler = createTestPluginServiceScheduler();
+  return { api, catalog, service, scheduler: createTestPluginServiceScheduler() };
+}
+
+async function createSource() {
+  let config = createSourceConfig();
+  const { api, catalog, service, scheduler } = catalogFixture(() => config);
   onTestFinished(async () => {
     await service.stop?.({ config, logger: api.logger, stateDir: "/unused", scheduler });
     await scheduler.stop();
@@ -295,18 +270,28 @@ it.each([
   expect(f.assertConnection).toThrow("configuration changed");
 });
 
-it("rejects an in-flight read when its credential provider changes", async () => {
-  const f = await createSource();
-  f.client.request.mockImplementationOnce(async () => {
-    const next = structuredClone(f.config());
-    next.secrets!.providers!.fixture = { source: "env", allowlist: [] };
-    f.replace(next);
-    return { threadId: "one", items: [] };
-  });
-  await expect(f.catalog.read({ hostId: "gateway:team", threadId: "one" })).rejects.toThrow(
-    "Shared Gateway read failed",
-  );
-});
+it.each(["list", "read"])(
+  "lets an admitted %s finish before applying configuration changes",
+  async (method) => {
+    const f = await createSource();
+    f.client.request.mockImplementationOnce(async () => {
+      const next = structuredClone(f.config());
+      next.secrets!.providers!.fixture = { source: "env", allowlist: [] };
+      f.replace(next);
+      return method === "list" ? { sessions: [] } : { threadId: "one", items: [] };
+    });
+    const read = () => f.catalog.read({ hostId: "gateway:team", threadId: "one" });
+    if (method === "list") {
+      expect((await f.catalog.list({}))[0]?.error).toBeUndefined();
+    } else {
+      await expect(read()).resolves.toMatchObject({ threadId: "one" });
+    }
+    const calls = f.client.request.mock.calls.length;
+    expect((await f.catalog.list({}))[0]?.error?.message).toContain("restart the service");
+    await expect(read()).rejects.toThrow("restart the service");
+    expect(f.client.request).toHaveBeenCalledTimes(calls);
+  },
+);
 
 it("does not revive an old connection when the service restarts", async () => {
   const f = await createSource();
@@ -330,40 +315,23 @@ it("never adopts replacement source B configuration while source A credentials a
   const started = new Promise<void>((resolve) => {
     resolving = resolve;
   });
-  let config: OpenClawConfig = {
-    plugins: {
-      entries: {
-        "session-share": {
-          enabled: true,
-          config: {
-            gateways: {
-              a: {
-                deviceIdentityKey: "session-share-test",
-                url: "wss://a.example.test",
-                deviceToken: { source: "env", provider: "fixture", id: "A" },
-              },
-              b: {
-                deviceIdentityKey: "session-share-test",
-                url: "wss://old-b.example.test",
-                deviceToken: { source: "env", provider: "fixture", id: "B" },
-              },
-            },
-          },
-        },
-      },
+  let config = createSourceConfig();
+  const team = (
+    config.plugins!.entries!["session-share"]!.config!.gateways as Record<string, object>
+  ).team!;
+  config.plugins!.entries!["session-share"]!.config!.gateways = {
+    a: {
+      ...team,
+      url: "wss://a.example.test",
+      deviceToken: { source: "env", provider: "fixture", id: "A" },
+    },
+    b: {
+      ...team,
+      url: "wss://old-b.example.test",
+      deviceToken: { source: "env", provider: "fixture", id: "B" },
     },
   };
-  const registerService = vi.fn<OpenClawPluginApi["registerService"]>();
-  const api = createTestPluginApi({
-    registerService,
-    runtime: createPluginRuntimeMock({ config: { current: () => config } }),
-  });
-  createSessionShareGatewayCatalog(api);
-  const service = registerService.mock.calls[0]![0];
-  if (service.apiVersion !== 2) {
-    throw new Error("Expected service v2");
-  }
-  const scheduler = createTestPluginServiceScheduler();
+  const { api, service, scheduler } = catalogFixture(() => config);
   transport.onResolve = async () => {
     transport.onResolve = undefined;
     resolving();
@@ -390,34 +358,13 @@ it.each([undefined, "primary", "missing"])(
   "does not dial without an existing named identity: %s",
   async (key) => {
     transport.identityMissing = key === "missing";
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          "session-share": {
-            config: {
-              gateways: {
-                team: {
-                  url: "wss://team.example.test",
-                  deviceIdentityKey: key,
-                  deviceToken: { source: "env", provider: "fixture", id: "TOKEN" },
-                },
-              },
-            },
-          },
-        },
-      },
-    };
-    const registerService = vi.fn<OpenClawPluginApi["registerService"]>();
-    const api = createTestPluginApi({
-      registerService,
-      runtime: createPluginRuntimeMock({ config: { current: () => config } }),
-    });
-    createSessionShareGatewayCatalog(api);
-    const service = registerService.mock.calls[0]![0];
-    if (service.apiVersion !== 2) {
-      throw new Error("Expected service v2");
-    }
-    const scheduler = createTestPluginServiceScheduler();
+    const config = createSourceConfig();
+    const gateways = config.plugins!.entries!["session-share"]!.config!.gateways as Record<
+      string,
+      Record<string, unknown>
+    >;
+    gateways.team!.deviceIdentityKey = key;
+    const { api, service, scheduler } = catalogFixture(() => config);
     try {
       await expect(
         service.start({ config, logger: api.logger, stateDir: "/unused", scheduler }),
