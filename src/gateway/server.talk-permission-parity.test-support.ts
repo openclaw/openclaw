@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, vi, type MockInstance } from "vitest";
+import { expect, onTestFailed, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createExecTool } from "../agents/bash-tools.js";
 import { createAgentHarnessHostCapabilities } from "../agents/harness/host-capability.js";
@@ -66,6 +66,10 @@ export async function runTalkNodePermissionParity({
   rpc: (method: string, params: Record<string, unknown>) => Promise<Record<string, unknown>>;
   expectRevokedWriter: (runId: string, isCurrent: () => boolean) => void;
 }) {
+  const diagnostic = { cell: "setup", lastCompletedAwait: "none", cleanup: "none" };
+  onTestFailed(() => {
+    console.error("[talk-node-parity]", JSON.stringify({ publicOnly, ...diagnostic }));
+  });
   const scope = { agentId, sessionKey: canonicalKey, sessionId, storePath };
   const matchesSourceScope = captureRpcSourceScopeMatcher({
     storePath,
@@ -141,6 +145,7 @@ export async function runTalkNodePermissionParity({
   }
   const node = await createTalkParityNodeFixture(config, harness.port, token);
   const provider = await installTalkParityProviderFixture(publicOnly);
+  diagnostic.lastCompletedAwait = "provider-installed";
   const originalConnections = context.getClientConnIds;
   context.getClientConnIds = (filter) => new Set(!filter || filter(client) ? [connectionId] : []);
   const { closeTalkClientGatewayControlSession } = await import("./talk/client-gateway-control.js");
@@ -177,6 +182,9 @@ export async function runTalkNodePermissionParity({
   try {
     for (const { ingress, decision } of scenarios) {
       const key = ingress + "-" + decision;
+      diagnostic.cell = key;
+      diagnostic.lastCompletedAwait = "none";
+      diagnostic.cleanup = "none";
       const requiresApproval = decision !== "permitted" && decision !== "policy-deny";
       const invocationCount = node.invokes.length;
       await fs.rm(marker, { force: true });
@@ -189,6 +197,7 @@ export async function runTalkNodePermissionParity({
         permissionMode:
           decision === "permitted" ? "full" : decision === "policy-deny" ? "read-only" : "guarded",
       });
+      diagnostic.lastCompletedAwait = "session-replaced";
       const source = captureGatewayDeviceRevocation(
         context,
         { deviceId: identity.identity.deviceId, role: "operator" },
@@ -335,6 +344,7 @@ export async function runTalkNodePermissionParity({
         }
         void task.catch((error: unknown) => finished.resolve({ error: String(error) }));
         const runId = await started.promise;
+        diagnostic.lastCompletedAwait = "model-started";
         if (requiresApproval) {
           const pending = await Promise.race([
             requested.promise,
@@ -342,10 +352,12 @@ export async function runTalkNodePermissionParity({
               throw new Error("No ordinary approval: " + JSON.stringify(outcome));
             }),
           ]);
+          diagnostic.lastCompletedAwait = "approval-requested";
           expect(await effectText()).toBe("");
           const approvalId = expectDefined(pending.id, "host approval ID");
           if (decision === "cancel") {
             await rpc("chat.abort", { sessionKey, runId });
+            diagnostic.lastCompletedAwait = "abort-requested";
           } else if (decision === "source-revoke") {
             // The real pre-commit guard may reject an already prepared lifecycle write.
             // Accept only that exact refusal while this deliberately revoked source is stale.
@@ -361,15 +373,19 @@ export async function runTalkNodePermissionParity({
               (await rpcReq(reviewer, "exec.approval.resolve", { id: approvalId, decision })).ok,
             ).toBe(true);
             await rpcReq(reviewer, "exec.approval.resolve", { id: approvalId, decision });
+            diagnostic.lastCompletedAwait = "approval-resolved";
           }
         }
         const result = await finished.promise;
+        diagnostic.lastCompletedAwait = "model-finished";
         if (ingress === "direct" && (decision === "cancel" || decision === "source-revoke")) {
           await expect(task).rejects.toMatchObject({ name: "AbortError" });
         } else {
           await task;
         }
+        diagnostic.lastCompletedAwait = "request-settled";
         await waitForDispatchEnd();
+        diagnostic.lastCompletedAwait = "dispatch-settled";
         if (publicOnly) {
           expect(
             listRpcSourceEntries().some(
@@ -401,14 +417,18 @@ export async function runTalkNodePermissionParity({
           );
         }
       } finally {
+        diagnostic.cleanup = "source-revoke";
         invalidateGatewayDeviceRevocation(context, identity.identity.deviceId, "operator");
         // Cleanup after a failed assertion must not mask the original revocation result.
         if (publicOnly && activeRunId && activeSignal?.aborted === false) {
           await rpc("chat.abort", { sessionKey, runId: activeRunId });
         }
+        diagnostic.cleanup = "request-settlement";
         await task?.catch(() => {});
+        diagnostic.cleanup = "dispatch-settlement";
         await waitForDispatchEnd();
         if (directVoiceSessionId) {
+          diagnostic.cleanup = "direct-session-close";
           await closeTalkClientGatewayControlSession({
             voiceSessionId: directVoiceSessionId,
             sessionKey,
@@ -416,6 +436,7 @@ export async function runTalkNodePermissionParity({
           });
         }
         source.release();
+        diagnostic.cleanup = "cell-done";
       }
     }
     expect(observed).toEqual(
@@ -434,8 +455,10 @@ export async function runTalkNodePermissionParity({
     context.getClientConnIds = originalConnections;
     provider.restore();
     reviewer.off("message", onMessage);
+    diagnostic.cleanup = "node-close";
     await node.close();
     reviewer.close();
+    diagnostic.cleanup = "done";
   }
 }
 
