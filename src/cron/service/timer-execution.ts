@@ -33,7 +33,6 @@ import {
   type CronServiceState,
   type CronSessionRunPreparation,
 } from "./state.js";
-import { executeScriptCronJob } from "./timer-execution-script.js";
 import {
   type ExecuteJobCoreOptions,
   resolveMainSessionCronDeliveryContext,
@@ -259,13 +258,23 @@ export async function executeJobCore(
     }
     assertCurrent();
     let effectiveJob = job;
+    let checkNextCheck: CronNextCheckProposal | undefined;
     let triggerEval: CronTriggerEvalOutcome | undefined;
-    if (job.trigger) {
-      const evaluator = state.deps.evaluateCronTrigger;
-      if (!evaluator) {
+    if (job.check) {
+      if (job.payload.kind !== "none" && job.payload.kind !== "agentTurn") {
         return {
           status: "error",
-          error: "cron trigger evaluator is unavailable",
+          error: "Checks cannot be combined with a shell command or system event",
+        };
+      }
+      const evaluator = state.deps.evaluateCronCheck;
+      if (!evaluator || state.deps.cronConfig?.triggers?.enabled === false) {
+        return {
+          status: "error",
+          error:
+            state.deps.cronConfig?.triggers?.enabled === false
+              ? "Automation checks are disabled by cron.triggers.enabled"
+              : "Automation check executor is unavailable",
           ...cronScriptFailureMetadata("trigger", "runtime_unavailable"),
         };
       }
@@ -273,7 +282,7 @@ export async function executeJobCore(
         occurrence,
         deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
         job,
-        script: job.trigger.script,
+        script: job.check.script,
         state: job.state.triggerState,
         streamBatch: options?.streamBatch,
         abortSignal,
@@ -288,19 +297,36 @@ export async function executeJobCore(
       if (evaluation.kind === "error") {
         return {
           status: "error",
-          error: `cron trigger evaluation failed (${evaluation.code}): ${evaluation.error}`,
+          error: `cron check failed (${evaluation.code}): ${evaluation.error}`,
           ...cronScriptFailureMetadata("trigger", evaluation.code),
           triggerEval: { fired: false, stateChanged: false },
         };
       }
+      checkNextCheck = evaluation.nextCheck;
       const stateChanged = Object.hasOwn(evaluation, "state");
       triggerEval = {
-        fired: evaluation.fire,
+        fired: evaluation.action !== "quiet",
         stateChanged,
         ...(stateChanged ? { state: evaluation.state } : {}),
       };
-      if (!evaluation.fire) {
-        return { status: "ok", triggerEval };
+      if (evaluation.nextCheck && !job.pacing) {
+        return {
+          status: "error",
+          error: "Automation check returned nextCheck, but this job has no pacing bounds",
+          ...cronScriptFailureMetadata("trigger", "invalid_input"),
+          triggerEval,
+        };
+      }
+      if (evaluation.action === "quiet") {
+        return { status: "ok", triggerEval, nextCheck: evaluation.nextCheck };
+      }
+      if (evaluation.action === "wake" && job.payload.kind !== "agentTurn") {
+        return {
+          status: "error",
+          error: "Automation check returned wake but no agent prompt is configured",
+          ...cronScriptFailureMetadata("trigger", "invalid_input"),
+          triggerEval,
+        };
       }
       // The wait for a run slot pauses the run's time budget, like a lane wait.
       const runSlot = await options?.onConditionFired?.({
@@ -335,7 +361,33 @@ export async function executeJobCore(
           triggerEval,
         };
       }
-      if (evaluation.message !== undefined) {
+      if (evaluation.action === "post") {
+        if (!state.deps.deliverCheckPost) {
+          return {
+            status: "error",
+            error: "Automation check delivery is unavailable",
+            triggerEval,
+          };
+        }
+        await options?.assertRunCurrent?.();
+        assertCurrent();
+        const message = evaluation.message!;
+        const delivery = await state.deps.deliverCheckPost({
+          job,
+          message,
+          abortSignal,
+          deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
+        });
+        assertCurrent();
+        return {
+          status: "ok",
+          summary: message,
+          ...delivery,
+          triggerEval,
+          nextCheck: evaluation.nextCheck,
+        };
+      }
+      if (evaluation.message) {
         effectiveJob = { ...job, payload: appendCronPayloadText(job.payload, evaluation.message) };
       }
     }
@@ -359,16 +411,8 @@ export async function executeJobCore(
         };
       }
     }
-    if (effectiveJob.payload.kind === "script") {
-      const result = await executeScriptCronJob(
-        state,
-        effectiveJob,
-        occurrence,
-        abortSignal,
-        assertCurrent,
-        options,
-      );
-      return triggerEval ? { ...result, triggerEval } : result;
+    if (effectiveJob.payload.kind === "none") {
+      return { status: "error", error: "No-turn automations require a check" };
     }
     if (options?.streamBatch !== undefined) {
       effectiveJob = {
@@ -387,7 +431,14 @@ export async function executeJobCore(
         sessionPreparation,
       );
       // Trigger execution already spent this occurrence; a later admission deferral cannot replay it.
-      return triggerEval ? { ...result, admissionDeferred: false, triggerEval } : result;
+      return triggerEval
+        ? {
+            ...result,
+            admissionDeferred: false,
+            triggerEval,
+            nextCheck: result.nextCheck ?? checkNextCheck,
+          }
+        : result;
     }
 
     const result = await executeDetachedCronJob(
@@ -397,7 +448,9 @@ export async function executeJobCore(
       abortSignal,
       options,
     );
-    return triggerEval ? { ...result, triggerEval } : result;
+    return triggerEval
+      ? { ...result, triggerEval, nextCheck: result.nextCheck ?? checkNextCheck }
+      : result;
   } finally {
     occurrence?.release();
     sessionPreparation?.notices.release();

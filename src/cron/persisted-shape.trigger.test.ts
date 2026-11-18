@@ -5,7 +5,7 @@ function candidate(overrides: Record<string, unknown> = {}) {
   return {
     id: "job-1",
     schedule: { kind: "every", everyMs: 30_000 },
-    trigger: { script: "json({ fire: true })" },
+    check: { script: "json({ wake: '' })" },
     payload: { kind: "systemEvent", text: "changed" },
     sessionTarget: "main",
     ...overrides,
@@ -23,7 +23,7 @@ describe("persisted cron trigger shape", () => {
   });
 
   it("rejects empty scripts and non-object triggers", () => {
-    expect(getInvalidPersistedCronJobReason(candidate({ trigger: { script: "  " } }))).toBe(
+    expect(getInvalidPersistedCronJobReason(candidate({ check: { script: "  " } }))).toBe(
       "invalid-trigger",
     );
     expect(getInvalidPersistedCronJobReason(candidate({ trigger: "script" }))).toBe(

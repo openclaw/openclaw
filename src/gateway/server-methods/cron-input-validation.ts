@@ -136,7 +136,7 @@ async function captureCronInferenceForCaller(
 }
 
 export function requiresExplicitAgentRuntimeToolsAllow(params: {
-  job: Pick<CronJob, "payload" | "trigger">;
+  job: Pick<CronJob, "payload" | "check">;
   callerScope: CronCallerScope | undefined;
 }): boolean {
   return (
@@ -328,9 +328,7 @@ export async function captureCronCreatorSession(
   const inheritedAuthority = caller.client?.internal?.operatorRunAuthority;
   const hasConversationResult =
     job.sessionTarget !== "main" &&
-    (job.payload.kind === "agentTurn" ||
-      job.payload.kind === "script" ||
-      job.payload.kind === "command");
+    (job.payload.kind === "agentTurn" || job.check !== undefined || job.payload.kind === "command");
   const sessionKey =
     callerScope?.sessionKey ?? (hasConversationResult ? job.sessionKey : undefined);
   const agentId = callerScope?.agentId ?? job.agentId;

@@ -7,17 +7,16 @@ import {
 } from "./scheduled-tool-policy.js";
 import type { CronJob, CronStoredJob } from "./types.js";
 
-type CronToolRuntimeSpec = Pick<CronJob, "payload" | "trigger">;
+type CronToolRuntimeSpec = Pick<CronJob, "payload" | "check">;
 
 /** Returns whether a cron job can construct or execute OpenClaw agent tools. */
 export function cronJobUsesToolRuntime(job: {
   payload?: { kind?: unknown };
-  trigger?: { script?: unknown };
+  check?: { script?: unknown };
 }): boolean {
   return (
     job.payload?.kind === "agentTurn" ||
-    job.payload?.kind === "script" ||
-    (typeof job.trigger?.script === "string" && job.trigger.script.trim().length > 0)
+    (typeof job.check?.script === "string" && job.check.script.trim().length > 0)
   );
 }
 
@@ -39,7 +38,7 @@ export function resolveCronRunToolsAllow(
   job: Pick<
     CronStoredJob,
     | "payload"
-    | "trigger"
+    | "check"
     | "owner"
     | "scheduledToolPolicy"
     | "runtimeAuthority"
@@ -48,7 +47,7 @@ export function resolveCronRunToolsAllow(
 ): string[] | undefined {
   return job.payload.kind === "agentTurn" &&
     job.payload.toolsAllowIsDefault === true &&
-    !job.trigger?.script.trim() &&
+    !job.check?.script.trim() &&
     !job.runtimeAuthority &&
     !job.runtimeAuthorityRecoveryRequired &&
     resolveCronScheduledToolPolicy({
@@ -66,8 +65,8 @@ export function cronScriptReferencesMcp(script: string): boolean {
 }
 
 type CronCreatorReauthorizationJob = {
-  payload?: { kind?: unknown; toolsAllow?: string[] | undefined; script?: unknown };
-  trigger?: { script?: unknown };
+  payload?: { kind?: unknown; toolsAllow?: string[] | undefined };
+  check?: { script?: unknown };
   scheduledToolPolicy?: unknown;
   owner?: { sessionKey?: string; accountId?: string };
   toolsAllowProvenance?: { callerOrigin?: unknown };
@@ -91,9 +90,7 @@ function cronJobRunAdmitsScheduledAccount(job: CronCreatorReauthorizationJob): b
   });
   return (
     constructTools ||
-    [job.trigger?.script, job.payload?.kind === "script" ? job.payload.script : undefined].some(
-      (script) => typeof script === "string" && cronScriptReferencesMcp(script),
-    )
+    (typeof job.check?.script === "string" && cronScriptReferencesMcp(job.check.script))
   );
 }
 

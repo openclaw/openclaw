@@ -2,14 +2,14 @@ import type { createHeadlessDeadlineScope } from "../agents/code-mode-headless.j
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { GitHubPublicationReadUnavailableError } from "../gateway/github-publication-json-read.js";
 import {
-  SESSION_PR_AUTO_FIX_TRIGGER,
+  SESSION_PR_AUTO_FIX_CHECK,
   sessionPrAutoFixTarget,
 } from "../shared/session-pr-auto-fix.js";
 import type { CronJob } from "./types.js";
 
 export function prAutoFixFailureCode(params: { job: CronJob; script: string }, error: unknown) {
   return error instanceof GitHubPublicationReadUnavailableError &&
-    params.script === SESSION_PR_AUTO_FIX_TRIGGER &&
+    params.script === SESSION_PR_AUTO_FIX_CHECK &&
     sessionPrAutoFixTarget(params.job)
     ? "runtime_unavailable"
     : "internal_error";
@@ -22,7 +22,7 @@ export async function observePrAutoFix(
   scope: ReturnType<typeof createHeadlessDeadlineScope>,
   assertCurrent: () => void,
 ) {
-  if (params.script !== SESSION_PR_AUTO_FIX_TRIGGER || !sessionPrAutoFixTarget(params.job)) {
+  if (params.script !== SESSION_PR_AUTO_FIX_CHECK || !sessionPrAutoFixTarget(params.job)) {
     return params.state;
   }
   const { readSessionPrAutoFixObservation } =

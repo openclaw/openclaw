@@ -176,8 +176,8 @@ export function formatCronPayload(job: CronJob) {
   if (p.kind === "command") {
     return t("cron.job.command", { command: p.argv.join(" ") });
   }
-  if (p.kind === "script") {
-    return t("cron.job.script", { script: p.script });
+  if (p.kind === "none") {
+    return t("cron.form.checkOnly");
   }
   const base = t("cron.job.agent", { message: p.message });
   const delivery = job.delivery;

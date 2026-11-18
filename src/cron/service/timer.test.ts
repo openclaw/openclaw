@@ -160,11 +160,11 @@ describe("cron service timer seam coverage", () => {
   it("does not dispatch payload work when trigger evaluation resolves after cancellation", async () => {
     const evaluation = createDeferred<{
       kind: "evaluated";
-      fire: true;
+      wake: "";
       state: { revision: number };
     }>();
     const evaluationEntered = createDeferred();
-    const evaluateCronTrigger = vi.fn(() => {
+    const evaluateCronCheck = vi.fn(() => {
       evaluationEntered.resolve();
       return evaluation.promise;
     });
@@ -173,14 +173,14 @@ describe("cron service timer seam coverage", () => {
     const runIsolatedAgentJob = vi.fn(async () => ok);
     const state = createCronServiceState({
       cronConfig: { triggers: { enabled: true } },
-      evaluateCronTrigger,
+      evaluateCronCheck,
       runCommandJob,
       runScriptJob,
       runIsolatedAgentJob,
     });
     const job: CronJob = {
       ...createDueCommandJob({ now }),
-      trigger: { script: "json({ fire: true })" },
+      check: { script: "json({ wake: '' })" },
     };
     const controller = new AbortController();
 
@@ -191,9 +191,9 @@ describe("cron service timer seam coverage", () => {
         result,
         "Cron did not enter trigger evaluation",
       );
-      expect(evaluateCronTrigger).toHaveBeenCalledOnce();
+      expect(evaluateCronCheck).toHaveBeenCalledOnce();
       controller.abort(new Error("operator cancelled the scheduled run"));
-      evaluation.resolve({ kind: "evaluated", fire: true, state: { revision: 2 } });
+      evaluation.resolve({ kind: "evaluated", action: "wake", state: { revision: 2 } });
 
       await expect(result).resolves.toMatchObject({ status: "error" });
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
@@ -203,7 +203,7 @@ describe("cron service timer seam coverage", () => {
     } finally {
       // Abort before releasing evaluation so failed assertions cannot start payload work.
       controller.abort(new Error("operator cancelled the scheduled run"));
-      evaluation.resolve({ kind: "evaluated", fire: true, state: { revision: 2 } });
+      evaluation.resolve({ kind: "evaluated", action: "wake", state: { revision: 2 } });
       await result.catch(() => undefined);
     }
   });
@@ -411,7 +411,7 @@ describe("cron quiet outcome finalization", () => {
     async ({ mode, failWrite }) => {
       const job = {
         ...createDueIsolatedAgentJob({ now }),
-        trigger: { script: "json({ fire: false })" },
+        check: { script: "json({ })" },
       };
       const force = mode === "manual-force";
       const pendingSlot = now + 30 * 60_000;
@@ -431,11 +431,11 @@ describe("cron quiet outcome finalization", () => {
       const database = openOpenClawStateDatabase().db;
       const state = createCronServiceState({
         cronConfig: { triggers: { enabled: true } },
-        evaluateCronTrigger: vi.fn(async () => {
+        evaluateCronCheck: vi.fn(async () => {
           if (mode.startsWith("retired")) {
             advanceCronActiveJobGeneration();
           }
-          return { kind: "evaluated" as const, fire: false };
+          return { kind: "evaluated" as const, action: "quiet" };
         }),
       });
 

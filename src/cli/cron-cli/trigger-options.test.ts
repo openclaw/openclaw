@@ -17,7 +17,7 @@ vi.mock("../gateway-rpc.js", async () => {
 const { registerCronAddCommand } = await import("./register.cron-add.js");
 const { registerCronEditCommand } = await import("./register.cron-edit.js");
 const { registerCronScratchCommand } = await import("./register.cron-scratch.js");
-const { readCronPayloadScript, readCronTriggerScript, readCronScratchContent } =
+const { readCronPayloadScript, readCronCheckScript, readCronScratchContent } =
   await import("./trigger-options.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -128,15 +128,13 @@ it.each(["display-name", "agent", "session-key", "model", "thinking", "thread-id
 it.each`
   options                                                               | message
   ${{ tools: "", "clear-tools": true, "pacing-min": "30m" }}            | ${"Use --tools or --clear-tools"}
-  ${{ "trigger-script": "", "clear-trigger": true }}                    | ${"--trigger-script must not be blank"}
-  ${{ script: " ", "pacing-min": "30m" }}                               | ${"--script must not be blank"}
+  ${{ "check-script": "", "clear-check": true }}                        | ${"--check-script must not be blank"}
   ${{ command: "", name: "Renamed" }}                                   | ${"--command must not be blank"}
   ${{ "system-event": "hello", "timeout-seconds": "12" }}               | ${"--timeout-seconds is not supported for systemEvent jobs"}
-  ${{ "timeout-seconds": "12", "script-tool-budget": "3" }}             | ${"Use --script-timeout-seconds"}
   ${{ "pacing-min": "30m", "command-cwd": " " }}                        | ${"--command-cwd must not be blank"}
   ${{ webhook: "https://example.invalid/hook", "clear-channel": true }} | ${"--webhook cannot be combined with chat delivery options"}
   ${{ webhook: "not-a-url" }}                                           | ${"--webhook must be a valid http(s) URL"}
-  ${{ session: "main", "system-event": "wakeup", channel: "telegram" }} | ${"require an agentTurn job or a non-main command or script job with delivery"}
+  ${{ session: "main", "system-event": "wakeup", channel: "telegram" }} | ${"require an agentTurn job or a non-main command or check job with delivery"}
   ${{ "stream-cwd": "/new-stream", "on-exit-cwd": "/repo" }}            | ${"--on-exit-cwd requires --on-exit"}
   ${{ "on-exit": "./watch.sh", every: "5m" }}                           | ${"Choose at most one schedule change"}
   ${{ "stream-batch-ms": "100", tz: "UTC" }}                            | ${"not valid with stream schedule edits"}
@@ -156,15 +154,15 @@ it.each`
     expectJsonFailure(args, message, root),
 );
 
-it("preserves trigger.once and the exact script path when replacing the body (#119916)", async () => {
+it("preserves check.once and the exact script path when replacing the body (#119916)", async () => {
   const dir = tempDirs.make("cron-edit-");
   const scriptPath = path.join(dir, "next.js ");
-  await fs.writeFile(path.join(dir, "next.js"), "return { fire: false };");
-  await fs.writeFile(scriptPath, "return { fire: true };");
-  existing({ configRevision: "revision", trigger: { script: "old", once: true } });
+  await fs.writeFile(path.join(dir, "next.js"), "return { };");
+  await fs.writeFile(scriptPath, "return { wake: '' };");
+  existing({ configRevision: "revision", check: { script: "old", once: true } });
   await edit(
-    ["--trigger-script", scriptPath],
-    { trigger: { script: "return { fire: true };", once: true } },
+    ["--check-script", scriptPath],
+    { check: { script: "return { wake: '' };", once: true } },
     { expectedConfigRevision: "revision" },
   );
 });
@@ -179,7 +177,7 @@ it("validates trigger files before reading an existing job", async () => {
     ["missing.js", "ENOENT"],
   ] as const) {
     vi.mocked(defaultRuntime.error).mockClear();
-    await rejectEdit(["--pacing-min", "30m", "--trigger-script", path.join(dir, file)], message);
+    await rejectEdit(["--pacing-min", "30m", "--check-script", path.join(dir, file)], message);
   }
 });
 
@@ -258,7 +256,7 @@ it.each`
   ${[...addArgs, "--system-event", "test", "--every", "8640000000000001ms"]}                                 | ${"Invalid --every"}                                                                                                          | ${undefined}                                                                                                | ${undefined}
   ${["edit", "job-1", "--cron", "0 * * * *", "--tz", "UTC", "--stagger", "8640000000000001ms"]}              | ${"Invalid --stagger"}                                                                                                        | ${undefined}                                                                                                | ${undefined}
   ${["edit", "job-1", "--cron", "0 * * * *", "--stagger", " "]}                                              | ${"Invalid --stagger"}                                                                                                        | ${undefined}                                                                                                | ${undefined}
-  ${[...addMessage, "--trigger-script", "   "]}                                                              | ${"--trigger-script must not be blank"}                                                                                       | ${undefined}                                                                                                | ${undefined}
+  ${[...addMessage, "--check-script", "   "]}                                                                | ${"--check-script must not be blank"}                                                                                         | ${undefined}                                                                                                | ${undefined}
 `("rejects $args", async ({ args, message, job, reads }: RejectCase) => {
   if (job) {
     existing(job);
@@ -374,8 +372,7 @@ async function rejectAdd(options: Record<string, string | true>, message: string
 
 describe("cron trigger CLI options", () => {
   it.each([
-    ["Trigger script", readCronTriggerScript],
-    ["Script payload", readCronPayloadScript],
+    ["Check script", readCronCheckScript],
     ["Cron scratch", readCronScratchContent],
   ] as const)("rejects malformed UTF-8 for %s from files and stdin", async (label, read) => {
     const bytes = Buffer.from([0x78, 0xff, 0x79]);
@@ -391,47 +388,45 @@ describe("cron trigger CLI options", () => {
     const text = "\uFEFF 中文 😀 \uFFFD\r\n";
     const file = await fixture("valid.txt", text);
     await expect(readCronScratchContent(file)).resolves.toBe(text);
-    await expect(readCronTriggerScript(file)).resolves.toBe("中文 😀 \uFFFD");
-    await expect(readCronPayloadScript(file)).resolves.toBe("中文 😀 \uFFFD");
+    await expect(readCronCheckScript(file)).resolves.toBe("中文 😀 \uFFFD");
   });
 
   it("reads the exact trigger path on add", async () => {
-    const scriptPath = await fixture("watch.js ", "  json({ fire: true })  \n");
+    const scriptPath = await fixture("watch.js ", "  json({ wake: '' })  \n");
     await runOptions("add", {
-      "trigger-script": scriptPath,
-      "trigger-once": true,
-      "system-event": "changed",
+      "check-script": scriptPath,
+      "check-once": true,
+      message: "changed",
       session: "main",
     });
 
     expectRequest(
       "cron.add",
-      expect.objectContaining({ trigger: { script: "json({ fire: true })", once: true } }),
+      expect.objectContaining({ check: { script: "json({ wake: '' })", once: true } }),
     );
   });
 
   it.each(["add", "edit"] as const)(
-    "reads the exact payload path and budgets on %s",
+    "reads the exact check path and budgets on %s",
     async (operation) => {
-      const scriptPath = await fixture("job.js ", "  return { notify: 'done' }  \n");
+      const scriptPath = await fixture("job.js ", "  return { post: 'done' }  \n");
       await runOptions(operation, {
-        script: scriptPath,
-        "script-timeout-seconds": "450",
-        "script-tool-budget": "75",
+        "check-script": scriptPath,
+        "check-timeout-seconds": "450",
+        "check-tool-budget": "75",
         ...(operation === "add" ? { session: "isolated" } : {}),
       });
 
-      const payload = {
-        kind: "script",
-        script: "return { notify: 'done' }",
+      const check = {
+        script: "return { post: 'done' }",
         timeoutSeconds: 450,
         toolBudget: 75,
       };
       expectRequest(
         operation === "add" ? "cron.add" : "cron.update",
         operation === "add"
-          ? expect.objectContaining({ sessionTarget: "isolated", payload })
-          : { id: "job-1", patch: { payload } },
+          ? expect.objectContaining({ sessionTarget: "isolated", payload: { kind: "none" }, check })
+          : { id: "job-1", patch: { check } },
       );
     },
   );
@@ -439,8 +434,8 @@ describe("cron trigger CLI options", () => {
   it("rejects script creation with a generic timeout", async () => {
     const scriptPath = await fixture("job.js", "return { notify: 'done' }");
     await rejectAdd(
-      { name: "script job", script: scriptPath, "timeout-seconds": "30" },
-      "Use --script-timeout-seconds for script jobs, not --timeout-seconds.",
+      { name: "check job", "check-script": scriptPath, "timeout-seconds": "30" },
+      "Use --check-timeout-seconds for check-only jobs, not --timeout-seconds.",
     );
   });
 
@@ -457,7 +452,7 @@ describe("cron trigger CLI options", () => {
     expectRequest("cron.add", expect.objectContaining({ pacing: { min: "15m", max: "4h" } }));
   });
 
-  it.each(["trigger", "pacing"])("maps --clear-%s to a nullable edit patch", async (field) => {
+  it.each(["check", "pacing"])("maps --clear-%s to a nullable edit patch", async (field) => {
     await runOptions("edit", { [`clear-${field}`]: true });
     expectRequest("cron.update", { id: "job-1", patch: { [field]: null } });
   });

@@ -227,9 +227,8 @@ it("rejects invalid explicit cron stagger before create or patch defaults", () =
 
 it("normalizes trigger scripts and preserves patch clears", () => {
   expect(
-    createMain({ trigger: { script: "  json({ fire: true })  ", once: "true", ignored: true } })
-      .trigger,
-  ).toEqual({ script: "json({ fire: true })", once: true });
+    createMain({ check: { script: "  json({ wake: '' })  ", once: "true", ignored: true } }).check,
+  ).toEqual({ script: "json({ wake: '' })", once: true });
   expect(normalizeCronJobPatch({ trigger: null })).toEqual({ trigger: null });
 });
 

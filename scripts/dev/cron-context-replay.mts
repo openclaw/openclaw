@@ -358,8 +358,8 @@ function anonymizePayload(payload: CronStoredJob["payload"]): CronStoredJob["pay
         : {}),
     };
   }
-  if (payload.kind === "script") {
-    return { kind: "script", script: "return null", ...tools };
+  if (payload.kind === "none") {
+    return { kind: "none", ...tools };
   }
   if (payload.kind === "systemEvent") {
     return { kind: "systemEvent", text: "fixture", ...tools };
@@ -396,11 +396,11 @@ export function anonymize(job: CronStoredJob, agentId: string, index: number): C
     payload: anonymizePayload(job.payload),
     delivery: { mode: "none" },
     state: {},
-    ...(job.trigger?.script.trim()
+    ...(job.check?.script.trim()
       ? {
-          trigger: {
-            script: "return null",
-            ...(job.trigger.once !== undefined ? { once: job.trigger.once } : {}),
+          check: {
+            script: "return {}",
+            ...(job.check.once !== undefined ? { once: job.check.once } : {}),
           },
         }
       : {}),

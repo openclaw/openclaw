@@ -214,7 +214,7 @@ export async function launchCronRun(
   }
   if (isImmediateCronRunMode(options.mode)) {
     executionJob.state.nextRunAtMs = options.scheduleOwnershipAtMs;
-    executionJob.trigger = options.evaluateTrigger ? executionJob.trigger : undefined;
+    if (!options.evaluateTrigger && executionJob.payload.kind !== "none") delete executionJob.check;
   }
   const activeJobMarker = manual
     ? markManualCronJobActive(state, entry.job, entry.runReceipt)
@@ -291,7 +291,7 @@ export async function launchCronRun(
         ? "error"
         : result.status !== "ok"
           ? "dropped"
-          : !executionJob.trigger || result.triggerEval?.fired
+          : !executionJob.check || result.triggerEval?.fired
             ? "fired"
             : "dropped",
   );

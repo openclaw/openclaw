@@ -62,18 +62,3 @@ export function cronCommandPayloadSchema<
     toolsAllowIsDefault: Type.Optional(Type.Boolean()),
   });
 }
-
-export function cronScriptPayloadSchema<
-  TScript extends TSchema,
-  TToolsAllow extends TSchema,
-  TTimeout extends TSchema,
->(params: { script: TScript; toolsAllow: TToolsAllow; timeoutSeconds: TTimeout }) {
-  return closedObject({
-    kind: Type.Literal("script"),
-    script: params.script,
-    timeoutSeconds: Type.Optional(params.timeoutSeconds),
-    toolBudget: Type.Optional(Type.Integer({ minimum: 1 })),
-    toolsAllow: Type.Optional(params.toolsAllow),
-    toolsAllowIsDefault: Type.Optional(Type.Boolean()),
-  });
-}

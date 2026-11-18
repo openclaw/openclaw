@@ -39,7 +39,11 @@ export function setupFailureAlertSuite() {
       requestHeartbeat: vi.fn(),
       runCronFailureRepair: vi.fn<NonNullable<Deps["runCronFailureRepair"]>>(async () => undefined),
       runIsolatedAgentJob: vi.fn<JobRunner>(async () => runResult),
-      runScriptJob: vi.fn<NonNullable<Deps["runScriptJob"]>>(async () => runResult),
+      evaluateCronCheck: vi.fn<NonNullable<Deps["evaluateCronCheck"]>>(async () => ({
+        kind: "error",
+        code: "internal_error",
+        error: runResult.error ?? "Check failed",
+      })),
     };
     const { sendCronFailureAlert, ...deps } = mocks;
     const cron = new CronService({

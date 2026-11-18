@@ -15,6 +15,7 @@ export function buildCronPayload(
   // Updates must omit caps so the Gateway retains that job's existing authority.
   const toolsAllow = !isUpdate && source && "toolsAllow" in source ? source.toolsAllow : undefined;
   const restrictions = toolsAllow ? { toolsAllow: [...toolsAllow] } : {};
+  if (form.payloadKind === "none") return { kind: "none" as const, ...restrictions };
   if (form.payloadKind === "systemEvent") {
     const text = form.payloadText.trim();
     if (!text) {

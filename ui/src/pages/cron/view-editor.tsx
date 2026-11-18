@@ -279,11 +279,9 @@ function PromptBlock(
     phoneLayout: boolean;
   },
 ) {
-  const lockedPayloadLabel = () =>
-    props.form.payloadKind === "script" ? t("cron.form.script") : t("cron.form.command");
   const promptLabel = () =>
     props.payloadLocked
-      ? lockedPayloadLabel()
+      ? t("cron.form.command")
       : props.form.payloadKind === "systemEvent"
         ? t("cron.form.mainTimelineMessage")
         : t("cron.form.assistantTaskPrompt");
@@ -330,7 +328,9 @@ function PromptBlock(
             {t(nameError() ?? "")}
           </div>
         ) : undefined}
-        {props.payloadLocked ? (
+        {props.form.payloadKind === "none" ? (
+          <div class="cron-help cron-prompt__note">{t("cron.form.checkOnlyHelp")}</div>
+        ) : props.payloadLocked ? (
           <>
             <pre
               id="cron-payload-text"
@@ -343,10 +343,7 @@ function PromptBlock(
               <SanitizedHtml
                 tag="code"
                 class="hljs"
-                html={highlightCodeHtml(
-                  props.form.payloadText,
-                  props.form.payloadKind === "script" ? "javascript" : "bash",
-                )}
+                html={highlightCodeHtml(props.form.payloadText, "bash")}
               />
             </pre>
             <div class="cron-help cron-prompt__note">{promptHelp()}</div>

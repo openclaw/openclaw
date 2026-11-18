@@ -126,7 +126,7 @@ async function executeProbe({ ctx }: HeadlessParams, condition = false) {
   const result = tool ? await runtime.callValue("cold_probe", {}) : null;
   return {
     status: "completed",
-    value: condition ? { fire: true, state: { state: result } } : { state: result },
+    value: condition ? { wake: "", state: { state: result } } : { state: result },
     output: [],
     toolCallCount: tool ? 1 : 0,
   } satisfies CodeModeHeadlessResult;
@@ -163,15 +163,15 @@ it("borrows the current Gateway plugins for detached conditions before and after
     expect(
       runInDetachedAsyncContext(() =>
         runScheduled(() =>
-          runtime.evaluateTrigger({
+          runtime.evaluateCheck({
             ...invocation("detached-condition", "main", ["cold_probe"]),
-            script: "return { fire: true }",
+            script: "return { wake: '' }",
           }),
         ),
       ),
     ).resolves.toMatchObject({
       kind: "evaluated",
-      fire: true,
+      action: "wake",
       state: { state: { artifact: "built", generation, calls: 1 } },
     });
   try {

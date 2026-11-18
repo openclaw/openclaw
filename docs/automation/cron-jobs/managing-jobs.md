@@ -286,7 +286,7 @@ already approved shapes must be replayed unchanged.
 
 A caller who can define a host-executed automation can make the Gateway start a process with its host privileges. That process can access credentials readable by the Gateway or alter configuration files writable by it. Direct file writes bypass Gateway API restrictions such as `OPENCLAW_CONFIG_READONLY` even when local terminals are disabled.
 
-To block this execution path, start the Gateway with `OPENCLAW_DISABLE_CRON_HOST_EXECUTION=1` in its launch environment. The Gateway refuses command and script payloads, condition triggers, `on-exit` schedules, and Gateway-hosted `stream` sources, including persisted and manually requested jobs. Scheduled agent turns and authorized sandbox-backed stream sources remain available. Existing blocked jobs can still be disabled or removed. Gateway configuration cannot change this control; change the launch environment and restart the Gateway to change it. The control does not govern tools used by agent turns or provide filesystem isolation.
+To block this execution path, start the Gateway with `OPENCLAW_DISABLE_CRON_HOST_EXECUTION=1` in its launch environment. The Gateway refuses command payloads, model-free checks, `on-exit` schedules, and Gateway-hosted `stream` sources, including persisted and manually requested jobs. Scheduled agent turns and authorized sandbox-backed stream sources remain available. Existing blocked jobs can still be disabled or removed. Gateway configuration cannot change this control; change the launch environment and restart the Gateway to change it. The control does not govern tools used by agent turns or provide filesystem isolation.
 
 <AccordionGroup>
   <Accordion title="Retry behavior">

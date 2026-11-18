@@ -234,7 +234,7 @@ export function hasCronCreatorSandboxExecTool(
   );
 }
 
-function hasCronTriggerScript(value: unknown): boolean {
+function hasCronCheckScript(value: unknown): boolean {
   return isRecord(value) && typeof value.script === "string" && value.script.trim().length > 0;
 }
 
@@ -320,16 +320,15 @@ export function cronCreateRequiresCreatorAuthority(
     return explicitFiniteToolsNeedResolution(payload, creatorToolAllowlist);
   }
   return (
-    hasCronTriggerScript(value.trigger) ||
+    hasCronCheckScript(value.check) ||
     payload?.kind === "agentTurn" ||
-    payload?.kind === "script" ||
     explicitToolsAllow === "resolved"
   );
 }
 
 function capCronJobToolsAllow(params: {
   payload: Record<string, unknown>;
-  trigger?: unknown;
+  check?: unknown;
   creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[];
   defaultToolsAllow?: unknown;
   /** Codex app authority is captured against the concrete list, so its jobs keep that list. */
@@ -338,8 +337,7 @@ function capCronJobToolsAllow(params: {
   const writesToolsAllow = Object.hasOwn(params.payload, "toolsAllow");
   if (
     params.payload.kind !== "agentTurn" &&
-    params.payload.kind !== "script" &&
-    !hasCronTriggerScript(params.trigger) &&
+    !hasCronCheckScript(params.check) &&
     !writesToolsAllow
   ) {
     return;
@@ -356,7 +354,7 @@ function capCronJobToolsAllow(params: {
     // authority is bound to the captured list, so those keep the creator's tools.
     if (
       params.payload.kind === "agentTurn" &&
-      !hasCronTriggerScript(params.trigger) &&
+      !hasCronCheckScript(params.check) &&
       !params.creatorHoldsRuntimeAuthority
     ) {
       params.payload.toolsAllow = ["*"];
@@ -405,7 +403,7 @@ export function capCronJobToolsAllowOnCreate(
   }
   capCronJobToolsAllow({
     payload: value.payload,
-    trigger: value.trigger,
+    check: value.check,
     creatorToolAllowlist,
     creatorHoldsRuntimeAuthority,
   });
@@ -440,7 +438,7 @@ export function planCronJobUpdatePatch(params: {
   }
   const explicitPayloadKind = readCronPayloadKind(payload);
   const explicitToolsAllow = classifyExplicitToolsAllow(payload);
-  if (payload === undefined && !Object.hasOwn(patch, "trigger")) {
+  if (payload === undefined && !Object.hasOwn(patch, "check")) {
     // Schedule, delivery, naming, and enabled-state edits do not reauthorize
     // legacy jobs. Only tool-runtime changes may synthesize durable authority.
     return { kind: "ready", patch };
@@ -450,7 +448,7 @@ export function planCronJobUpdatePatch(params: {
     explicitToolsAllow === "absent" &&
     params.creatorAuthorityComplete !== false &&
     !params.creatorToolAllowlist &&
-    !Object.hasOwn(patch, "trigger")
+    !Object.hasOwn(patch, "check")
   ) {
     return { kind: "ready", patch };
   }
@@ -467,7 +465,7 @@ export function planCronJobUpdatePatch(params: {
   ) {
     capCronJobToolsAllow({
       payload: payload!,
-      trigger: patch.trigger,
+      check: patch.check,
       creatorToolAllowlist: params.creatorToolAllowlist,
     });
     return { kind: "ready", patch };
@@ -485,15 +483,15 @@ export function planCronJobUpdatePatch(params: {
     patch.payload = payload;
   }
 
-  const trigger = Object.hasOwn(patch, "trigger") ? patch.trigger : params.currentJob.trigger;
+  const check = Object.hasOwn(patch, "check") ? patch.check : params.currentJob.check;
   const startsToolPayload =
     explicitPayloadKind !== undefined &&
     explicitPayloadKind !== existingPayloadKind &&
-    (payloadKind === "agentTurn" || payloadKind === "script");
+    payloadKind === "agentTurn";
   const startsToolTrigger =
-    Object.hasOwn(patch, "trigger") &&
-    hasCronTriggerScript(trigger) &&
-    !hasCronTriggerScript(params.currentJob.trigger);
+    Object.hasOwn(patch, "check") &&
+    hasCronCheckScript(check) &&
+    !hasCronCheckScript(params.currentJob.check);
   const reusesDefaultAuthority =
     explicitToolsAllow === "absent" &&
     (startsToolPayload || startsToolTrigger) &&
@@ -501,8 +499,7 @@ export function planCronJobUpdatePatch(params: {
       !Array.isArray(existingPayloadRecord?.toolsAllow) ||
       // Scripts reach MCP only through named servers, so a `*` job gaining one
       // captures the creator's concrete tools.
-      (existingPayloadRecord.toolsAllow.includes("*") &&
-        (payloadKind === "script" || startsToolTrigger)));
+      (existingPayloadRecord.toolsAllow.includes("*") && startsToolTrigger));
   const needsResolvedAuthority =
     explicitToolsAllow === "resolved" ||
     reusesDefaultAuthority ||
@@ -517,7 +514,7 @@ export function planCronJobUpdatePatch(params: {
   ) {
     capCronJobToolsAllow({
       payload: payload!,
-      trigger,
+      check,
       creatorToolAllowlist: params.creatorToolAllowlist,
     });
     return { kind: "ready", patch };
@@ -533,7 +530,7 @@ export function planCronJobUpdatePatch(params: {
   patch.payload = nextPayload;
   capCronJobToolsAllow({
     payload: nextPayload,
-    trigger,
+    check,
     creatorToolAllowlist: params.creatorToolAllowlist,
     defaultToolsAllow:
       existingPayloadRecord && existingPayloadRecord.toolsAllowIsDefault !== true

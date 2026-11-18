@@ -219,7 +219,7 @@ export function buildCronJobsListParams(
       ? {
           scheduleKind: state.cronJobsScheduleKindFilter,
           lastRunStatus: state.cronJobsLastStatusFilter,
-          trigger: state.cronJobsTriggerFilter,
+          check: state.cronJobsTriggerFilter,
         }
       : {}),
     sortBy: state.cronJobsSortBy,

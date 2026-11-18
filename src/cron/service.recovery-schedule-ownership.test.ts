@@ -37,9 +37,9 @@ type RunResult = Awaited<ReturnType<CronServiceDeps["runIsolatedAgentJob"]>>;
 
 async function createHarness(input: Partial<CronJobCreate> = {}) {
   const { storePath } = await makeStorePath();
-  const evaluateCronTrigger = vi.fn(async () => ({
+  const evaluateCronCheck = vi.fn(async () => ({
     kind: "evaluated" as const,
-    fire: true,
+    action: "wake",
     state: { observed: "completed evaluation" },
   }));
   const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(async () => ({
@@ -53,7 +53,7 @@ async function createHarness(input: Partial<CronJobCreate> = {}) {
     cronConfig: { triggers: { enabled: true } },
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    evaluateCronTrigger,
+    evaluateCronCheck,
     runIsolatedAgentJob,
   };
   const cron = new CronService(deps);
@@ -64,14 +64,14 @@ async function createHarness(input: Partial<CronJobCreate> = {}) {
     agentId: "main",
     enabled: true,
     schedule: HOURLY,
-    trigger: { script: "json({ fire: true })" },
+    check: { script: "json({ wake: '' })" },
     sessionTarget: "isolated",
     wakeMode: "now",
     payload: { kind: "agentTurn", message: "Check the scheduled condition." },
     delivery: { mode: "none" },
     ...input,
   });
-  return { cron, deps, evaluateCronTrigger, job, runIsolatedAgentJob, storePath };
+  return { cron, deps, evaluateCronCheck, job, runIsolatedAgentJob, storePath };
 }
 
 type Harness = Awaited<ReturnType<typeof createHarness>>;
@@ -204,7 +204,7 @@ async function restartAndRecover(
   await harness.cron.start();
 
   expect(readHistory(harness)).toEqual(pending.history);
-  expect(harness.evaluateCronTrigger).toHaveBeenCalledTimes(pending.runs);
+  expect(harness.evaluateCronCheck).toHaveBeenCalledTimes(pending.runs);
   expect(harness.runIsolatedAgentJob).toHaveBeenCalledTimes(pending.runs);
   expect(
     inspectActiveCronRunReceipt({ storePath: harness.storePath, jobId: harness.job.id }),
@@ -265,7 +265,7 @@ describe("CronService schedule ownership during finalized-run recovery", () => {
       label: "a stream-once-to-timed edit that must stay enabled",
       input: {
         schedule: { kind: "stream", command: ["echo"] },
-        trigger: { script: "json({ fire: true })", once: true },
+        check: { script: "json({ wake: '' })", once: true },
       },
       edits: [{ atMs: EDIT_AT, patch: { schedule: MINUTELY } }],
       historicalNextRunAtMs: undefined,
@@ -365,7 +365,7 @@ describe("CronService schedule ownership during finalized-run recovery", () => {
   it("lets an unchanged successor finish once in the same admission millisecond", async () => {
     const atMs = RUN_AT;
     const harness = await createHarness({
-      trigger: { script: "json({ fire: true })", once: true },
+      check: { script: "json({ wake: '' })", once: true },
     });
     try {
       const first = await finishWithPendingCronRow(harness);

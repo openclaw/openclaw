@@ -67,7 +67,7 @@ describe("event source schedule validation", () => {
 
 const triggerJob = {
   schedule: { kind: "every" as const, everyMs: 30_000 },
-  trigger: { script: "json({ fire: true })" },
+  check: { script: "json({ wake: '' })" },
 };
 
 describe("cron trigger enablement", () => {

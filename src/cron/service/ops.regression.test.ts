@@ -360,7 +360,7 @@ it("publishes a queued quiet run's next schedule in its one terminal event", asy
   const dueAt = Date.parse("2026-02-06T10:05:02.000Z");
   const job = recurringJob("queued-quiet-trigger", dueAt, {
     schedule: { kind: "every", everyMs: 60_000, anchorMs: dueAt - 60_000 },
-    trigger: { script: "return false" },
+    check: { script: "return false" },
   });
   const terminal = terminalEvents(job.id, undefined, true);
   let finishedContext: Parameters<NonNullable<CronServiceDeps["onEvent"]>>[1];
@@ -368,9 +368,9 @@ it("publishes a queued quiet run's next schedule in its one terminal event", asy
   const state = await prepareJob(job, {
     cronConfig: { triggers: { enabled: true } },
     nowMs: () => dueAt,
-    evaluateCronTrigger: vi.fn(async () => ({
+    evaluateCronCheck: vi.fn(async () => ({
       kind: "evaluated" as const,
-      fire: false,
+      action: "quiet",
     })),
     runIsolatedAgentJob,
     onEvent: (event, context) => {

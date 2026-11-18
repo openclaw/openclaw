@@ -194,14 +194,14 @@ it("applies schedule, status, trigger, and cross-field phrase filters before pag
     name: "Daily report",
     description: "Quarterly summary",
     displayName: "Executive overview",
-    trigger: { script: "json({ fire: true })" },
+    check: { script: "json({ wake: '' })" },
   };
   const state = listState(
     { ...matching, schedule: { kind: "at", at: "2030-02-27T15:30:00.000Z" } },
     { ...matching, state: { lastStatus: "error" } },
     matching,
     { ...matching, trigger: undefined },
-    { trigger: { script: "json({ fire: true })" } },
+    { check: { script: "json({ wake: '' })" } },
   );
   const page = await listPage(state, {
     scheduleKind: "cron",

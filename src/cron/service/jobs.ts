@@ -6,7 +6,6 @@ import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { resolveCronDeliveryMode } from "../delivery-defaults.js";
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
-import { normalizeCronScriptPayload } from "../script-payload.js";
 import { createCronSourceIdentity } from "../source-schedule.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../stagger.js";
 import {
@@ -39,10 +38,9 @@ import {
   assertExecutionPolicy,
   assertFailureDestinationSupport,
   assertPacingSupport,
-  assertScriptPayloadSupport,
   assertExternalSourceScheduleSupport,
   assertSupportedJobSpec,
-  assertTriggerSupport,
+  assertCheckSupport,
 } from "./jobs-validation.js";
 import { normalizeOptionalAgentId, normalizeRequiredName } from "./normalize.js";
 import { mergeCronPayload } from "./payload-merge.js";
@@ -131,32 +129,21 @@ function validateFullJob(
   configuredChannels?: readonly string[],
 ) {
   const cronConfig = context.cronConfig;
-  const triggerTouched =
+  const checkTouched =
     context.kind === "create"
-      ? job.trigger !== undefined
+      ? job.check !== undefined
       : context.kind === "patch"
-        ? context.patch.trigger != null
-        : context.input.trigger !== undefined;
-  const scriptTouched =
-    context.kind === "create"
-      ? job.payload.kind === "script"
-      : context.kind === "patch"
-        ? context.patch.payload?.kind === "script"
-        : context.input.payload.kind === "script";
+        ? context.patch.check != null
+        : context.input.check !== undefined;
   const sourceTouched =
     context.kind !== "patch" ||
     context.patch.enabled === true ||
     context.patch.schedule?.kind === "stream" ||
     context.patch.schedule?.kind === "event";
   const validateCapabilities = () => {
-    assertTriggerSupport(job, {
+    assertCheckSupport(job, {
       cronConfig,
-      validateAuthoredTrigger: triggerTouched,
-    });
-    assertScriptPayloadSupport(job, {
-      cronConfig,
-      requireEnabled: scriptTouched,
-      ...(context.kind === "patch" ? { validateSyntax: context.patch.payload !== undefined } : {}),
+      validateAuthoredCheck: checkTouched,
     });
     assertExternalSourceScheduleSupport(job, { cronConfig, requireEnabled: sourceTouched });
   };
@@ -251,13 +238,10 @@ export function createJob(
       : {}),
     sessionTarget: input.sessionTarget,
     wakeMode: input.wakeMode,
-    payload:
-      input.payload.kind === "script"
-        ? normalizeCronScriptPayload(structuredClone(input.payload))
-        : structuredClone(input.payload),
+    payload: structuredClone(input.payload),
     delivery: resolveInitialCronDelivery(input),
     failureAlert: input.failureAlert,
-    ...(input.trigger ? { trigger: structuredClone(input.trigger) } : {}),
+    ...(input.check ? { check: structuredClone(input.check) } : {}),
     state: {
       ...initialState,
       ...(schedule.kind === "stream"
@@ -350,11 +334,11 @@ export function applyJobPatch(
   if (patch.schedule) {
     job.schedule = normalizeJobSchedule(patch.schedule, { kind: "patch", previous: job.schedule });
   }
-  if ("trigger" in patch) {
-    if (patch.trigger === null || patch.trigger === undefined) {
-      delete job.trigger;
+  if ("check" in patch) {
+    if (patch.check === null || patch.check === undefined) {
+      delete job.check;
     } else {
-      job.trigger = structuredClone(patch.trigger);
+      job.check = structuredClone(patch.check);
     }
   }
   if ("pacing" in patch) {
@@ -393,9 +377,6 @@ export function applyJobPatch(
   }
   if (patch.payload) {
     job.payload = mergeCronPayload(job.payload, patch.payload);
-    if (job.payload.kind === "script") {
-      job.payload = normalizeCronScriptPayload(job.payload);
-    }
   }
   if (cronJobUsesToolRuntime(job) && (!previouslyUsedToolRuntime || explicitlyClearsToolsAllow)) {
     // `null` means unrestricted, not a return to ambiguous legacy semantics.
@@ -552,14 +533,11 @@ export function applyDeclarativeJobSpec(
   } else {
     delete job.idleOnly;
   }
-  job.payload =
-    input.payload.kind === "script"
-      ? normalizeCronScriptPayload(structuredClone(input.payload))
-      : structuredClone(input.payload);
-  if (input.trigger) {
-    job.trigger = structuredClone(input.trigger);
+  job.payload = structuredClone(input.payload);
+  if (input.check) {
+    job.check = structuredClone(input.check);
   } else {
-    delete job.trigger;
+    delete job.check;
   }
   if (cronJobUsesToolRuntime(job) && job.payload.toolsAllow === undefined) {
     if (previousToolsAllow !== undefined) {

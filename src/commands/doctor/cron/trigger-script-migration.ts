@@ -10,6 +10,7 @@ import {
   buildCodeModeScriptParseSource,
   parseCodeModeScriptSyntax,
 } from "../../../agents/code-mode-script-syntax.js";
+import { SESSION_PR_AUTO_FIX_CHECK } from "../../../shared/session-pr-auto-fix.js";
 
 type TriggerScriptMigration =
   | { kind: "current" }
@@ -270,4 +271,168 @@ export function migrateLegacyCronTriggerScript(script: string): TriggerScriptMig
   return result.kind === "current"
     ? { kind: "supported", script: rewritten }
     : { kind: "unsupported" };
+}
+
+// The recipe admits native GitHub observations only for an exact script.
+const LEGACY_PR_CHECK = SESSION_PR_AUTO_FIX_CHECK.replace("check.state", "trigger.state")
+  .replace("result.wake", "result.fire")
+  .replace("return { state };", "return { fire: false, state };")
+  .replaceAll("finish({})", "finish({ fire: false })")
+  .replace("finish({ wake:", "finish({ fire: true, message:");
+
+function rewriteCheckSource(script: string, condition: boolean, main: boolean): string | undefined {
+  const parsed = parseCodeModeScriptSyntax(script);
+  const wrapper = parsed.ok ? parsed.program.body[0] : undefined;
+  if (
+    wrapper?.type !== "ExpressionStatement" ||
+    wrapper.expression.type !== "ArrowFunctionExpression" ||
+    wrapper.expression.body.type !== "BlockStatement"
+  ) {
+    return undefined;
+  }
+  const visits = collectSyntaxVisits(wrapper.expression.body);
+  const { codeOffset } = buildCodeModeScriptParseSource(script);
+  const edits: SourceEdit[] = [];
+  for (const { node, ancestors } of visits) {
+    const parent = ancestors.at(-1);
+    if (node.type === "Identifier" && !isNoncomputedPropertyName(node, parent)) {
+      if (
+        node.name === "trigger" &&
+        parent?.type === "MemberExpression" &&
+        parent.object === node &&
+        !parent.computed
+      ) {
+        edits.push({
+          start: node.start - codeOffset,
+          end: node.end - codeOffset,
+          replacement: "check",
+        });
+      } else if (["trigger", "check", "globalThis", "eval", "Function"].includes(node.name)) {
+        return undefined;
+      }
+      if (node.name === "json" && (parent?.type !== "CallExpression" || parent.callee !== node)) {
+        return undefined;
+      }
+    }
+    if (node.type === "ThisExpression") return undefined;
+    const isJson =
+      node.type === "CallExpression" &&
+      node.callee.type === "Identifier" &&
+      node.callee.name === "json";
+    const isResult =
+      node.type === "ReturnStatement" &&
+      !ancestors.some(
+        (ancestor) =>
+          ancestor.type === "FunctionDeclaration" ||
+          ancestor.type === "FunctionExpression" ||
+          ancestor.type === "ArrowFunctionExpression",
+      );
+    if (!isJson && !isResult) continue;
+    const result = node.type === "CallExpression" ? node.arguments[0] : node.argument;
+    if (result?.type !== "ObjectExpression" || (isJson && node.arguments.length !== 1))
+      return undefined;
+    let fire = false;
+    let hasMessage = false;
+    for (const prop of result.properties) {
+      if (prop.type !== "Property" || prop.computed || prop.kind !== "init" || prop.method)
+        return undefined;
+      const key =
+        prop.key.type === "Identifier"
+          ? prop.key.name
+          : prop.key.type === "Literal"
+            ? prop.key.value
+            : undefined;
+      if (key === "state") continue;
+      if (condition) {
+        if (key === "fire" && !fire) fire = true;
+        else if (key === "message" && !hasMessage) hasMessage = true;
+        else return undefined;
+      } else if (key === "notify" && !main) {
+        edits.push({
+          start: prop.key.start - codeOffset,
+          end: prop.key.end - codeOffset,
+          replacement: prop.shorthand ? "post: notify" : "post",
+        });
+      } else if (key !== "nextCheck") {
+        // Legacy wake targeted a conversation event, not an agent-turn prompt.
+        return undefined;
+      }
+    }
+    if (condition) {
+      if (!fire) return undefined;
+      edits.push({
+        start: result.start - codeOffset,
+        end: result.start - codeOffset,
+        replacement:
+          "((r) => { if (typeof r.fire !== 'boolean' || (r.message !== undefined && typeof r.message !== 'string')) throw new Error('Check requires a boolean fire and optional text'); return { ...(r.fire ? { wake: r.message ?? '' } : {}), ...('state' in r ? { state: r.state } : {}) }; })(",
+      });
+      edits.push({
+        start: result.end - codeOffset,
+        end: result.end - codeOffset,
+        replacement: ")",
+      });
+    }
+  }
+  let rewritten = script;
+  for (const edit of edits.toSorted((a, b) => b.start - a.start)) {
+    rewritten = rewritten.slice(0, edit.start) + edit.replacement + rewritten.slice(edit.end);
+  }
+  return rewritten.length <= 65_536 && parseCodeModeScriptSyntax(rewritten).ok
+    ? rewritten
+    : undefined;
+}
+
+export function retireCronScriptJob(job: Record<string, unknown>): { paused?: string } | undefined {
+  const payload = job.payload as Record<string, unknown> | undefined;
+  const condition = Object.hasOwn(job, "trigger");
+  const standalone = payload?.kind === "script";
+  if (!condition && !standalone) return undefined;
+  const trigger =
+    typeof job.trigger === "object" && job.trigger !== null
+      ? (job.trigger as Record<string, unknown>)
+      : undefined;
+  const source = condition ? trigger?.script : payload?.script;
+  const original = typeof source === "string" ? source : undefined;
+  const legacy =
+    condition && original !== undefined ? migrateLegacyCronTriggerScript(original) : undefined;
+  const code = legacy?.kind === "supported" ? legacy.script : original;
+  let paused: string | undefined;
+  let script: string | undefined;
+  if (job.check !== undefined || (condition && standalone)) {
+    paused = "it has more than one script";
+  } else if (condition && payload?.kind !== "agentTurn" && payload?.kind !== "accessAgentTurn") {
+    paused = "its condition starts a command or system event rather than an agent prompt";
+  } else if (code === LEGACY_PR_CHECK && condition) {
+    script = SESSION_PR_AUTO_FIX_CHECK;
+  } else if (code && legacy?.kind !== "unsupported") {
+    script = rewriteCheckSource(code, condition, job.sessionTarget === "main");
+  }
+  if (!script) {
+    paused ??= "Doctor could not preserve its script result or conversation wake behavior";
+    job.enabled = false;
+    script =
+      'throw new Error("This check was paused during migration. Recover the original script from the Doctor backup and edit this check before enabling it.");';
+  }
+  const bounded = (value: unknown, defaultValue: number, max: number) =>
+    typeof value === "number" && Number.isFinite(value)
+      ? Math.min(max, Math.max(1, Math.floor(value)))
+      : defaultValue;
+  job.check = {
+    script,
+    ...(typeof trigger?.once === "boolean" ? { once: trigger.once } : {}),
+    timeoutSeconds: standalone ? bounded(payload?.timeoutSeconds, 300, 900) : 30,
+    toolBudget: standalone ? bounded(payload?.toolBudget, 50, 200) : 5,
+  };
+  if (
+    standalone ||
+    (paused && payload?.kind !== "agentTurn" && payload?.kind !== "accessAgentTurn")
+  ) {
+    job.payload = {
+      kind: "none",
+      toolsAllow: payload?.toolsAllow,
+      toolsAllowIsDefault: payload?.toolsAllowIsDefault,
+    };
+  }
+  delete job.trigger;
+  return { paused };
 }

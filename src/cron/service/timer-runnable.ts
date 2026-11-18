@@ -24,7 +24,7 @@ import { hasPendingCronTriggerInterval } from "./trigger-interval.js";
  * nextRunAtMs has already advanced past it.
  */
 export function hasMissedCronSlotSinceLastRun(job: CronJob, nowMs: number): boolean {
-  const lastTriggerEvalAtMs = job.trigger ? job.state.lastTriggerEvalAtMs : undefined;
+  const lastTriggerEvalAtMs = job.check ? job.state.lastTriggerEvalAtMs : undefined;
   const lastRunStatus = resolveJobLastRunStatus(job);
   // Successful and skipped runs already advance from their end. Slots covered
   // by that execution must not become new misses when the scheduler restarts.

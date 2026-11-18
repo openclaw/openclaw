@@ -134,7 +134,7 @@ it.each([
       },
     };
     const { job, apply } = outcomeFixture(startedAt, {
-      trigger: { script: "return { fire: false }" },
+      check: { script: "return { }" },
       operatorSource: { source: operatorSource, executionRevision: "fixture-revision" },
     });
     apply({

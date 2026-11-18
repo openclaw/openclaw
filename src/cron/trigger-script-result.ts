@@ -6,11 +6,8 @@ import type { CronTriggerEvaluationResult, CronTriggerFailureCode } from "./type
 
 const MAX_TRIGGER_STATE_BYTES = 16 * 1024;
 
-function scriptResultCandidate(
-  result: Extract<CodeModeHeadlessResult, { status: "completed" }>,
-  condition = false,
-) {
-  if (isRecord(result.value) && (!condition || typeof result.value.fire === "boolean")) {
+function scriptResultCandidate(result: Extract<CodeModeHeadlessResult, { status: "completed" }>) {
+  if (isRecord(result.value)) {
     return result.value;
   }
   for (let index = result.output.length - 1; index >= 0; index -= 1) {
@@ -28,39 +25,6 @@ export function scriptFailure(
 ): Extract<CronTriggerEvaluationResult, { kind: "error" }> {
   return { kind: "error", code, error };
 }
-
-export function parseTriggerResult(
-  result: Extract<CodeModeHeadlessResult, { status: "completed" }>,
-): CronTriggerEvaluationResult {
-  const candidate = scriptResultCandidate(result, true);
-  if (!isRecord(candidate) || typeof candidate.fire !== "boolean") {
-    return scriptFailure("cron trigger script must return an object with boolean fire");
-  }
-  if (candidate.message !== undefined && typeof candidate.message !== "string") {
-    return scriptFailure("cron trigger script message must be a string");
-  }
-  const state = validateCronState(candidate, "cron trigger");
-  if (!state.ok) {
-    return scriptFailure(state.error, state.code);
-  }
-  return {
-    kind: "evaluated",
-    fire: candidate.fire,
-    ...(typeof candidate.message === "string" ? { message: candidate.message } : {}),
-    ...(state.stateChanged ? { state: state.state } : {}),
-  };
-}
-
-export type CronScriptPayloadExecutionResult =
-  | {
-      kind: "completed";
-      notify?: string;
-      wake?: "now" | "next-heartbeat";
-      stateChanged: boolean;
-      state?: unknown;
-      nextCheck?: { delayMs: number };
-    }
-  | { kind: "error"; code: CronTriggerFailureCode; error: string };
 
 function validateCronState(candidate: Record<string, unknown>, label: string) {
   if (!Object.hasOwn(candidate, "state")) {
@@ -97,27 +61,29 @@ function validateCronState(candidate: Record<string, unknown>, label: string) {
   };
 }
 
-export function parseScriptPayloadResult(
+export function parseCheckResult(
   result: Extract<CodeModeHeadlessResult, { status: "completed" }>,
-): CronScriptPayloadExecutionResult {
+): CronTriggerEvaluationResult {
   const candidate = scriptResultCandidate(result);
   if (!isRecord(candidate)) {
-    return scriptFailure("cron script payload must return an object");
-  }
-  if (candidate.notify !== undefined && typeof candidate.notify !== "string") {
-    return scriptFailure("cron script payload notify must be a string");
+    return scriptFailure("cron check must return an object");
   }
   if (
-    candidate.wake !== undefined &&
-    candidate.wake !== "now" &&
-    candidate.wake !== "next-heartbeat"
+    (candidate.post !== undefined && typeof candidate.post !== "string") ||
+    (candidate.wake !== undefined && typeof candidate.wake !== "string") ||
+    (candidate.post !== undefined && candidate.wake !== undefined) ||
+    Object.hasOwn(candidate, "fire") ||
+    Object.hasOwn(candidate, "notify")
   ) {
-    return scriptFailure('cron script payload wake must be "now" or "next-heartbeat"');
+    return scriptFailure(
+      "cron check must return at most one of post or wake, with a string message",
+      "invalid_input",
+    );
   }
   let nextCheck: { delayMs: number } | undefined;
   if (candidate.nextCheck !== undefined) {
     if (typeof candidate.nextCheck !== "string") {
-      return scriptFailure("cron script payload nextCheck must be a duration string");
+      return scriptFailure("cron check nextCheck must be a duration string");
     }
     try {
       const delayMs = parseDurationMs(candidate.nextCheck);
@@ -126,18 +92,26 @@ export function parseScriptPayloadResult(
       }
       nextCheck = { delayMs };
     } catch {
-      return scriptFailure("cron script payload nextCheck must be a positive duration");
+      return scriptFailure("cron check nextCheck must be a positive duration");
     }
   }
-  const state = validateCronState(candidate, "cron script payload");
+  const state = validateCronState(candidate, "cron check");
   if (!state.ok) {
     return scriptFailure(state.error, state.code);
   }
   return {
-    kind: "completed",
-    ...(candidate.notify !== undefined ? { notify: candidate.notify } : {}),
-    ...(candidate.wake !== undefined ? { wake: candidate.wake } : {}),
-    stateChanged: state.stateChanged,
+    kind: "evaluated",
+    action:
+      candidate.wake !== undefined
+        ? "wake"
+        : typeof candidate.post === "string" && candidate.post.trim()
+          ? "post"
+          : "quiet",
+    ...(typeof candidate.wake === "string"
+      ? { message: candidate.wake }
+      : typeof candidate.post === "string"
+        ? { message: candidate.post }
+        : {}),
     ...(state.stateChanged ? { state: state.state } : {}),
     ...(nextCheck ? { nextCheck } : {}),
   };

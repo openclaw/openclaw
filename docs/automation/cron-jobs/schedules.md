@@ -185,7 +185,7 @@ After a Linux or macOS host reboot, recovery requires the same recorded machine 
 
 Before downgrading, stop and settle sandbox streams on the current version. Older versions quarantine these jobs instead of running them on the Gateway. After upgrading again, explicitly restore or recreate them under current policy and approval; they do not resume automatically from quarantine.
 
-Set `cron.triggers.enabled: false` to disable streams together with condition-trigger scripts and script payloads. Disabling or removing the job stops the process; Gateway shutdown waits for process-tree teardown. Fast failures restart with the scheduler's built-in error backoff. Five consecutive runs shorter than 60 seconds leave the job in an error state and use the normal failure-alert path; manually re-enable the job to clear the restart cap.
+Set `cron.triggers.enabled: false` to disable streams together with model-free checks. Disabling or removing the job stops the process; Gateway shutdown waits for process-tree teardown. Fast failures restart with the scheduler's built-in error backoff. Five consecutive runs shorter than 60 seconds leave the job in an error state and use the normal failure-alert path; manually re-enable the job to clear the restart cap.
 
 ```bash
 openclaw automations add \
@@ -225,7 +225,7 @@ Only one payload fire and one bounded pending batch are retained per job. Lines 
 
 Batch deadlines and retries when a job is busy use the Gateway scheduler. After sleep, each elapsed deadline runs once. Stopping a source cancels its pending deadlines and waits for started callbacks to settle.
 
-When a stream job also has `trigger.script`, the gate runs once per closed batch. The current batch is available as the deeply frozen `trigger.streamBatch` string alongside `trigger.state`. `fire: false` drops that batch after persisting gate state. `fire: true` keeps existing trigger message semantics, then appends the batch to the resulting payload. A stream job may instead use a script payload without a condition gate; that script receives the batch through the same `trigger.streamBatch` value. Combining a script payload with a condition gate is rejected because both would own the persisted `trigger.state` slot.
+When a stream job has a check, it evaluates once per batch. Read the batch as `check.streamBatch`. A quiet check consumes the batch; a wake also appends the batch to the agent prompt.
 
 ### Dynamic cadence (pacing)
 
@@ -253,133 +253,35 @@ Cron expressions are parsed by [croner](https://github.com/Hexagon/croner). When
 
 This fires roughly 5-6 times a month instead of 0-1 times a month. To require both conditions, use croner's `+` day-of-week modifier (`0 9 15 * +1`), or schedule on one field and guard the other in your job's prompt or command.
 
-## Event triggers (condition watchers)
+<a id="event-triggers-condition-watchers" />
 
-An event trigger adds a headless condition script to an `every`, `cron`, or `stream` schedule. Time schedules evaluate it when due; stream schedules evaluate it for each closed batch. The scheduler runs the normal payload only when the script returns `fire: true`:
+## Model-free checks
 
-For example, save this read-only PR CI gate as `watch-pr-ci.js`, then use
-`--trigger-script ./watch-pr-ci.js` with an agent-turn payload that investigates
-the changed checks. It compares the exact PR head and individual check/status
-identities, not an aggregate pass/fail string:
+A check runs JavaScript on the automation's schedule without calling a model. Return one outcome:
 
-```js
-const repo = "owner/repo";
-const pr = 123;
-async function readJson(command) {
-  const response = await exec({ command });
-  if (response.status !== "completed" || response.exitCode !== 0) {
-    throw new Error("CI observation failed; inspect this automation's run diagnostics.");
-  }
-  return JSON.parse(response.aggregated);
-}
-const { headRefOid: head } = await readJson(
-  "gh pr view " + pr + " --repo " + repo + " --json headRefOid",
-);
-const pages = await readJson(
-  "gh api repos/" + repo + "/commits/" + head + "/check-runs --paginate --slurp",
-);
-const checks = pages
-  .flatMap((page) => page.check_runs)
-  .map((check) => ({
-    id: check.id,
-    name: check.name,
-    appId: check.app.id,
-    head: check.head_sha,
-    status: check.status,
-    conclusion: check.conclusion,
-  }))
-  .sort((a, b) => a.id - b.id);
-const commitStatus = await readJson("gh api repos/" + repo + "/commits/" + head + "/status");
-const contexts = commitStatus.statuses
-  .map((status) => ({
-    id: status.id,
-    context: status.context,
-    state: status.state,
-  }))
-  .sort((a, b) => a.context.localeCompare(b.context));
-const observed = { head, checks, contexts };
-const changed = JSON.stringify(observed) !== JSON.stringify(trigger.state);
-return {
-  fire: changed,
-  ...(changed
-    ? { message: "PR " + pr + " CI observation changed: " + JSON.stringify(observed) }
-    : {}),
-  state: observed,
-};
-```
+| Result                       | What happens                                                         |
+| ---------------------------- | -------------------------------------------------------------------- |
+| `{ state }` (or `{}`)        | Stay quiet.                                                          |
+| `{ post: "message", state }` | Send the message through the job's configured delivery.              |
+| `{ wake: "message", state }` | Append the message to the configured agent prompt and run that turn. |
 
-A new head, a rerun with a new check identity, or a check/status transition fires
-the payload even when the aggregate status is unchanged. An unchanged observation
-returns `fire: false`, so no model turn or visible update is produced. Observation
-errors throw and remain actionable scheduler failures; do not convert them to
-`fire: false`. Keep this example within the 16 KiB state limit by scoping large
-repositories to the checks the watcher owns. Do not use a change-only gate for an
-explicitly requested recurring report or digest: that job should deliver at its
-requested cadence even if the observations are unchanged.
+The previous JSON state is frozen as `check.state`. Omit `state` to keep it or return `state: null` to clear it. State is limited to 16 KB and only committed on success. A check can also return a `nextCheck` duration on a job with pacing bounds. `once: true` disables the job after its first successful post or wake; quiet checks don't count.
 
-Forced manual runs bypass this gate: `openclaw automations run <job-id>` (forced by default) and the `automations` tool with `action: "run", runMode: "force"` skip `trigger.script` and execute the payload directly. An `agentTurn` payload wakes the model even if the script would return `fire: false`. To test the gate, wait for a scheduled evaluation or use `openclaw automations run <job-id> --due` when the job is due. The tool's default `runMode: "due"` also honors the gate; neither due mode makes a job due early.
-
-`openclaw doctor --fix` converts persisted trigger scripts that call `tools.call('exec', args)` and read the `.result.details` envelope. Doctor leaves custom or ambiguous scripts unchanged and identifies each affected job for manual conversion; standalone script payloads are not converted.
-
-The script must return `{ fire, message?, state? }`. The previous JSON state is available as the deeply frozen `trigger.state`; stream gates also receive the current batch as `trigger.streamBatch`. Return a new `state` value to persist it. State is capped at 16 KB. When a firing result includes `message`, the scheduler appends it to the system-event text or agent-turn message before execution. `once: true` disables the job after its first successful fired payload.
-
-Changing a running watcher's condition or saved state protects that edit from the
-old evaluation's state updates and `once` completion, including after a Gateway
-restart. The completed payload still retains its run history. An unchanged
-watcher keeps its usual `once` behavior; renaming it does not reset its condition.
-
-`fire: false` persists evaluation state and counters, then reschedules without creating run history. These quiet evaluations count as completed occurrences during restart catch-up. If a fired payload run fails, the returned `state` is **not** persisted — the next evaluation sees the previous state and can fire again, so write scripts as read-only checks and keep actions in the payload. Trigger schedules have a built-in minimum interval of 30 seconds, preserved through maintenance and Gateway restarts. Each evaluation has a 30-second wall-clock budget and up to 5 tool calls.
-
-Up to three conditions evaluate at once. Further checks stay queued, earliest due
-time first, and start as soon as a running check finishes or its condition fires.
-A queued check is not deferred or retried later, holds no run slot, spends none of
-its time budget, and keeps its occurrence across a Gateway restart.
-
-A scheduled check does not use one of the scheduler's eight run slots, so checks keep
-running while eight long runs are active. Only the payload of a fired condition needs a
-run slot. If a condition fires while all eight are busy, the run waits for a free slot and
-then runs its payload on the result of that one check; the wait does not count against
-the run's time budget. A cron config change keeps the wait; a Gateway stop or restart
-ends it without running the payload. Freed slots go to waiting payloads and queued runs in due-time
-order, so a run due before the condition's check still starts first. A check started by a manual or stream
-run, and the check of a job with a script payload, takes a run slot first.
-
-Cold runtime preparation can continue after an evaluation times out, so a later
-tick can reuse it. Preparation is limited to two minutes, or the script payload's
-budget when longer; cancelling the evaluation that started it still cancels preparation.
-
-Scripts call configured MCP server tools through the same `MCP.<server>.<tool>({ ...input })` namespace that interactive Code Mode uses. MCP is opt-in per server: a script can reach only the servers its job's `toolsAllow` (`--tools`) names with a server prefix, either an exact tool such as `wispr-flow__search_meetings` or a server-scoped glob such as `wispr-flow__*`. A wildcard `*`, a missing `toolsAllow`, or a glob without a server prefix gives the script no `MCP` namespace and starts no server, because evaluations can run every 30 seconds. A script whose source never mentions `MCP` also starts no server, even when `toolsAllow` names one for the payload. Within a named server, the owning agent's tool policy still applies, as in an interactive run. MCP calls go through the same before-tool-call hooks and approvals and return the same untrusted-content results. Each evaluation starts its own runtime for the named servers only and retires it when the evaluation ends; a slow server shutdown finishes in the background after a 1-second grace. Connecting and listing tools count toward the 30-second budget, and each MCP call counts toward the 5-call limit. A named server that fails to start is absent from `MCP`; if the script then fails, the run error ends with `MCP server "<name>" is unavailable: <reason>`.
-
-Returning `fire: false` from an MCP-backed check skips the payload, and its model call, on quiet ticks:
+For example, save this as `check-workspace.js`:
 
 ```js
-const { structuredContent } = await MCP.wisprFlow.searchMeetings({
-  since: trigger.state?.cursor,
-});
-const meetings = structuredContent?.meetings ?? [];
-if (meetings.length === 0) return { fire: false };
-return {
-  fire: true,
-  message: `${meetings.length} new meetings`,
-  state: { cursor: meetings.at(-1).id },
-};
+const lastStatus = check.state?.status;
+const status = "degraded";
+const state = { status };
+return status === lastStatus ? { state } : { post: "Workspace needs attention", state };
 ```
 
-Removing or disabling a job during condition evaluation cancels that evaluation before its payload can start. Main-session payloads use ordinary session admission and retain the job’s cancellation and authority checks.
-
-Author watchers around **actionable state**, not only success: a watcher that goes quiet when its check fails or times out looks healthy while broken. Compare the observation with `trigger.state` and return fresh state to deduplicate; do not rely on model or process memory. When firing, make `message` self-contained because it becomes the fired run's complete event context.
-
-<Warning>
-Condition-trigger scripts and `script` payloads run unattended by default with the owning agent's **full tool policy, including `exec`**. Stream schedules also keep operator-authored commands running unattended. Treat these surfaces as unattended code execution with that agent's permissions. Operators who need a hard stop can set `cron.triggers.enabled: false`; remove it or set it to `true` to re-enable them.
-</Warning>
-
-Create a watcher from a local script file (`-` reads the script from stdin). The CLI preserves leading and trailing spaces in file paths; quote the path as one shell argument:
-
-```bash
-openclaw automations add \
-  --name "PR CI watcher" \
-  --every 30s \
-  --trigger-script ./watch-pr-ci.js \
-  --message "Respond to the CI status change" \
-  --session isolated
+```sh
+openclaw automations add --name "Workspace health" --every 5m --check-script ./check-workspace.js
 ```
+
+Add `--message` to configure an agent prompt for `wake`. Checks with a prompt use a recurring interval, cron, or stream schedule; interval checks with a prompt must be at least 30 seconds apart. A forced manual run runs the prompt directly when there is one. Use `--due` or wait for the next scheduled occurrence to test the check itself. A check-only job always evaluates its script, including on a forced run.
+
+Checks use Code Mode under the job's tool policy. They default to 30 seconds and five tool calls; set `--check-timeout-seconds` or `--check-tool-budget` to override. MCP is available only for servers explicitly named by a `toolsAllow` entry like `<server>__<tool>` or `<server>__*`. A bare `*` does not expose MCP servers. Set `cron.triggers.enabled: false` to disable checks deployment-wide. Shell command payloads keep their separate operator policy.
+
+After a direct upgrade, run `openclaw doctor --fix`. Doctor backs up cron storage, converts supported condition scripts and JavaScript payloads, and reports each result. It preserves schedule, saved state, once settings, tool access and budgets on converted jobs. It pauses jobs whose behavior it cannot safely translate (such as conversation-event wakes or conditions that start a shell command), without deleting the job. Review the original definition in the backup, edit the check, and re-enable it when ready.

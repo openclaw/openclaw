@@ -73,7 +73,7 @@ function isCheckingCondition(job: CronStoredJob): boolean {
  * whose time budget cannot pause while it waits for a slot.
  */
 function startsWithoutRunSlot(job: CronStoredJob, receiptId: string): boolean {
-  return job.payload.kind !== "script" && parseCronScheduledRunId(receiptId) !== undefined;
+  return job.payload.kind !== "none" && parseCronScheduledRunId(receiptId) !== undefined;
 }
 
 /** A fired condition waiting for a run slot: it holds neither a check nor a slot. */
@@ -492,7 +492,8 @@ function drainCronQueueInDatabase(
       continue;
     }
     const checksCondition =
-      job.trigger !== undefined &&
+      job.check !== undefined &&
+      job.payload.kind !== "none" &&
       (context.mode === "scheduled" || context.evaluateTrigger === true);
     if (
       input.preparingAgentIds?.includes(agentId) ||

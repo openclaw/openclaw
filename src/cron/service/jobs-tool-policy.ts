@@ -150,7 +150,7 @@ export function reconcileCronOperatorSource(params: {
     (captured || previous?.executionRevision === executionRevision) &&
     (job.payload.kind === "agentTurn" ||
       (source.snapshot.openclawIdPrincipal !== undefined &&
-        (job.payload.kind === "script" || job.schedule.kind === "stream"))) &&
+        (job.check !== undefined || job.schedule.kind === "stream"))) &&
     job.owner?.sessionKey === source.sessionKey &&
     ((job.scheduledToolPolicy?.mode === "account" &&
       job.scheduledToolPolicy.ownerSessionKey === source.sessionKey) ||

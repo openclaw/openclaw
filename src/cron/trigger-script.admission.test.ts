@@ -51,7 +51,7 @@ function fixture(
     prepareRuntime: prepare,
     runHeadless: async ({ ctx }) => {
       retained.push(ctx);
-      return completed({ fire: false, state: await toolRuntime(ctx).callValue("probe", {}) });
+      return completed({ state: await toolRuntime(ctx).callValue("probe", {}) });
     },
     ...deps,
   });
@@ -144,8 +144,8 @@ it("keeps concurrent invocations independent while sharing prepared tools", asyn
         before !== undefined && before === getGatewayToolCallerIdentity()?.operationalRunInstance,
     });
   });
-  const first = runtime.evaluateTrigger(input);
-  const second = runtime.evaluateTrigger(input);
+  const first = runtime.evaluateCheck(input);
+  const second = runtime.evaluateCheck(input);
   try {
     await Promise.all(entered.map((entry) => entry.promise));
     release[0]!.resolve();

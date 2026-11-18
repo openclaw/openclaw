@@ -50,9 +50,9 @@ function createEvaluator(
     deps.prepareRuntime ?? (async () => createPreparedRuntime(config)),
   );
   const runtime = createCronScriptRuntime({ ...deps, config, runHeadless, prepareRuntime });
-  type Input = Partial<Parameters<typeof runtime.evaluateTrigger>[0]>;
+  type Input = Partial<Parameters<typeof runtime.evaluateCheck>[0]>;
   return {
-    evaluate: (input: Input = {}) => runtime.evaluateTrigger({ ...INPUT, ...input }),
+    evaluate: (input: Input = {}) => runtime.evaluateCheck({ ...INPUT, ...input }),
     executePayload: (input: Input = {}) => runtime.executePayload({ ...INPUT, ...input }),
     prepareRuntime,
     runHeadless,
@@ -81,8 +81,8 @@ it("snapshots a cron tool result without temporary object-value arrays", async (
   });
   try {
     await expect(
-      evaluate({ script: "return { fire: true, state: await snapshot_probe({}) };" }),
-    ).resolves.toMatchObject({ kind: "evaluated", fire: true, state: details });
+      evaluate({ script: "return { wake: '', state: await snapshot_probe({}) };" }),
+    ).resolves.toMatchObject({ kind: "evaluated", action: "wake", state: details });
     expect(snapshotArraySlots).toBe(0);
   } finally {
     values.mockRestore();
@@ -95,7 +95,7 @@ function execEvaluator(host: "auto" | "node" | "gateway", node?: string) {
       agents: { defaults: { workspace: tempDirs.make("openclaw-cron-exec-") } },
       tools: { exec: { host, node, security: "full", ask: "off" } },
     },
-  }).evaluateTrigger;
+  }).evaluateCheck;
 }
 
 function triggerNamespace(entries: Array<[string, unknown]>) {
@@ -135,7 +135,7 @@ it("cancels the real headless worker and bridge when its evaluation catalog clos
     { config, prepareRuntime: async () => ({ ...prepared, createTools: async () => [gate] }) },
   );
   const evaluation = evaluate({
-    script: 'await gate({}); text("STALE AFTER CLOSE"); return { fire: true };',
+    script: 'await gate({}); text("STALE AFTER CLOSE"); return { wake: "" };',
   });
   try {
     await entered.promise;
@@ -148,9 +148,9 @@ it("cancels the real headless worker and bridge when its evaluation catalog clos
     await expect(evaluation).resolves.toMatchObject({ kind: "error", code: "aborted" });
     expect(context.catalogRef?.onDispose).toBeUndefined();
     release.resolve();
-    await expect(evaluate({ script: "return { fire: false };" })).resolves.toMatchObject({
+    await expect(evaluate({ script: "return { };" })).resolves.toMatchObject({
       kind: "evaluated",
-      fire: false,
+      action: "quiet",
     });
     expect(context.catalogRef?.onDispose?.size ?? 0).toBe(0);
   } finally {
@@ -172,12 +172,12 @@ it("does not scaffold an implicit ACP workspace during trigger execution (#92015
   };
   const runtime = createCronScriptRuntime({
     config,
-    runHeadless: async () => completed({ fire: false }),
+    runHeadless: async () => completed({}),
   });
-  await runtime.evaluateTrigger({
+  await runtime.evaluateCheck({
     ...INPUT,
     agentId: "codex",
-    script: "return { fire: false }",
+    script: "return { }",
     toolsAllow: [],
   });
   expect(fs.existsSync(path.join(workspaceDir, "AGENTS.md"))).toBe(false);
@@ -186,7 +186,7 @@ it("does not scaffold an implicit ACP workspace during trigger execution (#92015
 });
 
 it.each([
-  { host: "auto", expected: { kind: "evaluated", fire: false } },
+  { host: "auto", expected: { kind: "evaluated", action: "quiet" } },
   {
     host: "node",
     expected: {
@@ -213,7 +213,7 @@ it.each([
       evaluate({
         ...input,
         script:
-          'await exec({ command: "printf openclaw-canonical-ok", host: "node", node: "remote" }); return { fire: false };',
+          'await exec({ command: "printf openclaw-canonical-ok", host: "node", node: "remote" }); return { };',
       }),
     ).resolves.toEqual({
       kind: "error",
@@ -225,7 +225,7 @@ it.each([
     await expect(
       evaluate({
         ...input,
-        script: 'await exec({ command: "printf openclaw-canonical-ok" }); return { fire: false };',
+        script: 'await exec({ command: "printf openclaw-canonical-ok" }); return { };',
       }),
     ).resolves.toEqual(expected);
   },
@@ -236,7 +236,7 @@ it("keeps an uncanonicalized alias-name cap fail-closed for exec", async () => {
 
   const result = await evaluate({
     ...INPUT,
-    script: 'await exec({ command: "printf must-not-run" }); return { fire: false };',
+    script: 'await exec({ command: "printf must-not-run" }); return { };',
     toolsAllow: ["gateway_exec"],
     scheduledToolPolicy: { version: 1, mode: "trusted" },
   });
@@ -264,31 +264,31 @@ it("projects typed exec details into trigger scripts without content wrappers", 
         };
       `,
     }),
-  ).resolves.toEqual({ kind: "evaluated", fire: true });
+  ).resolves.toEqual({ kind: "evaluated", action: "wake" });
 });
 
 it.each([
   [
     "prefers the return value",
-    completed({ fire: true, message: "changed", state: { revision: 2 } }, [
-      { type: "json", value: { fire: false, state: { revision: 1 } } },
+    completed({ wake: "changed", state: { revision: 2 } }, [
+      { type: "json", value: { state: { revision: 1 } } },
     ]),
-    { kind: "evaluated", fire: true, message: "changed", state: { revision: 2 } },
+    { kind: "evaluated", action: "wake", message: "changed", state: { revision: 2 } },
   ],
   [
     "falls back to the last JSON entry",
     completed({ ignored: true }, [
-      { type: "json", value: { fire: false, state: { old: true } } },
+      { type: "json", value: { state: { old: true } } },
       { type: "text", text: "ignored" },
-      { type: "json", value: { fire: true, state: { current: true } } },
+      { type: "json", value: { wake: "", state: { current: true } } },
     ]),
-    { kind: "evaluated", fire: true, state: { current: true } },
+    { kind: "evaluated", action: "wake", state: { current: true } },
   ],
   ["rejects a nonboolean fire", completed({ fire: "yes" }), INTERNAL_ERROR],
-  ["rejects a nonstring message", completed({ fire: true, message: 42 }), INTERNAL_ERROR],
+  ["rejects a nonstring message", completed({ wake: 42 }), INTERNAL_ERROR],
   [
     "rejects oversized state",
-    completed({ fire: false, state: { value: "x".repeat(16 * 1024) } }),
+    completed({ state: { value: "x".repeat(16 * 1024) } }),
     {
       kind: "error",
       code: "output_limit_exceeded",
@@ -330,7 +330,7 @@ it("starts cold after cancellation without waiting for the old preparation to se
     await expect(cancelled).resolves.toMatchObject({ kind: "error", code: "aborted" });
     next = evaluate();
     release.resolve();
-    await expect(next).resolves.toMatchObject({ kind: "evaluated", fire: false });
+    await expect(next).resolves.toMatchObject({ kind: "evaluated", action: "quiet" });
   } finally {
     controller.abort();
     release.resolve();
@@ -358,7 +358,7 @@ it("reuses a preparation that outlives its first evaluation's deadline", async (
     await expect(timedOut).resolves.toMatchObject({ kind: "error", code: "timeout" });
 
     release.resolve();
-    await expect(evaluate()).resolves.toMatchObject({ kind: "evaluated", fire: false });
+    await expect(evaluate()).resolves.toMatchObject({ kind: "evaluated", action: "quiet" });
     expect(prepareRuntime).toHaveBeenCalledOnce();
   } finally {
     release.resolve();
@@ -392,7 +392,7 @@ it("keeps preparation past the trigger deadline and evicts it at its own limit",
 
     await vi.advanceTimersByTimeAsync(90_000);
     expect(signals[0]?.aborted).toBe(true);
-    await expect(evaluate()).resolves.toMatchObject({ kind: "evaluated", fire: false });
+    await expect(evaluate()).resolves.toMatchObject({ kind: "evaluated", action: "quiet" });
     expect(prepareRuntime).toHaveBeenCalledTimes(2);
     release.resolve();
     await vi.advanceTimersByTimeAsync(0);
@@ -428,7 +428,7 @@ it("keeps shared preparation when a later waiter is cancelled", async () => {
     await expect(cancelled).resolves.toMatchObject({ kind: "error", code: "aborted" });
 
     release.resolve();
-    await expect(evaluate()).resolves.toMatchObject({ kind: "evaluated", fire: false });
+    await expect(evaluate()).resolves.toMatchObject({ kind: "evaluated", action: "quiet" });
     expect(prepareRuntime).toHaveBeenCalledOnce();
   } finally {
     release.resolve();
@@ -501,7 +501,7 @@ it.each(["policy change", "capacity eviction"] as const)(
           entered.resolve();
           await release.promise;
         }
-        return completed({ fire: false });
+        return completed({});
       },
       { prepareRuntime },
     );
@@ -519,7 +519,7 @@ it.each(["policy change", "capacity eviction"] as const)(
       }
       expect(disposed).toEqual([]);
       release.resolve();
-      await expect(active).resolves.toMatchObject({ kind: "evaluated", fire: false });
+      await expect(active).resolves.toMatchObject({ kind: "evaluated", action: "quiet" });
       expect(disposed).toEqual([1]);
     } finally {
       release.resolve();
@@ -545,8 +545,7 @@ it.each(["preparation", "headless"] as const)("survives a clock jump during %s",
       vi.fn(async () => jsonResult({ observed: true })),
     );
     const { evaluate, runHeadless } = createEvaluator(
-      async (params) =>
-        phase === "headless" ? runCodeModeScriptHeadless(params) : completed({ fire: false }),
+      async (params) => (phase === "headless" ? runCodeModeScriptHeadless(params) : completed({})),
       {
         prepareRuntime: async ({ runtimeConfig }) => {
           if (phase === "preparation") {
@@ -560,7 +559,7 @@ it.each(["preparation", "headless"] as const)("survives a clock jump during %s",
     await expect(
       evaluate({
         script:
-          "await Promise.all([shift_clock({}), observe_clock({})]); await observe_clock({}); return { fire: true };",
+          "await Promise.all([shift_clock({}), observe_clock({})]); await observe_clock({}); return { wake: '' };",
       }),
     ).resolves.toMatchObject({ kind: "evaluated", fire: phase === "headless" });
     expect(runHeadless).toHaveBeenCalledOnce();

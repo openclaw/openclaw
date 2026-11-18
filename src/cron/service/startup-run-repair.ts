@@ -7,11 +7,7 @@ import type { CronRunLogEntry } from "../run-log-types.js";
 import type { InterruptedStartupRun } from "../store/run-recovery.types.js";
 import type { CronJob, CronRunStatus, CronTriggerEvalOutcome } from "../types.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "./state.js";
-import {
-  applyJobResult,
-  applyScriptRunResult,
-  applyTriggerNoFireResult,
-} from "./timer-outcomes.js";
+import { applyJobResult, applyTriggerNoFireResult } from "./timer-outcomes.js";
 import { applyTriggerRunResult } from "./timer-trigger.js";
 
 function resolveOneShotReplacementAtMs(job: CronJob, runningAtMs: number): number | undefined {
@@ -125,7 +121,7 @@ export function restoreFinalizedStartupRun(params: {
     entry.status === "ok" &&
     entry.nextRunAtMs === undefined;
   job.state.startupCatchupAtMs = undefined;
-  if (params.triggerEval?.fired === false) {
+  if (job.payload.kind !== "none" && params.triggerEval?.fired === false) {
     applyTriggerNoFireResult(
       state,
       job,
@@ -205,15 +201,7 @@ export function restoreFinalizedStartupRun(params: {
       { scheduleOwnership, triggerOwnership },
     );
   }
-  if (params.scriptResult) {
-    // The payload script is the final writer when a trigger and payload both
-    // update their shared state during the same successful run.
-    applyScriptRunResult(
-      job,
-      { status: entry.status, ...params.scriptResult },
-      { triggerOwnership },
-    );
-  }
+
   state.deps.log.info(
     { jobId: job.id, runningAtMs, status: entry.status },
     "cron: restored finalized run history on startup",

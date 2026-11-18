@@ -115,7 +115,7 @@ describe("runCronIsolatedAgentTurn toolsAllow", () => {
     },
     {
       label: "keeps its list behind a condition trigger",
-      job: { trigger: { script: "return { fire: true }" } },
+      job: { check: { script: "return { wake: '' }" } },
       expected: ["message", "read"],
     },
   ])("an automatic creator snapshot $label", options, async ({ job, expected }) => {
@@ -279,7 +279,7 @@ describe("runCronIsolatedAgentTurn toolsAllow", () => {
     const result = await runTurn(
       ["read", "web_search"],
       { toolsAllowIsDefault: true },
-      { trigger: { script: "return { fire: true }" } },
+      { check: { script: "return { wake: '' }" } },
     );
     expect(result.status).toBe("ok");
     expect(result.diagnostics).toBeUndefined();

@@ -102,7 +102,7 @@ describe("cron tool creator cap", () => {
 
   it("lets default agent turns follow their owner while scripts and Codex apps keep the creator's tools", () => {
     const triggerJob = {
-      trigger: { script: "return true" },
+      check: { script: "return true" },
       payload: { ...wakePayload },
     };
     const agentJob = { payload: { ...agentPayload } };
@@ -262,7 +262,7 @@ describe("cron tool creator cap", () => {
 
     for (const requested of [["gateway_exec"], ["exec"], ["gateway_exec", "read"]]) {
       const job = {
-        trigger: { script: "return { fire: false }" },
+        check: { script: "return { }" },
         payload: { kind: "systemEvent", text: "wake", toolsAllow: [...requested] },
       };
       capCronJobToolsAllowOnCreate(job, creator);
@@ -271,7 +271,7 @@ describe("cron tool creator cap", () => {
     }
 
     const unrelated = {
-      trigger: { script: "return { fire: false }" },
+      check: { script: "return { }" },
       payload: { kind: "systemEvent", text: "wake", toolsAllow: ["write"] },
     };
     expect(() => capCronJobToolsAllowOnCreate(unrelated, creator)).toThrow(
@@ -284,14 +284,14 @@ describe("cron tool creator cap", () => {
     const creator = capture([alias]);
 
     const job = {
-      trigger: { script: "return { fire: false }" },
+      check: { script: "return { }" },
       payload: { kind: "systemEvent", text: "wake", toolsAllow: ["gateway_exec"] },
     };
     expect(cronCreateRequiresCreatorAuthority(job, creator)).toBe(false);
     expect(
       cronCreateRequiresCreatorAuthority(
         {
-          trigger: { script: "return { fire: false }" },
+          check: { script: "return { }" },
           payload: { kind: "systemEvent", text: "wake", toolsAllow: ["exec", "browser"] },
         },
         creator,

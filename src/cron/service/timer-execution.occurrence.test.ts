@@ -19,13 +19,12 @@ type CronExecutorDep = Extract<
   `run${string}` | `evaluate${string}` | `enqueue${string}`
 >;
 const EXECUTOR_ADMISSION = {
-  evaluateCronTrigger: "occurrence",
-  runScriptJob: "occurrence",
+  evaluateCronCheck: "occurrence",
   runIsolatedAgentJob: "occurrence",
   runSessionEvent: "occurrence",
   // Consumes the occurrence; a command is not an agent run and mints no context.
   runCommandJob: "occurrence",
-  // Script notify/wake and producer events enter ordinary session admission.
+  // Producer events enter ordinary session admission.
   enqueueSystemEvent: "not-admitted",
   enqueueSessionEvent: "not-admitted",
   // Scheduler binding, not an executor.
@@ -46,8 +45,7 @@ type RequiresOccurrence<K extends OccurrenceExecutor> = Parameters<
   ? true
   : false;
 const executorsRequireOccurrence: { [K in OccurrenceExecutor]: RequiresOccurrence<K> } = {
-  evaluateCronTrigger: true,
-  runScriptJob: true,
+  evaluateCronCheck: true,
   runIsolatedAgentJob: true,
   runSessionEvent: true,
   runCommandJob: true,
@@ -63,13 +61,13 @@ function payloadFor(kind: PayloadKind): CronStoredJob["payload"] {
       return { kind, text: "check in" };
     case "command":
       return { kind, argv: ["true"] };
-    case "script":
-      return { kind, script: "return {}" };
+    case "none":
+      return { kind };
   }
   throw new Error(`unclassified payload kind ${String(kind)}`);
 }
 
-const PAYLOAD_KINDS: readonly PayloadKind[] = ["agentTurn", "systemEvent", "command", "script"];
+const PAYLOAD_KINDS: readonly PayloadKind[] = ["agentTurn", "systemEvent", "command", "none"];
 const SESSION_TARGETS: readonly CronStoredJob["sessionTarget"][] = [
   "isolated",
   "current",
@@ -94,8 +92,7 @@ function harness() {
       admitted.push(occurrence);
       return occurrence;
     }),
-    evaluateCronTrigger: record("evaluateCronTrigger", { kind: "evaluated", fire: true }),
-    runScriptJob: record("runScriptJob"),
+    evaluateCronCheck: record("evaluateCronCheck", { kind: "evaluated", action: "wake" }),
     runIsolatedAgentJob: record("runIsolatedAgentJob"),
     runSessionEvent: record("runSessionEvent"),
     runCommandJob: record("runCommandJob"),
@@ -105,23 +102,66 @@ function harness() {
 
 const MATRIX = PAYLOAD_KINDS.flatMap((kind) =>
   SESSION_TARGETS.flatMap((sessionTarget) =>
-    [false, true].map((withTrigger) => ({ kind, sessionTarget, withTrigger })),
+    (kind === "agentTurn" ? [false, true] : [kind === "none"]).map((withTrigger) => ({
+      kind,
+      sessionTarget,
+      withTrigger,
+    })),
   ),
 );
 
 describe("scheduled occurrence admission", () => {
+  it.each(["quiet", "post", "wake"] as const)("dispatches only the %s effect", async (action) => {
+    const { state, seen, release } = harness();
+    state.deps.evaluateCronCheck = vi.fn(async () => ({
+      kind: "evaluated",
+      action,
+      message: "Workspace degraded",
+      state: { status: "degraded" },
+    }));
+    state.deps.deliverCheckPost = vi.fn(async () => ({ delivered: true }));
+    const payload =
+      action === "wake"
+        ? ({ kind: "agentTurn", message: "Summarize the status" } as const)
+        : ({ kind: "none" } as const);
+    const run = vi.mocked(state.deps.runIsolatedAgentJob!);
+    state.deps.runIsolatedAgentJob = vi.fn(run);
+    const result = await executeJobCore(state, {
+      ...makeCronJob({ payload, sessionTarget: "isolated" }),
+      check: { script: "return {}" },
+    });
+    expect(result).toMatchObject({
+      status: "ok",
+      triggerEval: { fired: action !== "quiet", stateChanged: true, state: { status: "degraded" } },
+    });
+    if (action === "post") {
+      expect(state.deps.deliverCheckPost).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Workspace degraded" }),
+      );
+      expect(result.delivered).toBe(true);
+    } else expect(state.deps.deliverCheckPost).not.toHaveBeenCalled();
+    if (action === "wake") {
+      expect(state.deps.runIsolatedAgentJob).toHaveBeenCalledWith(
+        expect.objectContaining({
+          job: expect.objectContaining({
+            payload: { kind: "agentTurn", message: "Summarize the status\n\nWorkspace degraded" },
+          }),
+        }),
+      );
+    } else expect(seen).toEqual([]);
+    expect(release).toHaveBeenCalledOnce();
+  });
   it("classifies every executor that can start occurrence work", () => {
     expect(Object.values(executorsRequireOccurrence).every(Boolean)).toBe(true);
     expect(Object.keys(EXECUTOR_ADMISSION).toSorted()).toMatchInlineSnapshot(`
       [
         "enqueueSessionEvent",
         "enqueueSystemEvent",
-        "evaluateCronTrigger",
+        "evaluateCronCheck",
         "runCommandJob",
         "runCronFailureRepair",
         "runIsolatedAgentJob",
         "runSchedulerOwned",
-        "runScriptJob",
         "runSessionEvent",
       ]
     `);
@@ -133,7 +173,7 @@ describe("scheduled occurrence admission", () => {
       const { state, admitted, release, seen } = harness();
       const job: CronStoredJob = {
         ...makeCronJob({ payload: payloadFor(kind), sessionTarget }),
-        ...(withTrigger ? { trigger: { script: "return { fire: true }" } } : {}),
+        ...(withTrigger ? { check: { script: "return { wake: '' }" } } : {}),
       };
 
       await executeJobCore(state, job);
@@ -153,7 +193,7 @@ describe("scheduled occurrence admission", () => {
       const { state, seen } = harness();
       await executeJobCore(state, {
         ...makeCronJob({ payload: payloadFor(kind), sessionTarget }),
-        ...(withTrigger ? { trigger: { script: "return { fire: true }" } } : {}),
+        ...(withTrigger ? { check: { script: "return { wake: '' }" } } : {}),
       });
       for (const call of seen) {
         reached.add(call.executor);
@@ -164,16 +204,16 @@ describe("scheduled occurrence admission", () => {
 
   it("admits before trigger evaluation, so a trigger that does not fire still consumes it", async () => {
     const { state, admitted, release } = harness();
-    state.deps.evaluateCronTrigger = vi.fn(async () => ({
+    state.deps.evaluateCronCheck = vi.fn(async () => ({
       kind: "evaluated" as const,
-      fire: false,
+      action: "quiet",
     }));
     await executeJobCore(state, {
       ...makeCronJob({ payload: payloadFor("agentTurn") }),
-      trigger: { script: "return { fire: false }" },
+      check: { script: "return { }" },
     });
     expect(admitted).toHaveLength(1);
-    expect(state.deps.evaluateCronTrigger).toHaveBeenCalledWith(
+    expect(state.deps.evaluateCronCheck).toHaveBeenCalledWith(
       expect.objectContaining({ occurrence: admitted[0] }),
     );
     expect(release).toHaveBeenCalledOnce();
@@ -193,7 +233,7 @@ describe("scheduled occurrence admission", () => {
       });
       const result = await executeJobCore(state, {
         ...makeCronJob({ payload: payloadFor(kind), sessionTarget }),
-        ...(withTrigger ? { trigger: { script: "return { fire: true }" } } : {}),
+        ...(withTrigger ? { check: { script: "return { wake: '' }" } } : {}),
       });
       if (kind === "command") {
         // Command jobs do not pause on a missing parent; they still run with the occurrence.

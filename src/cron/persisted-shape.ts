@@ -78,7 +78,8 @@ type InvalidPersistedCronJobReason =
   | "invalid-plugin-command"
   | "invalid-execution-policy"
   | "unsatisfiable-schedule"
-  | "invalid-trigger"
+  | "invalid-check"
+  | "legacy-check-repair-required"
   | "missing-payload"
   | "invalid-payload";
 
@@ -239,22 +240,25 @@ export function getInvalidPersistedCronJobReason(
       }
     }
   }
-  if ("trigger" in candidate) {
-    const trigger = candidate.trigger;
-    if (!trigger || typeof trigger !== "object" || Array.isArray(trigger)) {
-      return "invalid-trigger";
-    }
-    const script = (trigger as Record<string, unknown>).script;
-    if (
-      typeof script !== "string" ||
-      script.trim().length === 0 ||
-      scheduleKind === "at" ||
-      scheduleKind === "on-exit" ||
-      scheduleKind === "event"
-    ) {
-      return "invalid-trigger";
-    }
+  if (Object.hasOwn(candidate, "trigger") || asRecord(candidate.payload).kind === "script") {
+    return "legacy-check-repair-required";
   }
+  if (candidate.check !== undefined) {
+    const check = asRecord(candidate.check);
+    const kind = asRecord(candidate.payload).kind;
+    if (
+      typeof check.script !== "string" ||
+      !check.script.trim() ||
+      (kind !== "agentTurn" && kind !== "accessAgentTurn" && kind !== "none") ||
+      (check.once !== undefined && typeof check.once !== "boolean") ||
+      (check.timeoutSeconds !== undefined &&
+        asSafeIntegerInRange(check.timeoutSeconds, { min: 1, max: 900 }) === undefined) ||
+      (check.toolBudget !== undefined &&
+        asSafeIntegerInRange(check.toolBudget, { min: 1, max: 200 }) === undefined)
+    ) {
+      return "invalid-check";
+    }
+  } else if (asRecord(candidate.payload).kind === "none") return "invalid-check";
   const payload = candidate.payload;
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return "missing-payload";
@@ -283,7 +287,7 @@ export function getInvalidPersistedCronJobReason(
     payloadKind !== "systemEvent" &&
     payloadKind !== "agentTurn" &&
     payloadKind !== "command" &&
-    payloadKind !== "script"
+    payloadKind !== "none"
   ) {
     return "invalid-payload";
   }
@@ -292,11 +296,9 @@ export function getInvalidPersistedCronJobReason(
       ? payloadRecord.text
       : payloadKind === "agentTurn"
         ? payloadRecord.message
-        : payloadKind === "script"
-          ? payloadRecord.script
-          : undefined;
+        : undefined;
   if (
-    (payloadKind === "systemEvent" || payloadKind === "agentTurn" || payloadKind === "script") &&
+    (payloadKind === "systemEvent" || payloadKind === "agentTurn") &&
     (typeof requiredText !== "string" || (payloadKind !== "systemEvent" && !requiredText.trim()))
   ) {
     return "invalid-payload";

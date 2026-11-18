@@ -1,6 +1,8 @@
+import { writeFile } from "node:fs/promises";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -22,7 +24,8 @@ const suite = createControlUiE2eSuite({
 
 const scriptJob = cronJob("existing-script-automation", "Script health check", {
   sessionTarget: "isolated",
-  payload: { kind: "script", script: "return { ready: true };" },
+  payload: { kind: "none" },
+  check: { script: "return { post: 'Workspace degraded' };" },
 });
 
 const pageOptions = {
@@ -31,7 +34,7 @@ const pageOptions = {
   viewport: { height: 1_050, width: 1_440 },
 };
 const triggerToggle = (page: Page) =>
-  page.locator(".settings-row--toggle").filter({ hasText: "Check a condition first" });
+  page.locator(".settings-row--toggle").filter({ hasText: "Run a model-free check" });
 const field = (page: Page, name: string) => page.locator(`#cron-${name}`);
 const submit = (page: Page) => page.locator('[data-test-id="cron-submit"]');
 async function newTask(page: Page, name: string, message: string) {
@@ -61,6 +64,31 @@ async function selectSeconds(page: Page) {
 }
 
 suite.define(() => {
+  it("capture the workspace health check editor", async () => {
+    await suite.withPage(pageOptions, async ({ page }) => {
+      await installMockGateway(page, { methodResponses: cronMethodResponses([scriptJob]) });
+      await page.goto(`${suite.server.baseUrl}cron`);
+      await newTask(
+        page,
+        "Workspace health check",
+        "Summarize the issue and suggest what to do next.",
+      );
+      await advanced(page);
+      await triggerToggle(page).click();
+      const code = field(page, "trigger-script");
+      await code.fill(
+        'if (check.state?.status === "degraded") return {};\nreturn { wake: "Workspace is degraded", state: { status: "degraded" } };',
+      );
+      await code.waitFor({ state: "visible" });
+      if (process.env.OPENCLAW_CHECK_PROOF !== "1") return;
+      const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [code], {
+        elements: [code],
+        animations: "disabled",
+        scrollTo: code,
+      });
+      await writeFile(".check-after.png", frame.png);
+    });
+  });
   it("submits triggered and ordinary intervals at their respective boundaries", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -73,7 +101,7 @@ suite.define(() => {
       await field(page, "every-amount").fill("5");
       await advanced(page);
       await triggerToggle(page).click();
-      await field(page, "trigger-script").fill("json({ fire: true })");
+      await field(page, "trigger-script").fill("return { wake: 'ready' };");
 
       const intervalError = field(page, "error-everyAmount");
       await intervalError.waitFor({ state: "visible" });
@@ -91,7 +119,7 @@ suite.define(() => {
       expect(triggeredRequest.params).toMatchObject({
         name: "Conditional interval",
         schedule: { kind: "every", everyMs: 30_000 },
-        trigger: { script: "json({ fire: true })", once: false },
+        check: { script: "return { wake: 'ready' };", once: false },
       });
       await expect.poll(async () => submit(page).count()).toBe(0);
 
@@ -111,7 +139,7 @@ suite.define(() => {
         name: "Unconditional interval",
         schedule: { kind: "every", everyMs: 5_000 },
       });
-      expect(untriggeredRequest.params).not.toHaveProperty("trigger");
+      expect(untriggeredRequest.params).not.toHaveProperty("check");
     });
   });
 
@@ -136,9 +164,9 @@ suite.define(() => {
       const request = await gateway.waitForRequest("cron.add");
       expect(request.params).toMatchObject({
         name: "Malformed condition",
-        trigger: { script: "const x = ;", once: false },
+        check: { script: "const x = ;", once: false },
       });
-      const message = "Condition script is invalid";
+      const message = "Check script is invalid";
       await gateway.rejectDeferred("cron.add", { code: "INVALID_REQUEST", message });
 
       const errorBanner = page.locator(".callout.danger");

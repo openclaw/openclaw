@@ -190,18 +190,18 @@ export async function collectLegacyCronStoreHealthFindings(params: {
       fixHint: 'Review its intended delivery and set mode to "none", "announce", or "webhook".',
     });
   }
-  for (const job of normalized.legacyTriggerScriptJobs) {
+  for (const job of normalized.convertedCheckJobs) {
     recordFinding({
-      message: `Legacy cron trigger script for ${job} can be migrated to direct tool calls.`,
+      message: `Automation ${job} can be converted to a check script.`,
       requirement: "legacy-cron-trigger-script",
     });
   }
-  for (const job of normalized.unsupportedLegacyTriggerScriptJobs) {
+  for (const job of normalized.pausedCheckJobs) {
     recordFinding({
-      message: `Legacy cron trigger script for ${job} cannot be safely migrated automatically.`,
+      message: `Doctor will pause automation ${job}.`,
       requirement: "unsupported-legacy-cron-trigger-script",
       fixHint:
-        "Inspect the automation and update its trigger script manually to use direct tool calls.",
+        "Recover the original script from the Doctor backup and edit the check before enabling it.",
     });
   }
   for (const [names, requirement, description] of [
@@ -385,11 +385,11 @@ export async function maybeRepairLegacyCronStore(params: {
       "Cron",
     );
   }
-  if (normalized.unsupportedLegacyTriggerScriptJobs.length > 0) {
+  if (normalized.pausedCheckJobs.length > 0) {
     note(
       [
         "Legacy cron trigger scripts cannot be safely migrated automatically:",
-        ...normalized.unsupportedLegacyTriggerScriptJobs.map((job) => `- ${job}`),
+        ...normalized.pausedCheckJobs.map((job) => `- ${job}`),
         "Inspect each automation and update its trigger script manually to use direct tool calls.",
       ].join("\n"),
       "Cron",
@@ -412,9 +412,9 @@ export async function maybeRepairLegacyCronStore(params: {
     }
   }
   const previewLines = formatLegacyIssuePreview(normalized.issues);
-  if (normalized.legacyTriggerScriptJobs.length > 0) {
+  if (normalized.convertedCheckJobs.length > 0) {
     previewLines.push(
-      `- ${pluralize(normalized.legacyTriggerScriptJobs.length, "legacy cron trigger script")} will be migrated to direct tool calls: ${normalized.legacyTriggerScriptJobs.join(", ")}`,
+      `- ${pluralize(normalized.convertedCheckJobs.length, "legacy cron trigger script")} will be migrated to direct tool calls: ${normalized.convertedCheckJobs.join(", ")}`,
     );
   }
   previewLines.push(...storagePreviewLines);

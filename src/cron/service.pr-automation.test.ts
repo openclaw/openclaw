@@ -45,7 +45,7 @@ it("native read-only edit retains the linked-account refusal for a source-less s
   });
   // Control: bypass only the new observer; invoke the existing native tool from the actual due model turn.
   await fixture.execution.update(fixture.selected.id, {
-    trigger: { script: "return { fire: true };" },
+    check: { script: "return { wake: '' };" },
     enabled: true,
   });
   runEmbeddedAgentMock.mockImplementation((params) =>

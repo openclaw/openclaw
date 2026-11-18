@@ -44,9 +44,9 @@ it.each(["predecessor", "pending", "late"] as const)(
     const firstStartedAt = Date.now();
     let payload = pendingPayload();
     let evaluationCount = 0;
-    const evaluateCronTrigger = vi.fn(async () => ({
+    const evaluateCronCheck = vi.fn(async () => ({
       kind: "evaluated" as const,
-      fire: true,
+      action: "wake",
       state: { owner: `evaluation-${++evaluationCount}` },
     }));
     const runIsolatedAgentJob = vi.fn(async () => {
@@ -61,7 +61,7 @@ it.each(["predecessor", "pending", "late"] as const)(
       resolveDefaultAgentId: () => "alpha",
       isAgentAvailable: () => true,
       log: logger,
-      evaluateCronTrigger,
+      evaluateCronCheck,
       runIsolatedAgentJob,
     });
     const deps = recoveryState.deps;
@@ -77,7 +77,7 @@ it.each(["predecessor", "pending", "late"] as const)(
         agentId: "alpha",
         enabled: true,
         schedule: { kind: "every", everyMs: 86_400_000, anchorMs: firstStartedAt },
-        trigger: { script: "return true", once: true },
+        check: { script: "return true", once: true },
         sessionTarget: "isolated",
         wakeMode: "now",
         payload: { kind: "agentTurn", message: "watcher payload" },
@@ -186,7 +186,7 @@ it.each(["predecessor", "pending", "late"] as const)(
       });
       expect([state.runningAtMs, state.runningReceiptId]).toEqual([undefined, undefined]);
       expect(readHistory()).toEqual(history);
-      expect(evaluateCronTrigger).toHaveBeenCalledTimes(2);
+      expect(evaluateCronCheck).toHaveBeenCalledTimes(2);
       expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
     } finally {
       allowWrites?.();

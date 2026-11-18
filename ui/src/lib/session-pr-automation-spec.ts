@@ -4,7 +4,7 @@ import type {
   CronAddParams,
   CronJob,
 } from "../../../packages/gateway-protocol/src/schema/cron.types.js";
-import { SESSION_PR_AUTO_FIX_TRIGGER } from "../../../src/shared/session-pr-auto-fix.js";
+import { SESSION_PR_AUTO_FIX_CHECK } from "../../../src/shared/session-pr-auto-fix.js";
 
 export const CI_AUTOMATION_OPTIONS = ["autoFix", "autoMerge", "autoArchive"] as const;
 export type CiAutomationOption = (typeof CI_AUTOMATION_OPTIONS)[number];
@@ -107,7 +107,7 @@ export function ciAutomationJobSpec(target: CiAutomationTarget, option: CiAutoma
     schedule: { kind: "every", everyMs: 300_000 },
     sessionTarget: executionTarget(target, option),
     wakeMode: "now",
-    ...(option === "autoFix" ? { trigger: { script: SESSION_PR_AUTO_FIX_TRIGGER } } : {}),
+    ...(option === "autoFix" ? { check: { script: SESSION_PR_AUTO_FIX_CHECK } } : {}),
     payload: { kind: "agentTurn", message: automationMessage(target, option) },
     delivery: { mode: "none" },
   } satisfies CronAddParams;

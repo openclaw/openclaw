@@ -395,7 +395,7 @@ it.each(["finite", "unlimited", "trigger evaluating"] as const)(
             },
           })
         : sessionEventJob("session-trigger-watchdog", {
-            trigger: { script: "return { fire: true };" },
+            check: { script: "return { wake: '' };" },
           });
     const started = createDeferred<AbortSignal | undefined>();
     const release = createDeferred();
@@ -423,7 +423,7 @@ it.each(["finite", "unlimited", "trigger evaluating"] as const)(
       runSessionEvent,
       ...(!finite && !unlimited
         ? {
-            evaluateCronTrigger: vi.fn(async () => {
+            evaluateCronCheck: vi.fn(async () => {
               started.resolve(undefined);
               return await new Promise<never>(() => {});
             }),

@@ -478,10 +478,10 @@ it.each(["telegram", "discord", "slack"] as const)(
         trigger: "cron",
       });
       const evaluate = () =>
-        runtime.evaluateTrigger({
+        runtime.evaluateCheck({
           occurrence,
           job: stored,
-          script: "return { fire: false };",
+          script: "return { };",
           state: null,
           abortSignal: new AbortController().signal,
           deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
@@ -489,7 +489,10 @@ it.each(["telegram", "discord", "slack"] as const)(
       // Execute from the reloaded job, with no manual provenance reconstruction.
       try {
         const result = await evaluate();
-        expect(result, JSON.stringify(result)).toMatchObject({ kind: "evaluated", fire: false });
+        expect(result, JSON.stringify(result)).toMatchObject({
+          kind: "evaluated",
+          action: "quiet",
+        });
         expect(stored.payload.toolsAllow).toEqual(["read"]);
         expect(stored.scheduledToolPolicy).toEqual(cronAccountPolicy(parentSessionKey, accountId));
         setRuntimeConfigSnapshot({ ...config, channels: { [channel]: { accounts: {} } } }, config);

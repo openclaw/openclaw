@@ -71,7 +71,7 @@ it.each(["trigger", "payload"] as const)(
         const runtime = createCronScriptRuntime({ config, loadPluginRegistry: () => registry });
         const signal = new AbortController().signal;
         const invoke = async (accountId: string, channel?: string) => {
-          const script = `await message({ action: "send", channel: "telegram", accountId: ${JSON.stringify(accountId)}, target: "123", message: "Scheduled report" }); return { fire: false };`;
+          const script = `await message({ action: "send", channel: "telegram", accountId: ${JSON.stringify(accountId)}, target: "123", message: "Scheduled report" }); return { };`;
           const jobId = `account-${entry}-${accountId}`;
           const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
           const ownerSessionKey = `agent:main:telegram:${accountId}:direct:123`;
@@ -109,17 +109,17 @@ it.each(["trigger", "payload"] as const)(
               ingress: { kind: "schedule", boundary: "cron.script", state: "present" } as const,
               onPostAdmission: (admitted) => bindCronJobAdmittedRun(marker, admitted, signal),
             },
-          } satisfies Parameters<typeof runtime.evaluateTrigger>[0];
+          } satisfies Parameters<typeof runtime.evaluateCheck>[0];
           try {
             return await (entry === "trigger"
-              ? runtime.evaluateTrigger(params)
+              ? runtime.evaluateCheck(params)
               : runtime.executePayload(params));
           } finally {
             clearCronJobActive(jobId, marker);
           }
         };
         const expected =
-          entry === "trigger" ? { kind: "evaluated", fire: false } : { kind: "completed" };
+          entry === "trigger" ? { kind: "evaluated", action: "quiet" } : { kind: "completed" };
         for (const [accountId, channel, error, sends] of [
           ["work", "telegram", undefined, 1],
           ["work", "slack", 'Scheduled account "work" is unavailable', 1],
@@ -309,7 +309,7 @@ it("flags reauthorization exactly when script preparation reaches the missing-ch
       const ownerSessionKey = "agent:main:telegram:work:direct:123";
       const cases = [
         ["payload", [], 'return { notify: "done" };', false],
-        ["trigger", [], "return { fire: false };", false],
+        ["trigger", [], "return { };", false],
         ["payload", [], "return { notify: typeof MCP };", true],
         ["trigger", [], 'return { fire: typeof MCP === "object" };', true],
         ["payload", ["read"], 'return { notify: "done" };', true],
@@ -324,7 +324,7 @@ it("flags reauthorization exactly when script preparation reaches the missing-ch
             entry === "payload"
               ? { kind: "script", script, toolsAllow: [...toolsAllow] }
               : { kind: "command", argv: ["true"], toolsAllow: [...toolsAllow] },
-          ...(entry === "trigger" ? { trigger: { script } } : {}),
+          ...(entry === "trigger" ? { check: { script } } : {}),
           owner: { agentId: "main", sessionKey: ownerSessionKey, accountId: "work" },
           scheduledToolPolicy: {
             version: 1,
@@ -344,10 +344,10 @@ it("flags reauthorization exactly when script preparation reaches the missing-ch
             ingress: { kind: "schedule", boundary: "cron.script", state: "present" } as const,
             onPostAdmission: (admitted) => bindCronJobAdmittedRun(marker, admitted, signal),
           },
-        } satisfies Parameters<typeof runtime.evaluateTrigger>[0];
+        } satisfies Parameters<typeof runtime.evaluateCheck>[0];
         try {
           const result = await (entry === "trigger"
-            ? runtime.evaluateTrigger(params)
+            ? runtime.evaluateCheck(params)
             : runtime.executePayload(params));
           expect(result, JSON.stringify(result)).toMatchObject(
             blocked

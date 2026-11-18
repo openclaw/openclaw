@@ -2,7 +2,6 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { expect, it } from "vitest";
 import { clearCronJobActive, markCronJobActive } from "./active-jobs.js";
 import { normalizeCronJobPatch } from "./normalize.js";
-import { DEFAULT_CRON_SCRIPT_TIMEOUT_SECONDS } from "./script-payload.js";
 import { cronTestInput, cronTestJob } from "./service.fixture-builders.test-support.js";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
 import {
@@ -50,7 +49,6 @@ const convergence = { enabledExplicit: true, nowMs: NOW };
 it.each([
   agentPayload({ message: "Synthetic reminder" }),
   { kind: "command", argv: ["printf", "synthetic-proof"] },
-  { kind: "script", script: "return { output: 'synthetic-proof' };" },
 ] satisfies CronJob["payload"][])(
   "restores the default $kind timeout through a normalized update",
   (payload) => {
@@ -62,11 +60,7 @@ it.each([
       throw new Error("expected normalized patch");
     }
     applyJobPatch(current, patch);
-    if (current.payload.kind === "script") {
-      expect(current.payload.timeoutSeconds).toBe(DEFAULT_CRON_SCRIPT_TIMEOUT_SECONDS);
-    } else {
-      expect(current.payload).not.toHaveProperty("timeoutSeconds");
-    }
+    expect(current.payload).not.toHaveProperty("timeoutSeconds");
   },
 );
 
@@ -208,7 +202,7 @@ it.each([undefined, { toolsAllow: ["read", "cron"], toolsAllowIsDefault: true }]
 
 it("adopts explicit authority when a declaration becomes tool-bearing", () => {
   const current = fixtureJob();
-  applyDeclarativeJobSpec(current, input({ trigger: { script: "return true" } }), {
+  applyDeclarativeJobSpec(current, agentInput({ check: { script: "return {}" } }), {
     ...convergence,
     cronConfig: { triggers: { enabled: true } },
   });
@@ -216,16 +210,16 @@ it("adopts explicit authority when a declaration becomes tool-bearing", () => {
 });
 
 const malformedScript = "const x = ;";
-const triggeredInput = (script = "return { fire: true }") => input({ trigger: { script } });
+const triggeredInput = (script = "return { wake: '' }") => agentInput({ check: { script } });
 
 it("allows removal of a legacy malformed trigger", () => {
   const current = createTestJob(triggeredInput());
-  current.trigger = { script: malformedScript };
-  applyJobPatch(current, { trigger: null }, { cronConfig: { triggers: { enabled: false } } });
-  expect(current.trigger).toBeUndefined();
+  current.check = { script: malformedScript };
+  applyJobPatch(current, { check: null }, { cronConfig: { triggers: { enabled: false } } });
+  expect(current.check).toBeUndefined();
 });
 
-const scriptInput = () => agentInput({ payload: { kind: "script", script: "return {}" } });
+const scriptInput = () => agentInput({ payload: { kind: "none" }, check: { script: "return {}" } });
 const enabled = { cronConfig: { triggers: { enabled: true } } };
 
 const hourly: CronJob["schedule"] = {
@@ -309,10 +303,10 @@ const patchErrors = {
   webhook: "cron webhook delivery requires delivery.to to be a valid http(s) URL",
   mainFailure:
     'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
-  triggerSyntax: "cron trigger script has a syntax error: Unexpected token (line 1, column 10)",
-  emptyTrigger: "cron trigger script must not be empty",
-  scriptSyntax: "cron script payload has a syntax error",
-  triggerConflict: "cannot be combined with a condition trigger",
+  triggerSyntax: "cron check script has a syntax error: Unexpected token (line 1, column 10)",
+  emptyTrigger: "cron check script must not be empty",
+  scriptSyntax: "cron check script has a syntax error",
+  triggerConflict: "not a command or system event",
   disabledScript: "the operator set cron.triggers.enabled: false",
   channel: "cron announce delivery requires an explicit channel",
 };
@@ -341,22 +335,18 @@ it.each<InvalidPatch>([
     { delivery: { mode: "webhook", to: "" } },
   ],
   ["mainFailure", invalidMainJob, { enabled: true }],
-  [
-    "triggerSyntax",
-    () => createTestJob(triggeredInput()),
-    { trigger: { script: malformedScript } },
-  ],
-  ["emptyTrigger", () => createTestJob(triggeredInput()), { trigger: { script: "   " } }],
+  ["triggerSyntax", () => createTestJob(triggeredInput()), { check: { script: malformedScript } }],
+  ["emptyTrigger", () => createTestJob(triggeredInput()), { check: { script: "   " } }],
   [
     "scriptSyntax",
     () => createTestJob(scriptInput()),
-    { payload: { kind: "script", script: malformedScript } },
+    { check: { script: malformedScript } },
     enabled,
   ],
   [
     "triggerConflict",
     () => createTestJob(scriptInput()),
-    { trigger: { script: "return { fire: true }" } },
+    { payload: { kind: "command", argv: ["true"] } },
     enabled,
   ],
   [
@@ -379,7 +369,7 @@ const creationErrors = {
 it.each<[keyof typeof creationErrors, CronJobCreate]>([
   ["interval", input({ schedule: { kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS } })],
   ["timestamp", input({ schedule: { kind: "at", at: String(MAX_DATE_TIMESTAMP_MS + 1) } })],
-  ["trigger", { ...scriptInput(), trigger: { script: "return { fire: true }" } }],
+  ["trigger", { ...scriptInput(), payload: { kind: "command", argv: ["true"] } }],
   ["session", agentInput({ sessionTarget: "session:bad\0id" })],
 ])("rejects invalid %s at creation", (error, jobInput) => {
   expect(() => createTestJob(jobInput)).toThrow(creationErrors[error]);
@@ -392,14 +382,11 @@ it.each<CronJob["schedule"]>([
   expect(createTestJob(input({ schedule })).state.nextRunAtMs).toBe(MAX_DATE_TIMESTAMP_MS);
 });
 
-it("caps enabled script conversions", () => {
-  const current = createTestJob(agentInput());
-  applyJobPatch(
-    current,
-    { payload: { kind: "script", script: "return {}", timeoutSeconds: 9_000, toolBudget: 9_000 } },
-    enabled,
-  );
-  expect(current.payload).toMatchObject({ kind: "script", timeoutSeconds: 900, toolBudget: 200 });
+it("rejects a check above the configured execution limits", () => {
+  const current = createTestJob(scriptInput());
+  expect(() =>
+    applyJobPatch(current, { check: { script: "return {}", timeoutSeconds: 901 } }, enabled),
+  ).toThrow("timeoutSeconds must be an integer between 1 and 900");
 });
 
 it.each([

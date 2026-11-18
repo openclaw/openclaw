@@ -363,9 +363,7 @@ it.each([
                             kind: "at",
                             at: new Date(clock.clock.now() + 60_000).toISOString(),
                           },
-                    ...(recurring
-                      ? { trigger: { script: 'return { fire: true, message: "CI passed" };' } }
-                      : {}),
+                    ...(recurring ? { check: { script: 'return { wake: "CI passed" };' } } : {}),
                     sessionTarget: "session:" + targetKey,
                     payload: {
                       kind: "agentTurn",
@@ -611,7 +609,7 @@ it.each([
             abortSignal: params.abortSignal,
             runtimeToolAllowlist: params.toolsAllow,
             scheduledToolPolicy: params.scheduledToolPolicy,
-            trigger: params.trigger,
+            trigger: params.check,
             jobId: params.jobId,
           }),
           params.toolsAllow,
@@ -692,9 +690,9 @@ it.each([
     },
     ...(recurring
       ? {
-          evaluateCronTrigger: async () => ({
+          evaluateCronCheck: async () => ({
             kind: "evaluated" as const,
-            fire: true,
+            action: "wake",
             message: "CI passed",
           }),
         }

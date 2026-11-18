@@ -367,7 +367,7 @@ describe("scheduled tool policy provenance", () => {
           {
             ...jobInput,
             name: "trigger-capped",
-            trigger: { script: "return true" },
+            check: { script: "return true" },
             payload: { kind: "command", argv: ["true"] },
           },
           { captureRuntimeAuthority: () => baseAuthority },

@@ -216,7 +216,20 @@ export async function ensureLoaded(
   const loadedJobs = (loaded.store.jobs ?? []).filter(isRecord);
   const jobs: CronJob[] = [];
   const durableNextRunAtMsByJobId = new Map<string, number | undefined>();
-  const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
+  const quarantinedConfigJobs: QuarantinedCronConfigJob[] = loaded.invalidConfigRows.filter(
+    (row) => {
+      if (row.reason !== "legacy-check-repair-required") return true;
+      const key = `check:${row.sourceIndex}`;
+      if (!state.warnedInvalidPersistedJobKeys.has(key)) {
+        state.warnedInvalidPersistedJobKeys.add(key);
+        state.deps.log.warn(
+          { jobId: row.job?.id },
+          "cron: automation check withheld; run openclaw doctor --fix",
+        );
+      }
+      return false;
+    },
+  );
   for (const [index, raw] of loadedJobs.entries()) {
     if (!hasCanonicalCronDeliveryMode(raw.delivery)) {
       const warningKey = `delivery:${raw.id}`;

@@ -41,14 +41,14 @@ describe("cron service run admission", () => {
     waitingJob.schedule = { kind: "every", everyMs: 60_000, anchorMs: dueAt };
     waitingJob.trigger = { script: "fire", once: true };
     waitingJob.state.triggerState = { owner: "original" };
-    const evaluateCronTrigger = vi.fn(async () => ({
+    const evaluateCronCheck = vi.fn(async () => ({
       kind: "evaluated" as const,
-      fire: true,
+      action: "wake",
       state: { owner: "completed evaluation" },
     }));
     const queue = await blockedRun(waitingJob, {
       cronConfig: { triggers: { enabled: true } },
-      evaluateCronTrigger,
+      evaluateCronCheck,
     });
     let waitingRun: ReturnType<typeof run> | undefined;
     try {
@@ -56,7 +56,7 @@ describe("cron service run admission", () => {
       await queue.queued;
 
       expect(queue.readReceipt()).toBeDefined();
-      expect(evaluateCronTrigger).not.toHaveBeenCalled();
+      expect(evaluateCronCheck).not.toHaveBeenCalled();
       await update(queue.state, waitingJob.id, {
         state: { triggerState: { owner: "queued edit" } },
       });
@@ -64,7 +64,7 @@ describe("cron service run admission", () => {
       await queue.finishActive();
       await expect(waitingRun).resolves.toEqual({ ok: true, ran: true });
 
-      expect(evaluateCronTrigger.mock.calls).toMatchObject([[{ state: { owner: "queued edit" } }]]);
+      expect(evaluateCronCheck.mock.calls).toMatchObject([[{ state: { owner: "queued edit" } }]]);
       const persisted = await queue.readJob();
       expect(persisted).toMatchObject({
         enabled: false,

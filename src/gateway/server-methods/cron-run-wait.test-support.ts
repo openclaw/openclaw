@@ -81,7 +81,8 @@ export function registerCronRunWaitTests({
       job: {
         sessionTarget: "isolated",
         sourceConversation: { sessionKey: "agent:ops:main", sessionId: "creator" },
-        payload: { kind: "script", script: "return { notify: 'report' };" },
+        payload: { kind: "none" },
+        check: { script: "return { post: 'report' };" },
         delivery: { mode: "announce" },
       },
       waits: false,

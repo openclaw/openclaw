@@ -1,4 +1,4 @@
-// Client-side trigger script loading for cron create/edit commands.
+// Client-side check script loading for cron create/edit commands.
 import { realpath } from "node:fs/promises";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
@@ -59,22 +59,14 @@ async function readScriptStream(
   return script;
 }
 
-/** Reads a trigger script locally before sending the cron RPC. */
-export async function readCronTriggerScript(
+/** Reads a check script locally before sending the cron RPC. */
+export async function readCronCheckScript(
   source: string,
   deps?: {
     stdin?: AsyncIterable<unknown>;
   },
 ): Promise<string> {
-  return await readScriptStream(source, deps?.stdin, "Trigger script");
-}
-
-/** Reads a script payload locally before sending the cron RPC. */
-export async function readCronPayloadScript(
-  source: string,
-  deps?: { stdin?: AsyncIterable<unknown> },
-): Promise<string> {
-  return await readScriptStream(source, deps?.stdin, "Script payload");
+  return await readScriptStream(source, deps?.stdin, "Check script");
 }
 
 /** Reads exact scratch content locally; empty content is a meaningful value. */

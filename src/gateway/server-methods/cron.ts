@@ -220,7 +220,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const touchesToolRuntime = patch.payload !== undefined || Object.hasOwn(patch, "trigger");
+    const touchesToolRuntime = patch.payload !== undefined || Object.hasOwn(patch, "check");
     const narrowsTrustedJob = cronUpdateNarrowsTrustedJob(currentJob, patch, callerScope);
     let deliveryPreview: CronDeliveryPreview | undefined;
     let targetAccess: Awaited<ReturnType<typeof prepareHumanCronTargetAccess>>;
