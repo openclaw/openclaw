@@ -27,8 +27,9 @@ import {
 } from "../../state/user-preferences.js";
 import { prepareProfileAuthorityRead } from "../../state/user-profile-authority.js";
 import { captureUserProfileAuthorityRead } from "../../state/user-profile-events.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js";
-import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { mergeProfiles, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import type { BridgeRequest } from "../postgres-sync/protocol.js";
 import { isPostgresSqlConnection } from "../sql-connection.js";
@@ -55,7 +56,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       senderId: name,
     });
     const profile = (name: string) => admit(() => ensureProfileForEmail(`${name}@example.test`));
-    const prepareAction = (person: ReturnType<typeof profile>) => {
+    const prepareAction = async (person: ReturnType<typeof profile>) => {
       const connId = "profile-authority";
       const client = authorizationClient(connId, ["operator.write"], {
         authenticatedUserProfile: {
@@ -66,10 +67,25 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         },
       });
       const context = createDirectChatContext({
-        getRuntimeConfig: () => ({}),
+        getRuntimeConfig: () => ({
+          gateway: {
+            roles: {
+              default: "writer",
+              definitions: {
+                writer: { scopes: ["operator.write"], agents: [], sessions: { others: "none" } },
+                member: { scopes: ["operator.read"], agents: [], sessions: { others: "none" } },
+              },
+            },
+          },
+        }),
         getClientConnIds: (filter) => new Set(!filter || filter(client) ? [connId] : []),
       });
-      return preparePersonalProfileAction({ client, context }, "operator.write");
+      const catalog = await prepareUserProfileCatalog();
+      try {
+        return await preparePersonalProfileAction({ client, context }, "operator.write");
+      } finally {
+        catalog.release();
+      }
     };
     const custody = (subject: string) =>
       admit(() => {
@@ -83,10 +99,16 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           authorization_basis_json = 'null' WHERE subject = ${subject}`.run(),
       );
 
-    it.each([false, true])(
-      "fences production action and transferred readers at native COMMIT (rollback=%s)",
-      async (rollback) => {
-        const person = profile(`native-fence-${rollback}`);
+    it.each([
+      { change: "role", rollback: false },
+      { change: "role", rollback: true },
+      { change: "merge", rollback: false },
+      { change: "merge", rollback: true },
+    ])(
+      "fences transferred readers and preserves admitted action ownership at native $change COMMIT (rollback=$rollback)",
+      async ({ change, rollback }) => {
+        const person = profile(`native-fence-${change}-${rollback}`);
+        const target = change === "merge" ? profile(`native-target-${rollback}`) : person;
         const action = await prepareAction(person);
         const authority = await captureUserProfileAuthorityRead(
           captureOpenClawStateWorkerContext({}).admission,
@@ -112,7 +134,11 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             commits++;
             expect([bound(), readBound(), readSettled()]).toEqual([false, "pending", "pending"]);
             expect(() => authority.assertSettled(person.id)).toThrow("has not settled");
-            expect(action.assertCurrent).toThrow("Personal profile owner changed");
+            if (change === "merge") {
+              expect(action.assertCurrent).toThrow("Personal profile owner changed");
+            } else {
+              expect(action.assertCurrent).not.toThrow();
+            }
             if (rollback) {
               throw new Error("synthetic native COMMIT refusal");
             }
@@ -122,16 +148,18 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         const mutate = () =>
           admit(() =>
             runOpenClawStateWriteTransaction(() => {
-              setUserProfileRole(person.id, "member");
+              if (change === "merge") {
+                mergeProfiles(person.id, target.id);
+              } else {
+                setUserProfileRole(person.id, "member");
+              }
               expect([bound(), readBound(), readSettled()]).toEqual([true, "current", "current"]);
             }),
           );
         if (rollback) {
           expect(mutate).toThrow("synthetic native COMMIT refusal");
-          await expect(perform(false)).resolves.toMatchObject({ ok: true });
         } else {
           mutate();
-          await expect(perform(false)).rejects.toThrow("Personal profile owner changed");
         }
         expect(commits).toBe(1);
         expect([bound(), readBound(), readSettled()]).toEqual([
@@ -140,8 +168,19 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           "current",
         ]);
         expect(() => authority.assertSettled(person.id)).not.toThrow();
-        await expect(getCanonicalUserPreferences(person.id)).resolves.toMatchObject({
-          entries: { "synthetic.authority": !rollback },
+        const ownerChanged = change === "merge" && !rollback;
+        if (ownerChanged) {
+          await expect(perform(false)).rejects.toThrow("Personal profile owner changed");
+        } else {
+          await expect(perform(false)).resolves.toMatchObject({ ok: true });
+        }
+        if (change === "role" && !rollback) {
+          await expect(prepareAction(person)).rejects.toThrow("requires current operator.write");
+        }
+        await expect(
+          getCanonicalUserPreferences(ownerChanged ? target.id : person.id),
+        ).resolves.toMatchObject({
+          entries: { "synthetic.authority": ownerChanged },
         });
       },
     );
@@ -224,11 +263,13 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       ).resolves.toMatchObject({ recoveryReference: { version: 2, id: expect.any(String) } });
     });
 
-    it.runIf(engine === "postgres")(
-      "keeps production authority closed after losing a real COMMIT reply",
-      async () => {
-        const person = profile("lost-role-commit");
+    it.runIf(engine === "postgres").each(["role", "merge"])(
+      "keeps affected authority closed after losing a real %s COMMIT reply",
+      async (change) => {
+        const person = profile(`lost-${change}-commit`);
+        const target = change === "merge" ? profile("lost-merge-target") : person;
         const action = await prepareAction(person);
+        await setCanonicalUserPreferences(person.id, { "synthetic.authority": true });
         const authority = await captureUserProfileAuthorityRead(
           captureOpenClawStateWorkerContext({}).admission,
         );
@@ -272,9 +313,13 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           return received;
         });
         try {
-          expect(() => admit(() => setUserProfileRole(person.id, "member"))).toThrow(
-            expect.objectContaining({ code: "outcome-unknown" }),
-          );
+          expect(() =>
+            admit(() =>
+              change === "merge"
+                ? mergeProfiles(person.id, target.id)
+                : setUserProfileRole(person.id, "member"),
+            ),
+          ).toThrow(expect.objectContaining({ code: "outcome-unknown" }));
         } finally {
           vi.mocked(receiveMessageOnPort).mockImplementation(actual.receiveMessageOnPort);
         }
@@ -282,21 +327,31 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         expect(beforeClose).toBe("uncertain");
         expect([bound(), readBound(), readSettled()]).toEqual([false, "uncertain", "uncertain"]);
         expect(() => authority.assertSettled(person.id)).toThrow("requires canonical recovery");
-        await expect(
-          setCanonicalUserPreferences(
-            person.id,
-            { "synthetic.authority": false },
-            { assertCurrent: action.assertCurrent },
-          ),
-        ).rejects.toThrow("Personal profile owner changed");
+        const perform = setCanonicalUserPreferences(
+          person.id,
+          { "synthetic.authority": false },
+          { assertCurrent: action.assertCurrent },
+        );
+        if (change === "merge") {
+          await expect(perform).rejects.toThrow("Personal profile owner changed");
+        } else {
+          await expect(perform).resolves.toMatchObject({ ok: true });
+        }
+        await expect(getCanonicalUserPreferences(target.id)).resolves.toMatchObject({
+          entries: { "synthetic.authority": change === "merge" },
+        });
         const observer = new Client({ connectionString: mixedAgentConnection });
         await observer.connect();
         try {
           const durable = await observer.query(
-            `SELECT role FROM "${physical.namespace}".user_profiles WHERE id = $1`,
+            `SELECT role, merged_into FROM "${physical.namespace}".user_profiles WHERE id = $1`,
             [person.id],
           );
-          expect(durable.rows).toEqual([{ role: "member" }]);
+          expect(durable.rows).toEqual([
+            change === "merge"
+              ? { role: null, merged_into: target.id }
+              : { role: "member", merged_into: null },
+          ]);
         } finally {
           await observer.end();
         }
