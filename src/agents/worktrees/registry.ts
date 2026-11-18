@@ -213,6 +213,28 @@ export function updateRegistryWorktree(
   );
 }
 
+/** Persist use at run boundaries, sharing the five-minute write limit across processes. */
+export async function recordRegistryWorktreeActivity(
+  env: NodeJS.ProcessEnv,
+  record: ManagedWorktreeRecord,
+  assertCurrent?: () => void,
+): Promise<void> {
+  const now = Date.now();
+  if (record.removedAt !== undefined || now - record.lastActiveAt < 5 * 60 * 1000) {
+    return;
+  }
+  await updateRegistryWorktree(
+    env,
+    record.id,
+    { lastActiveAt: now },
+    {
+      onlyIfLive: true,
+      onlyIfActiveAt: record.lastActiveAt,
+      assertCurrent,
+    },
+  );
+}
+
 export function deleteRegistryWorktree(
   env: NodeJS.ProcessEnv,
   id: string,
