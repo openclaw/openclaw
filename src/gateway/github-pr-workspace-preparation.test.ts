@@ -1,6 +1,6 @@
 // Install the shared GitHub fixture before loading the registered action owners.
 // oxfmt-ignore
-import { interruptCanonicalWorkspaceAcceptance, bindFixtureRuntime, fixture, mocks, observeManagedLayoutCaptures } from "./github-pr-workspace-preparation.test-support.js";
+import { interruptCanonicalWorkspaceAcceptance, bindFixtureRuntime, admitSharedParent, fixture, mocks, observeManagedLayoutCaptures } from "./github-pr-workspace-preparation.test-support.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -11,6 +11,7 @@ import { resolveSandboxContext } from "../agents/sandbox/context.js";
 import { acquireSandboxGatewayOwner } from "../agents/sandbox/registry.test-support.js";
 import { ensureEmptyWorktreeSource } from "../agents/worktrees/empty-source.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
   linkCanonicalUserProfileEmail,
@@ -747,8 +748,13 @@ describe("existing PR preparation through the registered agent action", () => {
     "lifecycle",
     "archived",
     "aborted",
+    "sharing",
   ])("keeps private source transfer bound to the current requester (%s)", async (variant) => {
     const f = await fixture({ fork: true });
+    const sharingScope = { agentId: "main", sessionKey: "agent:main:publication-parent" };
+    if (variant === "sharing") {
+      await admitSharedParent(f, sharingScope);
+    }
     const cancellation = new AbortController();
     f.pr.base.repo.private = true;
     f.pr.head.repo.private = true;
@@ -769,11 +775,23 @@ describe("existing PR preparation through the registered agent action", () => {
     let privateAccessReads = 0;
     let fetched = false;
     let authorityChanged = false;
+    let observing = true;
+    let commandsAfterRevocation = 0;
+    const sandboxCommand = f.sandbox.backend!.runShellCommand;
+    vi.spyOn(f.sandbox.backend!, "runShellCommand").mockImplementation(async (input) => {
+      if (observing && authorityChanged) {
+        commandsAfterRevocation += 1;
+      }
+      return sandboxCommand(input);
+    });
     mocks.runCommand.mockImplementation(
       async (
         argv: string[],
         options?: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string },
       ) => {
+        if (observing && authorityChanged && argv[0] === "git") {
+          commandsAfterRevocation += 1;
+        }
         if (argv[0] === "gh" && argv.includes("GET") && argv.at(-1) === "user/101") {
           return commandResult(JSON.stringify({ id: 101, login: "contributor" }));
         }
@@ -813,6 +831,9 @@ describe("existing PR preparation through the registered agent action", () => {
           } else if (!authorityChanged && variant === "aborted") {
             cancellation.abort(new Error("PR preparation cancelled"));
             authorityChanged = true;
+          } else if (!authorityChanged && variant === "sharing") {
+            await removeSessionMember(sharingScope, f.guestProfile);
+            authorityChanged = true;
           }
         }
         return result;
@@ -823,6 +844,7 @@ describe("existing PR preparation through the registered agent action", () => {
         status: "prepared",
         headCommit: f.headCommit,
       });
+      observing = false;
       expect(await fs.readFile(path.join(f.projection, "pr.txt"), "utf8")).toBe(
         "original PR contents\n",
       );
@@ -830,6 +852,7 @@ describe("existing PR preparation through the registered agent action", () => {
       await expect(f.invoke({}, f.sandbox, cancellation.signal)).rejects.toThrow(
         variant === "wrong author" ? "could not be verified as yours" : undefined,
       );
+      observing = false;
       expect(await snapshot()).toEqual(before);
       for (const directory of [f.cwd, f.projection]) {
         await expect(fs.stat(path.join(directory, "pr.txt"))).rejects.toMatchObject({
@@ -840,6 +863,7 @@ describe("existing PR preparation through the registered agent action", () => {
     expect(privateAccessReads).toBeGreaterThan(0);
     expect(fetched).toBe(variant !== "wrong author");
     expect(authorityChanged).toBe(variant !== "authorized" && variant !== "wrong author");
+    expect(commandsAfterRevocation).toBe(0);
     expect(f.writes).toEqual([]);
     expect(f.externalWrites).toEqual([]);
   });
