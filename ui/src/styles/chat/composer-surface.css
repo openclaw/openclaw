@@ -1306,13 +1306,6 @@
     height: 44px;
   }
 
-  /* Keep the live voice pill wide enough for its meter; the generic
-     44px square above would crush it at phone widths. */
-  .chat-send-btn.chat-send-btn--voice-live {
-    width: auto;
-    min-width: 64px;
-  }
-
   .chat-thread {
     --chat-thread-inline-inset: max(
       var(--chat-thread-annotation-inset, 0px),

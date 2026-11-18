@@ -33,7 +33,6 @@ export function ActiveDictationStatus(props: {
     return dictation.connecting ? "connecting" : dictation.finalizing ? "thinking" : "listening";
   });
   return (
-    // The stack outlives phase changes, so the row eases in once per dictation.
     <div class="agent-chat__composer-status-stack">
       <Show when={phase()} keyed>
         {(current) => (
