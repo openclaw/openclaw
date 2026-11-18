@@ -56,6 +56,11 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { listVitestConfigTestFiles } from "../vitest-projects-config.test-support.js";
 import { databaseWorkerExtensionTestFiles } from "../vitest/vitest.extension-database-workers-paths.mjs";
 import { matchesVitestCliSelection } from "../vitest/vitest.pattern-file.ts";
+import {
+  evaluateWorkflowExpression,
+  readWorkflow,
+  requiredWorkflowStep,
+} from "./ci-workflow.test-support.js";
 import { childTermination, scriptFiles } from "./run-vitest.test-support.js";
 
 vi.mock("../../scripts/lib/vitest-build-prerequisites.mts", async (importOriginal) => ({
@@ -120,7 +125,7 @@ const extensionConfig = (id: string) => `test/vitest/vitest.extension-${id}.conf
 const withoutExtensionRoot = (file: string) => file.replace(/^extensions\//u, "");
 const parseVitest = (args: string[]) => parseCLI(["vitest", "run", ...args]);
 
-function controlledBatch() {
+function controlledBatch(env = { OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" }) {
   const started: string[] = [];
   const resolvers: Array<(code: number) => void> = [];
   const runGroup = vi.fn((params: RunGroupParams) => {
@@ -130,7 +135,7 @@ function controlledBatch() {
     });
   });
   const runPromise = runExtensionBatchPlan(concurrentPlan(), {
-    env: { OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" },
+    env,
     runGroup,
     vitestArgs: ["--reporter=dot"],
   });
@@ -390,6 +395,65 @@ it.each([0, 7])("runs bounded parallel groups and stops admission after exit %s"
       /\/\.cache\/vitest\/slots\/[a-f\d]+\/0$/u.test(cachePath ?? ""),
     ),
   ).toBe(true);
+});
+
+it.each([
+  {
+    eventName: "schedule",
+    runner: "blacksmith-4vcpu-ubuntu-2404",
+    runnerLabel: "boat",
+    parallel: 1,
+  },
+  {
+    eventName: "schedule",
+    runner: "blacksmith-8vcpu-ubuntu-2404",
+    runnerLabel: "boat-large",
+    parallel: 2,
+  },
+  {
+    eventName: "schedule",
+    runner: "blacksmith-4vcpu-ubuntu-2404",
+    runnerLabel: undefined,
+    parallel: 2,
+  },
+  {
+    eventName: "workflow_dispatch",
+    runner: "blacksmith-4vcpu-ubuntu-2404",
+    runnerLabel: "boat",
+    parallel: 2,
+  },
+] as const)("admits $parallel hourly batch groups on $runner ($eventName)", async (route) => {
+  const step = requiredWorkflowStep(
+    readWorkflow(".github/workflows/plugin-prerelease.yml").jobs[
+      "plugin-prerelease-extension-shard"
+    ].steps,
+    "Run extension shard",
+  );
+  const configured = step.env.OPENCLAW_EXTENSION_BATCH_PARALLEL;
+  const parallel =
+    typeof configured === "string"
+      ? evaluateWorkflowExpression(configured, {
+          eventName: route.eventName,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          matrix: { runner: route.runner, runner_label: route.runnerLabel },
+        })
+      : configured;
+  const { started, resolvers, runGroup, runPromise } = controlledBatch({
+    OPENCLAW_EXTENSION_BATCH_PARALLEL: String(parallel),
+  });
+  try {
+    await nextTurn();
+    expect(started).toHaveLength(route.parallel);
+  } finally {
+    while (resolvers.length > 0) {
+      resolvers.shift()?.(0);
+      await nextTurn();
+    }
+    await expect(runPromise).resolves.toBe(0);
+  }
+  expect(runGroup).toHaveBeenCalledTimes(3);
+  expect(new Set(started)).toEqual(new Set(["light", "middle", "heavy"]));
 });
 
 it("rejects malformed extension batch parallelism", () => {
