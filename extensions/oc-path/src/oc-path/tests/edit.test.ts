@@ -119,6 +119,16 @@ describe("setOcPath", () => {
     },
   );
 
+  it("keeps an inserted trailing CR apart from a following LF", () => {
+    const raw = "\n## Intro\r- name: first\r## End\r- name: second\r";
+    const added = edit(raw, "[frontmatter]/+added", "x");
+    if (added.kind !== "md") {
+      throw new Error("expected Markdown edit");
+    }
+    const result = setOcPath(added, parseOcPath("oc://AGENTS.md/intro/name/name"), "changed");
+    expect(result.raw).toBe(`---\radded: x\r---\r\n${raw.replace("first", "changed")}`);
+  });
+
   it("preserves literal dollar replacement text", () => {
     const raw = "## Tools\n\n- command: old\n- keep: stable\n";
     const ast = parseMd(raw);

@@ -10,18 +10,23 @@ export function replaceMdSource(
   replacement: string,
   update: (shifted: MdAst) => MdAst,
 ): MdAst {
+  // A CR followed by an LF reads as one break. Keep the replacement's edge
+  // breaks apart from adjacent source breaks so recorded lines match the output.
+  const text =
+    (ast.raw[start - 1] === "\r" && replacement.startsWith("\n") ? "\r" : "") +
+    replacement +
+    (replacement.endsWith("\r") && ast.raw[end] === "\n" ? "\n" : "");
   const endLine = ast.raw.slice(0, end).split(/\r\n?|\n/).length;
   const atLineStart =
     end === 0 || /[\r\n]/.test(ast.raw[end - 1] ?? "") || (end === 1 && ast.raw[0] === "\uFEFF");
-  const delta =
-    replacement.split(/\r\n?|\n/).length - ast.raw.slice(start, end).split(/\r\n?|\n/).length;
+  const delta = text.split(/\r\n?|\n/).length - ast.raw.slice(start, end).split(/\r\n?|\n/).length;
   const shift = (line: number) =>
     line > endLine || (atLineStart && line === endLine) ? line + delta : line;
   // Keep explicit multiline values as one addressed item; reparsing would turn
   // literal Markdown inside a value into additional addressable nodes.
   const edited = update({
     ...ast,
-    raw: ast.raw.slice(0, start) + replacement + ast.raw.slice(end),
+    raw: ast.raw.slice(0, start) + text + ast.raw.slice(end),
     frontmatterEndLine:
       ast.frontmatterEndLine === undefined ? undefined : shift(ast.frontmatterEndLine),
     frontmatter: ast.frontmatter.map((entry) => ({ ...entry, line: shift(entry.line) })),
@@ -69,12 +74,12 @@ export function insertMdSource(
       : "";
   const suffix = offset < ast.raw.length || /[\r\n]$/.test(ast.raw) ? ending : "";
   const line = ast.raw.slice(0, offset).split(/\r\n?|\n/).length + (prefix ? 1 : 0);
-  const normalized = text.replace(/\r\n?|\n/g, ending);
-  // Keep a leading LF from merging with an existing CR into one line break.
-  const insertion =
-    ast.raw[offset - 1] === "\r" && normalized.startsWith("\n") ? `\r${normalized}` : normalized;
-  return replaceMdSource(ast, offset, offset, prefix + insertion + suffix, (shifted) =>
-    update(shifted, line),
+  return replaceMdSource(
+    ast,
+    offset,
+    offset,
+    prefix + text.replace(/\r\n?|\n/g, ending) + suffix,
+    (shifted) => update(shifted, line),
   );
 }
 
