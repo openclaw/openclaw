@@ -371,6 +371,8 @@ try {
   );
   const first = parseJsonOutput("first-update");
   writeJson("first-update-result", { exitCode: firstExit, result: first });
+  // Observe before asserting, so a failed update still records what it left serving.
+  const afterFirst = await observe("after-first", port, token, updateEnv);
   assert.equal(firstExit, 0, "The first update succeeds");
   assert.equal(first?.run?.status, "succeeded");
   if (fault === "corrupt-plugin") {
@@ -382,11 +384,7 @@ try {
     // Plugin convergence changed no config, so the update left the file untouched.
     assert.equal(fs.readFileSync(configPath, "utf8"), configBefore);
   }
-  assertConverged(
-    await observe("after-first", port, token, updateEnv),
-    target,
-    fault === "corrupt-plugin" ? corruptPlugin : undefined,
-  );
+  assertConverged(afterFirst, target, fault === "corrupt-plugin" ? corruptPlugin : undefined);
   await firstRegistry.stop();
   registries.pop();
 
