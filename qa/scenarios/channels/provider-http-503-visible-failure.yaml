@@ -12,6 +12,10 @@ scenario:
       - channels.qa-channel-final-reply
   objective: Verify a provider HTTP 503 after tool execution produces one safe visible channel reply without replaying the tool.
   gatewayConfigPatch:
+    # Alice owns the gateway, so she still gets the provider copy. Non-owners in
+    # shared chats get a neutral "temporarily unavailable" reply instead.
+    commands:
+      ownerAllowFrom: [qa-channel:alice]
     # Isolate this scenario from model-fallback replay policy. The regression
     # target is the outer channel failure mapping after a post-tool 503.
     agents:
