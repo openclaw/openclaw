@@ -63,6 +63,7 @@ import {
   loadSessionUpdatesRuntime,
 } from "./get-reply-run-helpers.js";
 import { runPreparedReply } from "./get-reply-run.js";
+import { createOwnerIngress } from "./get-reply-run.owner-ingress.test-support.js";
 import { registerPendingRequesterAuthorityCases } from "./get-reply-run.requester-authority.test-support.js";
 import { registerSteeringIntentProducerCases } from "./get-reply-run.steering-intent.test-support.js";
 import { registerSystemEventAdmissionCases } from "./get-reply-run.system-event-admission.test-support.js";
@@ -402,32 +403,6 @@ function createConfig(overrides: Partial<ReplyRunParams["cfg"]> = {}): ReplyRunP
   return { session: {}, channels: {}, agents: { defaults: {} }, ...overrides };
 }
 
-function createOwnerIngress(kind: string, channel: string, body: string, runId: string) {
-  const params = ownerParams();
-  params.command.senderId = "owner-1";
-  params.command.senderIsOwner = kind !== "non-owner" && kind !== "discord-promoted-before-drain";
-  return {
-    ...params,
-    ...turn(body, {
-      ...createProviderSurface(channel),
-      ChatType: "group",
-      SenderId:
-        kind === "owner-alias" || kind === "discord-owner-alias" ? "transport-alias" : "owner-1",
-      InboundEventKind: kind === "room-event" ? "room_event" : undefined,
-      InputProvenance:
-        kind === "internal" || kind === "inter-session"
-          ? { kind: "inter_session" as const, sourceTool: "sessions_send" }
-          : undefined,
-    }),
-    conversation: undefined,
-    sessionEntry:
-      kind === "spawned"
-        ? { sessionId: "spawned-session", updatedAt: 1, spawnedBy: "agent:parent:main" }
-        : undefined,
-    opts: { runId, suppressNextUserMessagePersistence: kind === "replay" },
-  };
-}
-
 async function useActualSystemEventDrain() {
   const actual = await vi.importActual<typeof import("./session-system-events.js")>(
     "./session-system-events.js",
@@ -454,6 +429,7 @@ describe("runPreparedReply media-only handling", () => {
   describe.each(["followup", "collect"] as const)("queued owner authority: %s", (mode) => {
     it.each([
       "owner",
+      "telegram-named-account",
       "owner-overflow",
       "owner-batch",
       "mixed-source-authority",
@@ -570,12 +546,13 @@ describe("runPreparedReply media-only handling", () => {
                           getCronManagementAuthority(identity)!();
                           expect(queuedCapability?.requesterOwner?.senderId).toBe("owner-1");
                           expect(getCronManagementChannelRequester(identity)).toEqual(
-                            channel === "discord"
+                            channel === "discord" || channel === "telegram"
                               ? {
                                   version: 1,
                                   channel,
-                                  accountId: "default",
-                                  senderId: promoted ? "owner-1" : "transport-alias",
+                                  accountId: kind === "telegram-named-account" ? "work" : "default",
+                                  senderId:
+                                    kind === "discord-owner-alias" ? "transport-alias" : "owner-1",
                                 }
                               : undefined,
                           );
@@ -676,6 +653,7 @@ describe("runPreparedReply media-only handling", () => {
           }
           expect(scope).toBe(
             kind === "owner" ||
+              kind === "telegram-named-account" ||
               kind === "owner-overflow" ||
               kind === "owner-batch" ||
               kind === "foreign-defaults" ||

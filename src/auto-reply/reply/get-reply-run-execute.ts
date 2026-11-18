@@ -27,7 +27,6 @@ import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity-inbound.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { getGatewayLocalUserIngress } from "../../gateway/local-user-ingress.js";
-import { normalizeAccountId } from "../../routing/account-id.js";
 import {
   isSessionPersonalBootstrapTurn,
   readSessionInputProfileId,
@@ -55,6 +54,7 @@ import {
   suppressUnresolvedPromptMedia,
   updateRoomEventAmbientTranscriptWatermark,
 } from "./get-reply-run-helpers.js";
+import { resolveReplyCronChannelRequester } from "./get-reply-run.cron-requester.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { normalizeMessageTimestampMs } from "./message-timestamp.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
@@ -404,15 +404,14 @@ export async function executePreparedReplyRun(
     freshChannelCronAuthorityTurn && command.senderIsOwner
       ? (opts?.runId ?? crypto.randomUUID())
       : undefined;
-  const channelRequester =
-    freshChannelCronAuthorityTurn && messageProvider === "discord" && sessionCtx.SenderId
-      ? {
-          version: 1 as const,
-          channel: messageProvider,
-          accountId: normalizeAccountId(replyRoute.accountId),
-          senderId: sessionCtx.SenderId,
-        }
-      : undefined;
+  const channelRequester = freshChannelCronAuthorityTurn
+    ? resolveReplyCronChannelRequester({
+        channel: messageProvider,
+        senderId: sessionCtx.SenderId,
+        accountId: ctx.AccountId ?? sessionCtx.AccountId,
+        replyAccountId: replyRoute.accountId,
+      })
+    : undefined;
   const inheritedCronCreatorAuthorityCapability = opts?.cronCreatorAuthorityCapability;
   const cronOwner = {
     channel: messageProvider,
