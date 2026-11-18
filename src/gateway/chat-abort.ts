@@ -383,6 +383,7 @@ export function abortChatRunById(
     onAbortPrepared?: () => (() => void) | void;
     onAbortCommitted?: () => void;
     expectedEntry?: RpcSourceRef;
+    pendingInputEndCause?: "user-stop";
     /** Shutdown can cancel retained cleanup without replacing an already published terminal. */
     preserveTerminal?: boolean;
     presentation?: ReturnType<typeof captureChatRunAbortPresentation>;
@@ -424,7 +425,14 @@ export function abortChatRunById(
     projectSessionTerminalPending: active.adapter.projectSessionTerminalPending,
     projectSessionTerminalObservedAt: active.adapter.projectSessionTerminalObservedAt,
   };
-  runProjection.abortMarker = createChatAbortMarker();
+  const abortMarker = createChatAbortMarker();
+  if (params.pendingInputEndCause && identity.sessionId) {
+    abortMarker.pendingInputCancellation = {
+      sessionId: identity.sessionId,
+      endCause: params.pendingInputEndCause,
+    };
+  }
+  runProjection.abortMarker = abortMarker;
   if (stopReason) {
     active.adapter.abortStopReason = stopReason;
   }

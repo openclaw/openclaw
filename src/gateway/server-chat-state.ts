@@ -33,7 +33,11 @@ export type ChatRunEntry = ChatRunRegistration & {
   registeredSequence: number;
 };
 
-export type ChatAbortMarker = { abortedAtMs: number; sequence: number };
+export type ChatAbortMarker = {
+  abortedAtMs: number;
+  sequence: number;
+  pendingInputCancellation?: { sessionId: string; endCause: "user-stop" };
+};
 
 let chatRunOrderingSequence = 0;
 
@@ -45,6 +49,15 @@ export function createChatAbortMarker(now = Date.now()): ChatAbortMarker {
 /** Return the wall-clock timestamp used by maintenance TTL pruning. */
 export function chatAbortMarkerTimestampMs(marker: ChatAbortMarker): number {
   return marker.abortedAtMs;
+}
+
+/** Read the admitted cancellation for this input's session while its receipt settles. */
+export function chatAbortPendingInputEndCause(
+  marker: ChatAbortMarker | undefined,
+  sessionId: string | undefined,
+): "user-stop" | undefined {
+  const cancellation = marker?.pendingInputCancellation;
+  return cancellation && cancellation.sessionId === sessionId ? cancellation.endCause : undefined;
 }
 
 /**

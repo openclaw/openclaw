@@ -96,6 +96,45 @@ it("reports durable queued input in flight instead of a cached terminal response
     { cached: true, runId: params.session.clientRunId },
   );
 });
+
+it.each([
+  { timing: "before", state: undefined },
+  { timing: "before", state: "queued" },
+  { timing: "after", state: "cancelled" },
+] as const)(
+  "rejects replay of a canceled steer $timing cleanup writes the receipt (pending state: $state)",
+  async ({ timing, state }) => {
+    const { clientRunId } = params.session;
+    params.context.dedupe.set(`chat:${clientRunId}`, {
+      ts: 200,
+      ok: true,
+      requestIdentity: params.request.requestIdentity,
+      payload: { runId: clientRunId, status: "timeout", summary: "aborted" },
+    });
+    if (timing === "before") {
+      params.context.chatRunState.getOrCreate(clientRunId).abortMarker = {
+        ...createChatAbortMarker(200),
+        pendingInputCancellation: { sessionId: "mention-session", endCause: "user-stop" },
+      };
+    }
+    if (state) {
+      submittedInput.mockResolvedValue(submittedMessage(params));
+      submittedSource.value = {
+        source: "pending",
+        state,
+        endCause: state === "cancelled" ? "user-stop" : undefined,
+      };
+    }
+
+    expect(await runChatSendPreAdmission(params)).toBe(false);
+    expectFailure(params.respond, {
+      code: "INVALID_REQUEST",
+      message: "Chat input was cancelled: user-stop. Use a new message ID to send again.",
+      details: { reason: "chat-input-cancelled", endCause: "user-stop" },
+    });
+  },
+);
+
 type RetryParams = Parameters<typeof respondChatSendRetry>[0];
 
 function createFixture() {

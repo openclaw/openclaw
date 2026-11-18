@@ -9,7 +9,7 @@ import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
 import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
-import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
+import { chatAbortMarkerTimestampMs, chatAbortPendingInputEndCause } from "../server-chat-state.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import {
@@ -174,8 +174,14 @@ export function respondChatSendRetry(
     respond(false, undefined, conflict);
     return true;
   }
-  if (comparison?.state === "cancelled") {
-    const endCause = comparison.endCause ?? "unknown (legacy cancellation)";
+  const abortMarker = context.chatRunState.runs.get(clientRunId)?.abortMarker;
+  const endCause =
+    comparison?.state === "cancelled"
+      ? (comparison.endCause ?? "unknown (legacy cancellation)")
+      : comparison?.source === "transcript"
+        ? undefined
+        : chatAbortPendingInputEndCause(abortMarker, session.entry?.sessionId);
+  if (endCause) {
     respond(
       false,
       undefined,
@@ -194,7 +200,6 @@ export function respondChatSendRetry(
     respond(cached.ok, cached.payload, cached.error, { cached: true });
     return true;
   }
-  const abortMarker = context.chatRunState.runs.get(clientRunId)?.abortMarker;
   if (abortMarker !== undefined && comparison?.state !== "queued") {
     const abortedAt = chatAbortMarkerTimestampMs(abortMarker);
     const payload = buildAbortedChatSendPayload({ runId: clientRunId, endedAt: abortedAt });

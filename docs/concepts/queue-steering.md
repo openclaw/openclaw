@@ -261,6 +261,8 @@ An authorized Gateway client can withdraw a message still waiting in the OpenCla
 runtime's steering queue or the followup queue, before delivery starts, with `chat.abort({ sessionKey,
 runId })`. Use the `runId` returned by that message's `chat.send`. This withdraws
 that message without stopping the active run or retrying it as a followup.
+After withdrawing a steer from the runtime's queue, sending the same message ID
+returns a cancellation error. To send the message again, use a new message ID.
 
 Once delivery starts, cancellation cannot guarantee withdrawal or undo completed
 work. If delivery cannot be confirmed, OpenClaw reports the uncertainty and retains

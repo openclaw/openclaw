@@ -806,12 +806,15 @@ describe("Gateway steer FIFO", () => {
         const abort = await client.request("chat.abort", {
           sessionKey,
           runId: steerRunId,
-          userInitiated: true,
         });
         expect(abort).toEqual({
           ok: true,
           aborted: true,
           runIds: [steerRunId],
+        });
+        await expect(client.request("chat.send", steerParams)).rejects.toMatchObject({
+          gatewayCode: "INVALID_REQUEST",
+          details: { reason: "chat-input-cancelled", endCause: "user-stop" },
         });
         expect((await historyWithoutSteer()).sessionInfo).toMatchObject({
           hasActiveRun: true,
@@ -859,10 +862,6 @@ describe("Gateway steer FIFO", () => {
           ),
         ).toEqual([]);
 
-        await expect(client.request("chat.send", steerParams)).rejects.toMatchObject({
-          gatewayCode: "INVALID_REQUEST",
-          details: { reason: "chat-input-cancelled", endCause: "user-stop" },
-        });
         modelServer.releaseSecond();
         await waitForRunTerminal(fixture, firstRunId);
         await vi.waitFor(() => expect(fixture.chatFinalRunIds).toContain(firstRunId), WAIT_OPTS);

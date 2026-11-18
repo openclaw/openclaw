@@ -30,6 +30,7 @@ import { acceptGatewayDeviceSourceAuthority } from "../device-revocation.js";
 import { captureQueuedOperatorRecoverySource } from "../operator-run-recovery-source.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../operator-tool-gateway-authority.js";
 import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
+import { chatAbortPendingInputEndCause } from "../server-chat-state.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-projection.js";
 import { recordSessionOperatorSource } from "../session-operator-sources.js";
 import { resolveSessionChildController } from "../session-utils-core.js";
@@ -318,19 +319,21 @@ export async function handleChatSendWithStorage(
           userTurnRecorder.getPendingInputMessage?.() &&
           !userTurnRecorder.isPendingInputConsumed?.();
         const disposition = "cancelled";
-        const reason = activeRunAbort.controller.signal.aborted
-          ? resolveChatAbortDiagnosticReason(
-              activeRunAbort.controller.signal,
-              activeRunAbort.entry?.adapter,
-            )
+        const signal = activeRunAbort.controller.signal;
+        const reason = signal.aborted
+          ? resolveChatAbortDiagnosticReason(signal, activeRunAbort.entry?.adapter)
+          : undefined;
+        const abortMarker = signal.aborted
+          ? context.chatRunState.runs.get(clientRunId)?.abortMarker
           : undefined;
         await settleUserTurnPendingInput(
           userTurnRecorder,
-          activeRunAbort.controller.signal,
-          setupFailure ?? activeRunAbort.controller.signal.reason,
+          signal,
+          setupFailure ?? signal.reason,
           reason === "delete",
-          "cancelled",
+          disposition,
           inputAcceptance?.effectAccepted === true || queuedInputAdmission !== undefined,
+          chatAbortPendingInputEndCause(abortMarker, admittedSessionId),
         );
         if (pending && reason) {
           context.logGateway.info(`chat pending input aborted: ${reason} (${disposition})`, {
