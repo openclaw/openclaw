@@ -604,6 +604,20 @@ describe("provider failures seen by non-owners in shared chats", () => {
     expect(payload.text).toContain("Check its results before trying again");
   });
 
+  it("gives a non-owner the owner's copy when the provider request times out", async () => {
+    const timeout = () =>
+      new FailoverError("LLM request timed out.", {
+        reason: "timeout",
+        provider: "openai",
+        model: "gpt-5.5",
+        status: 408,
+      });
+    const ownerPayload = await replyTo(timeout(), true);
+    const nonOwnerPayload = await replyTo(timeout(), false);
+    expect(nonOwnerPayload.text).not.toBe(UNAVAILABLE_TEXT);
+    expect(nonOwnerPayload.text).toBe(ownerPayload.text);
+  });
+
   it("keeps the completed-work warning when a fallback times out after a provider outage", async () => {
     const timeout = createCliTimeoutError(
       { provider: "claude-cli" },
