@@ -33,12 +33,14 @@ it.each([
     "openclaw-library",
     path.join(tempDir, "state", "skill-library", "id-1", "revisions", "rev-1"),
   );
+  const shownLibraryPath = "~/.openclaw/skill-library/id-1/revisions/rev-1/SKILL.md";
   const workspace = skill("lint-guide", "openclaw-workspace", "/remote/workspace/skills/lint");
   const params = createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "ws"));
   setCodexTestModelSupportsTools(params, true);
   setCodexTestToolFactory(params, () => (read ? [createRuntimeDynamicTool("skills_read")] : []));
   params.skillsSnapshot = {
-    prompt: formatSkillsForPrompt([library, workspace]),
+    // Snapshots render home-compacted paths but keep canonical paths on the skill objects.
+    prompt: formatSkillsForPrompt([{ ...library, filePath: shownLibraryPath }, workspace]),
     skills: [{ name: library.name }, { name: workspace.name }],
     resolvedSkills: [library, workspace],
   };
@@ -56,7 +58,8 @@ it.each([
   );
 
   expect(developer).toContain(workspace.filePath);
-  expect(developer.includes(library.filePath)).toBe(!remote);
-  expect(developer.includes("<name>release-guide</name>")).toBe(!remote || read);
+  expect(developer.includes(shownLibraryPath)).toBe(!remote);
+  expect(developer).toContain("<name>release-guide</name>");
   expect(developer.includes("read it with skills_read by name")).toBe(remote && read);
+  expect(developer.includes("cannot be read on this machine")).toBe(remote && !read);
 });

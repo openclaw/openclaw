@@ -449,13 +449,14 @@ export async function prepareCodexWatchedSessionsContext(params: {
 
 /**
  * Skill Library pins live in the Gateway state directory, which a remote app-server's
- * own file tools cannot open: point those entries at skills_read, or drop them.
+ * own file tools cannot open. The catalog arrives rendered (with compacted paths), so
+ * entries are matched by name and their location is replaced with a note.
  */
 function withoutGatewayOnlySkillLocations(
   prompt: string,
-  skills: readonly { source: string; filePath: string }[],
+  skills: readonly { name: string; source: string }[],
   readable: boolean,
-): string | undefined {
+): string {
   const escape = (value: string) =>
     value
       .replaceAll("&", "&amp;")
@@ -463,27 +464,24 @@ function withoutGatewayOnlySkillLocations(
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&apos;");
-  const locations = new Set(
+  const names = new Set(
     skills
       .filter((skill) => skill.source === "openclaw-library")
-      .map((skill) => `    <location>${escape(skill.filePath)}</location>`),
+      .map((skill) => `    <name>${escape(skill.name)}</name>`),
   );
-  if (locations.size === 0) {
-    return prompt;
-  }
-  const rewritten = prompt.replace(/^ {2}<skill>\n[\s\S]*?\n {2}<\/skill>\n/gmu, (block) => {
-    const location = block.split("\n").find((line) => locations.has(line));
-    if (!location) {
-      return block;
-    }
-    return readable
-      ? block.replace(
-          location,
-          "    <location_note>Not on this machine: read it with skills_read by name.</location_note>",
-        )
-      : "";
-  });
-  return /^ {2}<skill>$/mu.test(rewritten) ? rewritten : undefined;
+  const note = readable
+    ? "Stored on the Gateway: read it with skills_read by name."
+    : "Stored on the Gateway: its instructions cannot be read on this machine.";
+  return names.size === 0
+    ? prompt
+    : prompt.replace(/^ {2}<skill>\n[\s\S]*?\n {2}<\/skill>$/gmu, (block) =>
+        block.split("\n").some((line) => names.has(line))
+          ? block.replace(
+              /^ {4}<location>.*<\/location>$/mu,
+              `    <location_note>${note}</location_note>`,
+            )
+          : block,
+      );
 }
 
 export function renderCodexSkillsInstructions(params: {
