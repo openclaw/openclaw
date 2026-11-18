@@ -42,7 +42,8 @@ pnpm release:prepare -- --version YYYY.M.PATCH-beta.N --check
 ```
 
 Shadow is nonmutating. Write aligns the owned root/macOS versions and the
-version-generated metadata DAG; add `--android` only when Android is selected.
+version-generated metadata DAG. Android version defaults are calculated from
+the root package version at build time.
 The controller's manifest is bound to the exact HEAD/worktree.
 Check version-bearing package, app plist/Gradle, updating-doc, and Peekaboo
 project fields against their platform contract. `appcast.xml` is generated at
@@ -50,11 +51,10 @@ macOS publication, not a blanket version-bump target. For fallback correction
 tags `vYYYY.M.PATCH-N`, those source version fields remain `YYYY.M.PATCH`;
 macOS needs a strictly higher numeric `APP_BUILD`.
 
-Android is independently pinned in `apps/android/version.json`. If the stable
-release should include its APK, prepare it before tagging with `--android` or
-`pnpm android:version:pin -- --version YYYY.M.PATCH`.
-An older pin causes candidate/publish to skip Android; an immutable tag cannot
-be repaired later to add that platform.
+Android does not need a separate version pin. Current source has no Android
+version manifest, so Gateway publication skips Android; current Android
+releases use the independent Play workflow. Legacy tagged-source APK recovery
+retains its existing eligibility and protected approval requirements.
 
 ## Selected changes and compatibility
 
