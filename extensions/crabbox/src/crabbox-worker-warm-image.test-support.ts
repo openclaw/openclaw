@@ -214,7 +214,15 @@ export function createProjectOptions(
     project: {
       key: PROJECT_KEY,
       baseCommit: BASE_COMMIT,
-      ...(preparation ? { preparation } : {}),
+      ...(preparation
+        ? {
+            preparation,
+            // The workspace is synthetic; inspecting it must not rerun preparation.
+            async inspectPreparedWorkspace() {
+              assertCurrent();
+            },
+          }
+        : {}),
       signal,
       assertCurrent,
       prepare: vi.fn<NonNullable<ProvisionOptions["project"]>["prepare"]>(async (transport) => {

@@ -1,4 +1,4 @@
 # Project setup credential boundaries, snapshot inventory integrity, and startup reuse regressions.
 # Includes prepared-HOME output, both Node cache owners, invoke/prewarm invalidation,
-# fresh-fork provenance, and read-only native cache verification before capture.
-1216
+# fresh-fork provenance, read-only capture inspection, and reserve admission via its owner.
+1251
