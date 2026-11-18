@@ -48,9 +48,9 @@ Google Chat's rendered-message limit.
 
 ## Proposed eligibility policy
 
-`approved-fast-track-v1` proposes **fewer than 5 commits AND fewer than 200 total
-added/deleted lines** since a **published, fully validated ancestor**. These are
-reviewable starting values, not a preexisting release entitlement. A previous
+`approved-fast-track-v1` allows **at most 10 commits AND at most 1,000 total
+added/deleted lines** since a **published, fully validated ancestor**. These inclusive limits were selected for this proposal; approval does not replace
+package integrity or publication authorization. A previous
 fast-track release cannot reset the reference. Include generated files. Binary,
 submodule or otherwise unmeasurable changes are ineligible. Shallow history is
 insufficient. The Git-backed helper recomputes counts and rejects caller/count or

@@ -137,9 +137,9 @@ it.each([
 
 it("recomputes complete delta including generated files and detects caller count or anchor mismatches", () => {
   const h = history();
-  const candidate = h.commit("generated.txt", "generated\n".repeat(199));
-  const value = { ...request(candidate, h.anchor), delta: { commits: 1, added: 199, deleted: 0 } };
-  expect(eligibility(h.root, value)).toEqual({ commits: 1, added: 199, deleted: 0 });
+  const candidate = h.commit("generated.txt", "generated\n".repeat(1000));
+  const value = { ...request(candidate, h.anchor), delta: { commits: 1, added: 1000, deleted: 0 } };
+  expect(eligibility(h.root, value)).toEqual({ commits: 1, added: 1000, deleted: 0 });
   expect(() => eligibility(h.root, { ...value, delta: { ...value.delta, added: 1 } })).toThrow(
     "Publisher-computed delta",
   );
@@ -150,34 +150,41 @@ it("recomputes complete delta including generated files and detects caller count
   expect(() => eligibility(h.root, value, { published: false })).toThrow();
 });
 
-it("counts deletions and rejects the exact 200-line boundary", () => {
+it("counts deletions, accepts 1000 total lines and rejects 1001", () => {
   const h = history();
-  const anchor = h.commit("generated.txt", "old\n".repeat(100));
-  const candidate = h.commit("generated.txt", "new\n".repeat(100));
-  expect(() =>
+  const anchor = h.commit("generated.txt", "old\n".repeat(500));
+  const candidate = h.commit("generated.txt", "new\n".repeat(500));
+  expect(
     eligibility(h.root, {
       ...request(candidate, anchor),
-      delta: { commits: 1, added: 100, deleted: 100 },
+      delta: { commits: 1, added: 500, deleted: 500 },
     }),
-  ).toThrow("fewer than 200");
+  ).toEqual({ commits: 1, added: 500, deleted: 500 });
+  const excessive = h.commit("generated.txt", "new\n".repeat(501));
+  expect(() =>
+    eligibility(h.root, {
+      ...request(excessive, anchor),
+      delta: { commits: 2, added: 501, deleted: 500 },
+    }),
+  ).toThrow("at most 1000");
 });
 
 it("counts every commit since the validated anchor, not since the last fast-track", () => {
   const h = history();
   let candidate = h.anchor;
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 10; i++) {
     candidate = h.commit(`file${i}.txt`, "line\n");
   }
-  const value = { ...request(candidate, h.anchor), delta: { commits: 4, added: 4, deleted: 0 } };
+  const value = { ...request(candidate, h.anchor), delta: { commits: 10, added: 10, deleted: 0 } };
   expect(eligibility(h.root, value)).toEqual(value.delta);
-  candidate = h.commit("fifth.txt", "line\n");
+  candidate = h.commit("eleventh.txt", "line\n");
   expect(() =>
     eligibility(h.root, {
       ...value,
       candidateSha: candidate,
-      delta: { commits: 5, added: 5, deleted: 0 },
+      delta: { commits: 11, added: 11, deleted: 0 },
     }),
-  ).toThrow("fewer than 5");
+  ).toThrow("at most 10 commits");
 });
 
 it("rejects binary changes even when candidate attributes force text", () => {
