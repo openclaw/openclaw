@@ -43,17 +43,21 @@ function resolveLogProfileSegment(): string | null {
 }
 
 /** Resolves today's default rolling log path for the active CLI profile. */
-export function resolveDefaultRollingLogFile(): string {
+export function resolveDefaultRollingLogFile(options?: { prepare?: false }): string {
   const date = new Date();
   let logDir = DEFAULT_POSIX_TMP_ROOT;
   if (canUseNodeFs()) {
     const stateDir = resolveStateDir();
-    // First-run writers and subsequent readers must select the same preferred directory.
-    ensureLogDirectorySync(stateDir, true, 0o700);
-    logDir = resolvePreferredOpenClawTmpDir({
-      preferredDir: path.join(stateDir, "logs"),
-      tmpdir: () => path.join(stateDir, "tmp"),
-    });
+    logDir = path.join(stateDir, "logs");
+    // Disabled sinks need a descriptive target, not filesystem admission. Only
+    // active file logging and explicit log discovery prepare the safe directory.
+    if (options?.prepare !== false) {
+      ensureLogDirectorySync(stateDir, true, 0o700);
+      logDir = resolvePreferredOpenClawTmpDir({
+        preferredDir: logDir,
+        tmpdir: () => path.join(stateDir, "tmp"),
+      });
+    }
   }
   const profileSegment = resolveLogProfileSegment();
   const profileSuffix = profileSegment ? `-${profileSegment}` : "";

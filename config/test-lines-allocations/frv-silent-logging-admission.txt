@@ -1,0 +1,2 @@
+# Silent logging stays artifact-free; mixed-database Doctor receipts require backup before upgrade.
+27

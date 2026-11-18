@@ -1,16 +1,19 @@
 // Logger settings tests cover file-backed logger settings behavior.
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-utils/temp-dir.js";
 
 let logging: typeof import("../logging.js");
 let loggingConfig: typeof import("./config.js");
 let applyLoggingConfig: typeof import("./logger.js").applyLoggingConfig;
+let getLogger: typeof import("./logger.js").getLogger;
 
 beforeAll(async () => {
   // Bind the observer and both settings consumers to the same module generation.
   vi.resetModules();
   loggingConfig = await import("./config.js");
-  ({ applyLoggingConfig } = await import("./logger.js"));
+  ({ applyLoggingConfig, getLogger } = await import("./logger.js"));
   logging = await import("../logging.js");
 });
 
@@ -37,6 +40,22 @@ describe("getResolvedLoggerSettings", () => {
     expect(settings.level).toBe("silent");
     expect(readLoggingConfig).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "keeps silent file logging artifact-free (override: %s)",
+    async (override) => {
+      await withTempDir("openclaw-silent-logs-", async (root) => {
+        const stateDir = path.join(root, "absent");
+        vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+        if (override) {
+          logging.setLoggerOverride({ level: "silent" });
+        }
+        expect(logging.getResolvedLoggerSettings().level).toBe("silent");
+        getLogger().warn("disabled file record");
+        expect(fs.existsSync(stateDir)).toBe(false);
+      });
+    },
+  );
 
   it("reads logging config when test file logging is explicitly enabled", () => {
     process.env.OPENCLAW_TEST_FILE_LOG = "1";

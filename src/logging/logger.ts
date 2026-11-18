@@ -432,7 +432,7 @@ function resolveDefaultActiveLogFile(): string {
   return resolveDefaultRollingLogFile();
 }
 
-function resolveSettings(): ResolvedRuntimeSettings {
+function resolveSettings(prepareFileTarget = false): ResolvedRuntimeSettings {
   if (!canUseNodeFs()) {
     return {
       level: "silent",
@@ -448,7 +448,7 @@ function resolveSettings(): ResolvedRuntimeSettings {
   if (canUseSilentVitestFileLogFastPath(envLevel)) {
     return {
       level: "silent",
-      file: resolveDefaultRollingLogFile(),
+      file: resolveDefaultRollingLogFile(prepareFileTarget ? undefined : { prepare: false }),
       maxFileBytes: DEFAULT_MAX_LOG_FILE_BYTES,
       rolling: true,
     };
@@ -461,13 +461,19 @@ function resolveSettings(): ResolvedRuntimeSettings {
   const fromConfig = normalizeLogLevel(cfg?.level, defaultLevel);
   const level = envLevel ?? fromConfig;
   const rolling = cfg?.file ? isLegacyRollingLogFilePath(cfg.file) : true;
-  const file = resolveActiveLogFileWithMode(cfg?.file ?? resolveDefaultActiveLogFile(), rolling);
+  const file = resolveActiveLogFileWithMode(
+    cfg?.file ??
+      (level === "silent" && !prepareFileTarget
+        ? resolveDefaultRollingLogFile({ prepare: false })
+        : resolveDefaultActiveLogFile()),
+    rolling,
+  );
   const maxFileBytes = resolveMaxLogFileBytes(cfg?.maxFileBytes);
   return { level, file, maxFileBytes, rolling };
 }
 
 export function getResolvedLoggerFileTarget(): { file: string; rolling: boolean } {
-  const { file, rolling } = resolveSettings();
+  const { file, rolling } = resolveSettings(true);
   return { file, rolling };
 }
 

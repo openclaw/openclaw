@@ -1,0 +1,2 @@
+# Reopen the original namespace to prove idle reuse resets search_path in both directions.
+4

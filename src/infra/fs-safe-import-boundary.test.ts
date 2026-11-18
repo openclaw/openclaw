@@ -43,6 +43,8 @@ const PLUGIN_OWNED_FS_SAFE_IMPORTS: Record<
   ]),
   "extensions/feishu/src/doctor.ts": allow("path", ["safeStatSync"]),
   "extensions/knowledge/src/attachment-file.ts": allow("advanced", ["readFileWindowFullySync"]),
+  // Knowledge owns fs-safe and uses its synchronous durability adapter for SQLite publication.
+  "extensions/knowledge/src/directory-sync.ts": allow("durability", ["syncDirectorySync"]),
   "extensions/knowledge/src/files.ts": allow("root", ["root"]),
   "extensions/llama-cpp/src/llama-server-install.ts": allow("durability", ["sha256File"]),
   "extensions/qa-lab/src/lab-server-ui.ts": allow("walk", ["walkDirectorySync"]),
@@ -199,6 +201,16 @@ describe("fs-safe import boundary", () => {
         "extensions/openshell/src/backend.ts",
         `${moveImport}\n${rootImport}`,
       ),
+    ).toBe(true);
+  });
+
+  it("limits Knowledge durability to its owned synchronous directory adapter", () => {
+    const owner = "extensions/knowledge/src/directory-sync.ts";
+    const source = importFsSafe("syncDirectorySync", "durability");
+    expect(hasDisallowedFsSafeImport(owner, source)).toBe(false);
+    expect(hasDisallowedFsSafeImport(`${owner}.other.ts`, source)).toBe(true);
+    expect(
+      hasDisallowedFsSafeImport(owner, importFsSafe("syncDirectorySync, sha256File", "durability")),
     ).toBe(true);
   });
 

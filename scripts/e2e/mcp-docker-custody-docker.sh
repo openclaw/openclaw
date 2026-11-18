@@ -49,7 +49,8 @@ docker_build_run mcp-docker-custody-runner \
   --build-arg "BASE_IMAGE=$FUNCTIONAL_IMAGE" -t "$RUNNER_IMAGE" \
   -f "$SCENARIO_ROOT/Dockerfile" "$SCENARIO_ROOT"
 cp "$ROOT_DIR/scripts/e2e/lib/mcp-docker-custody/server.cjs" "$SCENARIO_ROOT/server.cjs"
-chmod 0777 "$SCENARIO_ROOT"
+# Different container users share this ancestor; retain sticky temp-root protection.
+chmod 1777 "$SCENARIO_ROOT"
 
 # Nested Docker resolves bind sources on the host. Use this one task root at the
 # same path in both containers; the installed app and its dependencies stay /app.

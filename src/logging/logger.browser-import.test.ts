@@ -64,7 +64,7 @@ describe("logging/logger import", () => {
 
     expect(resolvePreferredOpenClawTmpDir).not.toHaveBeenCalled();
 
-    module.applyLoggingConfig(undefined);
+    module.setLoggerOverride({ level: "info" });
     try {
       expect(path.dirname(module.getResolvedLoggerSettings().file)).toBe(secureLogDir);
       expect(resolvePreferredOpenClawTmpDir).toHaveBeenCalledOnce();

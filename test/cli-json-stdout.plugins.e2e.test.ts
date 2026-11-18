@@ -97,7 +97,10 @@ it.each([
     const source =
       "tty" in testCase
         ? ttySource
-        : ['globalThis.fetch = async () => { throw new Error("offline fixture"); };'];
+        : [
+            'globalThis.fetch = async () => { throw new Error("offline fixture"); };',
+            "globalThis.fetch.mock = {};",
+          ];
     const result = runBuiltCli(
       tempHome,
       testCase.args,

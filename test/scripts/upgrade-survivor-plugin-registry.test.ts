@@ -730,7 +730,7 @@ printf '%s\\n' "$baseline_version" >"$CAPTURE_DIR/core-version"
       `scripts/e2e/lib/upgrade-survivor/assertions.mjs\nassert-baseline-plugin\n${pluginVersion}\ndiscord\n${tag}\n`,
     );
     expect(read(root, "install-args")).toBe(
-      `openclaw\n--\nplugins\ninstall\n@openclaw/discord@${tag}\n--force\n`,
+      `openclaw\n--\nplugins\ninstall\nnpm:@openclaw/discord@${tag}\n--force\n`,
     );
     expect(read(root, "core-version")).toBe(`${baseline}\n`);
   },

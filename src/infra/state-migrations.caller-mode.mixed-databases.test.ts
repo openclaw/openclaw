@@ -24,7 +24,10 @@ import {
   autoMigrateLegacyState,
   planLegacyStateMigrationsReadOnly,
 } from "./state-migrations.doctor.js";
-import { createLegacyDatabaseFixture } from "./state-migrations.media-persistence.test-support.js";
+import {
+  createLegacyDatabaseFixture,
+  PREVIOUS_VERSION,
+} from "./state-migrations.media-persistence.test-support.js";
 
 const tempDirs = createTrackedTempDirs();
 
@@ -71,7 +74,7 @@ it("repairs readable entries before independently preparing mixed agent database
         "agent:current:repair",
       );
   }
-  createLegacyDatabaseFixture({
+  const healthyDatabasePath = createLegacyDatabaseFixture({
     agentId: "healthy",
     env: fixture.env,
     eventsBySession: {},
@@ -103,7 +106,12 @@ it("repairs readable entries before independently preparing mixed agent database
   expect(receipt("media-persistence")).toMatchObject({
     requiredness: "conditional",
     outcome: "refused",
-    changes: [expect.stringContaining("Upgraded agent database schema")],
+    changes: [
+      expect.stringContaining(
+        `Saved pre-repair SQLite backup: ${path.join(path.dirname(healthyDatabasePath), "openclaw-media-persistence-recovery-")}`,
+      ),
+      `Upgraded agent database schema in ${healthyDatabasePath}: v${PREVIOUS_VERSION} -> v${OPENCLAW_AGENT_SCHEMA_VERSION}.`,
+    ],
     warnings: [expect.stringContaining(brokenDatabasePath)],
     refusal: { code: "step-refused" },
   });

@@ -226,16 +226,20 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     expect(rows(reader, "SELECT id FROM batch_entries")).toEqual([{ id: 1 }]);
   });
 
-  it("does not reuse across connection settings or namespaces", () => {
+  it("reuses across namespaces while isolating connection settings", () => {
     const first = open();
     const originalPid = pid(first);
     close(first);
     const differentNamespace = open(connection!, "public");
-    expect(pid(differentNamespace)).not.toBe(originalPid);
+    expect(pid(differentNamespace)).toBe(originalPid);
     expect(get(differentNamespace, "SELECT current_schema() AS schema")).toEqual({
       schema: "public",
     });
     close(differentNamespace);
+    const originalNamespace = open();
+    expect(pid(originalNamespace)).toBe(originalPid);
+    expect(get(originalNamespace, "SELECT current_schema() AS schema")).toEqual({ schema });
+    close(originalNamespace);
     const dsn = new URL(connection!);
     dsn.searchParams.set("application_name", "reuse-independent");
     const differentSettings = open(dsn.href);

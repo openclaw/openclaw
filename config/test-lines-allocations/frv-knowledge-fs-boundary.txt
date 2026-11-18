@@ -1,0 +1,2 @@
+# Exact Knowledge directory durability import; neighboring files and extra helpers remain rejected.
+12

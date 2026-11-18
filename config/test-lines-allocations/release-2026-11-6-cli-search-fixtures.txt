@@ -1,0 +1,2 @@
+# Mark the three CLI search HTTP fixtures for the dispatcher-aware fetch adapter.
+7
