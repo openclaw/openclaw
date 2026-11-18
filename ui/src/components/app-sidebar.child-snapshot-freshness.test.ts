@@ -371,50 +371,54 @@ it("keeps loaded children visible while a child event revalidates them", async (
   expect(rowElement(sidebar, sibling.key)).toBeNull();
 });
 
-it("keeps an expanded parent steady while it revalidates hidden-only children", async () => {
-  // A running parent whose children are all subagent runs or system sessions
-  // shows no child rows, yet every child event revalidates its window.
-  const publicationKey = "agent:main:dashboard:github-publication-1";
-  const runKey = "agent:main:subagent:run-1";
+const publicationKey = "agent:main:dashboard:github-publication-1";
+const hiddenChild = (key: string): GatewaySessionRow => ({
+  key,
+  spawnedBy: parentKey,
+  kind: "direct",
+  updatedAt: 1,
+  ...(key === publicationKey ? { createdActor: { type: "system", id: "gateway" } } : {}),
+});
+
+/** A running parent whose children are all subagent runs or system sessions
+ * shows no child rows, yet child events keep reading its window. */
+async function mountHiddenOnlyParent() {
   const harness = createSessionsHarness("main", [parentKey]);
   const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
-  harness.publishList({
-    result: result([{ ...parentRow, childSessions: [publicationKey, runKey] }]),
-  });
+  const childKeys = [publicationKey, "agent:main:subagent:run-1"];
+  harness.publishList({ result: result([{ ...parentRow, childSessions: childKeys }]) });
   const { sidebar } = await mountSidebar(gatewayHarness.gateway, harness.sessions);
-  const data = sidebar.sessionData;
   await sidebar.updateComplete;
-  let refresh: Promise<SessionsListResult> | undefined;
-  harness.list.mockImplementation((options) =>
-    options?.spawnedBy === parentKey
-      ? (refresh ??
-        Promise.resolve(
-          result([
-            {
-              key: publicationKey,
-              spawnedBy: parentKey,
-              kind: "direct",
-              createdActor: { type: "system", id: "gateway" },
-              updatedAt: 1,
-            },
-            { key: runKey, spawnedBy: parentKey, kind: "direct", updatedAt: 1 },
-          ]),
-        ))
-      : Promise.resolve(result([])),
-  );
+  const pendingReads = new Map<string, Promise<SessionsListResult>>();
+  harness.list.mockImplementation((options) => {
+    const spawnedBy = options?.spawnedBy ?? "";
+    return (
+      pendingReads.get(spawnedBy) ??
+      Promise.resolve(result(spawnedBy === parentKey ? childKeys.map(hiddenChild) : []))
+    );
+  });
   childToggle(sidebar)!.click();
+  const data = sidebar.sessionData;
   await waitForFast(() => expect(data.loadedChildSessionKeys.has(parentKey)).toBe(true));
   await settleLitElement(sidebar);
   expect(sidebar.querySelector(".sidebar-recent-session--child")).toBeNull();
   expect(sidebar.querySelector(".sidebar-session-tree__loading")).toBeNull();
-  const readsBeforeEvent = harness.list.mock.calls.length;
+  const holdRead = (spawnedBy: string) => {
+    const read = deferred<SessionsListResult>();
+    pendingReads.set(spawnedBy, read.promise);
+    onTestFinished(() => read.resolve(result([])));
+  };
+  return { harness, gatewayHarness, sidebar, data, holdRead };
+}
 
-  const pending = deferred<SessionsListResult>();
-  refresh = pending.promise;
+it("keeps an expanded parent steady while it revalidates hidden-only children", async () => {
+  const { harness, gatewayHarness, sidebar, data, holdRead } = await mountHiddenOnlyParent();
+  const readsBeforeEvent = harness.list.mock.calls.length;
+  holdRead(parentKey);
   vi.useFakeTimers();
   try {
     gatewayHarness.publishEvent("sessions.changed", {
-      sessionKey: runKey,
+      sessionKey: "agent:main:subagent:run-1",
       agentId: "main",
       reason: "patch",
       spawnedBy: parentKey,
@@ -425,9 +429,32 @@ it("keeps an expanded parent steady while it revalidates hidden-only children", 
     expect(sidebar.querySelector(".sidebar-session-tree__loading")).toBeNull();
     expect(data.loadingChildSessionKeys.has(parentKey)).toBe(false);
   } finally {
-    pending.resolve(result([]));
     vi.useRealTimers();
   }
+});
+
+it("reserves child space only when the first child read is slow", async () => {
+  const { harness, sidebar, data, expand } = await mountParent();
+  const read = deferred<SessionsListResult>();
+  harness.list.mockReturnValueOnce(read.promise);
+  vi.useFakeTimers();
+  try {
+    expand();
+    await vi.advanceTimersByTimeAsync(200);
+    await sidebar.updateComplete;
+    expect(harness.list).toHaveBeenCalledTimes(1);
+    expect(sidebar.querySelector(".sidebar-session-tree__loading")).toBeNull();
+    await vi.advanceTimersByTimeAsync(200);
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-session-tree__loading")).not.toBeNull();
+    read.resolve(result([child]));
+    await vi.advanceTimersByTimeAsync(0);
+  } finally {
+    vi.useRealTimers();
+  }
+  await waitForFast(() => expect(rowElement(sidebar, childKey)).not.toBeNull());
+  expect(sidebar.querySelector(".sidebar-session-tree__loading")).toBeNull();
+  expect(data.loadingChildSessionKeys.has(parentKey)).toBe(false);
 });
 
 it.each(["shared rejection", "incomplete window"] as const)(

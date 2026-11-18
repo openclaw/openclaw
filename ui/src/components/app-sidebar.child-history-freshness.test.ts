@@ -148,7 +148,7 @@ it.each(["away and back", "during publication"] as const)(
       }
       const primaryKeys = [parentKey, first.key];
       expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual(primaryKeys);
-      expect(data.loadingChildSessionKeys.has(parentKey)).toBe(true);
+      expect(data.loadedChildSessionKeys.has(parentKey)).toBe(false);
 
       childRead.resolve(listed);
       await children;

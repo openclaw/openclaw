@@ -586,7 +586,10 @@ describe("filtered sidebar session event refresh", () => {
     list.mockImplementationOnce(async () => await childPage.promise);
 
     const pendingChildren = controller.loadChildSessions("agent:main:parent");
-    expect(controller.loadingChildSessionKeys.has("agent:main:parent")).toBe(true);
+    // The placeholder appears once the first read outlasts its short delay.
+    await vi.waitFor(() =>
+      expect(controller.loadingChildSessionKeys.has("agent:main:parent")).toBe(true),
+    );
 
     parents.mockReturnValue(new Set());
     selectStatusFilter("all");

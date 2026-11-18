@@ -16,6 +16,7 @@ import {
 import { matchesExistingSession } from "../lib/sessions/session-row-reconcile.ts";
 
 const MAX_SESSION_LINEAGE_DEPTH = 16;
+const CHILD_PLACEHOLDER_DELAY_MS = 300;
 
 type SessionLineageObservation = {
   row: GatewaySessionRow;
@@ -36,6 +37,7 @@ export type SidebarChildSessionQuery = {
   childRead?: SidebarChildSessionRead;
   hydration?: Promise<void>;
   refresh?: Promise<void>;
+  placeholderTimer?: ReturnType<typeof setTimeout>;
 };
 
 function lineageRowCacheKey(row: GatewaySessionRow, key = row.key): string {
@@ -287,11 +289,14 @@ export function applySidebarChildSessionSnapshot(
     }
     query.loading = true;
     // Revalidation keeps the accepted window, so only a first fill is loading.
-    // Parents whose loaded children are all hidden runs would otherwise flash
-    // a skeleton row on every child event.
-    if (!owner.loadedChildSessionKeys.has(parentKey)) {
-      owner.loadingChildSessionKeys = new Set([...owner.loadingChildSessionKeys, parentKey]);
-      owner.requestSessionDataUpdate();
+    // A placeholder shown for a fast read only makes the rows below jump.
+    if (!owner.loadedChildSessionKeys.has(parentKey) && !query.placeholderTimer) {
+      query.placeholderTimer = setTimeout(() => {
+        if (query.loading && params.isCurrent()) {
+          owner.loadingChildSessionKeys = new Set([...owner.loadingChildSessionKeys, parentKey]);
+          owner.requestSessionDataUpdate();
+        }
+      }, CHILD_PLACEHOLDER_DELAY_MS);
     }
     return;
   }
