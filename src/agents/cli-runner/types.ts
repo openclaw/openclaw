@@ -13,6 +13,7 @@ import type {
   CliBackendExecute,
   CliBackendExecutionMode,
   CliBackendPromptContext,
+  CliBackendTurnInterrupt,
 } from "../../plugins/cli-backend.types.js";
 import type { PluginInstanceConsumer } from "../../plugins/plugin-instance.types.js";
 import type { SpawnSecretInput } from "../../process/supervisor/types.js";
@@ -289,4 +290,12 @@ export type PreparedCliRunContext = {
   trajectoryRecorder?: {
     recordEvent: (type: string, data?: Record<string, unknown>) => void;
   } | null;
+};
+
+export type CliMcpCapture = {
+  captureKey?: string;
+  beginCapture: (captureKey: string | undefined, assertCurrent: () => void) => void;
+  registerTurnInterrupt?: (interrupt: CliBackendTurnInterrupt | undefined) => void;
+  waitForTurnInterrupt?: () => Promise<void>;
+  onInputSubmitted?: () => void;
 };

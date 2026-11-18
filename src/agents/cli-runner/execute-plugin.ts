@@ -15,7 +15,6 @@ import type {
   CliBackendMessageInjection,
   CliBackendToolPermissionRequest,
   CliBackendToolPermissionResult,
-  CliBackendTurnInterrupt,
   CliBackendUserInputRequest,
   CliBackendUserInputResult,
 } from "../../plugins/cli-backend.types.js";
@@ -55,7 +54,7 @@ import { attachCliReplyBackend, createCliRunCurrentAssertion } from "./execution
 import { createCliFailoverError as failover } from "./exit-error.js";
 import * as noOutputPolicy from "./no-output-timeout-policy.js";
 import { normalizeCliToolName } from "./tool-policy.js";
-import type { PreparedCliRunContext } from "./types.js";
+import type { CliMcpCapture, PreparedCliRunContext } from "./types.js";
 
 function denyTool(message: string): CliBackendToolPermissionResult {
   return { behavior: "deny", message };
@@ -403,12 +402,7 @@ export async function executePluginOwnedProcess(params: {
   setOnActiveLoopbackAskUserDeadlineChange?: (listener: (() => void) | undefined) => void;
   onNoOutputTimeout?: (error: FailoverError) => void;
   onInterrupted?: (reason: CliTerminalInterruption["reason"]) => boolean;
-  mcpCapture?: {
-    captureKey?: string;
-    beginCapture: (captureKey: string | undefined, assertCurrent: () => void) => void;
-    registerTurnInterrupt?: (interrupt: CliBackendTurnInterrupt | undefined) => void;
-    waitForTurnInterrupt?: () => Promise<void>;
-  };
+  mcpCapture?: CliMcpCapture;
   liveSession?: {
     requiredGeneration?: string;
   };
@@ -488,6 +482,7 @@ export async function executePluginOwnedProcess(params: {
         signal,
         assertCurrent,
         cwd: run.cwd ?? run.workspaceDir,
+        onInputSubmitted: params.mcpCapture?.onInputSubmitted,
       }),
     },
   );

@@ -6,7 +6,6 @@ import {
   waitForMcpLoopbackToolCallCaptureIdle,
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { shouldUseInternalSourceReplySink } from "../../infra/outbound/internal-source-reply.js";
-import type { CliBackendTurnInterrupt } from "../../plugins/cli-backend.types.js";
 import {
   normalizeAcceptedSessionSpawnResult,
   type AcceptedSessionSpawn,
@@ -54,6 +53,7 @@ import {
   extractCliMessagingContent,
   extractCliMessagingTarget,
 } from "./execute-messaging.js";
+import { createCliYieldTurnEnd } from "./execute-yield-turn.js";
 import { stripOpenClawMcpToolPrefix } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -64,22 +64,9 @@ type CliLoopbackCall = Deadline.CliLoopbackCall;
 
 export function createCliToolTracking(context: PreparedCliRunContext) {
   let gatewayCaptureKey: string | undefined;
-  let yielded = false;
   let yieldAcknowledgment: string | undefined;
-  let turnInterrupt: CliBackendTurnInterrupt | undefined;
-  let supportsTurnInterrupt = false;
-  let yieldToolResultObserved = false;
-  let yieldInterrupt: Promise<void> | undefined;
-  const requestYieldInterrupt = () => {
-    if (!yielded || !yieldToolResultObserved || !turnInterrupt || yieldInterrupt) {
-      return;
-    }
-    const interrupt = turnInterrupt;
-    yieldInterrupt = Promise.resolve().then(() => interrupt.interrupt("yield"));
-    // The execution owner joins this promise and cancels the transport on failure.
-    void yieldInterrupt.catch(() => {});
-  };
-  const shouldSuppressAssistantOutput = () => yielded && supportsTurnInterrupt;
+  const yieldTurnEnd = createCliYieldTurnEnd();
+  const shouldSuppressAssistantOutput = yieldTurnEnd.suppressesAssistantOutput;
   let didSendViaMessagingTool = false;
   let didDeliverSourceReplyViaMessageTool = false;
   let sourceReplyDelivered: true | undefined;
@@ -295,6 +282,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     }
     if (deliveredCurrentSourceReply || (sourceReplyPayload && sourceReplyFinal)) {
       didDeliverSourceReplyViaMessageTool ||= deliveredCurrentSourceReply;
+      yieldTurnEnd.markDelivered(deliveredCurrentSourceReply);
       const payload = isMessagingSend
         ? sourceReplyPayload
         : extractMessagingToolSourceReplyPayload(params.result);
@@ -373,7 +361,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     beginMcpLoopbackToolCallCapture({
       captureKey,
       onYield: (_message, acknowledgment) => {
-        yielded = true;
+        yieldTurnEnd.markYielded();
         yieldAcknowledgment = acknowledgment;
       },
       onRequestStart: () => {
@@ -476,6 +464,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         ) {
           acceptedSessionSpawns.push(acceptedSessionSpawn);
         }
+        yieldTurnEnd.observe(toolName, call);
         if (isMessagingToolDeliveryAction(toolName, call.args)) {
           commitMessagingToolResult({
             toolName,
@@ -554,15 +543,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   };
   const handleCliToolResult = (event: CliToolResultDelta) => {
     const activeTool = activeCliTools.get(event.toolCallId);
-    if (
-      yielded &&
-      !event.isError &&
-      stripOpenClawMcpToolPrefix(activeTool?.toolName ?? event.name) === "sessions_yield"
-    ) {
-      // Native's tool-result record confirms the yield response was consumed before interruption.
-      yieldToolResultObserved = true;
-      requestYieldInterrupt();
-    }
+    yieldTurnEnd.onToolResult(activeTool?.toolName ?? event.name, event.isError);
     if (activeTool?.loopbackCall) {
       askUserDeadlines.clear(activeTool.loopbackCall);
     }
@@ -676,14 +657,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   });
   return {
     beginGatewayCapture,
-    registerTurnInterrupt(this: void, interrupt: CliBackendTurnInterrupt | undefined) {
-      turnInterrupt = interrupt;
-      supportsTurnInterrupt ||= interrupt !== undefined;
-      requestYieldInterrupt();
-    },
-    async waitForTurnInterrupt(this: void) {
-      await yieldInterrupt;
-    },
+    registerTurnInterrupt: yieldTurnEnd.register,
+    waitForTurnInterrupt: yieldTurnEnd.wait,
+    onInputSubmitted: yieldTurnEnd.beginInput,
     shouldSuppressAssistantOutput,
     getActiveLoopbackAskUserDeadline: askUserDeadlines.get,
     setOnActiveLoopbackAskUserDeadlineChange: askUserDeadlines.setOnChange,
@@ -711,7 +687,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
               interimNativeReplies: undefined,
             }
           : {}),
-        ...(yielded ? { yielded: true as const } : {}),
+        ...(yieldTurnEnd.yielded() ? { yielded: true as const } : {}),
         ...(yieldAcknowledgment ? { yieldAcknowledgment } : {}),
         ...projectCliMessagingDeliveryEvidence(current),
         ...(current.toolMediaUrls.length > 0 ? { toolMediaUrls: current.toolMediaUrls } : {}),

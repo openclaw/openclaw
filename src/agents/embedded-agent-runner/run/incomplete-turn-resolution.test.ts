@@ -4,6 +4,8 @@ import {
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
+  hasRunContinuationEvidence,
+  hasYieldContinuationEvidence,
   resolveIncompleteTurnPayloadText,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
@@ -164,3 +166,12 @@ describe("tool-authored source replies", () => {
     },
   );
 });
+
+it.each([undefined, "  ", "The existing task is still running."])(
+  "counts an explicit waiting acknowledgment only as yield evidence: %j",
+  (yieldAcknowledgment) => {
+    const attempt = { yieldAcknowledgment };
+    expect(hasRunContinuationEvidence(attempt)).toBe(false);
+    expect(hasYieldContinuationEvidence(attempt)).toBe(Boolean(yieldAcknowledgment?.trim()));
+  },
+);
