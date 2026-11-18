@@ -214,10 +214,13 @@ function prepareExecExitWake(
     return undefined;
   }
   // The retained tail (last 2,000 chars) lets the woken turn act; the output file has the rest.
-  // Prefer the last non-empty line so the wake names the outcome, not a mid-line fragment;
-  // a structured tail (e.g. a JSON blob) keeps the whole tail.
+  // Output that fit keeps the full tail; a truncated tail prefers its last non-empty line so
+  // the wake names the outcome, not a mid-line fragment. A structured tail (e.g. a JSON blob)
+  // keeps the whole tail.
   const tail = session.tail;
-  const output = selectExecCompletionContent(tail.trim());
+  const output = session.totalOutputChars > tail.length
+    ? selectExecCompletionContent(tail.trim())
+    : tail.trim();
   if (
     status === "completed" &&
     session.exitCode === 0 &&
