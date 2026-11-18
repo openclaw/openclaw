@@ -317,6 +317,10 @@ export function registerMaintenanceCommands(
     )
     .option("--update-result <path>", "Include update-failure diagnostics from this JSON artifact")
     .action(async (opts) => {
+      // Triage runs Doctor's inspections; a closed terminal must still remove their copies.
+      if (hasCliProcessScope()) {
+        installCliDoctorSignalExitHandlers();
+      }
       if (opts.json === true && opts.run === true) {
         return exitDoctorError("triage --json cannot be combined with --run.", true);
       }
