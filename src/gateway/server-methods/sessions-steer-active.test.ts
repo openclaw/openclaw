@@ -301,8 +301,13 @@ it("accepts a host-bound person ingress but rejects it after revocation", async 
     received();
     options?.onQueueAccepted?.(true);
   });
+  expect((await discover(f)).mock.calls[0]).toMatchObject({
+    0: true,
+    1: { target: { sessionId: f.scope.sessionId, runId: "active-steer-run" } },
+  });
   expect((await send(f)).mock.calls[0]?.[1]).toMatchObject({ status: "accepted" });
   grant.abort();
+  await expect(discover(f)).rejects.toThrow("aborted");
   await expect(send(f, { idempotencyKey: "after-revocation" })).rejects.toThrow("aborted");
   expect(received).toHaveBeenCalledOnce();
 });
@@ -536,3 +541,89 @@ it.each([true, false])(
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   },
 );
+
+async function discover(f: Fixture, changes: Record<string, unknown> = {}) {
+  const params = { sessionKey: f.scope.sessionKey, ...changes };
+  const respond = vi.fn<RespondFn>();
+  await handleGatewayRequest(
+    bindInProcessRequestMutationAuthority(
+      {
+        req: { type: "req", id: "target-request", method: "sessions.steerTarget", params },
+        params,
+        client: f.client,
+        context: f.context,
+        respond,
+        isWebchatConnect: () => true,
+      },
+      undefined,
+      undefined,
+    ),
+  );
+  return respond;
+}
+
+it("discovers the physical steerable backend without submitting input", async () => {
+  await using f = await createFixture({ preserveContent: true });
+  human(f);
+  const deliver = vi.fn();
+  const op = attach(f, deliver);
+  expect((await discover(f)).mock.calls[0]).toMatchObject({
+    0: true,
+    1: {
+      target: { sessionId: f.scope.sessionId, runId: "active-steer-run" },
+    },
+  });
+  expect(deliver).not.toHaveBeenCalled();
+  expect(op.result).toBeNull();
+  expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  expect(f.readTranscript()).toEqual(f.activeTranscript);
+});
+it.each(["idle", "unsupported", "completed"])(
+  "discovery returns no target for %s",
+  async (kind) => {
+    await using f = await createFixture({ active: kind !== "idle", preserveContent: true });
+    human(f);
+    if (kind === "completed") {
+      attach(f, vi.fn()).complete();
+    }
+    expect((await discover(f)).mock.calls[0]).toMatchObject({ 0: true, 1: { target: null } });
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  },
+);
+it.each(["unprofiled", "reader", "synthetic"])("discovery denies %s callers", async (kind) => {
+  await using f = await createFixture();
+  if (kind !== "unprofiled") {
+    human(f);
+  }
+  if (kind === "reader") {
+    f.client.connect.scopes = ["operator.read"];
+  }
+  if (kind === "synthetic") {
+    f.client.internal = { ...f.client.internal, syntheticClient: true };
+  }
+  attach(f, vi.fn());
+  expect((await discover(f)).mock.calls[0]?.[0]).toBe(false);
+});
+it("a discovered target cannot steer a replacement backend", async () => {
+  await using f = await createFixture({ preserveContent: true });
+  human(f);
+  const old = attach(f, vi.fn());
+  const discovered = await discover(f);
+  const target = discovered.mock.calls[0]?.[1] as { target: { sessionId: string; runId: string } };
+  expect(target.target.runId).toBe("active-steer-run");
+  const deliver = vi.fn();
+  old.attachBackend({
+    kind: "embedded",
+    runId: "replacement-run",
+    toolAuthorityFingerprint: "active-steer-tools",
+    supportsTranscriptCommitWait: true,
+    cancel: vi.fn(),
+    messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage: deliver },
+  });
+  expect((await send(f, target.target)).mock.calls[0]?.[0]).toBe(false);
+  expect((await discover(f)).mock.calls[0]).toMatchObject({
+    0: true,
+    1: { target: { runId: "replacement-run" } },
+  });
+  expect(deliver).not.toHaveBeenCalled();
+});

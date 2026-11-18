@@ -42,7 +42,7 @@ import {
 } from "../../openclaw-id/tunnel-principal.js";
 import { hasCurrentGatewayOperatorAccess } from "../../operator-access-policy.js";
 import { onOperatorRolePolicyChanged } from "../../operator-role-policy.js";
-import { isPublicationReaderCurrent } from "../../publication-reader.js";
+import { isPublicationTransportCurrent } from "../../publication-transport.js";
 import { bindWebSocketRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
 import type { GatewayRequestEntry } from "../../server-request-entry.js";
 import { SharedGatewaySessionGenerationState } from "../../server-shared-auth-generation.js";
@@ -199,16 +199,16 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         ? client.internal.operatorDeviceTokenIdentity
         : undefined;
     const reconnectProfile = client.authenticatedUserProfile?.profileId;
-    const hasCurrentPublicationReader = () => {
-      const reader = client.internal?.publicationReader;
-      if (!reader || isPublicationReaderCurrent(reader)) {
+    const hasCurrentPublicationTransport = () => {
+      const reader = client.internal?.publicationTransport;
+      if (!reader || isPublicationTransportCurrent(reader)) {
         return true;
       }
       invalidateGatewayPolicyClient(client, {
-        reason: "publication-reader-authority-changed",
+        reason: "publication-transport-authority-changed",
         code: 4001,
-        message: "publication reader authority changed",
-        close: () => close(4001, "publication reader authority changed"),
+        message: "publication transport authority changed",
+        close: () => close(4001, "publication transport authority changed"),
       });
       return false;
     };
@@ -216,7 +216,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       context,
       { deviceId: client.connect.device?.id, role: client.connect.role },
       () => {
-        if (!hasCurrentPublicationReader() || !hasCurrentIngress()) {
+        if (!hasCurrentPublicationTransport() || !hasCurrentIngress()) {
           return false;
         }
         if (!hasCurrentGatewayOperatorAccess(client.internal?.operatorAccessAuthority)) {
@@ -287,7 +287,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                 : {}),
             },
             isCurrent: () =>
-              hasCurrentPublicationReader() &&
+              hasCurrentPublicationTransport() &&
               hasCurrentIngress() &&
               hasCurrentGatewayPolicyClientSource(client) &&
               isCommittedGrantCurrent(),

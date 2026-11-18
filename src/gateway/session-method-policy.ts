@@ -70,6 +70,7 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
   ["sessions.rewind", { fields: ["sessionKey"], required: true }],
   ["sessions.send", { fields: ["key"], required: true, runStart: true, mayCreate: true }],
   ["sessions.steer", { fields: ["key"], required: true, runStart: true }],
+  ["sessions.steerTarget", { fields: ["sessionKey"], required: true }],
   ["sessions.steerActive", { fields: ["sessionKey"], required: true }],
   ["sessions.branches.switch", { fields: ["sessionKey"], required: true }],
   ["talk.voice.set", { fields: ["sessionKey"] }],

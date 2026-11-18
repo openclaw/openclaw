@@ -66,7 +66,7 @@ import {
   prepareGatewayConnectOperatorDeviceSource,
   rejectGatewayConnectOperatorAccess,
 } from "./connect-operator-access.js";
-import { attachPublicationReader } from "./connect-publication-reader.js";
+import { attachPublicationTransport } from "./connect-publication-transport.js";
 import {
   createGatewayConnectProfileLifecycle,
   resolveGatewayConnectProfileAdmission,
@@ -87,8 +87,8 @@ export async function attachAuthenticatedGatewayConnect(
   context: GatewayConnectPhaseContext,
   state: DeviceAuthorizedGatewayConnect,
 ): Promise<void> {
-  if (state.publicationReader) {
-    await attachPublicationReader(context, state);
+  if (state.publicationTransport) {
+    await attachPublicationTransport(context, state);
     return;
   }
   const {

@@ -1,8 +1,10 @@
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
-import { PUBLICATION_READ_SCOPE } from "../../operator-scopes.js";
 import { MAX_PAYLOAD_BYTES } from "../../payload-limits.js";
-import { isPublicationReaderMethod, isPublicationReaderCurrent } from "../../publication-reader.js";
+import {
+  isPublicationTransportMethod,
+  isPublicationTransportCurrent,
+} from "../../publication-transport.js";
 import { MAX_BUFFERED_BYTES, TICK_INTERVAL_MS } from "../../server-constants.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import { resolveGatewayConnectPolicyFailure } from "./connect-admission.js";
@@ -13,28 +15,28 @@ import type {
 } from "./message-handler-types.js";
 
 /** Closed device lane: no human fallback, presence, UI capabilities, or session snapshot. */
-export async function attachPublicationReader(
+export async function attachPublicationTransport(
   context: GatewayConnectPhaseContext,
   state: DeviceAuthorizedGatewayConnect,
 ): Promise<void> {
   const { handler } = context;
-  const admission = state.publicationReader;
+  const admission = state.publicationTransport;
   const source = await prepareGatewayConnectOperatorDeviceSource(context, state, state.scopes);
   if (!source) {
     return;
   }
   if (
-    !isPublicationReaderCurrent(admission) ||
+    !isPublicationTransportCurrent(admission) ||
     source.key !== admission.key ||
     source.deviceId !== admission.deviceId ||
     resolveGatewayConnectPolicyFailure(context, state)
   ) {
-    context.markHandshakeFailure("publication-reader-authority-changed");
+    context.markHandshakeFailure("publication-transport-authority-changed");
     context.sendHandshakeErrorResponse(
       ErrorCodes.FORBIDDEN,
-      "publication reader authority changed",
+      "publication transport authority changed",
     );
-    handler.close(1008, "publication reader authority changed");
+    handler.close(1008, "publication transport authority changed");
     return;
   }
   const receiver = handler.prepareAuthenticatedReceive("operator");
@@ -55,7 +57,7 @@ export async function attachPublicationReader(
     authPolicy: state.authPolicy,
     internal: {
       authenticatedOperator: true,
-      publicationReader: admission,
+      publicationTransport: admission,
       operatorDeviceTokenIdentity: source,
     },
   };
@@ -70,7 +72,7 @@ export async function attachPublicationReader(
   const methods =
     registry
       ?.listAdvertisedMethods()
-      .filter((method) => isPublicationReaderMethod(registry, method)) ?? [];
+      .filter((method) => isPublicationTransportMethod(registry, method, admission.scope)) ?? [];
   handler.advanceHandshakePhase("hello_payload_prepared");
   try {
     await context.sendFrame({
@@ -88,7 +90,7 @@ export async function attachPublicationReader(
           stateVersion: { presence: 0, health: 0 },
           uptimeMs: 0,
         },
-        auth: { method: "device-token", role: "operator", scopes: [PUBLICATION_READ_SCOPE] },
+        auth: { method: "device-token", role: "operator", scopes: [admission.scope] },
         policy: {
           maxPayload: MAX_PAYLOAD_BYTES,
           maxBufferedBytes: MAX_BUFFERED_BYTES,
