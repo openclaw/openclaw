@@ -37,7 +37,6 @@ import {
   resolveVisibleMessagePositions,
   resolveTranscriptBoundaryWindow,
 } from "./session-accessor.sqlite-reset-window.js";
-import { readActivePathEntryRelationFromProjection } from "./session-accessor.sqlite-transcript-anchor.js";
 import {
   createVisibleMessageCursor,
   encodeVisibleMessageCursor,
@@ -87,19 +86,6 @@ export function readLatestSessionTranscriptMessageEvent(
       });
       return row ? parseActiveTranscriptMessageRow(row, projection) : undefined;
     },
-    options,
-  );
-}
-
-/** Classifies one entry against the authoritative active path and leaf. */
-export function readSessionTranscriptActivePathEntryRelation(
-  scope: SessionTranscriptReadScope,
-  entryId: string | null,
-  options: { readOnly?: boolean } = {},
-): "exact" | "ancestor" | "off-path" {
-  return withCurrentProjectionSnapshot(
-    scope,
-    (projection) => readActivePathEntryRelationFromProjection(projection, entryId),
     options,
   );
 }

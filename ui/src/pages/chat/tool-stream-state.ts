@@ -23,6 +23,7 @@ export function refreshToolStreamMessage(entry: ToolStreamEntry) {
   if (entry.output || entry.resultReceived) {
     content.push({
       type: "toolresult",
+      timestamp: entry.resultTimestamp,
       name: entry.name,
       text: entry.output ?? "",
       ...(entry.parentToolCallId ? { parentToolCallId: entry.parentToolCallId } : {}),
@@ -103,12 +104,24 @@ export function cancelToolStreamSync(host: Pick<ToolStreamState, "toolStreamSync
   }
 }
 
-/** Captured partial cards may survive a terminal event; their live tails must not. */
-export function retireToolStreamLiveOutput(host: ToolStreamState, runId: string) {
+/** Captured partial cards survive a terminal event without claiming ongoing execution. */
+export function retireToolStreamLiveState(host: ToolStreamState, runId: string) {
   let changed = false;
   for (const entry of host.toolStreamById.values()) {
-    if (entry.runId === runId && entry.liveOutput) {
+    if (entry.runId !== runId) {
+      continue;
+    }
+    const unfinished =
+      entry.resultReceived !== true && entry.activity?.some((item) => item.status === "running");
+    if (entry.liveOutput || unfinished) {
       entry.liveOutput = undefined;
+      if (unfinished) {
+        entry.activity = entry.activity?.map((item) =>
+          item.status === "running"
+            ? { ...item, phase: "end", status: undefined, unpairedCall: true }
+            : item,
+        );
+      }
       entry.messageDirty = true;
       changed = true;
     }

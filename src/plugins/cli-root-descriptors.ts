@@ -3,9 +3,9 @@ import { collectUniqueCommandDescriptors } from "../cli/program/command-descript
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig, resolveMemorySlotDecision } from "./config-state.js";
 import { createInstalledPluginEnabledPredicate } from "./installed-plugin-index.js";
-import { validatePluginConfig } from "./loader-shared.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
+import { validatePluginConfig } from "./schema-validator.js";
 import { hasKind } from "./slots.js";
 import type { OpenClawPluginCliRootCommandDescriptor, PluginLogger } from "./types.js";
 

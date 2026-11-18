@@ -1,7 +1,5 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
-import type { ContextEngine } from "../../../context-engine/types.js";
+import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { clearMemoryPluginState } from "../../../plugins/memory-state.test-fixtures.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import {
@@ -15,37 +13,9 @@ import {
 
 export type ContextEngineAttemptOptions = Parameters<typeof createContextEngineAttemptRunner>[0];
 
-export const contextEngineInfo = {
-  id: "test-context-engine",
-  name: "Test Context Engine",
-  version: "0.0.1",
-};
-
-export function createTestContextEngine(params: Partial<ContextEngine>): ContextEngine {
-  return {
-    info: { ...contextEngineInfo },
-    ingest: async () => ({ ingested: true }),
-    compact: async () => ({ ok: false, compacted: false, reason: "not used in this test" }),
-    ...params,
-  } as ContextEngine;
-}
-
 export type MockCallSource = { mock: { calls: ArrayLike<ReadonlyArray<unknown>> } };
 
-export const requireRecord = createRequireRecord("object", "expected-label");
-
-export function requireRecords(value: unknown, label: string): Array<Record<string, unknown>> {
-  expect(value, label).toBeInstanceOf(Array);
-  return value as Array<Record<string, unknown>>;
-}
-
-export const runtimeContextMessage = (messages: unknown) =>
-  expectDefined(
-    requireRecords(messages, "seen messages").find(
-      (message) => message.customType === "openclaw.runtime-context",
-    ),
-    "expected record: runtime context message",
-  );
+const requireRecord = createRequireRecord("object", "expected-label");
 
 export const mockParams = (source: MockCallSource) =>
   requireRecord(source.mock.calls[0]?.[0], "mock params");

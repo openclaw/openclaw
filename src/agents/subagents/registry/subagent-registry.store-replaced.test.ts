@@ -24,6 +24,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import {
   blockSubagentCompletionDelivery,
@@ -95,7 +96,7 @@ it.each([
   "replaced-session",
   "replaced-revision",
 ] as const)(
-  "records a required failed completion in its original requester transcript (%s)",
+  "records a required failed completion in its current requester transcript (%s)",
   async (route) => {
     using warning = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
     const expiry = route.startsWith("expiry-");
@@ -171,6 +172,12 @@ it.each([
       expect(loadSubagentRegistryFromSqlite().get(subagent.runId)?.completion?.resultText).toBe(
         "captured child answer",
       );
+      expect(loadSubagentRegistryFromSqlite().get(subagent.runId)?.delivery?.status).toBe(
+        "pending",
+      );
+      expect(warning).not.toHaveBeenCalled();
+      expect(await loadTranscriptEvents(target)).toEqual([]);
+      return;
     } else if (route === "direct-legacy-yielded-batch") {
       await suspendReplacedStoreNotifications({ runs: subagentRuns, resumedRuns: new Set() });
     } else if (route !== "batch" && route !== "batch-retry" && !route.endsWith("yielded-batch")) {
@@ -220,8 +227,9 @@ it.each([
       });
     }
     const notices = events.filter((event) => isRecord(event) && event.type === "custom_message");
+    // The notice goes to the requester chat as it is now, also after a reset or replacement.
     expect(notices).toEqual(
-      route.startsWith("replaced-") || expiry
+      expiry
         ? []
         : [
             expect.objectContaining({
@@ -312,6 +320,31 @@ it.each([false, true])(
     }
   },
 );
+
+it("retains a restored running child until fresh requester admission can deliver its notice", async () => {
+  using warning = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
+  const startedBeforeThisProcess = Math.floor(performance.timeOrigin) - 60_000;
+  const subagent = createSubagentRunRecord({
+    runId: "restored-running-child",
+    requesterAgentId: "main",
+    createdAt: startedBeforeThisProcess,
+    startedAt: startedBeforeThisProcess,
+    expectsCompletionMessage: true,
+  });
+  publishCommittedRecords(subagent);
+  await resetSubagentRegistryForTests({ persist: false });
+  await closeOpenClawStateDatabaseAsync();
+  await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+  const restored = expectDefined(subagentRuns.get(subagent.runId), "restored running child");
+  expect(subagentRuns.isCompletionAuthorityRetired(restored)).toBe(true);
+
+  await testing.sweepOnceForTests();
+
+  const pending = loadSubagentRegistryFromSqlite().get(subagent.runId);
+  expect(warning).not.toHaveBeenCalled();
+  expect(pending?.execution.status).toBe("running");
+  expect(pending?.delivery?.status).toBe("pending");
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let settleRootWork: ReturnType<typeof observeRootWork>;

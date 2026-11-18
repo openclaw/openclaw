@@ -4,11 +4,11 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-errors.js";
 import {
   resolveIdentityPathViaExistingAncestor,
   resolveIdentityPathViaExistingAncestorSync,
-} from "./boundary-path.js";
-import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-errors.js";
+} from "./path-existence.js";
 import {
   installSqliteDatabaseAdmissions,
   prepareSqliteDatabaseAdmission,
@@ -38,7 +38,7 @@ import {
   type RetainedWorkerTransactionAdmission,
   type SqliteWorkerNativeSettlementOwner,
 } from "./sqlite-worker-operation-settlement.js";
-import { recordWorkerMessage } from "./worker-message-metrics.js";
+import { recordWorkerAuthorityMessage } from "./worker-message-metrics.js";
 
 export {
   deferSqliteWorkerCommitReceipt,
@@ -164,6 +164,7 @@ function createOperationAdmission(
   const cleanupFailures: unknown[] = [];
   let closed = false;
   let started = false;
+  let samplePayload: boolean | undefined;
   let observeRequest: ((request: SqliteWorkerAdmissionRequest) => void) | undefined;
   let failure: { error: unknown; source: AdmissionFailureSource } | undefined;
   let databaseAuthority:
@@ -192,12 +193,7 @@ function createOperationAdmission(
     // Reentrant finish releases the owner record, not an already-running callback frame.
     const currentCallbacks = callbacks;
     const metric = isRecord(wire) ? wire : undefined;
-    recordWorkerMessage(
-      metric?.kind === "sqlite-database-admissions" ? "admission" : "authority",
-      "from_worker",
-      typeof metric?.payloadBytes === "number" ? metric.payloadBytes : undefined,
-      admission.requestClass,
-    );
+    samplePayload = recordWorkerAuthorityMessage(metric, admission.requestClass, samplePayload);
     started = true;
     if (metric?.kind === "sqlite-database-admissions") {
       const received = databaseReplies.receive(

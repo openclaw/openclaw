@@ -17,7 +17,10 @@ import {
 } from "../shared/operator-scope-compat.js";
 import { isSameOpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.js";
 import { sourceRolePolicy } from "./operator-role-source-policy.js";
-import { decodeGatewayOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
+import {
+  hasAutomationAdminDelegation,
+  decodeGatewayOperatorRecoverySource,
+} from "./operator-run-recovery-source.codec.js";
 import type { RestartRecoveryOperatorSource } from "./operator-run-recovery-source.codec.js";
 import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -27,8 +30,8 @@ export async function restoreCronOperatorSource(params: {
   job: CronStoredJob;
   /** Condition/script runners supply the same current Gateway owner explicitly. */
   context?: GatewayRequestContext;
-  /** The session this run executes in; the restored authority lives as long as it does. */
-  target?: { agentId: string; sessionKey: string; sessionId?: string };
+  /** The chat this run executes in, by key; the restored authority lives until that chat is deleted. */
+  target?: { agentId: string; sessionKey: string };
   signal?: AbortSignal;
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
 }) {
@@ -108,11 +111,7 @@ export async function restoreCronOperatorSource(params: {
     if (params.signal?.aborted || isAbortError(error)) {
       throw error;
     }
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new CronOperatorSourceError(
-      `The operator authority that created this automation was refused (device, access grant, role or definition changed); recreate it from an authenticated turn. Cause: ${reason}`,
-      { cause: error },
-    );
+    throw new CronOperatorSourceError(error);
   }
 }
 
@@ -201,6 +200,14 @@ export function retainCronControlSource<T extends CronSourceCapture>(params: {
         snapshot: {
           ...fresh.snapshot,
           scopes,
+          ...(fresh.snapshot.sourceIngress !== "principal"
+            ? {
+                automationAdmin:
+                  hasAutomationAdminDelegation(previous.source.snapshot) &&
+                  hasAutomationAdminDelegation(fresh.snapshot) &&
+                  operatorScopeSatisfied("operator.admin", scopes),
+              }
+            : {}),
           controlUiAdmin:
             previous.source.snapshot.controlUiAdmin &&
             fresh.snapshot.controlUiAdmin &&

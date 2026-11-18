@@ -97,7 +97,7 @@ Keep system context small and stable; put turn-specific material in `prependCont
 or `appendContext` instead.
 
 `before_prompt_build` and `agent_turn_prepare` receive a model-context view with
-fresh message arrays and envelopes per dispatch. Owned transcript payload leaves
+fresh message arrays and envelopes per dispatch. Proven immutable payload leaves
 (such as content blocks and tool arguments) are shared and deeply frozen. Treat
 nested history as read-only: writing a frozen leaf throws a `TypeError` in strict
 mode. Return the hook's result fields to contribute context or change the prompt;
@@ -106,7 +106,7 @@ in-place history edits do not update core history or become hook results.
 Registrations within one dispatch share its array and envelopes in priority order.
 Replacing an envelope field or editing the array remains local to that dispatch.
 Prepare, ordinary prompt-build, authorized enrichment, and later prompt rebuilds
-receive separate arrays and envelopes. Non-owned values are deep-cloned and retain
+receive separate arrays and envelopes. Other values are deep-cloned and retain
 the shared-memory isolation checks. Storage-only native prompt text and tool-result
 details are excluded. See the [migration note](/plugins/sdk-migration#prompt-hook-history-is-read-only)
 if your plugin previously mutated nested content.

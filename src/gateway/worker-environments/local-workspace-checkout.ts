@@ -21,7 +21,7 @@ import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
 import { parseGitHubRemoteUrl } from "../github-remote.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
-import { captureWorkspaceManifestDocument } from "./workspace-manifest-worker.js";
+import { captureInitialLocalWorkspaceManifest } from "./workspace-manifest-worker.js";
 
 const RECONCILE_PHASE = "attempt.setup.sandbox.workspace_selection.prepare.reconcile";
 
@@ -270,7 +270,12 @@ export async function initializeLocalWorkspaceProjection(
     buildCacheInputs: () => Promise<string[]>;
     dependencies?: { sandbox: SandboxConfig; allocation: WorktreeAllocationGuard };
   },
-) {
+): Promise<{
+  rawManifest: string;
+  manifestRef: string;
+  projectionFingerprints?: Buffer | null;
+  buildCacheInputs: string[];
+}> {
   using phases = observeDiagnosticsTimelinePhases(`${RECONCILE_PHASE}.initialize`);
   const { signal, dependencies } = params;
   const workerAuthority = {
@@ -372,7 +377,7 @@ export async function initializeLocalWorkspaceProjection(
     const initial =
       cloned ||
       (await timeWorktreePreparationPhase("snapshot", async () =>
-        captureWorkspaceManifestDocument({
+        captureInitialLocalWorkspaceManifest({
           root: repo,
           baseCommit: params.baseCommit,
           buildCacheInputs: new Set(buildCacheInputs),
@@ -383,7 +388,7 @@ export async function initializeLocalWorkspaceProjection(
     current();
     phases.mark(`${RECONCILE_PHASE}.publish`);
     await fs.rename(repo, params.projectionPath);
-    return initial;
+    return { ...initial, buildCacheInputs };
   } finally {
     phases.mark(`${RECONCILE_PHASE}.cleanup`);
     await fs.rm(temporary, { recursive: true, force: true });

@@ -200,7 +200,7 @@ it.each([
     expect(page.deliveryDirectory).toMatchObject({ conversations: [], error: null });
     if (published) {
       await waitForCronPage(() =>
-        expect(page.querySelectorAll(".cron-suggestion").length).toBeGreaterThan(0),
+        expect(page.querySelector(".cron-overview-empty")).not.toBeNull(),
       );
     }
   },

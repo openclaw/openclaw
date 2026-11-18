@@ -1,0 +1,5 @@
+# PR #199064: retain the twelve real tool/engine/approval/installer scenarios,
+# native MCP handoff, and receipt-projection contracts after consolidating
+# duplicated entry-point coverage and fixture I/O. The two-turn continuation
+# regression consumes model-visible host output, not caller-injected plan JSON.
+87

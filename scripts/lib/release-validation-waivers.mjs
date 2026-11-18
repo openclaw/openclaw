@@ -17,10 +17,143 @@ const STABLE_114_CI_FAILURES = new Map([
   ["macos-swift (tests)", "macos-swift"],
 ]);
 
+const STABLE_114_D843_TARGET_SHA = "d843d6af39a42cd3c30084edbeabeece732fd93a";
+const STABLE_114_D843_CI_FAILURES = new Map([
+  ["checks-node-agentic-gateway-server-isolated-4", "checks-node-core-test-nondist-shard"],
+]);
+
+// Exact mobile job names and their CI gate keys; no Gateway or desktop jobs.
+const EXTENDED_1033_MOBILE_JOBS = new Map([
+  ["ios-screenshots-iphone", "ios-screenshot-shard"],
+  ["ios-screenshots-ipad-13", "ios-screenshot-shard"],
+  ["ios-screenshots", "ios-screenshot-capture"],
+  ["ios-screenshot-evidence", "ios-screenshot-evidence"],
+  ["ios-build (release)", "ios-build"],
+  ["ios-build (tests)", "ios-build"],
+  ["ios-build (smoke)", "ios-build"],
+  ["ios-release-e2e / qualify", "ios-release-e2e"],
+  ["android-release-e2e / qualify", "android-release-e2e"],
+  ["android-test-play", "android"],
+  ["android-test-third-party", "android"],
+  ["android-test-wear", "android"],
+  ["android-build-play", "android"],
+  ["android-build-wear", "android"],
+  ["android-ktlint", "android"],
+  ["android-screenshots", "android-screenshots"],
+  ["android-access-native (4096, google_apis)", "android-access-native"],
+  ["android-access-native (16384, google_apis_ps16k)", "android-access-native"],
+]);
+
 // Reviewed release-tooling policy, loaded from P, never the candidate checkout.
 // Add an exact version, child role, job name, and reason here to grant a waiver.
 /** @type {import("./release-validation-waivers.mjs").ReleaseValidationWaiver[]} */
 const RELEASE_VALIDATION_WAIVERS = [
+  {
+    targetVersion: "2026.10.33",
+    childRole: "releaseChecksCandidate",
+    jobName: "Run package acceptance / Telegram package acceptance / Run package Telegram E2E",
+    reason:
+      "Dallin Romney explicitly waived Telegram package recovery for 2026.10.33 " +
+      "on 2026-11-17 at 15:06 UTC after FRV 44090632483/1, job 134090325822. " +
+      "This accepts only the named terminal failed job across candidates and attempts; " +
+      "its underlying onboarding error remains undiagnosed, not fixed or proven flaky. " +
+      "Preserve execution and raw evidence. Other jobs, missing or cancelled evidence, " +
+      "artifact integrity, install/update gates and publication remain blocking.",
+  },
+  {
+    targetVersion: "2026.10.33",
+    childRole: "productPerformance",
+    jobName: "Kova mock provider performance",
+    reason:
+      "Dallin Romney explicitly authorized all performance/Kova failures for " +
+      "2026.10.33 on 2026-11-17 at 02:49 UTC after reviewing FRV 43995308737/1, " +
+      "child 43995795283/1 and the retained 2026.11.4 comparison. This accepts " +
+      "the observed RSS, CPU, event-loop and pre-provider latency failures, " +
+      "including higher many-plugin CPU; lower Gateway RSS is not a claim of " +
+      "overall non-regression. This release-wide grant covers the named terminal " +
+      "failed Kova job across candidates and attempts. Preserve raw results and " +
+      "required execution; no threshold changes or not-run exemption. Other " +
+      "jobs, missing or cancelled evidence, native tests, integrity, install/update " +
+      "and publication gates remain blocking.",
+  },
+  ...[...EXTENDED_1033_MOBILE_JOBS.keys()].map((jobName) => ({
+    targetVersion: "2026.10.33",
+    childRole: "normalCi",
+    jobName,
+    reason:
+      "Dallin Romney explicitly authorized all iOS and Android validation failures " +
+      "for 2026.10.33 on 2026-11-17 at 03:14 UTC, reaffirming the 03:12 grant, because " +
+      "extended-stable publishes " +
+      "Gateway npm/plugins/Docker, not mobile apps. This supersedes the screenshot-only " +
+      "grant of 2026-11-16 at 22:14 UTC. It includes the observed Android build timeout, " +
+      "iOS Access-restart configuration selection failure, and iOS pairing/chat timeouts " +
+      "from FRV 43995308737/1 and replay 44001867099/1; these are accepted failures, " +
+      "not passing tests. Preserve raw results and required execution across candidates " +
+      "and attempts. No missing/cancelled evidence exemption. Gateway, desktop, package, " +
+      "integrity, install/update and publication gates remain blocking.",
+  })),
+  {
+    targetVersion: "2026.11.5",
+    childRole: "releaseChecksCandidate",
+    jobName: "Run package acceptance / Telegram package acceptance / Run package Telegram E2E",
+    reason:
+      "Dallin Romney explicitly authorized this Telegram package-job waiver on " +
+      "2026-11-16 at 18:20 UTC. FRV 43898101600/1, child 43902860005/1, job " +
+      "133430641645 passed the first 15 scenarios, then failed the quiet-progress " +
+      "assertion in scenario 16. Provider success and exactly-once final delivery " +
+      "passed before that assertion; all 18 Telegram plugin shards and the separate " +
+      "live Telegram lane passed. The candidate permits bounded Exec status text " +
+      "that differs from the frozen qualification assertion, supporting a test-contract " +
+      "mismatch rather than demonstrated P0/P1 delivery loss. Actual offending message " +
+      "text was not retained, so a display or detail-exposure defect is not ruled out. " +
+      "Later package scenarios were not proved by that failed run. Retain raw failures " +
+      "and required execution; no not-run exemption. This accepts only the named " +
+      "terminal failed job for this release, not other Gateway/native failures, " +
+      "cancelled or missing evidence, credentials, integrity, install/update, " +
+      "or publication gates.",
+  },
+  {
+    targetVersion: "2026.11.5",
+    childRole: "productPerformance",
+    jobName: "Kova mock provider performance",
+    reason:
+      "Dallin Romney explicitly authorized the 2026.11.5 performance waiver on " +
+      "2026-11-16 at 18:13 UTC after reviewing FRV 43898101600/1, child " +
+      "43899049574/1: all 15 runs exceeded RSS budgets, including gateway " +
+      "1418.1-1521 MB versus 1177/1193 MB and agent 1385-1456.7 MB versus " +
+      "1150 MB. One CPU interval was inconclusive. Baseline parity with " +
+      "2026.11.4 is unverified; this is explicit acceptance, not non-regression proof. " +
+      "This release-wide grant covers only the named Kova threshold failures. " +
+      "Retain raw failures and reports; no global budget changes or not-run exemption. " +
+      "Other jobs, missing or cancelled evidence, build/setup, crashes, correctness, " +
+      "isolation, data integrity, install/update and publication gates remain blocking.",
+  },
+  ...[
+    {
+      childRole: "normalCi",
+      jobName: "checks-node-agentic-gateway-server-isolated-4",
+    },
+    {
+      childRole: "releaseChecksIndependent",
+      jobName: "Run repo/live E2E validation / Native live suites (Native live gateway core)",
+    },
+  ].map(({ childRole, jobName }) => ({
+    childRole,
+    jobName,
+    targetVersion: "2026.11.4",
+    targetSha: STABLE_114_D843_TARGET_SHA,
+    reason:
+      "Dallin Romney explicitly authorized these two failures on 2026-11-15 at 21:50 UTC " +
+      "for unchanged C/Q d843d6af39a42cd3c30084edbeabeece732fd93a. " +
+      "FRV 43759426550/1: child 43759963756/1 job 132952700537 recorded a catalog " +
+      "warm ownership-file read; child 43759969390/1 job 132953160694 recorded a " +
+      "missing required native read. Both original failures remain unresolved; " +
+      "catalog diagnostic replays are not a fix and the native replay was quota-blocked. " +
+      "Retain raw errors and artifacts. This grant accepts only the named terminal " +
+      "failed jobs on this exact candidate, not a test pass, not-run exemption or " +
+      "historical evidence relabeling. All other jobs, candidates, versions, required " +
+      "coverage, identity, integrity and publication approval remain blocking.",
+  })),
   ...["Native live gateway core", "Native live test harnesses"].map((suite) => ({
     targetVersion: "2026.11.4",
     targetSha: "e283dccf68ba35ef1af5b3fa31571db7f4b6bc74",
@@ -248,18 +381,37 @@ const KOVA_PERFORMANCE_JOB = "Kova mock provider performance";
 
 function aggregateCauses(waiver) {
   if (
-    waiver.targetVersion === "2026.11.4" &&
-    waiver.targetSha === STABLE_114_TARGET_SHA &&
+    waiver.targetVersion === "2026.10.33" &&
     waiver.childRole === "normalCi" &&
-    STABLE_114_CI_FAILURES.has(waiver.jobName)
+    EXTENDED_1033_MOBILE_JOBS.has(waiver.jobName)
   ) {
     return [
       {
         jobName: "openclaw/ci-gate",
         stepName: "Verify selected CI lanes",
         causes: [
-          STABLE_114_CI_FAILURES.get(waiver.jobName) + " finished with failure (selected=true)",
+          EXTENDED_1033_MOBILE_JOBS.get(waiver.jobName) + " finished with failure (selected=true)",
         ],
+        exactCauses: true,
+      },
+    ];
+  }
+  const stableCiFailures =
+    waiver.targetSha === STABLE_114_TARGET_SHA
+      ? STABLE_114_CI_FAILURES
+      : waiver.targetSha === STABLE_114_D843_TARGET_SHA
+        ? STABLE_114_D843_CI_FAILURES
+        : undefined;
+  if (
+    waiver.targetVersion === "2026.11.4" &&
+    waiver.childRole === "normalCi" &&
+    stableCiFailures?.has(waiver.jobName)
+  ) {
+    return [
+      {
+        jobName: "openclaw/ci-gate",
+        stepName: "Verify selected CI lanes",
+        causes: [stableCiFailures.get(waiver.jobName) + " finished with failure (selected=true)"],
         exactCauses: true,
       },
     ];
@@ -317,6 +469,10 @@ function aggregateCauses(waiver) {
           jobName: "Verify release checks",
           stepName: "Verify release check results",
           causes: [cause],
+          ...(waiver.targetVersion === "2026.11.4" &&
+          waiver.targetSha === STABLE_114_D843_TARGET_SHA
+            ? { exactCauses: true }
+            : {}),
         },
       ];
     }

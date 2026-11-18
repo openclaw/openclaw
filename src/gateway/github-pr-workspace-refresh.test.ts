@@ -10,6 +10,7 @@ import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
 import {
   commandResult,
   installGitHubPublicationTestHarness,
+  overrideCommands,
 } from "./github-publication.test-support.js";
 
 describe("imported PR source refresh", () => {
@@ -110,7 +111,10 @@ describe("imported PR source refresh", () => {
       f.pr.base.ref = "new-destination";
       f.pr.base.sha = f.headCommit;
       if (boundRuntime) {
-        expect(runtime?.isPaused()).toBe(true);
+        // Canonical-only acceptance has not mutated the guest. Recovery must
+        // preserve writes made before it acquires the guest application pause.
+        expect(runtime?.isPaused()).toBe(false);
+        await fs.writeFile(path.join(f.projection, "during-refresh.txt"), "later guest write\n");
       } else {
         await closeOpenClawAgentDatabasesAsync();
       }
@@ -121,6 +125,11 @@ describe("imported PR source refresh", () => {
         conflictPaths: ["artifact.txt"],
       });
       expect(runtime?.isPaused() ?? false).toBe(false);
+      if (boundRuntime) {
+        expect(await fs.readFile(path.join(f.projection, "during-refresh.txt"), "utf8")).toBe(
+          "later guest write\n",
+        );
+      }
       const conflict = await fs.readFile(path.join(f.projection, "artifact.txt"), "utf8");
       expect(conflict).toContain("guest saved conflict");
       expect(conflict).toContain("remote PR change");
@@ -239,11 +248,46 @@ describe("imported PR source refresh", () => {
       }
     },
   );
-  it("still refuses a bot-authored PR this session did not publish", async () => {
+  it("refuses an unrelated bot-authored PR when the linked account has no commit credit", async () => {
     const f = await fixture({ priorPublication: true });
     f.pr.user = { id: 42, login: "roboclaw-bot" };
-    await expect(f.invoke()).rejects.toThrow("not authored by a GitHub account linked to you");
+    overrideCommands((argv) => {
+      if (!argv.includes("graphql")) {
+        return undefined;
+      }
+      return commandResult(
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                headRefOid: f.headCommit,
+                commits: {
+                  nodes: [
+                    {
+                      commit: {
+                        id: "unrelated-commit",
+                        authors: {
+                          nodes: [{ user: { databaseId: 42 } }],
+                          pageInfo: { hasNextPage: false, endCursor: null },
+                        },
+                        committer: { user: { databaseId: 42 } },
+                      },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+      );
+    });
+    await expect(f.invoke()).rejects.toThrow(
+      "no linked account was verified as a contributor to this publisher's PR. Continue in the original publication conversation or ask a full-write maintainer to assist.",
+    );
     expect(f.readSession().worktree?.githubPullRequest).toBeUndefined();
+    expect(f.writes).toEqual([]);
+    expect(f.externalWrites).toEqual([]);
   });
   it.each(["private base", "private head", "other PR", "publisher", "author"])(
     "preserves unlinked guest work when the recorded public continuation changes %s",

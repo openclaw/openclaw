@@ -38,10 +38,10 @@ import {
   normalizeExecApprovalsInternal,
   parsePersistedExecApprovals,
   resolveExecApprovalsDisplayPath,
-  stripExecApprovalsSocketCredentials,
 } from "./exec-approvals-config.js";
 import type { ExecAuthorizationCommitInput } from "./exec-approvals-contracts.js";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./exec-approvals-core.js";
+import { stripExecApprovalsSocketCredentials } from "./exec-approvals-core.js";
 import {
   retainCronPolicyPublication,
   stageCronExecHostPolicyPublication,

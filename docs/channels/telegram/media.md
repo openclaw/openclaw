@@ -130,3 +130,7 @@ What OpenClaw can send to Telegram beyond text, and how inbound media reaches th
 
   </Accordion>
 </AccordionGroup>
+
+## Inbound attachments that fail to download
+
+A message's attachments (all photos of an album, all items of a forwarded burst) share two minutes for Telegram's `getFile` lookups and downloads, and replied-to media gets two more. If an attachment fails or runs out of time, OpenClaw still delivers the message: the agent sees the text with `[media unavailable: download failed]`, and the chat gets "⚠️ Failed to download media. Please try again." Messages sent after it in the same chat or topic are not held behind the failed attachment. In an album, the other photos still arrive. A message interrupted by a Gateway shutdown is replayed after restart instead.

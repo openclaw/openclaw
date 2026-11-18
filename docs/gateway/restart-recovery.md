@@ -15,7 +15,12 @@ execution gets one ordinary system input asking the agent to inspect current
 state and continue. Recorded yield waits stay parked when their wake source
 survives; a lost source produces a visible failure instead.
 The transcript remains the agent's context; the Gateway does not reconstruct or
-replay the old execution.
+replay the old execution. For a captured interrupted turn, the shutdown marker
+retains its original requester's bounded authentication source. Startup revalidates
+that source and current session access before admitting the continuation; a shared
+session's owner or another participant cannot replace it. A revoked or unavailable
+source fails recovery rather than falling back to another person. Older markers
+without a captured source keep the session-principal recovery policy.
 
 If the interrupted turn left a managed workspace pending, its recovery input waits
 for the workspace owner to finish preparation before starting the turn. Setup
@@ -76,7 +81,9 @@ without resuming it or replaying a pending final; startup reports an aggregate
 count per agent instead of repeating warnings for each such session.
 
 After a clean shutdown, the Gateway waits for final cleanup and flushes file logs
-and output pipes. On macOS and Linux, any remaining referenced handles get a
+and output pipes. Shared-state leases finish their cleanup before the SQLite worker
+host closes. Completed orderly cleanup preserves exit status 0; cleanup failures
+still produce a failed exit. On macOS and Linux, any remaining referenced handles get a
 one-second final drain before the process logs remaining handle types and re-raises
 `SIGTERM`. Failed or retained
 cleanup keeps its existing deadline and exit-status handling.
@@ -196,6 +203,12 @@ database unavailable` with its agent ID; it does not suppress another agent's
 recovery. Recovery runs after database preparation ends, under the session's
 current authority, before the same session accepts fresh inputs. Another agent becoming
 available does not revoke an already admitted session's authority.
+
+Runtime status and automation-list notifications do not invalidate a resumed
+turn's stored session generation. Compaction and subsequent tool calls retain the
+same admitted owner; session replacement, revocation, and uncertain storage changes
+still refuse stale authority. Model fallback does not retry a refused session
+generation, because selecting another model cannot restore that authority.
 
 The boot owner retains each agent's pending crash intervals in the existing shared
 SQLite machine-state store until its recovery pass completes, including an empty
@@ -592,9 +605,16 @@ call. Later model requests can contain the text as conversation history. The
 agent checks the transcript and current state before continuing; effects are not
 guaranteed exactly once.
 
-For a session with a human owner, the input uses that recorded principal's current
-role, scopes, and session access, narrowed by the session's current permission mode
-and tool policy. When no owner is set, the human creator is used. On a Gateway
+For a captured interrupted turn, the input revalidates the original requester's
+authentication source and current session access, bounded by that source's original
+scopes, model limits, and current policy. Its accepted access-grant custody is
+resumed rather than requested anew. A revoked or unavailable captured source
+prevents resume; the session owner or a later participant cannot replace it.
+
+For older markers without a captured source, a session with a human owner uses
+that recorded principal's current role, scopes, and session access, narrowed by the
+session's current permission mode and tool policy. When no owner is set, the human
+creator is used. On a Gateway
 without `gateway.roles`, a profile has no authority of its own: the input uses the
 authenticated connection the person last sent from in that session (its device,
 sign-in method and scopes), revalidated against current pairing, auth and profile
@@ -613,9 +633,13 @@ a needed capability, the agent must ask for an authorized input.
 WebChat uses the same session and transcript. An unanswered accepted user prompt
 stays in history as its original entry, separate from the restart input. Channel
 sessions use their current delivery route so normal replies return to the
-conversation. The resume input inherits no old browser connection, approval, or
-requester authority snapshot; on a Gateway without roles it uses only the current,
-revalidated authority of the person's recorded device.
+conversation. The resume input does not replay an old browser connection or
+unfinished tool approval. Captured source facts are a revalidation basis, not a
+portable grant; markers without those facts use the legacy principal policy above.
+On a Gateway without roles, recovery still requires the current, revalidated
+authority of the recorded device. A resumed Control UI task
+can update pinned dashboard widgets under that admitted authority without a
+connected browser. Inline widgets still require a connected capable client.
 
 Only accepted user messages whose IDs were captured in the graceful-shutdown
 marker follow the resume input, in FIFO order. Older queued rows left by a crash

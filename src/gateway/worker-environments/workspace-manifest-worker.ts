@@ -139,6 +139,7 @@ type WorkspaceCaptureCommand =
   | "workspace.manifest.capture"
   | "workspace.manifest.snapshot"
   | "workspace.manifest.document"
+  | "workspace.manifest.initial"
   | "workspace.manifest.reference";
 
 function captureWorkspace<Type extends WorkspaceCaptureCommand>(
@@ -155,7 +156,7 @@ async function captureWorkspace(type: WorkspaceCaptureCommand, params: Workspace
     gitIgnore,
     signal,
   } = params;
-  if (hasGitWorkerContext()) {
+  if (hasGitWorkerContext() && type !== "workspace.manifest.initial") {
     const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
     const snapshot = await readActualWorkspaceManifestImpl(params);
     if (type === "workspace.manifest.document") {
@@ -249,6 +250,16 @@ export async function workspaceSnapshotsEqual(
 
 export async function captureWorkspaceManifestDocument(params: WorkspaceCaptureArguments) {
   return await captureWorkspace("workspace.manifest.document", params);
+}
+
+/** Initialization publishes these same scan identities with its baseline, before guest access. */
+export async function captureInitialLocalWorkspaceManifest(params: WorkspaceCaptureArguments) {
+  const result = await captureWorkspace("workspace.manifest.initial", params);
+  return {
+    ...result,
+    projectionFingerprints:
+      result.projectionFingerprints && Buffer.from(result.projectionFingerprints),
+  };
 }
 
 /** Only the template owner supplies a previous generation after validating immutable source. */
@@ -403,6 +414,7 @@ export async function prepareWorkspaceStageInput(
         buildCacheInputs: input.buildCacheInputs,
         gitHistory: input.gitHistory,
         parentCommit: input.parentCommit,
+        blobsOnly: input.blobsOnly,
         ...("publication" in input
           ? {
               publication: {

@@ -46,6 +46,7 @@ export type ToolRenderOptions = {
   presented?: boolean;
   mediaReadAllowed?: boolean;
   runActive?: boolean;
+  interruptedRunIds?: ReadonlySet<string>;
   inlineCommands?: InlineCommandPresentation;
   toolMessageSource?: ChatToolMessageSource;
   onOpenSidebar?: (content: SidebarContent) => void;
