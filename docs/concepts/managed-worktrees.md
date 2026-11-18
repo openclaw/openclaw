@@ -349,6 +349,16 @@ can overlap, so their sum is not the total preparation duration.
 `provisionEstimate` measures included-file discovery and byte estimation before checkout;
 `provisionInspect` measures fresh selection before copying, after source custody is reacquired.
 
+Linux provisioning records `clonedFiles`/`clonedBytes` and
+`copiedFiles`/`copiedBytes` in `copyDetails` when GNU coreutils 9.2 or newer
+reports the transfer method. `reflinkFallbackReason` records the first reported
+clone fallback. Older tools or incomplete reports use
+`unreportedFiles`/`unreportedBytes`; they are never counted as confirmed clones.
+Byte counts are admitted logical source sizes for completed copy batches, not physical
+storage writes. Cross-filesystem and incompatible filesystem-policy copies may
+still fall back to copying bytes. These counters describe included-file
+provisioning, separately from native template snapshots.
+
 Repository-backed creation discovers unmanaged Git branches and checkout paths before waiting for capacity admission. Reservation still checks current managed names, owners, and pending slots under the allocation lease. Git enforces branch and path conflicts when creating the checkout, including external changes after discovery. Each admission retry refreshes its Git inventory.
 
 If a registered project's checkout is busy, creation releases allocation before waiting for that project. Other repositories can continue reserving and creating workspaces. Once project access is available, creation releases it and retries the reservation with current source, owner, name, and capacity checks. Registered-source waits share the existing 30-minute creation contention budget, including source checks before checkout and before final session binding. The accepted request stays pending and cancellable while waiting; it continues when access becomes available without another request. Source contention after checkout or setup waits at that stage without repeating completed work.
