@@ -4,13 +4,16 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import { recordMessageToolRunOutcome } from "../../infra/message-tool-run-outcome-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { captureReplyOperationSessionReader } from "../../sessions/session-controller.session-reader.js";
 import type { VisibleWorkSession } from "../get-reply-options.types.js";
 import { prepareReplyTurnRunSource } from "./agent-runner-admission.js";
 import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
 import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 import { bindGoalContinuationExecution } from "./goal-continuation-return.js";
 import { handoffCompletedSourceReply } from "./queue/drain.js";
+import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
+import { prepareReplyRunToolAuthority } from "./reply-tool-authority.js";
 import type { SessionEventExecution } from "./session-event-contract.js";
 import { withVisibleWorkSessionReporter } from "./visible-work-sessions.js";
 
@@ -124,6 +127,16 @@ export async function runAgentTurnWithOutcome(
   bindGoalContinuationExecution(runId, params.sessionKey ?? params.followupRun.run.sessionKey);
   const eventExecution = params.followupRun.run.internalEventExecution;
   const source = prepareReplyTurnRunSource(params, runId);
+  const failUnexecutedTurn = async (error: unknown) => {
+    try {
+      await params.completeUnexecutedTurn?.(
+        { kind: "failed", error },
+        params.getActiveSessionEntry(),
+      );
+    } finally {
+      params.replyOperation?.fail("run_failed", error);
+    }
+  };
   let terminalRecorded = false;
   try {
     if (eventExecution) {
@@ -133,6 +146,28 @@ export async function runAgentTurnWithOutcome(
       eventExecution.assertCurrent?.();
     }
     source.claim();
+    let participation: Awaited<ReturnType<typeof prepareGroupParticipationObservation>>;
+    try {
+      participation = await prepareGroupParticipationObservation(params);
+      if (
+        params.admittedTurn &&
+        !params.admittedTurn.preflightError &&
+        !participation?.isObserving
+      ) {
+        await params.admittedTurn.operation.bindToolAuthoritySnapshotAsync(
+          prepareReplyRunToolAuthority(
+            params.followupRun,
+            params.getActiveSessionEntry(),
+            captureReplyOperationSessionReader(params.admittedTurn.operation),
+          ),
+        );
+        // Authority preparation can yield to newly accepted conversation input.
+        participation = await prepareGroupParticipationObservation(params);
+      }
+    } catch (error) {
+      await failUnexecutedTurn(error);
+      throw error;
+    }
     const adapter = params.followupRun.controllerInput?.sourceAdapter;
     const result = await withExecRequestTurn(
       {
@@ -167,7 +202,16 @@ export async function runAgentTurnWithOutcome(
             report: params.opts?.onVisibleWorkSessions,
           },
           async (): Promise<AgentTurnExecutionResult> => {
-            const participation = await prepareGroupParticipationObservation(params);
+            if (params.admittedTurn?.preflightError) {
+              await failUnexecutedTurn(params.admittedTurn.preflightError);
+              if (!params.admittedTurn.preflightFailurePayload) {
+                throw params.admittedTurn.preflightError;
+              }
+              return {
+                runId,
+                outcome: { kind: "rejected", payload: params.admittedTurn.preflightFailurePayload },
+              };
+            }
             const revision = participation?.snapshot?.revision;
             if (
               participation?.isObserving &&
@@ -175,8 +219,16 @@ export async function runAgentTurnWithOutcome(
               participation.isCurrent(revision)
             ) {
               params.replyOperation?.freezeAbort();
-              await params.completeObservedTurn?.();
+              await params.completeUnexecutedTurn?.(
+                { kind: "observed" },
+                params.getActiveSessionEntry(),
+              );
               return { runId, outcome: { kind: "observed" } };
+            }
+            if (participation?.mode === "ordinary") {
+              await params.typingSignals.signalRunStart();
+            } else if (participation && !participation.isObserving) {
+              await params.typingSignals.signalExecutionActivity?.();
             }
             return run();
           },
@@ -202,6 +254,14 @@ export async function runAgentTurnWithOutcome(
     await recordSessionEventTerminalOutcome(eventExecution, runId, result);
     return result;
   } catch (error) {
+    const reason = resolveReplyOperationAbortReason(params.replyOperation, error);
+    // Revocation retains the source owner's visible authority-loss failure.
+    if (!terminalRecorded && reason && !params.followupRun.operatorAuthority?.signal?.aborted) {
+      const result: AgentTurnExecutionResult = { runId, outcome: { kind: "aborted", reason } };
+      await recordAgentTurnExecutionOutcome(params, result);
+      await recordSessionEventTerminalOutcome(eventExecution, runId, result);
+      return result;
+    }
     eventExecution?.onFailed?.(error);
     if (!terminalRecorded) {
       await recordAgentTurnExecutionOutcome(params, undefined);

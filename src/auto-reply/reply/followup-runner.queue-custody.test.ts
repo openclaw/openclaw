@@ -206,7 +206,8 @@ it.each([
   let effects = 0;
   const executedPrompts: string[] = [];
   const failure = new Error("closed preparation or committed effect failure");
-  const typing = createTypingController({});
+  const onReplyStart = vi.fn(async () => {});
+  const typing = createTypingController({ onReplyStart, keepalive: false });
   for (const prompt of phase === "adopted preparation" ? ["first", "second"] : ["first"]) {
     const source = createQueueTestRun({ prompt });
     source.run.sessionKey = key;
@@ -246,6 +247,7 @@ it.each([
     if (phase !== "indeterminate execution") {
       markReplyOperationExecutionStarted(turn.operation);
     }
+    await typing.startTypingLoop();
     effects++;
     executedPrompts.push(turn.queued.prompt);
     if (failedExecution) {
@@ -260,7 +262,7 @@ it.each([
       progress: { drain: async () => {} },
     };
   });
-  const runner = createFollowupRunner({ typing, typingMode: "never", defaultModel: "gpt-test" });
+  const runner = createFollowupRunner({ typing, typingMode: "instant", defaultModel: "gpt-test" });
   try {
     scheduleFollowupDrain(key, async (queued) => {
       try {
@@ -283,6 +285,7 @@ it.each([
     await sources[0]!.controllerInput!.claim!.settlement.promise;
     expect(attempts).toHaveLength(failedExecution ? 1 : 2);
     expect(effects).toBe(1);
+    expect(onReplyStart).toHaveBeenCalledOnce();
     if (phase === "adopted preparation") {
       expect(adoptedCancellation).toEqual([false]);
       expect(executedPrompts[0]).toContain("first");

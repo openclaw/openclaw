@@ -39,6 +39,7 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
   );
   const maxDurationMs = resolveTimerTimeoutMs(params.maxDurationMs, 60_000, 0);
   let closed = false;
+  let startAttempted = false;
   let ttlTimer: ReturnType<typeof setTimeout> | undefined;
 
   let consecutiveFailures = 0;
@@ -47,6 +48,7 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     if (closed || tripped) {
       return;
     }
+    startAttempted = true;
     try {
       await params.start();
       consecutiveFailures = 0;
@@ -125,7 +127,7 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     closed = true;
     keepaliveLoop.stop();
     clearTtlTimer();
-    if (!stop) {
+    if (!stop || !startAttempted) {
       return;
     }
     // An admitted start may publish activity after cleanup. Its terminal stop

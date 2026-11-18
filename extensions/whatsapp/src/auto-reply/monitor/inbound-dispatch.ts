@@ -706,10 +706,6 @@ export function createWhatsAppReplyPlan(params: {
     ...(params.turnAdoptionLifecycle
       ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
       : {}),
-    suppressTyping:
-      sourceRepliesAreToolOnly &&
-      params.context.ChatType === "group" &&
-      params.context.WasMentioned !== true,
     disableBlockStreaming: sourceRepliesAreToolOnly
       ? true
       : typeof blockStreamingEnabled === "boolean"

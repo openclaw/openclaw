@@ -139,7 +139,25 @@ it("keeps a cron context prefix readable while an inbound turn waits for actor a
       resolvedVerboseLevel: "off",
       shouldInjectGroupIntro: false,
       pendingToolTasks: new Set(),
-      preflightCompactionApplied: false,
+      admittedTurn: {
+        runId: "inbound-run",
+        queued: followupRun,
+        operation: replyOperation,
+        config: followupRun.run.config,
+        session: {
+          kind: "session",
+          key: target.sessionKey,
+          storePath: target.storePath,
+          current: () => entry,
+          publish: (next) => {
+            if (next) {
+              entry = next;
+            }
+          },
+        },
+        sendPolicy: "allow",
+        preflightCompactionApplied: false,
+      },
       replyMediaContext: { normalizePayload: async (payload) => payload },
       replyRouteThreadId: undefined,
       replyToChannel: "telegram",

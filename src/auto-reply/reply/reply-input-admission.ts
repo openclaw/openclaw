@@ -11,6 +11,7 @@ import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   bindSessionControllerSourceTurnId,
   type ReplyOperation,
@@ -23,6 +24,11 @@ import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transc
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { RunReplyAgentParams } from "./agent-runner-core.js";
 import { readReplyAdmissionSession } from "./reply-input-placement.js";
+import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
+
+export type UnexecutedReplyTurnCompletion =
+  | { kind: "observed" }
+  | { kind: "failed"; error: unknown };
 
 export type PendingReplyDelivery = {
   context?: DeliveryContext;
@@ -43,7 +49,7 @@ export function createReplyInputAdmission(params: {
 }) {
   const { replyOperation, followupRun, sessionKey, storePath } = params;
   let target: SessionEntryTargetPatchScope | undefined;
-  let admittedLifecycle: { target: SessionEntryTargetPatchScope; entry: SessionEntry } | undefined;
+  let admittedLifecycle = false;
   const assertCurrent = () => {
     replyOperation.abortSignal.throwIfAborted();
     if (replyOperation.lifecycleGeneration) {
@@ -143,20 +149,27 @@ export function createReplyInputAdmission(params: {
         });
         if (persisted?.sessionEntry) {
           if (target) {
-            admittedLifecycle = { target, entry: persisted.sessionEntry };
+            admittedLifecycle = true;
           }
           params.setEntry(persisted.sessionEntry);
         }
       }
       bindSource();
     },
-    async completeObservedTurn(this: void): Promise<void> {
+    async completeUnexecutedTurn(
+      this: void,
+      completion: UnexecutedReplyTurnCompletion,
+      entry: SessionEntry | undefined,
+    ): Promise<void> {
       if (!admittedLifecycle) {
         return;
       }
-      // Observation skips the runner's lifecycle manager. Complete only the
-      // durable start this admission committed, through its captured owner.
-      const { target: admittedTarget, entry } = admittedLifecycle;
+      // Settlement uses the preparation owner's committed entry and the admitted
+      // physical store. A canceled operation cannot authorize another session read.
+      const admittedTarget = target;
+      if (!entry || !admittedTarget) {
+        return;
+      }
       const updated = await applySessionEntryTargetOperation(
         admittedTarget,
         {
@@ -166,7 +179,20 @@ export function createReplyInputAdmission(params: {
               runId: params.runId,
               sessionId: entry.sessionId,
               ts: Date.now(),
-              data: { phase: "end", executionStarted: false },
+              data: {
+                phase: completion.kind === "failed" ? "error" : "end",
+                executionStarted: false,
+                ...(completion.kind === "failed"
+                  ? {
+                      error: formatErrorMessage(completion.error),
+                      ...resolveReplyOperationTerminationFields(
+                        completion.error,
+                        replyOperation.abortSignal,
+                        replyOperation,
+                      ),
+                    }
+                  : {}),
+              },
             },
             currentLifecycleGeneration:
               replyOperation.lifecycleGeneration ?? getAgentEventLifecycleGeneration(),
@@ -177,6 +203,7 @@ export function createReplyInputAdmission(params: {
         },
         { skipMaintenance: true, takeCacheOwnership: true, requireWriteSuccess: true },
       );
+      admittedLifecycle = false;
       if (updated) {
         params.setEntry(updated);
       }

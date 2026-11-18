@@ -126,7 +126,25 @@ it("settles a reply visibly when the reactivation cohort changes before replacem
     queueKey: sessionKey,
     resolvedQueue: { mode: "followup" },
     shouldInjectGroupIntro: false,
-    preflightCompactionApplied: false,
+    admittedTurn: {
+      runId: "reply-followup",
+      queued: followupRun,
+      operation: replyOperation,
+      config: followupRun.run.config,
+      session: {
+        kind: "session",
+        key: target.sessionKey,
+        storePath: target.storePath,
+        current: () => entry,
+        publish: (next) => {
+          if (next) {
+            entry = next;
+          }
+        },
+      },
+      sendPolicy: "allow",
+      preflightCompactionApplied: false,
+    },
     replyMediaContext: { normalizePayload: async (payload) => payload },
     replyRouteThreadId: undefined,
     replyToChannel: "webchat",

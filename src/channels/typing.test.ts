@@ -133,11 +133,40 @@ describe("createTypingCallbacks", () => {
     const { stop, onStopError, callbacks } = createTypingHarness({
       stop: vi.fn().mockRejectedValue(new Error("stop")),
     });
+    await callbacks.onReplyStart();
     callbacks.onIdle?.();
     await flushMicrotasks();
     expect(stop).toHaveBeenCalledTimes(1);
     expect(onStopError).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["onIdle", "onCleanup"] as const)(
+    "keeps another reply's typing visible when a quiet source receives %s",
+    async (finish) => {
+      let visible = false;
+      const transport = {
+        start: async () => {
+          visible = true;
+        },
+        stop: async () => {
+          visible = false;
+        },
+      };
+      const active = createTypingHarness(transport);
+      const quiet = createTypingHarness(transport);
+      await active.callbacks.onReplyStart();
+      quiet.callbacks[finish]?.();
+      await flushMicrotasks();
+      expect(visible).toBe(true);
+      expect(quiet.stop).not.toHaveBeenCalled();
+      await quiet.callbacks.onReplyStart();
+      expect(quiet.start).not.toHaveBeenCalled();
+      active.callbacks.onIdle?.();
+      await flushMicrotasks();
+      expect(visible).toBe(false);
+      expect(active.stop).toHaveBeenCalledOnce();
+    },
+  );
 
   it("keeps coalesced typing alive beyond 60 seconds while the same task refreshes it", async () => {
     vi.setSystemTime(0);

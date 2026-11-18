@@ -450,25 +450,28 @@ describe("WhatsApp reply delivery", () => {
     expect(deliverReply).not.toHaveBeenCalled();
   });
 
-  it("selects message-tool-only delivery for a mentioned group message", async () => {
-    const { plan } = await fixture({
-      cfg: {
-        channels: { whatsapp: { streaming: { block: { enabled: true } } } },
-        messages: { groupChat: { visibleReplies: "message_tool" } },
-      },
-      context: {
-        Body: "hi",
-        ChatType: "group",
-        WasMentioned: true,
-        CommandAuthorized: false,
-      },
-    });
-    expect(plan.replyOptions).toMatchObject({
-      sourceReplyDeliveryMode: "message_tool_only",
-      suppressTyping: false,
-      disableBlockStreaming: true,
-    });
-  });
+  it.each([false, true])(
+    "uses shared typing policy for message-tool-only group delivery (mentioned=%s)",
+    async (wasMentioned) => {
+      const { plan } = await fixture({
+        cfg: {
+          channels: { whatsapp: { streaming: { block: { enabled: true } } } },
+          messages: { groupChat: { visibleReplies: "message_tool" } },
+        },
+        context: {
+          Body: "hi",
+          ChatType: "group",
+          WasMentioned: wasMentioned,
+          CommandAuthorized: false,
+        },
+      });
+      expect(plan.replyOptions).toMatchObject({
+        sourceReplyDeliveryMode: "message_tool_only",
+        disableBlockStreaming: true,
+      });
+      expect(plan.replyOptions.suppressTyping).not.toBe(true);
+    },
+  );
   it.each([
     { visibleReplySent: true, emoji: "✅" },
     { visibleReplySent: false, emoji: "❌" },
