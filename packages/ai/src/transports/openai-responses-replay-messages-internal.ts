@@ -330,6 +330,24 @@ function convertResponsesMessagesWithStyle(
   const transformedMessages = orderResponsesAsyncToolResults(
     transformMessages(replayPlan.messages),
   );
+  const nativeOpenAI = supportsNativeOpenAIResponsesEndpoint(model);
+  const systemPrompt =
+    (options?.includeSystemPrompt ?? true) && context.systemPrompt
+      ? Object.assign(
+          buildResponsesInputMessage(resolveResponsesInstructionRole(model), [
+            {
+              type: "input_text",
+              text: prepareSystemPrompt(context.systemPrompt, context.preparedSystemPrompt)
+                .instructions,
+            },
+          ]),
+          { [RESPONSES_SYSTEM_PROMPT]: true },
+        )
+      : undefined;
+  // Compatible endpoints (including xAI /responses/compact) expect the prompt first.
+  if (systemPrompt && !nativeOpenAI) {
+    messages.push(systemPrompt);
+  }
   // The compact endpoint's output is already canonical provider input, not
   // internal user content to normalize or reinterpret as text/image blocks.
   if (replayPlan.compactedWindow) {
@@ -352,19 +370,8 @@ function convertResponsesMessagesWithStyle(
   // OpenAI drops input placed before a compaction item, so the system prompt follows
   // the checkpoint. It stays in the stored prefix: continuation deltas never repeat it,
   // and a changed prompt changes that prefix, which forces a full replay.
-  if ((options?.includeSystemPrompt ?? true) && context.systemPrompt) {
-    messages.push(
-      Object.assign(
-        buildResponsesInputMessage(resolveResponsesInstructionRole(model), [
-          {
-            type: "input_text",
-            text: prepareSystemPrompt(context.systemPrompt, context.preparedSystemPrompt)
-              .instructions,
-          },
-        ]),
-        { [RESPONSES_SYSTEM_PROMPT]: true },
-      ),
-    );
+  if (systemPrompt && nativeOpenAI) {
+    messages.push(systemPrompt);
   }
   let replayMessages = transformedMessages;
   // Responses continuation requires the complete prior input before tool output.
@@ -394,7 +401,6 @@ function convertResponsesMessagesWithStyle(
   const replayCallId = (id: string) =>
     recoveryAnchor ? `call_${shortHash(`${recoveryAnchor}:${id}`)}` : id;
   const appendAssistant = createResponsesInputReplay(model);
-  const nativeOpenAI = supportsNativeOpenAIResponsesEndpoint(model);
   const convertMessage = (
     msg: Context["messages"][number],
     messageIndex: number,

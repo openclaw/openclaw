@@ -1,10 +1,6 @@
 import type { Context, Model } from "@openclaw/llm-core";
 import { expect, it, onTestFinished } from "vitest";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
-import {
-  recordResponsesContinuationState,
-  resolveResponsesContinuationRequest,
-} from "./openai-responses-continuation.js";
 import { createResponsesLoopbackServer } from "./openai-responses-loopback.test-support.js";
 import { createModel } from "./openai-responses-prompt-observer.test-support.js";
 import {
@@ -20,7 +16,11 @@ const uncachedModel = (compat?: Model["compat"]) =>
 
 const compaction = { type: "compaction", id: "cmp_1", encrypted_content: "opaque-checkpoint" };
 
-async function runTurns(model: Model, prompts: string[], compactAfterTurn?: number) {
+async function runTurns(
+  model: Model,
+  prompts: Array<string | undefined>,
+  compactAfterTurn?: number,
+) {
   const server = await createResponsesLoopbackServer((turn) => {
     const message = wireMessage(`msg_${turn}`, `answer ${turn}`);
     const output = turn === compactAfterTurn ? [compaction, message] : [message];
@@ -93,7 +93,7 @@ it("sends an uncached-instructions prompt once as a developer item and replays w
 it("places the developer item right after the compaction item", async () => {
   const requests = await runTurns(
     uncachedModel({ cachesInstructions: false }),
-    ["Prompt A", "Prompt A"],
+    ["Prompt A", "Prompt B"],
     1,
   );
   const replay = requests[1];
@@ -101,39 +101,19 @@ it("places the developer item right after the compaction item", async () => {
   const input = replay?.input as WireItem[];
   expect(input[0]).toMatchObject({ type: "compaction", id: "cmp_1" });
   expect(input[1]).toMatchObject({ type: "message", role: "developer" });
-  expect(systemTexts(replay)).toEqual(["Prompt A"]);
+  expect(replay).not.toHaveProperty("instructions");
+  expect(systemTexts(replay)).toEqual(["Prompt B"]);
 });
 
-it.each([
-  ["the same prompt", "Prompt A", "Prompt A", "continued"],
-  ["a changed prompt", "Prompt A", "Prompt B", "history_changed"],
-  ["a removed prompt", "Prompt A", undefined, "history_changed"],
-  ["an added prompt", undefined, "Prompt A", "history_changed"],
-] as const)("continues a stored chain only for %s", (_name, before, after, status) => {
-  const developer = (text: string | undefined) =>
-    text ? [{ type: "message", role: "developer", content: [{ type: "input_text", text }] }] : [];
-  const user = (text: string) => ({
-    type: "message",
-    role: "user",
-    content: [{ type: "input_text", text }],
-  });
-  const answer = wireMessage("msg_1", "answer 1");
-  const first = { model: "gpt-6.2-astra", store: true, input: [...developer(before), user("q1")] };
-  const state = recordResponsesContinuationState(undefined, first as never, {
-    id: "resp_1",
-    output: [answer] as never,
-  });
-  const next = {
-    ...first,
-    input: [...developer(after), user("q1"), answer, user("q2")],
-  };
-  const resolved = resolveResponsesContinuationRequest(state, next as never);
-  expect(resolved.continuationStatus).toBe(status);
-  if (status === "continued") {
-    expect(resolved.request.previous_response_id).toBe("resp_1");
-    expect(resolved.request.input).toEqual([user("q2")]);
-  } else {
-    expect(resolved.request).not.toHaveProperty("previous_response_id");
-    expect(resolved.request.input).toEqual(next.input);
-  }
+it("restarts the stored chain when the prompt is removed or added", async () => {
+  const [first, removed, added] = await runTurns(uncachedModel({ cachesInstructions: false }), [
+    "Prompt A",
+    undefined,
+    "Prompt B",
+  ]);
+  expect(systemTexts(first)).toEqual(["Prompt A"]);
+  expect(removed).not.toHaveProperty("previous_response_id");
+  expect(systemTexts(removed)).toEqual([]);
+  expect(added).not.toHaveProperty("previous_response_id");
+  expect(systemTexts(added)).toEqual(["Prompt B"]);
 });

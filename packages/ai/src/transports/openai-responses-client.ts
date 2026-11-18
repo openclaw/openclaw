@@ -280,6 +280,7 @@ function createResponsesTransportExecutor(config: {
               replayMode,
               Boolean(v2Compaction),
               itemRecovery.applied,
+              compactRequest?.mode === "endpoint" && supportsNativeOpenAIResponsesEndpoint(model),
             ),
           );
         const buildItemConflictRequest = () => itemRecovery.retry(buildRequest);

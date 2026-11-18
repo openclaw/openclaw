@@ -101,9 +101,11 @@ export function buildOpenAIResponsesParams(
   replayMode: OpenAIResponsesReplayMode = "checkpoint",
   retainUserProvenance = false,
   onItemRecovery?: () => void,
+  nativeCompactEndpoint = false,
 ) {
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "transport-default",
+    nativeCompactEndpoint,
   });
   const policyAllowsReplayIds =
     payloadPolicy.explicitStore !== false && !payloadPolicy.shouldStripStore;
