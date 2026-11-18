@@ -21,6 +21,11 @@ vi.mock("node:child_process", async (importOriginal) => ({
   spawnSync: vi.fn(),
 }));
 
+vi.mock("node:net", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:net")>();
+  return { ...actual, createServer: vi.fn(actual.createServer) };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const emit = (stream: ChildProcess["stdout"], text: string) =>
   stream?.emit("data", Buffer.from(text));
@@ -74,6 +79,8 @@ it.each([
     const configWrites: number[] = [];
     const launches: number[] = [];
     const closeChildren: Array<() => void> = [];
+    let reservationListener: ReturnType<typeof createServer> | undefined;
+    const reservationClosed = vi.fn();
     writePort(oldPort);
     const refusal = (port: number) =>
       `Port ${port} is busy but no listener PID could be determined. Run openclaw gateway status --deep to inspect the listener.\n`;
@@ -105,6 +112,12 @@ it.each([
       } else if (cliArgs[0] === "config" && cliArgs[1] === "set") {
         expect(cliArgs[2]).toBe("gateway.port");
         const port = Number(cliArgs[3]);
+        const created = vi.mocked(createServer).mock.results.at(-1);
+        if (created?.type !== "return") {
+          throw new Error("Replacement port reservation did not create a listener");
+        }
+        reservationListener = created.value;
+        reservationListener.on("close", reservationClosed);
         configWrites.push(port);
         exitCode = scenario === "config-failure" ? 1 : 0;
         if (exitCode === 0) {
@@ -155,13 +168,9 @@ it.each([
       }
       if (recovery === "port") {
         expect(expectedPort).not.toBe(oldPort);
-        const replacement = await reserveTestPortListener({
-          offsets: [0],
-          port: expectedPort,
-          createListener: createServer,
-        });
-        await replacement.releaseListener();
-        await replacement.claim.release();
+        expect(reservationListener?.listening).toBe(false);
+        expect(reservationListener?.address()).toBeNull();
+        expect(reservationClosed).toHaveBeenCalledOnce();
       }
       expect(occupied.listener.listening).toBe(true);
     } finally {
