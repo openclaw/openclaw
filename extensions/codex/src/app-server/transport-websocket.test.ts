@@ -5,13 +5,13 @@ import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PROXY_FIXTURE_CERTIFICATE,
   PROXY_FIXTURE_KEY,
   PROXY_FIXTURE_SERVER_CERTIFICATE,
-} from "../../../../src/test-helpers/proxy-tls-fixture.js";
+} from "openclaw/plugin-sdk/test-env";
+import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { rawDataToText } from "./client-websocket.test-support.js";
 import { CodexAppServerClient } from "./client.js";
 import * as processRegistration from "./transport-process-registration.js";
