@@ -128,13 +128,17 @@ body.update-dialog-open .sidebar-update-card__status {
   background: color-mix(in srgb, var(--warn) 10%, transparent);
 }
 
-.sidebar-update-card__icon {
+.sidebar-update-card__icon,
+.refresh-notice__icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex: none;
+}
+
+.sidebar-update-card__icon {
   width: 24px;
   height: 24px;
-  flex: 0 0 auto;
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--accent);
@@ -171,9 +175,13 @@ body.update-dialog-open .sidebar-update-card__status {
   white-space: nowrap;
 }
 
-.sidebar-update-card__icon svg {
+.sidebar-update-card__icon svg,
+.refresh-notice__icon svg {
   width: 16px;
   height: 16px;
+}
+
+.sidebar-update-card__icon svg {
   stroke: currentColor;
   fill: none;
   stroke-width: 1.7px;
@@ -181,9 +189,7 @@ body.update-dialog-open .sidebar-update-card__status {
   stroke-linejoin: round;
 }
 
-/* Server-updated refresh notice: one pill centered above the active composer.
-   Pages without a composer keep the same spot at the bottom of the content. */
-/* Inactive split cells keep their composers but do not own the notice. */
+/* Inactive split cells retain composers but must not anchor the notice. */
 .agent-chat__composer-shell:not(.chat-pane-cache__pane:not(.chat-pane-cache__pane--active) *) {
   anchor-name: --openclaw-refresh-composer;
 }
@@ -219,13 +225,17 @@ body.update-dialog-open .sidebar-update-card__status {
 @starting-style {
   .refresh-notice {
     opacity: 0;
-    translate: -50% 8px;
   }
 }
 
-/* The composer's own surface, edge and depth, so the pill reads as part of the
-   writing area below it. Reload is the one accent, so the notice reads as a
-   call to action rather than an error. */
+@media (prefers-reduced-motion: no-preference) {
+  @starting-style {
+    .refresh-notice {
+      translate: -50% 8px;
+    }
+  }
+}
+
 .refresh-notice__surface {
   display: flex;
   align-items: center;
@@ -271,23 +281,13 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .refresh-notice__icon {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
   width: 16px;
   height: 16px;
   color: var(--muted);
 }
 
 .refresh-notice__icon svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.8px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .refresh-notice__spinner {
@@ -333,22 +333,7 @@ body.update-dialog-open .sidebar-update-card__status {
   --chat-scroll-to-bottom-gap: 62px;
 }
 
-.content--refresh-notice .chat-thread-viewport {
-  --chat-thread-padding-bottom: calc(56px + var(--chat-composer-overlap, 0px));
-}
-
+.content--refresh-notice .chat-thread-viewport,
 .content--refresh-notice .chat-thread {
   --chat-thread-padding-bottom: calc(56px + var(--chat-composer-overlap, 0px));
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .refresh-notice {
-    transition-property: opacity;
-  }
-
-  @starting-style {
-    .refresh-notice {
-      translate: -50% 0;
-    }
-  }
 }
