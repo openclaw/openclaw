@@ -114,7 +114,9 @@ it.each(["sqlite", "postgres"] as const)(
     expect(version).toEqual({
       userVersion: engine === "postgres" ? 9 : 0,
     });
-    expect(inspect).toHaveBeenCalledWith(file, options.stagingRoot, undefined, true);
+    expect(inspect).toHaveBeenCalledWith(file, options.stagingRoot, undefined, true, {
+      cleanupFailure: "warn",
+    });
     expect(classify).toHaveBeenCalledOnce();
     expect(classify).toHaveBeenCalledWith(file);
     if (engine === "postgres") {

@@ -706,6 +706,7 @@ export async function inspectSqliteSchemaHeaderInProcess(
   stagingRoot?: string,
   agentSchemaVersionForOwnership?: number,
   preserveSourceArtifacts = false,
+  options: { cleanupFailure?: "warn" } = {},
 ) {
   const canonicalPath = fs.realpathSync.native(pathname);
   if (preserveSourceArtifacts) {
@@ -713,6 +714,7 @@ export async function inspectSqliteSchemaHeaderInProcess(
       await prepareSqliteReadOnlyCopyInProcess(canonicalPath, stagingRoot),
       undefined,
       agentSchemaVersionForOwnership,
+      options,
     );
   }
   const mode = readSourceJournalMode(canonicalPath);
@@ -745,7 +747,12 @@ export async function inspectSqliteSchemaHeaderInProcess(
   // An incomplete WAL family would create source sidecars on native open.
   // The existing snapshot owner also handles hot rollback recovery privately.
   const prepared = await prepareReadOnlySourceInProcess(canonicalPath, stagingRoot);
-  return readSqliteSchemaHeaderFromSnapshot(prepared, undefined, agentSchemaVersionForOwnership);
+  return readSqliteSchemaHeaderFromSnapshot(
+    prepared,
+    undefined,
+    agentSchemaVersionForOwnership,
+    options,
+  );
 }
 
 export function prepareSqliteReadOnlyLocationInProcess(
