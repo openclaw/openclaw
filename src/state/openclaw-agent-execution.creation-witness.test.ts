@@ -3,7 +3,7 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
-import { withinTest } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -40,6 +40,8 @@ import {
   captureOpenClawAgentDatabaseExecutionAsync,
   prepareOpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "./openclaw-agent-write-admission-state.js";
+import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
@@ -70,6 +72,59 @@ it("prepares an agent database while its original creation witness is retained",
     ),
   ).resolves.toMatchObject({ entries: [] });
 });
+
+it.each(["cancelled", "revoked"] as const)(
+  "does not create a database after queued preparation is %s",
+  async (outcome, { signal }) => {
+    const options = fixture();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const controller = new AbortController();
+    const refusal = new Error("Queued preparation lost its caller");
+    let revoked = false;
+    const held = runOpenClawAgentWorkerWrite(options, async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    let preparing: Promise<void> | undefined;
+    try {
+      await withinTest(entered.promise, signal);
+      preparing = prepareOpenClawAgentDatabaseExecution(
+        options,
+        () => {
+          if (revoked) {
+            throw refusal;
+          }
+        },
+        controller.signal,
+      );
+      const result = preparing.catch((error: unknown) => error);
+      await vi.waitFor(() =>
+        expect(SQLITE_SESSION_WRITER_QUEUES.get(options.path)?.pending.length).toBeGreaterThan(0),
+      );
+      if (outcome === "cancelled") {
+        controller.abort(refusal);
+        expect(await withinTest(result, signal)).toBe(refusal);
+      } else {
+        revoked = true;
+      }
+      release.resolve();
+      await withinTest(held, signal);
+      expect(await withinTest(result, signal)).toBe(refusal);
+      expect(fs.existsSync(options.path)).toBe(false);
+
+      // A refused preparer must not leave a creation reference behind for its successor.
+      const next = capture(options);
+      await using _ = onExit(() => next.release());
+      await withinTest(next.prepare(source(), signal), signal);
+      expect(next.fileIdentity).toMatchObject({ kind: "file" });
+    } finally {
+      controller.abort(refusal);
+      release.resolve();
+      await Promise.allSettled([held, preparing]);
+    }
+  },
+);
 
 function onExit(cleanup: () => Promise<unknown>) {
   return {
