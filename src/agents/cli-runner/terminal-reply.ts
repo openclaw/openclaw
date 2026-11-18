@@ -66,10 +66,13 @@ export function prepareCliRunTerminalReply(context: PreparedCliRunContext, outpu
     sourceReplyMirror.payloads.length > 0 &&
     explicitFinalSource === true &&
     hasCompletedSourceReplyDeliveryEvidence(output);
+  const replyExpectation = resolveReplyExpectation(context.params);
   if (
-    (resolveReplyExpectation(context.params) === "result-required" && !completedFinalSource) ||
-    // Progress sends complete the turn only when it ends empty or silent.
-    (explicitFinalSource === false && prepared.terminalReply.disposition === "visible")
+    (replyExpectation === "result-required" && !completedFinalSource) ||
+    // Progress completes an optional turn; a required turn still needs its visible final.
+    (replyExpectation === "required" &&
+      explicitFinalSource === false &&
+      prepared.terminalReply.disposition === "visible")
   ) {
     sourceReplyMirror = { payloads: [], delivered: false };
   }

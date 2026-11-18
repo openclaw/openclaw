@@ -87,8 +87,7 @@ export function registerAgentCommandRecoveryCases(
       context.params.sourceReplyDeliveryMode = "message_tool_only";
       context.params.terminalReplyExpectation = "optional";
       const output = {
-        // Progress sends complete only a turn that ends silent; a visible final replaces them.
-        text: "NO_REPLY",
+        text: "private terminal confirmation",
         usage: { input: 2, output: 3, cacheRead: 10, total: 15 },
         diagnosticUsage: { input: 20, output: 30, cacheRead: 100, total: 150 },
         didSendViaMessagingTool: true,
@@ -162,7 +161,7 @@ export function registerAgentCommandRecoveryCases(
           },
         },
       ]);
-      expect(JSON.stringify(events)).not.toContain("NO_REPLY");
+      expect(JSON.stringify(events)).not.toContain("private terminal confirmation");
       const usage = await loadSessionCostSummary({
         agentId: scope.agentId,
         sessionId: entry.sessionId,
