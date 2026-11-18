@@ -131,8 +131,8 @@ const exposed = {
 };
 
 describe("connectGbrain", () => {
-  it("sets up a fresh host through GBrain's own commands and writes one HTTP MCP entry", async () => {
-    const host = fakeHost({ executables: [BUN] });
+  it("installs GBrain with Bun when Bun is present, even where a release binary exists", async () => {
+    const host = fakeHost({ executables: [BUN], platform: "darwin", arch: "arm64" });
     const outcome = await connectGbrain(host.deps, { allowSetup: true });
     expect(outcome).toEqual({
       state: "connected",
@@ -152,6 +152,7 @@ describe("connectGbrain", () => {
       transport: "streamable-http",
       headers: { Authorization: "Bearer gbrain_minted1" },
     });
+    expect(host.releaseInstalls).toEqual([]);
   });
 
   it("installs GBrain's release binary on Apple Silicon and x86-64 Linux without Bun", async () => {
@@ -171,19 +172,6 @@ describe("connectGbrain", () => {
         "mcp expose --no-tailscale --yes --json",
       ]);
     }
-  });
-
-  it("uses a GBrain that Bun already linked outside PATH instead of downloading the release", async () => {
-    const host = fakeHost({
-      platform: "darwin",
-      arch: "arm64",
-      executables: [BUN, `${BUN_GLOBAL_BIN}/gbrain`],
-    });
-    expect(await connectGbrain(host.deps, { allowSetup: true })).toMatchObject({
-      state: "connected",
-    });
-    expect(host.releaseInstalls).toEqual([]);
-    expect(host.commands[0]).toBe("pm bin -g");
   });
 
   it("reports a failed release download and writes nothing", async () => {

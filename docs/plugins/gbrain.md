@@ -18,9 +18,10 @@ only connects and reports.
 
 ## Before you install
 
-On Apple Silicon macOS and x86-64 Linux you need nothing else: the plugin installs
-GBrain's own release binary. It accepts the download only when GitHub's
-build-provenance attestation shows GBrain's release workflow built that exact file.
+On Apple Silicon macOS and x86-64 Linux you need nothing else: without Bun, the
+plugin installs GBrain's own release binary. It accepts the download only when
+GitHub's build-provenance attestation shows GBrain's release workflow built that
+exact file. When Bun is already installed, the plugin uses GBrain's Bun install.
 
 GBrain publishes no binary for Intel macOS or ARM Linux. There it needs
 [Bun](https://bun.sh) 1.4.4 or newer. OpenClaw does not install Bun. If neither
@@ -38,10 +39,10 @@ In Docker, the GBrain container image already includes Bun; see [Docker](#docker
 
 On the first Gateway start after install, the plugin:
 
-1. Uses the `gbrain` command when it is installed. Otherwise it downloads GBrain's
-   stable release binary to `~/.gbrain/bin/gbrain` (Apple Silicon macOS, x86-64
-   Linux), or runs `bun install -g github:garrytan/gbrain#stable` where GBrain
-   publishes no binary.
+1. Uses the `gbrain` command when it is installed. Otherwise, with Bun present, it
+   runs `bun install -g github:garrytan/gbrain#stable`; without Bun, it downloads
+   GBrain's stable release binary to `~/.gbrain/bin/gbrain` (Apple Silicon macOS,
+   x86-64 Linux).
 2. Starts GBrain's service with `gbrain mcp expose --no-tailscale --yes`. GBrain
    installs a launchd agent (`com.gbrain.serve`) on macOS or a systemd user unit
    (`gbrain-serve.service`) on Linux, on `127.0.0.1:3131`. When no brain exists yet,
