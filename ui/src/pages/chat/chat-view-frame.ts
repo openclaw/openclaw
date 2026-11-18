@@ -45,6 +45,7 @@ import type { SidebarContent, SidebarOpenResult } from "./components/chat-sideba
 import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.tsx";
 import { getTranscriptState, type ChatThreadProps } from "./components/chat-thread-interactions.ts";
 import type { ChatTranscript } from "./components/chat-transcript-controller.ts";
+import type { WidgetCommentEditorScope } from "./components/widget-comment-intent.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
 import { chatFailureRunId } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
@@ -190,13 +191,21 @@ export function createChatViewFrame(
     stage: (attachment: ChatAttachment) => boolean,
     onCancel?: () => void,
     selectionContextOnly = false,
+    widget?: WidgetCommentEditorScope,
   ) => {
     const readSignal = props.readSignal;
     const sessionKey = props.sessionKey;
     const paneId = props.paneId;
-    const sourceRange = resolveCommentSource(selection);
+    const sourceRange = widget ? undefined : resolveCommentSource(selection);
+    const editorSignal =
+      widget && readSignal
+        ? AbortSignal.any([readSignal, widget.signal])
+        : (widget?.signal ?? readSignal);
     const current = () =>
-      !readSignal?.aborted && props.readSignal === readSignal && props.sessionKey === sessionKey;
+      !editorSignal?.aborted &&
+      props.readSignal === readSignal &&
+      props.sessionKey === sessionKey &&
+      (!widget || (props.canSend && !props.suggestionComposer && widget.current()));
     try {
       await showChatAnnotationEditor(
         {
@@ -204,10 +213,10 @@ export function createChatViewFrame(
           anchorRect,
           sourceRange,
           comment: "",
-          readSignal,
+          readSignal: editorSignal,
           onCancel,
           onSave: (comment): boolean => {
-            if (props.readSignal?.aborted) {
+            if (!current()) {
               return true;
             }
             const attachment = createChatSelectionAttachment(
@@ -325,7 +334,7 @@ export function createChatViewFrame(
     commentsDisabled: !canCompose || Boolean(props.readSignal?.aborted),
     onAddToChat:
       props.canSend && !props.suggestionComposer
-        ? (selection, anchorRect) =>
+        ? (selection, anchorRect, widget) =>
             void openSelectionComment(
               selection,
               anchorRect,
@@ -333,14 +342,20 @@ export function createChatViewFrame(
                 if (!props.onAttachmentsChange) {
                   return false;
                 }
-                props.onAttachmentsChange([
-                  ...(props.getAttachments?.() ?? props.attachments ?? []),
-                  attachment,
-                ]);
+                if (
+                  props.onAttachmentsChange([
+                    ...(props.getAttachments?.() ?? props.attachments ?? []),
+                    attachment,
+                  ]) === false
+                ) {
+                  return false;
+                }
                 focusComposer();
                 return true;
               },
-              focusComposer,
+              widget?.onCancel ?? focusComposer,
+              false,
+              widget,
             )
         : undefined,
     // Portaled menus can outlive a render; resolve focus from the current session owner.

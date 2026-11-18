@@ -12,22 +12,10 @@ type WidgetSnapshotReply = {
   id?: unknown;
   dataUrl?: unknown;
   error?: unknown;
-  width?: unknown;
-  height?: unknown;
-  elements?: unknown;
-};
-export type WidgetCapture = {
-  dataUrl: string;
-  width: number;
-  height: number;
-  elements: unknown[];
 };
 class WidgetSnapshotUnavailableError extends Error {}
 
-export function captureWidget(
-  frame: HTMLIFrameElement,
-  includeElements = false,
-): Promise<WidgetCapture> {
+function captureWidget(frame: HTMLIFrameElement): Promise<string> {
   const target = frame.contentWindow;
   if (!target) {
     return Promise.reject(new Error("widget frame is unavailable"));
@@ -63,15 +51,7 @@ export function captureWidget(
         fail(new Error("widget returned an invalid snapshot"));
       } else {
         cleanup();
-        const width =
-          typeof payload.width === "number" && Number.isFinite(payload.width) ? payload.width : 0;
-        const height =
-          typeof payload.height === "number" && Number.isFinite(payload.height)
-            ? payload.height
-            : 0;
-        const elements =
-          includeElements && Array.isArray(payload.elements) ? payload.elements.slice(0, 500) : [];
-        resolve({ dataUrl: payload.dataUrl, width, height, elements });
+        resolve(payload.dataUrl);
       }
     };
 
@@ -85,7 +65,6 @@ export function captureWidget(
         {
           type: WIDGET_SNAPSHOT_REQUEST_TYPE,
           id,
-          ...(includeElements ? { includeElements: true } : {}),
         },
         "*",
       );
@@ -119,7 +98,7 @@ export async function exportWidget(
     .replace(/-+/g, "-")
     .replace(/^[. -]+|[. -]+$/g, "");
   const filename = truncateUtf16Safe(rawStem, 120).replace(/[. -]+$/g, "") || "widget";
-  const snapshot = captureWidget(frame).then((capture) => capture.dataUrl);
+  const snapshot = captureWidget(frame);
 
   if (action === "copy") {
     beginClipboardCopy();

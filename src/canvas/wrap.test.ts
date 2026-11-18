@@ -114,9 +114,9 @@ it("keeps the wrapped document bytes stable", () => {
 
   expect(html).toContain("--scrollbar-thumb-near:color-mix(in srgb,var(--muted) 16%,transparent)");
   expect(html).toContain("border:var(--scrollbar-thumb-inset,calc(var(--scrollbar-size)/4))");
-  expect(Buffer.byteLength(html)).toBe(22932);
+  expect(Buffer.byteLength(html)).toBe(26269);
   expect(createHash("sha256").update(html).digest("hex")).toBe(
-    "42f1cedcb7be244b69d9637f2e12db1f2589b8f7fefb67be6f044a28a74aaa03",
+    "ede8392334d9c74710c7e8e35d49a032e3b0b3625a7a50908da51eb03090fa62",
   );
 });
 // The host side reads port data through the pristine getter, so a widget
@@ -318,101 +318,79 @@ it("keeps preview controls local, validates changes, and republishes retained se
   expect(offers.at(-1)?.controls).toEqual([]);
 });
 
-it.each([false, true])(
-  "captures live form/canvas state with optional element metadata (%s)",
-  async (includeElements) => {
-    let snapshotSvg = "";
-    const { frame, offers, sendHostMessage } = await bootWrappedWidget(
-      '<button id="target" class="one two three four" role="switch" aria-label="  Current   preview  ">Button</button>' +
-        '<input id="entry" value="initial"><input id="check" type="checkbox" checked>' +
-        '<input id="new-check" type="checkbox"><textarea>initial text</textarea>' +
-        "<select><option selected>First</option><option>Second</option></select>" +
-        '<canvas id="chart" width="40" height="20"></canvas>' +
-        '<div style="display:none">Hidden</div><div id="zero">Empty box</div>' +
-        "<style>.not-a-target { color: red }</style>" +
-        "<span>Item</span>".repeat(510),
-      (target) => {
-        Object.defineProperties(target, { scrollX: { value: 20 }, scrollY: { value: 30 } });
-        target.Element.prototype.getBoundingClientRect = function () {
-          return new target.DOMRect(-4, 10, this.id === "zero" ? 0 : 40, 20);
-        };
-        const context = new target.CanvasRenderingContext2D();
-        Object.defineProperty(target.CanvasRenderingContext2D.prototype, "fillStyle", { set() {} });
-        target.CanvasRenderingContext2D.prototype.fillRect = vi.fn();
-        target.CanvasRenderingContext2D.prototype.drawImage = vi.fn();
-        vi.spyOn(target.HTMLCanvasElement.prototype, "getContext").mockReturnValue(context);
-        vi.spyOn(target.HTMLCanvasElement.prototype, "toDataURL").mockImplementation(function (
-          this: HTMLCanvasElement,
-        ) {
-          return this.id === "chart"
-            ? "data:image/png;base64,Y2hhcnQ="
-            : "data:image/png;base64,c25hcHNob3Q=";
-        });
-        const src = Object.getOwnPropertyDescriptor(target.HTMLImageElement.prototype, "src")!;
-        Object.defineProperty(target.HTMLImageElement.prototype, "src", {
-          ...src,
-          set(value: string) {
-            src.set!.call(this, value);
-            if (value.startsWith("data:image/svg+xml;")) {
-              snapshotSvg = decodeURIComponent(value.slice(value.indexOf(",") + 1));
-              queueMicrotask(() => this.dispatchEvent(new target.Event("load")));
-            }
-          },
-        });
-      },
-    );
-    Object.defineProperties(frame.document.body, {
-      scrollWidth: { value: 640 },
-      scrollHeight: { value: 480 },
-    });
-    frame.document.querySelector<HTMLInputElement>("#entry")!.value = "typed <value>";
-    frame.document.querySelector<HTMLInputElement>("#check")!.checked = false;
-    frame.document.querySelector<HTMLInputElement>("#new-check")!.checked = true;
-    frame.document.querySelector("textarea")!.value = "edited <text>";
-    frame.document.querySelector("select")!.selectedIndex = 1;
-    const request = { type: "openclaw:widget-snapshot-request", id: "capture", includeElements };
-    sendHostMessage(request, {});
-    expect(snapshotSvg).toBe("");
-    sendHostMessage(request);
-    await vi.waitFor(() => expect(offers.at(-1)?.type).toBe("openclaw:widget-snapshot"));
-    expect(offers.at(-1)).toMatchObject({
-      id: "capture",
-      width: 640,
-      height: 480,
-      dataUrl: "data:image/png;base64,c25hcHNob3Q=",
-    });
-    const captured = new frame.DOMParser().parseFromString(snapshotSvg, "image/svg+xml");
-    expect(captured.querySelector("parsererror")).toBeNull();
-    expect(captured.querySelector("#entry")?.getAttribute("value")).toBe("typed <value>");
-    expect(captured.querySelector("#check")?.hasAttribute("checked")).toBe(false);
-    expect(captured.querySelector("#new-check")?.hasAttribute("checked")).toBe(true);
-    expect(captured.querySelector("textarea")?.textContent).toBe("edited <text>");
-    expect(
-      [...captured.querySelectorAll("option")].map((option) => option.hasAttribute("selected")),
-    ).toEqual([false, true]);
-    expect(captured.querySelector("img#chart")?.getAttribute("src")).toBe(
-      "data:image/png;base64,Y2hhcnQ=",
-    );
-    expect(captured.querySelector("canvas,script")).toBeNull();
-    if (includeElements) {
-      const elements = offers.at(-1)?.elements as Array<{ id: string; tag: string }>;
-      expect(elements).toHaveLength(500);
-      expect(elements[0]).toEqual({
-        tag: "button",
-        id: "target",
-        classes: ["one", "two", "three"],
-        name: "Current preview",
-        role: "switch",
-        focusable: true,
-        rect: { x: 16, y: 40, width: 40, height: 20 },
+it("exports live form and canvas state without element metadata", async () => {
+  let snapshotSvg = "";
+  const { frame, offers, sendHostMessage } = await bootWrappedWidget(
+    '<button id="target" class="one two three four" role="switch" aria-label="  Current   preview  ">Button</button>' +
+      '<input id="entry" value="initial"><input id="check" type="checkbox" checked>' +
+      '<input id="new-check" type="checkbox"><textarea>initial text</textarea>' +
+      "<select><option selected>First</option><option>Second</option></select>" +
+      '<canvas id="chart" width="40" height="20"></canvas>' +
+      '<div style="display:none">Hidden</div><div id="zero">Empty box</div>' +
+      "<style>.not-a-target { color: red }</style>" +
+      "<span>Item</span>".repeat(510),
+    (target) => {
+      Object.defineProperties(target, { scrollX: { value: 20 }, scrollY: { value: 30 } });
+      target.Element.prototype.getBoundingClientRect = function () {
+        return new target.DOMRect(-4, 10, this.id === "zero" ? 0 : 40, 20);
+      };
+      const context = new target.CanvasRenderingContext2D();
+      Object.defineProperty(target.CanvasRenderingContext2D.prototype, "fillStyle", { set() {} });
+      target.CanvasRenderingContext2D.prototype.fillRect = vi.fn();
+      target.CanvasRenderingContext2D.prototype.drawImage = vi.fn();
+      vi.spyOn(target.HTMLCanvasElement.prototype, "getContext").mockReturnValue(context);
+      vi.spyOn(target.HTMLCanvasElement.prototype, "toDataURL").mockImplementation(function (
+        this: HTMLCanvasElement,
+      ) {
+        return this.id === "chart"
+          ? "data:image/png;base64,Y2hhcnQ="
+          : "data:image/png;base64,c25hcHNob3Q=";
       });
-      expect(
-        elements.some(
-          (element) => ["script", "style"].includes(element.tag) || element.id === "zero",
-        ),
-      ).toBe(false);
-    } else {
-      expect(offers.at(-1)).not.toHaveProperty("elements");
-    }
-  },
-);
+      const src = Object.getOwnPropertyDescriptor(target.HTMLImageElement.prototype, "src")!;
+      Object.defineProperty(target.HTMLImageElement.prototype, "src", {
+        ...src,
+        set(value: string) {
+          src.set!.call(this, value);
+          if (value.startsWith("data:image/svg+xml;")) {
+            snapshotSvg = decodeURIComponent(value.slice(value.indexOf(",") + 1));
+            queueMicrotask(() => this.dispatchEvent(new target.Event("load")));
+          }
+        },
+      });
+    },
+  );
+  Object.defineProperties(frame.document.body, {
+    scrollWidth: { value: 640 },
+    scrollHeight: { value: 480 },
+  });
+  frame.document.querySelector<HTMLInputElement>("#entry")!.value = "typed <value>";
+  frame.document.querySelector<HTMLInputElement>("#check")!.checked = false;
+  frame.document.querySelector<HTMLInputElement>("#new-check")!.checked = true;
+  frame.document.querySelector("textarea")!.value = "edited <text>";
+  frame.document.querySelector("select")!.selectedIndex = 1;
+  const request = { type: "openclaw:widget-snapshot-request", id: "capture" };
+  sendHostMessage(request, {});
+  expect(snapshotSvg).toBe("");
+  sendHostMessage(request);
+  await vi.waitFor(() => expect(offers.at(-1)?.type).toBe("openclaw:widget-snapshot"));
+  expect(offers.at(-1)).toMatchObject({
+    id: "capture",
+    width: 640,
+    height: 480,
+    dataUrl: "data:image/png;base64,c25hcHNob3Q=",
+  });
+  const captured = new frame.DOMParser().parseFromString(snapshotSvg, "image/svg+xml");
+  expect(captured.querySelector("parsererror")).toBeNull();
+  expect(captured.querySelector("#entry")?.getAttribute("value")).toBe("typed <value>");
+  expect(captured.querySelector("#check")?.hasAttribute("checked")).toBe(false);
+  expect(captured.querySelector("#new-check")?.hasAttribute("checked")).toBe(true);
+  expect(captured.querySelector("textarea")?.textContent).toBe("edited <text>");
+  expect(
+    [...captured.querySelectorAll("option")].map((option) => option.hasAttribute("selected")),
+  ).toEqual([false, true]);
+  expect(captured.querySelector("img#chart")?.getAttribute("src")).toBe(
+    "data:image/png;base64,Y2hhcnQ=",
+  );
+  expect(captured.querySelector("canvas,script")).toBeNull();
+  expect(offers.at(-1)).not.toHaveProperty("elements");
+});

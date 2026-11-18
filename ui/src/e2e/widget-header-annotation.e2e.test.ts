@@ -21,10 +21,10 @@ const title = "Session activity";
 
 suite.define(() => {
   const sandbox = useCanvasSandboxFixture();
-  it("stages widget feedback in the existing composer without sending or losing local state", async () => {
+  it("uses the native Add to chat input for live widget elements without activating or sending", async () => {
     const html = buildWidgetDocument(
       title,
-      `<section style="padding:20px"><div id="status-wrapper" style="width:200px;height:40px"><button id="status" style="display:block;width:100%;height:100%;border:0;padding:0">Running</button></div><label>Local note <input aria-label="Local note"></label><script>if(openclaw.preview)openclaw.preview.setControls([{id:"phase",label:"Phase",value:"running",options:[{value:"running",label:"Running"},{value:"completed",label:"Completed"}]}],({id,value})=>{document.getElementById("status").textContent=value==="running"?"Running":"Completed";});</script></section>`,
+      `<section style="padding:20px"><div id="status-wrapper" style="width:200px;height:40px"><button id="status" style="display:block;width:100%;height:100%;border:0;padding:0" onclick="this.textContent='Clicked'">Running</button></div><label>Local note <input aria-label="Local note"></label><script>if(openclaw.preview)openclaw.preview.setControls([{id:"phase",label:"Phase",value:"running",options:[{value:"running",label:"Running"},{value:"completed",label:"Completed"}]}],({id,value})=>{document.getElementById("status").textContent=value==="running"?"Running":"Completed";});</script></section>`,
     );
     const metadata = sandbox(html);
     await suite.withPage(
@@ -38,7 +38,10 @@ suite.define(() => {
           sessionKey,
           featureMethods: [...defaultControlUiFeatureMethods, "canvas.document.view"],
           historyMessages: [
-            timedText("assistant", `[embed ref="header-proof" title="${title}" height="200" /]`),
+            timedText(
+              "assistant",
+              `A paragraph to comment on.\n\n[embed ref="header-proof" title="${title}" height="200" /]`,
+            ),
           ],
           methodResponses: { "canvas.document.view": metadata },
         });
@@ -64,84 +67,74 @@ suite.define(() => {
           .getByRole("radio", { name: "Completed", exact: true })
           .check();
         expect(await inner.locator("#status").textContent()).toBe("Completed");
-        await preview.getByRole("button", { name: "Annotate widget", exact: true }).click();
-        const overlay = preview.locator(".bp-overlay--annotate");
-        await overlay.waitFor();
-        const bounds = await overlay.boundingBox();
-        if (!bounds) {
-          throw new Error("Annotation surface missing");
-        }
-        await page.mouse.move(bounds.x + 50, bounds.y + 24);
-        await page.mouse.down();
-        await page.mouse.move(bounds.x + 180, bounds.y + 36, { steps: 8 });
-        await page.mouse.up();
-        const add = preview.getByRole("button", { name: "Add to message", exact: true });
-        await page.keyboard.press("Control+z");
-        expect(await add.isDisabled()).toBe(true);
-        await page.mouse.click(bounds.x + 80, bounds.y + 28);
-        await preview.getByRole("button", { name: "Clear", exact: true }).click();
-        await page.mouse.move(bounds.x + 50, bounds.y + 24);
-        await page.mouse.down();
-        await page.mouse.move(bounds.x + 180, bounds.y + 36, { steps: 8 });
-        await page.mouse.up();
-        await page.keyboard.press("Control+z");
-        expect(await add.isDisabled()).toBe(true);
-        await page.mouse.click(bounds.x + 80, bounds.y + 28);
-        await page.keyboard.press("Escape");
-        expect(await overlay.count()).toBe(0);
-        await preview.getByRole("button", { name: "Annotate widget", exact: true }).click();
-        await overlay.waitFor();
-        const selected = await overlay.boundingBox();
-        if (!selected) {
-          throw new Error("Selection surface missing");
-        }
-        await page.mouse.move(selected.x + 45, selected.y + 27);
-        await preview
-          .locator(".bp-tooltip__selector")
-          .getByText("button#status", { exact: true })
-          .waitFor();
-        await page.mouse.click(selected.x + 45, selected.y + 27);
-        await add.click();
-        const card = page.locator(".chat-attachment-thumb--browser-annotation");
-        await card.waitFor();
-        await writeFile(
-          path.join(suite.artifactDir, "composer-comment.png"),
-          await page.screenshot(),
-        );
+        const dialog = page.getByRole("dialog", { name: "Comment", exact: true });
+        const input = dialog.getByRole("textbox");
+        const paragraph = page.getByText("A paragraph to comment on.", { exact: true });
+        await paragraph.evaluate((element) => {
+          const range = document.createRange();
+          range.selectNodeContents(element);
+          const selection = window.getSelection();
+          selection?.removeAllRanges();
+          selection?.addRange(range);
+        });
+        await paragraph.dispatchEvent("pointerup", { button: 0, pointerType: "mouse" });
+        await page.getByRole("button", { name: "Add to chat", exact: true }).click();
+        await dialog.waitFor();
+        const nativeClass = await dialog.getAttribute("class");
+        const nativePlaceholder = await input.getAttribute("placeholder");
+        await input.press("Escape");
+        await dialog.waitFor({ state: "detached" });
+
+        const pen = preview.getByRole("button", { name: "Annotate widget", exact: true });
+        const target = inner.locator("#status");
+        const outline = preview.locator(".widget-inspect-outline");
+        await pen.click();
+        await target.hover();
+        await outline.waitFor();
+        const targetBox = (await target.boundingBox())!;
+        const outlineBox = (await outline.boundingBox())!;
+        expect(Math.abs(outlineBox.x - targetBox.x)).toBeLessThan(2);
+        expect(Math.abs(outlineBox.y - targetBox.y)).toBeLessThan(2);
+        expect(Math.abs(outlineBox.width - targetBox.width)).toBeLessThan(2);
+        expect(Math.abs(outlineBox.height - targetBox.height)).toBeLessThan(2);
+        expect(await preview.locator(".bp-annotatebar").count()).toBe(0);
+        await target.click();
+        await dialog.waitFor();
+        expect(await dialog.getAttribute("class")).toBe(nativeClass);
+        expect(await input.getAttribute("placeholder")).toBe(nativePlaceholder);
+        expect(await target.textContent()).toBe("Completed");
+        await input.press("Escape");
+        await dialog.waitFor({ state: "detached" });
+        expect(await pen.evaluate((element) => document.activeElement === element)).toBe(true);
+
+        await pen.click();
+        await target.hover();
+        await outline.waitFor();
+        await target.click();
+        await input.fill("Make this status clearer.");
+        await input.press("Enter");
+        await dialog.waitFor({ state: "detached" });
+        const chip = page
+          .locator(".chat-comment-preview--editable")
+          .getByRole("button", { name: /1 comment/i });
+        await chip.waitFor();
+        await chip.click();
+        const comment = page.getByText("Make this status clearer.", { exact: true });
+        await comment.waitFor();
+        expect(
+          await page.getByText(/Session activity — button#status: Completed/).count(),
+        ).toBeGreaterThan(0);
         expect(await composer.inputValue()).toBe("Please simplify this state.");
         expect(await inner.getByRole("textbox", { name: "Local note" }).inputValue()).toBe(
           "Keep this local note",
         );
         expect(await gateway.getRequests("chat.send")).toEqual([]);
-        for (let index = 0; index < 3; index++) {
-          await preview.getByRole("button", { name: "Annotate widget", exact: true }).click();
-          await overlay.click({ position: { x: 45, y: 27 } });
-          await add.click();
-        }
-        expect(await card.count()).toBe(4);
-        await preview.getByRole("button", { name: "Annotate widget", exact: true }).click();
-        await overlay.click({ position: { x: 45, y: 27 } });
-        await add.click();
-        await preview.getByRole("alert").waitFor();
-        expect(await overlay.isVisible()).toBe(true);
-        await card
-          .first()
-          .getByRole("button", { name: /Remove.*annotation/i })
-          .click();
-        await add.click();
-        expect(await overlay.count()).toBe(0);
-        expect(await card.count()).toBe(4);
-        for (let index = 0; index < 4; index++) {
-          await card
-            .first()
-            .getByRole("button", { name: /Remove.*annotation/i })
-            .click();
-        }
-        expect(await card.count()).toBe(0);
-        expect(await composer.inputValue()).toBe("Please simplify this state.");
-        expect(
-          await preview.getByRole("radio", { name: "Completed", exact: true }).isChecked(),
-        ).toBe(true);
+        await writeFile(
+          path.join(suite.artifactDir, "composer-comment.png"),
+          await page.screenshot(),
+        );
+        await target.click();
+        expect(await target.textContent()).toBe("Clicked");
         await page.setViewportSize({ width: 400, height: 800 });
         await page.emulateMedia({ colorScheme: "dark" });
         expect(

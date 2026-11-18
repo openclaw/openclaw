@@ -872,24 +872,16 @@
   overflow-wrap: anywhere;
 }
 
-.widget-annotation__stage {
-  position: relative;
-  width: 100%;
-}
-
-.widget-annotation__image {
-  display: block;
-  width: 100%;
-  height: auto;
-  user-select: none;
-  -webkit-user-drag: none;
-}
-
-.widget-annotation .bp-annotatebar {
-  flex-wrap: wrap;
+.widget-inspect-outline {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  border: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
 .chat-tool-card__preview-panel {
+  position: relative;
   overflow: hidden;
   border-radius: inherit;
 }

@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, For, lazy, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type { WidgetPreviewControl } from "../../../../../src/shared/widget-preview-controls.ts";
+import { widgetInspectionAnchor } from "../../../components/canvas-widget-inspection.ts";
 import { IconButton } from "../../../components/solid/icon-button.tsx";
 import { SettingsSegmented } from "../../../components/solid/settings-ui.tsx";
 import { registerBrowserEnglish } from "../../../i18n/locales/en-browser.ts";
@@ -12,21 +13,17 @@ import {
 import { isInternalCanvasEntryUrl } from "../../../lib/chat/canvas-embed-policy.ts";
 import type { CanvasToolPreview } from "../../../lib/chat/tool-cards.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { showToast } from "../../../lib/toast.ts";
-import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
-import type { WidgetAnnotationCapture } from "./widget-annotation.tsx";
 import { WidgetCardMenu, type WidgetRawDetailsLabel } from "./widget-card-menu.tsx";
 import type { WidgetCardOptions, WidgetExportSource } from "./widget-card.types.ts";
-import { captureWidget, exportWidget } from "./widget-export.ts";
+import { WIDGET_COMMENT_INTENT, type WidgetCommentIntent } from "./widget-comment-intent.ts";
+import { exportWidget } from "./widget-export.ts";
 import { WidgetPinButton, type WidgetPinTarget } from "./widget-pin-button.tsx";
 import { isManagedCanvasDocumentPreview } from "./widget-preview-layout.ts";
 
 registerEnglishCatalog(registerChatToolWidgetsEnglish);
 registerEnglishCatalog(registerBrowserEnglish);
-
-const WidgetAnnotation = lazy(() => import("./widget-annotation.tsx"), {
-  export: "WidgetAnnotation",
-});
 
 export function WidgetCardFrame(props: {
   source: WidgetExportSource;
@@ -37,21 +34,18 @@ export function WidgetCardFrame(props: {
   surface: string;
   options?: WidgetCardOptions;
 }) {
-  const policy = createMemo(() => props.sandbox);
-  const [captureState, setCaptureState] = createSignal<{
-    policy: string;
-    capture?: WidgetAnnotationCapture;
-  }>(() => ({ policy: policy() }));
-  const annotation = () => captureState().capture;
-  const setAnnotation = (capture: WidgetAnnotationCapture | undefined) =>
-    setCaptureState({ policy: policy(), capture });
-  const [capturing, setCapturing] = createSignal(false);
+  const [inspecting, setInspecting] = createSignal(false);
+  const [outline, setOutline] = createSignal<DOMRect>();
+  let panel!: HTMLDivElement;
   let previewElement!: HTMLDivElement;
   let annotationButton: HTMLButtonElement | undefined;
-  const exitAnnotation = () => {
-    setAnnotation(undefined);
-    annotationButton?.focus({ preventScroll: true });
-  };
+  let stopInspection: (() => void) | undefined;
+  let editor: AbortController | undefined;
+  const focusPen = () => annotationButton?.focus({ preventScroll: true });
+  onSettled(() => () => {
+    stopInspection?.();
+    editor?.abort();
+  });
   const provider = () => props.options?.boardProvider;
   const mcpAppViewId = () => props.preview.mcpApp?.viewId?.trim();
   const pinName = () =>
@@ -81,34 +75,106 @@ export function WidgetCardFrame(props: {
     !props.preview.mcpApp &&
     isManagedCanvasDocumentPreview(props.preview) &&
     props.sandbox.includes("allow-scripts");
-  const startAnnotation = async () => {
-    const source = props.source;
-    const frame = source instanceof HTMLIFrameElement ? source : source?.previewFrame;
-    if (!frame || capturing()) {
+  const toggleAnnotation = () => {
+    if (stopInspection) {
+      stopInspection();
       return;
     }
-    const sessionKey = props.options?.sessionKey;
-    setCapturing(true);
-    try {
-      const captured = await captureWidget(frame, true);
-      const image = new Image();
-      image.src = captured.dataUrl;
-      await image.decode();
-      const capture = { ...captured, image };
-      if (
-        previewElement.isConnected &&
-        frame.isConnected &&
-        props.source === source &&
-        props.options?.sessionKey === sessionKey &&
-        canAnnotate()
-      ) {
-        setAnnotation(capture);
-      }
-    } catch {
-      showToast({ severity: "error", message: t("browser.widgetCaptureFailed") });
-    } finally {
-      setCapturing(false);
+    const source = props.source;
+    if (!source || source instanceof HTMLIFrameElement) {
+      return;
     }
+    editor?.abort();
+    const listeners = new AbortController();
+    const stop = source.startInspection((event) => {
+      if (event.kind === "cancel") {
+        listeners.abort();
+        stopInspection = undefined;
+        setInspecting(false);
+        setOutline(undefined);
+        if (document.activeElement === source.previewFrame) {
+          focusPen();
+        }
+        return;
+      }
+      if (event.kind === "hover") {
+        const frame = source.previewFrame;
+        const rect = event.rect;
+        if (frame && rect) {
+          const box = widgetInspectionAnchor(frame, rect);
+          const panelBox = panel.getBoundingClientRect();
+          const scaleX = panelBox.width / panel.offsetWidth || 1;
+          const scaleY = panelBox.height / panel.offsetHeight || 1;
+          setOutline(
+            new DOMRect(
+              (box.left - panelBox.left) / scaleX,
+              (box.top - panelBox.top) / scaleY,
+              box.width / scaleX,
+              box.height / scaleY,
+            ),
+          );
+        } else {
+          setOutline(undefined);
+        }
+        return;
+      }
+      const anchor = widgetInspectionAnchor(event.frame, event.rect);
+      stopInspection?.();
+      const owner = new AbortController();
+      editor = owner;
+      const detail: WidgetCommentIntent = {
+        text: `${props.preview.title?.trim() || t("chat.toolCards.canvas")} — ${event.label}`,
+        anchor,
+        signal: owner.signal,
+        current: () =>
+          previewElement.isConnected &&
+          source.presentationActive &&
+          props.source === source &&
+          source.previewFrame === event.frame &&
+          canAnnotate(),
+        onCancel: focusPen,
+      };
+      if (
+        previewElement.dispatchEvent(
+          new CustomEvent(WIDGET_COMMENT_INTENT, { detail, bubbles: true, cancelable: true }),
+        )
+      ) {
+        owner.abort();
+        focusPen();
+      }
+    });
+    if (!stop) {
+      showToast({ severity: "error", message: t("browser.widgetInspectUnavailable") });
+      return;
+    }
+    stopInspection = stop;
+    setInspecting(true);
+    listen(
+      document,
+      "pointerdown",
+      (event) => {
+        if (
+          event.target !== annotationButton &&
+          !annotationButton?.contains(event.target as Node)
+        ) {
+          stop();
+        }
+      },
+      { capture: true, signal: listeners.signal },
+    );
+    listen(
+      document,
+      "keydown",
+      (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          stop();
+          focusPen();
+        }
+      },
+      { signal: listeners.signal },
+    );
   };
   const canExportImage = () => !props.preview.mcpApp && isInternalCanvasEntryUrl(props.preview.url);
   const hasMenu = () =>
@@ -151,13 +217,12 @@ export function WidgetCardFrame(props: {
             <IconButton
               icon="penLine"
               label={t("browser.annotateWidget")}
-              pressed={Boolean(annotation())}
-              busy={capturing()}
-              disabled={capturing() || !props.source}
+              pressed={inspecting()}
+              disabled={!props.source || props.source instanceof HTMLIFrameElement}
               ref={(element) => {
                 annotationButton = element;
               }}
-              onClick={() => (annotation() ? exitAnnotation() : void startAnnotation())}
+              onClick={toggleAnnotation}
             />
           </Show>
           <Show when={pinTarget()} keyed>
@@ -221,7 +286,6 @@ export function WidgetCardFrame(props: {
                   ariaLabel={control().label}
                   value={control().value}
                   options={control().options}
-                  disabled={Boolean(annotation()) || capturing()}
                   onChange={(value) => {
                     const source = props.source;
                     if (source && !(source instanceof HTMLIFrameElement)) {
@@ -234,21 +298,28 @@ export function WidgetCardFrame(props: {
           </For>
         </div>
       </Show>
-      <Show when={annotation()} keyed>
-        {(capture) => (
-          <ChatLazyBoundary fallback={<div role="status">{t("common.loading")}</div>}>
-            <WidgetAnnotation
-              capture={capture}
-              title={props.preview.title ?? ""}
-              docId={props.preview.viewId ?? ""}
-              target={previewElement}
-              onExit={exitAnnotation}
-            />
-          </ChatLazyBoundary>
-        )}
-      </Show>
-      <div class="chat-tool-card__preview-panel" data-side="canvas" hidden={Boolean(annotation())}>
+      <div
+        class="chat-tool-card__preview-panel"
+        data-side="canvas"
+        ref={(node) => {
+          panel = node;
+        }}
+      >
         {props.children}
+        <Show when={outline()}>
+          {(rect) => (
+            <div
+              class="widget-inspect-outline"
+              aria-hidden="true"
+              style={{
+                left: `${rect().left}px`,
+                top: `${rect().top}px`,
+                width: `${rect().width}px`,
+                height: `${rect().height}px`,
+              }}
+            />
+          )}
+        </Show>
       </div>
     </div>
   );
