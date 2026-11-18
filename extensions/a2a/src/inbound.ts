@@ -16,8 +16,9 @@ type ActiveA2aRun = {
   completion?: RunCompletion;
   steered: Array<(completion: RunCompletion) => Promise<void>>;
 };
-// The A2A dispatch running in each session. A message steered into its run has no
-// reply delivery of its own, so it settles with the answers that run delivers after it.
+// The A2A dispatch whose run is executing in each session, including a queued followup's
+// run once it starts. A message steered into that run has no reply delivery of its own,
+// so it settles with the answers that run delivers after it.
 const activeRuns = new Map<string, ActiveA2aRun>();
 
 export async function dispatchA2aInbound(params: {
@@ -129,22 +130,33 @@ export async function dispatchA2aInbound(params: {
       .join("\n\n");
     await params.store.complete(params.taskId, text);
   };
+  const run: ActiveA2aRun = { finals: [], steered: [] };
+  const finishRun = async (completion: RunCompletion) => {
+    if (activeRuns.get(route.sessionKey) === run) {
+      activeRuns.delete(route.sessionKey);
+    }
+    run.completion = completion;
+    await Promise.all(run.steered.map((settleSteered) => settleSteered(completion)));
+  };
   // A queued turn outlives dispatch and must retain its own task identity instead
   // of routing the answer as a new outbound peer message.
   const deliverQueuedReply: NonNullable<GetReplyOptions["onQueuedFollowupReplyBatch"]> = async (
     batch,
   ) => {
     if (batch.completion.kind !== "progress") {
+      run.finals.push(...batch.payloads);
       await settle(batch.payloads, batch.completion);
+      await finishRun(batch.completion);
     }
   };
   deliverQueuedReply.ownsCompletion = (channel) => channel === "a2a";
 
   const activeRun = activeRuns.get(route.sessionKey);
-  const ownRun: ActiveA2aRun | undefined = activeRun ? undefined : { finals: [], steered: [] };
-  if (ownRun) {
-    activeRuns.set(route.sessionKey, ownRun);
+  if (!activeRun) {
+    activeRuns.set(route.sessionKey, run);
   }
+  let queuedAsFollowup = false;
+  let runStarted = false;
   let runFailed = false;
   // Core reports completed or failed runs; a cancelled run reports neither.
   let runCompleted = false;
@@ -158,7 +170,7 @@ export async function dispatchA2aInbound(params: {
       delivery: {
         deliver: async (payload, info) => {
           if (info.kind === "final") {
-            ownRun?.finals.push(payload);
+            run.finals.push(payload);
             await params.store.complete(params.taskId, payload.text);
           }
         },
@@ -172,6 +184,11 @@ export async function dispatchA2aInbound(params: {
       replyOptions: {
         sourceReplyDeliveryMode: "automatic",
         onQueuedFollowupReplyBatch: deliverQueuedReply,
+        // Also called when this message's queued followup run starts after dispatch returned.
+        onPreparedAgentRunStart: () => {
+          runStarted = true;
+          activeRuns.set(route.sessionKey, run);
+        },
         onAgentRunTerminalOutcome: (outcome) => {
           if (outcome === "completed") {
             runCompleted = true;
@@ -202,6 +219,12 @@ export async function dispatchA2aInbound(params: {
       } else {
         activeRun.steered.push(settleSteered);
       }
+    } else if (dispatch.dispatchResult.deferredToActiveRun === "followup") {
+      queuedAsFollowup = true;
+      // Another run is executing; this record becomes active when its own run starts.
+      if (!runStarted && activeRuns.get(route.sessionKey) === run) {
+        activeRuns.delete(route.sessionKey);
+      }
     } else if (!dispatch.dispatchResult.deferredToActiveRun) {
       await params.store.complete(params.taskId, undefined);
     }
@@ -209,15 +232,15 @@ export async function dispatchA2aInbound(params: {
     runFailed = true;
     throw error;
   } finally {
-    if (ownRun) {
-      activeRuns.delete(route.sessionKey);
-      const completion: RunCompletion = runFailed
-        ? { kind: "failed", error: "Agent run failed" }
-        : runCompleted
-          ? { kind: "completed" }
-          : { kind: "aborted" };
-      ownRun.completion = completion;
-      await Promise.all(ownRun.steered.map((settleSteered) => settleSteered(completion)));
+    // A queued followup finishes with its terminal batch instead.
+    if (!queuedAsFollowup) {
+      await finishRun(
+        runFailed
+          ? { kind: "failed", error: "Agent run failed" }
+          : runCompleted
+            ? { kind: "completed" }
+            : { kind: "aborted" },
+      );
     }
   }
 }

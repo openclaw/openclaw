@@ -292,6 +292,35 @@ describe("A2A channel inbound dispatch", () => {
     },
   );
 
+  it("settles a message steered into a queued followup's run with that run's batch", async () => {
+    const steered = fixture.store.create(fixture.task.contextId, "hermes", "steered");
+    fixture.store.start(steered.id);
+    fixture.dispatch
+      .mockImplementationOnce(async (turn) => dispatched(turn, "followup"))
+      .mockImplementationOnce(async (turn) => dispatched(turn, "steer"));
+    await fixture.run();
+    const queuedTurn = fixture.dispatch.mock.calls[0]![0];
+    // The queued run starts after its dispatch returned; the next message steers into it.
+    queuedTurn.replyOptions?.onPreparedAgentRunStart?.({
+      runId: "queued-run",
+      transcriptStart: null,
+    });
+    await fixture.run({ taskId: steered.id, messageId: "steered" });
+    expect(steered.status.state).toBe("TASK_STATE_WORKING");
+    await queuedTurn.replyOptions?.onQueuedFollowupReplyBatch?.({
+      kind: "queued-followup",
+      runId: "queued-run",
+      originatingChannel: "a2a",
+      payloads: [{ text: "ONE" }, { text: "TWO" }],
+      completion: { kind: "completed" },
+    });
+    expect(fixture.task.status.state).toBe("TASK_STATE_COMPLETED");
+    expect(steered.status.state).toBe("TASK_STATE_COMPLETED");
+    expect(steered.artifacts).toEqual([
+      { artifactId: expect.any(String), parts: [{ text: "ONE\n\nTWO" }] },
+    ]);
+  });
+
   it("propagates dispatch failure to the HTTP owner", async () => {
     const failure = new Error("provider unavailable");
     fixture.dispatch.mockRejectedValue(failure);
