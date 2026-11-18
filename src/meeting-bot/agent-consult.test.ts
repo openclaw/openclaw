@@ -108,12 +108,12 @@ it("consults successfully under a fresh admission after the meeting's creation-r
     consultResult = (async () => {
       await gate;
       return createMeetingRealtimeEngineBindings({
-          platform: TEST_MEETING_PLATFORM_METADATA,
-          config: { realtime: { toolPolicy: "safe-read-only" } },
-          fullConfig: { agents: { entries: { operator: {} } } },
-          runtime: { agent: {} } as never,
-          logger: {} as never,
-        }).consultAgent({
+        platform: TEST_MEETING_PLATFORM_METADATA,
+        config: { realtime: { toolPolicy: "safe-read-only" } },
+        fullConfig: { agents: { entries: { operator: {} } } },
+        runtime: { agent: {} } as never,
+        logger: {} as never,
+      }).consultAgent({
         meetingSessionId: "meeting-1",
         args: { question: "What should I say?" },
         transcript: [],
