@@ -777,7 +777,7 @@ describe("existing PR preparation through the registered agent action", () => {
     let authorityChanged = false;
     let observing = true;
     let commandsAfterRevocation = 0;
-    const sandboxCommand = f.sandbox.backend!.runShellCommand;
+    const sandboxCommand = f.sandbox.backend!.runShellCommand.bind(f.sandbox.backend);
     vi.spyOn(f.sandbox.backend!, "runShellCommand").mockImplementation(async (input) => {
       if (observing && authorityChanged) {
         commandsAfterRevocation += 1;
