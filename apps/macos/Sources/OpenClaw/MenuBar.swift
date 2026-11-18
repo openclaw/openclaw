@@ -395,24 +395,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard !Task.isCancelled else { return }
                 self.credentialLogger
                     .error("Credential startup failed: \(error.localizedDescription, privacy: .public)")
-                self.showCredentialStartupFailure()
+                self.showCredentialStartupFailure(error)
             }
         }
     }
 
-    private func showCredentialStartupFailure() {
-        let message = "Quit OpenClaw, run openclaw doctor --fix with the matching CLI, then reopen OpenClaw. " +
-            "If you restored a backup, restore its matching client credentials too."
-        self.credentialLogger
-            .error("Client credentials unavailable. Run openclaw doctor --fix before reopening the app.")
+    static func credentialStartupFailureAlert(for error: Error) -> NSAlert {
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "OpenClaw could not finish startup"
+        alert.informativeText = error.localizedDescription
+        return alert
+    }
+
+    private func showCredentialStartupFailure(_ error: Error) {
         if AppLaunchRuntimePlan.current.allowsActivation {
-            let alert = NSAlert()
-            alert.alertStyle = .critical
-            alert.messageText = "OpenClaw client credentials need recovery"
-            alert.informativeText = message
-            AppActivation.shared.presentAlert(alert)
+            AppActivation.shared.presentAlert(Self.credentialStartupFailureAlert(for: error))
         } else {
-            fputs("OpenClaw client credentials need recovery. \(message)\n", stderr)
+            fputs("OpenClaw could not finish startup. \(error.localizedDescription)\n", stderr)
         }
         Self.requestTermination()
     }

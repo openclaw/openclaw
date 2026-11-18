@@ -5,6 +5,20 @@ import Testing
 
 @MainActor
 struct ClientCredentialStartupTests {
+    @Test func `startup alert preserves a bundled CLI schema refusal`() {
+        let refusal = OpenClawNativeStateError(
+            "Could not prepare local client credentials. Refusing a forward database schema migration: " +
+                "this CLI is 2026.11.3 but the Gateway service runs 2026.11.4 from /Applications/OpenClaw.app; " +
+                "run openclaw update (or the CLI from /Applications/OpenClaw.app).")
+
+        let alert = AppDelegate.credentialStartupFailureAlert(for: refusal)
+
+        #expect(alert.informativeText.contains("this CLI is 2026.11.3"))
+        #expect(alert.informativeText.contains("Gateway service runs 2026.11.4"))
+        #expect(alert.informativeText.contains("run openclaw update"))
+        #expect(!alert.informativeText.contains("restore its matching client credentials"))
+    }
+
     @Test(arguments: ["default", "credential-fixture"])
     func `startup uses the matching bundled owner and explicit execution root`(_ profileName: String) async throws {
         let fixture = try Fixture()
