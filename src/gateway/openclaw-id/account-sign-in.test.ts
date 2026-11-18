@@ -478,6 +478,41 @@ describe("device sign-in", () => {
     }
   });
 
+  it("reuses only a held token it redeemed, for the same profile, issuer and client", async () => {
+    const time = clock();
+    const issuer = fakeDeviceIssuer();
+    const signIn = createOpenClawIdSignIn({ fetchImpl: issuer.fetchImpl, now: time.now });
+    const started = await beginDevice(signIn);
+    issuer.decide("approved");
+    time.advance(5_000);
+    const done = await signIn.pollDevice({ state: started.state, owner: "p1" });
+    if (!("idToken" in done)) {
+      throw new Error("device sign-in did not finish");
+    }
+    const held = { idToken: done.idToken, owner: "p1", issuerUrl: ISSUER, clientId: "ui" };
+    expect(signIn.verifyHeld(held)).toEqual({ account: done.account });
+    expect(signIn.verifyHeld({ ...held, issuerUrl: `${ISSUER}/` })).toEqual({
+      account: done.account,
+    });
+
+    const notHeld = { ok: false, code: "sign_in_not_held" };
+    // Another profile, issuer or client; a token with the same claims the issuer never sent.
+    for (const other of [
+      { ...held, owner: "p2" },
+      { ...held, issuerUrl: "https://other-issuer.example.test" },
+      { ...held, clientId: "other-client" },
+      { ...held, idToken: jwt({ iss: ISSUER, aud: "ui", sub: "acct-1", exp: 1_700_036_000 }) },
+      { ...held, idToken: undefined },
+    ]) {
+      expect(signIn.verifyHeld(other)).toMatchObject(notHeld);
+    }
+    expect(createOpenClawIdSignIn({ now: time.now }).verifyHeld(held)).toMatchObject(notHeld);
+
+    // Once its exp passes, the held token is refused and forgotten.
+    time.advance(36_000_000);
+    expect(signIn.verifyHeld(held)).toMatchObject(notHeld);
+  });
+
   it("refuses an issuer without a device endpoint on its own origin", async () => {
     for (const device of [undefined, "https://elsewhere.example.test/device-authorization"]) {
       const signIn = createOpenClawIdSignIn({

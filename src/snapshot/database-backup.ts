@@ -13,11 +13,8 @@ import {
   getScopedDatabaseEngineSelection,
   withDatabaseEngineSelection,
 } from "../infra/database-engine/context.js";
-import {
-  readBackupEngine,
-  readBackupEngineImage,
-  type BackupEngine,
-} from "../infra/database-engine/physical-store.js";
+import { readBackupEngineImage } from "../infra/database-engine/physical-store-inspection.js";
+import { readBackupEngine, type BackupEngine } from "../infra/database-engine/physical-store.js";
 import type { DatabasePortPluginOwners } from "../infra/database-engine/port-descriptor.js";
 import type { DatabaseEngineSelection } from "../infra/database-engine/types.js";
 import { hasActiveGatewayStateOwner } from "../infra/gateway-state-owner.js";
@@ -265,12 +262,42 @@ export function discardPostgresRestores(config: OpenClawConfig, namespaces: stri
   return runBackupTask<void>({ operation: "discard", params: { config, namespaces } }, () => {});
 }
 
+/** Drop the server copies of schema captures before their owner removes the directories. */
+export async function discardPostgresSchemaCaptures(
+  config: OpenClawConfig,
+  directories: readonly string[],
+) {
+  const { readSnapshotExportEnvelope } = await import("./export-envelope.js");
+  const namespaces: string[] = [];
+  for (const directory of directories) {
+    const envelope = await readSnapshotExportEnvelope(directory);
+    if (envelope.engine === "postgres" && envelope.manifest.schema) {
+      namespaces.push(envelope.manifest.schema);
+    }
+  }
+  if (namespaces.length > 0) {
+    await discardPostgresRestores(config, namespaces);
+  }
+}
+
 export function preparePostgresRestore({ assertCurrent, ...params }: Restore) {
   return runBackupTask<
     Awaited<
       ReturnType<typeof import("./database-backup.operations.js").preparePostgresRestoreInWorker>
     >
   >({ operation: "restore", params }, assertCurrent);
+}
+
+/** Drop this store's marked schema captures whose directory under the prefix was removed. */
+export function prunePostgresSchemaCaptures(
+  sourcePath: string,
+  config: OpenClawConfig,
+  directoryPrefix: string,
+) {
+  return runBackupTask<string[]>(
+    { operation: "prune", params: { sourcePath, config, directoryPrefix } },
+    () => {},
+  );
 }
 
 /** Resolve physical family identity through the same provider admission as capture. */

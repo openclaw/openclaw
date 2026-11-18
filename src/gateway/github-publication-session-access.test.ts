@@ -17,22 +17,25 @@ import { createHostWorkspaceEditTool } from "../agents/agent-tools.read.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import * as worktreeGit from "../agents/worktrees/git.js";
 import { deleteRegistryWorktree } from "../agents/worktrees/registry.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
-import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { listSessionChildEntriesReadOnly } from "../config/sessions/session-entry-children-read.js";
-import { withSessionStoreReaderInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import { deriveGitHubPublicationTaskId } from "../state/github-publication-requester.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import { prepareGitHubPublicationSession } from "./github-publication-availability.js";
 import { readPublicationCommit } from "./github-publication-git.test-support.js";
+import { prepareGitHubPublicationTaskRequester } from "./github-publication-requester.js";
 import {
-  createRequesterPublicationFixture,
+  createGitHubPublicationRequesterFixture,
+  createLocalPublicationFixture,
+  readPublicationWorktreeState,
+  useRealSessionReads,
   guestScopes,
 } from "./github-publication-requester.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
@@ -47,35 +50,12 @@ import { resolveSessionWorkspaceRoots } from "./session-workspace-roots.js";
 import * as allocation from "./session-worktree-preparation.js";
 
 const mocks = githubPublicationTestMocks();
-const createFixture = () =>
-  createRequesterPublicationFixture(vi.fn(), "local", {
-    sessionId: SESSION_ID,
-    sessionKey: SESSION_KEY,
-  });
-
-async function useRealSessionReads() {
-  const actual = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
-    "./session-utils-store-worker.js",
-  );
-  const store = await import("./session-utils-store-worker.js");
-  const read = vi
-    .spyOn(store, "loadGatewaySessionEntryReadOnlyInWorker")
-    .mockImplementation(actual.loadGatewaySessionEntryReadOnlyInWorker);
-  onTestFinished(() => read.mockRestore());
-}
-
-async function worktreeState(
-  workspace: NonNullable<Awaited<ReturnType<typeof createFixture>>["local"]>,
-) {
-  return {
-    head: await workspace.git("rev-parse", "HEAD"),
-    index: await fs.readFile(path.join(workspace.cwd, ".git/index")),
-    diff: await workspace.git("diff", "HEAD"),
-  };
-}
-
 const LOCAL_CHECKOUT_OUTCOMES = [
   "published",
+  "previous task",
+  "ambiguous previous tasks",
+  "rebased task",
+  "task access",
   "project",
   "private project",
   "writer project",
@@ -93,7 +73,7 @@ describe("local checkout publication", () => {
     realWorktree: true,
   });
   it("publishes an owned checkout outside the default workspace without admin", async () => {
-    const f = await createFixture();
+    const f = await createLocalPublicationFixture();
     await useRealSessionReads();
     const source = f.local!;
     const workspace = path.join(root, "default-workspace");
@@ -132,7 +112,7 @@ describe("local checkout publication", () => {
       );
       return respond.mock.calls[0];
     };
-    const before = await worktreeState(source);
+    const before = await readPublicationWorktreeState(source);
     const scope = { agentId: "main", sessionKey: SESSION_KEY };
     const worktree = loadSessionEntryReadOnly(scope)!.worktree;
     await upsertSessionEntryCore(scope, { worktree: undefined });
@@ -142,7 +122,7 @@ describe("local checkout publication", () => {
       { message: expect.stringContaining("operator.admin") },
     ]);
     await upsertSessionEntryCore(scope, { worktree });
-    expect(await worktreeState(source)).toEqual(before);
+    expect(await readPublicationWorktreeState(source)).toEqual(before);
     expect(source.effects).toEqual([]);
     expect(f.guestSource.client.connect.scopes).not.toContain("operator.admin");
     expect(await invoke(source.cwd, false)).toMatchObject([
@@ -161,7 +141,7 @@ describe("local checkout publication", () => {
         undefined,
         { message: expect.stringContaining(message) },
       ]);
-      expect(await worktreeState(source)).toEqual(before);
+      expect(await readPublicationWorktreeState(source)).toEqual(before);
       expect(source.effects).toEqual([]);
     }
     const result = await invoke(source.cwd);
@@ -178,109 +158,8 @@ describe("local checkout publication", () => {
     expect(source.effects).toEqual(["push", "pull_request"]);
   });
 
-  it("keeps private publication session rows in memory and reuses its accepted checkout", async () => {
-    const f = await createFixture();
-    await useRealSessionReads();
-    const source = f.local!;
-    setRuntimeConfigSnapshot({
-      ...f.config,
-      agents: { entries: { main: { workspace: root } } },
-    });
-    const actual = await vi.importActual<typeof import("../agents/worktrees/service.js")>(
-      "../agents/worktrees/service.js",
-    );
-    const registry = await vi.importActual<typeof import("../agents/worktrees/registry-read.js")>(
-      "../agents/worktrees/registry-read.js",
-    );
-    mocks.resolveRepository.mockImplementation(
-      actual.managedWorktrees.resolveRepositoryIdentity.bind(actual.managedWorktrees),
-    );
-    mocks.readWorktree.mockImplementation(registry.readLiveRegistryWorktreeByOwner);
-    await source.git("remote", "add", "origin", "https://github.com/openclaw/openclaw.git");
-    await source.git("add", "artifact.txt");
-    await source.git("commit", "-m", "Implement private task");
-    const location = {
-      agentId: "main",
-      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-    };
-    onTestFinished(() => memorySessionActorOwners.closeDatabase(location));
-    const created = await createGatewaySession({
-      cfg: getRuntimeConfig(),
-      agentId: "main",
-      incognito: true,
-      requestingOperatorScopes: ["operator.admin"],
-      operatorRoleActor: { kind: "system" },
-      creation: { via: "operator", actor: { type: "system" } },
-      commandSource: "test",
-    });
-    expect(created.ok).toBe(true);
-    if (!created.ok) {
-      throw new Error(created.error.message);
-    }
-    const scope = { agentId: "main", sessionKey: created.key };
-    const client = createSyntheticPluginRuntimeClient({
-      operatorRoleActor: { kind: "system" },
-      scopes: ["operator.admin"],
-    });
-    const context = {
-      ...createDirectChatContext({ getRuntimeConfig }),
-      workerSessionPlacementService: f.placements,
-      githubPublicationService: f.coordinator,
-    };
-    const invoke = async () => {
-      const respond = vi.fn();
-      await withGatewayToolCallerIdentity(
-        { ...scope, workspacePrAdoptionSessionId: created.entry.sessionId },
-        () =>
-          handleGatewayRequest({
-            req: {
-              type: "req",
-              id: "private-publication",
-              method: "sessions.github.publish",
-              params: {
-                ...scope,
-                workspacePath: source.cwd,
-                idempotencyKey: "private-publication",
-              },
-            },
-            context,
-            client,
-            isWebchatConnect: () => false,
-            respond,
-          }),
-      );
-      return respond.mock.calls[0];
-    };
-    const result = await invoke();
-    expect(result).toMatchObject([true, { status: "published" }]);
-    expect(await invoke()).toEqual(result);
-    const children = await listSessionChildEntriesReadOnly(scope);
-    expect(children).toHaveLength(1);
-    expect(children[0]).toMatchObject({
-      sessionKey: expect.stringMatching(/^agent:main:dashboard:incognito-/u),
-      entry: {
-        incognito: true,
-        parentSessionKey: created.key,
-        worktree: { canonicalWorkspaceDir: source.cwd },
-      },
-    });
-    const durable = await withSessionStoreReaderInWorker(
-      { agentId: "main", storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }) },
-      ({ reader, database, continuation }) =>
-        reader.readExactEntries({
-          sessionKeys: [created.key, children[0]!.sessionKey],
-          env: database.env,
-          continuation,
-        }),
-      { backing: true, dataOnly: true },
-    );
-    expect(durable.entries).toEqual([]);
-    expect(loadSessionEntryReadOnly(scope)?.worktree).toBeUndefined();
-    expect(source.effects).toEqual(["push", "pull_request"]);
-  });
-
   it.each(LOCAL_CHECKOUT_OUTCOMES)("local checkout outcome: %s", async (outcome) => {
-    const f = await createFixture();
+    const f = await createLocalPublicationFixture();
     await useRealSessionReads();
     const source = f.local!;
     const scope = { agentId: "main", sessionKey: SESSION_KEY };
@@ -323,15 +202,18 @@ describe("local checkout publication", () => {
     await manager.appendMessageAsync(
       makeUserMessage("Implement this change and publish its PR", 1),
     );
-    const requester = outcome === "writer project" ? f.maintainerSource : f.guestSource;
-    const requesterClient =
+    const requester =
+      outcome === "writer project" || outcome === "task access"
+        ? f.maintainerSource
+        : f.guestSource;
+    let requesterClient =
       outcome === "system private project"
         ? createSyntheticPluginRuntimeClient({
             operatorRoleActor: { kind: "system" },
             scopes: guestScopes,
           })
         : requester.client;
-    const clients = [requester.client, f.maintainerSource.client];
+    const clients = [f.guestSource.client, f.maintainerSource.client];
     const context = {
       ...createDirectChatContext({
         getRuntimeConfig,
@@ -381,7 +263,7 @@ describe("local checkout publication", () => {
       }
       return response;
     };
-    const dirty = await worktreeState(source);
+    const dirty = await readPublicationWorktreeState(source);
     expect(await invoke(source.cwd, false)).toMatchObject([
       false,
       undefined,
@@ -392,7 +274,11 @@ describe("local checkout publication", () => {
       undefined,
       { message: expect.stringContaining("Commit the task changes") },
     ]);
-    expect(await worktreeState(source)).toEqual(dirty);
+    expect(await readPublicationWorktreeState(source)).toEqual(dirty);
+    if (outcome === "rebased task") {
+      await fs.writeFile(path.join(source.cwd, "shared.txt"), "upstream improvement\n");
+      await source.git("add", "shared.txt");
+    }
     await source.git("add", "artifact.txt");
     await source.git("commit", "-m", "Implement the requested change");
     const linked = path.join(root, "linked-worktree");
@@ -432,7 +318,7 @@ describe("local checkout publication", () => {
       projectId = (await registerProjectRegistry({ path: projectRoot })).id;
       await upsertSessionEntryCore(scope, { projectId });
     }
-    const before = await worktreeState(source);
+    let before = await readPublicationWorktreeState(source);
     if (outcome === "linked project worktree") {
       const update = mocks.updateIndex.getMockImplementation()!;
       mocks.updateIndex.mockImplementationOnce(async (...args) => {
@@ -483,8 +369,102 @@ describe("local checkout publication", () => {
       expect(source.effects).toEqual([]);
       expect(await listSessionChildEntriesReadOnly(scope)).toEqual([]);
     }
+    const previousPublications: Array<{ url?: string; branch?: string }> = [];
+    if (outcome === "previous task" || outcome === "ambiguous previous tasks") {
+      const original = await createGitHubPublicationRequesterFixture({
+        ...scope,
+        profileId: f.guestProfile,
+        scopes: guestScopes,
+      });
+      const origin = {
+        ...scope,
+        sessionId: SESSION_ID,
+        lifecycleRevision: loadSessionEntryReadOnly(scope)!.lifecycleRevision ?? null,
+      };
+      // Create the previous version's task shape through real creation and publication
+      // owners; accepted receipts must be written by the coordinator, never seeded.
+      for (let index = 0; index < (outcome === "previous task" ? 1 : 2); index++) {
+        const idempotencyKey = `previous-publication-${index}`;
+        const taskId = deriveGitHubPublicationTaskId(origin, idempotencyKey);
+        const created = await createGatewaySession({
+          cfg: getRuntimeConfig(),
+          agentId: "main",
+          key: `agent:main:dashboard:github-${taskId}`,
+          parentSessionKey: SESSION_KEY,
+          label: `github-publication-${taskId}`,
+          requestingOperatorScopes: guestScopes,
+          requestingOperatorProfileId: f.guestProfile,
+          operatorRoleActor: original.requester.snapshot.actor,
+          creation: {
+            via: "spawn",
+            actor: {
+              type: "agent",
+              id: "main",
+              delegatedBy: { type: "human", source: "profile", id: f.guestProfile },
+            },
+            requesterProfileId: f.guestProfile,
+          },
+          commandSource: "github-publication",
+          spawnDepth: 1,
+          spawnToolPolicy: { version: 1, allow: ["github_publish", "read"], deny: ["exec"] },
+          preparedPermissionSelection: {
+            mode: "guarded",
+            assertCurrent: original.requester.assertCurrent,
+          },
+          prepareLifecycle: async (target) =>
+            allocation.prepareSessionWorktree({
+              cfg: getRuntimeConfig(),
+              target,
+              workspace: source.cwd,
+              checkoutCommit: await source.git("rev-parse", "HEAD"),
+              runSetupScript: false,
+            }),
+        });
+        if (!created.ok) {
+          throw new Error(created.error.message);
+        }
+        const transferred = await prepareGitHubPublicationTaskRequester(
+          original.requester,
+          { agentId: "main", sessionKey: created.key },
+          origin,
+          getRuntimeConfig,
+        );
+        onTestFinished(transferred.release);
+        const published = await f.coordinator.requestForSessionV2({
+          agentId: "main",
+          sessionKey: created.key,
+          idempotencyKey,
+          requester: transferred.requester,
+        });
+        if (published.status !== "published") {
+          throw new Error(`Previous publication did not complete: ${published.status}`);
+        }
+        previousPublications.push(published);
+      }
+      context.githubPublicationService = f.restart();
+      if (outcome === "ambiguous previous tasks") {
+        const effects = [...source.effects];
+        expect(await invoke(source.cwd)).toMatchObject([
+          false,
+          undefined,
+          { message: expect.stringContaining("Multiple publication tasks") },
+        ]);
+        expect(await listSessionChildEntriesReadOnly(scope)).toHaveLength(2);
+        expect(source.effects).toEqual(effects);
+        expect(await readPublicationWorktreeState(source)).toEqual(before);
+        return;
+      }
+      expect(await invoke(source.cwd, true, "previous-publication-0")).toMatchObject([
+        true,
+        { status: "published", ...previousPublications[0] },
+      ]);
+    }
     const result = await invoke(publicationSource);
-    expect(await worktreeState(source)).toEqual(before);
+    if (previousPublications.length) {
+      const { url, branch } = previousPublications[0]!;
+      expect(result).toMatchObject([true, { url, branch }]);
+    }
+    expect(await readPublicationWorktreeState(source)).toEqual(before);
     // Publishing a task must not redirect the next turn's editor or shell.
     expect(loadSessionEntryReadOnly(scope)?.spawnedCwd).toBe(root);
     expect(loadSessionEntryReadOnly(scope)?.worktree).toBeUndefined();
@@ -524,6 +504,7 @@ describe("local checkout publication", () => {
       true,
       { status: "published", url: expect.stringContaining("/pull/") },
     ]);
+    const publicationTarget = { url: result[1].url, branch: result[1].branch };
     const parent = loadSessionEntryReadOnly(scope)!;
     expect(parent).toMatchObject({
       thinkingLevel: "high",
@@ -552,13 +533,13 @@ describe("local checkout publication", () => {
     expect(await fs.readFile(path.join(task.entry.spawnedCwd!, "artifact.txt"), "utf8")).toBe(
       "accepted\n",
     );
-    expect(await worktreeState(source)).toEqual(before);
+    expect(await readPublicationWorktreeState(source)).toEqual(before);
     expect(source.effects).toEqual(["push", "pull_request"]);
     expect(
       await invoke(publicationSource, true, "local-checkout", "retry-publication-run"),
     ).toEqual(result);
     expect(await listSessionChildEntriesReadOnly(scope)).toHaveLength(1);
-    expect(await worktreeState(source)).toEqual(before);
+    expect(await readPublicationWorktreeState(source)).toEqual(before);
     expect(source.effects).toEqual(["push", "pull_request"]);
     context.githubPublicationService = f.restart();
     expect(await context.githubPublicationService.listUnreportedResultsAsync()).toContainEqual(
@@ -601,23 +582,111 @@ describe("local checkout publication", () => {
     expect(source.effects).toEqual(["push", "pull_request"]);
     expect(await listSessionChildEntriesReadOnly(scope)).toHaveLength(1);
 
+    if (outcome === "task access") {
+      const taskHead = await source.git("-C", task.entry.spawnedCwd!, "rev-parse", "HEAD");
+      await fs.writeFile(path.join(source.cwd, "artifact.txt"), "guest follow-up\n");
+      await source.git("commit", "-am", "Guest follow-up");
+      requesterClient = f.guestSource.client;
+      expect(await invoke(source.cwd, true, "guest-follow-up")).toMatchObject([
+        false,
+        undefined,
+        { message: expect.stringContaining("requester is no longer authorized") },
+      ]);
+      expect(await source.git("-C", task.entry.spawnedCwd!, "rev-parse", "HEAD")).toBe(taskHead);
+      expect(source.effects).toEqual(["push", "pull_request"]);
+      requesterClient = f.maintainerSource.client;
+      let revoked = false;
+      const requireGit = worktreeGit.requireGit;
+      const observeGit = vi.spyOn(worktreeGit, "requireGit").mockImplementation(async (...args) => {
+        const readResult = await requireGit(...args);
+        if (args[1].includes("--format=%H%n%T%n%an%n%ae%n%cn%n%ce")) {
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: task.sessionKey },
+            { lifecycleRevision: "replacement-publication-task" },
+          );
+          revoked = true;
+        }
+        return readResult;
+      });
+      onTestFinished(() => observeGit.mockRestore());
+      const revokedResult = await invoke(source.cwd, true, "revoked-task-follow-up");
+      expect(revoked).toBe(true);
+      expect(await source.git("-C", task.entry.spawnedCwd!, "rev-parse", "HEAD")).toBe(taskHead);
+      expect(source.effects).toEqual(["push", "pull_request"]);
+      expect(revokedResult).toMatchObject([
+        false,
+        undefined,
+        { message: expect.stringContaining("session authorization is unavailable") },
+      ]);
+      return;
+    }
+
     if (projectId) {
       if (outcome === "linked project worktree") {
         expect(await fs.readFile(path.join(linked, "artifact.txt"), "utf8")).toBe("another chat\n");
       }
       if (outcome === "project") {
         projectVisibility = "private";
-        expect(await invoke(publicationSource)).toEqual(result);
-        expect(await invoke(publicationSource, true, "new-project-task")).toMatchObject([
-          false,
-          undefined,
-          { message: expect.stringContaining("project is unavailable to this requester") },
-        ]);
+        // A retry checks current access again before it reaches the accepted receipt.
+        for (const key of ["local-checkout", "new-project-task"]) {
+          expect(await invoke(publicationSource, true, key)).toMatchObject([
+            false,
+            undefined,
+            { message: expect.stringContaining("project is unavailable to this requester") },
+          ]);
+        }
         expect(await listSessionChildEntriesReadOnly(scope)).toHaveLength(1);
         expect(source.effects).toEqual(["push", "pull_request"]);
       }
       return;
     }
+
+    // Fixing CI, or amending, in the same checkout updates its task, branch and PR.
+    for (const [text, args] of [
+      ["follow-up\n", ["commit", "-qam", "Fix CI"]],
+      ["amended\n", ["commit", "-qa", "--amend", "--no-edit"]],
+    ] as const) {
+      await fs.writeFile(path.join(source.cwd, "artifact.txt"), text);
+      expect(await invoke(source.cwd, true, "local-checkout")).toEqual(result);
+      await source.git(...args);
+      const acceptedHead = await source.git("-C", task.entry.spawnedCwd!, "rev-parse", "HEAD");
+      expect(await invoke(source.cwd, true, "local-checkout")).toEqual(result);
+      expect(await source.git("-C", task.entry.spawnedCwd!, "rev-parse", "HEAD")).toBe(
+        acceptedHead,
+      );
+      expect(await invoke(source.cwd, true, text)).toMatchObject([
+        true,
+        { status: "published", ...publicationTarget },
+      ]);
+      expect(await fs.readFile(path.join(task.entry.spawnedCwd!, "artifact.txt"), "utf8")).toBe(
+        text,
+      );
+    }
+    expect(await listSessionChildEntriesReadOnly(scope)).toHaveLength(1);
+    expect(source.effects).toEqual(["push", "pull_request", "push", "push"]);
+    if (outcome === "rebased task") {
+      const upstream = path.join(root, "upstream");
+      await source.git("worktree", "add", "--detach", upstream, "main");
+      await fs.writeFile(path.join(upstream, "shared.txt"), "upstream improvement\n");
+      await source.git("-C", upstream, "add", "shared.txt");
+      await source.git("-C", upstream, "commit", "-m", "Upstream includes the shared change");
+      const base = await source.git("-C", upstream, "rev-parse", "HEAD");
+      const tree = await source.git("rev-parse", "HEAD^{tree}");
+      await source.git("rebase", base);
+      expect(await source.git("rev-parse", "HEAD^{tree}")).toBe(tree);
+      overrideCommands((argv) =>
+        argv.some((arg) => arg.endsWith("/git/ref/heads/main"))
+          ? commandResult(JSON.stringify({ ref: "refs/heads/main", sha: base }))
+          : undefined,
+      );
+      const rebased = await invoke(source.cwd, true, "rebased-publication");
+      expect(rebased).toMatchObject([true, { status: "published", ...publicationTarget }]);
+      expect(await source.git("diff", "--name-only", `${base}...${rebased[1].headCommit}`)).toBe(
+        "artifact.txt",
+      );
+      expect(source.effects.filter((effect) => effect === "pull_request")).toHaveLength(1);
+    }
+    before = await readPublicationWorktreeState(source);
 
     // A later task can edit and publish another repository from the same conversation.
     const other = path.join(root, "another-repository");
@@ -633,7 +702,7 @@ describe("local checkout publication", () => {
     const edit = createHostWorkspaceEditTool(resumedRoot!, { workspaceOnly: true });
     await edit.execute("next-task", {
       path: path.join(other, "artifact.txt"),
-      edits: [{ oldText: "accepted\n", newText: "second task\n" }],
+      edits: [{ oldText: "amended\n", newText: "second task\n" }],
     });
     await source.git("-C", other, "add", "artifact.txt");
     await source.git("-C", other, "commit", "-m", "Implement the next task");
@@ -657,7 +726,7 @@ describe("local checkout publication", () => {
     ]);
     expect(await listSessionChildEntriesReadOnly(scope)).toHaveLength(2);
     expect(loadSessionEntryReadOnly(scope)?.spawnedCwd).toBe(root);
-    expect(await worktreeState(source)).toEqual(before);
+    expect(await readPublicationWorktreeState(source)).toEqual(before);
 
     // Deleting the source task must not turn the parent's original retry into a new publication.
     const deleted = vi.fn();
@@ -723,7 +792,7 @@ describe("registered session GitHub publication access", () => {
   ] as const)(
     "checks $target target for $actor with role policy=$policy",
     async ({ target, policy, actor, outcome }) => {
-      const f = await createFixture();
+      const f = await createLocalPublicationFixture();
       if (!f.local) {
         throw new Error("Expected a local publication fixture.");
       }
@@ -789,7 +858,7 @@ describe("registered session GitHub publication access", () => {
         }),
       );
       const request = vi.spyOn(f.coordinator, "requestForSessionV2");
-      const before = await worktreeState(workspace);
+      const before = await readPublicationWorktreeState(workspace);
       const respond = vi.fn();
       const params = {
         sessionKey: target === "missing" ? "agent:main:dashboard:missing" : SESSION_KEY,
@@ -819,13 +888,13 @@ describe("registered session GitHub publication access", () => {
       expect(workspace.effects).toEqual(outcome === "published" ? ["push", "pull_request"] : []);
       if (outcome !== "published") {
         expect(request).not.toHaveBeenCalled();
-        expect(await worktreeState(workspace)).toEqual(before);
+        expect(await readPublicationWorktreeState(workspace)).toEqual(before);
       }
     },
   );
 
   it("invalidates publication metadata after committed workspace and lifecycle updates", async () => {
-    await createFixture();
+    await createLocalPublicationFixture();
     using session = await prepareGitHubPublicationSession(SESSION_KEY, { agentId: "main" });
     const initial = session.loaded.entry!;
     const scope = {

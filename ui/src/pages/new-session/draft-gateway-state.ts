@@ -20,6 +20,7 @@ import {
   type SubmittedWorktreePreference,
 } from "./draft-preference-state.ts";
 import type { NewSessionRouteData } from "./location.ts";
+import type { ModelSelectionChange } from "./model-selection.ts";
 import {
   acquirePaletteIdentityPreferences,
   type PaletteIdentityPreferences,
@@ -604,6 +605,11 @@ export class DraftGatewayState {
       return undefined;
     }
     return this.preferences.capturePreferenceConsumption(agentId, workspace, expected);
+  }
+
+  persistModelPreference(agentId: string, patch: Parameters<ModelSelectionChange>[0]) {
+    // Model defaults are shared with /new; palette placement remains opt-in and separate.
+    return this.preferences.persistPreference(agentId, undefined, patch);
   }
 
   persistPreference(agentId: string, workspace: string, patch: NewSessionPreference) {

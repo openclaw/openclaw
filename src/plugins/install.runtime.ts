@@ -26,5 +26,4 @@ export {
   loadPluginManifest,
   resolvePackageExtensionEntries,
 } from "./manifest.js";
-export { checkMinHostVersion } from "./min-host-version.js";
 export { isPathInside } from "./path-safety.js";

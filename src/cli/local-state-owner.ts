@@ -10,11 +10,11 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { GatewayRequestFunction } from "../gateway/call.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import type { DatabaseEngineSelection } from "../infra/database-engine/context.js";
 import type { DatabasePortRecoveryIntent } from "../infra/database-port-recovery.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/path-existence.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { registerSignalExitGate } from "./signal-exit-barrier.js";
@@ -377,6 +377,15 @@ export async function runWithLocalStateOwner<T>(params: {
       throw error;
     }
     const runOwned = async () => {
+      if (params.databaseAccess !== "none") {
+        try {
+          // The configured engine may only now be in scope; take its PostgreSQL custody first.
+          await lock.acquireConfiguredPostgresOwner?.();
+        } catch (error) {
+          await lock.release();
+          refuse(error);
+        }
+      }
       const resources =
         params.databasePortMaintenance || params.databaseAccess === "none"
           ? undefined
@@ -384,13 +393,16 @@ export async function runWithLocalStateOwner<T>(params: {
               assertOwnerCurrent: () => lock.assertCurrent(),
               assertDatabaseAccess: lock.assertDatabaseAccess,
             });
+      const { createAgentCleanupScope } = await import("../agents/run-cleanup-timeout.js");
+      const cleanup = createAgentCleanupScope();
       let uncertainCleanup = false;
       try {
-        return await (resources ?? lock).run(() => runLocal(lock.assertCurrent));
+        return await (resources ?? lock).run(() => cleanup.run(() => runLocal(lock.assertCurrent)));
       } catch (error) {
         uncertainCleanup = hasCommandProcessCleanupError(error);
         throw error;
       } finally {
+        uncertainCleanup ||= cleanup.outcome === "uncertain";
         // Failed cleanup keeps physical custody; release cannot race accepted worker/native work.
         await resources?.close();
         // Stop lending this owner, but keep physical custody until uncertain children exit.

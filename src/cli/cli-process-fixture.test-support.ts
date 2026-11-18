@@ -42,10 +42,10 @@ export function cliOutputScript(options: {
   setup?: string;
 }) {
   return `
-      import { registerHooks } from "node:module";
+      import nodeModule from "node:module";
       import { Command } from "commander";
       const modules = ${JSON.stringify(options.modules)};
-      registerHooks({
+      nodeModule.registerHooks({
         resolve(specifier, context, nextResolve) {
           const suffix = Object.keys(modules).find(key => specifier.endsWith(key));
           return suffix === undefined ? nextResolve(specifier, context) : {

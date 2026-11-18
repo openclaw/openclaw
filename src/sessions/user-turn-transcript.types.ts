@@ -26,6 +26,7 @@ import type {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaFactInput } from "../media/media-facts.js";
+import type { SubagentCompletion } from "../shared/subagent-completion.js";
 import type { InputProvenance } from "./input-provenance.js";
 
 export type PersistedUserTurnMediaInput = Pick<
@@ -77,6 +78,7 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> &
 };
 
 export type UserTurnInput = Pick<PersistedUserTurnMessage, "display" | "excludeFromContext"> & {
+  subagentCompletions?: readonly SubagentCompletion[];
   text?: string | null;
   /** Display receipt of shared App references; never added to model text. */
   appContext?: ChatAppContextAttachment[];
@@ -232,6 +234,8 @@ export type CreateUserTurnTranscriptRecorderParams = {
   assertOriginalInputCommit?: SessionSourceAssertion;
   onPersistenceError?: (error: unknown) => void;
   onMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
+  /** First foreground submission, after the input and runtime-context persistence settle. */
+  onInputSubmitted?: () => void | Promise<void>;
   /** Fresh original input only, after durable append and before transcript publication. */
   onOriginalInputCommitted?: (commit: UserTurnOriginalInputCommit) => void;
   expectedSessionState?: SessionTranscriptTurnExpectedState;

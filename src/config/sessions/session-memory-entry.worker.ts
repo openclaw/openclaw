@@ -194,6 +194,12 @@ async function streamSessionMemoryEntry(
   send: (delivery: Delivery) => Promise<void>,
 ): Promise<Extract<SessionEntriesWorkerUpdate, { value: unknown }>["value"]> {
   let delivered = false;
+  const reset = async () => {
+    if (delivered) {
+      delivered = false;
+      await send({ index, reset: true, resetMessages: true });
+    }
+  };
   const sink: SessionEntryRenderSink = {
     prefixLineCount: request.prefixLineCount,
     pageMessages: request.messages,
@@ -201,7 +207,8 @@ async function streamSessionMemoryEntry(
       request.pages || request.messages
         ? async (page) => {
             const lines = request.pages && page.lines.length > 0;
-            delivered ||= lines;
+            // Message-only pages must also be discarded when this snapshot changes.
+            delivered = true;
             await send({
               index,
               page: lines
@@ -219,7 +226,7 @@ async function streamSessionMemoryEntry(
         : undefined,
     reset: async () => {
       if (delivered) {
-        delivered = false;
+        // Late classification discards rendered text, not the original observations.
         await send({ index, reset: true });
       }
     },
@@ -253,7 +260,7 @@ async function streamSessionMemoryEntry(
       };
     } catch (error) {
       if (error instanceof SessionTranscriptColdError) {
-        await sink.reset?.();
+        await reset();
         return { cold: true };
       }
       if (
@@ -262,7 +269,7 @@ async function streamSessionMemoryEntry(
       ) {
         throw error;
       }
-      await sink.reset?.();
+      await reset();
     }
   }
 }

@@ -1,11 +1,11 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import {
   acquireStateDatabaseSchemaLease,
   GatewayStateOwnerContentionError,
   getStateDatabaseSchemaLease,
   type StateDatabaseSchemaLease,
 } from "./gateway-state-owner.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./path-existence.js";
 import {
   createSqliteLifecycleAggregateError,
   runWithSqliteCleanup,

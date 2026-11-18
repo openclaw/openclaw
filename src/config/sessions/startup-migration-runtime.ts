@@ -4,14 +4,9 @@ import { withEngineStoreAdmission } from "../../infra/database-engine/admission-
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import { settleCurrentReadPreparations } from "../../shared/current-read-authority.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
-import { createRetainedAgentDatabaseMatcherFromSnapshot } from "../../state/agent-deletion-discovery.js";
 import { prepareAgentDatabaseDeletionSnapshotRead } from "../../state/agent-deletion-journal.read.js";
-import {
-  AGENT_DATABASE_PREFLIGHT_CONCURRENCY,
-  OPENCLAW_AGENT_SCHEMA_VERSION,
-} from "../../state/openclaw-agent-db-contract.js";
+import { AGENT_DATABASE_PREFLIGHT_CONCURRENCY } from "../../state/openclaw-agent-db-contract.js";
 import { agentEngineInput } from "../../state/openclaw-agent-db-engine.js";
-import { listOpenClawRegisteredAgentDatabasesAsync } from "../../state/openclaw-agent-db-registry-listing.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   isOpenClawAgentDatabaseOpen,
@@ -23,6 +18,7 @@ import {
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import { gatewayDiscoveryReadOptions } from "./combined-store-paths.js";
 import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { isCanonicalSqliteSessionMainKeyCurrent } from "./session-canonical-key-read.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
@@ -32,7 +28,6 @@ import {
   isConfiguredAgentDatabaseTarget,
   resolveAllAgentSessionStoreTargetsSync,
   resolveConfiguredAgentDatabaseCandidatePaths,
-  resolveConfiguredAgentDatabaseTargets,
 } from "./targets.js";
 
 export type SessionStartupMigrationLogger = Record<"info" | "warn", (message: string) => void>;
@@ -48,21 +43,26 @@ export async function runSessionStartupMigration(params: {
 }): Promise<void> {
   params.assertCurrent?.();
   const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
-  const registeredDatabaseRows = await listOpenClawRegisteredAgentDatabasesAsync({ env });
+  const { snapshot } = await prepareAgentDatabaseDeletionSnapshotRead(
+    { env },
+    "runtime-discovery",
+  ).read();
   params.assertCurrent?.();
-  const deletionRead = prepareAgentDatabaseDeletionSnapshotRead({ env }, "runtime");
-  let deletionSnapshot: ReturnType<typeof deletionRead.read> | undefined;
-  const admittedTargets = () =>
-    resolveAllAgentSessionStoreTargetsSync(params.cfg, {
-      env,
-      agentIds: params.agentIds,
-      registeredDatabases: registeredDatabaseRows,
-    }).filter(
-      (target) =>
-        (!params.agentIds || params.agentIds.has(target.agentId)) &&
-        !readAgentDatabaseAdmissionRefusal(target.agentId, { env }),
-    );
-  const targets = admittedTargets();
+  const discovery = gatewayDiscoveryReadOptions(params.cfg, { env, snapshot });
+  const registeredDatabaseRows = discovery.registeredDatabases ?? [];
+  const targets = resolveAllAgentSessionStoreTargetsSync(params.cfg, {
+    ...discovery,
+    agentIds: params.agentIds,
+    excludeTarget: (target) => {
+      if (discovery.excludeTarget(target)) {
+        params.log.info(
+          `session: skipping held agent database for ${target.agentId}; run "${formatCliCommand("openclaw doctor --fix", env)}" for explicit restoration guidance`,
+        );
+        return true;
+      }
+      return Boolean(readAgentDatabaseAdmissionRefusal(target.agentId, { env }));
+    },
+  });
   // Stable installations may still have file-backed history. Only Doctor imports it;
   // do not serve an empty SQLite history or rewrite those files during startup.
   withEngineStoreAdmission(() =>
@@ -86,6 +86,7 @@ export async function runSessionStartupMigration(params: {
           targets.map((target) => target.agentId),
           undefined,
           params.assertCurrent,
+          discovery.excludeTarget,
         ),
     // Fleet-wide guidance belongs to boot; a deferred agent must not wait on other stores.
     params.agentIds
@@ -117,37 +118,6 @@ export async function runSessionStartupMigration(params: {
       return;
     }
     databases.add(databasePath);
-    // Discovery is fixed for this startup pass; database owners fence later deletion effects.
-    const { snapshot } = await (deletionSnapshot ??= deletionRead.read());
-    params.assertCurrent?.();
-    const deletion = snapshot?.deletedAgents.find((entry) => entry.agentId === options.agentId);
-    if (deletion) {
-      params.log.info(
-        `session: skipping deleted agent database for ${options.agentId} (${deletion.status === "complete" ? "cleanup complete" : "cleanup pending; retry agent deletion"})`,
-      );
-      return;
-    }
-    // Retained stores remain discoverable, but only deletion cleanup may write them.
-    // Check the physical owner so surviving shared stores still reach their runtime.
-    const retained = createRetainedAgentDatabaseMatcherFromSnapshot(
-      env,
-      () =>
-        resolveConfiguredAgentDatabaseTargets(params.cfg, {
-          env,
-          registeredDatabases: (snapshot?.registeredAgentDatabases ?? []).filter(
-            (entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION,
-          ),
-        }),
-      snapshot,
-      "database",
-      "runtime",
-    )(databasePath, options.agentId);
-    if (typeof retained === "object") {
-      params.log.info(
-        `session: skipping deleted agent database for ${options.agentId} at ${databasePath} (cleanup complete); run "${formatCliCommand("openclaw doctor --fix", env)}" for explicit restoration guidance`,
-      );
-      return;
-    }
     // Missing registry entries still need recovery before runtime can discover their lineage.
     if (
       registeredDatabases.has(`${options.agentId}\0${databasePath}`) &&
@@ -227,6 +197,7 @@ export async function runSessionStartupMigration(params: {
           targets.map((admittedTarget) => admittedTarget.agentId),
           options,
           params.assertCurrent,
+          discovery.excludeTarget,
         );
       }
       assertEmbeddedAcpMetadataMigratedForStartup(options, embeddedAcpSessionKey);

@@ -243,7 +243,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       const message =
         reason === "owner_required"
           ? `Only the OpenClaw owner can start an update from chat. ${formatCommandOwnerHint({ cfg: currentConfig, channel: requester.channel, id: requester.senderId })}`
-          : "Updates from chat are disabled (commands.restart=false). Use the Control UI or ask the Gateway operator to update OpenClaw.";
+          : "Updates from chat are disabled (commands.restart=false). Use the OpenClaw app or ask the Gateway operator to update OpenClaw.";
       if (adoptedCampaignId && updateLifecycle.campaign?.getState()?.id === adoptedCampaignId) {
         updateLifecycle.campaign?.clear();
       }
@@ -485,23 +485,21 @@ export const updateHandlers: GatewayRequestHandlers = {
             requesterAuthority: retainedRequesterAuthority,
             beforePark: async () => {
               const current = (await getUpdateRun(runId)) ?? run;
-              const assertMayPark = () => {
-                const currentConfig = getConfig();
+              const claimMayPark = async () =>
+                !foregroundOrigin ||
+                (managedHandoffOwner
+                  ? await claimManagedServiceUpdateHandoff(managedHandoffOwner)
+                  : false);
+              const assertMayPark = (claimed: boolean) => {
                 retainedRequesterAuthority.assertCurrent();
-                if (foregroundOrigin) {
-                  if (
-                    !managedHandoffOwner ||
-                    !claimManagedServiceUpdateHandoff(managedHandoffOwner) ||
-                    !isRestartEnabled(currentConfig)
-                  ) {
-                    throw new Error("Foreground update authority changed before parking.");
-                  }
-                  assertForegroundRespawnEnabled();
+                assertForegroundRespawnEnabled();
+                if (!claimed || (foregroundOrigin && !isRestartEnabled(getConfig()))) {
+                  throw new Error("Foreground update authority changed before parking.");
                 }
               };
-              assertMayPark();
+              assertMayPark(await claimMayPark());
               await notify(current, current.phase === "requested" ? "parking" : "activating");
-              assertMayPark();
+              assertMayPark(await claimMayPark());
               if (foregroundOrigin) {
                 scheduleGatewayRestart({
                   delayMs: 0,

@@ -24,16 +24,19 @@ export type ChatNoticeProps = {
   item: Extract<ChatItem, { kind: "notice" }>;
   onPermissionRetry?: (message: string) => void;
   modelCatalog?: ModelCatalogEntry[];
-  recovery?: Pick<
-    ChatThreadProps,
-    | "failureActionsRunId"
-    | "runActive"
-    | "runWorking"
-    | "onRetryRun"
-    | "failedMessageEditSource"
-    | "onFocusComposer"
-    | "onDismissPendingInput"
-  >;
+  recovery?: Partial<Pick<ChatThreadProps, "sessionKey">> &
+    Pick<
+      ChatThreadProps,
+      | "currentAgentId"
+      | "fullMessageAgentId"
+      | "failureActionsRunId"
+      | "runActive"
+      | "runWorking"
+      | "onRetryRun"
+      | "failedMessageEditSource"
+      | "onFocusComposer"
+      | "onDismissPendingInput"
+    >;
 };
 
 // Text-only notices paint with their transcript row; only interactive cards load later.
@@ -145,7 +148,7 @@ function InlineNotice(props: ChatNoticeProps) {
         <span class="chat-notice-inline__icon" aria-hidden="true">
           <Icon name={props.item.icon ?? "cpu"} />
         </span>
-        <strong class="chat-notice-inline__label">{props.item.label}</strong>
+        <span class="chat-notice-inline__label">{props.item.label}</span>
         <Show when={props.item.showTimestamp}>
           <span class="chat-notice-inline__time">{formatTimeMs(props.item.timestamp)}</span>
         </Show>

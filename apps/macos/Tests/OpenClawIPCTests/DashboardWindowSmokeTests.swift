@@ -303,7 +303,7 @@ struct DashboardWindowSmokeTests {
 
         // A terminal failure drops moment-bound intent instead of replaying it
         // after a later recovery reload.
-        controller.showFailure(title: "Dashboard unavailable", message: "offline")
+        controller.showFailure(title: "OpenClaw unavailable", message: "offline")
         #expect(controller._testPendingNativeCommands.isEmpty)
     }
 
@@ -806,7 +806,7 @@ extension DashboardWindowSmokeTests {
             message: "Delete 1 session?",
             host: "127.0.0.1")
 
-        #expect(alert.messageText == "OpenClaw Dashboard")
+        #expect(alert.messageText == "OpenClaw")
         #expect(alert.informativeText.contains("127.0.0.1 is asking:"))
         #expect(alert.informativeText.contains("Delete 1 session?"))
         #expect(alert.buttons.map(\.title) == ["OK", "Cancel"])
@@ -829,7 +829,7 @@ extension DashboardWindowSmokeTests {
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
         controller.showFailure(
-            title: "Dashboard unavailable",
+            title: "OpenClaw unavailable",
             message: "Remote control tunnel failed",
             detail: "Reset the remote tunnel and try again.")
         #expect(controller.window?.isVisible == true)

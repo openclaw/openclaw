@@ -16,11 +16,24 @@ import type { AssistantMessageDisclosure } from "./chat-message-text-preparation
 import type { ReplyLine } from "./chat-reply-attribution.ts";
 import type { ToolRenderOptions } from "./chat-tool-render-model.ts";
 
+export type ActivityOperationGroup = Omit<ToolCallGroup<ToolCard>, "children"> & {
+  children: ActivityOperationGroup[];
+  /** Recorded execution containers, available only in the operation inspector. */
+  executionCards?: readonly ToolCard[];
+};
+
+export type ActivityOperationContext = {
+  messageKey: string;
+  runId?: string;
+  disclosureId: string;
+  onOpenWorkspaceFile?: ToolRenderOptions["onOpenWorkspaceFile"];
+};
+
 export type ActivityOperationProps = {
-  group: ToolCallGroup<ToolCard>;
+  group: ActivityOperationGroup;
   options: Omit<ToolRenderOptions, "messageKey"> &
     Pick<GroupedMessageOptions, "isToolExpanded" | "onToggleToolExpanded">;
-  contexts: ReadonlyMap<ToolCard, { messageKey: string; disclosureId: string }>;
+  contexts: ReadonlyMap<ToolCard, ActivityOperationContext>;
 };
 
 export type MessageRenderOptions = {
@@ -35,6 +48,7 @@ export type MessageRenderOptions = {
   displayFacts?: import("../../../lib/chat/row-display-facts.ts").ChatDisplayFacts;
   agentId?: string;
   runActive?: boolean;
+  interruptedRunIds?: ReadonlySet<string>;
   asyncQuestions?: AsyncQuestionPresentation;
   mediaOwner?: object;
   toolMessageSource?: ChatToolMessageSource;
@@ -73,6 +87,7 @@ export type GroupedMessageOptions = MessageRenderOptions & {
   firstBubbleKey?: string | null;
   showToolCalls?: boolean;
   inlineCommands?: InlineCommandPresentation;
+  isToolMessageExplicitlyExpanded?: (messageId: string) => boolean;
   isToolMessageExpanded?: (messageId: string, card?: ToolCard) => boolean | undefined;
   onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
   isUserMessageExpanded?: (messageId: string) => boolean;

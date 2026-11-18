@@ -1,3 +1,4 @@
+import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { recordGatewaySessionRunFailure } from "../../../sessions/session-run-error.js";
@@ -11,6 +12,7 @@ import type {
   RequesterWakeMutation,
 } from "../completion/subagent-completion-mutation.types.js";
 import { captureSubagentControllerInputRetirement } from "./subagent-controller-inputs.js";
+import { resolveRequesterDeliveryOutcome } from "./subagent-delivery-state.js";
 import type { SubagentLifecycleWakeContext } from "./subagent-registry-lifecycle-context.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
@@ -109,25 +111,6 @@ export async function mutateRequesterSettleWakeBatch(
   return result.applied === true && result.publication === "published";
 }
 
-/** Records one observed outcome, or retires a wake that owes no delivery. */
-export function settleRequesterSettleWakeBatch(
-  context: SubagentLifecycleWakeContext,
-  batch: readonly SubagentRunRecord[],
-  rearmGeneration: number | undefined,
-  outcome: SubagentAnnounceDeliveryResult | undefined,
-  stateContext: OpenClawStateWorkerContext,
-  receipt: RequesterWakeMutationReceipt = {},
-): Promise<boolean> {
-  return mutateRequesterSettleWakeBatch(
-    context,
-    batch,
-    rearmGeneration,
-    outcome ? { kind: "settle", outcome } : { kind: "complete" },
-    stateContext,
-    receipt,
-  );
-}
-
 // Observed outcomes belong to the run owner, not the transient evaluation. Weak keys release
 // retired owners; the scope keeps a later yield generation from consuming an older receipt.
 export const pendingRequesterSettlements = new WeakMap<
@@ -178,12 +161,16 @@ export function createRequesterWakeSettlement(params: {
     scope,
     batch,
     rearmGeneration,
-    outcome,
+    outcome: observedOutcome,
     onCommitted,
     stateContext,
     admittedWake,
     release,
   } = params;
+  const outcome = resolveRequesterDeliveryOutcome(
+    batch.map((member) => context.options.runs.get(member.runId) ?? member),
+    observedOutcome,
+  );
   // Retry bookkeeping with the observed outcome, never by replaying delivery or inventing failure.
   const receipt: RequesterWakeMutationReceipt = {};
   const retireInputs = batch.map(captureSubagentControllerInputRetirement);
@@ -206,11 +193,11 @@ export function createRequesterWakeSettlement(params: {
           members.length === batch.length);
       if (
         settlesMembers &&
-        !(await settleRequesterSettleWakeBatch(
+        !(await mutateRequesterSettleWakeBatch(
           context,
           members,
           rearmGeneration,
-          outcome,
+          outcome ? { kind: "settle", outcome } : { kind: "complete" },
           stateContext,
           receipt,
         ))
@@ -256,19 +243,22 @@ export function createRequesterWakeSettlement(params: {
               batchRunIds: admittedWake.batchRunIds ?? batch.map((entry) => entry.runId),
               rearmGeneration,
             });
-            await recordGatewaySessionRunFailure({
-              target: {
-                sessionKey: requester.requesterSessionKey,
-                agentId: requester.requesterAgentId,
-                storePath: requester.requesterStorePath,
-                sessionId: requester.completionRequesterSessionId,
-                expectedLifecycleRevision: requester.completionRequesterLifecycleRevision,
-              },
-              runId: buildAnnounceIdempotencyKey(`${batchKey}:delivery-failure`),
-              error,
-              notice,
-              assertCommitAllowed: () => assertSubagentRegistryWriteSourceCurrent(stateContext),
-            });
+            // The notice goes to the requester chat as it is now; a deleted requester gets none.
+            const chat = {
+              sessionKey: requester.requesterSessionKey,
+              agentId: requester.requesterAgentId,
+              storePath: requester.requesterStorePath,
+            };
+            const current = await readSessionEntryReadOnlyInWorker(chat);
+            if (current?.sessionId) {
+              await recordGatewaySessionRunFailure({
+                target: { ...chat, sessionId: current.sessionId },
+                runId: buildAnnounceIdempotencyKey(`${batchKey}:delivery-failure`),
+                error,
+                notice,
+                assertCommitAllowed: () => assertSubagentRegistryWriteSourceCurrent(stateContext),
+              });
+            }
           }
         }
         for (const retire of retireInputs) {

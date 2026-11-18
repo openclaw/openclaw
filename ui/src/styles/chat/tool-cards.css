@@ -99,7 +99,8 @@
 }
 
 .chat-tool-msg-summary,
-.chat-activity-group__summary {
+.chat-activity-group__summary,
+.chat-reasoning {
   gap: 4px;
   padding: 0;
   font-family: var(--font-body);
@@ -111,6 +112,11 @@
   --chat-tool-secondary-color: color-mix(in oklab, var(--text) 40%, transparent);
 
   color: var(--chat-tool-activity-color);
+}
+
+.chat-tool-msg-summary,
+.chat-activity-group__summary {
+  font-size: var(--chat-text-size);
 }
 
 .chat-tool-msg-summary :where(span, code, button),
@@ -219,15 +225,25 @@
   color: inherit;
 }
 
+.chat-tool-row__subagent-name,
+.chat-tool-row__subagent-link {
+  color: color-mix(in oklab, var(--text) 80%, transparent);
+}
+
 /* The state stays whole; a long name gives way instead. */
 .chat-tool-row__subagent-state {
   flex: none;
   color: var(--chat-tool-secondary-color);
 }
 
-.chat-tool-row__subagent-state--failed,
-.chat-activity-group__review-status[data-outcome="denied"],
-.chat-tool-failure {
+.chat-tool-failure,
+.chat-activity-group__review-status[data-outcome="denied"] {
+  color: var(--muted);
+}
+
+.chat-activity-group[data-explicitly-expanded="true"]
+  > .chat-activity-group__body
+  .chat-tool-failure {
   color: var(--danger);
 }
 
@@ -314,6 +330,12 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-tool-row--command,
+.chat-tool-row--command:focus-within,
+.chat-tool-row--command:hover {
+  color: var(--chat-tool-activity-color);
 }
 
 .chat-tool-msg-summary__names,
@@ -938,12 +960,20 @@
   margin-inline: 12px;
 }
 
+/* The summary ends where the reply text does. An auto track would grow to the
+   unwrapped summary in WebKit and Firefox and carry it past the column. */
 .chat-activity-group {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
   width: 100%;
   min-width: 0;
-  max-width: var(--chat-message-max-width, min(760px, 100%));
+  max-width: var(--chat-message-max-width, 100%);
+}
+
+/* Author display rules must preserve the live disclosure's hidden state. */
+.chat-activity-group[hidden] {
+  display: none;
 }
 
 .chat-activity-group__label {
@@ -951,6 +981,7 @@
   min-width: 0;
   overflow: hidden;
   font: inherit;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -978,6 +1009,34 @@
   padding-left: 0;
   border-left: 0;
   overflow-y: auto;
+}
+
+.chat-activity-group__body[hidden] {
+  display: none;
+}
+
+.chat-tool-msg-collapse--lifecycle {
+  gap: 4px;
+}
+
+/* Run bodies use display: contents, so both paths share the outer 2px gap. */
+.chat-group-messages > .chat-tool-msg-collapse + .chat-tool-msg-collapse,
+.chat-group-messages > .chat-activity-group + .chat-tool-msg-collapse,
+.chat-group-messages > .chat-tool-msg-collapse + .chat-activity-group,
+.chat-group-messages > .chat-activity-group + .chat-bubble--tool-shell,
+.chat-group-messages > .chat-bubble--tool-shell + .chat-activity-group,
+.chat-group-messages > .chat-tool-msg-collapse + .chat-bubble--tool-shell,
+.chat-group-messages > .chat-bubble--tool-shell + .chat-tool-msg-collapse,
+.chat-group-messages > .chat-bubble--tool-shell + .chat-bubble--tool-shell,
+.chat-agent-run-body > .chat-tool-msg-collapse + .chat-tool-msg-collapse,
+.chat-agent-run-body > .chat-activity-group + .chat-tool-msg-collapse,
+.chat-agent-run-body > .chat-tool-msg-collapse + .chat-activity-group,
+.chat-agent-run-body > .chat-activity-group + .chat-bubble--tool-shell,
+.chat-agent-run-body > .chat-bubble--tool-shell + .chat-activity-group,
+.chat-agent-run-body > .chat-tool-msg-collapse + .chat-bubble--tool-shell,
+.chat-agent-run-body > .chat-bubble--tool-shell + .chat-tool-msg-collapse,
+.chat-agent-run-body > .chat-bubble--tool-shell + .chat-bubble--tool-shell {
+  margin-block-start: 2px;
 }
 
 /* Grouped activity owns vertical scrolling; inline trails keep per-card bounds. */
@@ -1022,15 +1081,8 @@
   font-weight: var(--control-ui-font-weight-semibold);
 }
 
-.chat-work-group__total {
-  flex: none;
-  white-space: nowrap;
-  color: var(--muted);
-}
-
 .chat-activity-group__label.chat-activity-group__label--live {
   color: inherit;
-  text-overflow: ellipsis;
 }
 
 @keyframes chat-activity-headline-enter {

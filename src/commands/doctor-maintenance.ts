@@ -245,7 +245,6 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
             ? {
                 expectedVersion: staleReplacement.version,
                 expectedBuildId: staleReplacement.buildId,
-                requirePluginHealth: false,
               }
             : {}),
         }),

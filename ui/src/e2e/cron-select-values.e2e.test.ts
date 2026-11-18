@@ -8,8 +8,14 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { cronJob, cronList, cronRuns } from "./cron-fixtures.test-support.ts";
-import { openSidebarPages } from "./sidebar-customization.test-support.ts";
+import {
+  cronJob,
+  cronList,
+  cronRuns,
+  cronSidebarFeatureMethods,
+  openAutomation,
+  openAutomationActivity,
+} from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron select values mocked Gateway E2E",
@@ -32,6 +38,7 @@ function cronResponses(jobs: CronJob[], snapshotRevision: string, enabled = true
   const list = cronList(jobs, snapshotRevision);
   return {
     "cron.list": compact ? cronListResponseFixture(list) : list,
+    "cron.get": { cases: jobs.map((job) => ({ match: { id: job.id }, response: job })) },
     "cron.runs": cronRuns([]),
     "cron.status": { enabled, jobs: jobs.length, nextWakeAtMs: null },
   };
@@ -54,18 +61,17 @@ suite.define(() => {
         async ({ page }) => {
           const job = gardenJob();
           const gateway = await installMockGateway(page, {
+            featureMethods: cronSidebarFeatureMethods,
             methodResponses: cronResponses([job], "focus-clearance", enabled),
           });
           await page.goto(`${suite.server.baseUrl}cron`);
           const scroller = page.locator(".content");
           const initialPadding = await scrollPadding(page);
-          await page
-            .locator(
-              mode === "edit"
-                ? '[data-test-id="cron-row-garden-keyboard"]'
-                : '[data-test-id="cron-new-task"]',
-            )
-            .click();
+          if (mode === "edit") {
+            await openAutomation(page, job.id);
+          } else {
+            await page.locator('[data-test-id="cron-new-task"]').click();
+          }
           if (narrow && mode === "edit") {
             // Include validation help when exercising a wrapped edit footer.
             await page.locator("#cron-name").fill("");
@@ -129,7 +135,8 @@ suite.define(() => {
             .toBe(true);
           await page.locator("#cron-payload-text").fill(gardenMessage);
           if (keyboardName) {
-            for (let field = 0; field < 4; field++) {
+            // Action, scrollable preview, model, reasoning, then name.
+            for (let field = 0; field < 5; field++) {
               await page.keyboard.press("Tab");
             }
             expect(
@@ -211,8 +218,10 @@ suite.define(() => {
           if (narrow) {
             await page.setViewportSize({ width: 1416, height: 707 });
           }
-          const pages = await openSidebarPages(page);
-          await pages.getByRole("link", { name: "Sessions", exact: true }).click();
+          // Automations shows its own sidebar, so leave for Usage from the rail.
+          await page
+            .locator('openclaw-app-sidebar:visible [data-sidebar-entry="route:usage"] a')
+            .click();
           await expect.poll(() => scrollPadding(page)).toBe(initialPadding);
         },
       );
@@ -231,6 +240,7 @@ suite.define(() => {
         });
         Reflect.deleteProperty(job.delivery!, "mode");
         const gateway = await installMockGateway(page, {
+          featureMethods: cronSidebarFeatureMethods,
           methodResponses: {
             ...cronResponses([job], "garden-legacy-list"),
             "cron.update": {
@@ -242,7 +252,7 @@ suite.define(() => {
           },
         });
         await page.goto(`${suite.server.baseUrl}cron`);
-        await page.locator('[data-test-id="cron-row-garden-legacy-delivery"]').click();
+        await openAutomation(page, job.id);
         await page.locator("#cron-name").fill("Renamed garden summary");
         const mode = page.locator("#cron-delivery-mode");
         await mode.scrollIntoViewIfNeeded();
@@ -277,12 +287,13 @@ suite.define(() => {
   it("shows the authoritative defaults in the create-form selects", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installMockGateway(page, {
-        methodResponses: cronResponses([], "cron-select-values-fixture", true, false),
+        featureMethods: cronSidebarFeatureMethods,
+        methodResponses: cronResponses([gardenJob()], "cron-select-values-fixture", true, false),
       });
 
       const response = await page.goto(`${suite.server.baseUrl}cron`);
       expect(response?.status()).toBe(200);
-      await page.locator('[data-test-id="cron-list-tab-activity"]').click();
+      await openAutomationActivity(page);
       const sortMenu = page.locator(".cron-filter-dropdown__details", {
         has: page.locator(".cron-run-sort"),
       });
@@ -291,14 +302,16 @@ suite.define(() => {
       await sort.click();
       await sortMenu.locator('[data-value="asc"]').click();
       await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
-      // Switching tabs recreates the dropdown with the persisted non-first value.
-      await page.locator('[data-test-id="cron-tab-all"]').click();
-      await page.locator('[data-test-id="cron-list-tab-activity"]').click();
+      // Leaving Activity and returning recreates the dropdown with the persisted non-first value.
+      const newAutomation = page.locator(".sidebar-automations__new");
+      await newAutomation.click();
+      await page.locator("#cron-payload-kind").waitFor({ state: "visible" });
+      await openAutomationActivity(page);
       await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
       expect(await sortMenu.locator('[data-value="asc"]').getAttribute("aria-current")).toBe(
         "true",
       );
-      await page.locator('[data-test-id="cron-new-task"]').click();
+      await newAutomation.click();
 
       const pickerValue = (selector: string) =>
         readPickerValue(page.locator(`openclaw-select-picker:has(${selector})`));

@@ -30,7 +30,7 @@ const model = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna", {
   contextWindow: 1_000_000,
   maxTokens: 8192,
 });
-const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
+const replayIdentity = { sessionId: "session-a" };
 const replayMetadata = buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity);
 const wire = (messages: Context["messages"]) =>
   convertResponsesMessages(model, { messages }, new Set(["openai"]), replayIdentity);
@@ -197,7 +197,7 @@ describe("bounded compaction replay projection", () => {
     if (kind === "malformed") {
       barrier.providerReplay = { ...barrier.providerReplay, data: "" };
     } else if (kind === "mismatched") {
-      barrier.providerReplay = { ...barrier.providerReplay, model: "different-model" };
+      barrier.providerReplay = { ...barrier.providerReplay, sessionHash: "different-session" };
     } else {
       suppressCompaction(barrier, model, replayIdentity);
     }
@@ -282,7 +282,7 @@ describe("prepared compaction replay eligibility", () => {
 });
 
 describe("canonical compaction replay pressure", () => {
-  it("counts the returned prefix once after restart and an auth A to B to A round trip", () => {
+  it("counts the returned prefix once after restart, including checkpoints with a legacy auth hash", () => {
     const owner = createAssistant([text("covered")], 1);
     const output = [
       { type: "message", role: "user", content: [{ type: "input_text", text: "canonical" }] },
@@ -297,11 +297,10 @@ describe("canonical compaction replay pressure", () => {
       { role: "user", content: "raw".repeat(100_000), timestamp: 1 },
       owner,
     ];
-    const requestB = convertResponsesMessages(model, { messages: source }, new Set(["openai"]), {
-      ...replayIdentity,
-      authProfileId: "profile-b",
-    });
-    expect(requestB.some((item) => item.type === "compaction")).toBe(false);
+    // Checkpoints saved before the credential path left the fence still replay.
+    expect(owner.providerReplay).toBeDefined();
+    Object.assign(owner.providerReplay ?? {}, { authProfileHash: "legacy-profile-hash" });
+    expect(wire(source).some((item) => item.type === "compaction")).toBe(true);
     // oxlint-disable-next-line unicorn/prefer-structured-clone -- Exercise persisted JSON reload, not an in-memory clone.
     const resumed: Context["messages"] = JSON.parse(JSON.stringify([...source, later]));
     expect(wire(resumed).slice(0, output.length)).toEqual(output);

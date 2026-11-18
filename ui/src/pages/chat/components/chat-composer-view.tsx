@@ -3,15 +3,16 @@ import { createMemo, createSignal, lazy, Show } from "solid-js";
 import { createFooterControlRef } from "../../../app/shell-layout-traits-solid.tsx";
 import { McpAppCatalog } from "../../../components/mcp-app-catalog.tsx";
 import { McpAppResources } from "../../../components/mcp-app-resources.tsx";
+import { createMemberWelcomeSlot } from "../../../components/openclaw-id/member-welcome-slot.tsx";
 import { createBackgroundLayoutRef } from "../../../components/session-background-layout-context.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { McpAppContextStrip } from "../../../components/solid/mcp-app-context-strip.tsx";
 import "../../../styles/chat/composer-surface.css";
 import "../../../styles/chat/composer-mobile.css";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
+import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { keyboardHintsVisible } from "../../../lib/reactive/keyboard-hints.ts";
 import { PaneSubagentStop } from "../chat-pane-header-view.tsx";
 import type { ChatComposerPlusMenuView } from "../composer-capability-types.ts";
 import "../../../styles/chat/composer-context-strip.css";
@@ -201,8 +202,10 @@ export function renderChatComposerView(
       )}
     </Show>
   );
+  const application = useOptionalApplication();
+  const memberWelcome = createMemberWelcomeSlot(() => application);
   const showComposerInput = createMemo(
-    () => context().showComposer && props.disabledBanner?.kind !== "composer-replacement",
+    () => !memberWelcome.active() && props.disabledBanner?.kind !== "composer-replacement",
   );
   const disabledReasonId = () => paneDomId(props.paneId, "disabled-reason");
   const composerAlerts = createMemo(() =>
@@ -320,7 +323,7 @@ export function renderChatComposerView(
           </div>
           <ComposerQuestionDock panel={context().questionPanelProps} />
           {props.disabledBanner?.kind === "above-composer" ? disabledBanner : undefined}
-          <ComposerProgress composer={props} shown={context().showComposer} />{" "}
+          <ComposerProgress composer={props} shown={context().showComposerProgress} />{" "}
           <Show when={!props.mobileComposer}>
             <ComposerQueue composer={props} showAbortableUi={context().showAbortableUi} />
           </Show>
@@ -501,7 +504,7 @@ export function renderChatComposerView(
                 {...props}
                 inputHandle={inputHandle}
                 disabled={!context().canCompose}
-                cameraActive={context().showComposer && props.cameraActive !== false}
+                cameraActive={props.cameraActive !== false}
               />
               {props.realtimeTalkVideoStream ? (
                 <div class="agent-chat__video-preview">
@@ -579,28 +582,11 @@ export function renderChatComposerView(
                 </span>
                 <Show when={context().predictionText}>
                   <span class="agent-chat__composer-prediction" aria-hidden="true">
-                    {context().predictionText}
+                    {context().predictionText}{" "}
+                    <span class="agent-chat__composer-prediction-hint">
+                      {t("chat.composer.predictionHint")}
+                    </span>
                   </span>
-                  <div class="agent-chat__composer-prediction-actions">
-                    <button
-                      type="button"
-                      aria-label={t("chat.composer.usePrediction")}
-                      aria-keyshortcuts="Tab"
-                      onClick={() => context().acceptPrediction()}
-                    >
-                      <Show when={keyboardHintsVisible()}>
-                        <kbd>{t("chat.composer.predictionShortcut")}</kbd>{" "}
-                      </Show>
-                      {t("chat.composer.usePrediction")}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => context().dismissPrediction()}
-                      aria-label={t("chat.composer.dismissPrediction")}
-                    >
-                      {t("chat.composer.dismissPrediction")}
-                    </button>
-                  </div>
                 </Show>
                 <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
                   {predictionAnnouncement()}
@@ -687,6 +673,8 @@ export function renderChatComposerView(
           </div>
           <ComposerWidthEdge options={() => props} shell={() => shell} />
         </ComposerInputScope>
+      ) : memberWelcome.active() ? (
+        memberWelcome.step()
       ) : props.disabledBanner?.kind === "composer-replacement" ? (
         disabledBanner
       ) : undefined}

@@ -201,7 +201,7 @@ export function bindSessionPendingInputSources(
     throw new Error("Collected input exceeds the Gateway payload limit");
   }
   const aggregateInputId = randomUUID();
-  const aggregate = ownerReceipt({
+  const aggregateOwner: SessionPendingInputOwner = {
     ...first,
     // Source owners release their admission closures when settlement completes.
     assertCurrent: assertSessionPendingInputLifetimeCurrent.bind(undefined, first),
@@ -214,7 +214,13 @@ export function bindSessionPendingInputSources(
     messageJson,
     sources,
     finish: finishPendingInputSources.bind(undefined, sources),
-  });
+  };
+  // A timer's owner must not retain this scope's original settlement receipts.
+  aggregateOwner.assertReadCurrent = assertSessionPendingInputLifetimeCurrent.bind(
+    undefined,
+    aggregateOwner,
+  );
+  const aggregate = ownerReceipt(aggregateOwner);
   aggregate.settled = async () => {
     const results = await Promise.allSettled(receipts.map(async (receipt) => receipt.settled?.()));
     throwIfSettledRejected(results, "Failed to settle collected input custody");
@@ -547,24 +553,17 @@ async function stagePreparedPendingInput(
       authority: options.authority,
     };
     if (committed) {
-      if (options.trackCompletion) {
+      // A matched receipt already proves the raw request. Its committed input owns
+      // the once-only hook decision and JSON projection; only retired receipts need reconstruction.
+      if (options.trackCompletion && !previous && !existing) {
         const committedHash = resolveCommittedPendingInputRequestHash(
-          {
-            ...options,
-            message,
-            replaySourceSessionKeys:
-              previous || existing ? undefined : options.replaySourceSessionKeys,
-          },
+          { ...options, message },
           committed.message,
         );
         if (!committedHash) {
           return undefined;
         }
-        // A retained receipt owns the raw request hash, even when JSON storage
-        // normalized its message. Reconstruct identity only after receipt retirement.
-        if (!previous && !existing) {
-          requestHash = committedHash;
-        }
+        requestHash = committedHash;
         await assertCurrent();
       }
       owner = {
@@ -574,6 +573,10 @@ async function stagePreparedPendingInput(
         messageJson: JSON.stringify(committed.message),
         assertCurrent: () => {
           store.assertCurrent();
+          options.assertCurrent();
+        },
+        async assertReadCurrent() {
+          await store.assertReadCurrent();
           options.assertCurrent();
         },
         consumed: true,
@@ -659,6 +662,10 @@ async function stagePreparedPendingInput(
               messageJson: staged.message_json,
               assertCurrent: () => {
                 store.assertCurrent();
+                assertAdmittedCurrent();
+              },
+              async assertReadCurrent() {
+                await store.assertReadCurrent();
                 assertAdmittedCurrent();
               },
               ...(existing ? { dedupeRetryAvailable: true as const } : {}),

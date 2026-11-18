@@ -5,7 +5,7 @@ import Testing
 
 /// Real URLSession I/O for the header-only, no-redirect transport used by Access admission.
 /// The serial queue owns mutable state and callbacks, independently of MainActor test work.
-private final class GatewayHTTPFixture: @unchecked Sendable {
+final class GatewayHTTPFixture: @unchecked Sendable {
     private let queue = DispatchQueue(label: "gateway-http-fixture")
     private let listener: NWListener
     private let reply: String

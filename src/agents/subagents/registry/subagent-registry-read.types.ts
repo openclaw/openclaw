@@ -45,6 +45,14 @@ export type SubagentCompletionDeliveryState = {
   enqueuedAt?: number;
   deliveredAt?: number;
   announcedAt?: number;
+  /** Requester transcript custody, independent of an external reply or retry policy. */
+  requesterDelivery?: (
+    | { state: "waiting"; runId?: string }
+    | { state: "consumed"; runId: string }
+  ) & {
+    at?: number;
+    blockingRunId?: string;
+  };
   /** Exact requester turn and completed child batch that already produced its visible final. */
   requesterVisibleFinal?: { requesterTurnRunId: string; batchRunIds: string[] };
   lastAttemptAt?: number;

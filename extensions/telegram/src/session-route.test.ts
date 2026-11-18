@@ -403,13 +403,17 @@ describe("telegramPlugin reply threading", () => {
     ["-100123:topic:77", "telegram:-100123:direct-topic:77", false],
     ["-100123:topic:77", "telegram:-100123:topic:78", false],
     ["-100456", "telegram:-100123", false],
+    // DM topic: the current channel is the bare chat and the topic rides in currentThreadTs.
+    ["1234:topic:77", "telegram:1234", true, "77"],
+    ["1234:topic:78", "telegram:1234", false, "77"],
+    ["1234", "telegram:1234", true, "77"],
   ] as const)(
-    "matches canonical target %s against current channel %s: %s",
-    (target, currentChannelId, expected) => {
+    "matches canonical target %s against current channel %s: %s (thread %s)",
+    (target, currentChannelId, expected, currentThreadTs?: string) => {
       expect(
         telegramPlugin.threading?.matchesToolContextTarget?.({
           target,
-          toolContext: { currentChannelId },
+          toolContext: { currentChannelId, currentThreadTs },
         }),
       ).toBe(expected);
     },

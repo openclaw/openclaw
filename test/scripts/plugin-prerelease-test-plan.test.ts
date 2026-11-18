@@ -455,6 +455,17 @@ export const createExtensionTestShards = () => [{
 }];`,
       );
 
+      const legacy = runPluginManifest("independent", "workflow_dispatch", "", targetRoot);
+      expect(legacy.result.status, legacy.result.stderr).toBe(0);
+      const legacyMatrix = legacy.output
+        .split("\n")
+        .find((line) => line.startsWith("plugin_prerelease_extension_matrix="));
+      expect(
+        JSON.parse(expectDefined(legacyMatrix, "legacy extension matrix").split("=")[1]!).include,
+      ).toEqual([
+        expect.objectContaining({ check_name: "extensions-fixture", task: "extensions-batch" }),
+      ]);
+      expect(legacyMatrix).not.toContain('"test_runtime":');
       const { result, output } = runPluginManifest(
         "independent",
         "workflow_dispatch",
@@ -540,7 +551,19 @@ export const createExtensionTestShards = () => [{
     );
     expect(evaluate(exclusions.env.NODE_TEST_EXCLUDE_PATTERNS_JSON)).toBe("[]");
     expect(evaluate(exclusions.env.EXTENSION_TEST_EXCLUDE_PATTERNS_JSON)).toBe("[]");
-    expect(workflow.jobs["plugin-prerelease-extension-shard"].strategy["max-parallel"]).toBe(12);
+    const extensionJob = workflow.jobs["plugin-prerelease-extension-shard"];
+    expect(extensionJob.strategy).toMatchObject({ "max-parallel": 12, "fail-fast": false });
+    expect(
+      extensionJob.steps.find((step: WorkflowStep) => step.name === "Run extension shard").env,
+    ).toMatchObject({
+      OPENCLAW_CI_TEST_RUNTIME: "${{ matrix.test_runtime }}",
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: "${{ matrix.test_runtime_policy || 'node' }}",
+    });
+    expect(
+      extensionJob.steps.find(
+        (step: WorkflowStep) => step.uses === "./.github/actions/setup-test-bun",
+      ).if,
+    ).toBe("matrix.requires_bun == true");
 
     const hourly = runPluginManifest("independent", "schedule");
     const boatHourly = runPluginManifest("independent", "schedule", "", undefined, "boat");
@@ -594,11 +617,23 @@ export const createExtensionTestShards = () => [{
         }
       }
     }
-    const ownership = (matrix: string | undefined) =>
-      JSON.parse(expectDefined(matrix, "extension matrix")).include.map(
-        ({ requires_bun: _bun, test_runtime_policy: _runtime, ...row }: Record<string, unknown>) =>
-          row,
-      );
+    const ownership = (matrix: string | undefined) => [
+      ...new Map(
+        JSON.parse(expectDefined(matrix, "extension matrix"))
+          .include.map(
+            ({
+              requires_bun: _bun,
+              test_runtime_policy: _policy,
+              test_runtime: _runtime,
+              ...row
+            }: Record<string, unknown>) => {
+              row.check_name = String(row.check_name).replace(/ \((?:node|bun)\)$/u, "");
+              return row;
+            },
+          )
+          .map((row: Record<string, unknown>) => [row.check_name, row]),
+      ).values(),
+    ];
     expect(ownership(selected.plugin_prerelease_extension_matrix)).toEqual(
       ownership(outputs(release.output).plugin_prerelease_extension_matrix),
     );
@@ -611,15 +646,34 @@ export const createExtensionTestShards = () => [{
       const rows = JSON.parse(expectDefined(matrix, "extension matrix")).include as {
         task: string;
         test_runtime_policy: string;
+        test_runtime?: string;
+        check_name: string;
         requires_bun: boolean;
       }[];
       expect(
         rows.every((row) =>
           row.task === "extensions-batch"
-            ? row.test_runtime_policy === policy && row.requires_bun === (policy !== "node")
+            ? row.test_runtime_policy === policy &&
+              row.requires_bun === (row.test_runtime === "bun") &&
+              row.check_name.endsWith(` (${row.test_runtime})`)
             : row.test_runtime_policy === "node" && !row.requires_bun,
         ),
       ).toBe(true);
+      const batches = rows.filter((row) => row.task === "extensions-batch");
+      expect(new Set(batches.map((row) => row.check_name)).size).toBe(batches.length);
+      if (policy === "dual-all") {
+        for (const row of batches.filter((entry) => entry.test_runtime === "node")) {
+          expect(batches).toContainEqual({
+            ...row,
+            check_name: row.check_name.replace(/ \(node\)$/u, " (bun)"),
+            test_runtime: "bun",
+            requires_bun: true,
+          });
+        }
+        expect(batches.filter((row) => row.test_runtime === "node")).toHaveLength(
+          batches.length / 2,
+        );
+      }
     }
     const rows: {
       task: string;
@@ -627,6 +681,7 @@ export const createExtensionTestShards = () => [{
       includePatterns?: string[];
       exclusion_configs: { config: string; includePatterns: string[] }[];
       requires_bun?: boolean;
+      test_runtime?: string;
       test_runtime_policy?: string;
     }[] = JSON.parse(
       expectDefined(selected.plugin_prerelease_extension_matrix, "hourly extension matrix"),
