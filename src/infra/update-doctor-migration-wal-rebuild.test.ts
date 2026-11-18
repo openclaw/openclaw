@@ -104,7 +104,9 @@ it.each(["while Doctor reads it", "after admission", "after a same-content commi
         );
       } else {
         if (timing === "after a same-content commit") {
-          keep("UPDATE retained SET value = 9; UPDATE retained SET value = 8;");
+          keep(
+            "UPDATE retained SET value = 9 WHERE value = 8; UPDATE retained SET value = 8 WHERE value = 9;",
+          );
         }
         rebuild();
       }
@@ -112,6 +114,8 @@ it.each(["while Doctor reads it", "after admission", "after a same-content commi
       expect(change === 0).toBe(timing !== "while Doctor reads it");
       using database = new DatabaseSync(pathname);
       if (timing === "after a same-content commit") {
+        // Committed content matches admission; only the new frames' checksum differs.
+        expect(read(database)).toEqual([{ value: 7 }, { value: 8 }]);
         expect(() => migrate(database, pathname)).toThrow(
           "SQLite migration source changed after update capture:",
         );
