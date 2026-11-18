@@ -18,6 +18,7 @@ import {
 import type {
   WorkerDesktopEndpoint,
   WorkerNodeEnrollment,
+  WorkerNodeRuntimePreparation,
   WorkerProvider,
   WorkerSshEndpoint,
 } from "../../plugins/types.js";
@@ -102,6 +103,19 @@ export const BUNDLE_ARTIFACT: Extract<WorkerInstallationArtifact, { install: "bu
   tarballBytes: 1,
   tarballSha256: "b".repeat(64),
   tarballPath: "/gateway/cache/worker-bundle.tgz",
+};
+export const NODE_RUNTIME_PREPARATION: WorkerNodeRuntimePreparation = {
+  bootstrapTimeoutMs: 15 * 60_000,
+  nodeBootstrap: { ...NODE_BOOTSTRAP, openclawVersion: BUNDLE_ARTIFACT.openclawVersion },
+  workerBundle: {
+    url: "https://gateway.example.test/worker",
+    token: "synthetic-worker-token",
+    sha256: BUNDLE_ARTIFACT.tarballSha256,
+    bytes: BUNDLE_ARTIFACT.tarballBytes,
+    bundleHash: BUNDLE_ARTIFACT.bundleHash,
+    protocolFeatures: BUNDLE_ARTIFACT.protocolFeatures,
+    packageRelativePath: `worker-artifacts/${BUNDLE_ARTIFACT.tarballSha256}.tgz`,
+  },
 };
 export const NPM_ARTIFACT: WorkerInstallationArtifact = {
   ...BOOTSTRAP_RECEIPT,

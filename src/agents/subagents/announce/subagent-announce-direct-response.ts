@@ -1,4 +1,8 @@
 /** Interprets direct announcement responses and the existing text-fallback receipt. */
+import {
+  classifyAgentRunTerminalOutcome,
+  resolveAgentRunWaitTerminalFacts,
+} from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -20,6 +24,7 @@ import {
   isGatewayAgentRunPending,
   resolvePrivateCompletionDeliveryResult,
 } from "./subagent-announce-completion-delivery.js";
+import { classifyAnnounceDeliveryError } from "./subagent-announce-delivery-retry.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import type { DeliveryContext } from "./subagent-announce-origin.js";
 
@@ -47,16 +52,6 @@ type DirectAnnounceResponseContext = {
     agentResult?: { payloads?: unknown },
   ) => Promise<SubagentAnnounceDeliveryResult | undefined>;
 };
-
-function missingVisibleReplyResult(completedSuccessfully: boolean): SubagentAnnounceDeliveryResult {
-  return {
-    delivered: false,
-    path: "direct",
-    reason: "visible_reply_missing",
-    error: "completion agent did not produce a visible reply",
-    ...(completedSuccessfully ? { disposition: "retryable" as const } : {}),
-  };
-}
 
 /** Reuses prepared facts; only the existing text-delivery owner may perform a send. */
 export function createDirectAnnounceResponseClassifier(context: DirectAnnounceResponseContext) {
@@ -130,6 +125,34 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
       directAnnounceRecord?.status === "ok" &&
       !directAnnounceResult?.meta?.error &&
       !directAnnounceResult?.meta?.aborted;
+    const automaticEvidence = getAutomaticDeliveryEvidence(directAnnounceResult ?? {});
+    const hasCompletionSideEffect = Boolean(
+      directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
+    );
+    const missingVisibleReplyResult = (): SubagentAnnounceDeliveryResult => {
+      const terminal = resolveAgentRunWaitTerminalFacts(directAnnounceRecord ?? {});
+      const outcome = terminal && classifyAgentRunTerminalOutcome(terminal);
+      const interruption =
+        directAnnounceResult?.meta?.aborted === true || outcome === "cancellation"
+          ? "requester_aborted"
+          : outcome === "timeout"
+            ? "requester_timed_out"
+            : undefined;
+      const failure = classifyAnnounceDeliveryError(directAnnounceResult?.meta?.error, {
+        interruption,
+        replaySafe: directAnnounceRecord?.replaySafe === true && !automaticEvidence.mayHaveSent,
+      });
+      if (failure.reason) {
+        return automaticEvidence.mayHaveSent ? { ...failure, disposition: "ambiguous" } : failure;
+      }
+      return {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+        ...(requesterCompletedSuccessfully ? { disposition: "retryable" as const } : {}),
+      };
+    };
     const requiresSettleReply = params.sourceTool === "subagent_settle";
     const acceptsIntentionalSilentCompletion =
       effectiveReplyExpectation !== "result-required" &&
@@ -141,7 +164,6 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
     const requiresAutomaticFinalReceipt =
       shouldDeliverAgentFinal &&
       (params.expectsCompletionMessage || params.sourceTool === "subagent_settle");
-    const automaticEvidence = getAutomaticDeliveryEvidence(directAnnounceResult ?? {});
     const directDeliveryFailure =
       (shouldDeliverAgentFinal || requiresMessageToolDelivery) && directAnnounceResult
         ? getAgentCommandDeliveryFailure(directAnnounceResult)
@@ -156,6 +178,8 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
         delivered: false,
         path: "direct",
         error: directDeliveryFailure,
+        // A completed turn's answer did not reach the requester's channel.
+        ...(requesterCompletedSuccessfully ? { finalAssistantVisibleText: "" } : {}),
         ...(automaticEvidence.mayHaveSent ? { disposition: "ambiguous" as const } : {}),
       };
     }
@@ -193,12 +217,14 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
           directAnnounceResult?.meta?.yielded === true ||
           directAnnounceResult?.meta?.continuationPending === true)
       ) {
-        return missingVisibleReplyResult(requesterCompletedSuccessfully);
+        return missingVisibleReplyResult();
       }
       return {
         delivered: false,
         path: "direct",
         reason: automaticEvidence.mayHaveSent ? undefined : "delivery_suppressed",
+        // Consumption cannot credit a completed answer with an unconfirmed channel receipt.
+        ...(requesterCompletedSuccessfully ? { finalAssistantVisibleText: "" } : {}),
         error: automaticEvidence.mayHaveSent
           ? "automatic completion delivery could not be confirmed"
           : (automaticEvidence.suppressionReason ?? "automatic completion delivery suppressed"),
@@ -235,9 +261,6 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
         };
       }
     }
-    const hasCompletionSideEffect = Boolean(
-      directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
-    );
     const hasVisibleRequiredCompletionReply =
       hasMessagingToolDelivery ||
       (!requiresMessageToolDelivery && hasVisibleNonSilentGatewayPayload);
@@ -250,7 +273,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
         hasCompletionSideEffect
       ) {
         return {
-          ...missingVisibleReplyResult(requesterCompletedSuccessfully),
+          ...missingVisibleReplyResult(),
           disposition: "permanent_failure",
         };
       }
@@ -263,7 +286,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
           hasRequiredSubagentNoOutputCompletion)
       ) {
         if (hasSuccessfulTrustedSubagentNoOutputCompletion) {
-          return missingVisibleReplyResult(requesterCompletedSuccessfully);
+          return missingVisibleReplyResult();
         }
         const missingDelivery: SubagentAnnounceDeliveryResult = {
           delivered: false,
@@ -309,7 +332,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
             (shouldDeliverAgentFinal ||
               (!requiresMessageToolDelivery && !hasCompletionSideEffect))))
       ) {
-        return missingVisibleReplyResult(requesterCompletedSuccessfully);
+        return missingVisibleReplyResult();
       }
       const requesterVisibleFinalCommitted =
         !params.requesterIsSubagent &&
@@ -341,7 +364,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
           return textDelivery;
         }
         if (hasSuccessfulTrustedSubagentNoOutputCompletion && !hasCompletionSideEffect) {
-          return missingVisibleReplyResult(requesterCompletedSuccessfully);
+          return missingVisibleReplyResult();
         }
         return finishClassification();
       });

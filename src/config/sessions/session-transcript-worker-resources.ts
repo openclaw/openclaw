@@ -36,6 +36,7 @@ import {
 } from "./session-store-read-candidates.js";
 import type { SessionStoreTargetPreparationRequest } from "./session-store-target-inventory.js";
 import {
+  createSessionHistoryLanePool,
   createSessionTranscriptHistoryPool,
   createUsageCostPool,
   type SessionCostWorkerLane,
@@ -111,8 +112,9 @@ function createHistoryLane(name: string, maxWorkers?: number) {
   );
 }
 
-export const historyLane = registerSessionTranscriptReaderLane("Session history", (closed) =>
-  createSessionTranscriptHistoryPool(SESSION_TRANSCRIPT_FOREGROUND_WORKERS, closed),
+export const historyLane = registerSessionTranscriptReaderLane(
+  "Session history",
+  createSessionHistoryLanePool,
 );
 // Search readiness can await a host writer; it cannot occupy committed-history workers.
 export const transcriptSearchLane = createHistoryLane(
@@ -124,8 +126,6 @@ export const sessionStoreLane = createHistoryLane(
   "Session store",
   SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
 );
-// Compaction waits for host setup/hooks that can themselves read session projections.
-export const compactionLane = createHistoryLane("Session compaction");
 function createCostLane(name: string, kind: "read" | "refresh"): SessionCostWorkerLane {
   const lane: SessionCostWorkerLane = registerSessionTranscriptReaderLane(name, (closed) =>
     createUsageCostPool(kind, closed, (databases) => clearClosedDatabaseCustody(lane, databases)),
@@ -135,7 +135,7 @@ function createCostLane(name: string, kind: "read" | "refresh"): SessionCostWork
 
 export const costReadLane = createCostLane("Session usage read", "read");
 export const costRefreshLane = createCostLane("Session usage refresh", "refresh");
-const historyWorkerLanes = [historyLane, transcriptSearchLane, sessionStoreLane, compactionLane];
+const historyWorkerLanes = [historyLane, transcriptSearchLane, sessionStoreLane];
 
 export const refreshDatabaseWorkerPressureSubscription =
   createStateWorkerMemoryPressureSubscription(

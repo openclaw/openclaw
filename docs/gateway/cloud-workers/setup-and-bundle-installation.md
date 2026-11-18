@@ -75,6 +75,10 @@ Each explicit npm runtime archive also gets a best-effort npm project lock, gene
 
 Successful worker starts log the `openclaw-bootstrap-*` phase durations at info level in the Gateway log, including download, installation, and verification. The installation phase can overlap the independent worker-bundle download. Unlocked-install fallback warnings also appear in the Gateway log.
 
+Prepared runtime producers can expand and prewarm the exact worker bundle before capture. Nodes reuse that package-owned bundle after ordinary integrity validation.
+
+Disposable nodes can connect while private computer capabilities finish preparing. Worker-bundle installation and private computer use still wait for that preparation, including failures, before reporting readiness.
+
 Concurrent workspace installs on the same node share an in-progress integrity scan of the same already prewarmed bundle. Later requests scan the installed files again, so edits or damage still trigger repair. Retention and replacement separate scans; each request keeps its own cancellation and download credentials.
 
 For source builds, run `pnpm build` and restart the Gateway before dispatching. Bootstrap does not compile an unbuilt checkout or copy arbitrary source files. Missing or mismatched build metadata gives a rebuild-and-restart error. Runtime modules and installation scripts come from the package's published file list; custom distributions must declare their launcher helpers there. Private QA-only build chunks are excluded only when build metadata verifies their ownership; incomplete metadata or imports fail preparation.
@@ -82,6 +86,8 @@ For source builds, run `pnpm build` and restart the Gateway before dispatching. 
 OpenClaw worker turns install the matching worker bundle, reusing a verified archive retained in a prepared image when available. Codex remote execution starts its managed exec-server directly. Node-command allowlists and invocation approval still apply. See [runtime support](/gateway/cloud-workers/dispatching-a-session#runtime-support) and [the security model](/gateway/cloud-workers/security-model).
 
 Cross-platform Gateway installations prepare additional dependency inputs under `node-runtime-dependencies/<platform>-<arch>/` inside the immutable package (for example, `linux-x64`). Each input contains the exact root `package.json`, its complete installed production `node_modules`, linked workspace packages, and selected plugins' installed dependency directories under `extensions/`, and a `runtime-input.json` receipt with `platform`, `arch`, `packageJsonSha256`, and `lockfileSha256`. The hashes must match the Gateway's `package.json` and `pnpm-lock.yaml`. Build/install dependencies and native addons on the target platform using the frozen lockfile; copy compiled workspace distributions from the same source build. Keep all links within that input. The canonical producer materializes regular archive files from these installed dependencies; it never resolves or downloads packages. Qualify the resulting runtime with a real cold launch on each target. A macOS dependency tree alone does not qualify Linux.
+
+Managed dedicated Linux nodes recover on the current Gateway runtime before admitting new work. A connected older version, or a different build at the same version, follows the same verified upgrade and reconnect path. The original lease, workspace, and enrolled device remain bound. An accepted workspace result that still needs settlement can resume its recorded runtime for that cleanup before an upgrade; it cannot use cleanup readiness to start a new turn.
 
 ### Reuse a node runtime archive after Gateway restart
 

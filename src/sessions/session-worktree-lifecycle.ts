@@ -99,7 +99,7 @@ export async function removeSessionWorktree(params: {
   };
   try {
     assertCurrent();
-    await service.remove({
+    const result = await service.remove({
       id: record.id,
       reason: params.reason,
       runEndCleanup: { outcome: "removed-lossless", at: Date.now() },
@@ -115,6 +115,9 @@ export async function removeSessionWorktree(params: {
         ],
       },
     });
+    if (result.preserved) {
+      return { id: record.id, branch: record.branch, path: record.path, reason: "cleanup-failed" };
+    }
   } catch (error) {
     // Authorization loss is a failed lifecycle action, not successful best-effort cleanup.
     params.commitGuard?.();

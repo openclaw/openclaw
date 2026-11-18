@@ -2,7 +2,6 @@
 import fs from "node:fs/promises";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
@@ -23,6 +22,7 @@ import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.tes
 import { createDeferredCore } from "../../shared/deferred.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-grant.types.js";
 import { agentRunHandler } from "./agent-run-handler.js";
 import {
   getAgentTestMocks,

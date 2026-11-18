@@ -351,6 +351,26 @@ export function installSessionToolResultGuard(
     if (!appended || !sessionTarget) {
       return { entryId, message: persistedMessage, appended, ...(anchor ? { anchor } : {}) };
     }
+    // Image results become previewable as soon as their durable artifact owner exists.
+    // Ordinary tool text stays on the live tool lane until history reconciliation.
+    if (
+      persistedMessage.role !== "toolResult" ||
+      persistedMessage.content.some((item) => item.type === "image")
+    ) {
+      const runId = resolveTerminalAssistantTranscriptRunId(persistedMessage, context.runId);
+      void publishTranscriptUpdate(sessionTarget, {
+        lifecycleRevision,
+        message: persistedMessage,
+        messageId: entryId,
+        ...(messageSeq !== undefined ? { messageSeq } : {}),
+        ...(runId ? { runId } : {}),
+      }).catch(() =>
+        log.warn(
+          "Transcript update publication failed after append; reload the session to refresh its transcript.",
+          { sessionId: sessionTarget.sessionId, messageId: entryId },
+        ),
+      );
+    }
     return {
       entryId,
       appended,
@@ -560,9 +580,7 @@ export function installSessionToolResultGuard(
       anchor,
       appended,
       entryId: result,
-      lifecycleRevision,
       message: persistedMessage,
-      messageSeq,
       sessionTarget,
     } = yield* appendMessageAndCacheTranscriptSeq(
       finalMessage,
@@ -573,21 +591,6 @@ export function installSessionToolResultGuard(
       },
       message,
     );
-    if (sessionTarget) {
-      const runId = resolveTerminalAssistantTranscriptRunId(persistedMessage, context.runId);
-      void publishTranscriptUpdate(sessionTarget, {
-        lifecycleRevision,
-        message: persistedMessage,
-        messageId: result,
-        ...(messageSeq !== undefined ? { messageSeq } : {}),
-        ...(runId ? { runId } : {}),
-      }).catch(() =>
-        log.warn(
-          "Transcript update publication failed after append; reload the session to refresh its transcript.",
-          { sessionId: sessionTarget.sessionId, messageId: result },
-        ),
-      );
-    }
 
     if (finalMessage.role === "user" && persistedMessage.role === "user") {
       void context.onUserMessagePersisted?.(finalMessage, {

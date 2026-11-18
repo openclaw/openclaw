@@ -1,7 +1,7 @@
 import { constants } from "node:os";
 import { toErrorObject } from "../infra/errors.js";
 import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
-import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
+import { resolveNodeRuntimeExecutableAsync } from "../infra/node-runtime-executable.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -23,7 +23,7 @@ export async function spawnNodeTerminalPty(
   initiateSpawn?: SpawnInitiation,
   prepareCurrent?: () => Promise<void>,
 ): Promise<TerminalPtyHandle> {
-  const node = resolveNodeRuntimeExecutable();
+  const node = await resolveNodeRuntimeExecutableAsync();
   if (!node) {
     throw new Error("A Node executable is required for this terminal helper; add node to PATH.");
   }

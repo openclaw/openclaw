@@ -9,6 +9,7 @@ import { safeDebugValue } from "./openai-responses-debug.js";
 import {
   createResponsesStreamWithRecovery,
   isInvalidEncryptedContentError,
+  isResponsesItemConflict,
   readResponsesRecoveryEvent,
   resolveNextResponsesEncryptedContentAttempt,
 } from "./openai-responses-replay-internal.js";
@@ -34,6 +35,7 @@ export function createRecoverableResponsesWebSocketStream<
   options: Parameters<StreamFn>[2];
   output: AssistantMessage;
   buildRequest: (mode: "full-history") => Promise<TRequest>;
+  buildItemConflictRequest: () => Promise<TRequest>;
   createSseStream: (
     request?: TRequest,
     kind?: RecoveryParams["initialAttemptKind"],
@@ -62,8 +64,17 @@ export function createRecoverableResponsesWebSocketStream<
       let outputObserved = false;
       try {
         for await (const event of trackedWebSocketStream) {
-          const { failure, hasResponseOutput, isPrelude } = readResponsesRecoveryEvent(event);
+          const { failure, hasResponseOutput } = readResponsesRecoveryEvent(event);
           outputObserved ||= hasResponseOutput;
+          if (isResponsesItemConflict(failure) && !outputObserved && output.content.length === 0) {
+            throw new OpenAIResponsesWebSocketSafeRetryError(
+              "item_conflict",
+              undefined,
+              null,
+              "Stored Responses item conflicts",
+              failure,
+            );
+          }
           if (isResponsesServiceTierRejection(failure) && !websocket.hasActiveResponse) {
             throw new OpenAIResponsesWebSocketSafeRetryError(
               "invalid_request_error",
@@ -73,7 +84,6 @@ export function createRecoverableResponsesWebSocketStream<
               failure,
             );
           }
-          outputObserved ||= !isPrelude;
           if (acceptance === "pending") {
             acceptance = "observing";
             await notifyProviderStreamOpened({
@@ -112,8 +122,15 @@ export function createRecoverableResponsesWebSocketStream<
           }
           // Explicit server rejection proves no output was accepted. Resume at the next
           // semantic attempt instead of treating this like an ambiguous disconnect.
-          const encryptedContentRejected = isInvalidEncryptedContentError(error);
-          const recovery = encryptedContentRejected
+          const replayRejected =
+            isInvalidEncryptedContentError(error) || isResponsesItemConflict(error);
+          if (
+            isResponsesItemConflict(error) &&
+            (outputObserved || output.content.length || websocketSignal.aborted)
+          ) {
+            throw error;
+          }
+          const recovery = replayRejected
             ? await resolveNextResponsesEncryptedContentAttempt(
                 {
                   kind: "initial",
@@ -121,10 +138,13 @@ export function createRecoverableResponsesWebSocketStream<
                   request: { ...websocket.request, stream: true } as TRequest,
                 },
                 error,
-                { buildFullHistoryRequest: () => buildRequest("full-history") },
+                {
+                  buildFullHistoryRequest: () => buildRequest("full-history"),
+                  buildItemConflictRequest: params.buildItemConflictRequest,
+                },
               )
             : undefined;
-          if (encryptedContentRejected && !recovery) {
+          if (replayRejected && !recovery) {
             throw error;
           }
           closeWebSocketForFallback(

@@ -72,6 +72,7 @@ function fixture() {
     pending.mutate({
       ...owner,
       kind: "finish",
+      endCause: "failed",
       inputId: "input-1",
       requestHash,
       disposition: "cancelled",

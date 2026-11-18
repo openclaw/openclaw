@@ -91,7 +91,9 @@ select a personal file. Internal turns continuing the same session use that
 session's selection, including subagent completions, `sessions_send`, goal
 continuation, and cron and restart wakes in that session. Isolated cron sessions
 keep shared defaults only. Subagent sessions still load only their allowed project
-instructions, so delegated tasks never receive a personal `USER.md` file. The shared
+instructions, so delegated tasks never receive a personal `USER.md` file. A spawned session's prompt
+series keys on its session's selection on every turn, including its hidden task, so
+a later `sessions_send` turn does not rebuild the cached prompt. The shared
 local owner profile represents all connections using that identity, not separate
 people; use per-person sign-in on a team Gateway.
 
@@ -382,9 +384,12 @@ agent turn, the `sessions` tool exposes `assign_owner` for these senders;
 settings, reset/delete, and global group controls still require owner authority.
 Operators with `operator.write` also retain the separate archive, restore, and
 stop controls for sessions they created or are assigned to, subject to session access checks.
-New visible sessions default to the trusted requester when the parent has no
-different human owner; this includes agent-owned and channel-originated parents.
-Without a trusted requester, they remain agent-owned. The agent can assign an
+New visible sessions belong to the verified person who requested them, even in a
+conversation owned by someone else. This does not reassign the parent session.
+Without a trusted requester, visible sessions remain agent-owned. When an agent
+creates an automation for a verified requester, that person is recorded as its
+human owner. Existing jobs are not reassigned on upgrade. Scheduling, management,
+and execution still require their existing permissions. The agent can assign an
 existing session to the trusted requester profile and verify the stored owner
 with `sessions_list`.
 This changes responsibility, not creator attribution or access. Unlinked or

@@ -1,14 +1,13 @@
+import { stat } from "node:fs/promises";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
 import { resolveStateDir } from "../config/state-dir.js";
-import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
-import { withFileLock } from "../infra/file-lock.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { getArtifactPreservingSqliteRead } from "../infra/sqlite-snapshot-source.js";
 import {
-  assertExistingDatabaseIdentity,
-  readDatabasePathIdentitySync,
+  assertDatabaseFileIdentity,
+  readDatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-store.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
@@ -28,35 +27,6 @@ import {
 import { readPluginModelCatalogsInWorker } from "./plugin-model-catalog-read.js";
 import type { PersistedPluginModelCatalog } from "./plugin-model-catalog-read.types.js";
 import type { PluginModelCatalogCredentialOperations } from "./plugin-model-catalog.worker.js";
-
-/** A clean read must follow publication settlement, including another process's uncommitted row. */
-export async function withPluginModelCatalogPublicationLocks<T>(
-  databasePaths: readonly string[],
-  operation: () => Promise<T>,
-): Promise<T> {
-  const paths = [...new Set(databasePaths.map(resolvePathViaExistingAncestorSync))].toSorted();
-  const enter = async (index: number): Promise<T> => {
-    const databasePath = paths[index];
-    return databasePath
-      ? await withFileLock(
-          `${databasePath}.plugin-model-catalog`,
-          {
-            retries: {
-              retries: 20,
-              factor: 2,
-              minTimeout: 100,
-              maxTimeout: 10_000,
-              randomize: true,
-            },
-            stale: 180_000,
-            staleRecovery: "remove-if-definitely-stale",
-          },
-          () => enter(index + 1),
-        )
-      : await operation();
-  };
-  return await enter(0);
-}
 
 /** The canonical executor owns preparation, publication, and custody settlement. */
 export async function withPluginModelCatalogWorker<T>(
@@ -112,10 +82,6 @@ export async function loadPersistedPluginModelCatalogs(
     path: resolveAuthProfileDatabasePath(agentDir),
     env,
   };
-  const identity = readDatabasePathIdentitySync(options.path);
-  if (!identity.key.startsWith("file:")) {
-    return [];
-  }
   const root = captureOpenClawStateReadContext(resolveOpenClawStateSqlitePath(env));
   const controller = new AbortController();
   let reading: Promise<PersistedPluginModelCatalog[]> | undefined;
@@ -128,24 +94,31 @@ export async function loadPersistedPluginModelCatalogs(
     controller.signal.throwIfAborted();
     root.admission.assertCurrent();
     root.maintenanceScope?.assertAdmission();
-    assertExistingDatabaseIdentity(options.path, identity.key, identity.birthtime);
   };
   const unregisterAgent = registerOpenClawAgentDatabaseAsyncResource({ ...options, revoke, close });
   try {
-    const inspection = getArtifactPreservingSqliteRead(options.path);
-    reading = readPluginModelCatalogsInWorker(
-      {
-        ...options,
-        path: inspection?.canonicalPath ?? options.path,
-        expectedIdentity: inspection,
-        env: { ...env, OPENCLAW_STATE_DIR: resolveStateDir(env) },
-        pluginIds: pluginIds && [...pluginIds],
-      },
-      controller.signal,
-    );
-    const catalogs = await reading;
-    assertCurrent();
-    return catalogs;
+    reading = (async () => {
+      const identity = await readDatabasePathIdentity(options.path);
+      assertCurrent();
+      if (!identity.key.startsWith("file:")) {
+        return [];
+      }
+      const inspection = getArtifactPreservingSqliteRead(options.path);
+      const catalogs = await readPluginModelCatalogsInWorker(
+        {
+          ...options,
+          path: inspection?.canonicalPath ?? options.path,
+          expectedIdentity: inspection,
+          env: { ...env, OPENCLAW_STATE_DIR: resolveStateDir(env) },
+          pluginIds: pluginIds && [...pluginIds],
+        },
+        controller.signal,
+      );
+      assertDatabaseFileIdentity(await stat(options.path, { bigint: true }), identity);
+      assertCurrent();
+      return catalogs;
+    })();
+    return await reading;
   } finally {
     unregisterAgent();
   }

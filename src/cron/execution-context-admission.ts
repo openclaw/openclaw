@@ -13,13 +13,17 @@ import { prepareCommandOwnerAuthority } from "../auto-reply/command-auth.js";
 import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { prepareSessionGenerationFacts } from "../config/sessions/session-delivery-generation.js";
 import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import {
+  acquireTranscriptLease,
+  type TranscriptLease,
+} from "../config/sessions/transcript-lease.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "../gateway/operator-role-enforcement.js";
 import { resolveCreatorSandbox } from "../gateway/operator-role-policy.js";
 import { decodeGatewayOperatorRecoverySource } from "../gateway/operator-run-recovery-source.codec.js";
+import { chatRef } from "../sessions/chat-ref.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import { bindScheduledExecutionContext } from "./execution-context-registry.js";
@@ -33,6 +37,7 @@ import {
   type ScheduledRequesterRef,
 } from "./execution-context.js";
 import { cronExecutionActor, hasTransferredCronOwner } from "./human-owner.js";
+import { readCronOperatorSnapshot } from "./operator-source-snapshot.js";
 import { type ParentResetWatch, watchParentReset } from "./parent-reset-watch.js";
 import {
   failedScheduledExecution,
@@ -222,6 +227,13 @@ export function assembleScheduledAdmissionFacts(
   parentRow: ScheduledAdmissionFacts["parentRow"],
   owner: boolean | undefined,
 ): ScheduledAdmissionFacts {
+  let operatorSnapshot: ReturnType<typeof readCronOperatorSnapshot>;
+  try {
+    operatorSnapshot = readCronOperatorSnapshot(params.job);
+  } catch {
+    // The context builder reports invalid stored authority and refuses execution.
+    operatorSnapshot = undefined;
+  }
   return {
     trigger: params.trigger,
     ...(params.trigger === "event" ? { ingress: ingressFor(params.ingressBoundary) } : {}),
@@ -234,7 +246,10 @@ export function assembleScheduledAdmissionFacts(
     agentMainSessionKey: resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId }),
     agentSandboxMode: resolveSandboxConfigForAgent(params.cfg, params.agentId).mode,
     ...((params.creatorRoleSandbox ??
-      resolveCreatorSandbox(params.cfg, { actor: cronExecutionActor(params.job) })) === "required"
+      resolveCreatorSandbox(params.cfg, {
+        actor: cronExecutionActor(params.job),
+        openclawIdPrincipal: operatorSnapshot?.openclawIdPrincipal,
+      })) === "required"
       ? { creatorRoleSandbox: "required" as const }
       : {}),
     ...(params.toolsAllow ? { resolvedToolsAllow: params.toolsAllow } : {}),
@@ -259,7 +274,7 @@ export async function admitScheduledOccurrence(
   });
   let parentRow: ScheduledAdmissionFacts["parentRow"];
   let requesterOwner: RequesterOwnerCheck | undefined;
-  let generation: Awaited<ReturnType<typeof prepareSessionGenerationFacts>> | undefined;
+  let generation: TranscriptLease | undefined;
   let pause: CronParentUnavailable | undefined;
   let childParent: ScheduledOccurrence["childParent"];
   let parentWatch: ParentResetWatch | undefined;
@@ -309,13 +324,11 @@ export async function admitScheduledOccurrence(
       }
       if (typeof live !== "string") {
         // The link is key-only; this occurrence holds the incarnation it was admitted in.
-        generation = await prepareSessionGenerationFacts({
-          agentId: params.agentId,
-          storePath,
-          sessionKey: parentSessionKey,
-          sessionId: live.sessionId,
-          lifecycleRevision: live.lifecycleRevision ?? null,
-        });
+        generation = await acquireTranscriptLease(
+          chatRef({ agentId: params.agentId, storePath, sessionKey: parentSessionKey }),
+          { sessionId: live.sessionId, lifecycleRevision: live.lifecycleRevision },
+          { exact: "lifecycle" },
+        );
       }
       // A child working in its parent's workspace must also stop work that never
       // reaches a tool check, such as a CLI process's native file tools.

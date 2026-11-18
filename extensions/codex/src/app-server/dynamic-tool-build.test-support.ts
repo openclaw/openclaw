@@ -8,6 +8,11 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  recordSessionMetaFromInbound,
+  resolveStorePath,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { cleanupSessionStateForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { vi } from "vitest";
 import { buildDynamicTools } from "./dynamic-tool-build.js";
@@ -104,6 +109,23 @@ export function createRuntimeDynamicTool(name: string): AnyAgentTool {
       details: {},
     })),
   };
+}
+
+export async function declareWebChatSource(params: EmbeddedRunAttemptParams) {
+  const sessionKey = expectDefined(params.sessionKey, "Codex source session key");
+  const storePath = resolveStorePath(params.config?.session?.store, { agentId: "main" });
+  setRuntimeConfigSnapshot(params.config ?? {});
+  await upsertSessionEntry({
+    agentId: "main",
+    sessionKey,
+    storePath,
+    entry: { sessionId: params.sessionId, updatedAt: 1 },
+  });
+  await recordSessionMetaFromInbound({
+    sessionKey,
+    storePath,
+    ctx: { Provider: "webchat", GatewayClientCaps: [] },
+  });
 }
 
 export async function setupDynamicToolBuildFixture(): Promise<string> {

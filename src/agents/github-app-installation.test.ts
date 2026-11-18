@@ -465,6 +465,7 @@ const integrationState = vi.hoisted(() => ({
 vi.mock("../plugins/repository-integration-runtime.js", async (original) => {
   const actual = await original<typeof import("../plugins/repository-integration-runtime.js")>();
   return {
+    ...actual,
     getRepositoryIntegration: (capturedConfig?: OpenClawConfig) =>
       integrationState.real
         ? actual.getRepositoryIntegration(capturedConfig)

@@ -2,6 +2,7 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import * as normalization from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { projectAgentToolDefinition } from "../prepared-tool-definition.js";
 import { canonicalizeSessionEntry } from "../sessions/session-manager-persistence-entry.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
 import * as promptPool from "../sessions/system-prompt-pool.js";
@@ -15,13 +16,57 @@ import {
   prepareSessionToolSurface,
   persistSessionSystemPrompt,
   retainEmbeddedSessionPromptState,
+  readSessionSentTools,
   retireSessionSystemPrompt,
 } from "./session-prompt-state.js";
+import { readToolSurfaceCheckpoint } from "./session-tool-checkpoint.js";
 
 const sessionIds = new Set<string>();
 const entryMetadata = { parentId: null, timestamp: "2026-10-01T00:00:00Z" };
 const updateHeading =
   "System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.\n\n";
+
+it.each(["absent", "restored", "empty", "missing-tools", "malformed", "model-change"] as const)(
+  "keeps pure checkpoint definitions aligned with host restoration (%s)",
+  (shape) => {
+    const definition = { name: "read", description: "Read a file", parameters: { type: "object" } };
+    const marker = (id: string, data: unknown): SessionEntry => ({
+      ...entryMetadata,
+      type: "custom",
+      id,
+      customType: "openclaw.system-prompt",
+      data,
+    });
+    const entries: SessionEntry[] =
+      shape === "absent" ? [] : [marker("old-pin", { tools: [definition] })];
+    if (shape === "empty") {
+      entries.push(marker("empty-pin", { tools: [] }));
+    }
+    if (shape === "missing-tools") {
+      entries.push(marker("retired-pin", { restart: true }));
+    }
+    if (shape === "malformed") {
+      entries.push(marker("bad-pin", { tools: "not an array" }));
+    }
+    if (shape === "model-change") {
+      entries.push({
+        ...entryMetadata,
+        type: "model_change",
+        id: "changed",
+        provider: "fixture",
+        modelId: "replacement",
+      });
+    }
+    const expected = shape === "restored" ? [definition] : shape === "empty" ? [] : undefined;
+    const definitions = readToolSurfaceCheckpoint(entries)?.tools;
+    expect(definitions).toEqual(expected);
+    const host = readSessionSentTools(entries)?.map(projectAgentToolDefinition);
+    const worker = definitions?.map((tool) =>
+      projectAgentToolDefinition({ ...tool, label: tool.name }),
+    );
+    expect(worker).toEqual(host);
+  },
+);
 
 function historyEntry(type: "compaction" | "reset", id: string = type): SessionEntry {
   return type === "reset"

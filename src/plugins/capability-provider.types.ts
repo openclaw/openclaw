@@ -184,6 +184,8 @@ type WorkerNodeBootstrapAccess = {
 /** Operation-bound immutable artifacts without a node identity or enrollment credential. */
 export type WorkerNodeRuntimePreparation = WorkerNodeBootstrapAccess & {
   workerBundle: {
+    bundleHash?: string;
+    protocolFeatures?: readonly string[];
     url: string;
     token: string;
     sha256: string;
@@ -513,8 +515,8 @@ export type WorkerProvider = {
   ) => Promise<SpawnResult | undefined>;
   /**
    * Restart only the same enrolled node on this dedicated lease after proving its
-   * process is absent. A live process owns reconnect. Never allocate, install, pair,
-   * change repository contents, or replay input. Settle commands on cancellation.
+   * process is absent. A live process owns reconnect unless runtime preparation admits an idle
+   * upgrade. Never allocate, pair, change repository contents, or replay input. Settle commands on cancellation.
    */
   resumeNode?: (request: {
     leaseId: string;
@@ -522,6 +524,10 @@ export type WorkerProvider = {
     deviceId: string;
     nodeBootstrapSha256: string;
     openclawVersion: string;
+    /** Fresh immutable runtime grants; upgrade only the exact idle enrolled node. */
+    runtime?: WorkerNodeRuntimePreparation;
+    /** Recovery-only work consumes the canonical retained runtime without replacing it. */
+    retainedRuntimeOnly?: true;
     /** Saved preparation target, not the profile's current default. */
     platform: string;
     signal: AbortSignal;

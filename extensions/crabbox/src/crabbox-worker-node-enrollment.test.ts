@@ -27,12 +27,10 @@ import {
 import {
   createNodeBootstrapFixture,
   createNodePackageFixture,
-  createNodeResumeFixture,
   expectAbsent,
   expectFailure,
   expectPrivate,
   expectSetupPhases,
-  expectResumePublicationFailures,
   readLaunch,
   runtimeManifestSha256,
   type DesktopFixture,
@@ -348,67 +346,6 @@ childProcess.spawn = (command, args, options) => {
 }
 
 describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
-  it.skipIf(process.platform !== "linux")(
-    "resumes only a dead enrolled process without changing its runtime or workspace",
-    async ({ signal }) => {
-      const { home, stateDir, stop } = testHome();
-      const { nodeBootstrap, authorizations } = await servePackage("same-node-resume");
-      await expectSetupPhases(enroll(home, nodeBootstrap));
-      await readLaunch(stateDir, receipts, signal);
-      const { invoke, resume } = createNodeResumeFixture({ home, leaseId, nodeBootstrap, signal });
-      const pidFile = path.join(stateDir, "node.pid");
-      const initialPid = readText(pidFile);
-      const activation = readText(stateDir, "activation.jsonl");
-      const installed = readText(runtimePackage(home, nodeBootstrap.sha256), "installed.json");
-      const requests = authorizations.length;
-      fs.writeFileSync(path.join(stateDir, "workspace-sentinel"), "private work stays here");
-      expect(resume().status).toBe(0);
-      expect(readText(pidFile)).toBe(initialPid);
-      await stop();
-      await expectResumePublicationFailures({
-        home,
-        stateDir,
-        initialPid,
-        receipts,
-        signal,
-        resume: (env) => resume({}, env),
-        invoke,
-      });
-      expect(resume().status).toBe(0);
-      const launch = await readLaunch(stateDir, receipts, signal);
-      expect(readText(pidFile)).not.toBe(initialPid);
-      expect(launch.args).toEqual([
-        "node",
-        "run",
-        "--resume-device",
-        "device-test",
-        "--ephemeral",
-        "--display-name",
-        "Cloud worker",
-      ]);
-      expectPrivate(launch);
-      expect(readText(stateDir, "workspace-sentinel")).toBe("private work stays here");
-      expect(readText(stateDir, "activation.jsonl")).toBe(activation);
-      expect(readText(runtimePackage(home, nodeBootstrap.sha256), "installed.json")).toBe(
-        installed,
-      );
-      expect(authorizations).toHaveLength(requests);
-      expect(resume({ deviceId: "other-device" }).status).toBe(1);
-      expect(resume({ nodeBootstrapSha256: "0".repeat(64) }).status).toBe(1);
-      await stop();
-      const deadPid = readText(pidFile);
-      try {
-        fs.writeFileSync(pidFile, String(process.pid));
-        expect(resume().stderr).toContain("different bootstrap artifact or invocation");
-      } finally {
-        fs.writeFileSync(pidFile, deadPid);
-      }
-      fs.unlinkSync(pidFile);
-      expect(resume().stderr).toContain("launch is incomplete");
-      expectAbsent(pidFile);
-    },
-  );
-
   it.for([
     { cached: false, uid: 0, status: 0, target: "linux" as const },
     { cached: true, uid: 1000, status: 0, target: "linux" as const },

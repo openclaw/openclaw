@@ -110,6 +110,7 @@ export const MEMBERSHIP_OPS = [
   "revoke_device",
   "add_owner_device",
   "add_member_device",
+  "set_member_recovery_kit",
   "deny_invite",
   "add_node",
   "remove_node",
@@ -133,6 +134,7 @@ export type MembershipTarget =
       device_pub: Ed25519PublicKey;
       label: string;
     }
+  | { op: "set_member_recovery_kit"; account_id: string; device_pub: Ed25519PublicKey | null }
   | { op: "add_node"; peer_key: IrohEndpointKey; label: string; invite_id: string }
   | { op: "remove_node"; peer_key: IrohEndpointKey }
   | { op: "remove"; account_id: string }

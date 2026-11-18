@@ -40,6 +40,24 @@ export function registerNodeCli(program: Command) {
   );
 
   node.addCommand(
+    node
+      .createCommand("prepare-worker-bundle")
+      .requiredOption("--input <json>", "Worker build and archive identity")
+      .option("--verify-only", "Inspect without changing the package")
+      .action(async (opts: { input: string; verifyOnly?: boolean }) => {
+        const { parseNodeWorkerBundlePreparationInput } =
+          await import("../../worker/node-bundle-install-protocol.js");
+        const { preparePackagedNodeWorkerBundle } =
+          await import("../../node-host/node-worker-bundle-cache.js");
+        await preparePackagedNodeWorkerBundle(
+          parseNodeWorkerBundlePreparationInput(opts.input),
+          opts.verifyOnly,
+        );
+      }),
+    { hidden: true },
+  );
+
+  node.addCommand(
     createNodeWorkerCommand().action(async (opts: { desktopSharing?: boolean }) => {
       const { runNodeHostWorker } = await import("../../node-host/worker.js");
       await runNodeHostWorker({ desktopSharingEnabled: opts.desktopSharing });
@@ -52,7 +70,10 @@ export function registerNodeCli(program: Command) {
   )
     .argument("<link>", "openclaw-node:// invitation link")
     .option("--service", "Install and run the node host as an OS service")
-    .option("--discovery-url <url>", "Discovery API origin (separate from the invitation link)")
+    .option(
+      "--discovery-url <url>",
+      "Discovery API origin (overrides the origin carried by the invitation link)",
+    )
     .option("--display-name <name>", "Override node display name")
     .action(async (link: string, opts, command: Command) => {
       try {

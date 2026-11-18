@@ -150,7 +150,7 @@ export async function waitForNodeRunnerAvailability(
     getIssue?: (nodeId: string) => NodeRunnerInventoryIssue | undefined;
   },
   nodeId: string,
-  options: { signal: AbortSignal; assertCurrent: () => void },
+  options: { signal: AbortSignal; assertCurrent: () => void; isReady?: () => boolean },
 ): Promise<void> {
   let changed = createDeferredCore();
   const unsubscribe = publisher.subscribe(nodeId, () => changed.resolve());
@@ -166,11 +166,12 @@ export async function waitForNodeRunnerAvailability(
         options.signal,
       );
       assertCurrent();
-      if (node && transport.isCurrent(node)) {
+      const ready = !options.isReady || options.isReady();
+      if (node && transport.isCurrent(node) && ready) {
         return;
       }
       const issue = transport.getIssue?.(nodeId);
-      if (issue) {
+      if (issue && ready) {
         throw createNodeRunnerInventoryIssueError(nodeId, issue);
       }
       await racePromiseWithAbortSignal(changed.promise, options.signal);

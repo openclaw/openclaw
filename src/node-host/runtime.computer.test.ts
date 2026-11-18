@@ -79,7 +79,8 @@ async function startComputer(ephemeral = true, prepare?: () => Promise<void>) {
     requests.push(args);
     return {};
   }
-  const runtime = prepared.start({ client: { request }, onManifestChanged: vi.fn() });
+  const onManifestChanged = vi.fn();
+  const runtime = prepared.start({ client: { request }, onManifestChanged });
   let invokeId = 0;
   const invoke = async (input: unknown, command = NODE_WORKER_DESKTOP_COMPUTER_COMMAND) => {
     const id = `invoke-${++invokeId}`;
@@ -104,6 +105,7 @@ async function startComputer(ephemeral = true, prepare?: () => Promise<void>) {
     close,
     stopWatching,
     openExecution,
+    onManifestChanged,
     setProviderGeneration(value: string) {
       providerGeneration = value;
     },
@@ -138,7 +140,7 @@ async function withComputer(
 }
 
 describe("private worker computer runtime", () => {
-  it("awaits the registered provider preparation before publishing the first manifest", async () => {
+  it("connects with mandatory commands while joining private provider preparation before use", async () => {
     const gate = createDeferredCore();
     const entered = createDeferredCore();
     const prepare = vi.fn(() => {
@@ -153,16 +155,57 @@ describe("private worker computer runtime", () => {
     try {
       await entered.promise;
       expect(prepare).toHaveBeenCalledOnce();
-      expect(prepared).toBe(false);
-      gate.resolve();
       const host = await starting;
-      expect(await host.invoke({ operation: "capabilities" })).toMatchObject({ ok: true });
+      expect(prepared).toBe(true);
+      expect(host.prepared.manifest.commands).not.toContain("computer.act");
+      let invoked = false;
+      const invoking = host.invoke({ operation: "capabilities" }).then((result) => {
+        invoked = true;
+        return result;
+      });
+      await setImmediate();
+      expect(invoked).toBe(false);
+      gate.resolve();
+      expect(await invoking).toMatchObject({ ok: true });
       await host.runtime.cancelAll();
       await host.invoke({ operation: "capabilities" });
       expect(prepare).toHaveBeenCalledOnce();
     } finally {
       gate.resolve();
       await (await starting).runtime.close();
+    }
+  });
+
+  it("retires deferred preparation resources when closed before readiness", async () => {
+    const prepared = createDeferredCore();
+    const retired = createDeferredCore();
+    const retiring = createDeferredCore();
+    const host = await startComputer(true, () => prepared.promise);
+    host.stopWatching.mockImplementation(() => {
+      retiring.resolve();
+      return retired.promise;
+    });
+    let closed = false;
+    const closing = host.runtime.close().then(() => {
+      closed = true;
+    });
+    try {
+      await setImmediate();
+      expect(closed).toBe(false);
+      prepared.resolve();
+      await Promise.race([retiring.promise, closing]);
+      expect(host.stopWatching).toHaveBeenCalledOnce();
+      expect(closed).toBe(false);
+      expect(host.onManifestChanged).not.toHaveBeenCalled();
+      retired.resolve();
+      await closing;
+      await host.runtime.close();
+      expect(host.stopWatching).toHaveBeenCalledOnce();
+      expect(host.openExecution).not.toHaveBeenCalled();
+    } finally {
+      prepared.resolve();
+      retired.resolve();
+      await closing;
     }
   });
 

@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { ToolInterruptedByUser } from "../../packages/agent-core/src/tool-interruption.js";
 import { resolveStateDir } from "../config/paths.js";
 import { createAbortError } from "../infra/abort-signal.js";
+import { captureDiagnosticToolExecutionAwaiting } from "../infra/diagnostic-tool-execution-liveness.js";
 import {
   loadExecApprovalsReadOnlyAsync,
   maxAsk,
@@ -491,6 +492,20 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             ? preparedRunEnvironment.localIdentityEnv.GH_CONFIG_DIR
             : undefined;
 
+        const subagentSession =
+          notifyOnExit && allowBackground ? await resolveSubagentSession() : false;
+        const timeoutSec =
+          params.timeoutSeconds ??
+          (startsService ? serviceTimeoutSec(subagentSession) : defaultTimeoutSec);
+        const deadlineSource = params.timeoutSeconds === undefined ? "default" : "explicit";
+        captureDiagnosticToolExecutionAwaiting()(() => [
+          {
+            kind: "exec",
+            phase: "preparing",
+            deadlineSource: timeoutSec === null || timeoutSec <= 0 ? "none" : deadlineSource,
+          },
+        ]);
+
         const githubApp = prepareLocalGitHubAppExecution(
           defaults,
           host === "gateway" ? preparedRunEnvironment.appInstallationProfileId : undefined,
@@ -541,8 +556,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           );
         }
 
-        const subagentSession =
-          notifyOnExit && allowBackground ? await resolveSubagentSession() : false;
         assertSourceActive();
         run = await runExecProcess({
           workerMemoryBoundary: defaults?.workerMemoryBoundary,
@@ -574,9 +587,8 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           agentId,
           eventRouting: defaults?.eventRouting,
           notifyDeliveryContext,
-          timeoutSec:
-            params.timeoutSeconds ??
-            (startsService ? serviceTimeoutSec(subagentSession) : defaultTimeoutSec),
+          timeoutSec,
+          deadlineSource,
           processContinuationAvailable: allowBackground,
           startupSignal: signal,
           onUpdate,
@@ -589,8 +601,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             settled = true;
           },
         });
-        // Completion wakes need the backgrounding below, so this precedes any wake.
-        run.session.originRunId = defaults?.runId;
+        run.session.startedByRunId = defaults?.runId;
         discardPreparedSandboxWorkdir = null;
       } catch (error) {
         gatewayApproval?.releaseSpawn?.();
@@ -699,8 +710,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
                 outcome: completed.outcome,
                 cwd: run.session.cwd,
                 warningText: getWarningText(),
-                aggregateOutputDropped:
-                  run.session.totalOutputChars > run.session.aggregated.length,
+                session: run.session,
               })
             : {
                 content: [

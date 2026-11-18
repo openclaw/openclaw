@@ -347,6 +347,8 @@ export async function runGitCandidatePreflight(params: {
   sourceRuntimePrepared?: boolean;
   /** Immutable releases must build exactly the candidate's recorded dependency graph. */
   frozenLockfile?: boolean;
+  /** Build in this release worktree, under `prefix`, instead of a temporary one. */
+  release?: { prefix: string; worktreeDir: string };
   beforeGitStaging?: UpdateRunnerOptions["beforeGitStaging"];
   validateCandidate: UpdateRunnerOptions["validateCandidate"];
   prepareGitExposure?: UpdateRunnerOptions["prepareGitExposure"];
@@ -574,7 +576,7 @@ export async function runGitCandidatePreflight(params: {
   await params.beforeCandidate(preflightBaseSha);
   let preflightRoot: string;
   try {
-    preflightRoot = await createPreflightRoot(params.artifactRoot);
+    preflightRoot = params.release?.prefix ?? (await createPreflightRoot(params.artifactRoot));
   } catch (error) {
     return {
       status: "error",
@@ -583,7 +585,8 @@ export async function runGitCandidatePreflight(params: {
         : "preflight-worktree-failed",
     };
   }
-  const worktreeDir = path.join(preflightRoot, PREFLIGHT_WORKTREE_DIRNAME);
+  const worktreeDir =
+    params.release?.worktreeDir ?? path.join(preflightRoot, PREFLIGHT_WORKTREE_DIRNAME);
   let tested: PreflightCandidateResult | undefined;
   let replayConflict: { sha: string; paths: string[] } | undefined;
   // Stays true only while every candidate was rejected by a local replay conflict.

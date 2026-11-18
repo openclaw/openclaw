@@ -349,6 +349,64 @@ describe("worker node enrollment", () => {
     },
   );
 
+  it("issues current runtime grants for an exact attached recovery without enrolling again", async () => {
+    const provisioning = await createProvisioning("retained-device");
+    const credential = {
+      credentialHash: createHash("sha256")
+        .update("synthetic-retained-upgrade-credential")
+        .digest("base64url"),
+      sessionId: null,
+      rpcSetVersion: 1,
+      expiresAtMs: Date.now() + 60000,
+    };
+    await store.transition({
+      environmentId: provisioning.environmentId,
+      from: "provisioning",
+      to: "ready",
+      patch: {
+        leaseId: "retained-lease",
+        sharedHost: false,
+        bootstrapReceipt: {
+          bundleHash: "b".repeat(64),
+          openclawVersion: "2026.8.1",
+          protocolFeatures: [],
+          installKind: "bundle",
+        },
+        credential,
+      },
+    });
+    const record = await store.transition({
+      environmentId: provisioning.environmentId,
+      from: "ready",
+      to: "attached",
+      patch: {
+        attachedSessionIds: ["retained-session"],
+        credential: { ...credential, sessionId: "retained-session" },
+      },
+    });
+    const manager = createManager();
+    const ensureEnrollment = vi.spyOn(store, "ensureNodeEnrollment");
+    vi.mocked(ensureDevicePairSetupBootstrapToken).mockClear();
+    let admitted = true;
+    const runtime = await manager.prepareRuntime(record, bundle(), undefined, () => {
+      if (!admitted) {
+        throw new Error("placement recovery closed");
+      }
+    });
+    try {
+      expect(runtime.nodeBootstrap.sha256).toBe(artifact().tarballSha256);
+      expect(transfer.authorize(downloadRequest(runtime.nodeBootstrap))).toBeDefined();
+      expect(ensureEnrollment).not.toHaveBeenCalled();
+      expect(ensureDevicePairSetupBootstrapToken).not.toHaveBeenCalled();
+      admitted = false;
+      expect(transfer.authorize(downloadRequest(runtime.nodeBootstrap))).toBeUndefined();
+      expect(store.get(record.environmentId)?.nodeDeviceId).toBe("retained-device");
+      expect(store.get(record.environmentId)?.attachedSessionIds).toEqual(["retained-session"]);
+    } finally {
+      manager.closeRuntime(runtime);
+    }
+  });
+
   it("transfers the prepared project lock under the runtime's revocable authority", async () => {
     const record = await createProvisioning();
     const manager = createManager({

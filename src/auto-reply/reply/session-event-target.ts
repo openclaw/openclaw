@@ -35,6 +35,7 @@ import {
   parseAgentSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deletion-journal.read.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
@@ -186,7 +187,11 @@ export async function captureSessionEventTargetForHost(
     let toolsAllow: string[] | undefined;
     if (caller && callerAgentMatches) {
       assertCaptureCurrent();
-      if (caller.sessionEventToolsAllow) {
+      // A session-scoped surface is this session's own policy, so its follow-ups need no ceiling.
+      const sessionScopedSurface =
+        caller.sessionEventToolsAllowSessionScoped === true &&
+        resolveSessionEventKey(agentId, caller.sessionKey) === sessionKey;
+      if (caller.sessionEventToolsAllow && !sessionScopedSurface) {
         if (
           caller.sessionEventToolsAllow.length > 512 ||
           caller.sessionEventToolsAllow.some((name) => name.length > 256)
@@ -307,8 +312,7 @@ export async function prepareSessionEventTargetForHost(
   if (!target.agentId || !target.sessionKey || !target.storePath) {
     throw new Error("Session event target has no captured destination");
   }
-  const { prepareSessionGenerationFacts } =
-    await import("../../config/sessions/session-delivery-generation.js");
+  const { prepareChatLease } = await import("../../config/sessions/session-delivery-generation.js");
   const env = targetScopes.get(target)?.env;
   const assertAcceptance = () => {
     options.assertAcceptanceCurrent?.();
@@ -339,19 +343,16 @@ export async function prepareSessionEventTargetForHost(
       Promise.resolve(),
     );
   }
-  let lease: Awaited<ReturnType<typeof prepareSessionGenerationFacts>> | undefined;
+  let lease: Awaited<ReturnType<typeof prepareChatLease>> | undefined;
   try {
     try {
       const prepared = await preparation?.preparations[0];
       assertAcceptance();
       prepared?.assertCurrent();
-      lease = await prepareSessionGenerationFacts({
-        agentId: target.agentId,
-        storePath: target.storePath,
-        sessionKey: target.sessionKey,
-        sessionId: target.sessionId || null,
-        lifecycleRevision: target.lifecycleRevision ?? null,
+      const { agentId, storePath, sessionKey } = target;
+      lease = await prepareChatLease(chatRef({ agentId, storePath, sessionKey }), {
         env,
+        ...(target.sessionId ? {} : { absent: true }),
       });
       prepared?.assertCurrent();
       assertAcceptance();
@@ -360,6 +361,12 @@ export async function prepareSessionEventTargetForHost(
     }
     assertAcceptance();
     lease.assertCurrent();
+    // The lease follows the key; later admission pins the chat's current transcript.
+    const current = lease.readSessionSettings();
+    if (current) {
+      target.sessionId = current.sessionId;
+      target.lifecycleRevision = current.lifecycleRevision;
+    }
     const retained = lease;
     const assertTargetCurrent = () => {
       assertSessionEventTargetCurrent(target);

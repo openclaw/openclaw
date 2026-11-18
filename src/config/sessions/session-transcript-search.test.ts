@@ -40,11 +40,9 @@ import {
   reconcileSessionTranscriptIndexes,
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
-import {
-  searchSessionTranscripts as searchSessionTranscriptsAsync,
-  searchSessionTranscriptsReadOnlySync,
-} from "./session-transcript-search.js";
+import { searchSessionTranscripts as searchSessionTranscriptsAsync } from "./session-transcript-search.js";
 import type { SessionTranscriptSearchParams } from "./session-transcript-search.types.js";
+import { searchSessionTranscriptsReadOnlySync } from "./session-transcript-search.worker.js";
 import { messageEvent } from "./transcript-message.test-support.js";
 
 vi.mock("../config.js", async () => ({

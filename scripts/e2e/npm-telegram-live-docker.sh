@@ -226,6 +226,8 @@ docker_e2e_build_or_reuse "$IMAGE_NAME" npm-telegram-live "$ROOT_DIR/scripts/e2e
 mkdir -p "$ROOT_DIR/.artifacts/qa-e2e"
 mkdir -p "$OUTPUT_DIR_HOST"
 npm_prefix_host="$(mktemp -d "$ROOT_DIR/.artifacts/qa-e2e/npm-telegram-live-prefix.XXXXXX")"
+# The disposable package prefix is shared with the container's non-root appuser.
+chmod a+rwx "$npm_prefix_host"
 harness_root="$(mktemp -d "$ROOT_DIR/.artifacts/qa-e2e/npm-telegram-live-harness.XXXXXX")"
 harness_package_json="$harness_root/package.json"
 cp "$ROOT_DIR/package.json" "$harness_package_json"
