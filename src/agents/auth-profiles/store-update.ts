@@ -88,7 +88,10 @@ import type {
 import type { AuthStoreUpdateInput } from "./store.worker-contract.js";
 import type { AuthProfileStore, PreparedAuthProfileStoreOwner } from "./types.js";
 import { reserveAuthProfileUsagePreparation, runAuthProfileUsage } from "./usage-lifecycle.js";
-import { captureAuthProfileWriteExecution } from "./write-execution.js";
+import {
+  captureAuthProfileCandidateWriteExecution,
+  captureAuthProfileWriteExecution,
+} from "./write-execution.js";
 
 class AuthProfileSharedSourceChangedError extends Error {}
 
@@ -160,7 +163,10 @@ export function runAuthProfileStoreUpdate(params: AuthProfileStoreUpdate): Promi
             env,
           }
         : undefined);
-    const execution = target ? captureAuthProfileWriteExecution({ ...target, env }) : undefined;
+    let execution =
+      target && !params.existingDatabaseTarget
+        ? captureAuthProfileWriteExecution({ ...target, env })
+        : undefined;
     let transferred = false;
     let followsCapturedAgent = true;
     const assertCurrent = () => {
@@ -178,6 +184,10 @@ export function runAuthProfileStoreUpdate(params: AuthProfileStoreUpdate): Promi
         : []),
     ]);
     try {
+      // Candidates already pin their file; reserve FIFO order before async executor admission.
+      if (params.existingDatabaseTarget) {
+        execution = await captureAuthProfileCandidateWriteExecution(params.existingDatabaseTarget);
+      }
       await reservation.ready;
       const prepared = await prepareAuthProfileWriteTransactionAsync(
         params.agentDir,
