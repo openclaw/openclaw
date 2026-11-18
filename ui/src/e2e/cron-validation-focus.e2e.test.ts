@@ -26,7 +26,6 @@ suite.define(() => {
         },
       });
       await page.goto(suite.server.baseUrl + "cron?new");
-      await page.locator("#cron-name").fill("Synthetic garden inventory");
       await page.locator("#cron-payload-text").fill("Summarize the fictional garden inventory.");
       const advanced = page.locator("details.cron-advanced").first();
       const summary = advanced.locator("summary").first();

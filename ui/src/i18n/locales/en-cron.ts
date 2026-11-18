@@ -27,7 +27,6 @@ const enCron = {
       unknown: "Couldn’t start this automation. Try again.",
     },
     errors: {
-      nameRequired: "Name is required.",
       activeHoursTime: "Enter HH:MM (24:00 is allowed only for the end).",
       activeHoursTimezone: "Enter a valid IANA time zone, local, or user.",
       scheduleAtInvalid: "Enter a valid date and time.",

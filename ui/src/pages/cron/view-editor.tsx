@@ -212,11 +212,12 @@ export function Editor(props: EditorProps & { phoneLayout: boolean }) {
 }
 
 /**
- * The automation as one composer: name and prompt on the sheet, and when and how it runs on
- * the tray tucked under it.
+ * The automation as one composer: prompt (and, once saved, its name) on the sheet, and when
+ * and how it runs on the tray tucked under it. New automations are named from their prompt.
  */
 function PromptBlock(
   props: CronProps & {
+    mode: CronPanelMode;
     payloadLocked: boolean;
     isAgentTurn: boolean;
     phoneLayout: boolean;
@@ -243,36 +244,29 @@ function PromptBlock(
       return { value, label: value, provider: provider ?? undefined };
     }),
   );
-  const nameError = () => props.fieldErrors.name;
   const payloadError = () => props.fieldErrors.payloadText;
   return (
     <div class="cron-prompt cron-prompt--editing">
       <div class="cron-prompt__sheet">
-        <textarea
-          id={inputIdForField("name")}
-          class="cron-prompt__name"
-          rows="1"
-          value={props.form.name}
-          aria-label={t("cron.form.fieldName")}
-          aria-required="true"
-          aria-invalid={nameError() ? "true" : "false"}
-          aria-describedby={nameError() ? errorIdForField("name") : undefined}
-          placeholder={t("cron.form.namePlaceholder")}
-          onKeyDown={(event) => {
-            // The name is one line that wraps, as the single-line field it replaces.
-            if (event.key === "Enter" && !event.isComposing) {
-              event.preventDefault();
+        <Show when={props.mode === "job"}>
+          <textarea
+            id={inputIdForField("name")}
+            class="cron-prompt__name"
+            rows="1"
+            value={props.form.name}
+            aria-label={t("cron.form.fieldName")}
+            placeholder={t("cron.form.namePlaceholder")}
+            onKeyDown={(event) => {
+              // The name is one line that wraps, as the single-line field it replaces.
+              if (event.key === "Enter" && !event.isComposing) {
+                event.preventDefault();
+              }
+            }}
+            onInput={(event) =>
+              props.onFormChange({ name: event.currentTarget.value.replace(/[\r\n]+/g, "") })
             }
-          }}
-          onInput={(event) =>
-            props.onFormChange({ name: event.currentTarget.value.replace(/[\r\n]+/g, "") })
-          }
-        />
-        {nameError() ? (
-          <div id={errorIdForField("name")} class="cron-help cron-error" role="alert">
-            {t(nameError() ?? "")}
-          </div>
-        ) : undefined}
+          />
+        </Show>
         {props.payloadLocked ? (
           <>
             <pre

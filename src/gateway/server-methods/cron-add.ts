@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -16,6 +17,7 @@ import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
 import type { CronDeliveryPreview, CronJobCreate } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import {
   applyCronCreateCallerScopeDefault,
@@ -57,6 +59,9 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   }
   const commandCreation = readPluginCommandCreation(rawParams);
   const params = commandCreation.params;
+  // Normalization fills a missing name from the prompt's first line; a model name replaces it below.
+  const rawName = asOptionalObjectRecord(params)?.name;
+  const nameProvided = typeof rawName === "string" && rawName.trim().length > 0;
   let candidate: unknown;
   let enabledExplicit: boolean;
   try {
@@ -182,6 +187,45 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     creatorOptions?.disposeInferenceAuthorization?.();
     respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
     return;
+  }
+  const namingAgentId = tryResolveCronJobEffectiveAgentId(
+    jobCreate,
+    context.cron.getDefaultAgentId(),
+  );
+  const namingSource =
+    jobCreate.payload.kind === "agentTurn"
+      ? jobCreate.payload.message
+      : jobCreate.payload.kind === "systemEvent"
+        ? jobCreate.payload.text
+        : undefined;
+  // Declarations converge on their key, so a generated name would churn on every apply.
+  if (!nameProvided && !jobCreate.declarationKey && namingAgentId && namingSource) {
+    let operator: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+    try {
+      operator = await captureGatewayOperatorRunAuthority({
+        client,
+        context,
+        hasCurrentClientAuthority,
+        invocationAuthority: { assertCurrent: commitGuard, signal },
+      });
+      const { generateAutomationName } = await import("../dashboard-session-title.js");
+      const name = await generateAutomationName({
+        cfg,
+        agentId: namingAgentId,
+        message: namingSource,
+        abortSignal: signal,
+        assertCurrent: commitGuard,
+        operatorAuthority: operator?.authority,
+      });
+      if (name) {
+        jobCreate.name = name;
+      }
+    } catch {
+      // Naming is best effort: the prompt-derived name stays, and the commit guard
+      // below still refuses a request whose authority changed meanwhile.
+    } finally {
+      operator?.release();
+    }
   }
   // Resolve the preview before durable add so a preview failure cannot duplicate a retry.
   const previewContext = { cfg, defaultAgentId: context.cron.getDefaultAgentId() };

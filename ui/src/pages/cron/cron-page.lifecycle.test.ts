@@ -46,11 +46,10 @@ function deferred<T>(fallback: T) {
 
 const gate = () => deferred<void>(undefined);
 
-async function openDraft(page: CronTestPage, name: string, prompt: string) {
+async function openDraft(page: CronTestPage, prompt: string) {
   click(page, testId("cron-new-task"));
   await import("./view-detail.tsx");
   await waitForElement(page, "fieldset.cron-editor");
-  fillInput(page, "#cron-name", name);
   fillInput(page, "#cron-payload-text", prompt);
   await page.settle();
 }
@@ -194,7 +193,7 @@ it.each(["catalog-needed", "configured-alternative"])(
     const page = createPage(context, { render: true });
     await waitForCronPage(() => expect(page.cron.cronLoading).toBe(false));
     await page.settle();
-    await openDraft(page, "Provider identity", "Use the selected model");
+    await openDraft(page, "Use the selected model");
     await waitForCronPage(() => expect(page.cronModelSuggestions.length).toBeGreaterThan(0));
     await page.settle();
     const trigger = page.querySelector<HTMLButtonElement>("#cron-payload-model-picker")!;
@@ -224,6 +223,8 @@ it.each(["catalog-needed", "configured-alternative"])(
         message: "Use the selected model",
         model: "beta/shared-model",
       });
+      // A new automation leaves naming to the Gateway.
+      expect(adds[0]?.[1]).toHaveProperty("name", undefined);
     });
     await waitForCronPage(() => expect(page.cron.cronBusy).toBe(false));
   },
@@ -237,7 +238,7 @@ it.each([false, true])(
       refreshFailed: false,
     };
     const { page, gateway } = mountCronPage(modelClient(() => result));
-    await openDraft(page, "Catalogue recovery", "Keep this draft");
+    await openDraft(page, "Keep this draft");
     await expectModels(page, ["fixture/obsolete"]);
     result = {
       models: hasRows ? [{ provider: "fixture", id: "current", name: "Current model" }] : [],
@@ -270,7 +271,7 @@ it.each(["agent", "connection", "detach", "panel close"])(
       .mockReturnValue({ models: [{ id: "current-model" }] });
     const client = modelClient(read);
     const { page, gateway, context } = mountCronPage(client);
-    await openDraft(page, "Catalogue retirement", "Keep current owner");
+    await openDraft(page, "Keep current owner");
     await expectModels(page, ["initial-model"]);
     emitEvent(gateway, "config.changed");
     await waitForCronPage(() => expect(read).toHaveBeenCalledTimes(2));
@@ -298,7 +299,7 @@ it.each(["agent", "connection", "detach", "panel close"])(
         await page.settle();
         expect(read).toHaveBeenCalledTimes(readsBeforeCompletion);
         expect(page.textContent).not.toContain("Retired catalog error");
-        await openDraft(page, "Current catalogue", "Use the current owner");
+        await openDraft(page, "Use the current owner");
       }
       await expectModels(page, ["current-model"]);
       await page.settle();
@@ -344,7 +345,7 @@ it("refreshes model suggestions when team selection changes without changing sco
     { render: true },
   );
   cleanups.push(() => agentSelection.dispose());
-  await openDraft(page, "Same-scope selection", "Retain this draft");
+  await openDraft(page, "Retain this draft");
   await expectModels(page, ["main-model"]);
   const cron = page.cron;
   emitEvent(gateway, "chat.metadata.changed");

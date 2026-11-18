@@ -138,7 +138,6 @@ suite.define(() => {
           .poll(() => picker.locator('[data-value="fixture/aurora-large"]').count())
           .toBe(1);
         await trigger.click();
-        await page.locator("#cron-name").fill("Keep this draft");
         await page.locator("#cron-payload-text").fill("Do not submit this automation");
         const writesBeforeSearch = mutations.length;
         await trigger.focus();
@@ -157,7 +156,6 @@ suite.define(() => {
         await press("Enter");
         expect(await trigger.getAttribute("aria-label")).toBe("Model: fixture/not-in-catalog");
         await press("Escape");
-        expect(await page.locator("#cron-name").inputValue()).toBe("Keep this draft");
         expect(await page.locator("#cron-payload-text").inputValue()).toBe(
           "Do not submit this automation",
         );

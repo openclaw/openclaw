@@ -275,7 +275,6 @@ catalogSuite.define(() => {
         await waitForControlUiGatewayReady(page);
         // Without an automation, the page's empty state offers New automation.
         await page.locator('[data-test-id="cron-new-task"]').click();
-        await page.locator("#cron-name").fill("Retain this draft");
         await page.locator("#cron-payload-text").fill("Do not submit this draft");
         const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
         const modelOption = (id: string) =>
@@ -319,9 +318,6 @@ catalogSuite.define(() => {
                     "held",
                     "recovered",
                   ].filter((modelId) => values.includes(`fixture/${modelId}`)),
-                  catalogDraftNameRetained:
-                    document.querySelector<HTMLInputElement>("#cron-name")?.value ===
-                    "Retain this draft",
                   catalogDraftPayloadRetained:
                     document.querySelector<HTMLTextAreaElement>("#cron-payload-text")?.value ===
                     "Do not submit this draft",
@@ -353,7 +349,6 @@ catalogSuite.define(() => {
         await publish("recovered");
         await waitForModel("recovered");
         await error.waitFor({ state: "hidden" });
-        expect(await page.locator("#cron-name").inputValue()).toBe("Retain this draft");
         expect(await page.locator("#cron-payload-text").inputValue()).toBe(
           "Do not submit this draft",
         );
@@ -722,7 +717,7 @@ suite.define(() => {
         const menu = page.locator(".cron-detail-actions .cron-job-menu");
         await menu.locator(".cron-job-menu__trigger").click();
         await menu.locator('[data-value="clone"]').click();
-        await page.locator("#cron-name").fill("Cloned partial failure policy");
+        await page.locator('.cron-page[data-panel-mode="create"]').waitFor();
         const cloned = await submitCronForm(evidence, "cron.add");
         const cloneId = cronJobId(cloned.stored);
         await openAutomation(page, cloneId);
@@ -837,11 +832,8 @@ suite.define(() => {
           await menu.locator(".cron-job-menu__trigger").click();
           await menu.locator('[data-value="clone"]').click();
           await page.locator('.cron-page[data-panel-mode="create"]').waitFor();
-          await expect
-            .poll(() => page.locator("#cron-name").inputValue())
-            .toBe(`${sourceName} copy`);
-          const cloneName = `Synthetic clone ${variant.name} copy`;
-          await page.locator("#cron-name").fill(cloneName);
+          // A copy keeps its source's name without showing a name field.
+          const cloneName = `${sourceName} copy`;
           const cloned = await submitCronForm(evidence, "cron.add", (id) =>
             cliJson(["automations", "get", id, "--json"]),
           );

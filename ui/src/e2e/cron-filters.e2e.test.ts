@@ -433,7 +433,6 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}cron`);
       await page.locator('[data-test-id="cron-new-task"]').click();
-      await page.locator("#cron-name").fill("Created no-timeout task");
       await page.locator("#cron-payload-text").fill("Continue until the new task finishes");
       await page.locator("details.cron-advanced > summary").click();
       await page.locator("#cron-timeout-seconds").fill("0");
@@ -441,9 +440,10 @@ suite.define(() => {
 
       const addRequest = await gateway.waitForRequest("cron.add");
       expect(requestParams(addRequest)).toMatchObject({
-        name: "Created no-timeout task",
         payload: agentPayload("Continue until the new task finishes"),
       });
+      // The Gateway names a new automation from its prompt.
+      expect(requestParams(addRequest)).not.toHaveProperty("name");
 
       await openAutomation(page, existingJob.id);
       await page.locator('[data-test-id="cron-edit"]').click();
