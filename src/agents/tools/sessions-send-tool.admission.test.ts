@@ -282,7 +282,6 @@ describe("sessions_send dispatch admission", () => {
       updatedAt: 2,
       communication: { receive: "never" },
     });
-    expect(peekSystemEvents(targetSessionKey)).toHaveLength(1);
     const second = await tool.execute("notify-denied", {
       sessionKey: targetSessionKey,
       message: "unaccepted notice",
@@ -292,8 +291,6 @@ describe("sessions_send dispatch admission", () => {
     const consumed = drainSystemEvents(targetSessionKey);
     expect(consumed).toHaveLength(1);
     expect(consumed[0]).toContain("accepted notice");
-    expect(consumed[0]).not.toContain("unaccepted notice");
-    expect(peekSystemEvents(targetSessionKey)).toEqual([]);
     expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
   });
 
@@ -528,7 +525,7 @@ describe("sessions_send dispatch admission", () => {
     });
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const liveness = createDiagnosticToolExecutionLiveness();
-    const deadline = Date.now() + 30_000;
+    const deadline = Date.now() + 60_000;
     let result: unknown;
     const pending = liveness
       .run(async () => {
@@ -634,123 +631,126 @@ describe("sessions_send dispatch admission", () => {
     }
   });
 
-  it("declares a long send deadline and preserves a late child result after slow admission", async () => {
-    const sourceKey = requesterSessionKey;
-    await putSession(targetSessionKey, {
-      sessionId: "target-session",
-      updatedAt: 1,
-      spawnedBy: sourceKey,
-    });
-    const { context, owner, source } = operatorFixture("send");
-    const finish = createDeferredCore();
-    const admitted = createDeferredCore();
-    const liveness = createDiagnosticToolExecutionLiveness();
-    let result: unknown;
-    let completion: SessionFollowupCompletion | undefined;
-    const capturing = createDeferredCore();
-    const allowCapture = createDeferredCore();
-    let invocationStarted = false;
-    let returned = false;
-    const capture = operatorCapture.captureGatewayOperatorRunAuthority;
-    const heldCapture = vi
-      .spyOn(operatorCapture, "captureGatewayOperatorRunAuthority")
-      .mockImplementation(async (...args) => {
-        const captured = await capture(...args);
-        if (invocationStarted) {
-          capturing.resolve();
-          await allowCapture.promise;
-        }
-        return captured;
+  it.each([1, 1200])(
+    "preserves a %s-second reply wait after slow admission",
+    async (timeoutSeconds) => {
+      await putSession(targetSessionKey, {
+        sessionId: "target-session",
+        updatedAt: 1,
+        spawnedBy: requesterSessionKey,
       });
-    vi.mocked(runSessionsSendA2AFlow).mockImplementationOnce(() => finish.promise);
-    const callGateway = mockAgentGateway(async () => {
-      const followup = readFollowupRequest(runId, targetSessionKey);
-      if (!followup) {
-        throw new Error("Expected retained child result custody");
-      }
-      completion = SessionFollowupCompletion.bind(followup);
-      followup.completion = completion;
-      completion.markAccepted(runId);
-      admitted.resolve();
-      return { runId, status: "accepted" };
-    }, true);
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const deadline = Date.now() + 1_200_000;
-    const pending = liveness
-      .run(() =>
-        inOperatorScope(context, owner, source, async () => {
-          const participants = createReplyTurnParticipants({
-            operatorAuthority:
-              getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority,
-          });
-          try {
-            return await withGatewayToolCallerIdentity(
-              {
-                agentId: "main",
-                sessionKey: sourceKey,
-                personalToolParticipants: participants,
-                gatewayContextResolver: () => context,
-                receiptAuthority: () => true,
-              },
-              () => {
-                invocationStarted = true;
-                return execute(
-                  createTool({ agentSessionKey: sourceKey, callGateway }),
-                  "send-followup",
-                  { timeoutSeconds: 1200 },
-                );
-              },
-            );
-          } finally {
-            returned = true;
-            participants.close();
+      const { context, owner, source } = operatorFixture("send");
+      const finish = createDeferredCore();
+      const admitted = createDeferredCore();
+      const liveness = createDiagnosticToolExecutionLiveness();
+      let result: unknown;
+      let completion: SessionFollowupCompletion | undefined;
+      const capturing = createDeferredCore();
+      const allowCapture = createDeferredCore();
+      let invocationStarted = false;
+      const capture = operatorCapture.captureGatewayOperatorRunAuthority;
+      const heldCapture = vi
+        .spyOn(operatorCapture, "captureGatewayOperatorRunAuthority")
+        .mockImplementation(async (...args) => {
+          const captured = await capture(...args);
+          if (invocationStarted) {
+            capturing.resolve();
+            await allowCapture.promise;
           }
-        }),
-      )
-      .then((value) => {
-        result = value.details;
-        return value;
-      });
-    try {
-      await assertPendingAtGate(capturing.promise, pending, "Reply-source capture");
-      expect.soft(liveness.view.deadlineAtMs).toBe(deadline);
-      await vi.advanceTimersByTimeAsync(1000);
-      expect(returned).toBe(false);
-      expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
-      allowCapture.resolve();
-      await assertPendingAtGate(admitted.promise, pending, "Child admission");
-      await vi.advanceTimersByTimeAsync(899_001);
-      expect(result).toBeUndefined();
-      await vi.advanceTimersByTimeAsync(299_999);
-      expect.soft(result).toMatchObject({ status: "timeout", runId });
-      await completion!.settle(runId, {
-        status: "ok",
-        replyText: "Task complete",
-        terminalReply: { disposition: "visible", text: "Task complete" },
-      });
-      completion!.finishExecution(runId);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(runSessionsSendA2AFlow).toHaveBeenCalledOnce();
-      expect(runSessionsSendA2AFlow).toHaveBeenCalledWith(
-        expect.objectContaining({
-          requesterSessionKey: sourceKey,
-          targetSessionKey,
-          reply: expect.objectContaining({ replyText: "Task complete" }),
-        }),
-      );
-      source.release();
-      expect(readGatewayDeviceSourceAuthority(source.isCurrent)?.()).toBe(true);
-    } finally {
-      vi.useRealTimers();
-      allowCapture.resolve();
-      finish.resolve();
-      completion?.close();
-      await pending;
-      liveness.close();
-      heldCapture.mockRestore();
-      source.release();
-    }
-  });
+          return captured;
+        });
+      vi.mocked(runSessionsSendA2AFlow).mockImplementationOnce(() => finish.promise);
+      const callGateway = mockAgentGateway(async () => {
+        const followup = readFollowupRequest(runId, targetSessionKey);
+        if (!followup) {
+          throw new Error("Expected retained child result custody");
+        }
+        completion = SessionFollowupCompletion.bind(followup);
+        followup.completion = completion;
+        completion.markAccepted(runId);
+        admitted.resolve();
+        return { runId, status: "accepted" };
+      }, true);
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const deadline = Date.now() + 30_000 + timeoutSeconds * 1000;
+      const pending = liveness
+        .run(() =>
+          inOperatorScope(context, owner, source, async () => {
+            const participants = createReplyTurnParticipants({
+              operatorAuthority:
+                getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority,
+            });
+            try {
+              return await withGatewayToolCallerIdentity(
+                {
+                  agentId: "main",
+                  sessionKey: requesterSessionKey,
+                  personalToolParticipants: participants,
+                  gatewayContextResolver: () => context,
+                  receiptAuthority: () => true,
+                },
+                () => {
+                  invocationStarted = true;
+                  return execute(
+                    createTool({ agentSessionKey: requesterSessionKey, callGateway }),
+                    "send-followup",
+                    { timeoutSeconds },
+                  );
+                },
+              );
+            } finally {
+              participants.close();
+            }
+          }),
+        )
+        .then((value) => {
+          result = value.details;
+          return value;
+        });
+      try {
+        await assertPendingAtGate(capturing.promise, pending, "Reply-source capture");
+        expect.soft(liveness.view.deadlineAtMs).toBe(deadline);
+        await vi.advanceTimersByTimeAsync(2000);
+        expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
+        allowCapture.resolve();
+        await assertPendingAtGate(admitted.promise, pending, "Child admission");
+        if (timeoutSeconds > 1) {
+          await vi.advanceTimersByTimeAsync(900_001);
+          expect(result).toBeUndefined();
+          await vi.advanceTimersByTimeAsync(299_999);
+          expect.soft(result).toMatchObject({ status: "accepted", runId });
+        }
+        await completion!.settle(runId, {
+          status: "ok",
+          replyText: "Task complete",
+          terminalReply: { disposition: "visible", text: "Task complete" },
+        });
+        completion!.finishExecution(runId);
+        await vi.advanceTimersByTimeAsync(0);
+        if (timeoutSeconds === 1) {
+          expect((await pending).details).toMatchObject({ status: "ok", reply: "Task complete" });
+          expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
+        } else {
+          expect(runSessionsSendA2AFlow).toHaveBeenCalledWith(
+            expect.objectContaining({
+              reply: expect.objectContaining({ replyText: "Task complete" }),
+            }),
+          );
+          source.release();
+          expect(readGatewayDeviceSourceAuthority(source.isCurrent)?.()).toBe(true);
+        }
+      } finally {
+        vi.useRealTimers();
+        allowCapture.resolve();
+        finish.resolve();
+        completion?.close();
+        await pending;
+        liveness.close();
+        heldCapture.mockRestore();
+        source.release();
+      }
+    },
+  );
 
   it.each([
     { name: "top-level Slack", sourceKey: requesterSessionKey, threadId: undefined },

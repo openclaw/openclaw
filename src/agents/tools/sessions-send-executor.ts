@@ -76,12 +76,12 @@ export async function executeSessionsSend(
     params,
     mode,
     timeoutSeconds,
-    deadlineAtMs,
+    onAdmissionComplete,
   }: {
     params: Record<string, unknown>;
     mode: ReturnType<typeof readSessionsSendMode>;
     timeoutSeconds: number;
-    deadlineAtMs: number;
+    onAdmissionComplete: () => void;
   },
   retain?: ReturnType<typeof createSelfHeldSendRetainer>,
 ) {
@@ -674,6 +674,7 @@ export async function executeSessionsSend(
         if (!start.ok && start.selfHeld && retainedSend && targetSessionEntry && mode !== "steer") {
           return retainedSend(start.selfHeld, "followup");
         }
+        onAdmissionComplete();
         return await finishSessionsSendReply({
           start,
           completion,
@@ -686,7 +687,7 @@ export async function executeSessionsSend(
           requesterAgentId,
           promptedAt,
           timeoutSeconds,
-          deadlineAtMs,
+          deadlineAtMs: Date.now() + timeoutMs,
           signal: opts.signal,
           targetIsSubagent,
           isIsolatedCronRequester,

@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { registerDiagnosticToolExecutionDeadline } from "../../infra/diagnostic-tool-execution-liveness.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   describeSessionsSendTool,
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
@@ -25,6 +26,8 @@ import {
 } from "./sessions-send-tool.input.js";
 import { SessionsSendToolSchema, SessionsSendOutputSchema } from "./sessions-send-tool.schema.js";
 import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
+
+const SESSIONS_SEND_ADMISSION_TIMEOUT_MS = 30_000;
 
 export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgentTool {
   const retain = createSelfHeldSendRetainer(opts, (options, args) =>
@@ -59,7 +62,8 @@ async function executeSessionsSendWithDeadline(
   const mode = readSessionsSendMode(params);
   const timeoutSeconds = readSessionsSendTimeout(params, mode);
   const timeoutMs =
-    finiteSecondsToTimerSafeMilliseconds(timeoutSeconds === 0 ? 30 : timeoutSeconds) ?? 30_000;
+    SESSIONS_SEND_ADMISSION_TIMEOUT_MS +
+    (finiteSecondsToTimerSafeMilliseconds(timeoutSeconds) ?? 0);
   const runId = opts?.idempotencyKey ?? crypto.randomUUID();
   const controller = new AbortController();
   const signal = opts?.signal
@@ -74,28 +78,42 @@ async function executeSessionsSendWithDeadline(
       opts?.assertSourceCurrent?.();
     },
   };
+  const admissionComplete = createDeferredCore();
+  const timeout = () => {
+    const error =
+      "sessions_send timed out; the message may have been accepted. Inspect the target before retrying.";
+    // Stop new sender effects without cancelling input already owned by the receiver.
+    controller.abort(new Error(error));
+    const target = readSessionsSendTarget(params);
+    return sendFailure("timeout", error, target.ok ? target.sessionKeyParam : undefined, runId);
+  };
   const deadlineAtMs = Date.now() + timeoutMs;
   const releaseDeadline = registerDiagnosticToolExecutionDeadline(deadlineAtMs);
   try {
     return await raceWithTimeout(
-      () =>
-        withSessionsSendRequesterSource(boundedOptions, () =>
+      async () => {
+        const execution = withSessionsSendRequesterSource(boundedOptions, () =>
           executeSessionsSend(
             boundedOptions,
             toolCallId,
-            { params, mode, timeoutSeconds, deadlineAtMs },
+            { params, mode, timeoutSeconds, onAdmissionComplete: admissionComplete.resolve },
             retain,
           ),
-        ),
-      timeoutMs,
-      () => {
-        const error =
-          "sessions_send timed out; the message may have been accepted. Inspect the target before retrying.";
-        // Stop new sender effects without cancelling input already owned by the receiver.
-        controller.abort(new Error(error));
-        const target = readSessionsSendTarget(params);
-        return sendFailure("timeout", error, target.ok ? target.sessionKeyParam : undefined, runId);
+        );
+        const admissionExpired = await raceWithTimeout(
+          () =>
+            Promise.race([
+              execution.then(() => false),
+              admissionComplete.promise.then(() => false),
+            ]),
+          SESSIONS_SEND_ADMISSION_TIMEOUT_MS,
+          () => true,
+          { signal: opts?.signal },
+        );
+        return admissionExpired ? timeout() : await execution;
       },
+      timeoutMs,
+      timeout,
       { signal: opts?.signal },
     );
   } finally {
