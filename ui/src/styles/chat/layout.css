@@ -255,9 +255,12 @@ openclaw-pending-session-create {
   gap: 8px;
 }
 
-.chat-cloud-disk-space-notice p,
-.chat-workspace-conflict-notice__content p,
-.chat-workspace-conflict-event p {
+:is(
+    .chat-cloud-disk-space-notice,
+    .chat-workspace-conflict-notice__content,
+    .chat-workspace-conflict-event
+  )
+  p {
   margin: 0;
   color: var(--muted);
 }

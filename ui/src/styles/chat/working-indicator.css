@@ -285,17 +285,20 @@ button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
   animation: chatWorkingClawSouthpaw 1.2s ease-in-out var(--claw-surprise-delay) 1;
 }
 
-.chat-reading-indicator--flurry svg,
-.chat-reading-indicator--spin svg,
-.chat-reading-indicator--shadowbox svg,
-.chat-reading-indicator--backflip svg,
-.chat-reading-indicator--zen svg,
-.chat-reading-indicator--drummer svg,
-.chat-reading-indicator--peekaboo svg,
-.chat-reading-indicator--nodoff svg,
-.chat-reading-indicator--curious svg,
-.chat-reading-indicator--omnom svg,
-.chat-reading-indicator--fakeout svg {
+:is(
+    .chat-reading-indicator--flurry,
+    .chat-reading-indicator--spin,
+    .chat-reading-indicator--shadowbox,
+    .chat-reading-indicator--backflip,
+    .chat-reading-indicator--zen,
+    .chat-reading-indicator--drummer,
+    .chat-reading-indicator--peekaboo,
+    .chat-reading-indicator--nodoff,
+    .chat-reading-indicator--curious,
+    .chat-reading-indicator--omnom,
+    .chat-reading-indicator--fakeout
+  )
+  svg {
   animation:
     chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
     var(--claw-surprise-body) var(--claw-surprise-duration, 1.2s)
@@ -303,15 +306,19 @@ button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
       var(--claw-surprise-count, 1);
 }
 
-.chat-reading-indicator--flurry svg .claw-icon__jaw,
-.chat-reading-indicator--shadowbox svg .claw-icon__jaw,
-.chat-reading-indicator--zen svg .claw-icon__jaw,
-.chat-reading-indicator--drummer svg .claw-icon__jaw,
-.chat-reading-indicator--peekaboo svg .claw-icon__jaw,
-.chat-reading-indicator--nodoff svg .claw-icon__jaw,
-.chat-reading-indicator--curious svg .claw-icon__jaw,
-.chat-reading-indicator--omnom svg .claw-icon__jaw,
-.chat-reading-indicator--fakeout svg .claw-icon__jaw {
+:is(
+    .chat-reading-indicator--flurry,
+    .chat-reading-indicator--shadowbox,
+    .chat-reading-indicator--zen,
+    .chat-reading-indicator--drummer,
+    .chat-reading-indicator--peekaboo,
+    .chat-reading-indicator--nodoff,
+    .chat-reading-indicator--curious,
+    .chat-reading-indicator--omnom,
+    .chat-reading-indicator--fakeout
+  )
+  svg
+  .claw-icon__jaw {
   animation:
     chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
     var(--claw-surprise-jaw) var(--claw-surprise-duration, 1.2s) ease-out var(--claw-surprise-delay)

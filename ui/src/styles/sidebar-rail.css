@@ -282,8 +282,7 @@
   stroke-width: var(--sidebar-rail-action-stroke-width, 2px);
 }
 
-.sidebar-rail .nav-item__text,
-.sidebar-rail .sidebar-identity-card__text {
+.sidebar-rail :is(.nav-item__text, .sidebar-identity-card__text) {
   position: absolute;
   width: 1px;
   height: 1px;
