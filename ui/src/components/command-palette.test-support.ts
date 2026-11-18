@@ -138,6 +138,7 @@ export function createContext(
     sessions: {
       list,
       state: { result: null },
+      presentation: { result: null },
       subscribe: () => () => undefined,
     },
   } as unknown as ApplicationContext;

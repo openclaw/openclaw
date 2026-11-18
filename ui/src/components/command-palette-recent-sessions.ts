@@ -5,7 +5,7 @@ import {
   compareSessionRowsByActivity,
   filterVisibleSessionRows,
 } from "../lib/sessions/navigation.ts";
-import { isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
+import { isSessionSnoozed, nextSessionSnoozeWakeAt } from "../lib/sessions/session-snooze.ts";
 import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
 import { SESSION_ACTION_PREFIX } from "./command-palette-session-search.ts";
 import type { CommandPaletteState } from "./command-palette-state.ts";
@@ -58,38 +58,77 @@ type RecentSessionsInput = Pick<
 >;
 
 /**
- * Projects the sidebar roster for an open palette, once per roster publication
- * and open chat; the palette never issues its own list read for these rows.
+ * Projects the sidebar roster for an open palette, once per roster publication,
+ * open chat, and snooze deadline; the palette never issues its own list read.
  */
 export class CommandPaletteRecentSessions {
   private cached:
-    | { revision: number; currentSessionKey: string; items: readonly CommandPaletteItem[] }
+    | {
+        revision: number;
+        currentSessionKey: string;
+        wakeAt: number | null;
+        items: readonly CommandPaletteItem[];
+      }
     | undefined;
+  private wakeTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /** `onDeadline` runs when a snoozed chat wakes, so an open palette shows it again. */
+  constructor(private readonly onDeadline: () => void = () => undefined) {}
 
   read(
     sessions: ApplicationContext["sessions"] | undefined,
     input: RecentSessionsInput,
   ): readonly CommandPaletteItem[] {
     if (!input.open || !input.onSelectSession || !sessions) {
-      this.cached = undefined;
+      this.reset();
       return NO_ITEMS;
     }
     const currentSessionKey = input.currentSessionKey?.() ?? "";
+    const now = Date.now();
     const cached = this.cached;
     if (
       cached &&
       cached.revision === sessions.revision &&
-      cached.currentSessionKey === currentSessionKey
+      cached.currentSessionKey === currentSessionKey &&
+      (cached.wakeAt === null || now < cached.wakeAt)
     ) {
       return cached.items;
     }
+    // The sidebar keeps the last roster on screen while the Gateway reconnects; so does the palette.
+    const rows = sessions.presentation.result?.sessions ?? [];
     const items = buildCommandPaletteRecentItems({
-      rows: sessions.state.result?.sessions ?? [],
+      rows,
       currentSessionKey,
       defaultAgentId: input.defaultAgentId,
-      now: Date.now(),
+      now,
     });
-    this.cached = { revision: sessions.revision, currentSessionKey, items };
+    const wakeAt = nextSessionSnoozeWakeAt(rows, now);
+    this.cached = { revision: sessions.revision, currentSessionKey, wakeAt, items };
+    this.scheduleWake(wakeAt, now);
     return items;
+  }
+
+  dispose(): void {
+    this.reset();
+  }
+
+  private reset(): void {
+    this.cached = undefined;
+    clearTimeout(this.wakeTimer);
+    this.wakeTimer = undefined;
+  }
+
+  private scheduleWake(wakeAt: number | null, now: number): void {
+    clearTimeout(this.wakeTimer);
+    this.wakeTimer =
+      wakeAt === null
+        ? undefined
+        : setTimeout(
+            () => {
+              this.wakeTimer = undefined;
+              this.onDeadline();
+            },
+            Math.min(2_147_483_647, wakeAt - now + 1),
+          );
   }
 }

@@ -53,7 +53,7 @@ export const CommandPalette = defineSolidBridge<CommandPaletteProperties, Comman
         ),
       (owner) => owner,
     );
-    const recentSessions = new CommandPaletteRecentSessions();
+    const recentSessions = new CommandPaletteRecentSessions(state.changed);
     // Event handlers read owner changes immediately, before Solid settles.
     const readProps = () => {
       const snapshot = projection.read().readProps();
@@ -77,6 +77,7 @@ export const CommandPalette = defineSolidBridge<CommandPaletteProperties, Comman
       }
       return () => {
         state.disconnect();
+        recentSessions.dispose();
         for (const stop of [...stops, ...draftStops]) {
           stop();
         }

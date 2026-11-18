@@ -1,9 +1,17 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
+import type { ApplicationContext } from "../app/context.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+  sessionsResult,
+} from "../lib/sessions/session-capability.test-support.ts";
 import {
   buildCommandPaletteRecentItems,
+  CommandPaletteRecentSessions,
   RECENT_SESSION_LIMIT,
 } from "./command-palette-recent-sessions.ts";
 import "./command-palette.tsx";
@@ -84,6 +92,77 @@ describe("buildCommandPaletteRecentItems", () => {
   });
 });
 
+describe("CommandPaletteRecentSessions", () => {
+  const input = {
+    open: true,
+    onSelectSession: () => undefined,
+    currentSessionKey: () => "",
+    defaultAgentId: "main",
+  };
+  const labels = (items: readonly { label: string }[]) => items.map((item) => item.label);
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("keeps the sidebar's chats while the Gateway reconnects", async () => {
+    const roster = sessionsResult(
+      [
+        row("agent:main:reply", 900, { unread: true }),
+        row("agent:main:quiet", 800),
+      ] as GatewaySessionRow[],
+      2,
+    );
+    const request = vi.fn(async (method: string) =>
+      method === "sessions.list"
+        ? roster
+        : method === "sessions.subscribe"
+          ? { subscribed: true }
+          : {},
+    );
+    const harness = createGatewayHarness(
+      { request } as unknown as GatewayBrowserClient,
+      undefined,
+      {
+        selfUser: { id: "profile-one" },
+      },
+    );
+    const sessions = createTestSessionCapability(harness.gateway);
+    await sessions.refresh();
+    const recent = new CommandPaletteRecentSessions();
+    const asContext = sessions as unknown as ApplicationContext["sessions"];
+    expect(labels(recent.read(asContext, input))).toEqual(["reply", "quiet"]);
+
+    harness.publish(false);
+    expect(sessions.state.result).toBeNull();
+    expect(labels(recent.read(asContext, input))).toEqual(["reply", "quiet"]);
+    recent.dispose();
+  });
+
+  it("shows a snoozed chat again once its snooze ends while the palette stays open", () => {
+    vi.useFakeTimers({ now: NOW });
+    const result = sessionsResult([
+      row("agent:main:later", 900, { unread: true, snoozedUntil: NOW + 5_000 }),
+      row("agent:main:kept", 800),
+    ] as GatewaySessionRow[]);
+    const sessions = {
+      revision: 1,
+      state: { result },
+      presentation: { result },
+    } as unknown as ApplicationContext["sessions"];
+    const onDeadline = vi.fn();
+    const recent = new CommandPaletteRecentSessions(onDeadline);
+    expect(labels(recent.read(sessions, input))).toEqual(["kept"]);
+
+    vi.advanceTimersByTime(5_000);
+    expect(onDeadline).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(2);
+    expect(onDeadline).toHaveBeenCalledOnce();
+    expect(labels(recent.read(sessions, input))).toEqual(["later", "kept"]);
+    recent.dispose();
+  });
+});
+
 describe("CommandPalette quick switcher", () => {
   registerCommandPaletteTestHooks();
 
@@ -92,9 +171,11 @@ describe("CommandPalette quick switcher", () => {
     const listeners = new Set<() => void>();
     let revision = 0;
     const publishRoster = (next: GatewaySessionRow[]) => {
+      const result = { ts: 1, path: "", count: next.length, defaults: {}, sessions: next };
       Object.assign(context.sessions, {
         revision: ++revision,
-        state: { result: { ts: 1, path: "", count: next.length, defaults: {}, sessions: next } },
+        state: { result },
+        presentation: { result },
       });
       for (const listener of listeners) {
         listener();
