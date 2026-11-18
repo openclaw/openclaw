@@ -143,7 +143,6 @@ class Monitor {
   private readonly removeCloseHandler: () => void;
   private readonly retainClient?: () => (() => void) | undefined;
   private readonly retainParentThread?: (threadId: string) => (() => void) | undefined;
-  private readonly canAnnounceToRetainedParent?: (threadId: string) => boolean;
   private readonly claimChildThread?: (threadId: string) => Promise<unknown>;
   private readonly retainChildThread?: (threadId: string) => Promise<unknown>;
   private readonly releaseChildThread?: (threadId: string) => Promise<unknown>;
@@ -168,7 +167,6 @@ class Monitor {
     });
     this.retainClient = options.retainClient;
     this.retainParentThread = options.retainParentThread;
-    this.canAnnounceToRetainedParent = options.canAnnounceToRetainedParent;
     this.claimChildThread = options.claimChildThread;
     this.retainChildThread = options.retainChildThread;
     this.releaseChildThread = options.releaseChildThread;
@@ -195,9 +193,7 @@ class Monitor {
       children: this.childStates,
       parents: this.parentStates,
       retiredParents: this.retiredParentStates,
-      mustWaitForSiblingRelease: (parentThreadId) =>
-        this.parentThreadRetentions.has(parentThreadId) &&
-        this.canAnnounceToRetainedParent?.(parentThreadId) === false,
+      isParentThreadRetained: (parentThreadId) => this.parentThreadRetentions.has(parentThreadId),
       unregisterChild: (child) => this.unregisterChild(child),
       abandon: (state, child, assertCurrent) =>
         this.assignments.abandon(state, child, assertCurrent),
@@ -2357,10 +2353,13 @@ class Monitor {
     // Pending completion delivery keeps its own custody, but must not block
     // the parent from resuming to receive those results.
     const releaseParentThread = this.parentThreadRetentions.get(parentThreadId);
+    if (!releaseParentThread) {
+      return;
+    }
     this.parentThreadRetentions.delete(parentThreadId);
-    releaseParentThread?.();
-    // Results held back only because the sibling kept this thread protected can
-    // be announced now that the release the announce path needs has happened.
+    releaseParentThread();
+    // Completion delivery holds detached results while this retention protects
+    // the parent; wake them now that their turn can take the parent subscription.
     const state = this.parentStates.get(parentThreadId);
     if (state) {
       this.completionDelivery.deliverDetached(state);

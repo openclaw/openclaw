@@ -17,8 +17,8 @@ type CompletionDeliveryDependencies = {
   children: ReadonlyMap<string, ChildState>;
   parents: ReadonlyMap<string, ParentState>;
   retiredParents: Pick<WeakSet<ParentState>, "has">;
-  /** The only remaining route to this parent is the release our own retention blocks. */
-  mustWaitForSiblingRelease: (parentThreadId: string) => boolean;
+  /** A running sibling keeps this parent's subscription protected through the monitor. */
+  isParentThreadRetained: (parentThreadId: string) => boolean;
   unregisterChild: (child: ChildState) => void;
   abandon: (state: ParentState, child: ChildState, assertCurrent: () => void) => Promise<void>;
   settleNestedCompletion: (
@@ -64,8 +64,7 @@ export class CodexNativeSubagentCompletionDelivery {
     if (childState.completionDeliveryTimer) {
       return;
     }
-    let deferredToForeground = false;
-    let deferredToSibling = false;
+    let deferred = false;
     try {
       if (childState.cancellationRequested) {
         // Stop settles owned processes before acknowledging cancellation or
@@ -95,18 +94,17 @@ export class CodexNativeSubagentCompletionDelivery {
         await this.abandon(state, childState);
         return;
       }
-      // Foreground parents receive native completion input. Only wake a detached
-      // parent after its last owner leaves; native receipts deduplicate both paths.
-      if (state.owners.size > 0 || !state.completionScope) {
-        deferredToForeground = state.owners.size > 0;
-        return;
-      }
-      // Retention keeps the parent subscription alive; it does not force a
-      // release. Only a parent whose announce has no other route waits for the
-      // release the monitor already schedules, instead of charging the retry
-      // budget for a refusal we can predict.
-      if (this.dependencies.mustWaitForSiblingRelease(state.parentThreadId)) {
-        deferredToSibling = true;
+      // Foreground parents receive native completion input. A detached parent is
+      // woken only after its last owner leaves and no running sibling still
+      // protects it: the wake turn may have to release that subscription, which
+      // the protection refuses. Releasing the last sibling re-drives held results;
+      // native receipts deduplicate both paths.
+      if (
+        state.owners.size > 0 ||
+        !state.completionScope ||
+        this.dependencies.isParentThreadRetained(state.parentThreadId)
+      ) {
+        deferred = state.owners.size > 0 || Boolean(state.completionScope);
         return;
       }
       const historyOwner = childState.historyOwner;
@@ -172,7 +170,7 @@ export class CodexNativeSubagentCompletionDelivery {
         error: message,
       });
     } finally {
-      if (!deferredToForeground && !deferredToSibling) {
+      if (!deferred) {
         // Keep the root through the first handoff, including a foreground parent's
         // pending unregister. Once attempted, sleeping retries retain only delivery authority.
         childState.completionCustody?.settleExecution();

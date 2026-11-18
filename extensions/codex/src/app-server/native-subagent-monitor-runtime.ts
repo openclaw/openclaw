@@ -18,7 +18,6 @@ import {
 } from "./client-runtime.js";
 import type { CodexAppServerLiveThreadOwnership } from "./client-thread-owner.js";
 import type { CodexAppServerClient } from "./client.js";
-import { canAnnounceToRetainedParent } from "./native-parent-thread-announce.js";
 import {
   getCodexNativeProcessClient,
   type CodexNativeProcessAuthority,
@@ -165,7 +164,6 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
           void interruptCodexTurnAndWaitBestEffort(client, { threadId, turnId });
         },
         retainParentThread,
-        canAnnounceToRetainedParent: (threadId) => canAnnounceToRetainedParent(client, threadId),
         hasObservationBacking: (parentThreadId, childThreadId) =>
           hasCodexAppServerLiveThread(client, parentThreadId) ||
           hasCodexAppServerLiveThread(client, childThreadId),

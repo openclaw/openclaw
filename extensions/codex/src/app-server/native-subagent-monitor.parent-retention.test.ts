@@ -4,7 +4,6 @@ import {
   protectCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
-import { canAnnounceToRetainedParent } from "./native-parent-thread-announce.js";
 import { createNativeSubagentAssignmentStore } from "./native-subagent-assignment-store.js";
 import { createNativeSubagentCompletionCustodyFixture } from "./native-subagent-custody.test-support.js";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
@@ -29,20 +28,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function setupParentRetention(
-  agentDir: string,
-  releaseCustody = () => {},
-  { retainIdleSubscription = true }: { retainIdleSubscription?: boolean } = {},
-) {
+async function setupParentRetention(agentDir: string, releaseCustody = () => {}) {
   const client = createClient();
   const runtime = createRuntime();
   ensureCodexAppServerClientRuntime(client.client, { agentDir });
-  if (retainIdleSubscription) {
-    await retainCodexAppServerLiveThread(client.client, "parent-thread");
-  }
+  await retainCodexAppServerLiveThread(client.client, "parent-thread");
   const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
     retainParentThread: (threadId) => protectCodexAppServerLiveThread(client.client, threadId),
-    canAnnounceToRetainedParent: (threadId) => canAnnounceToRetainedParent(client.client, threadId),
   });
   onTestFinished(async () => {
     await monitor.retireParent("parent-thread");
@@ -134,68 +126,6 @@ it("keeps an interrupted assignment resumable without pinning its restored paren
   await continued.unregister();
 });
 
-it("announces a finished child through the parent's idle subscription while a sibling still runs", async () => {
-  const { client, runtime, monitor } = await setupParentRetention(
-    "/tmp/codex-parent-retention-warm-announce",
-  );
-  runtime.deliverAgentHarnessCompletion.mockResolvedValue({ delivered: true, path: "direct" });
-  const parent = await registerParent(monitor);
-  await notifyChildStarted(client, "parent-thread", "child-a");
-  await notifyChildStarted(client, "parent-thread", "child-b");
-  await parent.unregister();
-
-  await client.notify(
-    nativeCompletionNotification({ agentPath: "child-a", result: "first result" }),
-  );
-  // Retention only keeps the parent subscription alive. An idle subscription is
-  // still a supported announce route, so a running sibling must not hold it back.
-  await vi.waitFor(() =>
-    expect(
-      runtime.deliverAgentHarnessCompletion.mock.calls.map(([request]) => request.result),
-    ).toEqual(["first result"]),
-  );
-
-  await client.notify(
-    nativeCompletionNotification({ agentPath: "child-b", result: "second result" }),
-  );
-  await vi.waitFor(() =>
-    expect(
-      runtime.deliverAgentHarnessCompletion.mock.calls.map(([request]) => request.result),
-    ).toEqual(["first result", "second result"]),
-  );
-});
-
-it("holds a finished child's completion when the blocked release is its only route to the parent", async () => {
-  vi.useFakeTimers();
-  const { client, runtime, monitor } = await setupParentRetention(
-    "/tmp/codex-parent-retention-sibling-hold",
-    () => {},
-    { retainIdleSubscription: false },
-  );
-  runtime.deliverAgentHarnessCompletion.mockResolvedValue({ delivered: true, path: "direct" });
-  const parent = await registerParent(monitor);
-  await notifyChildStarted(client, "parent-thread", "child-a");
-  await notifyChildStarted(client, "parent-thread", "child-b");
-  await parent.unregister();
-
-  await client.notify(
-    nativeCompletionNotification({ agentPath: "child-a", result: "first result" }),
-  );
-  // No idle subscription is left to announce through, so the attempt would need
-  // the release this sibling retention blocks. Wait for that release instead of
-  // spending the retry budget on a refusal the monitor can predict.
-  expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(600_000);
-  expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
-
-  await client.notify(
-    nativeCompletionNotification({ agentPath: "child-b", result: "second result" }),
-  );
-  expect(
-    runtime.deliverAgentHarnessCompletion.mock.calls.map(([request]) => request.result),
-  ).toEqual(["first result", "second result"]);
-});
-
 it("permits parent cold resume once every child is terminal, while preserving undelivered results", async () => {
   vi.useFakeTimers();
   const { client, runtime, monitor, releaseForResume } = await setupParentRetention(
@@ -217,6 +147,10 @@ it("permits parent cold resume once every child is terminal, while preserving un
   // A still-running sibling requires the native parent subscription to remain alive.
   await expect(releaseForResume()).rejects.toThrow("claimed by active work; stop it first");
   expect(client.request.mock.calls.some(([method]) => method === "thread/unsubscribe")).toBe(false);
+  // Its wake turn could only take the parent through that refused release: hold the
+  // result without spending its retry schedule until the sibling settles.
+  await vi.advanceTimersByTimeAsync(600_000);
+  expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
 
   await client.notify(
     nativeCompletionNotification({ agentPath: "child-b", result: "second result" }),
