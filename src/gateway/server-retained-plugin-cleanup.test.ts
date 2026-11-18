@@ -174,7 +174,7 @@ it.each([
     expect(fs.existsSync(packageDir)).toBe(true);
     expect(retention.hasRetainedManagedNpmInstallMarker(packageDir)).toBe(true);
     expect(log.info).not.toHaveBeenCalled();
-    expectWarning(log, malformed ? "retired plugin cleanup unavailable" : undefined);
+    expectWarning(log, malformed ? "failed to clean retained npm generation" : undefined);
   }),
 );
 

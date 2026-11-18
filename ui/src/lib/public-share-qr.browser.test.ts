@@ -46,17 +46,17 @@ it("keeps function marks, centers and quiet zone exact while the surrounding cel
         }
         const u = (sx / (modules.size * 3) - 0.08) / 0.84;
         const v = (sy / (modules.size * 3) - 0.08) / 0.84;
-        if (u > 0.55 && u < 0.65 && v > 0.25 && v < 0.3) {
+        if (u > 0.38 && u < 0.48 && v > 0.24 && v < 0.32) {
           notch.push(dark);
         }
-        if (u > 0.25 && u < 0.3 && v > 0.8 && v < 0.84) {
+        if (u > 0.44 && u < 0.56 && v > 0.84 && v < 0.9) {
           wrist.push(dark);
         }
       }
     }
   }
   // Recover the artwork from eligible peripheral cells, not the overlaid QR bits.
-  // A single pincer has an open notch and a lower-left wrist, unlike the full mascot.
+  // The rounded pincer has an upper notch and a centered wrist.
   expect(notch.filter(Boolean).length / notch.length).toBeLessThan(0.1);
   expect(wrist.filter(Boolean).length / wrist.length).toBeGreaterThan(0.9);
   expect(incorrect).toBe(0);

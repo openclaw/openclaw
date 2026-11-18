@@ -60,7 +60,7 @@ suite.define(() => {
             );
             (target as HTMLElement).click();
           };
-          // Outside Sessions a click opens Sessions; the context menu opens the agent menu.
+          // The context menu opens the agent menu like a click.
           document
             .querySelector("button.sidebar-agent-card__main")!
             .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));

@@ -37,9 +37,9 @@ export function ActiveDictationStatus(props: {
         : "listening";
   });
   return (
-    <Show when={phase()} keyed>
-      {(current) => (
-        <div class="agent-chat__composer-status-stack">
+    <div class="agent-chat__composer-status-stack">
+      <Show when={phase()} keyed>
+        {(current) => (
           <div
             class={[
               "agent-chat__dictation-status",
@@ -49,15 +49,14 @@ export function ActiveDictationStatus(props: {
             aria-live={current === "listening" ? undefined : "polite"}
             aria-atomic={current === "listening" ? undefined : "true"}
           >
-            <MicrophoneActivity
-              status={current}
-              inputLevel={current === "listening" ? props.readDictation()?.inputLevel : undefined}
-            />
             <span
               class={[
                 "agent-chat__dictation-phase",
                 { "agent-chat__dictation-phase--listening text-shimmer": current === "listening" },
               ]}
+              // Listening can last a while, so its shimmer sweeps slower than running work.
+              // Set here rather than in CSS: the shared stylesheet is at its size ceiling.
+              style={{ "--text-shimmer-duration": "4s" }}
             >
               {current === "connecting" ? (
                 <DictationStartingLabel />
@@ -67,9 +66,14 @@ export function ActiveDictationStatus(props: {
                 t("chat.composer.dictationListening")
               )}
             </span>
+            {/* The timeline fills the rest of the row, so the label leads. */}
+            <MicrophoneActivity
+              status={current}
+              inputLevel={current === "listening" ? props.readDictation()?.inputLevel : undefined}
+            />
           </div>
-        </div>
-      )}
-    </Show>
+        )}
+      </Show>
+    </div>
   );
 }

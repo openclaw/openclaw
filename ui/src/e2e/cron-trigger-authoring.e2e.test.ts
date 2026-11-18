@@ -31,7 +31,7 @@ const pageOptions = {
   viewport: { height: 1_050, width: 1_440 },
 };
 const triggerToggle = (page: Page) =>
-  page.locator(".settings-row--toggle").filter({ hasText: "Condition trigger" });
+  page.locator(".settings-row--toggle").filter({ hasText: "Check a condition first" });
 const field = (page: Page, name: string) => page.locator(`#cron-${name}`);
 const submit = (page: Page) => page.locator('[data-test-id="cron-submit"]');
 async function newTask(page: Page, name: string, message: string) {

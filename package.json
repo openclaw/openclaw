@@ -499,7 +499,6 @@
     "!dist/plugin-sdk/compiled-subprocess-testing.d.ts",
     "!dist/plugin-sdk/compiled-subprocess-testing.js",
     "!dist/plugin-sdk/memory-host-search.d.ts",
-    "!dist/plugin-sdk/codex-client-version-runtime.d.ts",
     "!dist/plugin-sdk/realtime-transcription-provider.d.ts",
     "!dist/plugin-sdk/meeting-config.d.ts",
     "!dist/plugin-sdk/collection-input-runtime.d.ts",
@@ -985,9 +984,6 @@
     },
     "./plugin-sdk/claude-model-runtime": {
       "default": "./dist/plugin-sdk/claude-model-runtime.js"
-    },
-    "./plugin-sdk/codex-client-version-runtime": {
-      "default": "./dist/plugin-sdk/codex-client-version-runtime.js"
     },
     "./plugin-sdk/codex-mcp-projection": {
       "default": "./dist/plugin-sdk/codex-mcp-projection.js"
@@ -1839,7 +1835,8 @@
     "changed:lanes": "node scripts/changed-lanes.mjs",
     "check": "node --import ./scripts/tsx.mjs scripts/check.mts",
     "check:agents-md-size": "node --import ./scripts/tsx.mjs scripts/check-agents-md-size.mts",
-    "check:architecture": "pnpm check:import-cycles && pnpm check:madge-import-cycles && pnpm check:deprecated-api-usage && pnpm check:wrapper-shadowing && pnpm check:deprecated-jsdoc && pnpm db:kysely:check && pnpm db:postgres:check && pnpm lint:kysely && pnpm check:database-first-legacy-stores",
+    "check:architecture": "pnpm check:architecture:after-preflight && pnpm check:database-first-legacy-stores",
+    "check:architecture:after-preflight": "pnpm check:import-cycles && pnpm check:madge-import-cycles && pnpm check:deprecated-api-usage && pnpm check:wrapper-shadowing && pnpm check:deprecated-jsdoc && pnpm db:kysely:check && pnpm db:postgres:check && pnpm lint:kysely",
     "check:assertion-safety": "node --import ./scripts/tsx.mjs scripts/check-assertion-safety-ratchet.mts",
     "check:baseline-ratchets": "node --import ./scripts/tsx.mjs scripts/ci-baseline-ratchets.mts",
     "check:base-config-schema": "node --import ./scripts/tsx.mjs scripts/generate-base-config-schema.ts --check",

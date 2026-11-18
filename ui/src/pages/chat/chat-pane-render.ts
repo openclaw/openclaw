@@ -40,7 +40,6 @@ import {
 import {
   chatSubmitState,
   createChatPaneSendActions,
-  createChatPaneRunRecoveryActions,
   dismissChatError,
   resolveChatPaneFollowUpMode,
 } from "./chat-pane-state.ts";
@@ -601,7 +600,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       ...this.chatState.attachmentInputProps(state),
       cameraActive: this.conversationPresented,
       onRemoveAttachment: this.removeBrowserAnnotation,
-      ...createChatPaneRunRecoveryActions(state, {
+      ...this.runRecoveryActions(state, {
         canSend: composerAvailability.canSend && !catalogKey && !suggestionViewer,
         onRewindMessage: selectedSessionArchived
           ? undefined

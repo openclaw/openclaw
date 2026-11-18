@@ -30,6 +30,7 @@ import {
   isUpdateActionable,
 } from "../app/update-schedule-projection.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
+import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { createInterval } from "../lib/reactive/timers.ts";
@@ -42,6 +43,8 @@ import { UpdateGitRevisions } from "./solid/update-git-revisions.tsx";
 import "./tooltip.ts";
 
 registerEnglishCatalog(registerSidebarAttentionEnglish);
+// Update titles and finishing-campaign copy.
+registerEnglishCatalog(registerUpdateActionsEnglish);
 
 export type SidebarUpdateCardProps = {
   compact: boolean;
@@ -342,9 +345,12 @@ export function SidebarUpdateCard(
       severity: statusBanner?.tone === "danger" ? ("error" as const) : ("warning" as const),
       title: blocked
         ? t("updates.sidebar.blockedTitle")
-        : busy
-          ? t("updates.sidebar.updating")
-          : t("updates.sidebar.availableTitle"),
+        : // A targetless campaign finishes an earlier update; see formatUpdateCampaignLabel.
+          campaign && !props.updateSchedule?.target
+          ? t("updates.sidebar.finishingTitle")
+          : busy
+            ? t("updates.sidebar.updating")
+            : t("updates.sidebar.availableTitle"),
     };
   }
 

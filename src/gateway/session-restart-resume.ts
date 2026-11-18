@@ -450,7 +450,7 @@ export async function resumeMarkedSessions(
 
 async function resumeRestartStore(
   { context, signal, log }: RestartResumeParams,
-  { target, entries, orphaned, windows, sessions }: PreparedRestartStore,
+  { target, entries, orphaned, outOfScope, windows, sessions }: PreparedRestartStore,
   deferred: Map<string, () => Promise<void>>,
 ): Promise<boolean> {
   let completed = true;
@@ -460,7 +460,7 @@ async function resumeRestartStore(
   );
   const summary = createRestartResumeSummary("startup");
   const queuedKeys = new Set(orphaned.map(({ sessionKey }) => sessionKey));
-  const ended = new Set<string>();
+  const ended = new Set(outOfScope);
   for (const { sessionKey } of entries) {
     summary.record(
       parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId,
@@ -691,7 +691,7 @@ async function resumeRestartStore(
     }
     for (const session of orphaned) {
       const agentId = parseAgentSessionKey(session.sessionKey)?.agentId ?? target.agentId;
-      // Input queued behind an out-of-scope marker ended with it.
+      // Input queued behind work from another restart resume scope ended with it.
       const endCause = ended.has(session.sessionKey) ? "restart-unrecoverable" : undefined;
       try {
         const remaining = await continueSessionQueuedInputs(

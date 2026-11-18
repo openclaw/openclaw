@@ -82,7 +82,7 @@ suite.define(() => {
         await at.fill("2027-03-14T02:30");
         expect(await at.getAttribute("aria-invalid")).toBe("true");
         expect(await submit.isDisabled()).toBe(true);
-        expect(await page.locator(".cron-schedule-summary").count()).toBe(0);
+        expect(await page.locator('[data-test-id="cron-schedule-note"]').count()).toBe(0);
         expect(await gateway.getRequests("cron.update")).toHaveLength(previous);
       },
     );
