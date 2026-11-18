@@ -10,6 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import nodeModule from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -48,6 +49,7 @@ import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { readNativeTypeScriptConfig } from "./lib/native-typescript-config.mts";
 import { createChangedOxlintEnv, isOxlintCommand } from "./lib/oxlint-changed-scope.mts";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
+import { TSGO_CORE_TEST_SHARDS } from "./lib/tsgo-core-test-shards.mts";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mts";
 import type { createChangedCoreTestCheck } from "./run-tsgo-core-test-shards.mts";
 import {
@@ -80,6 +82,7 @@ type CiLintSelection = {
 type ChangedCheckPlanOptions = {
   typecheckResult?: ChangedLaneResult;
   lintOnly?: boolean;
+  delegateCompilers?: boolean;
   lintSelection?: CiLintSelection;
   lintThreads?: 1 | 8;
   env?: NodeJS.ProcessEnv;
@@ -166,12 +169,6 @@ const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$|^ui\/(?:src\/.+|public\/themes\/[^/]+)\.css$/u;
 const TOOLING_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:test\/scripts\/|\.github\/workflows\/ci\.yml$)/u;
-const ANDROID_VERSION_SYNC_PATHS = new Set([
-  "apps/android/CHANGELOG.md",
-  "apps/android/Config/Version.properties",
-  "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
-  "apps/android/version.json",
-]);
 const SWIFT_BUILD_CACHE_METADATA_TEST_PATH = "test/scripts/swift-build-cache-metadata.test.ts";
 const MACOS_APP_CI_PATH_RE =
   /^(?:apps\/(?:macos\/(?!Tests\/.+\.swift$)|(?:macos-mlx-tts|shared|swabble)\/)|Swabble\/|src\/(?:agents\/github-exec-(?:launcher|credential)\.ts|shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$)/u;
@@ -191,10 +188,6 @@ async function ensureChangedCheckRuntimeDependencies(paths: string[]) {
 // delays package-backed imports until after lane and remote-routing selection.
 if (!isDirectRun()) {
   await ensureChangedCheckRuntimeDependencies(["package.json"]);
-}
-
-function hasAndroidVersionSyncPath(paths: string[]) {
-  return paths.some((changedPath) => ANDROID_VERSION_SYNC_PATHS.has(changedPath));
 }
 
 function hasMacosAppCiPath(paths: string[]) {
@@ -496,7 +489,7 @@ export function createChangedCheckPlan(
 ) {
   const commands: ChangedCheckCommand[] = [];
   const broadAudits = new Set<ChangedCheckCommand>();
-  const typechecks = new Set<ChangedCheckCommand>();
+  const typechecks = new Map<ChangedCheckCommand, readonly string[]>();
   const lintChecks = new Set<ChangedCheckCommand>();
   const baseEnv = { ...resolveLocalCheckEnv(options.env ?? process.env) };
   const controllerGuardArgs = [
@@ -527,6 +520,7 @@ export function createChangedCheckPlan(
   // Dedicated CI rows already own their commands; central discovery is discarded.
   if (options.lintOnly && options.lintSelection && !options.lintSelection.central) {
     return {
+      delegatedTypeGraphs: [],
       commands: createCiLintCommands(
         options.lintSelection,
         options.lintThreads ?? 1,
@@ -579,8 +573,8 @@ export function createChangedCheckPlan(
     commands.push(command);
     return command;
   };
-  const addTypecheck = (name: string, args: string[]) =>
-    typechecks.add(add(name, args, createSparseTsgoSkipEnv(baseEnv)));
+  const addTypecheck = (name: string, args: string[], graphs: readonly string[]) =>
+    typechecks.set(add(name, args, createSparseTsgoSkipEnv(baseEnv)), graphs);
   const addLintCommand = (name: string, bin: string, args: string[], env?: NodeJS.ProcessEnv) =>
     lintChecks.add(addCommand(name, bin, args, env));
   const finishPlan = (summary: string) => {
@@ -669,6 +663,7 @@ export function createChangedCheckPlan(
           })
         : [];
       return {
+        delegatedTypeGraphs: [],
         commands: selection
           ? [
               ...(selection.central
@@ -692,12 +687,23 @@ export function createChangedCheckPlan(
     const prefix = commands.slice(0, end);
     // These audits produce diagnostics, not compiler inputs. Defer them without
     // moving compiler prerequisites or overlapping their resource-heavy processes.
+    // Narrow core tests share their boundary's in-memory inventory. Aggregate
+    // tsgo:all also owns the extension project-reference build, not one CI graph.
+    // Keep both inline rather than silently broadening or dropping their work.
+    const delegated = options.delegateCompilers
+      ? new Map(
+          [...typechecks].filter(
+            ([command, graphs]) => graphs.length > 0 && !command.coreTestCheck,
+          ),
+        )
+      : new Map<ChangedCheckCommand, readonly string[]>();
     return {
+      delegatedTypeGraphs: [...delegated.values()].flat(),
       commands: [
         ...prefix.filter((command) => !broadAudits.has(command)),
         ...prefix.filter((command) => broadAudits.has(command)),
         ...commands.slice(end),
-      ],
+      ].filter((command) => !delegated.has(command)),
       summary,
     };
   };
@@ -998,7 +1004,6 @@ export function createChangedCheckPlan(
     !typecheckResult.paths.every((file) => getChangedPathFacts(file).surface === "docs")
       ? lanes
       : typecheckResult.lanes;
-  const shouldRunAndroidVersionSync = hasAndroidVersionSyncPath(result.paths);
 
   // Typechecking alone accepts extension imports; the graph guard also covers
   // shared test/tooling dependencies that core tests can pull into their graph.
@@ -1035,14 +1040,9 @@ export function createChangedCheckPlan(
     ]);
     // Metadata selectors bind Git/index bytes; artifact checks inspect the working tree.
     add("release changelog artifacts", ["changelog:check"]);
-    add("Android version sync", ["android:version:check"]);
     add("config schema baseline", ["config:schema:check"]);
     add("root dependency ownership", ["deps:root-ownership:check"]);
     return finishPlan("release metadata");
-  }
-
-  if (shouldRunAndroidVersionSync) {
-    add("Android version sync", ["android:version:check"]);
   }
 
   if (runAll) {
@@ -1057,31 +1057,35 @@ export function createChangedCheckPlan(
   }
 
   if (typeLanes.all) {
-    addTypecheck("typecheck all", ["tsgo:all"]);
+    addTypecheck("typecheck all", ["tsgo:all"], []);
   } else {
     if (typeLanes.core) {
-      addTypecheck("typecheck core", ["tsgo:core"]);
+      addTypecheck("typecheck core", ["tsgo:core"], ["core"]);
     }
     if (typeLanes.coreTests || liveDockerTypes) {
-      addTypecheck("typecheck core tests", ["tsgo:core:test"]);
+      addTypecheck(
+        "typecheck core tests",
+        ["tsgo:core:test"],
+        TSGO_CORE_TEST_SHARDS.map(({ name }) => "core-test-" + name),
+      );
       if (narrowCoreTests) {
         commands.at(-1)!.coreTestCheck = "checkTypes";
       }
     }
     if (typeLanes.ui) {
-      addTypecheck("typecheck UI", ["tsgo:ui"]);
+      addTypecheck("typecheck UI", ["tsgo:ui"], ["ui"]);
     }
     if (typeLanes.extensions) {
-      addTypecheck("typecheck extensions", ["tsgo:extensions"]);
+      addTypecheck("typecheck extensions", ["tsgo:extensions"], ["extensions"]);
     }
     if (typeLanes.extensionTests) {
-      addTypecheck("typecheck extension tests", ["tsgo:extensions:test"]);
+      addTypecheck("typecheck extension tests", ["tsgo:extensions:test"], ["extensions-test"]);
     }
     if (typeLanes.scripts) {
-      addTypecheck("typecheck scripts", ["tsgo:scripts"]);
+      addTypecheck("typecheck scripts", ["tsgo:scripts"], ["scripts"]);
     }
     if (typeLanes.testRoot) {
-      addTypecheck("typecheck test root", ["tsgo:test:root"]);
+      addTypecheck("typecheck test root", ["tsgo:test:root"], ["test-root"]);
     }
   }
 
@@ -1382,10 +1386,24 @@ export async function resolveChangedOxlintFileScope(
   if (!changedFiles.every((file) => isOxlintSourcePath(file, cwd) || rootTest(file))) {
     return undefined;
   }
-  // Declarations can affect consumers without import edges. Match the keyword
-  // so comments between declare and global/module cannot hide an augmentation.
-  const hasAmbientImpact = (file: string) =>
-    /\.d\.[cm]?ts$/u.test(file) || /\bdeclare\b/u.test(readFileSync(path.join(cwd, file), "utf8"));
+  // Declarations can affect consumers without import edges. Strip mode preserves
+  // offsets: erased matches stay conservative; comments and runtime strings do not.
+  const hasAmbientImpact = (file: string) => {
+    if (/\.d\.[cm]?ts$/u.test(file)) {
+      return true;
+    }
+    const source = readFileSync(path.join(cwd, file), "utf8");
+    const matches = [...source.matchAll(/\bdeclare\b/gu)];
+    if (matches.length === 0) {
+      return false;
+    }
+    try {
+      const stripped = nodeModule.stripTypeScriptTypes(source, { mode: "strip" });
+      return matches.some(({ index }) => stripped.slice(index, index + 7) !== "declare");
+    } catch {
+      return true;
+    }
+  };
   if (changedFiles.some(hasAmbientImpact)) {
     return undefined;
   }
@@ -1733,6 +1751,14 @@ function printPlan(
   if ((options.typecheckResult ?? result).extensionImpactFromCore) {
     console.error(`${prefix} extension-impacting surface; extension typecheck included`);
   }
+  if (options.delegateCompilers) {
+    console.error(
+      prefix +
+        " compiler graphs delegated to CI: " +
+        (plan.delegatedTypeGraphs.join(", ") || "none") +
+        "; narrow and aggregate checks remain inline",
+    );
+  }
   for (const reason of result.reasons) {
     console.error(`${prefix} ${reason}`);
   }
@@ -1874,6 +1900,7 @@ function parseArgs(argv: string[]) {
     dryRun: boolean;
     timed: boolean;
     noChanges: boolean;
+    delegateCompilers: boolean;
     help: boolean;
     paths: string[];
   } = {
@@ -1882,6 +1909,7 @@ function parseArgs(argv: string[]) {
     dryRun: false,
     timed: false,
     noChanges: false,
+    delegateCompilers: false,
     help: false,
     paths: new Array<string>(),
   };
@@ -1895,6 +1923,7 @@ function parseArgs(argv: string[]) {
       booleanFlag("--dry-run", "dryRun"),
       booleanFlag("--timed", "timed"),
       booleanFlag("--no-changes", "noChanges"),
+      booleanFlag("--delegate-compilers", "delegateCompilers"),
       booleanFlag("--help", "help"),
       booleanFlag("-h", "help"),
     ],
@@ -1926,6 +1955,7 @@ function printUsage() {
       "  --staged         Check staged paths instead of git diff paths",
       "  --dry-run        Print the planned checks without running them",
       "  --timed          Print timing summary",
+      "  --delegate-compilers  CI owns canonical compiler graphs; retain guards and narrow/aggregate checks",
       "  --no-changes     Treat the changed path set as empty",
       "  -h, --help       Show this help",
       "",

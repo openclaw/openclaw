@@ -1,7 +1,8 @@
+import { createServer, request as httpRequest } from "node:http";
+import { registerPublicationCredentialFixture } from "./github-publication-credential.test-helpers.js";
 // Install shared transport mocks before publication owners enter the module cache.
 // oxfmt-ignore
 import {
-  BRANCH,
   NEW_HEAD,
   OLD_HEAD,
   WORKSPACE_TREE,
@@ -21,6 +22,7 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   ensureCanonicalUserProfileForEmail,
@@ -44,6 +46,7 @@ import {
   guestScopes,
   holdWorkerTurn,
   publicationBackends as backends,
+  publicationPullRequest as pullRequest,
   publicationGuestEmail as email,
   queueGuestPublication as queueGuest,
   requireVisitorPublicationPolicy,
@@ -71,28 +74,6 @@ type Fixture = Awaited<ReturnType<typeof fixture>>;
 const request = (f: Fixture, key: string, requester = f.guest) =>
   f.coordinator.requestForSessionV2(f.request(key, requester));
 const identityChanged = { status: "failed", code: "identity_changed" } as const;
-const publicationUrl = (backend: (typeof backends)[number]) =>
-  backend === "local"
-    ? "https://github.com/openclaw/openclaw/pull/125200"
-    : "https://github.com/owner/repository/pull/1";
-const pullRequest = (
-  overrides: Partial<{
-    url: string;
-    state: string;
-    body: string;
-    headSha: string;
-    baseRef: string;
-  }> = {},
-) => ({
-  url: publicationUrl("local"),
-  userId: 42,
-  state: "open",
-  body: "",
-  headSha: NEW_HEAD,
-  headRef: BRANCH,
-  baseRef: "main",
-  ...overrides,
-});
 const jsonResult = (value: unknown) => commandResult(JSON.stringify(value));
 function interceptTransport(
   intercept: (
@@ -144,6 +125,7 @@ describe("shared GitHub publication requester authority", () => {
     onTestFinished(system.release);
     expect(system.requester.snapshot).toEqual({
       version: 1,
+      authenticationSource: "non-member",
       actor: { kind: "system" },
       scopes: ["operator.admin"],
       grant: null,
@@ -308,6 +290,7 @@ describe("shared GitHub publication requester authority", () => {
     const stored = f.readRequester(accepted.requestId);
     expect(stored).toEqual({
       version: 1,
+      authenticationSource: "non-member",
       actor: { kind: "operator", profileId: f.guestProfile },
       scopes: guestScopes,
       grant: null,
@@ -560,7 +543,15 @@ describe("shared GitHub publication requester authority", () => {
       const visitors = await startVisitorPublicationFixture(f);
       try {
         const first = (await visitors.store.lookup(email))!;
+        const policy = getPluginRegistryState()!.activeRegistry!.gatewayAccessPolicies.find(
+          (entry) => entry.pluginId === "visitor-access",
+        )!.policy;
+        using resumes = vi.spyOn(policy, "resume");
         const original = await guestRequester(f);
+        const resumed = resumes.mock.calls.length;
+        original.requester.assertCurrent();
+        original.requester.assertCurrent();
+        expect(resumes).toHaveBeenCalledTimes(resumed);
         const claim = await holdWorkerTurn(f);
         if (ending === "renewal") {
           expect(original.requester.snapshot.grant).toMatchObject({
@@ -652,6 +643,7 @@ describe("shared GitHub publication requester authority", () => {
         expect(f.guestSource.client.internal?.operatorAccessAuthority).toBeNull();
         expect(f.guest.snapshot).toEqual({
           version: 1,
+          authenticationSource: "non-member",
           actor: { kind: "operator", profileId: f.guestProfile },
           scopes: guestScopes,
           grant: null,
@@ -721,7 +713,7 @@ describe("shared GitHub publication requester authority", () => {
         }
       } else {
         expect(result.status).toBe("published");
-        expect(receipt.pull_request_url).toBe(publicationUrl(backend));
+        expect(receipt.pull_request_url).toBe(pullRequest({}, backend).url);
       }
       const writes = [...f.externalWrites];
       const acceptedEffects = local && [...local.effects];
@@ -832,7 +824,7 @@ describe("shared GitHub publication requester authority", () => {
       if (is("accepted", "advanced-closed")) {
         await expectResult(coordinator, requestId, {
           status: "published",
-          url: publicationUrl("local"),
+          url: pullRequest().url,
           headCommit: NEW_HEAD,
         });
       } else {
@@ -930,10 +922,106 @@ describe("shared GitHub publication requester authority", () => {
       await restarted.resumeSessionRequests();
       await expectResult(restarted, requestId, {
         status: "published",
-        url: publicationUrl(backend),
+        url: pullRequest({}, backend).url,
       });
       expect(writes).toEqual(acceptedWrites);
       expect(f.publishedTitles).toEqual(["lost-pr-response"]);
+    },
+  );
+});
+
+describe("local production-owner proof", () => {
+  installGitHubPublicationTestHarness({
+    creatorEmail: email,
+    sandbox: "required",
+    realWorktree: true,
+  });
+  it.each(["allowed", "revoked", "reassigned"] as const)(
+    "qualifies credential-before-network authority with real owners: %s",
+    async (scenario) => {
+      const f = await createRequesterPolicyFixture();
+      const identity = { ...f.session, agentId: "main" };
+      const placements = createWorkerSessionPlacementStore({ database: f.database });
+      const events: string[] = [];
+      const synthetic = registerPublicationCredentialFixture(f, events);
+      const server = createServer((req, res) => {
+        events.push("network");
+        expect(req.headers.authorization).toBe("Bearer " + synthetic);
+        res.end("ok");
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback address");
+      }
+
+      try {
+        if (scenario === "revoked") {
+          await f.revoke();
+        }
+        if (scenario === "reassigned") {
+          await placements.startDispatch({ ...identity, agentId: "other-agent" });
+        }
+        const run = placements.withRepositoryWorkspaceReservation(
+          identity,
+          async (assertPlacementCurrent) => {
+            events.push("placement-admitted");
+            const read = f.guest.prepareDispatchCredential!({
+              sessionId: identity.sessionId,
+              requestDigest: "local-proof",
+              assertCurrent: assertPlacementCurrent,
+            });
+            expect(read).toBeTypeOf("function");
+            const credential = await read!({});
+            await new Promise<void>((resolve, reject) => {
+              const req = httpRequest(
+                {
+                  host: "127.0.0.1",
+                  port: address.port,
+                  headers: { authorization: "Bearer " + credential },
+                },
+                (res) => {
+                  res.resume();
+                  res.on("end", resolve);
+                },
+              );
+              req.setTimeout(5000, () => req.destroy(new Error("Loopback sink timed out")));
+              req.on("error", reject);
+              req.end();
+            });
+          },
+        );
+        if (scenario === "allowed") {
+          await run;
+          expect(events).toEqual([
+            "placement-admitted",
+            "integration-admitted",
+            "credential",
+            "network",
+          ]);
+        } else {
+          if (scenario === "reassigned") {
+            await expect(run).rejects.toThrow("workspace placement identity changed");
+          } else {
+            await expect(run).rejects.toBeInstanceOf(GitHubPublicationRequesterUnavailableError);
+          }
+          expect(events).not.toContain("credential");
+          expect(events).not.toContain("network");
+          expect(events).not.toContain("integration-admitted");
+        }
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => {
+            if (error) {
+              reject(error);
+            } else {
+              resolve();
+            }
+          });
+        });
+      }
     },
   );
 });

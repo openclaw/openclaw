@@ -1,3 +1,0 @@
-# Browser regression for the waiting status and persistent goal-card clearance
-# during live goal insertion and expansion; production screenshots share this flow.
-138

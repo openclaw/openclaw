@@ -205,12 +205,13 @@ export function fullReleaseConcurrencyBranchPrefix(
 }
 
 function usage() {
-  console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch-or-tag>] [--workflow-sha <candidate-sha>] [--trusted-workflow-ref <candidate|main|release-publish-tag>] [--admission-workflow-sha <P-sha>] [--admission-workflow-ref <main|release-publish-tag>] [--pin-admission-workflow] [--request-file <path>] [--keep-branch] [--dry-run] [-- -f key=value ...]
+  console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch-or-tag>] [--workflow-sha <qualification-sha>] [--trusted-workflow-ref <candidate|main|release-publish-tag>] [--admission-workflow-sha <P-sha>] [--admission-workflow-ref <main|release-publish-tag>] [--pin-admission-workflow] [--request-file <path>] [--keep-branch] [--dry-run] [-- -f key=value ...]
        node scripts/full-release-validation-at-sha.mjs --reconcile-request <path>
        node scripts/full-release-validation-at-sha.mjs --resume-request <path>
 
-Candidate-owned qualification is the default: C=Q. Invoking it attests that the
-selected exact candidate and its qualification policy are reviewed. The existing
+Admitted candidate qualification is the default: Q defaults to C. Explicitly
+select --workflow-sha to freeze an independent main-provenance Q. Invoking it
+attests that the exact candidate and selected qualification policy are reviewed. The existing
 prepare workflow at independently trusted P authenticates the complete request;
 then this same dispatch owner runs the candidate workflow graph at Q. P defaults
 to a verified main revision that may advance before dispatch, never the qualification harness.
@@ -948,7 +949,7 @@ export function formatCandidateToolingLagWarning(
   changedAreas: string[],
 ) {
   return [
-    `WARNING: candidate-owned Q=C tooling ${candidateSha} is ${commitCount} non-merge commit(s) behind main ${mainSha}, with ${changedPathCount} net changed path(s). Main cannot repair this candidate harness; review and port applicable release fixes before dispatch.`,
+    `WARNING: frozen qualification Q ${candidateSha} is ${commitCount} non-merge commit(s) behind main ${mainSha}, with ${changedPathCount} net changed path(s). Moving main cannot repair this harness; explicitly select and admit any replacement Q before dispatch.`,
     ...(changedAreas.length > 0
       ? ["Largest changed areas (share of net changed paths):", ...changedAreas]
       : []),
@@ -968,45 +969,52 @@ function warnCandidateToolingLag(candidateSha: string) {
     );
     return;
   }
-  const mainSha = resolveSha("origin/main");
-  if (candidateSha === mainSha) {
-    return;
-  }
-  const commitCount = Number(
-    run("git", [
-      "rev-list",
-      "--count",
-      "--right-only",
-      "--no-merges",
-      `${candidateSha}...${mainSha}`,
-    ]),
-  );
-  // Long-lived release branches can differ from main by tens of thousands of
-  // paths; --shortstat keeps the count bounded instead of buffering every name.
-  const changedPathCount = Number(
-    /^\s*(\d+) files? changed/u.exec(
-      run("git", ["diff", "--no-renames", "--shortstat", candidateSha, mainSha]),
-    )?.[1] ?? 0,
-  );
-  if (commitCount > 0 && changedPathCount > 0) {
-    const changedAreas = run("git", [
-      "diff",
-      "--no-renames",
-      "--dirstat=files,1",
-      candidateSha,
-      mainSha,
-    ])
-      .split(/\r?\n/u)
-      .map((line) => line.trim())
-      .filter(Boolean);
-    console.warn(
-      formatCandidateToolingLagWarning(
+  try {
+    const mainSha = resolveSha("origin/main");
+    if (candidateSha === mainSha) {
+      return;
+    }
+    const commitCount = Number(
+      run("git", [
+        "rev-list",
+        "--count",
+        "--right-only",
+        "--no-merges",
+        `${candidateSha}...${mainSha}`,
+      ]),
+    );
+    // Long-lived release branches can differ from main by tens of thousands of
+    // paths; --shortstat keeps the count bounded instead of buffering every name.
+    const changedPathCount = Number(
+      /^\s*(\d+) files? changed/u.exec(
+        run("git", ["diff", "--no-renames", "--shortstat", candidateSha, mainSha]),
+      )?.[1] ?? 0,
+    );
+    if (commitCount > 0 && changedPathCount > 0) {
+      const changedAreas = run("git", [
+        "diff",
+        "--no-renames",
+        "--dirstat=files,1",
         candidateSha,
         mainSha,
-        commitCount,
-        changedPathCount,
-        changedAreas,
-      ),
+      ])
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      console.warn(
+        formatCandidateToolingLagWarning(
+          candidateSha,
+          mainSha,
+          commitCount,
+          changedPathCount,
+          changedAreas,
+        ),
+      );
+    }
+  } catch {
+    // Drift reporting is advisory; the independent qualification gates below remain fatal.
+    console.warn(
+      "WARNING: candidate tooling lag is unavailable because the Git comparison failed; continuing with the existing qualification checks.",
     );
   }
 }
@@ -2196,7 +2204,7 @@ async function main() {
   }
   requireDispatch(
     args.trustedWorkflowRef === "candidate" || args.inputs.validation_purpose !== "publish",
-    "Fresh publication qualification must use candidate-owned Q=C; explicit cross-revision tooling is diagnostic only. Reconcile historical requests by their retained file.",
+    "Fresh publication qualification must use admitted candidate qualification; explicit main/protected routes are diagnostic only. Reconcile historical requests by their retained file.",
   );
   const targetSha = resolveTargetSha(args.sha, args.targetRef);
   preflightTargetShaFetch(targetSha);
@@ -2214,10 +2222,11 @@ async function main() {
   const workflowSha = candidateOwned
     ? resolveSha(args.workflowSha || targetSha)
     : resolveTrustedWorkflowSha(args.workflowSha, args.trustedWorkflowRef);
-  requireDispatch(
-    !candidateOwned || workflowSha === targetSha,
-    "Candidate-owned qualification requires Q=C; backport qualification repairs into a new candidate",
-  );
+  if (candidateOwned && workflowSha !== targetSha) {
+    // An explicit Q is frozen here, never replaced by the fetched main tip. P
+    // independently repeats provenance and operator admission before Q can run.
+    resolveTrustedWorkflowSha(workflowSha, "main");
+  }
   const trustedWorkflowHarness = assertTrustedWorkflowHarness(workflowSha);
   if (candidateOwned) {
     const workflow = parseYaml(run("git", ["show", `${workflowSha}:${TRUSTED_WORKFLOW_PATH}`]));
@@ -2235,7 +2244,7 @@ async function main() {
   if (candidateOwned) {
     warnCandidateToolingLag(workflowSha);
     const baselinePolicy: unknown = JSON.parse(
-      run("git", ["show", `${workflowSha}:scripts/lib/upgrade-survivor-scenarios.json`]),
+      run("git", ["show", `${targetSha}:scripts/lib/upgrade-survivor-scenarios.json`]),
     );
     requireDispatch(
       isJsonRecord(baselinePolicy) &&
@@ -2417,7 +2426,12 @@ async function executeFrozenDispatch(options: {
   let { record, selection } = options;
   console.log(
     formatDispatchSelection(
-      record?.request ?? { targetSha: String(selection.inputs.ref), workflowSha, ...selection },
+      record?.request ?? {
+        targetSha: String(selection.inputs.ref),
+        workflowSha,
+        trustedWorkflowRef: args.trustedWorkflowRef,
+        ...selection,
+      },
     ),
   );
   const candidateOwned = args.trustedWorkflowRef === "candidate";
@@ -2451,7 +2465,7 @@ async function executeFrozenDispatch(options: {
       };
     } else if (candidateOwned && args.dryRun) {
       console.log(
-        `Admission P: ${args.admissionWorkflowRef} at ${admissionWorkflowSha}; reviewed C=Q request (dry run)`,
+        `Admission P: ${args.admissionWorkflowRef} at ${admissionWorkflowSha}; reviewed C/Q request (dry run)`,
       );
     }
     let payloadDirectory: string | undefined;

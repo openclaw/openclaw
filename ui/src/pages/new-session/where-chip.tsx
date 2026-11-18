@@ -20,15 +20,6 @@ export type WhereChipProps = {
 };
 
 export function WhereChip(props: WhereChipProps) {
-  let picker: PopoverHandle | undefined;
-  let pendingSearchFocus: Element | null | undefined;
-  const focusSearch = (search: HTMLElement) => {
-    // The first chunk may arrive after native popover autofocus has finished.
-    if (picker?.overlay.open && search.ownerDocument.activeElement === pendingSearchFocus) {
-      search.focus({ preventScroll: true });
-    }
-    pendingSearchFocus = undefined;
-  };
   const kind = createMemo(() => props.state.kind);
   const triggerIcon = createMemo(() =>
     kind() === "hosted" ? (
@@ -71,23 +62,20 @@ export function WhereChip(props: WhereChipProps) {
         : "";
     return { cloudSelection, cloudPresentation, label, configurationSummary };
   });
+  const labelPending = () =>
+    props.state.kind === "local" && props.params.gateway.gatewayNamePending;
+  const label = () =>
+    labelPending() ? t("newSession.where") : `${t("newSession.where")}: ${view().label}`;
   return (
     <SessionPicker
       lazy
-      onBeforeShow={() => {
-        pendingSearchFocus = picker?.overlay.surface.ownerDocument.activeElement;
-      }}
-      ref={(handle) => {
-        picker = handle;
-        props.ref?.(handle);
-      }}
+      ref={props.ref}
       kind="where"
-      label={`${t("newSession.where")}: ${view().label}`}
-      value={view().label}
+      label={label()}
+      value={labelPending() ? undefined : view().label}
       icon={triggerIcon()}
       summary={view().configurationSummary}
       triggerAttributes={{
-        "aria-label": `${t("newSession.where")}: ${view().label}${view().configurationSummary ? `, ${view().configurationSummary}` : ""}`,
         "aria-description":
           props.state.kind === "cloud" && view().cloudPresentation.label
             ? t("newSession.cloudWorkerProvider", { provider: view().cloudPresentation.label })
@@ -101,7 +89,7 @@ export function WhereChip(props: WhereChipProps) {
       }}
       params={props.params}
     >
-      <WherePickerContent params={props.params} state={props.state} onReady={focusSearch} />
+      <WherePickerContent params={props.params} state={props.state} />
     </SessionPicker>
   );
 }

@@ -154,6 +154,7 @@ export function createSessionActorMemoryMessages(
               state.pendingInputs.set(source.idempotencyKey, {
                 ...current,
                 consumed_event_id: facts.transcriptInputId,
+                origin_source_json: null,
               });
             } else {
               state.pendingInputs.delete(source.idempotencyKey);

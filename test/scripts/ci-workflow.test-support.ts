@@ -148,6 +148,8 @@ type WorkflowContext = Strings<"action" | "actor" | "authorAssociation" | "maint
     ciShape?: "default" | "main";
     inputs?: Record<string, unknown>;
     runnerEnvironment?: "" | "github-hosted" | "self-hosted";
+    runnerOs?: "" | "Linux" | "macOS" | "Windows";
+    runnerArch?: "X64" | "ARM64";
     runnerProfile?: "blacksmith" | "github" | "hybrid";
     runAttempt: number;
     runId?: number;
@@ -258,7 +260,12 @@ export function evaluateWorkflowExpression(
     env: context.env ?? {},
     secrets: context.secrets ?? {},
     matrix: context.matrix ?? {},
-    runner: { environment: context.runnerEnvironment ?? "", temp: context.runnerTemp ?? "" },
+    runner: {
+      os: context.runnerOs ?? "",
+      arch: context.runnerArch ?? "",
+      environment: context.runnerEnvironment ?? "",
+      temp: context.runnerTemp ?? "",
+    },
     steps: {
       runner_profile: { outputs: { node_runner_backend: "" } },
       qualification_dispatch: { outputs: { eligible: "false" } },
@@ -409,8 +416,14 @@ export function runWorkflowShellScript(
     let moduleIndex = 0;
     const rewritten = script
       .replace(
-        /node (?:(--import tsx |"\$\{manifest_node_args\[@\]\}" ))?--input-type=module <<'([A-Z][A-Z0-9_]*)'\n([\s\S]*?)\n\2(?=\n|$)/gu,
-        (_match, nodeOptions: string | undefined, _marker: string, body: string) => {
+        /node (?:(--import tsx |"\$\{manifest_node_args\[@\]\}" ))?--input-type=module( >>? (?:"[^"\n]*"|'[^'\n]*'|[^\s<>|;&]+))? <<'([A-Z][A-Z0-9_]*)'\n([\s\S]*?)\n\3(?=\n|$)/gu,
+        (
+          _match,
+          nodeOptions: string | undefined,
+          stdoutRedirection: string | undefined,
+          _marker: string,
+          body: string,
+        ) => {
           // Keep scratch outside the checkout's compiler namespace. File-backed stdin
           // avoids Bash heredoc deadlocks and preserves the workflow's cwd-based imports.
           const modulePath = path.join(root, `module-${moduleIndex}.mjs`);
@@ -420,7 +433,7 @@ export function runWorkflowShellScript(
             nodeOptions === "--import tsx "
               ? `--import ${quoteShell(TSX_IMPORT)} `
               : (nodeOptions ?? "");
-          return `${quoteShell(testNodeExecPath)} ${loader}--input-type=module < ${quoteShell(modulePath)}`;
+          return `${quoteShell(testNodeExecPath)} ${loader}--input-type=module${stdoutRedirection ?? ""} < ${quoteShell(modulePath)}`;
         },
       )
       .replace(
@@ -513,6 +526,23 @@ export function readWorkflowOutputs(outputPath: string): Record<string, string> 
     : {};
 }
 
+/** Resolve only the shared WebKit installer; this is not a general Actions runner. */
+export function readPlaywrightWebkitInstall(step: WorkflowStep, cwd: string): string {
+  const uses = expectDefined(step.uses, "WebKit installer action");
+  expect([
+    "./.ci-harness/.github/actions/setup-playwright-webkit",
+    "./.release-harness/.github/actions/setup-playwright-webkit",
+  ]).toContain(uses);
+  const action = readWorkflow(path.resolve(cwd, uses, "action.yml"));
+  expect(action.runs.using).toBe("composite");
+  expect(action.runs.steps).toHaveLength(1);
+  const install = action.runs.steps[0];
+  expect(Object.keys(install).toSorted()).toEqual(["name", "run", "shell"]);
+  expect(install.shell).toBe("bash");
+  expect(typeof install.run).toBe("string");
+  return install.run;
+}
+
 /** Execute the UI phases with Actions' output/env handoff and stop-on-failure behavior. */
 export function runControlUiE2eWorkflow(options: { cwd: string; env: NodeJS.ProcessEnv }) {
   const steps = readCiWorkflow().jobs["checks-ui-e2e"].steps as WorkflowStep[];
@@ -537,7 +567,8 @@ export function runControlUiE2eWorkflow(options: { cwd: string; env: NodeJS.Proc
       continue;
     }
     writeFileSync(outputFile, "");
-    result = runWorkflowShellScript(`set -e\n${step.run}`, { cwd: options.cwd, env });
+    const script = step.uses ? readPlaywrightWebkitInstall(step, options.cwd) : step.run;
+    result = runWorkflowShellScript(`set -e\n${script}`, { cwd: options.cwd, env });
     stdout += result.stdout;
     stderr += result.stderr;
     if (result.status !== 0) {

@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { expect, it, vi } from "vitest";
 import { main, PREFLIGHT_CHECKS, runCommand } from "../../scripts/check.mts";
 import * as managed from "../../scripts/lib/managed-child-process.mts";
@@ -69,4 +70,120 @@ it("keeps script policy guards in the aggregate preflight", () => {
       exact("script TypeScript erasability", "check:script-erasability"),
     ]),
   );
+});
+
+it.each([{ flags: [] }, { flags: ["--include-test-types", "--include-architecture"] }])(
+  "partitions the full check graph without changing flags or canonical order: $flags",
+  async ({ flags }) => {
+    const run = vi.spyOn(managed, "runManagedCommand").mockResolvedValue(0);
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+    const exitCode = process.exitCode;
+    const trace = async (...stages: string[]) => {
+      run.mockClear();
+      await main([
+        "--base",
+        "fixture-base",
+        ...flags,
+        ...stages.flatMap((stage) => ["--stage", stage]),
+      ]);
+      expect(process.exitCode).toBe(0);
+      return run.mock.calls.map(([command]) => {
+        if (!command.args) {
+          throw new Error("Check stages must pass command arguments to the managed runner.");
+        }
+        return command.args;
+      });
+    };
+    try {
+      const full = await trace();
+      const nonlint = await trace("policy", "preflight", "typecheck", "preflight");
+      const lint = await trace("lint");
+      expect(lint).toEqual([["lint", "--base", "fixture-base"], ["format:check"]]);
+      expect(nonlint).toEqual(
+        full.filter(([command]) => command !== "lint" && command !== "format:check"),
+      );
+      expect([...nonlint, ...lint].map((args) => JSON.stringify(args)).toSorted()).toEqual(
+        full.map((args) => JSON.stringify(args)).toSorted(),
+      );
+      expect(await trace("policy", "lint", "typecheck", "preflight")).toEqual(full);
+      expect(nonlint).toContainEqual([flags.length ? "tsgo:all" : "tsgo:prod"]);
+      expect(nonlint).toContainEqual([
+        flags.length ? "check:architecture:after-preflight" : "check:import-cycles",
+      ]);
+      for (const command of PREFLIGHT_CHECKS.filter((entry) => entry.usesBase)) {
+        expect(nonlint).toContainEqual([...command.args, "--base", "fixture-base"]);
+      }
+    } finally {
+      run.mockRestore();
+      stderr.mockRestore();
+      process.exitCode = exitCode;
+    }
+  },
+);
+
+it("runs the legacy-store guard once while preserving standalone and fail-fast coverage", async () => {
+  const { scripts } = JSON.parse(readFileSync("package.json", "utf8")) as {
+    scripts: Record<string, string>;
+  };
+  const guard = "check:database-first-legacy-stores";
+  const expand = (name: string): string[] =>
+    scripts[name]?.startsWith("pnpm ")
+      ? scripts[name].split(" && ").flatMap((command) => expand(command.slice(5)))
+      : [name];
+  const run = vi.spyOn(managed, "runManagedCommand").mockResolvedValue(0);
+  const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+  const exitCode = process.exitCode;
+  try {
+    expect(expand("check:architecture").filter((name) => name === guard)).toHaveLength(1);
+    for (const stages of [[], ["preflight"], ["policy"], ["preflight", "typecheck", "policy"]]) {
+      run.mockClear();
+      await main(["--include-architecture", ...stages.flatMap((stage) => ["--stage", stage])]);
+      const commands = run.mock.calls.flatMap(([command]) => expand(command.args![0]!));
+      expect(
+        commands.filter((name) => name === guard),
+        stages.join(","),
+      ).toHaveLength(1);
+    }
+    run.mockClear();
+    run.mockImplementation(async ({ args }) => (args?.[0] === guard ? 7 : 0));
+    await main(["--include-architecture"]);
+    expect(process.exitCode).toBe(7);
+    expect(run.mock.calls.some(([command]) => command.args?.[0] === "tsgo:prod")).toBe(false);
+  } finally {
+    run.mockRestore();
+    stderr.mockRestore();
+    process.exitCode = exitCode;
+  }
+});
+
+it.each(
+  [["--stage", "missing"], ["--stage", ""], ["--stage"], ["--stage="]].map((args) => ({ args })),
+)("rejects invalid stage selection before admitting commands: $args", async ({ args }) => {
+  const run = vi.spyOn(managed, "runManagedCommand").mockResolvedValue(0);
+  const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+  const exitCode = process.exitCode;
+  try {
+    await main(args);
+    expect(process.exitCode).toBe(2);
+    expect(run).not.toHaveBeenCalled();
+  } finally {
+    run.mockRestore();
+    stderr.mockRestore();
+    process.exitCode = exitCode;
+  }
+});
+
+it("stops the selected lane on failure and retains its exit status", async () => {
+  const run = vi.spyOn(managed, "runManagedCommand").mockResolvedValue(7);
+  const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+  const exitCode = process.exitCode;
+  try {
+    await main(["--stage", "lint", "--stage", "policy"]);
+    expect(process.exitCode).toBe(7);
+    expect(run.mock.calls).toEqual([[{ args: ["lint"], bin: "pnpm" }]]);
+  } finally {
+    run.mockRestore();
+    stderr.mockRestore();
+    process.exitCode = exitCode;
+  }
 });

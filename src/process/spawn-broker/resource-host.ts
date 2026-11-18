@@ -74,12 +74,15 @@ export class BrokerResourceClaims {
   get hasOpenClaims() {
     return [...this.claims.values()].some((claim) => !claim.closed);
   }
+  get admissionClosed() {
+    return this.failure !== undefined || this.sealed;
+  }
 
   capture(
     attachment: BrokerResourceAttachment,
     callbacks: BrokerNativeResourceCallbacks,
   ): BrokerNativeResourceLease {
-    if (this.failure || this.sealed) {
+    if (this.admissionClosed) {
       throw this.failure ?? new SpawnBrokerError("Native resource source is sealed");
     }
     // Validate and copy before admission; caller mutation cannot alter the captured factory input.
@@ -286,11 +289,16 @@ export class BrokerResourceClaims {
     claim.inContext(() => claim.callbacks.message(response));
   }
 
+  /** Reject new claims without settling retained native resources. */
+  closeAdmission(): void {
+    this.sealed = true;
+  }
+
   seal(): Promise<void> {
     if (this.sealPromise) {
       return this.sealPromise;
     }
-    this.sealed = true;
+    this.closeAdmission();
     this.sealPromise = this.host.transmit({ type: "resource-seal" }).then(
       () => {
         for (const claim of this.claims.values()) {

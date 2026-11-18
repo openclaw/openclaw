@@ -11,6 +11,7 @@ import {
   TALK_READY_HISTORY_MESSAGE,
 } from "./browser-talk-start-stop.fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { ONE_PIXEL_PNG_B64 } from "./new-session-page.test-support.ts";
 
 function catalog(transcription: boolean, realtime?: boolean) {
   return {
@@ -239,7 +240,8 @@ suite.define(() => {
             const phase = composer.locator(".agent-chat__dictation-phase");
             const stop = composer.getByRole("button", { name: "Stop and keep text" });
             const send = composer.getByRole("button", { name: "Send", exact: true });
-            await expect.poll(() => phase.isVisible()).toBe(true);
+            // Phones drop the label; the timeline alone shows listening.
+            await expect.poll(() => phase.isVisible()).toBe(false);
             await expect
               .poll(() => phase.textContent().then((text) => text?.trim()))
               .toBe("Listening…");
@@ -253,7 +255,7 @@ suite.define(() => {
             const layout = await composer.evaluate((element) => {
               const composerBox = element.getBoundingClientRect();
               const controls = [
-                ".agent-chat__dictation-phase",
+                ".agent-chat__dictation-status .agent-chat__voice-activity",
                 ".chat-mobile-dictation-action .chat-send-btn--dictating",
                 ".chat-send-btn--dictation-commit",
               ].map((selector) => {
@@ -337,7 +339,7 @@ suite.define(() => {
         }),
       ).toBe(true);
       if (cancel) {
-        await button(page, "Sessions", true).click();
+        await button(page, "Collapse sidebar", true).click();
         await page.locator(".shell--nav-collapsed").waitFor();
         expect(await isFocused(textarea)).toBe(false);
         await page.keyboard.press("Escape");
@@ -406,6 +408,67 @@ suite.define(() => {
       }),
   );
 
+  it("restores the new-session image drop highlight after keeping dictated text", () =>
+    suite.withPage(
+      {
+        permissions: ["microphone"],
+        viewport: { width: 1056, height: 740 },
+        colorScheme: "dark",
+        reducedMotion: "reduce",
+      },
+      async ({ page }) => {
+        const { gateway, textarea, admit, emit, close } = await openDictation(page, {
+          route: "new",
+        });
+        await button(page, "Dictate", true).click();
+        await admit();
+        await emit("Describe this image");
+        await expectDraft(textarea, "Describe this image");
+
+        const input = page.locator(".new-session-page__composer > .agent-chat__input");
+        const tintOpacity = () =>
+          input.evaluate((element) => Number(getComputedStyle(element, "::before").opacity));
+        expect(await tintOpacity()).toBe(0);
+        const transfer = await page.evaluateHandle((base64) => {
+          const data = new DataTransfer();
+          data.items.add(
+            new File([Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))], "pixel.png", {
+              type: "image/png",
+            }),
+          );
+          return data;
+        }, ONE_PIXEL_PNG_B64);
+        const drag = (type: string) => textarea.dispatchEvent(type, { dataTransfer: transfer });
+        try {
+          await drag("dragenter");
+          await drag("dragover");
+          expect(await tintOpacity()).toBe(0);
+          const draft = "Describe this image in detail";
+          await emit(draft);
+          await expectDraft(textarea, draft);
+          await drag("dragleave");
+
+          await button(page, "Stop and keep text", true).click();
+          await gateway.waitForRequest("talk.session.close");
+          await emit(draft, true);
+          await close();
+          await expect.poll(() => textarea.isEditable()).toBe(true);
+
+          await drag("dragenter");
+          await drag("dragover");
+          await expect.poll(tintOpacity).toBeGreaterThan(0);
+          await expectDraft(textarea, draft);
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            await captureFullPage(page, "dictation-image-drag.png");
+          }
+          await drag("dragleave");
+          await expect.poll(tintOpacity).toBe(0);
+        } finally {
+          await transfer.dispose();
+        }
+      },
+    ));
+
   it("cancels new-session dictation after dismissing its tooltip", () =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const { gateway, textarea, admit, emit } = await openDictation(page, { route: "new" });
@@ -452,6 +515,43 @@ suite.define(() => {
       expect(await gateway.getRequests("talk.session.close")).toHaveLength(1);
       await captureComposer(page, "dictation-new-session-tooltip-cancelled.png");
     }));
+
+  it("keeps the slow microphone permission hint whole and the starting highlight moving in a narrow composer", () =>
+    suite.withPage(
+      { permissions: ["microphone"], viewport: { width: 320, height: 720 } },
+      async ({ page }) => {
+        const { textarea } = await openDictation(page, { route: "new" });
+        await textarea.waitFor();
+        // A pending browser permission prompt keeps microphone acquisition open.
+        await page.evaluate(() =>
+          Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
+            configurable: true,
+            value: () => new Promise<MediaStream>(() => {}),
+          }),
+        );
+        await button(page, "Dictate", true).click();
+        const phase = page.locator(".agent-chat__dictation-phase");
+        await expect
+          .poll(() => phase.textContent())
+          .toBe(
+            "Waiting for microphone access. Bring this tab to the foreground and allow access if prompted.",
+          );
+        const clipped = await phase.evaluate(
+          (element) =>
+            element.scrollWidth > element.clientWidth ||
+            element.getBoundingClientRect().right >
+              element.closest(".agent-chat__dictation-status")!.getBoundingClientRect().right,
+        );
+        await captureComposer(page, "dictation-permission-hint-narrow.png");
+        expect(clipped).toBe(false);
+        // While the microphone opens, a highlight sweeps across the resting dots.
+        const starting = page.locator('.agent-chat__voice-activity[data-status="connecting"]');
+        const highlight = () =>
+          starting.evaluate((element) => getComputedStyle(element, "::after").maskPosition);
+        const firstHighlight = await highlight();
+        await expect.poll(highlight).not.toBe(firstHighlight);
+      },
+    ));
 
   it("gates unavailable voice capabilities in the microphone picker", () =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {

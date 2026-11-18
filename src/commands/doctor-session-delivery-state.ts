@@ -16,7 +16,7 @@ import {
   projectExistingAgentDatabaseTargets,
   type ExistingAgentDatabaseTarget,
 } from "../infra/session-sqlite-migration-readers.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { isSqliteSnapshotCapacityError } from "../infra/sqlite-snapshot-capacity-error.js";
 import { prepareArtifactPreservingSqliteRead } from "../infra/sqlite-snapshot-source.js";

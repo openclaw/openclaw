@@ -212,7 +212,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
       }}
       class={[
         "sidebar-recent-session session-row-host",
-        pinDrop() ? `sidebar-zone-entry--drop-${pinDrop()}` : undefined,
+        pinDrop() ? `reorder-drop-${pinDrop()}` : undefined,
         {
           "sidebar-recent-session--team": team(),
           "sidebar-recent-session--colored": Boolean(color()),
@@ -233,8 +233,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           "sidebar-recent-session--attention-amber": !["error", "none", "question"].includes(
             attentionKind(),
           ),
-          "sidebar-recent-session--dragging":
-            host().sessionOrganizer.draggingSessionKey === session().key,
+          "reorder-dragging": host().sessionOrganizer.draggingSessionKey === session().key,
           "sidebar-recent-session--naming": session().titlePending,
           "sidebar-recent-session--menu-open": menuOpen(),
         },
@@ -382,7 +381,6 @@ function renderRecentSessionRow(params: RecentSessionParams) {
               ref={(element) => (controls.pin = element)}
               data-sidebar-session-pin="true"
               type="button"
-              title={pinLabel()}
               aria-label={pinLabel()}
               disabled={!pinnable()}
               onClick={() => host().toggleSessionPin(actionSession())}
@@ -427,7 +425,6 @@ function renderRecentSessionRow(params: RecentSessionParams) {
             data-sidebar-session-menu="true"
             disabled={Boolean(host().sidebarSnapshot)}
             type="button"
-            title={t("chat.sidebar.openSessionMenu")}
             aria-label={`${t("chat.sidebar.openSessionMenu")}: ${label()}`}
             aria-haspopup="menu"
             aria-expanded={menuOpen() ? "true" : "false"}

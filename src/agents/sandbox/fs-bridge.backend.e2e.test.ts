@@ -2,10 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  createSandboxedWriteTool,
-  wrapToolMemoryFlushAppendOnlyWrite,
-} from "../agent-tools.read.js";
+import { projectMemoryFlushWriteTool } from "../agent-tools.memory-flush.test-support.js";
+import { createSandboxedWriteTool } from "../agent-tools.read.js";
 import type { SandboxBackendHandle } from "./backend-handle.types.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { createLocalRemoteShellScriptRunner } from "./remote-fs-bridge.test-helpers.js";
@@ -71,7 +69,7 @@ describe.runIf(process.platform !== "win32")("sandbox fs bridge local backend e2
     await Promise.all(
       notes.map(async (content) => {
         const bridge = createBridge();
-        const tool = wrapToolMemoryFlushAppendOnlyWrite(
+        const tool = projectMemoryFlushWriteTool(
           createSandboxedWriteTool({ root: workspaceDir, bridge }),
           { root: workspaceDir, relativePath, sandbox: { root: workspaceDir, bridge } },
         );

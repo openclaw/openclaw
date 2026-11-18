@@ -357,7 +357,7 @@ export async function serveWorkspaceSkills(options: {
       assertWorkspace(discovery, workspace);
       const { readWorkspaceSkillSources } =
         await import("../loading/workspace-skill-source-reader.js");
-      await write(readWorkspaceSkillSources(discovery));
+      await write(await readWorkspaceSkillSources(discovery));
       return;
     }
     default:

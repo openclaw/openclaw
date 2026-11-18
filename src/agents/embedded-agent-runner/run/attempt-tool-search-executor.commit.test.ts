@@ -69,6 +69,7 @@ it.each(["accepted", "rejected", "superseded"] as const)(
       const completion = executor({
         tool,
         toolName: "write",
+        toolId: "openclaw:core:write",
         source: "openclaw",
         sourceName: "core",
         toolCallId: "nested-write",
@@ -137,6 +138,7 @@ it("reads back nested activity that a hidden coordination turn stored without di
         execute: async () => ({ content: [{ type: "text" as const, text: "sent" }], details: {} }),
       },
       toolName: "sessions_send",
+      toolId: "openclaw:core:sessions_send",
       source: "openclaw",
       sourceName: "core",
       toolCallId: "nested-send",

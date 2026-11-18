@@ -6,7 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vit
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeTriageUpdateFailure } from "../infra/update-failure-report-artifact.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
-import { readTriageUpdateFailure } from "./triage-update.js";
+import {
+  readTriageUpdateFailure,
+  sanitizeTriageUpdateFailure,
+  updateFailureSchema,
+} from "./triage-update.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type Failure = Parameters<typeof writeTriageUpdateFailure>[0];
@@ -141,7 +145,7 @@ describe("update failure triage diagnostics", () => {
         reason: "Package install failed",
         before: { version: "2026.8.1" },
         recovery: result.recovery,
-        steps: [{ name: "step-1" }, { name: "step-2" }, { name: "step-3" }],
+        steps: [{ name: "step-0" }, { name: "step-2" }, { name: "step-3" }],
       },
     });
     for (const included of [
@@ -160,6 +164,194 @@ describe("update failure triage diagnostics", () => {
     if (process.platform !== "win32") {
       expect((await fs.stat(outputPath)).mode & 0o777).toBe(0o600);
     }
+  });
+
+  const failedStep = (name: string, details: Partial<Result["steps"][number]> = {}) => ({
+    name,
+    command: "openclaw update",
+    cwd: home,
+    durationMs: 1,
+    exitCode: 1,
+    stderrTail: `${name} failed`,
+    ...details,
+  });
+
+  it("retains middle SQLite contention frames across artifact and prompt bounds", async () => {
+    const secret = "sk-test-update-triage-secret-1234567890";
+    const frames = [
+      "    at DatabaseSync.exec (node:sqlite:367:10)",
+      ...Array.from(
+        { length: 13 },
+        (_, index) => `    at writeReceipt${index} (${home}/dist/state.mjs:${51 + index}:10)`,
+      ),
+    ];
+    const stderrTail = [
+      "Doctor failed while publishing the predecessor stop receipt.",
+      "Preparing captured state for Doctor.\n".repeat(100),
+      "SQLite contention call site:",
+      `Error: database is locked token=${secret}`,
+      ...frames,
+      "Unrelated trailing diagnostics.\n".repeat(100),
+      "Installation recovery is unverified; preserve backups.",
+    ].join("\n");
+    const { raw, failure } = await write({
+      steps: [failedStep("openclaw doctor", { stderrTail, termination: "exit" })],
+    });
+    const prompt = sanitizeTriageUpdateFailure(failure, { env, stateDir });
+
+    for (const output of [updateFailureSchema.parse(JSON.parse(raw)), failure, prompt]) {
+      expect(output).toMatchObject({
+        result: {
+          steps: [
+            {
+              stderrTail: expect.stringContaining("Doctor failed"),
+              sqliteContentionCallSite: expect.stringContaining("Error: database is locked"),
+            },
+          ],
+        },
+      });
+      if (!("result" in output)) {
+        throw new Error("The update report lost its failed step.");
+      }
+      const step = output.result.steps[0]!;
+      expect(step.stderrTail).toContain("Installation recovery is unverified");
+      expect(Buffer.byteLength(JSON.stringify(step.stderrTail))).toBeLessThanOrEqual(384);
+      expect(step.sqliteContentionCallSite).toContain("DatabaseSync.exec (node:sqlite:367:10)");
+      expect(step.sqliteContentionCallSite).toContain("writeReceipt10 (~/dist/state.mjs:61:10)");
+      expect(step.sqliteContentionCallSite).not.toContain("writeReceipt11");
+      expect(step.sqliteContentionCallSite).not.toContain("Unrelated trailing diagnostics");
+      expect(Buffer.byteLength(JSON.stringify(step.sqliteContentionCallSite!))).toBeLessThanOrEqual(
+        1024,
+      );
+      for (const excluded of [home, secret]) {
+        expect(JSON.stringify(output)).not.toContain(excluded);
+      }
+    }
+    expect(Buffer.byteLength(raw)).toBeLessThanOrEqual(8 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(prompt))).toBeLessThanOrEqual(4 * 1024);
+  });
+
+  it("bounds oversized contention frames after redaction and JSON escaping", async () => {
+    const stderrTail = [
+      "SQLite contention call site:",
+      "Error: database is locked",
+      "    at DatabaseSync.exec (node:sqlite:367:10)",
+      `    at checkpoint (${home}/${'🦞 "context" '.repeat(1000)}/state.mjs:51:10)`,
+      "    at laterFrame (state.mjs:53:128)",
+    ].join("\n");
+    const { raw, failure } = await write({
+      steps: [failedStep("openclaw doctor", { stderrTail })],
+    });
+    const prompt = sanitizeTriageUpdateFailure(failure, { env, stateDir });
+    if (!("result" in prompt)) {
+      throw new Error("The update report lost its failed step.");
+    }
+    const callSite = prompt.result.steps[0]?.sqliteContentionCallSite;
+    expect(callSite).toContain("Error: database is locked at DatabaseSync.exec");
+    expect(callSite).toContain("...");
+    expect(callSite).not.toContain("laterFrame");
+    expect(raw).not.toContain(home);
+    expect(raw).not.toContain("\uFFFD");
+    expect(Buffer.byteLength(JSON.stringify(callSite!))).toBeLessThanOrEqual(1024);
+    expect(Buffer.byteLength(raw)).toBeLessThanOrEqual(8 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(prompt))).toBeLessThanOrEqual(4 * 1024);
+  });
+
+  it("keeps the failure that started recovery when recovery steps also fail", async () => {
+    const { failure } = await write({
+      reason: "state-migrated-no-rollback",
+      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      steps: [
+        failedStep("candidate-doctor-lint", { exitCode: 0 }),
+        failedStep("database rollback"),
+        failedStep("gateway migration recovery"),
+        failedStep("package-backup-retention"),
+        failedStep("gateway recovery verification"),
+      ],
+    });
+
+    expect(failure).toMatchObject({
+      omittedDetails: 1,
+      result: {
+        steps: [
+          { name: "database rollback" },
+          { name: "package-backup-retention" },
+          { name: "gateway recovery verification" },
+        ],
+      },
+    });
+  });
+
+  it("drops middle failures before the triggering one when the prompt budget is exceeded", () => {
+    const noisy = (label: string) => `${label} ${'\\"'.repeat(1_000)}`;
+    const recorded = sanitizeTriageUpdateFailure(
+      {
+        error: "Update failed",
+        result: {
+          status: "error",
+          mode: "npm",
+          steps: ["trigger", "middle-1", "middle-2", "latest"].map((name) =>
+            failedStep(name, {
+              stderrTail: noisy(`${name} stderr`),
+              stdoutTail: noisy(`${name} stdout`),
+              failureFacts: Array.from({ length: 2 }, (_, index) => ({
+                check: `${name}/check-${index}`.padEnd(120, "-"),
+                code: "doctor-failed",
+                message: `${name} fact ${index}`.padEnd(190, "."),
+              })),
+            }),
+          ),
+        },
+      },
+      { env, stateDir },
+    );
+
+    expect("result" in recorded && recorded.result.steps.map((step) => step.name)).toEqual([
+      "trigger",
+      "latest",
+    ]);
+  });
+
+  it("keeps the latest failure when a lint inventory record follows it under the artifact budget", () => {
+    const noisy = (label: string) => `${label} ${'\\"'.repeat(1_000)}`;
+    const failing = (name: string) =>
+      failedStep(name, {
+        stderrTail: noisy(`${name} stderr`),
+        stdoutTail: noisy(`${name} stdout`),
+        failureFacts: Array.from({ length: 5 }, (_, index) => ({
+          check: `${name}/check-${index}`.padEnd(120, "-"),
+          code: "doctor-failed",
+          message: `${name} fact ${index}`.padEnd(190, "."),
+          affectedKey: `${name}.key.${index}`.padEnd(120, "k"),
+          location: `${name}/location/${index}`.padEnd(150, "l"),
+          // Sized so the artifact budget forces exactly one record out.
+          packageSpec: `${name}-package@${index}`.padEnd(128, "p"),
+        })),
+      });
+    const recorded = sanitizeTriageUpdateFailure(
+      {
+        error: "Update failed",
+        result: {
+          status: "error",
+          mode: "npm",
+          steps: [
+            failing("trigger"),
+            failing("latest"),
+            failedStep("candidate-doctor-lint", {
+              exitCode: 0,
+              doctorLintFindings: [{ checkId: "core/config", message: "Config warning" }],
+            }),
+          ],
+        },
+      },
+      { env, stateDir },
+      "artifact",
+    );
+
+    expect(recorded).toMatchObject({
+      omittedDetails: 1,
+      result: { steps: [{ name: "trigger" }, { name: "latest" }] },
+    });
   });
 
   it("preserves a post-install activation error even when the core update succeeded", async () => {

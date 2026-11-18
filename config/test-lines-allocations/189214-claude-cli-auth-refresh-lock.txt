@@ -1,3 +1,0 @@
-# Real-process regression proving a cancelled Claude CLI availability probe still lets Claude Code
-# release its OAuth refresh lock (#189214). Exact net growth for the auth-refresh lane.
-23

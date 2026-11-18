@@ -357,7 +357,7 @@ describe("ChatSessionRailElement", () => {
 
   it.each([
     { phrases: [], expected: "" },
-    { phrases: ["Reviewing the workspace"], expected: "· Reviewing the workspace…" },
+    { phrases: ["Reviewing the workspace"], expected: "· Reviewing the workspace" },
   ])("uses the theme's pending-answer phrases: $phrases", async ({ phrases, expected }) => {
     const originalBranding = currentThemeBranding();
     setCurrentThemeBranding({ ...originalBranding, workingPhrases: phrases });

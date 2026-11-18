@@ -1,0 +1,2 @@
+# Real nested/captured completion delivery across two process restarts, plus stale requester rejection.
+70

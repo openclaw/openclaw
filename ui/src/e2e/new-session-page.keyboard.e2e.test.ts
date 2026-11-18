@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { createPageOpener } from "./new-session-page.scenario.test-support.ts";
 import {
+  captureUiProof,
   createNewSessionPageE2eSuite,
   installMockGateway,
 } from "./new-session-page.test-support.ts";
@@ -32,9 +33,7 @@ suite.define(() => {
     });
     await page.goto(suite.server.baseUrl + "new");
     await page.locator("#new-session-checkout-trigger").click();
-    await page
-      .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
-      .click();
+    await page.getByRole("button", { name: "New worktree", exact: true }).click();
     await page.keyboard.press("Escape");
     const editor = page.locator(".new-session-page__message");
     const composer = page.locator(".new-session-page__composer");
@@ -74,6 +73,35 @@ suite.define(() => {
         ).toBe(true);
       }
     }
+
+    // Exercise the roomy layout just above its 500px breakpoint as well as at 600px.
+    for (const height of [501, 600]) {
+      const offsetTop = 874 - height;
+      await page.evaluate(
+        (dimensions) => {
+          for (const [key, value] of Object.entries(dimensions)) {
+            Object.defineProperty(window.visualViewport!, key, { configurable: true, value });
+          }
+          window.visualViewport!.dispatchEvent(new Event("resize"));
+        },
+        { height, offsetTop },
+      );
+      await editor.fill("A longer first prompt.\n".repeat(20));
+      await waitForLayoutSettled(page, ".new-session-page__composer");
+      expect((await editor.boundingBox())!.height).toBeGreaterThan(48);
+      const roomyBox = (await composer.boundingBox())!;
+      expect(roomyBox.y).toBeGreaterThanOrEqual(offsetTop);
+      expect(roomyBox.y + roomyBox.height).toBeLessThanOrEqual(offsetTop + height);
+      expect(
+        await send.evaluate((element) => {
+          const bounds = element.getBoundingClientRect();
+          return element.contains(
+            document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
+          );
+        }),
+      ).toBe(true);
+    }
+    await captureUiProof(suite, page, "mobile-keyboard-roomy.png");
 
     await page.evaluate(() => {
       for (const key of ["height", "offsetTop"]) {

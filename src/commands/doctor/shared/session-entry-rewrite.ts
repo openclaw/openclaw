@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { sql } from "kysely";
 import type { DoctorSessionScanScope } from "../../../config/sessions/session-accessor.sqlite-canonical-inventory.js";
@@ -30,12 +31,12 @@ import { deriveSessionPredicateColumns } from "../../../config/sessions/session-
 import { stripRuntimeOnlySessionSkillsFields } from "../../../config/sessions/store-entry-shape.js";
 import { assertSupportedSessionStoreEntry } from "../../../config/sessions/supported-session-store.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import { decodeQueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.codec.js";
 import { withEngineStoreAdmission } from "../../../infra/database-engine/admission-scope.js";
 import { executeSqliteQuerySync, iterateSqliteQuerySync } from "../../../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../../../infra/sql-connection.js";
 import {
   prepareArtifactPreservingSqliteRead,
-  readCustodiedDrainedSqliteSource,
   startSqliteReadOnlyLocationAsync,
 } from "../../../infra/sqlite-snapshot-source.js";
 import {
@@ -43,7 +44,7 @@ import {
   readDatabasePathIdentitySync,
   type DatabaseFileIdentity,
 } from "../../../infra/sqlite-worker-identity.js";
-import { hasUpdateDoctorMigrationCapture } from "../../../infra/update-doctor-migration-attribution.js";
+import { hasUpdateDoctorMigrationCapture } from "../../../infra/update-doctor-migration-context.js";
 import { withArtifactPreservingStateReads } from "../../../state/artifact-preserving-state-reads.js";
 import { agentEngineInput } from "../../../state/openclaw-agent-db-engine.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../../state/openclaw-agent-db-identity.js";
@@ -53,12 +54,16 @@ import {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
 } from "../../../state/openclaw-agent-db.js";
-import { getOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-maintenance-context.js";
+import {
+  getOpenClawDatabaseMaintenanceScope,
+  readCustodiedDrainedSqliteSource,
+} from "../../../state/openclaw-state-maintenance-context.js";
 import { chunkItems } from "../../../utils/chunk-items.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
 } from "../../../utils/delivery-context.read.js";
+import { doctorMigrationBackupPath } from "../../doctor-migration-backup-names.js";
 import {
   inspectLegacyRestartTombstone,
   migrateLegacySessionEntryState,
@@ -112,6 +117,7 @@ export async function scanDoctorSessionEntryRecords(
             WHERE key IN (${sql.join(LEGACY_SESSION_ENTRY_STATE_FIELDS)})
               OR key IN ('provider', 'lastProvider', 'room')
               OR key = 'mainRestartRecovery'
+              OR key = 'resumeAfterRestart'
               OR (key = 'pendingFinalDelivery' AND json_typeof(value) = 'boolean')
               OR (key = 'status' AND value #>> '{}' IN ('running', 'queued'))
               OR (key IN (${sql.join(SESSION_ENTRY_NUMERIC_FIELDS)}) AND json_typeof(value) = 'string')
@@ -121,6 +127,7 @@ export async function scanDoctorSessionEntryRecords(
             WHERE key IN (${sql.join(LEGACY_SESSION_ENTRY_STATE_FIELDS)})
               OR key IN ('provider', 'lastProvider', 'room')
               OR key = 'mainRestartRecovery'
+              OR key = 'resumeAfterRestart'
               OR (key = 'pendingFinalDelivery' AND type IN ('true', 'false'))
               OR (key = 'status' AND value IN ('running', 'queued'))
               OR (key IN (${sql.join(SESSION_ENTRY_NUMERIC_FIELDS)}) AND type = 'text')
@@ -161,7 +168,7 @@ export async function scanDoctorSessionEntryRecords(
     }
     assertSourceCurrent();
     if (readCustodiedDrainedSqliteSource(scope.storePath)) {
-      // The artifact-preserving owner reads a drained, custodied source in place.
+      // The backup owner has already drained WAL under the same maintenance custody.
       const inPlace = withArtifactPreservingStateReads(
         () => scan(databaseOptions, expectedIdentity),
         { agentDatabases: true },
@@ -228,7 +235,13 @@ export async function repairLegacySessionRunOutcomes(
       ) {
         tombstones.add(sessionKey);
       }
-      if (entry.status === "running" || entry.status === "queued" || tombstones.has(sessionKey)) {
+      const resume = entry.resumeAfterRestart;
+      if (
+        entry.status === "running" ||
+        entry.status === "queued" ||
+        tombstones.has(sessionKey) ||
+        (isRecord(resume) && ("queuedInputIds" in resume || "queuedInputSources" in resume))
+      ) {
         sessionKeys.push(sessionKey);
       }
     },
@@ -252,7 +265,7 @@ export async function repairLegacySessionRunOutcomes(
     const { createVerifiedSqliteSnapshot } = await import("../../../infra/sqlite-snapshot.js");
     await createVerifiedSqliteSnapshot({
       sourcePath: scope.storePath,
-      targetPath: `${scope.storePath}.pre-startup-migration-restart-recovery-${randomUUID()}.bak`,
+      targetPath: doctorMigrationBackupPath(scope.storePath, randomUUID(), "restart-recovery"),
       preserveRowIds: true,
       beforePublish: assertRepairCurrent,
     });
@@ -269,11 +282,41 @@ export async function repairLegacySessionRunOutcomes(
           if (tombstone && !tombstone.doctorOnly) {
             warnings.set(sessionKey, tombstone.warning);
           }
-          return tombstone
+          const entryRepair: SessionEntryStateRepair = tombstone
             ? migrateLegacySessionEntryState(entry, updatedAt, {
                 preserveTerminalRestartCustody: true,
               })
             : { entry: migrateLegacySessionRunOutcome(entry, updatedAt) };
+          const resume = entry.resumeAfterRestart;
+          if (isRecord(resume) && ("queuedInputIds" in resume || "queuedInputSources" in resume)) {
+            const inputs: NonNullable<SessionEntryStateRepair["pendingInputOrigins"]>["inputs"] =
+              [];
+            if (isRecord(resume.queuedInputSources) && typeof entry.sessionId === "string") {
+              for (const [inputId, origin] of Object.entries(resume.queuedInputSources)) {
+                if (!isRecord(origin) || typeof origin.runId !== "string") {
+                  continue;
+                }
+                try {
+                  const source = decodeQueuedOperatorRecoverySource(origin.source);
+                  if (source.kind !== "unavailable") {
+                    inputs.push({
+                      inputId,
+                      runId: origin.runId,
+                      sourceJson: JSON.stringify(source),
+                    });
+                  }
+                } catch {
+                  // Invalid legacy provenance cannot restore authority; row recovery reports its absence.
+                }
+              }
+              entryRepair.pendingInputOrigins = { sessionId: entry.sessionId, inputs };
+            }
+            const marker = { ...resume };
+            delete marker.queuedInputIds;
+            delete marker.queuedInputSources;
+            entryRepair.entry = { ...entryRepair.entry, resumeAfterRestart: marker };
+          }
+          return entryRepair;
         },
         expectedIdentity,
         assertCurrent,
@@ -365,6 +408,24 @@ export function rewriteDoctorSessionEntries(
             );
             const repair = params.rawTransform(entry, sessionKey, row.updated_at);
             const transformed = repair.entry;
+            if (repair.pendingInputOrigins?.inputs.length) {
+              for (const origin of repair.pendingInputOrigins.inputs) {
+                executeSqliteQuerySync(
+                  database.db,
+                  db
+                    .updateTable("session_pending_inputs")
+                    .set({ origin_source_json: origin.sourceJson })
+                    .where("session_key", "=", sessionKey)
+                    .where("session_id", "=", row.current_session_id)
+                    .where("session_id", "=", repair.pendingInputOrigins.sessionId)
+                    .where("input_id", "=", origin.inputId)
+                    .where("run_id", "=", origin.runId)
+                    .where("state", "=", "queued")
+                    .where("consumed_event_id", "is", null)
+                    .where("origin_source_json", "is", null),
+                );
+              }
+            }
             numericProjection = repair.numericChanges
               ? bindSessionEntryNumericChanges(repair.numericChanges)
               : undefined;

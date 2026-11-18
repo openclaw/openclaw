@@ -20,6 +20,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeScopedGatewayHttpRequestOrReply as authorizeHttpRequest } from "./http-auth-utils.js";
 import type { authorizeScopedGatewayHttpRequestOrReply } from "./http-utils.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
+import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   setOpenClawIdTunnelPrincipalResolver,
@@ -384,6 +385,7 @@ describe("POST /tools/invoke request cancellation", () => {
             default: "reader",
             definitions: {
               reader: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+              operator: structuredClone(MEMBER_ROLE_PRESETS.operator),
             },
           },
         },

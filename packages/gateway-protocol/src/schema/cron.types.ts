@@ -32,9 +32,11 @@ export type CronCompactJob = Pick<
   | "displayName"
   | "owner"
   | "agentId"
+  | "cyberAccessProgram"
   | "enabled"
   | "updatedAtMs"
   | "streamExecutionHost"
+  | "reauthorizationRequired"
 > &
   Pick<
     CronJob["state"],

@@ -1,6 +1,8 @@
 import "../../test/dom.setup.ts";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { loadWorkboard } from "../../lib/workboard/loading.ts";
+import { resetWorkboardConnectionState } from "../../lib/workboard/runtime.ts";
 import {
   createWorkboardCard,
   createWorkboardTestClient,
@@ -18,6 +20,49 @@ import {
 } from "./view.test-support.ts";
 
 describe("WorkboardView", () => {
+  it.each(["__all__", "default"])(
+    "keeps unread card results unknown in %s",
+    async (boardFilter) => {
+      const { state, host, container, renderView } = createWorkboardView();
+      state.loaded = false;
+      state.boardFilter = boardFilter;
+      const first = Promise.withResolvers<unknown>();
+      const client = createWorkboardTestClient(() => first.promise);
+      renderView({ client });
+      const loading = loadWorkboard({ host, client });
+      renderView({ client });
+      const resultContent =
+        ".workboard-empty-state, .workboard-column, .workboard-filter-option__count, .workboard-mobile-status__count";
+      expect.soft(container.querySelectorAll(resultContent)).toHaveLength(0);
+      first.reject(new Error("Card inventory unavailable"));
+      await loading;
+      renderView({ client });
+      expect.soft(container.querySelectorAll(resultContent)).toHaveLength(0);
+      await waitForFast(() =>
+        expect(toast(container)?.textContent).toContain("Card inventory unavailable"),
+      );
+      expect(buttonByLabel(container, "Refresh")?.disabled).toBe(false);
+      const card = createWorkboardCard();
+      client.request.mockResolvedValue({ cards: [card] });
+      await loadWorkboard({ host, client, force: true });
+      renderView({ client });
+      const retained = container.querySelector(".workboard-card");
+      expect(retained?.textContent).toContain(card.title);
+      resetWorkboardConnectionState(host);
+      renderView({ client, connected: false });
+      expect(container.querySelector(".workboard-card")).toBe(retained);
+      client.request.mockResolvedValue({ cards: [] });
+      await loadWorkboard({ host, client, force: true });
+      state.query = "release";
+      renderView({ client });
+      expect(container.querySelector(".workboard-empty-state")?.textContent).toContain(
+        "No cards match this view",
+      );
+      expect(container.querySelector(".workboard-filter-option__count")?.textContent).toBe("0");
+      expect(container.querySelector(".workboard-mobile-status__count")?.textContent).toBe("0");
+    },
+  );
+
   it("keeps refresh context accessible while loading", async () => {
     const { state, container, renderView } = createWorkboardView();
     state.loading = true;

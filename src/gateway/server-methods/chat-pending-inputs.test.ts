@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
@@ -16,11 +18,19 @@ import {
   loadTranscriptEvents,
   type SessionPendingInputReceipt,
 } from "../../config/sessions/session-accessor.js";
+import { runSessionStartupMigration } from "../../config/sessions/startup-migration-runtime.js";
 import { saveCronJobsStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
 import { retireSessionControllerSourceCancellation } from "../../sessions/session-controller.mailbox.js";
 import { requestRpcSourceCancellation } from "../../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
+import { withAgentDatabaseMaintenanceLease } from "../../state/openclaw-agent-db-maintenance-lease.js";
+import { migrateOpenClawAgentDatabaseForMaintenance } from "../../state/openclaw-agent-db-maintenance.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as userProfileList from "../../state/user-profile-list.js";
 import { setAvatar } from "../../state/user-profile-writes.worker.js";
@@ -84,7 +94,7 @@ function pendingInputs(scope: Parameters<typeof stageSessionPendingInput>[0]) {
     },
     async [Symbol.asyncDispose]() {
       for (const receipt of receipts) {
-        receipt.finish("interrupted");
+        receipt.finish("interrupted", "failed");
         await receipt.settled?.();
       }
     },
@@ -397,7 +407,7 @@ describe("pending input read boundary", () => {
           ],
         },
       });
-      receipt.finish("cancelled");
+      receipt.finish("cancelled", "failed");
       await receipt.settled?.();
       const page = await readChatPendingInputs(scope, { limit: 1, maxChars: 50 });
       const displayId = `pending:${receipt.inputId}`;
@@ -424,6 +434,71 @@ describe("pending input read boundary", () => {
       expect(message).toMatchObject({ ok: true, message: { content: receipt.message.content } });
       await upsertSessionEntryCore(scope, { sessionId: "replacement-session", updatedAt: 2 });
       expect(await lookup()).toEqual({ ok: false, unavailableReason: "not_found" });
+    }));
+
+  it("projects a version 42 stopped input with its canonical user-stop cause after startup admission", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = await createScope("legacy-stopped-input");
+      await using inputs = pendingInputs(scope);
+      const receipt = await inputs.stage("legacy-stopped-run");
+      receipt.finish("cancelled", "failed");
+      await receipt.settled?.();
+      const options = { agentId: scope.agentId };
+      const filename = openOpenClawAgentDatabase(options).path;
+      const legacyMessage = JSON.stringify({
+        ...receipt.message,
+        __openclaw: { pendingInputCancelledByUser: true },
+      });
+      await closeOpenClawAgentDatabasesAsync();
+      closeOpenClawAgentDatabasesForTest();
+      fs.copyFileSync(filename, `${filename}.previous`);
+      fs.renameSync(`${filename}.previous`, filename);
+      {
+        using old = new DatabaseSync(filename);
+        old.exec(`
+          ALTER TABLE session_pending_inputs DROP COLUMN end_cause;
+          ALTER TABLE session_pending_inputs DROP COLUMN origin_source_json;
+          PRAGMA user_version = 42;
+          UPDATE schema_meta SET schema_version = 42 WHERE meta_key = 'primary';
+        `);
+        old
+          .prepare("UPDATE session_pending_inputs SET message_json = ? WHERE input_id = ?")
+          .run(legacyMessage, receipt.inputId);
+      }
+      await withAgentDatabaseMaintenanceLease({ env: state.env }, (maintenance) =>
+        migrateOpenClawAgentDatabaseForMaintenance(
+          { agentId: scope.agentId, env: state.env, pathname: filename },
+          maintenance,
+        ),
+      );
+      await runSessionStartupMigration({
+        cfg: { session: { store: filename } },
+        env: state.env,
+        agentIds: new Set(["main"]),
+        log: { info: vi.fn(), warn: vi.fn() },
+      });
+      const admitted = openOpenClawAgentDatabase(options).db;
+      expect(admitted.prepare("PRAGMA user_version").get()).toEqual({ user_version: 43 });
+      expect(
+        admitted.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
+      ).toEqual({ schema_version: 43 });
+      expect(
+        admitted
+          .prepare("SELECT message_json FROM session_pending_inputs WHERE input_id = ?")
+          .get(receipt.inputId),
+      ).toEqual({ message_json: legacyMessage });
+      // Dismiss availability is derived from this canonical cause, not private message metadata.
+      expect(await readChatPendingInputs(scope, { limit: 20, maxChars: 1_000 })).toMatchObject({
+        total: 1,
+        items: [
+          {
+            id: receipt.inputId,
+            state: "cancelled",
+            endCause: "user-stop",
+            message: { content: "legacy-stopped-run" },
+          },
+        ],
+      });
     }));
 
   it("does not reveal an input hidden by the canonical history visibility policy", () =>
@@ -507,7 +582,7 @@ it.each(["chat.history", "chat.startup"] as const)(
         items: [{ runId: "retained-20" }],
       });
       expect(requestRpcSourceCancellation(retainedSource)).toBe(true);
-      retained[0]?.finish("cancelled");
+      retained[0]?.finish("cancelled", "failed");
       await retained[0]?.settled?.();
       const cancelledPage = await call({ inputRunIds: ["retained-0"], limit: 1 });
       expect(cancelledPage.pendingInputs).toMatchObject({ queuedCount: 0 });

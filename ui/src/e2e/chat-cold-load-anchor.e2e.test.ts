@@ -223,7 +223,13 @@ suite.define(() => {
             runId,
             content: "Synthetic final reply: the report is ready.",
             timestamp: 1_800_000_040_000,
-            __openclaw: { id: "cold-40", seq: 41, runId, replyToId: "cold-38" },
+            __openclaw: {
+              id: "cold-40",
+              seq: 41,
+              runId,
+              replyToId: "cold-38",
+              recordTimestampMs: 1_800_000_218_000,
+            },
           },
         ];
         const gateway = await installMockGateway(page, {
@@ -449,6 +455,20 @@ suite.define(() => {
             ".chat-pane-cache__pane--active .chat-thread",
           );
           return thread && thread.scrollHeight - thread.clientHeight - thread.scrollTop > 200;
+        });
+        // Rows the wheel brings in join the flow once measured; read the reader from that frame.
+        await scroller.evaluate((element) => {
+          const view = element.getBoundingClientRect();
+          return new Promise<void>((resolve) => {
+            const settled = () =>
+              [...element.querySelectorAll(".chat-virtual-row[data-prepared-row]")].every((row) => {
+                const rect = row.getBoundingClientRect();
+                return !rect.height || rect.bottom <= view.top || rect.top >= view.bottom;
+              })
+                ? resolve()
+                : requestAnimationFrame(settled);
+            settled();
+          });
         });
         const reader = await captureTopVisibleVirtualRow(scroller);
         const previousThread = await scroller.evaluateHandle((element) => element);

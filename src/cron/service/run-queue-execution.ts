@@ -2,11 +2,12 @@ import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-terminatio
 import { waitForSessionRunIdle } from "../../sessions/session-controller.wait.js";
 import type { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
+import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { clearCronJobActive } from "../active-jobs.js";
 import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { cronEventPayload } from "../event-source.js";
 import { isPluginCommandCronJob } from "../plugin-command-schedule.js";
-import { resolveCronSessionTargetSessionKey } from "../session-target.js";
+import { resolveCronContinuationSessionKey } from "../session-target.js";
 import { cronSourceIdentity, ownsCronSource } from "../source-schedule.js";
 import type { CronQueuedRun } from "../store/run-queue.types.js";
 import { hasUnstartedCronAdmission } from "./admission-deferred.js";
@@ -16,7 +17,9 @@ import { assertExecutionPolicy } from "./jobs-validation.js";
 import { clearManualCronJobActive, markManualCronJobActive } from "./ops-shared.js";
 import { createCronRunHandle } from "./run-history.js";
 import type { CronRunOptions as RunOptions } from "./run-queue-requests.js";
+import { awaitCronRunQueueTurn, wakeCronRunQueues } from "./run-queue-wake.js";
 import { createCronReceiptExecutionIdentity, markServiceCronJobActive } from "./run-receipts.js";
+import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import {
   emit,
   isImmediateCronRunMode,
@@ -24,6 +27,7 @@ import {
   type CronServiceState,
 } from "./state.js";
 import { ensureLoaded } from "./store.js";
+import type { ConditionFiredRunSlot, ConditionFiredWait } from "./timer-execution-timeout.js";
 import { authorCronRunCompletion, executeJobCoreWithTimeout } from "./timer-job-runner.js";
 import { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-notifications.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
@@ -45,6 +49,77 @@ export type CronLaunchContext = {
   receiptSettlement?: Promise<void>;
 };
 
+/**
+ * A fired condition stops counting as a check and takes a run slot for its payload. A timed
+ * check holds no slot, so it waits, holding neither, for the queue drain to hand it one in due
+ * order, and asks again each time the queue moves. A failed request is retried the same way.
+ */
+async function takeRunSlot(
+  state: CronServiceState,
+  run: CronQueuedRun,
+  pending: CronLaunchContext,
+  wait: ConditionFiredWait,
+): Promise<ConditionFiredRunSlot> {
+  const { context } = pending;
+  const signal = wait.signal ?? new AbortController().signal;
+  // A stop ends the wait. A reload handover does not: like runs already executing here, the
+  // payload goes on, and the replacement's drain hands it the slot.
+  const ended = () =>
+    signal.aborted || (state.lifecycleGeneration !== pending.generation && !state.handedOver);
+  const settle = async () => {
+    const { job, runSlot, stale } = await runOpenClawStateWorkerOperation(context, (scope) =>
+      scope.execute({
+        type: "cron.settleConditionCheck",
+        input: {
+          storeKey: state.deps.storeKey,
+          jobId: run.job.id,
+          receiptId: run.runReceipt.receiptId,
+        },
+      }),
+    );
+    if (job) {
+      applyCronRuntimeRowsToState(state, [job]);
+      // Its check is free for the next waiting condition, and a waiting payload needs a drain
+      // that reads its wait: one already running may have read the queue before it.
+      void state.op.then(() => wakeCronRunQueues(state));
+    }
+    return stale ? "stale" : runSlot;
+  };
+  let next: ReturnType<typeof awaitCronRunQueueTurn> | undefined;
+  let waited = false;
+  try {
+    while (!ended()) {
+      // Registered before asking, so a slot handed out in between still wakes this run.
+      next = awaitCronRunQueueTurn(state, signal);
+      const answer = await settle().catch((error: unknown) => {
+        state.deps.log.warn(
+          { jobId: run.job.id, err: String(error) },
+          "cron: run slot request failed; still waiting",
+        );
+        return false as const;
+      });
+      if (answer === true) {
+        return waited ? "taken-after-wait" : "taken";
+      }
+      if (answer === "stale") {
+        // Before any wait a stale receipt goes ahead: the checks that follow the trigger stop it.
+        return waited ? "stopped" : "taken";
+      }
+      if (!waited) {
+        waited = true;
+        wait.onWait?.(true);
+      }
+      await next.turn;
+    }
+    return "stopped";
+  } finally {
+    next?.cancel();
+    if (waited) {
+      wait.onWait?.(false);
+    }
+  }
+}
+
 export async function launchCronRun(
   state: CronServiceState,
   entry: CronQueuedRun,
@@ -52,9 +127,11 @@ export async function launchCronRun(
   cancel: (reason: string) => Promise<void>,
 ) {
   const { options } = pending;
-  const continuationSession =
-    entry.job.operatorSource && resolveCronSessionTargetSessionKey(entry.job.sessionTarget);
+  const continuationSession = resolveCronContinuationSessionKey(entry.job);
   if (continuationSession) {
+    // The queue parks a timed occurrence while its conversation is busy, so for those this
+    // normally returns at once. Requested and event runs, and a turn that starts between the
+    // drain and this launch, wait here with their slot held.
     await waitForSessionRunIdle(continuationSession, undefined, {
       signal: state.schedulerScope.signal,
     });
@@ -177,6 +254,7 @@ export async function launchCronRun(
       streamBatch: options.streamBatch,
       streamScheduleKey: options.streamScheduleKey,
       streamSourceIdentity: options.streamSourceIdentity,
+      onConditionFired: (wait) => takeRunSlot(state, entry, pending, wait),
       runReceipt: entry.runReceipt,
       runReceiptContext: pending.context,
       executionIdentity: createCronReceiptExecutionIdentity(
@@ -207,8 +285,7 @@ export async function launchCronRun(
     });
   }
   options.onTriggerDisposition?.(
-    result.triggerEval?.busy ||
-      (hasUnstartedCronAdmission(result) && result.admissionDeferredReason === "busy")
+    hasUnstartedCronAdmission(result) && result.admissionDeferredReason === "busy"
       ? "busy"
       : result.status === "error"
         ? "error"

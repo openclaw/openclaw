@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ClawHubRequestError } from "../../infra/clawhub-client.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { ClawHubSourceError } from "../../templates/clawhub-source.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
@@ -116,6 +117,22 @@ describe("ClawHub Template catalog Gateway methods", () => {
   it.each([
     [new ClawHubSourceError("unavailable", "Release is unavailable."), "Release is unavailable."],
     [new Error("upstream internal detail"), "ClawHub catalog is unavailable."],
+    [
+      new ClawHubRequestError({ path: "/api/v1/packages/missing", status: 404, body: "" }),
+      "This Template is not on ClawHub. Check the name or browse the catalog.",
+    ],
+    [
+      new ClawHubRequestError({
+        path: "/api/v1/packages/agent/versions/9.9.9",
+        status: 404,
+        body: "",
+      }),
+      "This Template version is not on ClawHub. Choose another version.",
+    ],
+    [
+      new ClawHubRequestError({ path: "/api/v1/packages/agent", status: 503, body: "" }),
+      "ClawHub catalog is unavailable.",
+    ],
   ])("preserves the public catalog failure for %s", async (failure, message) => {
     readClawHubTemplateDetail.mockRejectedValue(failure);
     expectError(await catalogRequest("templates.catalog.detail", release), "UNAVAILABLE", message);

@@ -9,16 +9,22 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionColdRecord } from "./session-cold-storage-codec.js";
 import { createSessionTranscriptFtsInserter } from "./session-transcript-fts.js";
 import {
-  createTranscriptEventInserter,
   prepareColdTranscriptPayload,
+  prepareTranscriptPayloadForReuse,
   TRANSCRIPT_INSERT_BATCH_SIZE,
   type TranscriptPayloadRecord,
+  type PreparedTranscriptPayload,
 } from "./transcript-payload.js";
 
-/** Cold archives already own the bodies; insert only their native navigation and inline exceptions. */
-function createNavigationInserter(
+export type SessionColdWriteRecord = SessionColdRecord & {
+  preparedPayload?: PreparedTranscriptPayload;
+};
+
+/** Replay payloads without deleting the navigation that still serves cold readers. */
+function createColdEventInserter(
   database: Pick<OpenClawAgentDatabase, "db" | "path">,
   sessionId: string,
+  mode: "restore" | "navigation",
 ) {
   type Row = TranscriptPayloadRecord & { session_id: string; seq: number; created_at: number };
   const inserts = new Map<number, ReturnType<typeof prepareInsert>>();
@@ -32,7 +38,7 @@ function createNavigationInserter(
             seq: parameter((rows) => rows[index]!.seq),
             created_at: parameter((rows) => rows[index]!.created_at),
             event_json: parameter((rows) => rows[index]!.event_json),
-            event_zstd: null,
+            event_zstd: parameter((rows) => rows[index]!.event_zstd),
             event_utf8_bytes: parameter((rows) => rows[index]!.event_utf8_bytes),
             navigation_json: parameter((rows) => rows[index]!.navigation_json),
             navigation_type: parameter((rows) => rows[index]!.navigation_type),
@@ -45,9 +51,24 @@ function createNavigationInserter(
             ),
             navigation_valid: parameter((rows) => rows[index]!.navigation_valid),
           })),
+        )
+        .onConflict((conflict) =>
+          conflict.columns(["session_id", "seq"]).doUpdateSet((eb) => ({
+            event_json: eb.ref("excluded.event_json"),
+            event_zstd: eb.ref("excluded.event_zstd"),
+            event_utf8_bytes: eb.ref("excluded.event_utf8_bytes"),
+            navigation_json: eb.ref("excluded.navigation_json"),
+          })),
         ),
     );
-  return (rows: readonly { seq: number; createdAt: number; eventJson: string }[]) => {
+  return (
+    rows: readonly {
+      seq: number;
+      createdAt: number;
+      eventJson: string;
+      preparedPayload?: PreparedTranscriptPayload;
+    }[],
+  ) => {
     let insert = inserts.get(rows.length);
     if (!insert) {
       insert = prepareInsert(rows.length);
@@ -58,7 +79,10 @@ function createNavigationInserter(
         session_id: sessionId,
         seq: row.seq,
         created_at: row.createdAt,
-        ...prepareColdTranscriptPayload(database.db, row.eventJson),
+        ...(mode === "navigation"
+          ? prepareColdTranscriptPayload(database.db, row.eventJson)
+          : (row.preparedPayload ?? prepareTranscriptPayloadForReuse(database.db, row.eventJson))
+              .payload),
       })),
     );
   };
@@ -68,14 +92,11 @@ function createNavigationInserter(
 export function writeSessionColdRecordsInTransaction(
   database: Pick<OpenClawAgentDatabase, "db" | "path">,
   session_id: string,
-  records: Iterable<SessionColdRecord>,
+  records: Iterable<SessionColdWriteRecord>,
   mode: "restore" | "navigation",
 ): void {
   const db = getNodeSqliteKysely<DB>(database.db);
-  const insertEvents =
-    mode === "navigation"
-      ? createNavigationInserter(database, session_id)
-      : createTranscriptEventInserter(database.db, session_id).batch;
+  const insertEvents = createColdEventInserter(database, session_id, mode);
   const eventRows: Parameters<typeof insertEvents>[0][number][] = [];
   const identityRows: DB["transcript_event_identities"][] = [];
   const activeRows: DB["session_transcript_active_events"][] = [];
@@ -89,14 +110,22 @@ export function writeSessionColdRecordsInTransaction(
     if (identityRows.length) {
       executeSqliteQuerySync(
         database.db,
-        db.insertInto("transcript_event_identities").values(identityRows),
+        db
+          .insertInto("transcript_event_identities")
+          .values(identityRows)
+          .onConflict((conflict) => conflict.columns(["session_id", "event_id"]).doNothing()),
       );
       identityRows.length = 0;
     }
     if (activeRows.length) {
       executeSqliteQuerySync(
         database.db,
-        db.insertInto("session_transcript_active_events").values(activeRows),
+        db
+          .insertInto("session_transcript_active_events")
+          .values(activeRows)
+          .onConflict((conflict) =>
+            conflict.columns(["session_id", "active_position"]).doNothing(),
+          ),
       );
       activeRows.length = 0;
     }
@@ -123,6 +152,7 @@ export function writeSessionColdRecordsInTransaction(
           seq: record.row.seq,
           createdAt: record.row.created_at,
           eventJson: record.row.event_json,
+          preparedPayload: record.preparedPayload,
         });
         eventCharacters += record.row.event_json.length;
         // Bound retained decoded text to about 1 MiB, plus one oversized event.
@@ -146,7 +176,10 @@ export function writeSessionColdRecordsInTransaction(
       case "index":
         executeSqliteQuerySync(
           database.db,
-          db.insertInto("session_transcript_index_state").values({ session_id, ...record.row }),
+          db
+            .insertInto("session_transcript_index_state")
+            .values({ session_id, ...record.row })
+            .onConflict((conflict) => conflict.column("session_id").doUpdateSet(record.row)),
         );
         break;
       case "fts":

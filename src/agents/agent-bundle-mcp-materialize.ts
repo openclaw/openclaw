@@ -20,10 +20,13 @@ import {
   TOOL_NAME_SEPARATOR,
 } from "./agent-bundle-mcp-names.js";
 import {
+  resolveMcpConnectSurface,
+  type OperatorMcpConnectContext,
+} from "./agent-bundle-mcp-operator-connect.js";
+import {
   getSessionMcpRequestSignal,
   runWithSessionMcpRequestSignal,
 } from "./agent-bundle-mcp-request-context.js";
-import { mergeMcpConnectCatalog } from "./agent-bundle-mcp-requester-connect.js";
 import type {
   BundleMcpToolRuntime,
   McpAppRequesterIdentity,
@@ -37,7 +40,6 @@ import {
   projectMcpCallToolResult,
   projectMcpGetPromptResult,
   setMcpCodeModeGuestResult,
-  setMcpCodeModeGuestResultFromAgentResult,
 } from "./mcp-content.js";
 import { prepareMcpAppFormUpload } from "./mcp-form-resource-upload.js";
 import { captureMcpFormRequester } from "./mcp-form-tool-approval.js";
@@ -352,6 +354,7 @@ export async function materializeBundleMcpToolsForRun(params: {
   runtime: SessionMcpRuntime;
   agentId?: string;
   appRequester?: McpAppRequesterIdentity;
+  operatorConnect?: OperatorMcpConnectContext;
   reservedToolNames?: Iterable<string>;
   /** Transfer the lease admitted by the manager before returning this runtime. */
   releaseLease?: () => void;
@@ -393,7 +396,7 @@ export async function materializeBundleMcpToolsForRun(params: {
     const reservedToolNames = params.reservedToolNames
       ? Array.from(params.reservedToolNames)
       : undefined;
-    const materializedCatalog = mergeMcpConnectCatalog(catalog, runtime.requesterConnect);
+    const connectSurface = await resolveMcpConnectSurface(runtime, catalog, params.operatorConnect);
     const getPrompt = runtime.getPrompt?.bind(runtime);
     const createListExecute = (
       method: "listResources" | "listPrompts",
@@ -411,7 +414,7 @@ export async function materializeBundleMcpToolsForRun(params: {
             })
         : undefined;
     const tools = buildBundleMcpToolsFromCatalog({
-      catalog: materializedCatalog,
+      catalog: connectSurface.catalog,
       reservedToolNames,
       createExecute: (tool) => (toolCallId: string, input: unknown, signal?: AbortSignal) =>
         runWithSessionMcpRequestSignal(signal, async () => {
@@ -420,9 +423,9 @@ export async function materializeBundleMcpToolsForRun(params: {
             runtime.appRequester ??
             captureMcpFormRequester(runtime.sessionKey);
           if (!Object.hasOwn(catalog.servers, tool.serverName)) {
-            const connect = runtime.requesterConnect?.createExecute(tool.serverName);
+            const connect = connectSurface.createExecute(tool.serverName);
             if (connect) {
-              return setMcpCodeModeGuestResultFromAgentResult(await connect(toolCallId, input));
+              return await connect(toolCallId, input, signal);
             }
           }
           runtime.markUsed();
@@ -593,12 +596,12 @@ export async function materializeBundleMcpToolsForRun(params: {
       ...(reservedToolNames ?? []),
       ...tools.map((tool) => tool.name),
     ]);
-    const appOnlyTools = materializedCatalog.tools.filter(isAppOnlyMcpTool).toSorted((a, b) => {
+    const appOnlyTools = connectSurface.catalog.tools.filter(isAppOnlyMcpTool).toSorted((a, b) => {
       const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
       return serverOrder || a.toolName.localeCompare(b.toolName);
     });
     for (const tool of appOnlyTools) {
-      const server = materializedCatalog.servers[tool.serverName];
+      const server = connectSurface.catalog.servers[tool.serverName];
       const name = buildSafeToolName({
         serverName: tool.safeServerName,
         toolName: tool.toolName,

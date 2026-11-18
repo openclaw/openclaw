@@ -17,7 +17,13 @@ Session-list failures appear in the sidebar while that list is active and clear
 when it recovers or you change filters. A failed session action, such as a
 rename, keeps its error with that action instead of adding a list error.
 
-On phones, swipe right across the chat to open navigation. A deliberate swipe opens the full drawer while your finger is still down, rather than holding a partly clipped sidebar over the conversation. Short drags and vertical scrolling leave navigation closed. Tap outside the drawer to close it.
+On phones, swipe right starting within 32 CSS pixels of the chat’s left edge to
+open navigation, or tap **Expand sidebar** in the header. The opening strip starts
+after any device safe-area inset, including in landscape. Swipes farther inside
+the content stay with that content, such as a 3D viewer’s orbit controls.
+A deliberate edge swipe opens the full drawer while your finger is still down,
+rather than holding a partly clipped sidebar over the conversation. Short drags
+and vertical scrolling leave navigation closed. Tap outside the drawer to close it.
 
 To work directly in a folder on a paired device, select that specific device,
 then choose **Existing folder on** _device_ in the workspace picker. Admins
@@ -43,21 +49,21 @@ their name on hover or keyboard focus and stays visible on touch screens. Use
 Pages always hides dashboards from
 archived sessions and has no archive toggle. To find archived sessions in the
 sidebar, use the **Sessions** filter instead. Hover or focus an icon for its name.
-The active agent's avatar sits at the top of the rail and opens the agent menu;
-in team mode it opens the workspace menu. The accented **+**, labeled **New session**,
-sits directly below the avatar, separated from navigation by a divider. It stays in
-the same place in Pages, Sessions, and Users, even when the list is collapsed.
-It opens New session for the selected agent; in team mode, choose an agent from
-its menu first. Command-palette search sits below the three view buttons.
+The active agent's avatar sits at the top of the rail and only opens the agent menu,
+from any page and with the list open or collapsed; in team mode it opens the workspace
+menu. **Sessions** sits directly below the avatar and opens the session list; its icon
+fills while that list is open. **New session** (**+**) sits in the Sessions list header,
+beside **Filter & sort**, and opens New session for the selected agent; in team mode,
+choose an agent from its menu first. Command-palette search sits below the three view buttons.
 Search failures show **Couldn’t search sessions. Try again.**, rather than an empty result.
 If message search is unavailable, the palette still shows matching session titles and details.
-Click the selected Pages or Sessions view again to collapse its list, or press ⌘B on
+Use the list's collapse button to hide it, or press ⌘B on
 Mac or Ctrl+B on Windows/Linux. Clicks use the normal sidebar animation; the
 keyboard shortcut opens or closes navigation immediately. Reduced-motion preferences
 also keep clicks immediate. While the list is hidden, none of the three view
 buttons is selected; click any view to open its list. Selecting a different view
-while the list is open switches directly to that view. Clicking Users again keeps
-its list open; use the collapse button or keyboard shortcut to hide it.
+while the list is open switches directly to that view. Clicking Sessions or Users again
+keeps its list open.
 Home, Inbox, and your account controls stay together at the bottom of the rail.
 When gateway switching is available, the account menu shows one current-gateway row.
 Open it to switch gateways or open **Gateway settings**; **Set as primary** appears
@@ -116,13 +122,19 @@ participation and mentions. External catalog entries appear in **Involving me**
 only when their adopted OpenClaw conversation is in the Gateway-filtered list.
 Shared or imported catalog access alone does not establish involvement; use
 **All owners** to browse those sources. The separate filter button controls the
-remaining session filters. New session stays in the rail rather than moving
-into this header. In mobile chat, open navigation to reach **New session**
-in the rail; the conversation header reserves its two right-hand controls for
-**Session actions** and **Panels**. Other mobile pages keep an equivalent **+** in
-the page topbar while the drawer is closed. Opening the drawer moves that action
-back to the rail, without a second header button. In team mode, creation opens the
-same agent picker as the rail. Native apps keep their native creation controls.
+remaining session filters. On mobile chat, open navigation and choose **Sessions**
+to reach **New session** in the list header. The conversation header keeps its
+two right-hand controls for **Session actions** and **Panels**. Other mobile pages
+also offer **New session** (**+**) in the page topbar while the drawer is closed.
+In team mode, **New session** first opens an agent picker. Native apps keep their
+native creation controls.
+
+The agent picker sets the sidebar's agent scope. **My sessions**, a named owner,
+**Involving me**, and **All owners** stay within the selected agent; changing the
+owner never expands the list to other agents. Sidebar pins and personal sections
+also follow that agent scope without removing their saved references. Choose
+**Show all** in the agent picker to browse across agents. Explicit rail shortcuts
+remain available across agent selections.
 
 Session activity and unread indicators stay in the leading column across owner
 filters, grouping modes, pinned sessions, and child rows. Idle rows reserve the
@@ -311,6 +323,13 @@ On the first identified connection, the Control UI uploads existing browser-loca
 
 When a remote project session starts before its repository finishes cloning, chat shows workspace preparation progress. If preparation fails, opening or reloading chat restores the session's failure summary. Correct the reported problem, then send a new message in the same session to retry preparation.
 
+An unrecognized Git clone or refresh failure includes a **Diagnostic ID**. Give
+that ID to the Gateway operator to find the matching `projects/clone` file-log
+entry, which retains Git's exit status and process output. Raw Git output stays
+out of the shared conversation; the diagnostic ID does not grant log access.
+Refresh preparation and branch-update failures ask you to retry first by sending
+your message again; if they persist, give the diagnostic ID to the Gateway operator.
+
 Accepted browser messages, including initial prompts waiting for workspace
 preparation and follow-ups during a run, remain visible as normal message bubbles
 until their own turn starts, without an additional receipt notice. Inputs accepted through `sessions_send` or the
@@ -497,6 +516,12 @@ Persistent child conversations and forks stay nested after their turns finish,
 including after a reload or Gateway restart. Archiving hides them from the
 **Active** list; restoring them brings them back under their parent.
 
+GitHub publication keeps internal records for its checkout, retries, and recovery.
+These stay out of the conversation tree and child counts by default, including
+records created before an update. Enable **Show system sessions** to inspect them.
+Publication results and pull requests remain attached to the original conversation;
+this display filter does not change permissions or publication authority.
+
 Choose **Show all** in the agent switcher to open the **Sessions** page across all agents and expand the compact agent roster. This clears any agent filter, even when the roster is already selected. The browser remembers the roster mode. Selecting an agent row opens its main conversation; use **Sessions** in that agent's options menu to browse only its conversations.
 
 Session-row owner avatars appear automatically when the signed-in user and session roster identify more than one human. With only one human, owner avatars stay hidden even when agents own or participate in sessions. Agent participants and undisplayed participant counts do not enable attribution. Session icons, channel avatars, and activity indicators keep their usual behavior.
@@ -660,8 +685,8 @@ The root menu keeps everyday actions together: **Pin/Unpin**, **Rename**, **Mark
 - In the sidebar session menu, **Snooze** offers **In 1 hour**, **In 3 hours**, **This evening** (18:00 local, when more than one hour away), **Tomorrow** (09:00 local), and **Next week** (next Monday at 09:00 local). On Sundays, Next week is omitted because it matches Tomorrow. Each preset shows its wake time in your locale. Active sessions eligible for pinning can be snoozed, except protected main and sentinel sessions; archived and nested child sessions cannot. A child moved to the top level can be snoozed. A snoozed session offers **Wake session** instead.
 - **Icon & color** opens one picker with color swatches, an icon grid, and **Reset to default**. It stays open while you change both; the sidebar reflects your changes.
 - **Move to group** includes **New group** and **Remove from group**. **Assign to** stays on the root menu when more than one eligible owner is available ([session ownership](/concepts/multi-user#assigning-an-owner)).
-  On phones, **Search groups** matches canonically equivalent accented names
-  without changing the stored group name; an unaccented query remains distinct.
+  **Search groups** matches canonically equivalent accented names without
+  changing the stored group name; an unaccented query remains distinct.
 - **Fork session** creates a separate session; while the agent is replying, it forks from the last completed message. Forks of local folder and project sessions keep that workspace, so existing file references continue to open. **Fork from here** keeps the same local workspace as well.
 - **Copy link** copies the session link in one step. **Advanced → Copy details** offers the preview link, conversation text as Markdown, and the session ID, without duplicating the common session link. The link requires normal Gateway authentication and session access; copying it does not grant access. Markdown loads the available conversation history, not just the messages currently visible. Both copied Markdown and `/export` downloads retain the conversation's sender labels, so messages from different participants remain distinguishable. Records without exportable text, such as tool calls without text output, are omitted.
 - In the Control UI, `/export` and `/export-session` load the available conversation history before downloading Markdown through your browser, even when older messages have not been scrolled into view. If history cannot be read completely or the conversation changes while paging, the export fails instead of downloading a partial file; retry the command. These commands take no file path. An argument leaves the draft intact and shows how to retry. The server-side HTML export available through other clients keeps its separate workspace-path behavior.
@@ -680,7 +705,7 @@ the search; Arrow Down and Enter let you select a matching owner.
 
 1. Open the saved session and select **Session sharing** in the chat header. In the compact header menu, select **Session sharing** there instead.
 2. Under **Link sharing**, enable **Anyone with the link**, review **Make this session public?**, then select **Make public**.
-3. Select **Copy public link** to copy the normal thread URL, or scan the QR code in the sharing menu to open that same URL on another device. The mobile sharing page also shows the code. Select **Use claw QR** for the image-styled version, **Download claw QR** to save its full-size PNG, or **Use standard QR** if scanning is difficult. The **Public** badge in the chat header remains visible while the transcript is published and updates when another window changes public access.
+3. Select **Copy public link** to copy the normal thread URL, or scan the QR code in the sharing menu to open that same URL on another device. The sharing menu and mobile sharing page show the claw QR automatically. If the panel is too narrow or the artwork can’t load, a plain QR appears instead. The **Public** badge in the chat header remains visible while the transcript is published and updates when another window changes public access.
 4. Open that same URL in a signed-out browser to verify the read-only conversation and **Log in** button. Signing in returns to the thread with your existing permissions. New user and assistant text, including progress updates, becomes visible to public readers automatically.
 5. Return to **Session sharing** and select **Disable public access** to stop anonymous reads. The same URL then returns an unavailable page to signed-out readers. Enabling access again makes that URL public again; disabling access cannot recall saved copies.
 
@@ -770,13 +795,15 @@ accompany text. There is no attachment picker in the palette.
 Type **@** to search eligible people by name or verified GitHub handle, just as
 in the chat composer. Use **↑/↓** or **Home/End**, then **Enter** or **Tab** to
 select a person; **Escape** dismisses the people picker before the palette.
-The compact **Will notify** row shows selected people once each, with **+N**
+The compact **Notify or invite** row shows selected people once each, with **+N**
 when space is tight. You can select up to ten mention references. Editing or
 deleting a selected name removes that reference; **Remove mention** clears all
 recipient selections without deleting the text. Pasted names and email addresses
 remain ordinary text. The picker replaces search results while open, and selected
 mentions keep the palette in composer mode. Mentions travel with the first message
-of the new session; they never share a session, invite people, or grant access.
+of the new session. For roles with `sessions.others: "invited"`, a selected
+mention from the creator or an admin grants membership when that message commits.
+It does not change session visibility or the recipient's operator scopes.
 
 - **Enter** selects a person while the people picker is open; otherwise it opens
   or runs the selected search result. With no result, Enter does not send.
@@ -880,7 +907,9 @@ If startup is rejected, the draft remains available to correct and retry.
 
 ### OpenClaw Chat workspace startup
 
-On an OpenClaw Chat send, the submitted text and attachments appear immediately with a **Starting** indicator while the Gateway creates or adopts the session. This is a pending submission, not a Gateway acknowledgment. If creation is rejected, your prompt and attachments remain available to correct and retry. Once creation succeeds, the UI opens the session's chat. If navigation fails, the submitted message stays visible with an **Open session** action that retries navigation without creating or sending again. A background start keeps the same visible acknowledgment above the next draft, with a link to the created session.
+On an OpenClaw Chat send, the submitted text and attachments appear immediately with a **Starting** indicator while the Gateway creates or adopts the session. This is a pending submission, not a Gateway acknowledgment. If creation is rejected, your prompt and attachments remain available to correct and retry. Once creation succeeds, the UI opens the session's chat. If navigation fails, the submitted message stays visible with an **Open session** action that retries navigation without creating or sending again. A background start leaves the normal New session screen in place. The composer keeps its prompt until creation is accepted, then clears and regains focus for the next prompt. The same Session started notice as the command palette links to the created session; failures keep their existing recovery action instead of adding a transcript to New session.
+
+On desktop, press **⌘Enter** on Mac or **Ctrl+Enter** on Windows/Linux in the New session composer to start in the background, the same chord the command palette uses. New session stays open for your next prompt, and the started session appears in the sidebar. With the **Cmd/Ctrl+Enter** send shortcut selected, that chord remains the normal start; add **Shift** to start in the background. **Draft** sessions and native coding CLI starts always open the session they create.
 
 If the model catalog is still loading, session creation stops waiting after a shared 20-second catalog deadline and reports that the session was not created. Retry shortly; your draft remains available. Closing the requesting connection or losing its authority also ends a pending catalog wait.
 

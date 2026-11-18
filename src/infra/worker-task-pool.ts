@@ -82,8 +82,11 @@ export function createOwnedWorkerTaskPool<Input, Output>(
     ownerOptions,
   );
   const owned = {
-    run: (input: WorkerTaskInput<Input>, taskOptions: WorkerTaskOptions<Input>) =>
-      core.run(input, taskOptions),
+    run: (
+      input: WorkerTaskInput<Input>,
+      taskOptions: WorkerTaskOptions<Input> &
+        Pick<OwnedWorkerTaskOptions<Input>, "diagnosticOperation">,
+    ) => core.run(input, taskOptions),
     rotate: () => core.rotate(),
     runTask: (input: WorkerTaskInput<Input>, taskOptions: OwnedWorkerTaskOptions<Input>) =>
       core.runTask(input, taskOptions),

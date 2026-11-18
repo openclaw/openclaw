@@ -1,13 +1,113 @@
+import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { createChangedNodeTestShards } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { routeBoatNodeTestJobs } from "../../scripts/lib/ci-node-test-capacity.mts";
+import { nodeTestVolumeEnvironment } from "../../scripts/lib/ci-node-test-groups-codec.mts";
+import * as inventoryOwner from "../../scripts/lib/ci-node-test-inventory.mts";
 import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
+  isRuntimeTestFileIncluded,
+  type NodeTestVolumeContext,
   type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { parseCompactSplitTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
+
+it("retains the original eligible denominator across selected subsets and runtime copies", () => {
+  const config = "test/vitest/vitest.gateway-database-workers.config.ts";
+  const files = [
+    "src/gateway/session-message-events.history-worker.test.ts",
+    "src/gateway/board-http.test.ts",
+  ];
+  const siblingConfig = "test/vitest/vitest.gateway-server-isolated.config.ts";
+  const sibling = "src/gateway/gateway.prompt-cache.test.ts";
+  const volumeContext: NodeTestVolumeContext = {
+    revision: "a".repeat(40),
+    runtimePolicy: "dual-all" as const,
+    eligibility: {
+      changedPaths: [...files, sibling],
+      includeReleaseOnlyRuntimeTests: false,
+      includePrExemptRuntimeTests: false,
+    },
+    fullPlan: () =>
+      createNodeTestShardBundles({
+        ...volumeContext.eligibility,
+        runnerBackend: "hybrid",
+        compactMode: "pull-request",
+        includeReleaseOnlyPluginShards: false,
+        includeReleaseOnlyToolingShards: false,
+        includeProofTests: false,
+      }),
+  };
+  const eligible = (name: string) =>
+    inventoryOwner
+      .listNodeTestConfigFiles(name)!
+      .filter((file) => isRuntimeTestFileIncluded(file, volumeContext.eligibility));
+  expect(eligible(config)).not.toContain("src/gateway/gateway-auth-recovery.test.ts");
+  const volumes = files.map((file) => {
+    const jobs = createSelectedNodeTestShardBundles([file, sibling], {
+      runnerBackend: "hybrid",
+      // Execution has already admitted these targets. Metadata must not use these flags.
+      includeReleaseOnlyRuntimeTests: true,
+      includePrExemptRuntimeTests: true,
+      volumeContext,
+    })!;
+    expect(jobs.flatMap(planFiles).toSorted()).toEqual([file, sibling].toSorted());
+    const entries = jobs.flatMap((job) =>
+      job.groups.flatMap((group) => group.volume?.entries ?? []),
+    );
+    expect(
+      entries.filter((entry) => entry.config === siblingConfig).map((entry) => entry.full?.count),
+    ).toEqual([eligible(siblingConfig).length, eligible(siblingConfig).length]);
+    return entries.filter((entry) => entry.config === config);
+  });
+  for (const entries of volumes) {
+    expect(entries.map((entry) => entry.runtime).toSorted()).toEqual(["bun", "node"]);
+    for (const entry of entries) {
+      const expected = eligible(config).filter(
+        (file) =>
+          entry.runtime === "node" || file !== "src/gateway/session-database-retention.test.ts",
+      );
+      expect(entry.full).toMatchObject({
+        count: expected.length,
+        digest: createHash("sha256").update(JSON.stringify(expected.toSorted())).digest("hex"),
+      });
+      expect(entry.selected?.count).toBe(1);
+    }
+  }
+  for (const runtime of ["node", "bun"]) {
+    expect(volumes[0]!.find((entry) => entry.runtime === runtime)!.full!.id).toBe(
+      volumes[1]!.find((entry) => entry.runtime === runtime)!.full!.id,
+    );
+  }
+  expect(volumes[0]![0]!.full!.id).not.toBe(volumes[0]![1]!.full!.id);
+});
+
+it("separates scenario identity from worker-only split profiles", () => {
+  const first = nodeTestVolumeEnvironment({ OPENCLAW_VITEST_MAX_WORKERS: "8", SCENARIO: "a" }, [
+    "SCENARIO",
+  ]);
+  const split = nodeTestVolumeEnvironment({ OPENCLAW_VITEST_MAX_WORKERS: "2", SCENARIO: "a" }, [
+    "SCENARIO",
+  ]);
+  const other = nodeTestVolumeEnvironment({ OPENCLAW_VITEST_MAX_WORKERS: "2", SCENARIO: "b" }, [
+    "SCENARIO",
+  ]);
+  expect(first.semantic).toBe(split.semantic);
+  expect(first.admitted).not.toBe(split.admitted);
+  expect(split.semantic).not.toBe(other.semantic);
+  const scenarioOptions = '--conditions="scenario  --max-old-space-size=1234" --trace-warnings';
+  const withHeap =
+    '--conditions="scenario  --max-old-space-size=1234" --max-old-space-size=8192 --trace-warnings';
+  const original = nodeTestVolumeEnvironment({ NODE_OPTIONS: scenarioOptions });
+  const resources = nodeTestVolumeEnvironment({
+    NODE_OPTIONS: withHeap,
+    OPENCLAW_VITEST_WORKER_CACHE: "1",
+  });
+  expect(resources.semantic).toBe(original.semantic);
+  expect(resources.admitted).not.toBe(original.admitted);
+});
 
 const preparedWorkspace = "src/node-host/node-worker-prepared-workspace.test.ts";
 const preparedCompanion = "src/cli/update-cli/update-repair-cancellation.test.ts";
@@ -153,10 +253,6 @@ it.each(["noncompact", "pull-request", "push", "selected", "changed"] as const)(
       boat.find((job) => planFiles(job).includes(preparedWorkspace)),
       "hosted owner",
     );
-    const retained = expectDefined(
-      boat.find((job) => job.checkName === original.checkName),
-      "retained owner",
-    );
     expect(boat.flatMap(planFiles).toSorted()).toEqual(hybrid.flatMap(planFiles).toSorted());
     expect(planFiles(hosted)).toEqual([preparedWorkspace]);
     expect(hosted.runner).toBe("ubuntu-24.04");
@@ -167,13 +263,25 @@ it.each(["noncompact", "pull-request", "push", "selected", "changed"] as const)(
     expect(hosted.pretestBuildMode).toBe(original.pretestBuildMode);
     expect(hosted.requiresDist).toBe(original.requiresDist);
     expect(hosted.predictedSeconds).toBeUndefined();
-    expect(retained.predictedSeconds).toBe(original.predictedSeconds);
-    expect(retained.runner).toMatch(/^boat/u);
     expect(
       boat.some(
         (job) => job.runner.startsWith("boat") && planFiles(job).includes(preparedCompanion),
       ),
     ).toBe(true);
+    if (planFiles(original).length === 1) {
+      expect(boat.some((job) => job.checkName === original.checkName)).toBe(false);
+      expect(boat).toHaveLength(hybrid.length);
+      expect(hosted.groups).toEqual(original.groups);
+      expect(hosted.timing_key).toBe(original.timing_key);
+      return;
+    }
+    const retained = expectDefined(
+      boat.find((job) => job.checkName === original.checkName),
+      "retained mixed owner",
+    );
+    expect(boat).toHaveLength(hybrid.length + 1);
+    expect(retained.predictedSeconds).toBe(original.predictedSeconds);
+    expect(retained.runner).toMatch(/^boat/u);
     const sourceGroup = original.groups?.find((group) =>
       group.includePatterns?.includes(preparedWorkspace),
     );
@@ -184,15 +292,12 @@ it.each(["noncompact", "pull-request", "push", "selected", "changed"] as const)(
     if (sourceGroup) {
       expect(hosted.groups?.[0]?.configs).toEqual(sourceGroup.configs);
     }
-    expect(extracted.timing_key).not.toBe(source.timing_key);
-    expect(parseCompactSplitTimingKey(extracted.timing_key!)).toMatchObject({
-      part: 2,
-      expectedParts: 2,
-    });
-    expect(parseCompactSplitTimingKey(remaining.timing_key!)).toMatchObject({
-      part: 1,
-      expectedParts: 2,
-    });
+    if (source.includePatterns?.length === 1) {
+      expect(extracted).toEqual(source);
+    } else {
+      expect(extracted.timing_key).not.toBe(source.timing_key);
+      expect(remaining.timing_key).not.toBe(source.timing_key);
+    }
     for (const group of original.groups ?? []) {
       if (!group.includePatterns?.includes(preparedWorkspace)) {
         expect(retained.groups).toContainEqual(group);
@@ -201,16 +306,35 @@ it.each(["noncompact", "pull-request", "push", "selected", "changed"] as const)(
   },
 );
 
-it("keeps the selected prepared workspace extraction within the existing job cap", () => {
-  const source = expectDefined(
-    createSelectedNodeTestShardBundles([preparedWorkspace, preparedCompanion], {
-      runnerBackend: "hybrid",
-    }),
-    "source owner",
-  );
+it("keeps singleton replacement and mixed workspace extraction within the existing job cap", () => {
+  const owner: NodeTestShard = {
+    checkName: "checks-node-workspace",
+    shardName: "workspace",
+    runner: "blacksmith-8vcpu-ubuntu-2404",
+    configs: ["test/vitest/vitest.infra.config.ts"],
+    includePatterns: [preparedWorkspace, preparedCompanion],
+    requiresDist: false,
+  };
+  const source = [owner];
+  const singleton = { ...owner, includePatterns: [preparedWorkspace], timing_key: "selected" };
+  const replacement = routeBoatNodeTestJobs([singleton], 1);
+  expect(replacement).toHaveLength(1);
+  expect(replacement[0]).toMatchObject({
+    includePatterns: [preparedWorkspace],
+    timing_key: "selected",
+  });
   const snapshot = JSON.stringify(source);
   expect(() => routeBoatNodeTestJobs(source, source.length)).toThrow(/exceeds.*jobs/u);
-  expect(routeBoatNodeTestJobs(source, source.length + 1)).toHaveLength(source.length + 1);
+  const routed = routeBoatNodeTestJobs(source, source.length + 1);
+  expect(routed.map((job) => job.includePatterns)).toEqual([
+    [preparedCompanion],
+    [preparedWorkspace],
+  ]);
+  const [retainedTiming, hostedTiming] = routed.map((job) =>
+    expectDefined(parseCompactSplitTimingKey(job.timing_key!), "mixed timing generation"),
+  );
+  expect(retainedTiming).toMatchObject({ part: 1, expectedParts: 2, parentShardName: "workspace" });
+  expect(hostedTiming).toEqual({ ...retainedTiming, part: 2 });
   expect(JSON.stringify(source)).toBe(snapshot);
   for (const [inherited, expected] of [
     ["1", "1"],
@@ -290,6 +414,11 @@ it("shares selected serial setup within the shortest contributing timeout", () =
     planConcurrency: 1,
   });
   expect(serial.timeoutMinutes ?? 60).toBe(60);
+  for (const group of serial.groups) {
+    expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe(
+      group.configs.includes("test/vitest/vitest.gateway-methods.config.ts") ? "4" : "2",
+    );
+  }
   expect(
     selected
       .flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? []))

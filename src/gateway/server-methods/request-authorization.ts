@@ -30,6 +30,7 @@ import {
 } from "../../state/agent-database-admission.js";
 import type { ExpectedProfileBinding } from "../expected-profile.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
 import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import {
   prepareGatewaySessionAccessAuthority,
@@ -59,7 +60,7 @@ import type { SessionSubscribePhase } from "../slow-request-diagnostics.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { gatewayRouterUploadPolicyError } from "./core-handlers.js";
 import { authorizeAuthenticatedProfileForMethod } from "./gateway-client-identity.js";
-import { authorizeGatewayMethod } from "./method-authorization.js";
+import { authorizeGatewayMethod, authorizeGatewayMethodScopes } from "./method-authorization.js";
 import type {
   GatewayRequestContext,
   GatewayRequestOptions,
@@ -238,16 +239,18 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   params.markSessionSubscribePhase?.("accessFacts");
   // SAFETY: The host-owned method registry carries the PluginRegistry selected for dispatch.
   const pluginRegistry = params.methodRegistry.pluginRegistry as PluginRegistry | undefined;
-  const authorizeMethod = () =>
-    withPluginRuntimeRegistryScope(pluginRegistry, () =>
-      authorizeGatewayMethod(
-        params.method,
-        params.client,
-        params.requestParams,
-        params.methodRegistry,
-        params.context,
-      ),
-    );
+  const scopeAuthorization = withPluginRuntimeRegistryScope(pluginRegistry, () =>
+    authorizeGatewayMethod(
+      params.method,
+      params.client,
+      params.requestParams,
+      params.methodRegistry,
+      params.context,
+    ),
+  );
+  if (scopeAuthorization.error) {
+    return { error: scopeAuthorization.error };
+  }
   const unavailableDuringStartup = () =>
     errorShape(ErrorCodes.UNAVAILABLE, `${params.method} unavailable during gateway startup`, {
       retryable: true,
@@ -281,10 +284,6 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   while (true) {
     signal?.throwIfAborted();
     startupReadSignal?.throwIfAborted();
-    const scopeAuthorization = authorizeMethod();
-    if (scopeAuthorization.error) {
-      return { error: scopeAuthorization.error };
-    }
     const uploadError = gatewayRouterUploadPolicyError(params, params.methodRegistry);
     if (uploadError) {
       return { error: uploadError };
@@ -299,8 +298,9 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         params.methodRegistry.requiresAuthenticatedProfile(params.method) ||
         resolveDirectIncognitoTargets(params.method, params.requestParams).length > 0 ||
         (sessionMutationTargetFields(params.method).length > 0 &&
-          (params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig)().gateway
-            ?.roles !== undefined),
+          isNamedOperatorRoleEnforcementEnabled(
+            (params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig)(),
+          )),
     });
     if (profileError) {
       return { error: profileError };
@@ -513,11 +513,26 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       assertChatRoutingCurrent?.();
     };
     const authorizeCurrent = (assertCurrent?: () => void, release?: () => void) => {
-      const current = authorizeMethod();
-      const authorizationError = current.error ?? startupError();
+      const authorizationError = startupError();
       if (authorizationError) {
         release?.();
         return authorizationError;
+      }
+      // Profile/catalog preparation must not switch the admitted dispatch ceiling.
+      const client = params.client;
+      if (client) {
+        const currentScope = withPluginRuntimeRegistryScope(pluginRegistry, () =>
+          authorizeGatewayMethodScopes(
+            params.method,
+            client.connect.scopes ?? [],
+            params.requestParams,
+            params.methodRegistry,
+          ),
+        );
+        if (currentScope.allowed && currentScope.sessionScope !== scopeAuthorization.sessionScope) {
+          release?.();
+          return errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed");
+        }
       }
       try {
         params.expectedProfileBinding?.assertCurrent();
@@ -528,10 +543,6 @@ export async function authorizeGatewayRequestPreDispatch(params: {
           return error.error;
         }
         throw error;
-      }
-      if (current.sessionScope !== scopeAuthorization.sessionScope) {
-        release?.();
-        return errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed");
       }
       return null;
     };
