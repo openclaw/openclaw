@@ -318,16 +318,21 @@ export async function readUpdateStateSchemaVersionsInProcess(
   },
 ): Promise<UpdateStateSchemaVersion[]> {
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
-  const files = input.inspectionPlan
-    ? new Map(input.inspectionPlan.files)
+  // Released drivers such as 2026.9.37 strip ownership fields while parsing discovery.
+  // Rebuild their inventory through the existing source reader; treating those stripped
+  // rows as supplemental would hide both shared state and registered agent schemas.
+  const inspectionPlan =
+    input.includeLocalStoreVersions === false ? undefined : input.inspectionPlan;
+  const files = inspectionPlan
+    ? new Map(inspectionPlan.files)
     : await collectSupplementalStateDatabasePaths(input, await collectStateDatabasePaths(input));
   const sharedIdentity = resolveUpdateCandidateStateIdentity(input.stateDir, shared);
   // Inspect each identity once, then publish every spelling for released rollback baselines.
   const inspected = new Map<string, Omit<UpdateStateSchemaVersion, "path">>();
   for (const [identity, discovery] of files) {
     const file = discovery.spellings[0];
-    if (identity === sharedIdentity && input.inspectionPlan) {
-      const { path: _path, ...version } = input.inspectionPlan.sharedVersion;
+    if (identity === sharedIdentity && inspectionPlan) {
+      const { path: _path, ...version } = inspectionPlan.sharedVersion;
       inspected.set(identity, version);
       continue;
     }

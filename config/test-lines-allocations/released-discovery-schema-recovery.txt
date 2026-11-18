@@ -1,0 +1,2 @@
+# Compiled candidate-worker regression for ownership stripped by the released 2026.9.37 discovery parser; preserves shared schema visibility and wrong-schema agent rejection.
+15

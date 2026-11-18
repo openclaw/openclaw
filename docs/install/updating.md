@@ -53,6 +53,12 @@ backup.
 
 ## Update implementation contract
 
+Candidate schema inspection rebuilds the source inventory for released updaters
+that strip database ownership from discovery replies, including 2026.9.37. This
+keeps shared-state and registered-agent versions visible to their migration
+checks without treating plugin or local stores as agent databases. The candidate
+must contain the fix; schemas, migration guards, and rollback policy are unchanged.
+
 Ordinary Git updates build runnable artifacts without declaration-only builds by
 default. An explicit `OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0` remains honored. This
 policy must be present in the installed updater; immutable release build policy

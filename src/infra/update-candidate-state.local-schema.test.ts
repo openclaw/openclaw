@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { z } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withDaemonRuntimePinStore } from "../daemon/runtime-pin-store.js";
 import { runCommandBuffered } from "../process/exec.js";
@@ -132,7 +133,7 @@ it.each(["legacy", "daemon-aware", "local-aware", "legacy-alias", "local-aware-a
   },
 );
 
-it("legacy replies still expose wrong-schema agents to the released 2026.11.3 verifier", async () => {
+it("legacy discovery roundtrips preserve shared and wrong-schema agent versions", async () => {
   const root = await fs.realpath(dirs.make("update-legacy-agent-schemas-"));
   const stateDir = path.join(root, "source");
   const shared = path.join(stateDir, "state", "openclaw.sqlite");
@@ -163,7 +164,21 @@ it("legacy replies still expose wrong-schema agents to the released 2026.11.3 ve
   };
   const parse = (response: unknown) =>
     UpdateCandidateStateSnapshotSchema.shape.versions.parse(response);
-  const legacy = parse(await runWorker(input));
+  // v2026.9.37 parses discovery with this shape, dropping the newer ownership fields.
+  const inspectionPlan = z
+    .object({
+      files: z.array(
+        z.tuple([z.string(), z.object({ spellings: z.tuple([z.string()], z.string()) })]),
+      ),
+      sharedVersion: z.object({
+        path: z.string(),
+        userVersion: z.number().nullable(),
+        contentVersion: z.number().optional(),
+      }),
+    })
+    .parse(await runWorker({ ...input, mode: "discover", stagingRoot: root }));
+  const legacy = parse(await runWorker({ ...input, inspectionPlan }));
+  expect(legacy).toContainEqual({ path: shared, userVersion: 7, contentVersion: 7 });
   // The released verifier treats every non-shared, present row as an agent database
   // (src/cli/update-cli/update-command-migrated.ts at 847611dcaa3b).
   const flagged = legacy
