@@ -85,7 +85,14 @@ export function ChatModelAccountOptions(
         <Show when={props.onNextPage}>{(next) => <AccountPageSentinel onVisible={next()} />}</Show>
         <Show when={props.loading}>
           <div class="chat-controls__account-page-loader" role="status">
-            <span class="btn__spinner chat-controls__account-spinner" aria-hidden="true" />
+            <Show
+              when={props.loading === "more"}
+              fallback={
+                <span class="btn__spinner chat-controls__account-spinner" aria-hidden="true" />
+              }
+            >
+              <span class="chat-controls__account-page-skeleton" aria-hidden="true" />
+            </Show>
             <span class="sr-only">{t("common.loading")}</span>
           </div>
         </Show>

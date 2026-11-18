@@ -394,8 +394,11 @@ suite.define(() => {
         await expect
           .poll(() =>
             loading.evaluate((loader) => {
-              const spinner = loader.querySelector(".chat-controls__account-spinner")!;
-              const box = spinner.getBoundingClientRect();
+              const skeleton = loader.querySelector(".chat-controls__account-page-skeleton");
+              if (!skeleton || getComputedStyle(skeleton).animationName !== "none") {
+                return false;
+              }
+              const box = skeleton.getBoundingClientRect();
               return loader.contains(
                 document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2),
               );

@@ -4859,7 +4859,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 
 .chat-controls__account-page-end {
   position: relative;
-  min-height: 28px;
+  min-height: 34px;
 }
 
 /* Intersect just inside the last row, including when keyboard focus reveals it. */
@@ -4872,8 +4872,17 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 
 .chat-controls__account-page-loader {
   display: grid;
-  min-height: 28px;
+  min-height: 34px;
   place-items: center;
+}
+
+.chat-controls__account-page-skeleton {
+  justify-self: start;
+  width: 42%;
+  height: 12px;
+  margin-inline-start: 8px;
+  border-radius: 4px;
+  background: var(--skeleton-base-raised);
 }
 
 .chat-controls__account-spinner {
