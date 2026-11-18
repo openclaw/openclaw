@@ -40,6 +40,7 @@ import {
   readTurnCompletion,
   systemErrorFallbackCompletion,
 } from "./native-subagent-history-recovery.js";
+import { restoreNativeKnownChild } from "./native-subagent-known-child.js";
 import {
   prepareNativeModelToolInput,
   drainNativeChildModelAdmissions,
@@ -69,6 +70,7 @@ import type {
   ChildState,
   KnownChild,
   MonitorOptions,
+  NativeCompletionCatalogRequest,
   NativeDescendantCancellation,
   NativeDescendantCancellationResult,
   NativeSubagentsReadRequest,
@@ -96,6 +98,7 @@ import {
   readNativeSubagentObservations,
   listNativePendingChildren,
   listNativeRequesterParents,
+  releaseNativeParentIfChildrenSettled,
   observeNativeParentTurn,
   registerNativeSubagentParent,
   type NativeParentRegistration,
@@ -805,6 +808,10 @@ class Monitor {
     }
   }
 
+  captureCompletionCatalog(request: NativeCompletionCatalogRequest): (() => void) | undefined {
+    return this.completionDelivery.captureCatalog(request);
+  }
+
   async captureModelSource(
     request: NativeModelSourceRequest,
   ): Promise<NativeModelSourceCapture | undefined> {
@@ -1004,6 +1011,7 @@ class Monitor {
       return;
     }
     const params = isJsonObject(notification.params) ? notification.params : undefined;
+    const nativeNotification = readCodexNativeSubagentNotification(notification);
     const startedThread = isJsonObject(params?.thread) ? params.thread : undefined;
     const threadId =
       readString(params, "threadId")?.trim() ?? readString(startedThread, "id")?.trim();
@@ -1072,6 +1080,19 @@ class Monitor {
     ) {
       const parent = this.resolveNativeParentState(readString(params, "threadId") ?? "");
       if (parent) {
+        // Consumption is already a native fact. Do not let projection writes
+        // retire its admitted turn before the delivery owner records it.
+        if (
+          this.isCurrentParent(parent) &&
+          canNativeParentConsumeCompletion(parent, readString(params, "turnId"))
+        ) {
+          observeCodexNativeSubagentDeliveryReceipts({
+            state: parent,
+            receipts: nativeNotification.receipts,
+            knownChildren: this.knownChildren.values(),
+            applyReceipts: (runIds) => this.completionDelivery.applyReceipts(parent, runIds),
+          });
+        }
         this.submissions.observeOutput(parent, readString(params, "turnId"), params.item);
         await this.submissions.settleWrites(parent);
         if (!this.isCurrentParent(parent)) {
@@ -1114,8 +1135,11 @@ class Monitor {
       return;
     }
     const childState = threadId && !pendingNativeTurn ? this.currentChild(threadId) : undefined;
-    const nativeNotification = readCodexNativeSubagentNotification(notification);
-    if (parent && canNativeParentConsumeCompletion(parent, readString(params, "turnId"))) {
+    if (
+      notification.method !== "rawResponseItem/completed" &&
+      parent &&
+      canNativeParentConsumeCompletion(parent, readString(params, "turnId"))
+    ) {
       observeCodexNativeSubagentDeliveryReceipts({
         state: parent,
         receipts: nativeNotification.receipts,
@@ -2340,20 +2364,11 @@ class Monitor {
   }
 
   private releaseParentThreadIfChildrenSettled(parentThreadId: string): void {
-    for (const childState of this.childStates.values()) {
-      if (
-        childState.parentThreadId === parentThreadId &&
-        !childState.terminal &&
-        !childState.settledWithoutCompletion
-      ) {
-        return;
-      }
-    }
-    // Pending completion delivery keeps its own custody, but must not block
-    // the parent from resuming to receive those results.
-    const releaseParentThread = this.parentThreadRetentions.get(parentThreadId);
-    this.parentThreadRetentions.delete(parentThreadId);
-    releaseParentThread?.();
+    releaseNativeParentIfChildrenSettled(
+      parentThreadId,
+      this.childStates,
+      this.parentThreadRetentions,
+    );
   }
 
   private hasChildrenForParent(parentThreadId: string): boolean {
@@ -2399,67 +2414,17 @@ class Monitor {
     assignment: NativeSubagentAssignment,
     observedTurns: readonly NativeTurnObservation[] = [],
   ): void {
-    const currentIndex = observedTurns.findIndex((turn) => turn.turnId === assignment.nativeTurnId);
-    const pendingTurns: KnownChild["pendingTurns"] = observedTurns
-      .filter((turn, index) => index > currentIndex && turn.turnId !== assignment.nativeTurnId)
-      .map((turn, index, turns) => ({
-        turnId: turn.turnId,
-        state: turn.state === "active" && index < turns.length - 1 ? undefined : turn.state,
-      }));
-    const previous = this.knownChildren.get(assignment.childThreadId);
-    const previousRunId = previous?.assignment.runId;
-    const retainedPending = previous?.pendingTurns.filter((pending) => pending.modelSource) ?? [];
-    for (const retained of retainedPending) {
-      const recovered = pendingTurns.find((pending) => pending.turnId === retained.turnId);
-      if (recovered) {
-        recovered.modelSource = retained.modelSource;
-        recovered.completionCustody = retained.completionCustody;
-        retained.completionCustody = undefined;
-      } else {
-        pendingTurns.push(retained);
-      }
-    }
-    for (const pending of previous?.pendingTurns ?? []) {
-      if (!pendingTurns.includes(pending)) {
-        releaseCompletionCustody(pending);
-      }
-    }
-    this.knownChildren.set(assignment.childThreadId, {
-      configurationQualification: previous?.configurationQualification,
-      parent: state,
-      nativeParentThreadId:
-        this.childStates.get(assignment.runId)?.nativeParentThreadId ?? state.parentThreadId,
-      deliveryReceipts: this.resolveChildReceiptOwner(state, assignment.childThreadId),
-      assignment: {
-        ...assignment,
-        terminal: false,
-      },
-      turnId: pendingTurns.at(-1)?.turnId ?? assignment.nativeTurnId,
-      observedTurns: new Map(
-        [
-          ...new Set(
-            [assignment.nativeTurnId, ...observedTurns.map((turn) => turn.turnId)].filter(
-              (id): id is string => Boolean(id),
-            ),
-          ),
-        ].map((turnId) => [
-          turnId,
-          {
-            ...(pendingTurns.some((turn) => turn.turnId === turnId)
-              ? { awaitingInteraction: true as const }
-              : {}),
-            state: observedTurns.find((turn) => turn.turnId === turnId)?.state,
-          },
-        ]),
-      ),
-      pendingTurns,
-      agentPaths:
-        this.knownChildren.get(assignment.childThreadId)?.agentPaths ??
-        new Set([assignment.childThreadId]),
+    restoreNativeKnownChild({
+      state,
+      assignment,
+      observedTurns,
+      knownChildren: this.knownChildren,
+      children: this.childStates,
+      receiptOwner: this.resolveChildReceiptOwner(state, assignment.childThreadId),
+      retiredChildren: this.retiredChildren,
+      registerAgentPath: (path) => this.registerAgentPath(state, assignment.childThreadId, path),
+      refreshWaitDependency: () => this.refreshWaitDependency(state, assignment.childThreadId),
     });
-    if (previousRunId !== assignment.runId) {
-      this.refreshWaitDependency(state, assignment.childThreadId);
-    }
   }
 }
 

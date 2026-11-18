@@ -38,6 +38,13 @@ export type NativeSubagentMonitorClient = Pick<
   "request" | "addNotificationHandler" | "addCloseHandler"
 >;
 
+export type NativeCompletionCatalogRequest = {
+  parentThreadId: string;
+  requesterSessionKey: string;
+  sourceSessionKey: string;
+  runId: string;
+};
+
 export type NativeModelSource = NonNullable<
   ReturnType<NonNullable<EmbeddedRunAttemptParamsV2["hostCapabilities"]["retainSourceAuthority"]>>
 >;

@@ -7,6 +7,7 @@ import {
 import { assertHistoryOwnerMatchesRegistration } from "./native-subagent-history-owner.js";
 import type {
   ChildState,
+  NativeCompletionCatalogRequest,
   NativeSubagentMonitorRuntime,
   ParentState,
 } from "./native-subagent-monitor-types.js";
@@ -30,6 +31,13 @@ type CompletionDeliveryDependencies = {
 const COMPLETION_DELIVERY_RETRY_DELAYS_MS = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
 const completionDeliveryOwners = new Map<string, ChildState>();
 
+function completionAnnounceId(
+  child: ChildState,
+  completion: NonNullable<ChildState["pendingCompletion"]>,
+): string {
+  return `codex-native:${child.nativeParentThreadId}:${readCodexNativeSubagentRunId(child.runId)?.turnId ? child.runId : completion.childThreadId}:${completion.status}`;
+}
+
 export class CodexNativeSubagentCompletionDelivery {
   private readonly attempts = new Map<ChildState, Promise<void>>();
 
@@ -52,6 +60,44 @@ export class CodexNativeSubagentCompletionDelivery {
 
   async join(child: ChildState): Promise<void> {
     await this.attempts.get(child);
+  }
+
+  captureCatalog(request: NativeCompletionCatalogRequest): (() => void) | undefined {
+    const state = this.dependencies.parents.get(request.parentThreadId);
+    const child = this.dependencies.children.get(request.sourceSessionKey);
+    const completion = child?.pendingCompletion;
+    const custody = child?.completionCustody;
+    const attempt = child && this.attempts.get(child);
+    if (
+      !state ||
+      !child ||
+      !completion ||
+      !custody ||
+      !attempt ||
+      child.parentThreadId !== request.parentThreadId ||
+      child.nativeParentThreadId !== request.parentThreadId ||
+      state.requesterSessionKey !== request.requesterSessionKey ||
+      request.runId !== `announce:${completionAnnounceId(child, completion)}`
+    ) {
+      return undefined;
+    }
+    const isCurrent = () =>
+      this.isCurrent(state, child) &&
+      state.requesterSessionKey === request.requesterSessionKey &&
+      child.pendingCompletion === completion &&
+      this.attempts.get(child) === attempt &&
+      child.completionCustody === custody &&
+      custody.isCurrent() &&
+      this.claim(state, child);
+    if (!isCurrent()) {
+      return undefined;
+    }
+    // Delivery custody preserves declarations, without extending execution protection.
+    return () => {
+      if (!isCurrent()) {
+        throw new Error("Native completion catalog is no longer current.");
+      }
+    };
   }
 
   private async deliverAttempt(state: ParentState, childState: ChildState): Promise<void> {
@@ -114,7 +160,7 @@ export class CodexNativeSubagentCompletionDelivery {
           this.isCurrent(state, childState) && this.claim(state, childState),
         childSessionKey: childState.runId,
         childSessionId: completion.childThreadId,
-        announceId: `codex-native:${childState.nativeParentThreadId}:${readCodexNativeSubagentRunId(childState.runId)?.turnId ? childState.runId : completion.childThreadId}:${completion.status}`,
+        announceId: completionAnnounceId(childState, completion),
         announceType: "Subagent",
         taskLabel: "Subagent",
         status: completion.status,
