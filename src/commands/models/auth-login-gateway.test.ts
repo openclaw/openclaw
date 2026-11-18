@@ -120,6 +120,34 @@ it("renders device codes and sends selection answers on the admitted session", a
   expect(h.calls).toEqual([next(), next("device"), next("access", "keep")]);
 });
 
+it("keeps line breaks in multi-line login steps while stripping terminal controls", async () => {
+  prompts.select.mockResolvedValueOnce("keep");
+  const h = gateway([
+    step({
+      id: "device",
+      type: "progress",
+      title: "xAI OAuth",
+      message:
+        "Enter this one-time code.\r\nCode: ABCD-1234\n\n\u001b[31mxAI OAuth complete\u001b[0m\u0007",
+    }),
+    step({
+      id: "access",
+      type: "select",
+      message: "Keep access?\n\u001b[31mChoose\u001b[0m one.\rinjected",
+      options: [{ label: "Keep", value: "keep" }],
+    }),
+    done,
+  ]);
+  await h.run();
+  expect(prompts.note).toHaveBeenCalledWith(
+    "Enter this one-time code.\nCode: ABCD-1234\n\nxAI OAuth complete",
+    "xAI OAuth",
+  );
+  expect(prompts.select).toHaveBeenCalledWith(
+    expect.objectContaining({ message: "Keep access?\nChoose one.\\rinjected" }),
+  );
+});
+
 it("closes the admitted session when a terminal prompt is cancelled", async () => {
   prompts.select.mockRejectedValueOnce(new WizardCancelledError());
   const h = gateway([step({ id: "choice", type: "select", options: [] })]);
