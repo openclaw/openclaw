@@ -74,12 +74,18 @@ async function executeSessionsSendWithDeadline(
       opts?.assertSourceCurrent?.();
     },
   };
-  const releaseDeadline = registerDiagnosticToolExecutionDeadline(Date.now() + timeoutMs);
+  const deadlineAtMs = Date.now() + timeoutMs;
+  const releaseDeadline = registerDiagnosticToolExecutionDeadline(deadlineAtMs);
   try {
     return await raceWithTimeout(
       () =>
         withSessionsSendRequesterSource(boundedOptions, () =>
-          executeSessionsSend(boundedOptions, toolCallId, { params, mode, timeoutSeconds }, retain),
+          executeSessionsSend(
+            boundedOptions,
+            toolCallId,
+            { params, mode, timeoutSeconds, deadlineAtMs },
+            retain,
+          ),
         ),
       timeoutMs,
       () => {

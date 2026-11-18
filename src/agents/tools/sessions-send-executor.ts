@@ -76,10 +76,12 @@ export async function executeSessionsSend(
     params,
     mode,
     timeoutSeconds,
+    deadlineAtMs,
   }: {
     params: Record<string, unknown>;
     mode: ReturnType<typeof readSessionsSendMode>;
     timeoutSeconds: number;
+    deadlineAtMs: number;
   },
   retain?: ReturnType<typeof createSelfHeldSendRetainer>,
 ) {
@@ -684,7 +686,8 @@ export async function executeSessionsSend(
           requesterAgentId,
           promptedAt,
           timeoutSeconds,
-          timeoutMs,
+          deadlineAtMs,
+          signal: opts.signal,
           targetIsSubagent,
           isIsolatedCronRequester,
         });

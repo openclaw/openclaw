@@ -420,192 +420,177 @@ describe("sessions_send dispatch admission", () => {
     },
   );
 
-  it.each([undefined, 1200])(
-    "bounds busy-child steering and retains receiver custody (timeout=%s)",
-    async (timeoutSeconds) => {
-      const { context, owner, source } = operatorFixture("steer");
-      const accepted = createDeferredCore();
-      const receipt = createDeferredCore();
-      const sessionFile = "/synthetic/steering-custody/session.jsonl";
-      let continuationSignal: AbortSignal | undefined;
-      const capture = operatorContinuation.captureOperatorToolGatewayContinuationContext;
-      const observeCapture = vi
-        .spyOn(operatorContinuation, "captureOperatorToolGatewayContinuationContext")
-        .mockImplementation((...args) =>
-          capture(...args)?.then((captured) => {
-            continuationSignal = captured.signal;
-            return captured;
-          }),
-        );
-      let queueReturned = false;
-      const selected = createEmbeddedRunHandle({
-        runId: "selected-steer-run",
-        guarded: true,
-        supportsTranscriptCommitWait: true,
-        queueMessage: async (_text, options) => {
-          options?.onQueueAccepted?.(true);
-          accepted.resolve();
-          await receipt.promise;
-          queueReturned = true;
-          options?.onQueueSettled?.();
-        },
-      });
-      const sibling = createEmbeddedRunHandle({ runId: "sibling-steer-run" });
-      const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-      const operations = [storePath, `${storePath}.other`].map((storeScope) =>
-        createReplyOperation({
-          ...targetIdentity,
-          resetTriggered: false,
-          target: captureSessionTarget({
-            storeScope,
-            sessionKey: targetSessionKey,
-            agentId: "main",
-            incarnation: "target-session",
-          }),
+  it("bounds default busy-child steering and retains receiver custody", async () => {
+    const { context, owner, source } = operatorFixture("steer");
+    const accepted = createDeferredCore();
+    const receipt = createDeferredCore();
+    const sessionFile = "/synthetic/steering-custody/session.jsonl";
+    let continuationSignal: AbortSignal | undefined;
+    const capture = operatorContinuation.captureOperatorToolGatewayContinuationContext;
+    const observeCapture = vi
+      .spyOn(operatorContinuation, "captureOperatorToolGatewayContinuationContext")
+      .mockImplementation((...args) =>
+        capture(...args)?.then((captured) => {
+          continuationSignal = captured.signal;
+          return captured;
         }),
       );
-      const attach = (
-        handle: typeof selected,
-        operation: Parameters<typeof attachActiveEmbeddedRun>[5],
-        file?: string,
-      ) =>
-        attachActiveEmbeddedRun(
-          "target-session",
-          handle,
-          targetSessionKey,
-          file,
-          "main",
-          operation,
-        );
-      attach(sibling, operations[1]!);
-      const captured = await operatorCapture.captureGatewayOperatorRunAuthority({
-        client: owner,
-        context,
-        hasCurrentClientAuthority: source.isCurrent,
-      });
-      if (!captured) {
-        throw new Error("Expected the authenticated steering owner");
-      }
-      const requesterOrigin = {
-        sessionKey: requesterSessionKey,
-        operatorProfileId: captured.authority.profileId,
-      };
-      const admission = prepareAgentRunAdmission({
-        cfg: config,
-        operatorAuthority: captured.authority,
-        operationalRunInstance: createOperationalRunInstanceRef("selected-steer-run"),
-        facts: {
+    let queueReturned = false;
+    const selected = createEmbeddedRunHandle({
+      runId: "selected-steer-run",
+      guarded: true,
+      supportsTranscriptCommitWait: true,
+      queueMessage: async (_text, options) => {
+        options?.onQueueAccepted?.(true);
+        accepted.resolve();
+        await receipt.promise;
+        queueReturned = true;
+        options?.onQueueSettled?.();
+      },
+    });
+    const sibling = createEmbeddedRunHandle({ runId: "sibling-steer-run" });
+    const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+    const operations = [storePath, `${storePath}.other`].map((storeScope) =>
+      createReplyOperation({
+        ...targetIdentity,
+        resetTriggered: false,
+        target: captureSessionTarget({
+          storeScope,
+          sessionKey: targetSessionKey,
           agentId: "main",
-          runId: "selected-steer-run",
-          ingress: { kind: "system", state: "present", boundary: "steering-custody-test" },
-        },
+          incarnation: "target-session",
+        }),
+      }),
+    );
+    const attach = (
+      handle: typeof selected,
+      operation: Parameters<typeof attachActiveEmbeddedRun>[5],
+      file?: string,
+    ) =>
+      attachActiveEmbeddedRun("target-session", handle, targetSessionKey, file, "main", operation);
+    attach(sibling, operations[1]!);
+    const captured = await operatorCapture.captureGatewayOperatorRunAuthority({
+      client: owner,
+      context,
+      hasCurrentClientAuthority: source.isCurrent,
+    });
+    if (!captured) {
+      throw new Error("Expected the authenticated steering owner");
+    }
+    const requesterOrigin = {
+      sessionKey: requesterSessionKey,
+      operatorProfileId: captured.authority.profileId,
+    };
+    const admission = prepareAgentRunAdmission({
+      cfg: config,
+      operatorAuthority: captured.authority,
+      operationalRunInstance: createOperationalRunInstanceRef("selected-steer-run"),
+      facts: {
+        agentId: "main",
+        runId: "selected-steer-run",
+        ingress: { kind: "system", state: "present", boundary: "steering-custody-test" },
+      },
+    });
+    const nativeReady = createDeferredCore();
+    const native = admission
+      .admit("embedded", "steering-custody-test")
+      .then((admittedRunContext) =>
+        withPreparedEmbeddedRunToolAuthority(
+          { admittedRunContext, replyOperation: operations[0] },
+          {
+            config,
+            ...targetIdentity,
+            runId: "selected-steer-run",
+            sessionFile,
+            workspaceDir: "/synthetic/steering-custody",
+            provider: "openai",
+            modelId: "gpt-test",
+            requesterOrigin,
+          },
+          undefined,
+          async (prepared) => {
+            selected.toolAuthorityFingerprint = prepared.toolAuthorityFingerprint;
+            attach(selected, prepared.replyOperation, sessionFile);
+            nativeReady.resolve();
+            await receipt.promise;
+          },
+        ),
+      )
+      .finally(() => {
+        admission.close();
+        captured.release();
       });
-      const nativeReady = createDeferredCore();
-      const native = admission
-        .admit("embedded", "steering-custody-test")
-        .then((admittedRunContext) =>
-          withPreparedEmbeddedRunToolAuthority(
-            { admittedRunContext, replyOperation: operations[0] },
-            {
-              config,
-              ...targetIdentity,
-              runId: "selected-steer-run",
-              sessionFile,
-              workspaceDir: "/synthetic/steering-custody",
-              provider: "openai",
-              modelId: "gpt-test",
-              requesterOrigin,
-            },
-            undefined,
-            async (prepared) => {
-              selected.toolAuthorityFingerprint = prepared.toolAuthorityFingerprint;
-              attach(selected, prepared.replyOperation, sessionFile);
-              nativeReady.resolve();
-              await receipt.promise;
-            },
-          ),
-        )
-        .finally(() => {
-          admission.close();
-          captured.release();
-        });
-      const restoreGateway = interceptGateway(mockGateway(undefined, true));
-      await putSession(targetSessionKey, {
-        sessionId: "target-session",
-        updatedAt: 1,
-        spawnedBy: requesterSessionKey,
-      });
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      const liveness = createDiagnosticToolExecutionLiveness();
-      const deadline = Date.now() + (timeoutSeconds ?? 30) * 1000;
-      let result: unknown;
-      const pending = liveness
-        .run(async () => {
-          await awaitGateBeforeSettlement(
-            nativeReady.promise,
-            native,
-            "Native owner was not prepared",
-          );
-          return await inOperatorScope(context, owner, source, () =>
-            withGatewayToolCallerIdentity(
-              {
-                agentId: "main",
-                sessionKey: requesterSessionKey,
-                requesterOrigin,
-                operatorAuthority:
-                  getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority,
-                gatewayContextResolver: () => context,
-                receiptAuthority: () => true,
-              },
-              () =>
-                execute(createTool(), "steer-physical-owner", { mode: undefined, timeoutSeconds }),
-            ),
-          );
-        })
-        .then((value) => {
-          result = value.details;
-          return value;
-        });
-      try {
-        await assertPendingAtGate(accepted.promise, pending, "Native acceptance");
-        expect(continuationSignal?.aborted).toBe(false);
-        expect.soft(liveness.view.deadlineAtMs).toBe(deadline);
-        if (timeoutSeconds) {
-          await vi.advanceTimersByTimeAsync(900_001);
-          expect(result).toBeUndefined();
-        }
-        await vi.advanceTimersByTimeAsync(
-          (timeoutSeconds ?? 30) * 1000 - (timeoutSeconds ? 900_001 : 0),
+    const restoreGateway = interceptGateway(mockGateway(undefined, true));
+    await putSession(targetSessionKey, {
+      sessionId: "target-session",
+      updatedAt: 1,
+      spawnedBy: requesterSessionKey,
+    });
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const liveness = createDiagnosticToolExecutionLiveness();
+    const deadline = Date.now() + 30_000;
+    let result: unknown;
+    const pending = liveness
+      .run(async () => {
+        await awaitGateBeforeSettlement(
+          nativeReady.promise,
+          native,
+          "Native owner was not prepared",
         );
-        expect
-          .soft(result)
-          .toMatchObject({ status: "timeout", runId, sessionKey: targetSessionKey });
-        expect.soft(continuationSignal?.aborted).toBe(false);
-        detachActiveEmbeddedRun("target-session", sibling, targetSessionKey);
-        await vi.advanceTimersByTimeAsync(0);
-        expect(continuationSignal?.aborted).toBe(false);
-        detachActiveEmbeddedRun("target-session", selected, targetSessionKey);
-        await vi.advanceTimersByTimeAsync(0);
-        expect(queueReturned).toBe(false);
-        expect(continuationSignal?.aborted).toBe(true);
+        return await inOperatorScope(context, owner, source, () =>
+          withGatewayToolCallerIdentity(
+            {
+              agentId: "main",
+              sessionKey: requesterSessionKey,
+              requesterOrigin,
+              operatorAuthority:
+                getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority,
+              gatewayContextResolver: () => context,
+              receiptAuthority: () => true,
+            },
+            () =>
+              execute(createTool(), "steer-physical-owner", {
+                mode: undefined,
+                timeoutSeconds: undefined,
+              }),
+          ),
+        );
+      })
+      .then((value) => {
+        result = value.details;
+        return value;
+      });
+    try {
+      await assertPendingAtGate(accepted.promise, pending, "Native acceptance");
+      expect(continuationSignal?.aborted).toBe(false);
+      expect.soft(liveness.view.deadlineAtMs).toBe(deadline);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect.soft(result).toMatchObject({ status: "timeout", runId, sessionKey: targetSessionKey });
+      expect.soft(continuationSignal?.aborted).toBe(false);
+      detachActiveEmbeddedRun("target-session", sibling, targetSessionKey);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(continuationSignal?.aborted).toBe(false);
+      detachActiveEmbeddedRun("target-session", selected, targetSessionKey);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(queueReturned).toBe(false);
+      expect(continuationSignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      receipt.resolve();
+      try {
+        await Promise.all([pending, native]);
       } finally {
-        vi.useRealTimers();
-        receipt.resolve();
-        try {
-          await Promise.all([pending, native]);
-        } finally {
-          for (const [index, handle] of [selected, sibling].entries()) {
-            detachActiveEmbeddedRun("target-session", handle, targetSessionKey);
-            operations[index]!.complete();
-          }
-          restoreGateway();
-          observeCapture.mockRestore();
-          source.release();
-          liveness.close();
+        for (const [index, handle] of [selected, sibling].entries()) {
+          detachActiveEmbeddedRun("target-session", handle, targetSessionKey);
+          operations[index]!.complete();
         }
+        restoreGateway();
+        observeCapture.mockRestore();
+        source.release();
+        liveness.close();
       }
-    },
-  );
+    }
+  });
 
   it("queues an unsupported durable steer once without injecting volatile guidance", async () => {
     const context = createContext([], () => config);
@@ -649,18 +634,18 @@ describe("sessions_send dispatch admission", () => {
     }
   });
 
-  const callerKeys = [requesterSessionKey, "agent:main:telegram:direct:peer-1"];
-  it.each(callerKeys)("retains accepted reply source (%s)", async (sourceKey) => {
-    if (sourceKey !== requesterSessionKey) {
-      await putSession(sourceKey, { sessionId: "key-only-requester", updatedAt: 1 });
-      await putSession(targetSessionKey, {
-        sessionId: "target-session",
-        updatedAt: 1,
-        spawnedBy: sourceKey,
-      });
-    }
+  it("declares a long send deadline and preserves a late child result after slow admission", async () => {
+    const sourceKey = requesterSessionKey;
+    await putSession(targetSessionKey, {
+      sessionId: "target-session",
+      updatedAt: 1,
+      spawnedBy: sourceKey,
+    });
     const { context, owner, source } = operatorFixture("send");
     const finish = createDeferredCore();
+    const admitted = createDeferredCore();
+    const liveness = createDiagnosticToolExecutionLiveness();
+    let result: unknown;
     let completion: SessionFollowupCompletion | undefined;
     const capturing = createDeferredCore();
     const allowCapture = createDeferredCore();
@@ -680,62 +665,78 @@ describe("sessions_send dispatch admission", () => {
     vi.mocked(runSessionsSendA2AFlow).mockImplementationOnce(() => finish.promise);
     const callGateway = mockAgentGateway(async () => {
       const followup = readFollowupRequest(runId, targetSessionKey);
-      if (followup) {
-        completion = SessionFollowupCompletion.bind(followup);
-        followup.completion = completion;
-        completion.markAccepted(runId);
-        await completion.settle(runId, {
-          status: "ok",
-          replyText: "Task complete",
-          terminalReply: { disposition: "visible", text: "Task complete" },
-        });
-        completion.finishExecution(runId);
+      if (!followup) {
+        throw new Error("Expected retained child result custody");
       }
+      completion = SessionFollowupCompletion.bind(followup);
+      followup.completion = completion;
+      completion.markAccepted(runId);
+      admitted.resolve();
       return { runId, status: "accepted" };
     }, true);
-    try {
-      const pending = inOperatorScope(context, owner, source, async () => {
-        const participants = createReplyTurnParticipants({
-          operatorAuthority:
-            getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority,
-        });
-        try {
-          return await withGatewayToolCallerIdentity(
-            {
-              agentId: "main",
-              sessionKey: sourceKey,
-              personalToolParticipants: participants,
-              gatewayContextResolver: () => context,
-              receiptAuthority: () => true,
-            },
-            () => {
-              invocationStarted = true;
-              return execute(
-                createTool({ agentSessionKey: sourceKey, callGateway }),
-                "send-followup",
-              );
-            },
-          );
-        } finally {
-          returned = true;
-          participants.close();
-        }
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const deadline = Date.now() + 1_200_000;
+    const pending = liveness
+      .run(() =>
+        inOperatorScope(context, owner, source, async () => {
+          const participants = createReplyTurnParticipants({
+            operatorAuthority:
+              getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority,
+          });
+          try {
+            return await withGatewayToolCallerIdentity(
+              {
+                agentId: "main",
+                sessionKey: sourceKey,
+                personalToolParticipants: participants,
+                gatewayContextResolver: () => context,
+                receiptAuthority: () => true,
+              },
+              () => {
+                invocationStarted = true;
+                return execute(
+                  createTool({ agentSessionKey: sourceKey, callGateway }),
+                  "send-followup",
+                  { timeoutSeconds: 1200 },
+                );
+              },
+            );
+          } finally {
+            returned = true;
+            participants.close();
+          }
+        }),
+      )
+      .then((value) => {
+        result = value.details;
+        return value;
       });
+    try {
       await assertPendingAtGate(capturing.promise, pending, "Reply-source capture");
-      vi.useFakeTimers();
-      await vi.advanceTimersByTimeAsync(0);
-      vi.useRealTimers();
+      expect.soft(liveness.view.deadlineAtMs).toBe(deadline);
+      await vi.advanceTimersByTimeAsync(1000);
       expect(returned).toBe(false);
       expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
       allowCapture.resolve();
-      const result = await pending;
-      expect(result.details).toMatchObject({
-        status: "accepted",
-        delivery: { status: "pending" },
+      await assertPendingAtGate(admitted.promise, pending, "Child admission");
+      await vi.advanceTimersByTimeAsync(899_001);
+      expect(result).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(299_999);
+      expect.soft(result).toMatchObject({ status: "timeout", runId });
+      await completion!.settle(runId, {
+        status: "ok",
+        replyText: "Task complete",
+        terminalReply: { disposition: "visible", text: "Task complete" },
       });
+      completion!.finishExecution(runId);
+      await vi.advanceTimersByTimeAsync(0);
       expect(runSessionsSendA2AFlow).toHaveBeenCalledOnce();
       expect(runSessionsSendA2AFlow).toHaveBeenCalledWith(
-        expect.objectContaining({ requesterSessionKey: sourceKey, targetSessionKey }),
+        expect.objectContaining({
+          requesterSessionKey: sourceKey,
+          targetSessionKey,
+          reply: expect.objectContaining({ replyText: "Task complete" }),
+        }),
       );
       source.release();
       expect(readGatewayDeviceSourceAuthority(source.isCurrent)?.()).toBe(true);
@@ -744,6 +745,8 @@ describe("sessions_send dispatch admission", () => {
       allowCapture.resolve();
       finish.resolve();
       completion?.close();
+      await pending;
+      liveness.close();
       heldCapture.mockRestore();
       source.release();
     }
