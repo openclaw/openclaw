@@ -12,6 +12,7 @@ import {
 } from "../../../config/deferred-plugin-migration-config.js";
 import { stampConfigWriteMetadata } from "../../../config/io.meta.js";
 import { containsConfigIncludeDirective } from "../../../config/io.read-helpers.js";
+import { createConfigValidationFailedError } from "../../../config/io.write-errors.js";
 import { prepareConfigWriteTopology } from "../../../config/io.write-topology.js";
 import { inheritLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
@@ -23,6 +24,7 @@ import {
   validateConfigObjectWithPlugins,
 } from "../../../config/validation.js";
 import { withDeferredPluginDoctorMigrations } from "../../../plugins/doctor-contract-registry.js";
+import { dedupeByKey } from "../../../shared/dedupe-by-key.js";
 import {
   prepareDoctorConfigReferenceSource,
   restoreDoctorConfigEnvRefs,
@@ -85,6 +87,7 @@ async function planConfigRepair(
   snapshot: ConfigFileSnapshot,
   pluginContracts: boolean,
   additionalMigration?: { config: OpenClawConfig; changes: string[]; pendingStateMigration?: true },
+  reportValidationFailure = false,
 ): Promise<AutomaticConfigRepairPlan | null> {
   if (!canPlanAutomaticConfigRepair(snapshot, additionalMigration?.pendingStateMigration)) {
     return null;
@@ -139,6 +142,13 @@ async function planConfigRepair(
       validationConfig,
       validationConfig,
     );
+    if (reportValidationFailure && (!validated.ok || issues.length > 0)) {
+      throw createConfigValidationFailedError(
+        dedupeByKey([...(!validated.ok ? validated.issues : []), ...issues], (issue) =>
+          JSON.stringify([issue.path, issue.message]),
+        ),
+      );
+    }
     return validated.ok && issues.length === 0 ? validated : null;
   });
   if (!validation) {
@@ -183,7 +193,8 @@ export async function projectAutomaticConfigRepair(
   additionalMigration: { config: OpenClawConfig; changes: string[]; pendingStateMigration?: true },
   options: { pluginContracts: boolean },
 ): Promise<OpenClawConfig | undefined> {
-  return (await planConfigRepair(snapshot, options.pluginContracts, additionalMigration))?.config;
+  return (await planConfigRepair(snapshot, options.pluginContracts, additionalMigration, true))
+    ?.config;
 }
 
 /**
