@@ -55,17 +55,16 @@ export class TranscriptLayoutOwner {
     return this.rowGeometry;
   }
 
-  get canYieldInitialPlacement(): boolean {
-    // New Session already painted this user turn. Place its message and working
-    // row before paint instead of exposing a hidden range during the handoff.
-    return !this.initialSubmission && this.rows.length > 1;
-  }
-
   set rows(rows: readonly TranscriptRowGeometry[]) {
     // Geometry survives rendered bodies; structural types alone do not discard payloads.
     this.rowGeometry = projectedRows(rows, [], () =>
       rows.map(({ key, revision }) => ({ key, revision })),
     );
+  }
+
+  get canYieldInitialPlacement(): boolean {
+    // Place the submitted turn and working row before paint during the handoff.
+    return !this.initialSubmission && this.rows.length > 1;
   }
 
   configureRows(props: ChatThreadProps, avatarPlacement: string, transient: boolean): void {

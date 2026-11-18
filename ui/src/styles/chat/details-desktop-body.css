@@ -18,7 +18,6 @@
       [data-progress-card-placement="details"],
       .chat-details__muted,
       .chat-details__creator,
-      .chat-details__meta-actions,
       .chat-details-desktop-loading,
       .lazy-view-error
     )
@@ -34,7 +33,6 @@
     [data-progress-card-placement="details"],
     .chat-details__muted,
     .chat-details__creator,
-    .chat-details__meta-actions,
     .lazy-view-error
   )
   > .chat-details-desktop-loading {

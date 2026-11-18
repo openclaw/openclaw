@@ -57,7 +57,9 @@ suite.define(() => {
       let sawMessage = false;
       let active = true;
       const sample = () => {
-        if (!active) return;
+        if (!active) {
+          return;
+        }
         const visible = (element: Element) => {
           const box = element.getBoundingClientRect();
           return (
