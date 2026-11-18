@@ -114,7 +114,7 @@ export function LabelChoices(props: {
       <Show when={candidate().length > 40}>
         <span class="muted">{t("workboard.labelLengthLimit")}</span>
       </Show>
-      <Show when={full()}>
+      <Show when={props.value.length === props.limit}>
         <span class="muted">{t("workboard.labelLimit")}</span>
       </Show>
     </div>

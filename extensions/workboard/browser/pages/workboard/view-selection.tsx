@@ -468,6 +468,9 @@ function SelectionDialogContent(props: { workboard: WorkboardProps; draft: Workb
   };
   const labelsTooMany = () => {
     const current = editDraft();
+    if (current?.labelMode === "replace") {
+      return current.labels.length > 12;
+    }
     return (
       current?.labelMode === "add" &&
       current.observedCards.some((card) => new Set([...card.labels, ...current.labels]).size > 12)

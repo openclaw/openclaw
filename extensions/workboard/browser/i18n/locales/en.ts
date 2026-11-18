@@ -78,8 +78,7 @@ export default {
     noMatchingLabels: "No matching labels.",
     noKnownLabels: "No labels in the loaded cards yet.",
     labelLengthLimit: "Labels can have up to 40 characters.",
-    bulkLabelLimit:
-      "This would give a selected card more than 12 labels. Choose fewer labels or use Replace labels.",
+    bulkLabelLimit: "This would give a selected card more than 12 labels. Choose fewer labels.",
     labelLimit: "12 labels selected. Remove one to add another.",
     bulkApplying: "Applying…",
     bulkApply: "Apply changes",

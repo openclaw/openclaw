@@ -180,3 +180,33 @@ it("blocks bulk Add that would silently drop labels and keeps Replace empty as c
     patch: { labels: [] },
   });
 });
+
+it("blocks Replace after selecting more labels than it can save in Remove mode", () => {
+  const titles = Array.from({ length: 13 }, (_, i) => `label-${i}`);
+  const first = createWorkboardCard({ id: "first", labels: titles.slice(0, 12) });
+  const second = createWorkboardCard({ id: "second", labels: titles.slice(12) });
+  const request = vi.fn();
+  const { state, container, renderView } = createWorkboardView({
+    client: { request },
+    connected: true,
+    canWrite: true,
+  });
+  state.cards = [first, second];
+  state.selectedCardIds = new Set([first.id, second.id]);
+  renderView();
+  requireButton(container, "Edit properties").click();
+  mode(container, "remove");
+  for (const title of titles) {
+    checkbox(container, title).click();
+    flush();
+  }
+  expect(checkbox(container, titles[12]).checked).toBe(true);
+  expect(requireButton(container, "Apply changes").disabled).toBe(false);
+  mode(container, "replace");
+  expect(requireButton(container, "Apply changes").disabled).toBe(true);
+  requireButton(container, "Apply changes").click();
+  expect(request).not.toHaveBeenCalled();
+  checkbox(container, titles[12]).click();
+  flush();
+  expect(requireButton(container, "Apply changes").disabled).toBe(false);
+});
