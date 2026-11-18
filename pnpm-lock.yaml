@@ -219,7 +219,6 @@ patchedDependencies:
   '@solidjs/signals@2.0.0-rc.18': 421b418083c0218bb54ceb3e12bd0eb74a84e86474ca26cc1f1114abbe58de48
   '@solidjs/web@2.0.0-rc.18': 6d6b2e52e607edf3c9cfcc1a26f331d013537d051f43bbb4f3e7877ed08fa5cf
   acorn@8.19.0: 2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a
-  apache-arrow@21.2.0: c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68
   baileys@7.0.0-rc14: c3c4601486630c689ffd1a0e7a34f4b8cf8e7231e41c312ad33afdf4487d8ded
   chrome-devtools-mcp@1.12.0: 1512760e206b35bf417387b18d4c1a5d0f68e2ffeef994cb733c9e02ba4eba92
   ghostty-web@0.4.0: d4c6598b6840564dac4a469f3aa9b8df24fe6eab48a6744302707017e095a524
@@ -539,7 +538,7 @@ importers:
         version: 8.20.0
       apache-arrow:
         specifier: 21.2.0
-        version: 21.2.0(patch_hash=c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68)
+        version: 21.2.0
       baileys:
         specifier: 7.0.0-rc14
         version: 7.0.0-rc14(patch_hash=c3c4601486630c689ffd1a0e7a34f4b8cf8e7231e41c312ad33afdf4487d8ded)(audio-decode@3.12.0)(supports-color@10.2.2)
@@ -1783,7 +1782,7 @@ importers:
     dependencies:
       apache-arrow:
         specifier: 21.2.0
-        version: 21.2.0(patch_hash=c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68)
+        version: 21.2.0
       openai:
         specifier: 7.47.0
         version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.4)(ws@8.22.0)(zod@4.6.7)
@@ -1793,7 +1792,7 @@ importers:
     devDependencies:
       '@lancedb/lancedb':
         specifier: 0.41.0
-        version: 0.41.0(@types/node@26.6.6)(apache-arrow@21.2.0(patch_hash=c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68))
+        version: 0.41.0(@types/node@26.6.6)(apache-arrow@21.2.0)
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
@@ -12854,10 +12853,10 @@ snapshots:
   '@lancedb/lancedb-win32-x64-msvc@0.41.0':
     optional: true
 
-  '@lancedb/lancedb@0.41.0(@types/node@26.6.6)(apache-arrow@21.2.0(patch_hash=c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68))':
+  '@lancedb/lancedb@0.41.0(@types/node@26.6.6)(apache-arrow@21.2.0)':
     dependencies:
       '@opentelemetry/api': 1.9.1
-      apache-arrow: 21.2.0(patch_hash=c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68)
+      apache-arrow: 21.2.0
       reflect-metadata: 0.2.2
     optionalDependencies:
       '@lancedb/lancedb-darwin-arm64': 0.41.0
@@ -15318,7 +15317,7 @@ snapshots:
 
   anynum@1.0.1: {}
 
-  apache-arrow@21.2.0(patch_hash=c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68):
+  apache-arrow@21.2.0:
     dependencies:
       '@types/node': 25.9.9
       flatbuffers: 25.9.23

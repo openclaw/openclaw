@@ -129,7 +129,6 @@ packageExtensions:
         optional: true
 
 patchedDependencies:
-  "apache-arrow@21.2.0": patches/apache-arrow@21.2.0.patch
   "@shinyoshiaki/binary-data@0.6.1": patches/@shinyoshiaki__binary-data@0.6.1.patch
   "@openclaw/crabline@0.2.0": patches/@openclaw__crabline@0.2.0.patch
   playwright-core@1.64.1: patches/playwright-core@1.64.1.patch

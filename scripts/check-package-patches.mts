@@ -14,7 +14,6 @@ const ALLOWED_PATCHED_DEPENDENCIES = new Map([
   ["@homebridge/ciao@1.3.12", "patches/@homebridge__ciao@1.3.12.patch"],
   ["proper-lockfile@4.1.2", "patches/proper-lockfile@4.1.2.patch"],
   ["@clawdbot/lobster@2026.10.1", "patches/@clawdbot__lobster@2026.10.1.patch"],
-  ["apache-arrow@21.2.0", "patches/apache-arrow@21.2.0.patch"],
   ["@shinyoshiaki/binary-data@0.6.1", "patches/@shinyoshiaki__binary-data@0.6.1.patch"],
   ["@openclaw/crabline@0.2.0", "patches/@openclaw__crabline@0.2.0.patch"],
   ["playwright-core@1.64.1", "patches/playwright-core@1.64.1.patch"],

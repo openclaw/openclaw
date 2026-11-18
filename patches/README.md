@@ -208,20 +208,6 @@ listener and supplies equivalent success-only copy feedback, with
 failure, pending-copy and disposal cases; a copy-request callback is not the same
 contract as clipboard completion.
 
-`apache-arrow@21.2.0` replaces per-builder JavaScript generation for null
-sentinels with a direct predicate for the common `[null]` case and a snapshot
-`Set` for other sentinels. NaN, signed zero, undefined, bigint, and literal
-strings retain their equality semantics. Both CommonJS and ESM distributions,
-the TypeScript source, declarations, and maps are generated from the same owner.
-This lets LanceDB serialize memory writes when code generation from strings is
-disabled and avoids compiling a predicate for each column on ordinary Node/Bun.
-
-Remove this patch and its registration when an upstream release passes
-`extensions/memory-lancedb/arrow-null-predicates.test.ts` and the existing
-`lancedb-store.delete.test.ts` and `lancedb-store.staleness.test.ts` contracts. The former exercises both module formats in a
-Node process with `--disallow-code-generation-from-strings`; the latter covers
-memory writes, vector search, agent isolation, and reopened tables.
-
 `@shinyoshiaki/binary-data@0.6.1` uses ordinary closures for its finite numeric,
 stream, transaction, and BufferList methods instead of compiling functions at
 module initialization. This keeps the existing codec API and endian, byte-count,
