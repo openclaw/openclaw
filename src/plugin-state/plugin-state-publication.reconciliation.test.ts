@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { formatErrorMessage } from "../infra/errors.js";
+import { readGlobalSingleton } from "../shared/global-singleton.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -37,6 +39,77 @@ function latchedIdentity() {
 }
 
 describe("plugin state unknown settlement reconciliation", () => {
+  it("formats denial with the reconciliation singleton shape from an older module", async () => {
+    const shared = readGlobalSingleton(Symbol.for("openclaw.pluginStatePublicationReconciliation"));
+    assert(shared && typeof shared === "object", "Expected the shared reconciliation owner");
+    const descriptor = Object.getOwnPropertyDescriptor(shared, "diagnosticKey");
+    // An already loaded base module supplies epochs/active, but no diagnostic key.
+    Reflect.deleteProperty(shared, "diagnosticKey");
+    const identity = latchedIdentity();
+    try {
+      expect(() => assertPluginStatePublicationSettled(identity, scope)).toThrow(
+        "reason=identity-unavailable-after-unknown",
+      );
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(shared, "diagnosticKey", descriptor);
+      }
+      await reconcilePluginStatePublication(identity, async () => {});
+    }
+  });
+
+  it.each(["pending", "unknown"] as const)(
+    "formats %s denial without private data",
+    async (kind) => {
+      const identity = `file:/private/diagnostic-canary/database.sqlite:${randomUUID()}`;
+      const privateScope = {
+        pluginId: "private-plugin-canary",
+        namespace: "private-namespace-canary",
+        key: "private-session-canary",
+      };
+      const pending = beginPluginStatePublication(() => identity, undefined, privateScope);
+      const failures: string[] = [];
+      const readFailure = (assertCurrent: () => void) => {
+        let failure: unknown;
+        try {
+          assertCurrent();
+        } catch (error) {
+          failure = error;
+        }
+        expect(failure).toBeInstanceOf(Error);
+        const text = formatErrorMessage(failure);
+        failures.push(text);
+        return text;
+      };
+      try {
+        if (kind === "unknown") {
+          pending.finish("unknown");
+        }
+        for (const assertCurrent of [
+          () => assertPluginStatePublicationSettled(identity, privateScope),
+          () => assertPluginStatePublicationPreserves(identity, privateScope, () => {}),
+        ]) {
+          const text = readFailure(assertCurrent);
+          expect(text).toContain(
+            `reason=${kind === "unknown" ? "identity-unavailable-after-unknown" : "overlapping-publication-pending"}`,
+          );
+          expect(text).toContain(
+            `settlement=${kind}; committed=unconfirmed; installation=${kind === "unknown" ? "invalidated" : "unconfirmed"}`,
+          );
+        }
+        const references = failures.map((text) => /identityRef=([a-f0-9]{16})/.exec(text)?.[1]);
+        expect(references[0]).toMatch(/^[a-f0-9]{16}$/);
+        expect(new Set(references).size).toBe(1);
+        expect(failures.join(" ")).not.toMatch(
+          /diagnostic-canary|private-.*-canary|database.sqlite/,
+        );
+      } finally {
+        pending.finish("completed");
+        await reconcilePluginStatePublication(identity, async () => {});
+      }
+    },
+  );
+
   it("latches the identity after an unknown settlement", () => {
     const identity = `reconcile:${randomUUID()}`;
     expect(() => assertPluginStatePublicationSettled(identity, scope)).not.toThrow();

@@ -303,6 +303,13 @@ identity until the host re-reads committed state through the state worker; a lat
 guarded call starts that confirmation, and a failed confirmation or a newer unknown
 outcome keeps denial. Ordinary descriptive reads remain available.
 
+Authority-denial errors distinguish `identity-unavailable-after-unknown` from
+`overlapping-publication-pending`. Their `identityRef` correlates the same database
+within one process without exposing its path, plugin scope, or stored values; it
+changes after restart. Settlement and installation fields describe publication
+state, not native transaction completion. `committed=unconfirmed` never means the
+write rolled back or that replay is safe.
+
 Custom store adapters return `undefined` because the host cannot observe their
 writers. Keep the adapter's authoritative reader for that case. A failed prepared
 read is a denial, never permission to fall back to an older value. Preparation

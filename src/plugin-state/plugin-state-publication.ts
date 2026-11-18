@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHmac, randomBytes } from "node:crypto";
 import { toUSVString } from "node:util";
 import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -353,6 +354,30 @@ function isRow(value: unknown): value is PluginStateRow {
   );
 }
 
+// Keep the key separate: an older loaded module may already own reconciliation.
+const diagnosticKey = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginStatePublicationDiagnosticKey"),
+  () => randomBytes(32),
+);
+
+function publicationUnavailable(
+  identity: string,
+  reason: "identity-unavailable-after-unknown" | "overlapping-publication-pending",
+): Error {
+  // Process-local correlation only: never disclose a database path, scope, or stored value.
+  const identityRef = createHmac("sha256", diagnosticKey)
+    .update(identity)
+    .digest("hex")
+    .slice(0, 16);
+  const unknown = reason === "identity-unavailable-after-unknown";
+  // These guards have publication facts, not proof of native COMMIT or receipt delivery.
+  return new Error(
+    `Plugin state authority is unavailable (reason=${reason}; identityRef=${identityRef}; ` +
+      `settlement=${unknown ? "unknown" : "pending"}; committed=unconfirmed; ` +
+      `installation=${unknown ? "invalidated" : "unconfirmed"})`,
+  );
+}
+
 /**
  * Deny affected pending writes; an indeterminate outcome retires the whole source until
  * `reconcilePluginStatePublication` confirms committed truth.
@@ -362,10 +387,10 @@ export function assertPluginStatePublicationSettled(
   scope?: PluginStatePublicationScope,
 ): void {
   if (state.unavailable.has(identity)) {
-    throw new Error("Plugin state authority is unavailable");
+    throw publicationUnavailable(identity, "identity-unavailable-after-unknown");
   }
   if (hasPendingPluginStatePublication(identity, scope)) {
-    throw new Error("Plugin state authority is unavailable");
+    throw publicationUnavailable(identity, "overlapping-publication-pending");
   }
 }
 
@@ -405,14 +430,14 @@ export function assertPluginStatePublicationPreserves(
   assertValueCurrent: (value: unknown) => void,
 ): void {
   if (state.unavailable.has(identity)) {
-    throw new Error("Plugin state authority is unavailable");
+    throw publicationUnavailable(identity, "identity-unavailable-after-unknown");
   }
   for (const pending of state.pending.get(identity) ?? []) {
     if (!publicationScopesOverlap(scope, pending.scope)) {
       continue;
     }
     if (!pending.effect) {
-      throw new Error("Plugin state authority is unavailable");
+      throw publicationUnavailable(identity, "overlapping-publication-pending");
     }
     if (pending.effect.kind === "postimage") {
       assertValueCurrent(JSON.parse(pending.effect.valueJson));
