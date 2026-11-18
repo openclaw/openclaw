@@ -13,7 +13,12 @@ import {
   resolveGitReleaseLauncherForEntrypoint,
   usesGitReleases,
 } from "./git-release-paths.js";
-import { createGitReleaseDirs, publishGitRelease, settleGitReleaseTrial } from "./git-release.js";
+import {
+  createGitReleaseDirs,
+  publishGitRelease,
+  settleGitReleaseTrial,
+  restoreUnstartedGitReleaseSelection,
+} from "./git-release.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -47,6 +52,42 @@ const startGateway = (prefix: string, env: NodeJS.ProcessEnv = {}) =>
 describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
   "git releases",
   () => {
+    it.each(["started", "newer publication", "replaced link", "changed fallback"])(
+      "preserves recovery facts when selection compensation finds %s",
+      async (changed) => {
+        const { prefix } = await setup();
+        const previous = await release(prefix, "2026.11.4", "");
+        await publishGitRelease({ prefix, releaseRoot: previous, trial: false });
+        const target = await release(prefix, "2026.11.4", "");
+        const { rollback } = await publishGitRelease({ prefix, releaseRoot: target, trial: true });
+        expect(rollback).toBeDefined();
+        const slot = gitReleaseSlot(prefix);
+        const trial = path.join(prefix, "releases", GIT_RELEASE_TRIAL);
+        if (changed === "started") {
+          expect(startGateway(prefix).status).toBe(0);
+          expect(JSON.parse(await fs.readFile(trial, "utf8")).attempts).toBe(1);
+        } else if (changed === "newer publication") {
+          await publishGitRelease({ prefix, releaseRoot: target, trial: true });
+        } else if (changed === "replaced link") {
+          const replacement = path.join(prefix, "replacement");
+          await fs.symlink(await fs.readlink(slot), replacement);
+          await fs.rename(replacement, slot);
+        } else {
+          await fs.writeFile(
+            path.join(previous, "dist", "build-info.json"),
+            JSON.stringify({ buildId: "changed" }),
+          );
+        }
+        const selected = await fs.readlink(slot);
+        const record = await fs.readFile(trial, "utf8");
+
+        await expect(restoreUnstartedGitReleaseSelection(rollback!, () => {})).rejects.toThrow();
+
+        expect(await fs.readlink(slot)).toBe(selected);
+        expect(await fs.readFile(trial, "utf8")).toBe(record);
+      },
+    );
+
     it("switches back and restores upgraded state after two failed trial starts", async () => {
       const { stateDir, prefix } = await setup();
       const good = await release(prefix, "1.0.0", 'console.log("old " + process.argv[1]);\n');
@@ -371,7 +412,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
           running: true,
           env: {},
           command: { programArguments: [process.execPath, launcher, "gateway", "--port", "1"] },
-          runtime: { status: "running" },
+          runtime: { status: "running", systemd: { managerUid: process.getuid?.() ?? 501 } },
         },
       });
 
@@ -392,7 +433,10 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
           running: entry !== null,
           env: {},
           command: entry ? { programArguments: [process.execPath, entry, "gateway"] } : null,
-          runtime: { status: entry ? "running" : "stopped" },
+          runtime: {
+            status: entry ? "running" : "stopped",
+            systemd: { managerUid: process.getuid?.() ?? 501 },
+          },
           ...(sealed
             ? { definitionMutationCapability: { kind: "sealed", reason: "symlink" } }
             : {}),

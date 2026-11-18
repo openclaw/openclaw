@@ -57,7 +57,10 @@ import {
   resolveGatewayServiceManagementBlockMessageForUpdate,
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
-import { recoverLaunchAgentAndRecheckGatewayHealth } from "./update-command-service-recovery.js";
+import {
+  recoverLaunchAgentAndRecheckGatewayHealth,
+  compensateRefusedGitReleaseConversion,
+} from "./update-command-service-recovery.js";
 import {
   recordFailedUpdateGatewayState,
   verifyUpdatedGateway,
@@ -189,12 +192,7 @@ export async function maybeRestartService(
     // A restart can fail before health verification starts; recovery owns that phase.
     recordPhase("verifying");
     if (!verificationObserved) {
-      await recordFailedUpdateGatewayState(
-        params.opts.run,
-        serviceEnv,
-        assertCurrent,
-        params.timeoutMs,
-      );
+      await recordFailedUpdateGatewayState(run, serviceEnv, assertCurrent, params.timeoutMs);
     }
     assertCurrent();
     return outcome;
@@ -548,6 +546,9 @@ export async function maybeRestartService(
         }
         // The update continues on the previous definition, so its refresh is owed.
         recordOwedUpdateStep(run, { id: "service-definition", reason: warning });
+        if (await compensateRefusedGitReleaseConversion(activation, err)) {
+          return await failed();
+        }
         if (requiresInstallRootRefresh) {
           return await reconciliationPending();
         }
