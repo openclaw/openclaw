@@ -16,6 +16,8 @@ type AdoptedProcess = ReleasedProcess & {
   startTime?: number | Promise<number | undefined>;
   onExit: () => void;
   stopping?: Promise<StopOutcome>;
+  /** Its group outlived an unconfirmed stop: custody holds until the group is gone. */
+  heldGroup?: number;
 };
 
 const state = resolveGlobalSingleton<{
@@ -74,7 +76,10 @@ function clearIdleReaper(): void {
 function reap(): Promise<void> {
   return (state.reaping ??= (async () => {
     for (const entry of state.adopted) {
-      if (!entry.stopping && (await isSameLiveProcess(entry)) === false && !entry.stopping) {
+      const gone = entry.heldGroup
+        ? groupGone(entry.heldGroup)
+        : (await isSameLiveProcess(entry)) === false;
+      if (!entry.stopping && gone && !entry.stopping) {
         settle(entry);
       }
     }
@@ -156,11 +161,20 @@ async function forceGroupAfterGrace(pgid: number, graceEnds: number): Promise<St
  * SIGKILL can be reused.
  */
 async function terminate(
-  entry: Pick<AdoptedProcess, "pid" | "startTime" | "pgid">,
+  entry: Pick<AdoptedProcess, "pid" | "startTime" | "pgid" | "heldGroup">,
   group: boolean,
 ): Promise<StopOutcome> {
-  let pgid: number | undefined;
   const graceEnds = Date.now() + GRACEFUL_CANCEL_TIMEOUT_MS;
+  const stopGroup = async (group: number) => {
+    const outcome = await forceGroupAfterGrace(group, graceEnds);
+    entry.heldGroup = outcome.status === "uncertain" ? group : undefined;
+    return outcome;
+  };
+  // The survivor is gone; a retry stops what remains of its group.
+  if (entry.heldGroup) {
+    return stopGroup(entry.heldGroup);
+  }
+  let pgid: number | undefined;
   // "sent", "gone", or the reason the signal failed.
   const signal = async (
     name: NodeJS.Signals,
@@ -190,14 +204,14 @@ async function terminate(
     return { status: "stopped" };
   }
   if ("result" in term && (await waitForExit(entry, GRACEFUL_CANCEL_TIMEOUT_MS))) {
-    return pgid ? await forceGroupAfterGrace(pgid, graceEnds) : { status: "stopped" };
+    return pgid ? await stopGroup(pgid) : { status: "stopped" };
   }
   const kill = await signal("SIGKILL");
   if (
     ("result" in kill && kill.result === "gone") ||
     (await waitForExit(entry, KILL_CONFIRM_TIMEOUT_MS))
   ) {
-    return pgid ? await forceGroupAfterGrace(pgid, graceEnds) : { status: "stopped" };
+    return pgid ? await stopGroup(pgid) : { status: "stopped" };
   }
   const reason =
     "failed" in kill
