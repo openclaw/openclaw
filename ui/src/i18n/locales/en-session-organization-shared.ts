@@ -44,12 +44,8 @@ const enSessionOrganizationShared = {
     movingSession: "Moving to {target}…",
     movingSessionGeneric: "Moving session…",
     stopWorker: "Stop session on device…",
-    stopWorkerConfirm: "Stop “{session}” on its device?",
-    stopWorkerDescription:
-      "This session stops working on its device after saving workspace changes. Your conversation and saved changes stay.",
     stopWorkerConfirmAction: "Stop",
     stopCloudWorker: "Stop cloud device…",
-    stopCloudWorkerConfirm: "Stop this cloud device?",
     stopCloudWorkerTarget: "Session: {session}",
     stopCloudWorkerDescription:
       "The session stops working on it and the cloud device is released. Your conversation and accepted changes stay.",

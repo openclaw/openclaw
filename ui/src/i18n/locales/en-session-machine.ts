@@ -5,11 +5,12 @@ import { en } from "./en.ts";
 const sharedSessions = registerSessionOrganizationSharedEnglish.catalog.sessionsView;
 const copy = {
   sessionsView: {
-    workerStopCloudTitle: sharedSessions.stopCloudWorkerConfirm,
+    workerStopCloudTitle: "Stop this cloud device?",
     workerStopDeviceTitle: "Stop this session on the device?",
     workerStopDeviceFallback: "this device",
     workerStopTitle: "Stop this session?",
-    workerStopDescription: sharedSessions.stopWorkerDescription,
+    workerStopDescription:
+      "This session stops working on its device after saving workspace changes. Your conversation and saved changes stay.",
     workerStopCloudDescription: sharedSessions.stopCloudWorkerDescription,
     workerStopDeviceDescription:
       "This session stops working on {device} after saving workspace changes. Other sessions on the device keep running.",

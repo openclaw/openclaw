@@ -361,9 +361,7 @@ it("keeps sidebar and chat actions readable until the session management dialog 
   expect(manager.t("sessionsView.personalGroupNew")).toBe("New section");
   expect(manager.t("sessionsView.personalGroupEdit")).toBe("sessionsView.personalGroupEdit");
   expect(manager.t("sessionsView.archiveReasonManual")).toBe("Archived manually");
-  expect(manager.t("sessionsView.stopCloudWorkerConfirm", { session: "Build" })).toBe(
-    "Stop this cloud device?",
-  );
+  expect(manager.t("sessionsView.stopCloudWorker")).toBe("Stop cloud device…");
   expect(manager.t("sessionsView.goal")).toBe("Ziel");
   expect(en.sessionsView).toBe(sessionsView);
   expect(manager.t("profilePage.modelAccounts.loadMore")).toBe("Load more saved accounts");

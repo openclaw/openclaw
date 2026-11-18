@@ -97,8 +97,6 @@ const catalog = {
     openNewWindow: "New window",
     openPullRequest: "Open PR",
     stopWorker: sharedSessions.stopWorker,
-    stopWorkerConfirm: sharedSessions.stopWorkerConfirm,
-    stopWorkerDescription: sharedSessions.stopWorkerDescription,
     stopWorkerConfirmAction: sharedSessions.stopWorkerConfirmAction,
     stopCloudWorker: sharedSessions.stopCloudWorker,
     stopCloudWorkerDescription: sharedSessions.stopCloudWorkerDescription,
