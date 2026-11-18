@@ -17,7 +17,6 @@ const sharedStateLifecycle = resolveGlobalMap<string, boolean>(
 );
 const createGatewayCloseTestDeps = createGatewayCloseTestDepsFactory({
   disposeAllBundleLspRuntimes: async () => {},
-  stopGmailWatcher: async () => {},
   disposeAllCodeModeRuns: async () => {},
   closeProviderTransportDispatcherPool: async () => {},
   drainRetainedEmbeddingProviders: async () => {},

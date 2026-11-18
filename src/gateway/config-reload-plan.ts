@@ -19,7 +19,6 @@ export type GatewayReloadPlan = {
   reloadInternalHooks?: boolean;
   /** Refresh the hook target-policy snapshot without invalidating transform modules. */
   refreshHooksPolicy?: boolean;
-  restartGmailWatcher: boolean;
   restartCron: boolean;
   reloadPlugins: boolean;
   /** Canonical config/install deltas that require a plugin replacement. */
@@ -46,7 +45,6 @@ const RELOAD_ACTIONS = [
   "reloadHooks",
   "reloadInternalHooks",
   "refreshHooksPolicy",
-  "restartGmailWatcher",
   "restartCron",
   "reloadPlugins",
   "disposeMcpRuntimes",
@@ -198,7 +196,6 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
     ],
     kind: "hot",
   },
-  { prefixes: ["hooks.gmail"], kind: "hot", actions: ["restartGmailWatcher", "reloadHooks"] },
   {
     prefixes: ["hooks.internal", "agents.defaults.workspace"],
     kind: "hot",
@@ -512,7 +509,6 @@ export function buildGatewayReloadPlan(
     hotReasons: [],
     reloadHooks: false,
     reloadInternalHooks: false,
-    restartGmailWatcher: false,
     restartCron: false,
     reloadPlugins: false,
     restartChannels: new Set(),

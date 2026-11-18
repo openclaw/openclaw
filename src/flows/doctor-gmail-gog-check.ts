@@ -1,4 +1,4 @@
-import { inspectGog, inspectGogUpgrade, upgradeGog } from "../hooks/gmail-gog.js";
+import { inspectGog, inspectGogUpgrade, upgradeGog } from "../../extensions/gmail/runtime-api.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";

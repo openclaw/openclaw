@@ -63,10 +63,6 @@ vi.mock("./embeddings-provider-lifetime.js", () =>
   }),
 );
 // mock-isolation: Shutdown ordering records which modules load; real modules must stay unloaded.
-vi.mock("../hooks/gmail-watcher.js", () =>
-  state.loadedMock("gmail-watcher", { stopGmailWatcher: vi.fn() }),
-);
-// mock-isolation: Shutdown ordering records which modules load; real modules must stay unloaded.
 vi.mock("../cron/maintenance.js", () =>
   state.loadedMock("cron-maintenance", { stopCronMaintenance: vi.fn() }),
 );
@@ -113,7 +109,6 @@ it("resolves every shutdown dependency during preparation", async () => {
       "mcp-http",
       "bundle-lsp",
       "embeddings",
-      "gmail-watcher",
       "cron-maintenance",
       "code-mode",
       "provider-transports",

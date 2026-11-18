@@ -275,7 +275,6 @@ describe("startGatewayPostAttachRuntime", () => {
     vi.stubEnv("OPENCLAW_SKIP_CHANNELS", "0");
     vi.stubEnv("OPENCLAW_SKIP_PROVIDERS", "0");
     hoisted.startPluginServices.mockReset();
-    hoisted.startGmailWatcherWithLogs.mockClear();
     hoisted.prepareInternalHooks.mockClear();
     hoisted.commitInternalHooks.mockClear();
     hoisted.hasInternalHookListeners.mockReset();
@@ -922,7 +921,7 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
-  it("keeps transcripts auto-start alive when Gmail post-ready sidecars stop", async () => {
+  it("keeps transcripts auto-start alive when post-ready sidecars stop", async () => {
     const onPostReadySidecars = vi.fn<SidecarPublisher>();
     const started = createDeferred();
     transcriptSidecarMocks.transcriptsAutoStartService.start.mockImplementationOnce(() =>
@@ -932,7 +931,6 @@ describe("startGatewayPostAttachRuntime", () => {
       hooks: {
         enabled: true,
         internal: { enabled: false },
-        gmail: { account: "me" },
       },
       transcripts: {
         autoStart: [{ providerId: "discord-voice", guildId: "g", channelId: "c" }],
@@ -949,13 +947,13 @@ describe("startGatewayPostAttachRuntime", () => {
     };
     await startGatewayPostAttachRuntime(params);
 
-    const gmailSidecars = onPostReadySidecars.mock.calls[0];
+    const postReadySidecars = onPostReadySidecars.mock.calls[0];
     const lifetimeSidecars = [...publishedGatewayLifetimeSidecars];
-    expect(gmailSidecars).toHaveLength(3);
+    expect(postReadySidecars).toHaveLength(2);
 
     await started.promise;
 
-    for (const sidecar of gmailSidecars ?? []) {
+    for (const sidecar of postReadySidecars ?? []) {
       await stopTrackedSidecar(sidecar);
     }
     expect(transcriptSidecarMocks.transcriptsAutoStartService.stop).not.toHaveBeenCalled();
@@ -1660,55 +1658,6 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
-  it("runs Gmail watcher after sidecars are ready", async () => {
-    let resolveWatcher: (() => void) | undefined;
-    let watcherSignal: AbortSignal | undefined;
-    hoisted.startGmailWatcherWithLogs.mockImplementationOnce(
-      async (...args: unknown[]) =>
-        await new Promise<void>((resolve) => {
-          const [params] = args as [{ signal?: AbortSignal }];
-          watcherSignal = params.signal;
-          resolveWatcher = resolve;
-        }),
-    );
-    let sidecarStartReturned = false;
-    const onPostReadySidecars = vi.fn<SidecarPublisher>();
-    const log = { warn: vi.fn() };
-
-    const result = await startGatewaySidecars({
-      cfg: {
-        hooks: { enabled: true, internal: { enabled: false }, gmail: { account: "me" } },
-      } as never,
-      onPostReadySidecars: (...sidecars) => {
-        expect(sidecarStartReturned).toBe(false);
-        onPostReadySidecars(...sidecars);
-      },
-      log,
-    });
-    sidecarStartReturned = true;
-
-    expect(result).toBe(3);
-    expect(publishedPostReadySidecars.size).toBe(3);
-    expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
-    expect(onPostReadySidecars).toHaveBeenCalledWith(...publishedPostReadySidecars);
-
-    await waitForGatewayTestState(() => {
-      expect(hoisted.startGmailWatcherWithLogs).toHaveBeenCalledTimes(1);
-    });
-    expect(watcherSignal?.aborted).toBe(false);
-    expect(log.warn).not.toHaveBeenCalled();
-
-    if (!resolveWatcher) {
-      throw new Error("Expected gmail watcher resolver to be initialized");
-    }
-    const postReadySidecars = [...publishedPostReadySidecars];
-    for (const sidecar of postReadySidecars) {
-      await stopTrackedSidecar(sidecar);
-    }
-    expect(watcherSignal?.aborted).toBe(true);
-    resolveWatcher();
-  });
-
   it("does not create post-ready sidecars when close begins while scheduling channels", async () => {
     const channels = createDeferred();
     let closing = false;
@@ -1718,7 +1667,7 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     const onPostReadySidecars = vi.fn<SidecarPublisher>();
     const starting = startGatewaySidecars({
-      cfg: { hooks: { enabled: true, internal: { enabled: false }, gmail: { account: "me" } } },
+      cfg: { hooks: { enabled: true, internal: { enabled: false } } },
       startChannels,
       onPostReadySidecars,
       shouldCreatePostReadySidecars: () => !closing,
@@ -1729,7 +1678,6 @@ describe("startGatewayPostAttachRuntime", () => {
       expect(await starting).toBe(0);
       expect(publishedPostReadySidecars.size).toBe(0);
       expect(onPostReadySidecars).not.toHaveBeenCalled();
-      expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
     } finally {
       channels.resolve();
       await starting;
@@ -1790,7 +1738,6 @@ describe("startGatewayPostAttachRuntime", () => {
       await vi.advanceTimersByTimeAsync(1_000);
       await vi.dynamicImportSettled();
 
-      expect.soft(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
       expect.soft(hoisted.loadModelCatalog).not.toHaveBeenCalled();
       expect.soft(transcriptSidecarMocks.transcriptsAutoStartService.start).not.toHaveBeenCalled();
       expect.soft(hoisted.triggerInternalHook).not.toHaveBeenCalled();
@@ -1894,97 +1841,6 @@ describe("startGatewayPostAttachRuntime", () => {
       }
     }
   });
-
-  it("logs post-ready Gmail watcher failures without delaying sidecar readiness", async () => {
-    const log = { warn: vi.fn() };
-    hoisted.startGmailWatcherWithLogs.mockRejectedValueOnce(new Error("boom"));
-
-    const result = await startGatewaySidecars({
-      cfg: {
-        hooks: { enabled: true, internal: { enabled: false }, gmail: { account: "me" } },
-      } as never,
-      log,
-    });
-
-    expect(result).toBe(3);
-    expect(publishedPostReadySidecars.size).toBe(3);
-    await waitForGatewayTestState(() => {
-      expect(log.warn).toHaveBeenCalledWith(
-        "sidecars.gmail-watch failed after gateway ready: Error: boom",
-      );
-    });
-  });
-
-  it("cancels a post-ready Gmail watcher before the immediate starts", async () => {
-    const result = await startGatewaySidecars({
-      cfg: {
-        hooks: { enabled: true, internal: { enabled: false }, gmail: { account: "me" } },
-      } as never,
-    });
-
-    expect(result).toBe(3);
-    expect(publishedPostReadySidecars.size).toBe(3);
-    const postReadySidecars = [...publishedPostReadySidecars];
-    for (const sidecar of postReadySidecars) {
-      await stopTrackedSidecar(sidecar);
-    }
-    await nextEventLoopTurn();
-
-    expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
-  });
-
-  it.each(["sidecar stop", "close prelude"] as const)(
-    "cancels a post-ready Gmail watcher after the immediate enters through %s",
-    async (boundary) => {
-      let releaseImport: (() => void) | undefined;
-      let closing = false;
-      vi.doMock("../hooks/gmail-watcher-lifecycle.js", async () => {
-        await new Promise<void>((resolve) => {
-          releaseImport = resolve;
-        });
-        return {
-          startGmailWatcherWithLogs: hoisted.startGmailWatcherWithLogs,
-        };
-      });
-      vi.resetModules();
-      try {
-        const { startGatewaySidecars: startGatewaySidecarsWithDelayedImport } =
-          await import("./server-startup-sidecars.js");
-
-        await startGatewaySidecarsWithDelayedImport(
-          createSidecarParams({
-            scheduler: createTestGatewayScheduler(),
-            cfg: {
-              hooks: { enabled: true, internal: { enabled: false }, gmail: { account: "me" } },
-            } as never,
-            shouldCreatePostReadySidecars: () => !closing,
-            onPostReadySidecars: composeTrackedPublisher(publishedPostReadySidecars, undefined),
-          }),
-        );
-
-        await waitForGatewayTestState(() => {
-          expect(releaseImport).toBeDefined();
-        });
-        if (boundary === "sidecar stop") {
-          const postReadySidecars = [...publishedPostReadySidecars];
-          for (const sidecar of postReadySidecars) {
-            await stopTrackedSidecar(sidecar);
-          }
-        } else {
-          closing = true;
-        }
-        releaseImport?.();
-        await nextEventLoopTurn();
-
-        expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
-      } finally {
-        releaseImport?.();
-        await vi.dynamicImportSettled();
-        vi.doUnmock("../hooks/gmail-watcher-lifecycle.js");
-        vi.resetModules();
-      }
-    },
-  );
 
   it("runs Gmail model validation after sidecars are ready", async () => {
     hoisted.resolveHooksGmailModel.mockReturnValueOnce({

@@ -1,15 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveBrewExecutable } from "../infra/brew.js";
-import { resolveExecutablePath } from "../infra/executable-path.js";
+import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
+import { resolveExecutablePath } from "openclaw/plugin-sdk/process-runtime";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
-} from "../process/exec-result.js";
-import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
-import { runUtf8CommandWithTimeout, type SpawnResult } from "../process/exec.js";
-import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+} from "openclaw/plugin-sdk/process-runtime";
+import { resolveCommandProcessSignal } from "openclaw/plugin-sdk/process-runtime";
+import { runUtf8CommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
+import { resolveBrewExecutable } from "openclaw/plugin-sdk/setup-tools";
 import { resolveGogServeInvocation } from "./gmail.js";
 
 type GogTokenEnvSupport = "supported" | "unsupported" | "indeterminate";

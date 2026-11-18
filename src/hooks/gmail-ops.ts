@@ -1,33 +1,5 @@
 import { randomBytes } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { stylePromptMessage } from "../../packages/terminal-core/src/prompt-style.js";
-import { formatCliCommand } from "../cli/command-format.js";
-import {
-  captureRuntimeConfigAsyncReader,
-  type OpenClawConfig,
-  CONFIG_PATH,
-  readConfigFileSnapshot,
-  replaceConfigFile,
-  resolveGatewayPort,
-  validateConfigObjectWithPlugins,
-} from "../config/config.js";
-import { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import { formatCommandResult } from "../process/command-error.js";
-import { runCommandWithTimeout } from "../process/exec.js";
-import { defaultRuntime } from "../runtime.js";
-import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import { displayPath } from "../utils.js";
-import { inspectGog, inspectGogUpgrade, upgradeGog, type GogInspection } from "./gmail-gog.js";
-import {
-  ensureDependency,
-  ensureGcloudAuth,
-  ensureSubscription,
-  ensureTailscaleEndpoint,
-  ensureTopic,
-  resolveProjectIdFromGogCredentials,
-  runGcloud,
-} from "./gmail-setup-utils.js";
-import { startGmailWatcherService, stopGmailWatcher } from "./gmail-watcher.js";
 import {
   buildDefaultHookUrl,
   buildGogWatchStartArgs,
@@ -46,7 +18,40 @@ import {
   normalizeServePath,
   parseTopicPath,
   resolveGmailHookRuntimeConfig,
-} from "./gmail.js";
+} from "../../extensions/gmail/api.js";
+import {
+  inspectGog,
+  inspectGogUpgrade,
+  upgradeGog,
+  type GogInspection,
+} from "../../extensions/gmail/runtime-api.js";
+import {
+  ensureDependency,
+  ensureGcloudAuth,
+  ensureSubscription,
+  ensureTailscaleEndpoint,
+  ensureTopic,
+  resolveProjectIdFromGogCredentials,
+  runGcloud,
+} from "../../extensions/gmail/runtime-api.js";
+import { startGmailWatcherService, stopGmailWatcher } from "../../extensions/gmail/runtime-api.js";
+import { stylePromptMessage } from "../../packages/terminal-core/src/prompt-style.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import {
+  captureRuntimeConfigAsyncReader,
+  type OpenClawConfig,
+  CONFIG_PATH,
+  readConfigFileSnapshot,
+  replaceConfigFile,
+  resolveGatewayPort,
+  validateConfigObjectWithPlugins,
+} from "../config/config.js";
+import { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { formatCommandResult } from "../process/command-error.js";
+import { runCommandWithTimeout } from "../process/exec.js";
+import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { displayPath } from "../utils.js";
 
 type GmailCommonOptions = Omit<
   GmailHookOverrides,

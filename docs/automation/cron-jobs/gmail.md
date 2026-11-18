@@ -133,7 +133,7 @@ Check forwarding and completion separately. A watcher success only acknowledges 
 
 ### Gateway auto-start
 
-When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `gog gmail watch serve` on boot and auto-renews the watch. Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to opt out.
+The bundled Gmail Pub/Sub plugin starts `gog gmail watch serve` on Gateway boot and auto-renews the watch when `hooks.enabled=true` and `hooks.gmail.account` is set. Keep your existing Gmail hook settings. If you restrict `plugins.allow`, include `gmail` to allow the watcher to start. When configuring this watcher for the first time, restart the Gateway so it loads the plugin. Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to run the watcher separately.
 
 OpenClaw probes the selected Gog executable before watch registration. Supporting builds receive both tokens through child-only environment sources automatically. Older Gog continues working with legacy arguments and one actionable warning per watcher lifecycle. If support cannot be verified, the connection continues with a distinct warning. Both tokens remain visible to other local users with process access while legacy arguments are in use; upgrading Gog is required to remove this exposure. Serve failures never downgrade a watcher that selected environment transport.
 

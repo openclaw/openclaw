@@ -88,7 +88,6 @@ export function createHotTailPlan(overrides: Partial<GatewayReloadPlan> = {}): G
     restartReasons: [],
     hotReasons: ["logging.level"],
     reloadHooks: false,
-    restartGmailWatcher: false,
     restartCron: false,
     reloadPlugins: false,
     restartChannels: new Set(),

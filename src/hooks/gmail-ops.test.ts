@@ -39,8 +39,8 @@ vi.mock("../process/exec.js", () => ({
   runUtf8CommandWithTimeout: mocks.runUtf8CommandWithTimeout,
 }));
 
-vi.mock("./gmail-gog.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./gmail-gog.js")>()),
+vi.mock("../../extensions/gmail/src/gmail-gog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../extensions/gmail/src/gmail-gog.js")>()),
   inspectGogUpgrade: mocks.inspectGogUpgrade,
   upgradeGog: mocks.upgradeGog,
 }));
@@ -65,7 +65,7 @@ vi.mock("../config/config.js", async () => {
 // mock-isolation: capture service output and exit instead of affecting this test process.
 vi.mock("../runtime.js", () => ({ defaultRuntime: mocks.defaultRuntime }));
 
-vi.mock("./gmail-setup-utils.js", () => ({
+vi.mock("../../extensions/gmail/src/gmail-setup-utils.js", () => ({
   ensureDependency: mocks.ensureDependency,
   ensureGcloudAuth: vi.fn(),
   ensureSubscription: vi.fn(),
@@ -82,7 +82,7 @@ vi.mock("../infra/executable-path.js", () => ({
 }));
 
 const { runGmailService } = await import("./gmail-ops.js");
-const { stopGmailWatcher } = await import("./gmail-watcher.js");
+const { stopGmailWatcher } = await import("../../extensions/gmail/runtime-api.js");
 
 const ttyDescriptors = [process.stdin, process.stdout].map((stream) =>
   Object.getOwnPropertyDescriptor(stream, "isTTY"),

@@ -116,7 +116,6 @@ export async function finishGatewayStartup(params: {
     activateRuntimeSecrets,
     applyFixedGatewayOverlays,
     resolveSharedGatewaySessionGenerationForConfig,
-    stopRegisteredPostReadySidecars,
     registerPostReadySidecars,
     registerGatewayLifetimeSidecars,
     registerConnectionDependentSidecars,
@@ -549,7 +548,6 @@ export async function finishGatewayStartup(params: {
     startChannel,
     stopChannel,
     getChannelAutostartSuppression: channelManager.getAutostartSuppression,
-    stopPostReadySidecars: stopRegisteredPostReadySidecars,
     reloadPlugins: kernel.reloadPlugins,
     reloadPluginServices: async (config, serviceIds) => {
       const services = runtimeState.pluginServices;

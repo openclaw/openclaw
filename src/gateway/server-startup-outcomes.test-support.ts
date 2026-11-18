@@ -1,5 +1,5 @@
 /** Startup outcome coverage loaded by the post-attach startup suite. */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   createGatewayStartupOutcomeRecorder,
   formatGatewayStartupOutcomes,
@@ -17,28 +17,6 @@ const inactiveParams: GatewayStartupOutcomeRecorderParams = {
 };
 
 describe("gateway startup outcomes", () => {
-  beforeEach(() => vi.stubEnv("OPENCLAW_SKIP_GMAIL_WATCHER", ""));
-  afterEach(() => vi.unstubAllEnvs());
-  it.each([
-    {
-      account: "operator@example.com",
-      skip: "1",
-      reason: "disabled-by-environment",
-    },
-    { account: undefined, skip: undefined, reason: "no-gmail-account" },
-  ])("records Gmail skip reason $reason", ({ account, skip, reason }) => {
-    vi.stubEnv("OPENCLAW_SKIP_GMAIL_WATCHER", skip);
-    const recorder = createGatewayStartupOutcomeRecorder({
-      ...inactiveParams,
-      cfg: { hooks: { enabled: true, gmail: { account } } },
-    });
-    expect(recorder.snapshot().find((outcome) => outcome.subsystem === "gmail-watcher")).toEqual({
-      subsystem: "gmail-watcher",
-      status: "skipped",
-      reason,
-    });
-  });
-
   it("records awaited internal hook outcomes without logging raw error fields", () => {
     const recorder = createGatewayStartupOutcomeRecorder({
       ...inactiveParams,

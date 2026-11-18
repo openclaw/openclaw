@@ -1,14 +1,13 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import process from "node:process";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { computeBackoff } from "../infra/backoff.js";
-import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { releaseChildProcessOutputAfterExit } from "../process/child-process.js";
-import { formatCommandResult } from "../process/command-error.js";
-import { runCommandWithTimeout } from "../process/exec.js";
-import { killProcessTree } from "../process/kill-tree.js";
-import { hasBinary } from "../skills/loading/config.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
+import { releaseChildProcessOutputAfterExit } from "openclaw/plugin-sdk/process-runtime";
+import { formatCommandResult } from "openclaw/plugin-sdk/process-runtime";
+import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import { killProcessTree } from "openclaw/plugin-sdk/process-runtime";
+import { resolveExecutablePath } from "openclaw/plugin-sdk/process-runtime";
+import { computeBackoff } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { inspectGog, type GogInspection } from "./gmail-gog.js";
 import { ensureTailscaleEndpoint } from "./gmail-setup-utils.js";
 import {
@@ -30,7 +29,7 @@ const GMAIL_BIND_RETRY_LIMIT = 3;
 const GMAIL_BIND_BACKOFF = { initialMs: 5_000, maxMs: 20_000, factor: 2, jitter: 0 };
 
 let watcherProcess: ChildProcess | null = null;
-let renewalScope: GatewaySchedulerScope | undefined;
+let renewalScope: ReturnType<GmailWatcherStartOptions["scheduler"]["scope"]> | undefined;
 let shuttingDown = false;
 let currentConfig: GmailHookRuntimeConfig | null = null;
 let respawnTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -277,7 +276,12 @@ type GmailWatcherStartResult = {
 
 type GmailWatcherStartOptions = {
   signal?: AbortSignal;
-  scheduler: GatewayScheduler;
+  scheduler: {
+    scope(): Pick<
+      import("openclaw/plugin-sdk/plugin-entry").OpenClawPluginServiceContextV2["scheduler"],
+      "signal" | "schedule" | "stop"
+    >;
+  };
   prepareGog?: (inspection: GogInspection, signal?: AbortSignal) => Promise<GogInspection>;
 };
 
@@ -302,7 +306,7 @@ export async function startGmailWatcher(
     return { started: false, reason: "no gmail account configured" };
   }
 
-  if (!hasBinary("gog")) {
+  if (!resolveExecutablePath("gog")) {
     return { started: false, reason: "gog binary not found" };
   }
 

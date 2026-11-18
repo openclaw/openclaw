@@ -25,7 +25,6 @@ const postAttachMocks = vi.hoisted(() => {
         return handle;
       },
     ),
-    startGmailWatcherWithLogs: vi.fn(async () => {}),
     prepareInternalHooks: vi.fn(async () => ({ loadedCount: 0, commit: commitInternalHooks })),
     commitInternalHooks,
     hasInternalHookListeners: vi.fn(() => false),
@@ -94,11 +93,6 @@ vi.mock("../config/paths.js", async () => {
     resolveGatewayPort: vi.fn(() => 18789),
   };
 });
-
-// mock-isolation: Exercise watcher scheduling without loading Gmail credentials or opening a watcher.
-vi.mock("../hooks/gmail-watcher-lifecycle.js", () => ({
-  startGmailWatcherWithLogs: postAttachMocks.startGmailWatcherWithLogs,
-}));
 
 // mock-isolation: Capture startup hook dispatch without invoking process-wide registered handlers.
 vi.mock("../hooks/internal-hooks.js", () => ({
