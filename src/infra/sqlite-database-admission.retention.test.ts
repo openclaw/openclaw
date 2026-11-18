@@ -46,7 +46,7 @@ import {
   readSqliteDatabaseWriteTokenForPath as pathToken,
   retireSqliteDatabaseAdmissionForPath as retireAdmission,
   retainSqliteDatabaseAdmissionLocation as retainLocation,
-  retainSqliteDatabaseAdmissionLocationAsync as retainLocationAsync,
+  prepareSqliteDatabaseAdmissionAsync as prepareAdmissionAsync,
   revokeSqliteDatabaseAdmissions as revokeAdmissions,
   revokeSqliteDatabaseAdmissionsForPath as revokePath,
   trackSqliteDatabaseAdmissionWorker as trackWorker,
@@ -275,14 +275,15 @@ it.each(["host", "worker"])(
     fs.writeFileSync(location, "");
     const entered = createDeferred();
     const resume = createDeferred();
-    const realpath = fs.promises.realpath;
-    using _ = vi.spyOn(fs.promises, "realpath").mockImplementationOnce(async () => {
-      entered.resolve();
-      await resume.promise;
-      return realpath(location);
+    const fstat = fs.fstat;
+    // Pause after open but before custody publication; a native opener can win this interval.
+    using stat = vi.spyOn(fs, "fstat").mockImplementationOnce((descriptor, options, callback) => {
+      fstat(descriptor, options, (error, value) => {
+        entered.resolve();
+        void resume.promise.then(() => callback(error, value));
+      });
     });
-    using stat = vi.spyOn(fs, "fstat");
-    const pending = retainLocationAsync(location);
+    const pending = prepareAdmissionAsync({ location, assertCurrent() {} });
     await entered.promise;
     const extraDescriptor = stat.mock.calls[0]![0];
     using database = createDatabase(location);

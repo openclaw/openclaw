@@ -7,7 +7,6 @@ import { sqliteDatabaseSealSchemaFor } from "../state/openclaw-database-seal-sch
 import {
   invalidateSqliteCleanCloseSeal,
   readSqliteCleanCloseSeal,
-  readSqliteCleanCloseSealAsync,
   writeSqliteCleanCloseSeal,
 } from "./sqlite-clean-close-seal.js";
 import {
@@ -17,6 +16,7 @@ import {
   readSqliteDatabaseGeneration,
   isSqliteDatabaseAdmissionFactCurrent as valid,
   type Admission,
+  type SqliteDatabaseDescriptorCustody,
   type AdmissionFactValue,
   type SqliteDatabaseAdmissionKey,
 } from "./sqlite-database-admission-record.js";
@@ -98,7 +98,10 @@ function decodeSealValue(_key: string, value: unknown): unknown {
 }
 
 export class SqliteDatabaseCleanCloseSeals {
-  private readonly loaded = new WeakSet<Admission>();
+  private readonly loaded = new WeakMap<
+    Admission | SqliteDatabaseDescriptorCustody,
+    SharedArrayBuffer
+  >();
 
   constructor(
     private readonly publishFact: (
@@ -111,70 +114,59 @@ export class SqliteDatabaseCleanCloseSeals {
       retain: (record: Admission) => void;
       release: (record: Admission) => void;
       publish: (record: Admission) => void;
+      descriptor: (record: Admission) => SqliteDatabaseDescriptorCustody | undefined;
     },
   ) {}
 
-  markCreated(record: Admission): void {
-    this.loaded.add(record);
+  isLoaded(custody: SqliteDatabaseDescriptorCustody): boolean {
+    return this.loaded.has(custody);
   }
 
-  load(record: Admission): void {
+  markLoaded(record: Admission): void {
+    const custody = this.references.descriptor(record) ?? record;
+    const previous = this.loaded.get(custody);
+    if (previous && previous !== record.generation) {
+      Atomics.store(
+        new Int32Array(record.generation),
+        SqliteDatabaseGenerationSlot.sealPresent,
+        Atomics.load(new Int32Array(previous), SqliteDatabaseGenerationSlot.sealPresent),
+      );
+    }
+    this.loaded.set(custody, record.generation);
+  }
+
+  load(
+    record: Admission,
+    prepared?: {
+      seal: ReturnType<typeof readSqliteCleanCloseSeal>;
+      refusal?: import("./sqlite-clean-close-seal.js").SqliteCleanCloseSealRefusal;
+    },
+  ): void {
     // Only descriptor custody can admit restart proof. Workers consume the host's
     // shared facts; rereading a seal there could revive an explicitly revoked fact.
     if (threadId !== 0) {
       return;
     }
-    if (this.loaded.has(record)) {
+    const custody = this.references.descriptor(record) ?? record;
+    if (this.loaded.has(custody)) {
+      this.markLoaded(record);
       return;
     }
-    this.loaded.add(record);
+    this.markLoaded(record);
     record.cleanCloseRefusal = "malformed-proof";
-    let seal: ReturnType<typeof readSqliteCleanCloseSeal>;
     try {
-      seal = readSqliteCleanCloseSeal(
-        record.location,
-        fs.fstatSync(record.descriptor, { bigint: true }),
-        (reason) => {
-          record.cleanCloseRefusal = reason;
-        },
-      );
-    } catch {
-      this.references.publish(record);
-      return;
-    }
-    this.admit(record, seal);
-  }
-
-  async loadAsync(record: Admission): Promise<void> {
-    if (threadId !== 0 || this.loaded.has(record)) {
-      return;
-    }
-    const generation = new Int32Array(record.generation).slice();
-    let refusal: typeof record.cleanCloseRefusal = "malformed-proof";
-    const file = await new Promise<fs.BigIntStats>((resolve, reject) => {
-      fs.fstat(record.descriptor, { bigint: true }, (error, observed) =>
-        error ? reject(error) : resolve(observed),
-      );
-    });
-    const seal = await readSqliteCleanCloseSealAsync(record.location, file, (reason) => {
-      refusal = reason;
-    });
-    // Restart proof never supersedes a native publication or revocation during the read.
-    if (
-      this.loaded.has(record) ||
-      generation.some(
-        (value, index) => Atomics.load(new Int32Array(record.generation), index) !== value,
-      )
-    ) {
-      return;
-    }
-    this.loaded.add(record);
-    record.cleanCloseRefusal = refusal;
-    this.admit(record, seal);
-  }
-
-  private admit(record: Admission, seal: ReturnType<typeof readSqliteCleanCloseSeal>): void {
-    try {
+      if (prepared?.refusal) {
+        record.cleanCloseRefusal = prepared.refusal;
+      }
+      const seal = prepared
+        ? prepared.seal
+        : readSqliteCleanCloseSeal(
+            record.location,
+            fs.fstatSync(record.descriptor, { bigint: true }),
+            (reason) => {
+              record.cleanCloseRefusal = reason;
+            },
+          );
       if (!seal || typeof seal.facts !== "string") {
         return;
       }

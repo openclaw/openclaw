@@ -30,7 +30,18 @@ function fixture() {
     const context = captureOpenClawStateWorkerContext({ env });
     const lifetime = new AgentDatabaseExecutionLifetime().state;
     const noop = () => {};
-    const native = createNative("main", path, context, lifetime, noop, noop, identity, noop, noop);
+    const native = createNative(
+      "main",
+      path,
+      context,
+      undefined,
+      lifetime,
+      noop,
+      noop,
+      identity,
+      noop,
+      noop,
+    );
     return Object.assign(native, { [Symbol.asyncDispose]: () => native.close() });
   };
   return { env, options, path, generation };

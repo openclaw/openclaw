@@ -146,6 +146,7 @@ it.each(["before handoff", "after handoff"] as const)(
       peer.agentId,
       peer.path,
       context,
+      undefined,
       new AgentDatabaseExecutionLifetime().state,
       () => context.admission.assertCurrent(),
       () => context.admission.assertCurrent(),

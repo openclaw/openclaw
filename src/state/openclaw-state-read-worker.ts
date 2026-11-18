@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { stat } from "node:fs/promises";
 import { getDatabaseProcessRole } from "../infra/database-engine/admission-scope.js";
 import { getPostgresPool } from "../infra/postgres-sync/pool.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
@@ -6,7 +7,7 @@ import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.j
 import { acquireSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
 import { resolveSqliteDatabaseFilePath } from "../infra/sqlite-database-admission.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
-import { assertDatabasePathIdentityAsync } from "../infra/sqlite-worker-identity.js";
+import { assertDatabaseFileIdentity } from "../infra/sqlite-worker-identity.js";
 import {
   captureRetainedNativeWorkerSource,
   type RetainedNativeWorkerSource,
@@ -327,36 +328,31 @@ class StateReadTransport {
       const retireAfterRead =
         !pool.retained && !context.maintenanceScope && readCommand.type !== "admit";
       const task = pool.pool.runTask(
-        () => {
-          const physicalLocation = resolveSqliteDatabaseFilePath(location);
-          const requestForDispatch = () =>
-            authority.acquire(
-              () => request,
-              expectedIdentity === undefined
-                ? undefined
-                : async () => {
-                    // Check after custody preparation; no later await may hide a replacement.
-                    await assertDatabasePathIdentityAsync(physicalLocation, {
-                      key: expectedIdentity,
-                      canonicalPath: physicalLocation,
-                    });
-                  },
+        () =>
+          authority.acquire(async () => {
+            const physicalLocation = resolveSqliteDatabaseFilePath(location);
+            const turn = acquireSqliteDatabaseAdmissionTurn(physicalLocation, [], undefined, () =>
+              authority.assertCurrent(),
             );
-          const turn = acquireSqliteDatabaseAdmissionTurn(physicalLocation);
-          if (!turn) {
-            return requestForDispatch();
-          }
-          return turn.then(async (release) => {
-            releaseAdmission = release;
+            if (turn) {
+              releaseAdmission = await turn;
+            }
             try {
-              return await requestForDispatch();
+              authority.assertCurrent();
+              // Queue admission can outlive the captured file at this pathname.
+              if (expectedIdentity !== undefined) {
+                assertDatabaseFileIdentity(await stat(physicalLocation, { bigint: true }), {
+                  key: expectedIdentity,
+                });
+                authority.assertCurrent();
+              }
+              return request;
             } catch (error) {
-              releaseAdmission();
+              releaseAdmission?.();
               releaseAdmission = undefined;
               throw error;
             }
-          });
-        },
+          }),
         {
           signal: authority.signal,
           inputBytes: requestBytes(request),

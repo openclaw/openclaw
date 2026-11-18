@@ -4,6 +4,10 @@ import path from "node:path";
 import { setEnvironmentData, threadId } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { SqliteCleanCloseSealRefusal } from "./sqlite-clean-close-seal.js";
+import {
+  changedAdmissionEntries,
+  changedAdmissionWriteScopes as changedWriteScopes,
+} from "./sqlite-database-admission-delta.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import {
   isSoleDatabaseFileDescriptor,
@@ -159,10 +163,12 @@ export type SqliteDatabaseAdmissionKey<T> = {
   /** Physical cache facts can be recaptured locally; their transport never gates a live connection. */
   writer?: "host" | "connection";
 };
+export type SqliteDatabaseAdmissionLocation = { identity: string; canonicalPath: string };
 export type SqliteDatabaseAdmissionExchange = (
   admissions: SqliteDatabaseAdmissions,
   location?: string,
   create?: boolean,
+  observedLocation?: SqliteDatabaseAdmissionLocation,
 ) => SqliteDatabaseAdmissions;
 
 /** Internal typed publications need no decoder; public/custom keys retain their read contract. */
@@ -324,23 +330,6 @@ function snapshotWriteScopes(
   return buckets;
 }
 
-function changedWriteScopes(
-  current: WriteScopeBuckets,
-  previous: WriteScopeBuckets,
-): Admission["writeScopes"] {
-  const changed = new Map<string, ScopedWriteRevision>();
-  current.forEach((bucket, index) => {
-    if (bucket !== previous[index]) {
-      bucket.forEach((value, key) => {
-        if (previous[index]!.get(key) !== value) {
-          changed.set(key, value);
-        }
-      });
-    }
-  });
-  return changed;
-}
-
 export type SqliteDatabaseAdmissionCursor = {
   revision: number;
   records: WeakMap<SharedArrayBuffer, PublishedAdmission>;
@@ -350,18 +339,10 @@ export function createSqliteDatabaseAdmissionCursor(): SqliteDatabaseAdmissionCu
   return { revision: -1, records: new WeakMap() };
 }
 
-function changedAdmissionEntries<Key, Value>(
-  current: Map<Key, Value>,
-  previous: Map<Key, Value>,
-): Map<Key, Value> {
-  const changed = new Map<Key, Value>();
-  for (const [key, value] of current) {
-    if (previous.get(key) !== value) {
-      changed.set(key, value);
-    }
-  }
-  return changed;
-}
+export type SqliteDatabaseDescriptorCustody = Pick<Admission, "descriptor" | "facts"> & {
+  file: BigIntStats;
+  additionalDescriptors?: Set<number>;
+};
 
 export class SqliteDatabaseAdmissionRegistry {
   readonly records = new Map<string, Admission>();
@@ -369,10 +350,7 @@ export class SqliteDatabaseAdmissionRegistry {
   private readonly locations = new Map<string, string>();
   private readonly published = new Map<string, PublishedAdmission>();
   private readonly scopeSweeps = new WeakMap<Admission, number>();
-  readonly descriptors = new Map<
-    string,
-    Pick<Admission, "descriptor" | "facts"> & { additionalDescriptors?: Set<number> }
-  >();
+  readonly descriptors = new Map<string, SqliteDatabaseDescriptorCustody>();
   private revision = 0;
   private retainProcessFacts = true;
 
@@ -447,8 +425,13 @@ export class SqliteDatabaseAdmissionRegistry {
     }
   }
 
-  observeLocation(location: string, identity: string): void {
-    this.locations.set(normalizeDatabasePath(path.resolve(location)), identity);
+  observeLocation(location: string, identity: string | undefined): void {
+    const pathname = normalizeDatabasePath(path.resolve(location));
+    if (identity === undefined) {
+      this.locations.delete(pathname);
+    } else {
+      this.locations.set(pathname, identity);
+    }
   }
 
   forLocation(location: string): Admission | undefined {
@@ -472,6 +455,20 @@ export class SqliteDatabaseAdmissionRegistry {
       if (observed === identity) {
         this.locations.delete(location);
       }
+    }
+  }
+
+  /** Physical custody survives a cancelled caller without publishing native authority. */
+  retainDescriptorCustody(descriptor: number, opened: BigIntStats): void {
+    const identity = readSqliteDatabaseAdmissionIdentity(opened);
+    const existing = this.descriptors.get(identity);
+    if (existing && existing.descriptor !== descriptor) {
+      // A synchronous native open can acquire custody while async fstat is pending.
+      // Keep both descriptors until joint retirement; closing either can drop POSIX locks.
+      (existing.additionalDescriptors ??= new Set()).add(descriptor);
+    }
+    if (!existing) {
+      this.descriptors.set(identity, { descriptor, file: opened, facts: new Map() });
     }
   }
 
@@ -500,7 +497,13 @@ export class SqliteDatabaseAdmissionRegistry {
       ),
     };
     this.records.set(record.identity, record);
-    this.descriptors.set(record.identity, { ...retained, descriptor, facts: new Map() });
+    const custody =
+      retained?.descriptor === descriptor
+        ? retained
+        : { descriptor, file: opened, facts: new Map<string, AdmissionFact>() };
+    custody.file = opened;
+    custody.facts = new Map();
+    this.descriptors.set(record.identity, custody);
     this.observeLocation(location, record.identity);
     this.publish(record);
     return record;

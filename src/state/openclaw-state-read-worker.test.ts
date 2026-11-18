@@ -2,6 +2,7 @@
 // oxfmt-ignore
 import { emptyReply, mock, queueTask, source, tempDirs } from "./openclaw-state-read-worker.test-harness.js";
 import fs from "node:fs";
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import { threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -27,6 +28,11 @@ import type {
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
 
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...original, stat: vi.fn(original.stat) };
+});
+
 it.each(["complete", "cancel", "revoke", "consumer-error", "worker-failure"] as const)(
   "joins asynchronous stream consumption before releasing its reader (%s)",
   async (finish) => {
@@ -37,8 +43,7 @@ it.each(["complete", "cancel", "revoke", "consumer-error", "worker-failure"] as 
     const failure = new Error(`stream ${finish}`);
     let current = true;
     const authority = {
-      async acquire<T>(operation: () => T, prepare?: () => Promise<void>): Promise<T> {
-        await prepare?.();
+      acquire<T>(operation: () => T): T {
         authority.assertCurrent();
         return operation();
       },
@@ -224,9 +229,12 @@ it.skipIf(process.platform === "win32").each(["queued", "custody"] as const)(
     if (phase === "queued") {
       replace();
     } else {
-      vi.spyOn(fs.promises, "readFile").mockImplementationOnce(async () => {
+      const original = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      vi.mocked(stat).mockImplementationOnce(async (...args) => {
+        // Replace the source at the awaited dispatch-time identity check, after
+        // the queued request has captured its original admission identity.
         replace();
-        throw Object.assign(new Error("No persisted owner"), { code: "ENOENT" });
+        return await original.stat(...args);
       });
     }
     dispatch.resolve();
@@ -248,8 +256,7 @@ it("lets an active reader's host callback finish a nested read before the parent
   const authority = {
     signal: controller.signal,
     assertCurrent: context.admission.assertCurrent,
-    acquire: async <T>(operation: () => T, prepare?: () => Promise<void>) => {
-      await prepare?.();
+    acquire: <T>(operation: () => T) => {
       context.admission.assertCurrent();
       return operation();
     },
@@ -578,8 +585,7 @@ it.each(captures)(
     const authority = {
       signal: new AbortController().signal,
       assertCurrent: fixture.checkFreshAdmission ? context.admission.assertCurrent : () => {},
-      acquire: async <T>(operation: () => T, prepare?: () => Promise<void>) => {
-        await prepare?.();
+      acquire: <T>(operation: () => T) => {
         if (fixture.checkFreshAdmission) {
           context.admission.assertCurrent();
         }

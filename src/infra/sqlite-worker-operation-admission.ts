@@ -12,7 +12,7 @@ import {
   prepareSqliteDatabaseAdmission,
   readSqliteDatabaseAdmissions,
   retainSqliteDatabaseAdmissionLocation,
-  retainSqliteDatabaseAdmissionLocationAsync,
+  prepareSqliteDatabaseAdmissionAsync,
   type SqliteDatabaseAdmissionCursor,
 } from "./sqlite-database-admission.js";
 import {
@@ -31,14 +31,12 @@ import {
   withSqliteDatabaseAdmissionWait,
 } from "./sqlite-worker-database-admission-relay.js";
 import {
-  currentSqliteWorkerOperationAdmission as currentAdmission,
   isNativeCommitReceipt,
   type NativeCommitReceipt,
   type RetainedWorkerTransactionAdmission,
   type SqliteWorkerNativeSettlement,
   type SqliteWorkerNativeSettlementOwner,
 } from "./sqlite-worker-operation-settlement.js";
-import { requestSqliteWorkerOperationAdmission } from "./sqlite-writer-admission-client.js";
 import { recordWorkerMessage } from "./worker-message-metrics.js";
 
 export {
@@ -51,6 +49,8 @@ export { requestSqliteWorkerOperationAdmission } from "./sqlite-writer-admission
 export {
   withSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmissionAsync,
+  requestSqliteWorkerSchemaMaintenance,
+  takeSqliteWorkerOperationAdmissionAttachment,
 } from "./sqlite-worker-operation-scope.js";
 
 const REQUESTED = 0;
@@ -350,7 +350,11 @@ function createOperationAdmission(
               if (synchronous) {
                 retainSqliteDatabaseAdmissionLocation(location, expected);
               } else {
-                await retainSqliteDatabaseAdmissionLocationAsync(location, expected);
+                await prepareSqliteDatabaseAdmissionAsync({
+                  location,
+                  expectedIdentity: expected,
+                  assertCurrent: assertWaiting,
+                });
               }
             } catch (error) {
               if (!isRecord(error) || error.code !== "ENOENT") {
@@ -714,28 +718,4 @@ function createOperationAdmission(
     commitObservers.push(observer);
   });
   return admission;
-}
-
-/** Schema work borrows live host authority through the same retained job port. */
-export function requestSqliteWorkerSchemaMaintenance(databasePath: string): boolean {
-  if (!currentAdmission.getStore()) {
-    return false;
-  }
-  requestSqliteWorkerOperationAdmission({
-    stage: "prepare",
-    facts: { kind: "schema-maintenance", databasePath },
-  });
-  return true;
-}
-
-/** Require owner-prepared data carried by this operation's command envelope. */
-export function takeSqliteWorkerOperationAdmissionAttachment(): unknown {
-  const scope = currentAdmission.getStore();
-  if (!scope?.active) {
-    throw new SqliteWorkerError("SQLite operation requires its retained admission", "unavailable");
-  }
-  if (!scope.owner.attachment) {
-    throw new SqliteWorkerError("SQLite operation attachment is unavailable", "unavailable");
-  }
-  return scope.owner.attachment.value;
 }

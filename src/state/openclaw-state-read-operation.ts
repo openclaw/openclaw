@@ -5,7 +5,7 @@ import { acquireWithWait } from "../infra/acquire-with-wait.js";
 import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-errors.js";
 import {
-  captureStateDatabaseAccess,
+  prepareStateDatabaseReadAccess,
   getStateDatabaseSchemaLease,
 } from "../infra/gateway-state-owner.js";
 import { resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
@@ -108,9 +108,9 @@ export function startOpenClawStateReadOperation(
   let startSnapshotCleanup: (() => RetainedOperation<boolean>) | undefined;
   let releasePreparedSource: (() => void) | undefined;
   let closing: Promise<void> | undefined;
+  let stateAccess: Awaited<ReturnType<typeof prepareStateDatabaseReadAccess>>;
   let cleaned = false;
   let admissionDeadline: number | undefined;
-  let access: Awaited<ReturnType<typeof captureStateDatabaseAccess>>;
   const isPendingAdmission = (error: unknown) =>
     error instanceof StateDatabaseAdmissionPendingError && error.databasePath === pathname;
   const authority: OpenClawStateReadAuthority = {
@@ -119,14 +119,17 @@ export function startOpenClawStateReadOperation(
       signal.throwIfAborted();
       context.maintenanceScope?.assertAdmission();
       context.admission.assertCurrent();
-      openClawStateDatabaseCache.assertOpenClawStateDatabaseOpenAllowed(pathname, "cached-read");
+      openClawStateDatabaseCache.assertOpenClawStateDatabaseOpenAllowed(
+        pathname,
+        "cached-read",
+        stateAccess,
+      );
     },
-    async acquire<T>(operation: () => T, prepare?: () => Promise<void>): Promise<T> {
-      const acquire = () =>
-        access.withReadAccess(() => {
-          authority.assertCurrent();
-          return operation();
-        }, prepare);
+    async acquire<T>(operation: () => T | Promise<T>): Promise<T> {
+      const acquire = () => {
+        authority.assertCurrent();
+        return operation();
+      };
       try {
         return await acquire();
       } catch (error) {
@@ -134,7 +137,7 @@ export function startOpenClawStateReadOperation(
           throw error;
         }
       }
-      // Native borrowing and queued dispatch share one budget; never replay a read or snapshot.
+      // Preserve the existing shared deadline; retry preparation, never a dispatched read.
       admissionDeadline ??= performance.now() + OPENCLAW_SQLITE_BUSY_TIMEOUT_MS;
       return acquireWithWait({
         acquire,
@@ -287,26 +290,32 @@ export function startOpenClawStateReadOperation(
     );
     transport = selectedTransport;
     unregisterSource = source.own(() => resource.close());
-    access = await captureStateDatabaseAccess(pathname);
+    stateAccess = await prepareStateDatabaseReadAccess(context.admission);
+    signal.throwIfAborted();
+    context.maintenanceScope?.assertAdmission();
+    context.admission.assertCurrent();
     if (command.type === "admit") {
       return query(selectedTransport);
     }
-    const borrowing = !snapshot
-      ? authority.acquire(() => {
+    const acquired = !snapshot
+      ? await authority.acquire(() => {
           const native = preserveArtifacts
-            ? borrowOpenClawStateDatabaseForAsyncRead(pathname, "cached-read")
+            ? borrowOpenClawStateDatabaseForAsyncRead(pathname, "cached-read", stateAccess)
             : undefined;
           return {
             native,
             borrowed:
               native ??
               (!preserveArtifacts
-                ? retainOpenClawStateDatabaseForIndependentRead(pathname, "cached-read")
+                ? retainOpenClawStateDatabaseForIndependentRead(
+                    pathname,
+                    "cached-read",
+                    stateAccess,
+                  )
                 : undefined),
           };
         })
       : undefined;
-    const acquired = borrowing instanceof Promise ? await borrowing : borrowing;
     const native = acquired?.native;
     borrowed = acquired?.borrowed;
     const independentWarmSource =

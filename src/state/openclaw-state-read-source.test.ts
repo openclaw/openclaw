@@ -63,10 +63,7 @@ function readFixture() {
     authority: {
       signal: new AbortController().signal,
       assertCurrent: () => {},
-      acquire: async <T>(operation: () => T, prepare?: () => Promise<void>) => {
-        await prepare?.();
-        return operation();
-      },
+      acquire: <T>(operation: () => T) => operation(),
     },
   };
 }

@@ -180,13 +180,13 @@ function captureRegistryMutation(
     agentId: string;
     path: string;
     schemaVersion?: number;
-    identity?: DatabasePathIdentity;
+    capturedIdentity?: DatabasePathIdentity;
   }[],
 ): AgentDatabaseRegistryMutation | undefined {
   try {
     const captured: AgentDatabaseRegistrySource[] = [];
     for (const source of sources) {
-      const identity = source.identity ?? inspectDatabasePathIdentitySync(source.path);
+      const identity = source.capturedIdentity ?? inspectDatabasePathIdentitySync(source.path);
       if (!identity) {
         return undefined;
       }
@@ -299,8 +299,7 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
   kind?: AgentDatabaseRegistryMutation["kind"];
   agentId: string;
   agentPath: string;
-  /** Async native preparation already observed this physical source. */
-  identity?: DatabasePathIdentity;
+  capturedIdentity?: DatabasePathIdentity;
   admission: OpenClawStateDatabaseReadAdmission;
   assertPublicationCurrent?: () => void;
   onRegistryChange?: (change: AgentDatabaseRegistryChange) => void;
@@ -308,7 +307,7 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
   const options = { path: params.admission.databasePath };
   const operation = Symbol("agent-registry-registration");
   const mutation = captureRegistryMutation(params.kind ?? "upsert", [
-    { agentId: params.agentId, path: params.agentPath, identity: params.identity },
+    { agentId: params.agentId, path: params.agentPath, capturedIdentity: params.capturedIdentity },
   ]);
   const advance = (phase: RegistryTransition["phase"]) => {
     const change = advanceRegisteredAgentDatabasesMemo(options.path, {

@@ -120,11 +120,8 @@ export async function assertGatewayOwnerLeaseStopped(
       context.admission.assertCurrent();
       owner.assertDatabaseAccess(pathname);
     },
-    async acquire<T>(operation: () => T, prepare?: () => Promise<void>): Promise<T> {
-      if (prepare) {
-        await prepare();
-      }
-      // Offline custody already owns admission; recheck it without ordinary-read retries.
+    acquire<T>(operation: () => T): T {
+      // Offline custody rechecks its own lease without ordinary-read retries.
       authority.assertCurrent();
       return operation();
     },

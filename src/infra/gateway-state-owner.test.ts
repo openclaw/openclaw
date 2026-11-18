@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import * as pidAlive from "../shared/pid-alive.js";
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import {
@@ -31,7 +30,6 @@ import {
   assertStateDatabaseAccessAllowed,
   assertStateDatabaseReadAllowed,
   captureGatewayStateOwner,
-  captureGatewayStateOwnerAsync,
   captureStateDatabaseAccess,
   GatewayStateOwnerContentionError,
   getStateDatabaseSchemaLease,
@@ -106,39 +104,46 @@ function expectExistence(present: boolean, ...paths: string[]) {
 }
 
 describe("Gateway state ownership", () => {
-  it.each([captureGatewayStateOwner, captureGatewayStateOwnerAsync])(
-    "resolves the selected database once per captured owner assertion and rejects successors (%#)",
-    async (capture) => {
-      const owner = gatewayOwner(databasePath, root);
-      fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-      fs.writeFileSync(databasePath, "synthetic database");
-      const captured = (await capture(databasePath))!;
-      const realpath = vi.spyOn(fs.realpathSync, "native");
-      captured.assertCurrent();
-      expect(realpath.mock.calls.filter(([pathname]) => pathname === databasePath)).toHaveLength(1);
-      realpath.mockRestore();
-      owner.release();
-      gatewayOwner(databasePath, root);
-      expect(() => captured.assertCurrent()).toThrow();
-    },
-  );
+  it("checks captured process custody without lock polling and rejects successors", async () => {
+    const owner = gatewayOwner(databasePath, root);
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    fs.writeFileSync(databasePath, "synthetic database");
+    const captured = captureGatewayStateOwner(databasePath)!;
+    const realpath = vi.spyOn(fs.realpathSync, "native");
+    const stat = vi.spyOn(fs, "lstatSync");
+    const open = vi.spyOn(fs, "openSync");
+    captured.assertCurrent();
+    owner.assertCurrent();
+    (await captured.prepareAccess())();
+    expect(realpath.mock.calls.filter(([pathname]) => pathname === databasePath)).toHaveLength(1);
+    expect(stat).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+    stat.mockRestore();
+    open.mockRestore();
+    realpath.mockRestore();
+    owner.release();
+    gatewayOwner(databasePath, root);
+    expect(() => captured.assertCurrent()).toThrow();
+    await expect(
+      captured.prepareAccess().then((assertCurrent) => assertCurrent()),
+    ).rejects.toThrow();
+  });
 
-  it
-    .skipIf(process.platform === "win32")
-    .each([captureGatewayStateOwner, captureGatewayStateOwnerAsync])(
-    "rejects a retargeted captured owner alias (%#)",
-    async (capture) => {
-      gatewayOwner(databasePath, root);
-      const alias = path.join(directories.make("openclaw-owner-alias-"), "root");
-      fs.symlinkSync(root, alias);
-      const captured = (await capture(path.join(alias, "state", "openclaw.sqlite")))!;
-      const otherRoot = directories.make("openclaw-owner-successor-");
-      gatewayOwner(path.join(otherRoot, "state", "openclaw.sqlite"), otherRoot);
-      fs.unlinkSync(alias);
-      fs.symlinkSync(otherRoot, alias);
-      expect(() => captured.assertCurrent()).toThrow(GatewayStateOwnerContentionError);
-    },
-  );
+  it.skipIf(process.platform === "win32")("rejects a retargeted captured owner alias", () => {
+    gatewayOwner(databasePath, root);
+    const alias = path.join(directories.make("openclaw-owner-alias-"), "root");
+    fs.symlinkSync(root, alias);
+    const captured = captureGatewayStateOwner(path.join(alias, "state", "openclaw.sqlite"))!;
+    const otherRoot = directories.make("openclaw-owner-successor-");
+    gatewayOwner(path.join(otherRoot, "state", "openclaw.sqlite"), otherRoot);
+    expect(() => captured.assertCurrent(databasePath)).not.toThrow();
+    expect(() => captured.assertCurrent(path.join(otherRoot, "state", "openclaw.sqlite"))).toThrow(
+      GatewayStateOwnerContentionError,
+    );
+    fs.unlinkSync(alias);
+    fs.symlinkSync(otherRoot, alias);
+    expect(() => captured.assertCurrent()).toThrow(GatewayStateOwnerContentionError);
+  });
 
   it.skipIf(process.platform === "win32")(
     "acquires Gateway ownership on healthy state storage when system tmp is exhausted",
@@ -296,36 +301,6 @@ describe("Gateway state ownership", () => {
     expect(stat).not.toHaveBeenCalled();
   });
 
-  it("refuses a new local owner acquired during an awaited offline read admission", async () => {
-    const access = await captureStateDatabaseAccess(databasePath);
-    const sidecar = createDeferredCore<string>();
-    vi.spyOn(fs.promises, "readFile").mockReturnValueOnce(sidecar.promise);
-    const consume = vi.fn();
-    const reading = access.withReadAccess(consume);
-    const owner = gatewayOwner(databasePath, root);
-    sidecar.resolve(fs.readFileSync(owner.path, "utf8"));
-    await expect(reading).rejects.toThrow("no longer current");
-    expect(consume).not.toHaveBeenCalled();
-  });
-
-  it.each(["custody", "dispatch"] as const)(
-    "refuses a root retired during asynchronous read %s preparation",
-    async (phase) => {
-      const owner = gatewayOwner(databasePath, root);
-      const access = await captureStateDatabaseAccess(databasePath);
-      const consume = vi.fn();
-      const reading = access.withReadAccess(
-        consume,
-        phase === "dispatch" ? async () => owner.release() : undefined,
-      );
-      if (phase === "custody") {
-        owner.release();
-      }
-      await expect(reading).rejects.toThrow();
-      expect(consume).not.toHaveBeenCalled();
-    },
-  );
-
   it.skipIf(process.platform === "win32")(
     "keeps worker-verified custody bound to the captured target after an alias changes",
     async () => {
@@ -429,29 +404,32 @@ describe("Gateway state ownership", () => {
       const replacedPath = kind === "owner" ? lease.path : projectionPath(root);
       const original = kind === "owner" ? fs.readFileSync(replacedPath) : undefined;
       const retainedAccess = await captureStateDatabaseAccess(databasePath);
-      const replace = () => {
+      const replace = async () => {
         fs.writeFileSync(replacedPath, "replacement");
         if (kind === "owner") {
-          // Reads must record loss once, before the lease or write checks observe it.
+          // The verification worker records physical loss; host guards consume its publication.
+          await expect(retainedAccess.prepareAccess()).rejects.toThrow(
+            /lock (?:was )?removed(?:\/| or )replaced; restart the Gateway/u,
+          );
           expect(() => assertStateDatabaseReadAllowed(databasePath)).toThrow(
-            /lock removed\/replaced; restart the Gateway\.$/u,
+            /lock (?:was )?removed(?:\/| or )replaced; restart the Gateway\.$/u,
           );
           expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow(
-            "lock removed/replaced; restart the Gateway",
+            /lock (?:was )?removed(?:\/| or )replaced; restart the Gateway/u,
           );
         }
-        expect(() => lease.assertCurrent()).toThrow("no longer current");
+        expect(() => lease.assertCurrent()).toThrow(/no longer current|removed or replaced/u);
         expect(() => acquireStateDatabaseSchemaLease(databasePath)).toThrow(
           kind === "owner" ? GatewayStateOwnerContentionError : "no longer current",
         );
       };
       try {
         if (kind === "projection") {
-          lease.run(replace);
+          await lease.run(replace);
         } else {
-          replace();
+          await replace();
           await expect(retainedAccess.prepareAccess()).rejects.toThrow(
-            "lock removed/replaced; restart the Gateway",
+            /lock (?:was )?removed(?:\/| or )replaced; restart the Gateway/u,
           );
         }
       } finally {

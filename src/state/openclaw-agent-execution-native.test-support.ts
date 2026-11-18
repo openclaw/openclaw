@@ -17,6 +17,7 @@ export function createNativeIntegrityGeneration(
     database.agentId,
     database.path,
     context,
+    undefined,
     new AgentDatabaseExecutionLifetime().state,
     assertCurrent,
     assertCleanup,

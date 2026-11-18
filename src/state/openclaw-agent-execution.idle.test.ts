@@ -45,6 +45,7 @@ beforeEach(() => {
       agentId,
       pathname,
       _context,
+      _processOwner,
       _logicalLifetime,
       _assertLogicalCurrent,
       _assertCleanupOwned,
