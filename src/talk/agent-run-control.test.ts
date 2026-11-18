@@ -223,7 +223,12 @@ describe("controlRealtimeVoiceAgentRun", () => {
       {
         text: "use the safer path",
         mode: "steer",
-        getToolAuthorityOverlay: () => ({ approvalReviewerDeviceId: "device-a" }),
+        getToolAuthorityOverlay: () => ({
+          senderIsOwner: true,
+          disableTools: false,
+          traceAuthorized: false,
+          approvalReviewerDeviceId: "device-a",
+        }),
       },
       deps,
     );
