@@ -1,6 +1,7 @@
 import { Blob as NodeBlob } from "node:buffer";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import * as toast from "../../../lib/toast.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import {
   clearSessionWorkspacePreviews,
@@ -10,6 +11,7 @@ import {
 import { createSidebarContentRecorder } from "./chat-session-workspace.test-support.ts";
 import {
   createSessionWorkspaceProps,
+  openSessionWorkspaceManagedArtifact,
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
 import type { SidebarContent, SidebarSelection } from "./chat-sidebar-content-types.ts";
@@ -39,22 +41,30 @@ describe("session workspace artifacts", () => {
   function createArtifactHost(
     mimeType: string,
     data: string,
-    { title = "Unicode artifact", http = false }: { title?: string; http?: boolean } = {},
+    {
+      title = "Unicode artifact",
+      http = false,
+      id = "artifact-1",
+    }: { title?: string; http?: boolean; id?: string } = {},
   ) {
     const settled = createDeferred<Exclude<SidebarSelection, { kind: "loading" }>>();
     const url = "/api/artifacts/download/connection/ticket";
     const artifact = {
-      id: "artifact-1",
+      id,
       type: mimeType.startsWith("image/") ? "image" : "file",
       mimeType,
       title,
       sizeBytes: atob(data).length,
       download: { mode: http ? ("url" as const) : ("bytes" as const) },
     };
-    const request = vi.fn(async (_method: string, query: { transport?: string }) => ({
-      artifact,
-      ...(http && query.transport === "http" ? { url } : { data, encoding: "base64" }),
-    }));
+    const request = vi.fn(async (method: string, query: { transport?: string }) =>
+      method === "artifacts.list"
+        ? { artifacts: [artifact] }
+        : {
+            artifact,
+            ...(http && query.transport === "http" ? { url } : { data, encoding: "base64" }),
+          },
+    );
     const fetchMock = vi.fn(async () => {
       const bytes = Uint8Array.from(atob(data), (char) => char.charCodeAt(0));
       return {
@@ -129,6 +139,103 @@ describe("session workspace artifacts", () => {
     }
     return { ...fixture, props, file: content.file };
   }
+
+  const managedId = "artifact_managed_media_12345678-1234-4234-8234-123456789abc";
+  const managedHref =
+    "/api/chat/media/outgoing/agent%3Amain%3Acurrent/12345678-1234-4234-8234-123456789abc/full";
+
+  it("tells an offline reader to reconnect and retry without requesting artifacts", () => {
+    const fixture = createArtifactHost("application/json", "", { id: managedId });
+    fixture.state.connected = false;
+    const show = vi.spyOn(toast, "showToast").mockReturnValue(true);
+    openSessionWorkspaceManagedArtifact(fixture.state, managedHref);
+    expect(show).toHaveBeenCalledWith({
+      message: "You're offline. Reconnect, then open this attachment link again.",
+      severity: "error",
+    });
+    expect(fixture.request).not.toHaveBeenCalled();
+  });
+
+  it("reuses the original artifact tab when a later link selects the same saved file", async () => {
+    vi.stubGlobal("Blob", NodeBlob);
+    const fixture = createArtifactHost("application/json", btoa('{"original":true}'), {
+      id: managedId,
+    });
+    createSessionWorkspaceProps(fixture.state).onOpenArtifact(managedId);
+    await fixture.loadedContent();
+    const original = fixture.state.sessionWorkspaceState!.previews[0]!;
+    openSessionWorkspaceManagedArtifact(fixture.state, managedHref);
+    const linked = fixture.state.sessionWorkspaceState!.previews.at(-1)!;
+    await linked.readResult;
+    expect(fixture.state.sessionWorkspaceState!.previews).toEqual([original]);
+    expect(original.content).toMatchObject({ kind: "file", content: '{"original":true}' });
+  });
+
+  it.each(["missing", "foreign", "malformed", "denied"])(
+    "keeps a %s managed reference unavailable without selecting other bytes",
+    async (condition) => {
+      const fixture = createArtifactHost("application/json", btoa('{"original":true}'), {
+        id: condition === "missing" ? "artifact-1" : managedId,
+      });
+      if (condition === "denied") {
+        fixture.request.mockRejectedValueOnce(new Error("Access denied"));
+      }
+      const href =
+        condition === "foreign"
+          ? managedHref.replace("current", "other")
+          : condition === "malformed"
+            ? managedHref.replace("/full", "/invalid")
+            : managedHref;
+      expect(openSessionWorkspaceManagedArtifact(fixture.state, href)).toBe(true);
+      const preview = fixture.state.sessionWorkspaceState!.previews[0]!;
+      await preview.readResult;
+      expect(preview.content).toMatchObject({
+        kind: "unavailable",
+        message:
+          condition === "denied"
+            ? "Access denied"
+            : "This attachment is unavailable in this chat. Ask the sender to share it again.",
+      });
+      expect(
+        fixture.request.mock.calls.filter(([method]) => method === "artifacts.download"),
+      ).toEqual([]);
+      expect(
+        openSessionWorkspaceManagedArtifact(fixture.state, `https://other.test${managedHref}`),
+      ).toBe(false);
+    },
+  );
+
+  it.each(["close", "connection"])(
+    "does not open a managed reference after %s retires its metadata read",
+    async (retirement) => {
+      const fixture = createArtifactHost("application/json", btoa('{"original":true}'), {
+        id: managedId,
+      });
+      fixture.state.connectionEpoch = 1;
+      const metadata = createDeferred();
+      const started = createDeferred();
+      fixture.request.mockImplementationOnce(async () => {
+        started.resolve();
+        await metadata.promise;
+        return { artifacts: [fixture.artifact] };
+      });
+      openSessionWorkspaceManagedArtifact(fixture.state, managedHref);
+      const preview = fixture.state.sessionWorkspaceState!.previews[0]!;
+      await started.promise;
+      if (retirement === "close") {
+        clearSessionWorkspacePreviews(fixture.state);
+      } else {
+        fixture.state.connectionEpoch += 1;
+        createSessionWorkspaceProps(fixture.state);
+      }
+      metadata.resolve();
+      await preview.readResult;
+      expect(fixture.state.sessionWorkspaceState!.previews).toEqual([]);
+      expect(
+        fixture.request.mock.calls.filter(([method]) => method === "artifacts.download"),
+      ).toEqual([]);
+    },
+  );
 
   it.each([false, true])(
     "reauthorizes an expired cached binary download and saves its bytes (HTTP fails: %s)",
