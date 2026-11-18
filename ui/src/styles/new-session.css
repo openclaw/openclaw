@@ -1999,6 +1999,11 @@ span.new-session-page__select {
   padding-inline: 10px;
 }
 
+/* Horizontal trays need no placeholder; stacked controls must retain their row. */
+.new-session-page__checkout-skeleton {
+  display: none;
+}
+
 .new-session-page__picker-panel > .new-session-page__skeletons {
   padding: 0 calc(var(--new-session-tray-edge) - 8px) 8px;
 }
@@ -2075,6 +2080,12 @@ span.new-session-page__select {
 
   .new-session-page__context-tray .new-session-page__trigger-label {
     max-width: none;
+  }
+
+  .new-session-page__context-tray .new-session-page__checkout-skeleton {
+    display: flex;
+    height: 36px;
+    padding-inline: calc(var(--chat-composer-editor-inset-inline, 14px) + 1px);
   }
 
   .new-session-page__context-tray .new-session-page__picker-chevron {

@@ -218,7 +218,22 @@ export function NewSessionPlaceControls(props: {
             )}
             {props.params.place.checkoutVisible &&
             !(view().nativeTerminal && props.params.place.terminalOnNode) ? (
-              <CheckoutChip params={props.params} folderLabel={view().projectState.label} />
+              props.params.place.repositoryState.checkoutPending ? (
+                <span
+                  class="new-session-page__checkout-skeleton new-session-page__skeleton-row"
+                  role="status"
+                  aria-label={t("newSession.checkingPlace")}
+                >
+                  <span class="new-session-page__skeleton-icon" aria-hidden="true" />
+                  <span
+                    class="new-session-page__skeleton-bar"
+                    aria-hidden="true"
+                    style={{ width: "80px" }}
+                  />
+                </span>
+              ) : (
+                <CheckoutChip params={props.params} folderLabel={view().projectState.label} />
+              )
             ) : undefined}
           </div>
           {props.params.place.deviceFolder ? (

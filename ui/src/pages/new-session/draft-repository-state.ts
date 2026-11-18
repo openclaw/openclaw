@@ -98,11 +98,11 @@ export class DraftRepositoryStateOwner {
   }
 
   checkoutVisible(projectSelected: boolean): boolean {
-    // Do not label a provisional checkout before discovery can resolve the choice.
-    if (this.checkoutPending || (this.repositoryValue.kind === "direct" && !projectSelected)) {
+    if (this.repositoryValue.kind === "direct" && !projectSelected) {
       return false;
     }
     return (
+      this.checkoutPending ||
       projectSelected ||
       this.repositoryValue.kind === "unavailable" ||
       this.available() ||
@@ -110,12 +110,15 @@ export class DraftRepositoryStateOwner {
     );
   }
 
-  private get checkoutPending(): boolean {
-    return (
-      this.repositoryValue.kind === "checking" ||
-      this.currentCheckoutUnavailable === "checking" ||
-      (this.refreshing && this.checkoutSubmissionBlocked)
-    );
+  get checkoutPending(): boolean {
+    // Project eligibility owns the checkout choice; branch suggestions load independently.
+    const options = this.checkoutOptions;
+    return this.read().selectedProject && !this.read().remotePlacement
+      ? this.currentCheckoutUnavailable === "checking" ||
+          (typeof options === "object" &&
+            options.refreshing === true &&
+            this.checkoutSubmissionBlocked)
+      : this.repositoryValue.kind === "checking";
   }
 
   private selectionRevision = 0;
@@ -528,6 +531,10 @@ export class DraftRepositoryStateOwner {
       this.read().remotePlacement
     ) {
       return;
+    }
+    if (this.preferredWorktreeRestore && !this.worktreeSelectedByUser) {
+      this.worktreeValue = true;
+      this.preferredWorktreeRestore = false;
     }
     const selectedAvailable = this.worktreeValue ? options.worktree : options.current;
     if (!selectedAvailable && (options.current || options.worktree)) {

@@ -388,7 +388,9 @@ export function PaletteSessionSettingsView(properties: {
                 <Icon name="chevronRight" />
               </span>
             </button>
-            {place().checkoutVisible && !place().remoteRepository ? (
+            {place().checkoutVisible &&
+            !place().repositoryState.checkoutPending &&
+            !place().remoteRepository ? (
               <button
                 class="palette-session-settings__row palette-session-settings__worktree"
                 type="button"
