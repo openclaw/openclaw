@@ -4,6 +4,7 @@ import { Popover } from "../../components/solid/popover.tsx";
 import { isComposingKeyboardEvent } from "../../lib/ime.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
+import { HoverMarquee } from "../../lib/solid/hover-marquee.tsx";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
 import { isWorktreeNameValid } from "./create-params.ts";
 import type { DraftRepositoryRead } from "./draft-repository-state.ts";
@@ -68,6 +69,7 @@ function WorktreeFields(props: {
     clearActiveSuggestion();
     activeSuggestion = rows[nextIndex]!;
     activeSuggestion.setAttribute("aria-selected", "true");
+    activeSuggestion.scrollIntoView({ block: "nearest" });
     baseRef.setAttribute("aria-activedescendant", activeSuggestion.id);
     setSuggestionsOpen(true);
     return true;
@@ -100,10 +102,20 @@ function WorktreeFields(props: {
     props.params.place.repository.kind === "git" ? props.params.place.repository : null;
   const hasBranches = () => Boolean(branches()?.branches.length);
   const suggestions = createMemo(() => {
+    const all = branches()?.branches ?? [];
     const query = props.params.place.baseRef.trim().toLowerCase();
-    return (branches()?.branches ?? [])
-      .filter((branch) => branch.name.toLowerCase().includes(query))
-      .slice(0, 8);
+    // Keep the Gateway's default/current/recent order, with prefix and segment matches first.
+    const leading: typeof all = [];
+    const rest: typeof all = [];
+    for (const branch of all) {
+      const name = branch.name.toLowerCase();
+      if (name.startsWith(query) || name.includes(`/${query}`)) {
+        leading.push(branch);
+      } else if (name.includes(query)) {
+        rest.push(branch);
+      }
+    }
+    return [...leading, ...rest].slice(0, 8);
   });
   const suggestionsVisible = () => suggestionsOpen() && suggestions().length > 0;
   const branchName = () => props.params.place.worktreeName.trim();
@@ -196,7 +208,11 @@ function WorktreeFields(props: {
                           }),
                         ]}
                       >
-                        <span class="session-menu__text">{branch().name}</span>
+                        <HoverMarquee
+                          content={branch().name}
+                          class="session-menu__text"
+                          options={{ host: () => button, delay: 250, speed: 80 }}
+                        />
                       </button>
                     );
                   }}

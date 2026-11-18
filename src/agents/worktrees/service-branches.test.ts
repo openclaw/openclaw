@@ -674,6 +674,25 @@ describe("ManagedWorktreeService branch discovery", () => {
     ).rejects.toThrow(/base ref|resolve|revision/i);
   });
 
+  it("suggests recently committed branches after the default and current branch", async () => {
+    for (const [name, date] of [
+      ["alpha-old", "2020-01-01T00:00:00Z"],
+      ["zulu-new", "2024-01-01T00:00:00Z"],
+      ["mid", "2022-01-01T00:00:00Z"],
+    ]) {
+      vi.stubEnv("GIT_COMMITTER_DATE", date);
+      await git(repo, "branch", name, await createChildCommit("HEAD^{tree}", name));
+    }
+    vi.stubEnv("GIT_COMMITTER_DATE", undefined);
+
+    expect((await readRepositoryBranches(repo)).branches.map((branch) => branch.name)).toEqual([
+      "main",
+      "zulu-new",
+      "mid",
+      "alpha-old",
+    ]);
+  });
+
   it.each([
     { label: "fits the original byte guard", segments: 161, width: 8, available: true },
     { label: "exceeds the original byte guard", segments: 400, width: 3, available: false },
