@@ -14,6 +14,7 @@ import { getMatrixRuntime } from "../../runtime.js";
 import {
   readMatrixIdbSnapshotOwnerGeneration,
   sealMatrixIdbSnapshotOwnerGeneration,
+  type MatrixSnapshotStateAccess,
   type MatrixSnapshotStateReader,
   type MatrixSnapshotStateRuntime,
 } from "../crypto-state-store.js";
@@ -163,7 +164,7 @@ export async function isMatrixCryptoStoreUnsafe(
 /** Doctor has already validated the snapshot and obtained explicit rollback consent under custody. */
 export async function sealMatrixCryptoStoreRecovery(
   snapshotPath: string,
-  stateRuntime: MatrixSnapshotStateRuntime = getMatrixRuntime().state,
+  stateRuntime: MatrixSnapshotStateAccess = getMatrixRuntime().state,
 ): Promise<void> {
   const guard = await readOwnerGuard(snapshotPath);
   const generation = randomUUID().replaceAll("-", "");

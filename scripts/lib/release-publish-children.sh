@@ -774,15 +774,30 @@ append_clawhub_dispatch_args() {
 
 # Rendering and canonical readback must use the same frozen notice context.
 run_github_release_notes() {
-  local regular_stable_version=""
+  local regular_stable_version="" notice_body_file="" release_json
   local -a render_args=(
     --root "${GITHUB_WORKSPACE}" --ref "${TARGET_SHA}"
     --tag "${RELEASE_TAG}" --repository "${GITHUB_REPOSITORY}"
     "$@"
   )
   if [[ "${RELEASE_NPM_DIST_TAG:-}" == "extended-stable" ]]; then
-    regular_stable_version="$(jq -er '.version | strings' "${GITHUB_WORKSPACE}/.release-harness/package.json")"
-    render_args+=(--regular-stable-version "${regular_stable_version}")
+    render_args+=(--main-package-version "$(jq -er '.version | strings' "${GITHUB_WORKSPACE}/.release-harness/package.json")")
+    if [[ -f "${RUNNER_TEMP}/release-notes.md" ]]; then
+      # Preparation already froze Latest. Reuse it across later workflow steps.
+      notice_body_file="${RUNNER_TEMP}/release-notes.md"
+    elif release_json="$(gh_read release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft,body 2>/dev/null)" &&
+      [[ "$(printf '%s' "${release_json}" | jq -r .isDraft)" == false ]]; then
+      # A fresh recovery keeps the public notice even after Latest has advanced.
+      notice_body_file="${RUNNER_TEMP}/existing-public-release-body.md"
+      printf '%s' "${release_json}" | jq -er '.body | strings' > "${notice_body_file}" || return 1
+      assert_initial_release_body "$(cat "${notice_body_file}")" || return 1
+    fi
+    if [[ -n "${notice_body_file}" ]]; then
+      render_args+=(--notice-body "${notice_body_file}")
+    else
+      regular_stable_version="$(gh_read api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)" || return 1
+      render_args+=(--regular-stable-version "${regular_stable_version#v}")
+    fi
     if [[ -n "${RETIRED_LINE_PUBLICATION_REASON:-}" ]]; then
       render_args+=(--retired-line-reason "${RETIRED_LINE_PUBLICATION_REASON}")
     fi

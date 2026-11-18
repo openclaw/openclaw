@@ -46,14 +46,18 @@ suite.define(() =>
           const navigationToggle =
             width < 900
               ? navigationDrawerToggle(page)
-              : page.locator('[data-navigation-view][aria-pressed="true"]:visible');
+              : page
+                  .locator("openclaw-app-sidebar")
+                  .getByRole("button", { name: "Collapse sidebar", exact: true });
           await navigationToggle.click();
           const collapsedClass = width < 900 ? "shell--nav-drawer-open" : "shell--nav-collapsed";
           await page.locator(`.${collapsedClass}`).waitFor();
           if (width < 900) {
             await page.keyboard.press("Escape");
           } else {
+            // Off a session page, the Sessions item also returns to the last session.
             await page.locator('[data-navigation-view="sessions"]').click();
+            await waitForControlUiRoute(page, { routeId: "chat" });
           }
           await expect.poll(() => shell.getAttribute("class")).not.toContain(collapsedClass);
           await assertSidebarIdentity();

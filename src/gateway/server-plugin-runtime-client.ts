@@ -6,6 +6,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import { isPluginBuiltCoreToolId } from "../agents/core-tool-facts.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -195,15 +196,17 @@ export function resolvePluginSubagentToolsAlsoAllow(params: {
     throw new Error("toolsAlsoAllow requires plugin identity for subagent runs.");
   }
   const registry = getActivePluginRegistry();
-  // A catalog id is the plugin's own when its manifest declares the tool (as `browser` and
-  // `skill_workshop` are); every other catalog id is a core tool a plugin may not hand a fork.
+  // A catalog id is the plugin's own only when the catalog marks it plugin-built (as `browser` and
+  // `skill_workshop`) and its manifest declares it. Every other catalog id is a core tool a plugin
+  // may not hand a subagent run, since the grant widens the session's tool profile.
   const declaredTools = new Set(
     (registry?.plugins.find((plugin) => plugin.id === pluginId)?.contracts?.tools ?? []).map(
       (name) => normalizeToolPolicyName(name),
     ),
   );
   for (const toolName of requested) {
-    if (isKnownCoreToolId(toolName) && !declaredTools.has(toolName)) {
+    const pluginOwned = declaredTools.has(toolName) && isPluginBuiltCoreToolId(toolName);
+    if (isKnownCoreToolId(toolName) && !pluginOwned) {
       throw new Error(`plugin "${pluginId}" may not add core tool "${toolName}" to subagent runs.`);
     }
     const owners = uniqueStrings(

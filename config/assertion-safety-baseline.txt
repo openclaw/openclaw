@@ -817,7 +817,6 @@ extensions/voice-call/src/providers/shared/guarded-json-api.ts	2
 extensions/voice-call/src/runtime.ts	1
 extensions/voice-call/src/webhook.ts	5
 extensions/voyage/embedding-batch.ts	1
-extensions/web-readability/web-content-extractor.ts	2
 extensions/whatsapp/src/account-config.ts	1
 extensions/whatsapp/src/agent-tools-call.ts	1
 extensions/whatsapp/src/agent-tools-login.ts	6
@@ -1023,7 +1022,7 @@ src/agents/agent-tools.before-tool-call.wrapper.ts	3
 src/agents/agent-tools.execution-preparer.ts	2
 src/agents/agent-tools.params.ts	5
 src/agents/agent-tools.policy.ts	1
-src/agents/agent-tools.read.ts	3
+src/agents/agent-tools.read.ts	2
 src/agents/agent-tools.ring-zero-context.ts	1
 src/agents/ai-transport-runtime-host.ts	9
 src/agents/apply-patch-file-ops.ts	2
@@ -1885,7 +1884,6 @@ src/infra/sqlite-index-schema.ts	1
 src/infra/sqlite-integrity.ts	1
 src/infra/sqlite-readonly-location.ts	3
 src/infra/sqlite-schema-contract.ts	3
-src/infra/sqlite-snapshot.ts	1
 src/infra/sqlite-strict.ts	6
 src/infra/sqlite-wal.ts	3
 src/infra/state-migrations.audit-backup.ts	1
@@ -2057,7 +2055,7 @@ src/plugins/hook-decision-types.ts	1
 src/plugins/hook-isolation.ts	3
 src/plugins/hook-runner-global-state.ts	1
 src/plugins/hook-types.ts	1
-src/plugins/hooks.ts	5
+src/plugins/hooks.ts	4
 src/plugins/host-hook-attachments.ts	1
 src/plugins/host-hook-runtime.ts	1
 src/plugins/host-hook-scheduled-turns.ts	4
@@ -2080,7 +2078,6 @@ src/plugins/loader-load-context.ts	4
 src/plugins/loader-module-runtime.ts	5
 src/plugins/loader-records.ts	1
 src/plugins/loader-runtime-candidate.ts	1
-src/plugins/loader-shared.ts	2
 src/plugins/managed-npm-retention.ts	3
 src/plugins/manifest-setup-normalizers.ts	4
 src/plugins/manifest.ts	2
@@ -2111,7 +2108,7 @@ src/plugins/runtime.ts	1
 src/plugins/runtime/channel-runtime-contexts.ts	1
 src/plugins/runtime/runtime-agent.ts	1
 src/plugins/runtime/runtime-llm-isolated.ts	2
-src/plugins/schema-validator.ts	4
+src/plugins/schema-validator.ts	2
 src/plugins/setup-registry.ts	2
 src/plugins/slots.ts	1
 src/plugins/toggle-config.ts	2

@@ -30,6 +30,10 @@ export function buildOpenClawControlSection({
         : hasGateway
           ? `Config read: \`gateway\` (\`config.get|config.schema.lookup\`) only when those actions are exposed by its schema. Config writes need the \`openclaw\` tool.`
           : "",
+    hasOpenClaw && !setupIssue
+      ? "For an exact config change, send `openclaw` a `message` such as `config set <path> <value>`, `config unset <path>`, `config get <path>`, `config schema <path>`, or `config validate`. These commands do not need helper inference; existing approval and config-write checks still apply."
+      : "",
+    "Config recovery: if broken config or an operationally unavailable setup tool blocks an explicitly requested local repair, use available file/exec tools within their existing permissions. Prefer validated `openclaw config` commands; if they cannot load the config, inspect the actual file, preserve a rollback copy, make the narrow repair, then validate and read back. Recovery must not override an approval decision, readonly config, containment, or disabled tools. Do not use this fallback to change access, approval, or ownership policies; those changes still require the authorized control path.",
     ...(!hasOpenClaw || setupIssue
       ? [
           "`/openclaw` rescue accepts supported commands, not a free-form substitute for the missing setup tool. Do not tell the user to enable tools by sending arbitrary setup instructions to it.",

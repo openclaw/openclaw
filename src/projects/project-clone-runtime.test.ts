@@ -110,6 +110,21 @@ it("links an unmatched real Git failure to its retained process diagnostics", as
   }
 });
 
+it("explains repository access denial without exposing Git transport output", async () => {
+  const target = targetPath();
+  mockGit().mockResolvedValue({
+    ...failedClone,
+    stderr:
+      "remote: Write access to repository not granted.\nfatal: unable to access private repository: The requested URL returned error: 403",
+  });
+  await expect(clone(target)).rejects.toMatchObject({
+    failure: "auth_required",
+    message:
+      "GitHub denied access to this repository. Ask the Gateway operator to check the configured GitHub credential and repository access before retrying.",
+  });
+  await expectMissing(target);
+});
+
 it.each(["inventory", "publication"] as const)(
   "retains native Git diagnostics when refresh fails during ref %s",
   async (phase) => {
