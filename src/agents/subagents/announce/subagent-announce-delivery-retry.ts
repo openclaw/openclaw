@@ -12,6 +12,7 @@ import {
   findReplaySafeRunAbort,
   isReplaySafeTranscriptConflict,
 } from "../../embedded-agent-runner/transcript-conflict.js";
+import { isSandboxProvisioningError } from "../../sandbox/provisioning-error.js";
 import { isSessionTranscriptTurnMismatchErrorMessage } from "../../sessions/transcript-turn-error.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 
@@ -164,8 +165,13 @@ export function classifyAnnounceDeliveryError(
             hasAnnounceErrorMatch(
               error,
               (candidate) =>
-                candidate instanceof GatewayProtocolRequestError && candidate.retryable,
+                candidate instanceof GatewayProtocolRequestError &&
+                (candidate.retryable ||
+                  (facts.requesterSettle === true &&
+                    facts.replaySafe === true &&
+                    candidate.gatewayCode === ErrorCodes.UNAVAILABLE)),
             ) ||
+            (facts.requesterSettle === true && isSandboxProvisioningError(error)) ||
             safeAbort ||
             transcriptConflict ||
             (!facts.interruption && stateConflict))
