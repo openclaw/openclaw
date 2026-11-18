@@ -56,12 +56,16 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import * as agentExecution from "./agent-runner-execution.js";
 import * as routedReplies from "./route-reply.js";
-import { prepareSessionEventDelivery } from "./session-event-delivery.js";
+import { createSessionEventReplyDelivery } from "./session-event-delivery.js";
 import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
 } from "./session-event-handoff.js";
-import { openEventToolHost, startEmbeddedTurn } from "./session-event.test-support.js";
+import {
+  configureEventState,
+  openEventToolHost,
+  startEmbeddedTurn,
+} from "./session-event.test-support.js";
 // mock-isolation: Synthetic model decisions; admission, queue and real tool writes stay real.
 vi.mock("../../agents/embedded-agent-runner/run.js", () => ({
   runEmbeddedAgent: vi.fn(),
@@ -103,10 +107,7 @@ it("continues a resumed turn after compaction and a runtime row notification", a
   await withOpenClawTestState(
     { label: "restart-runtime-publication", env: { OPENCLAW_TEST_FAST: "0" } },
     async (state) => {
-      const config = completionConfig(state.workspaceDir);
-      setRuntimeConfigSnapshot(config);
-      await state.writeConfig(config);
-      openOpenClawStateDatabase();
+      await configureEventState(state, completionConfig(state.workspaceDir));
       const target = { agentId: "main", sessionKey: "agent:main:dashboard:runtime-recovery" };
       await replaceSessionEntry(target, {
         sessionId: "runtime-recovery",
@@ -181,10 +182,7 @@ it("executes a recovery event after its producer's plugin scope closes", async (
   await withOpenClawTestState(
     { label: "session-event-plugin-readmission", env: { OPENCLAW_TEST_FAST: "0" } },
     async (state) => {
-      const config = completionConfig(state.workspaceDir);
-      setRuntimeConfigSnapshot(config);
-      await state.writeConfig(config);
-      openOpenClawStateDatabase();
+      const config = await configureEventState(state, completionConfig(state.workspaceDir));
       const target = { agentId: "main", sessionKey: "agent:main:plugin-readmission" };
       await replaceSessionEntry(target, {
         sessionId: "plugin-readmission",
@@ -213,13 +211,18 @@ it("executes a recovery event after its producer's plugin scope closes", async (
           .spyOn(routedReplies, "routePreparedReply")
           .mockImplementation(plugin.wrap(async () => ({ ok: true, delivered: true }) as const));
         // A reply drains after its turn's scope closed, like a cron or wake turn's lease.
-        const reply = invocations.run(async () =>
-          (await prepareSessionEventDelivery({ channel: "telegram", to: "-100001" }, () => {}))({
-            cfg: config,
-            sessionKey: target.sessionKey,
-            payload: { text: "Process completed" },
-            replyKind: "final",
-          }),
+        const reply = invocations.run(() =>
+          createSessionEventReplyDelivery({
+            ...target,
+            options: { ...target, source: "restart" },
+            signal,
+            target: () => expectedTarget,
+            route: () => ({ channel: "telegram", to: "-100001" }),
+            prepareCurrent: async () => {},
+            assertCurrent: () => {},
+            assertEffectCurrent: () => {},
+            sourceReplyDelivered: () => false,
+          }).deliver({ text: "Process completed" }, "final"),
         );
         receipt = invocations.run(() =>
           enqueueSessionEventForHost("Resume required work", {
@@ -233,7 +236,7 @@ it("executes a recovery event after its producer's plugin scope closes", async (
         );
         invocations.release();
         expect(() => oldCallback()).toThrow("Plugin event-source consumer is closed");
-        await expect(reply).resolves.toMatchObject({ delivered: true });
+        await expect(reply).resolves.toBeUndefined();
         expect(routed).toHaveBeenCalledOnce();
         // Publication before admission forces the rejection handler to re-admit the occurrence.
         setRuntimeConfigSnapshot({ ...config, tools: { deny: ["exec"] } });
@@ -261,10 +264,7 @@ it("finalizes a failed-before-reply event after its visitor policy scope closes"
   await withOpenClawTestState(
     { label: "session-event-visitor-finalization", env: { OPENCLAW_TEST_FAST: "0" } },
     async (state) => {
-      const config = completionConfig(state.workspaceDir);
-      setRuntimeConfigSnapshot(config);
-      await state.writeConfig(config);
-      openOpenClawStateDatabase();
+      const config = await configureEventState(state, completionConfig(state.workspaceDir));
       const target = { agentId: "main", sessionKey: "agent:main:visitor-finalization" };
       await replaceSessionEntry(target, {
         sessionId: "visitor-finalization",

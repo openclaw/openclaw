@@ -222,7 +222,7 @@ it("restores the scoped predecessor without discarding unrelated later writes", 
   );
 });
 
-it("checks only schema facts before crossing from v38 to the current schema", async () => {
+it("checks pending-input mutation integrity before crossing from v38 to the current schema", async () => {
   await withFixture("integrity-scope.sqlite", async ({ database }) => {
     const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
     try {
@@ -237,7 +237,16 @@ it("checks only schema facts before crossing from v38 to the current schema", as
         observer.queries.filter((sql) =>
           /^PRAGMA (?:quick_check|integrity_check|foreign_key_check)/u.test(sql),
         ),
-      ).toEqual(["PRAGMA quick_check('schema_meta');"]);
+      ).toEqual([
+        "PRAGMA quick_check;",
+        "PRAGMA integrity_check('schema_meta');",
+        "PRAGMA integrity_check('session_conversations');",
+        "PRAGMA integrity_check('session_nodes');",
+        "PRAGMA integrity_check('session_pending_inputs');",
+        "PRAGMA integrity_check('session_transcript_active_events');",
+        "PRAGMA integrity_check('session_windows');",
+        "PRAGMA foreign_key_check;",
+      ]);
       expect(
         resolveSchemaMigrationIntegrityCheck(
           {

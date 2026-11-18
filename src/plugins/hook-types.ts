@@ -51,6 +51,7 @@ import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
 } from "./hook-message.types.js";
+import { MODEL_HOOK_METADATA, type ModelRequestHooks } from "./hook-model.types.js";
 import type { PluginHookReplyDispatchEvent } from "./hook-reply-dispatch-event.types.js";
 import type { PluginHookRunStoppedHandler } from "./hook-run-stopped.types.js";
 import type { PluginHookSkillChangedEvent, PluginHookSkillContext } from "./hook-skill.types.js";
@@ -139,6 +140,7 @@ type PluginHookMetadata = {
 
 export const PLUGIN_HOOK_METADATA: Readonly<Record<PluginHookName, PluginHookMetadata>> = {
   before_model_resolve: { conversationAccess: true },
+  ...MODEL_HOOK_METADATA,
   agent_turn_prepare: { conversationAccess: true, promptInjection: true },
   before_prompt_build: {
     conversationAccess: true,
@@ -146,10 +148,6 @@ export const PLUGIN_HOOK_METADATA: Readonly<Record<PluginHookName, PluginHookMet
     modifyingTimeoutMs: 15_000,
   },
   before_agent_reply: { conversationAccess: true },
-  model_call_started: {},
-  model_call_ended: {},
-  llm_input: { conversationAccess: true },
-  llm_output: { conversationAccess: true },
   // Terminal finalization hooks sit on the runner's completion path. A hung
   // handler must not freeze final delivery or keep compaction retry recovery
   // unresolved; timeout fail-opens with the original final answer.
@@ -736,7 +734,9 @@ export type PluginHookResolveExecEnvEvent = {
 
 export type PluginHookResolveExecEnvContext = PluginHookAgentContext;
 
-export type PluginHookHandlerMap = PluginMessageHookHandlerMap & {
+type RuntimeHooks = PluginMessageHookHandlerMap & ModelRequestHooks;
+
+export type PluginHookHandlerMap = RuntimeHooks & {
   agent_turn_prepare: AsyncPluginHook<
     PluginAgentTurnPrepareEvent,
     PluginHookAgentContext,

@@ -147,14 +147,9 @@ export function checkpointLocalWorkspace(
     (beginCapture) =>
       withLocalWorkspaceStore({ ...owner, worktreeId: owner.worktree.id }, async (store) => {
         beginCapture();
-        let snapshotCapture = false;
         if (
           !options.knownMutation &&
-          (await probeUnchangedLocalWorkspace(owner, store, ["canonical"], (entries, elapsedMs) => {
-            // A probe stops at its first edit. The accepted inventory also covers
-            // large trees whose changed file happens to sort first.
-            snapshotCapture = entries >= 20_000 || elapsedMs >= 500;
-          }))
+          (await probeUnchangedLocalWorkspace(owner, store, ["canonical"]))
         ) {
           await removeLocalWorkspaceCheckpointCapture(store.get()!.projection_path, {
             signal: store.signal,
@@ -173,7 +168,7 @@ export function checkpointLocalWorkspace(
                 quiescence &&
                 (() => timeWorktreePreparationPhase("runtimeResume", quiescence.resume)),
             }),
-          { reason: "checkpoint", snapshotCapture },
+          { reason: "checkpoint" },
         );
       }),
     options,
@@ -327,6 +322,7 @@ async function settleLocalWorkspace<T>(
             await quiescence?.retire();
           }
           const current = state.current();
+          quiescence?.markPhase("operation.callback");
           return await operation(
             current.baseline_ref
               ? {
@@ -336,12 +332,14 @@ async function settleLocalWorkspace<T>(
                   prepareArchive: state.prepareArchive,
                   canonicalPaths: state.canonicalPaths,
                   synchronizeProjection: () => state.synchronize("projection"),
+                  markPhase: quiescence?.markPhase,
                   assertCurrent: state.current,
                   workerAuthority: state.workerAuthority,
                 }
               : {
                   worktreeId: worktree.id,
                   projectionRevision: current.revision,
+                  markPhase: quiescence?.markPhase,
                   assertCurrent: store.assertCurrent,
                   workerAuthority: store.workerAuthority,
                 },
@@ -403,12 +401,8 @@ export function reuseLocalWorkspaceProjection(
           beginCapture?.();
         }
         return (
-          (await probeUnchangedLocalWorkspace(
-            owner,
-            store,
-            ["canonical", "projection"],
-            undefined,
-            (target) => markPhase(target === "canonical" ? "probeCanonical" : "probeProjection"),
+          (await probeUnchangedLocalWorkspace(owner, store, ["canonical", "projection"], (target) =>
+            markPhase(target === "canonical" ? "probeCanonical" : "probeProjection"),
           )) ??
           (await runLocalWorkspaceProjection(owner, store, (state) => state.reuse(), {
             reason: "preparation",
@@ -428,58 +422,22 @@ async function probeUnchangedLocalWorkspace(
   owner: LocalWorkspaceOwner,
   store: LocalWorkspaceStore,
   targets: readonly ("canonical" | "projection")[],
-  observeProbe?: (entries: number, elapsedMs: number) => void,
   markProbe?: (target: "canonical" | "projection") => void,
 ) {
-  let row = store.get();
+  const row = store.get();
   if (
-    !row?.baseline_ref ||
-    !row.tree_root_digest ||
+    !row ||
     row.session_id !== owner.sessionId ||
-    row.lifecycle_revision !== owner.lifecycleRevision ||
-    row.pending_ref ||
-    row.journal_json ||
-    row.paused_runtimes_json
+    row.lifecycle_revision !== owner.lifecycleRevision
   ) {
     return undefined;
   }
-  // Bind the row before observation; acceptance retains the same lease and live authority.
-  projectionOperations(owner, store, row, await localWorkspaceProjectionPath(owner)).current();
-  for (const target of targets) {
-    markProbe?.(target);
-    const selected = row;
-    const started = performance.now();
-    const snapshot = await timeWorktreePreparationPhase(
-      target === "canonical" ? "synchronizeCanonical" : "synchronizeProjection",
-      async () => {
-        try {
-          return await store.manifest(selected, {
-            kind: "probe",
-            target,
-            canonicalRoot: owner.worktree.path,
-          });
-        } catch {
-          // Live writers can interrupt discovery; retry under the existing pause owner.
-          store.signal.throwIfAborted();
-          store.assertCurrent();
-          return undefined;
-        }
-      },
-    );
-    observeProbe?.(
-      snapshot?.kind === "rescan" ? (snapshot.entryCount ?? 0) : 0,
-      performance.now() - started,
-    );
-    store.assertCurrent();
-    if (snapshot?.kind !== "scan" || snapshot.resultingRoot !== snapshot.previousRoot) {
-      return undefined;
-    }
-    // Acceptance failures must propagate, never retry an uncertain write.
-    if (snapshot.observation) {
-      row = await store.accept(snapshot.observation, owner.workerAuthority);
-    }
-  }
-  return row.projection_path;
+  return await projectionOperations(
+    owner,
+    store,
+    row,
+    await localWorkspaceProjectionPath(owner),
+  ).probeUnchanged(targets, markProbe);
 }
 
 /** Every operation owns the same renewable, cross-process reconciliation lease. */

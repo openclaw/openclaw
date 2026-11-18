@@ -302,10 +302,11 @@ it("publishes the last running command after outer timeout without an inner exit
   expect(fs.existsSync(path.join(f.artifacts, "diagnostics/raw.json"))).toBe(false);
 });
 
-it.each([false, true])(
-  "requires a complete selected cut and distinct subsequent update: %s",
-  (complete) => {
+it.each(["complete", "without-next-update", "without-update-repair", "without-killed-update"])(
+  "requires a complete selected cut, its update repair, a killed update, and the update that finished it: %s",
+  (receipt) => {
     const f = fixture();
+    const complete = receipt === "complete";
     const commands = [
       "displacement",
       "missing-status",
@@ -315,16 +316,18 @@ it.each([false, true])(
       "resume-retirement",
       "completed-status",
       "archive-completed",
+      ...(receipt === "without-update-repair" ? [] : ["update-repair"]),
+      "killed-update",
       "next-update",
       "next-update-status",
     ].map((name) => {
-      const prefix = name.startsWith("next-") ? "" : "partial-previous/";
+      const prefix = /^(?:next|killed)-/.test(name) ? "" : "partial-previous/";
       return {
         cut: prefix ? "partial-previous" : null,
         name,
         state: "completed",
         treeJoined: true,
-        status: ["displacement", "retirement"].includes(name) ? 137 : 0,
+        status: ["displacement", "retirement", "killed-update"].includes(name) ? 137 : 0,
         startedAt: 1000,
         elapsedMs: 50,
         stdout: `${prefix}${name}.out`,
@@ -352,7 +355,19 @@ it.each([false, true])(
           fullConfigPreserved: true,
         },
       ],
-      ...(complete
+      ...(receipt !== "without-killed-update"
+        ? {
+            killedUpdate: {
+              killedRunId: "12345678-1234-4234-8234-123456789abe",
+              killedStatus: "failed",
+              killedReason: "abandoned",
+              stageRunId: "12345678-1234-4234-8234-123456789abf",
+              stageStatus: "succeeded",
+              nextRunStatus: "succeeded",
+            },
+          }
+        : {}),
+      ...(receipt !== "without-next-update"
         ? {
             nextUpdate: {
               exitCode: 0,
@@ -372,6 +387,7 @@ it.each([false, true])(
       expect(report.outcome).toBe("passed");
       expect(report.completedCuts).toEqual(summary.rows);
       expect(report.commands).toEqual(commands);
+      expect(report.killedUpdate).toEqual(summary.killedUpdate);
       expect(report.nextUpdate).toEqual(summary.nextUpdate);
     }
   },
