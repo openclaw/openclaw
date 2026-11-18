@@ -136,6 +136,8 @@ export const SkillEntrySchema = z.strictObject({
 
 export const PluginEntrySchema = z.strictObject({
   enabled: z.boolean().optional(),
+  /** Allow this plugin to publish its own diagnostic metrics. Off unless explicitly true. */
+  allowMetrics: z.boolean().optional(),
   hooks: z
     .strictObject({
       /** Controls plugin prompt modification, including hooks, guidance, and steering. */

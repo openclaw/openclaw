@@ -1,6 +1,10 @@
+import { serialize } from "node:v8";
 import { afterEach, expect, it, vi } from "vitest";
 import { GitCommandTimeoutError } from "../../infra/git-exec.js";
+import * as runner from "../../process/exec-runner.js";
 import { createOpenClawStateLeaseAbortError } from "../../state/openclaw-state-lease-error.js";
+import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
+import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 import {
   markManagedWorktreePreparation,
   setWorktreePreparationTemplate,
@@ -19,6 +23,43 @@ vi.mock("../../logging/subsystem.js", () => ({ createSubsystemLogger: () => ({ i
 
 afterEach(vi.restoreAllMocks);
 afterEach(vi.resetAllMocks);
+
+it("reports completed native clone writes separately from unmeasured copies and failures", async () => {
+  vi.spyOn(nativeWorktreeFilesystem, "probe").mockResolvedValue("btrfs");
+  const run = vi.spyOn(runner, "runCommandBuffersWithTimeout");
+  const options = { commitGuard: () => {} };
+  const backend = await detectWorktreeFilesystemBackend("/synthetic", options);
+  expect(backend?.id).toBe("btrfs");
+  await withTiming("managed", async () => {
+    for (const reply of [
+      { type: "written", cloneWriteBytes: 4096 },
+      { type: "written", cloneWriteBytes: 8192 },
+      { type: "written" },
+      { type: "failed", message: "clone unavailable" },
+    ]) {
+      run.mockResolvedValueOnce({
+        stdout: serialize(reply),
+        stderr: Buffer.alloc(0),
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+        windowsEncoding: null,
+      });
+      const copy = backend!.cloneTemplate("/synthetic/source", "/synthetic/clone", options);
+      if (reply.type === "failed") {
+        await expect(copy).rejects.toThrow("clone unavailable");
+      } else {
+        await copy;
+      }
+    }
+  });
+  expect(log.mock.calls.at(-1)?.[1].templateDetails).toMatchObject({
+    nativeCloneCount: 3,
+    nativeCloneWriteBytes: 12288,
+    nativeCloneUnmeasuredCount: 1,
+  });
+});
 
 it.each(["original", "lease", "unrelated"] as const)(
   "attributes nested preparation through lease wrapping (%s)",

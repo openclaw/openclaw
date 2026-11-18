@@ -11,6 +11,7 @@ import {
   cronRuns,
   cronSidebarFeatureMethods,
   openAutomationActivity,
+  chooseScheduleKind,
 } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -148,10 +149,14 @@ suite.define(() => {
       await errorBanner.scrollIntoViewIfNeeded();
 
       // A rejected save must release the fieldset's inherited disabled state.
-      const once = page.locator('[data-test-id="cron-schedule-kind-at"]').getByRole("radio");
-      await once.scrollIntoViewIfNeeded();
-      await expect.poll(() => once.isEnabled()).toBe(true);
-      await once.click();
+      await expect
+        .poll(() =>
+          page
+            .locator("fieldset.cron-editor")
+            .evaluate((element) => (element as HTMLFieldSetElement).disabled),
+        )
+        .toBe(false);
+      await chooseScheduleKind(page, "at");
       await field(page, "schedule-at").waitFor();
       expect(await field(page, "name").inputValue()).toBe("Malformed condition");
       expect(await gateway.getRequests("cron.add")).toHaveLength(1);

@@ -26,7 +26,7 @@ export type CronTestPage = HTMLElement & {
   deliveryDirectory: CronPageState["deliveryDirectory"];
   patchForm: CronPageState["actions"]["onFormChange"];
   closePanel: CronPageState["actions"]["onClosePanel"];
-  submitForm: (runNow?: boolean) => void;
+  submitForm: () => void;
   selectJob: CronPageState["actions"]["onSelectJob"];
   removeJob: CronPageState["actions"]["onRemove"];
   settle: () => Promise<void>;
@@ -213,8 +213,7 @@ export function createPage(
   Object.defineProperty(page, "deliveryDirectory", { get: () => state.deliveryDirectory });
   page.patchForm = state.actions.onFormChange;
   page.closePanel = state.actions.onClosePanel;
-  page.submitForm = (runNow = false) =>
-    runNow ? state.actions.onSubmitRunNow() : state.actions.onSubmit();
+  page.submitForm = state.actions.onSubmit;
   page.selectJob = state.actions.onSelectJob;
   page.removeJob = state.actions.onRemove;
   page.refreshView = () => state.publish();

@@ -458,7 +458,7 @@ it
           completion: { resultText: "CAPTURED_CUSTODY_RESULT" },
           // Shutdown can checkpoint custody before terminal delivery settlement finishes.
           delivery: {
-            status: privateContinuation
+            status: interruptAnnounce
               ? expect.stringMatching(/^(pending|delivered)$/)
               : retryingRequester
                 ? "delivered"
@@ -530,7 +530,7 @@ it
             expect(readCapturedInputs()).toHaveLength(1);
             if (interruptAnnounce) {
               expect(completedReplies).toBe(1);
-              expect(rootReceivedRecovery).toBe(privateContinuation);
+              expect(rootReceivedRecovery).toBe(true);
             }
           },
           { timeout: 30_000 },

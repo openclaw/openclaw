@@ -1734,34 +1734,48 @@ then finishes what the killed update left: it runs Doctor and plugin convergence
 for the installed version and restarts a Gateway the update had stopped.
 
 The next `openclaw update` settles that recovery itself, after the publication,
-only when repair would have nothing left to finish and nothing needs an
-operator:
+when nothing needs an operator:
 
 - the installation is a package install, and the killed update was a
   command-line `openclaw update`, not one the Gateway started, whose recorded
   process is no longer running;
 - the update lease store still holds that process's lease, so claiming the
-  installation shows its child processes are gone too;
-- it did not stop the Gateway without starting it again;
-- either the version from before that update is still installed, so its plugin
-  and configuration changes are rolled back, or the Gateway was verified on the
-  version it installed, so they are kept.
+  installation shows its child processes are gone too.
 
-The update prints what it settled, continues, and records an
+It settles the plugin and configuration changes the way repair does. When the
+version from before that update is still installed they are rolled back, and
+when the Gateway was verified on the version it installed they are kept. The
+update prints what it settled, continues, and records an
 `interrupted-update-recovery` warning in its run history.
+
+Some killed updates also leave work that repair finishes and an update that
+finds its core already current would skip:
+
+- the killed update replaced the installed version and was not confirmed
+  finished;
+- it had begun rolling its plugin changes back on the version it installed;
+- it stopped the Gateway and never started it again.
+
+In those cases the update then finishes the installed version the way
+`openclaw update repair` does: it runs Doctor and plugin convergence for that
+version, and restarts and verifies a Gateway the killed update had stopped. This
+happens before the update checks for a newer version. That work is recorded on a
+separate repair run, exactly as repair records it, because the update's own run
+does not exist yet at that point. The update adds an
+`interrupted-update-finalization` warning that names that run, prints no
+separate result, and then continues. A stopped Gateway is restarted only when
+the update would restart it anyway. With `--no-restart` the update refuses,
+because the history cannot show whether the killed update or an operator
+stopped it. If Doctor, plugin convergence or the Gateway restart fails, or Doctor
+maintenance has to wait, the update stops. It names `openclaw update repair` and
+leaves the installation as repair would leave it.
 
 Otherwise the update stops with `Update <id> has unfinished recovery`. When
 repair can settle the recovery, the message adds the reason and the command:
 
-- **The killed update replaced the installed version and was not confirmed
-  finished.** Run `openclaw update repair`, which also runs Doctor for that
-  version. An update that found it already current would not.
-- **The killed update had begun rolling its plugin changes back** on the version
-  it installed. Run `openclaw update repair`, which finishes that rollback and
-  then the installed version.
-- **The killed update stopped the Gateway and never started it again.** Run
-  `openclaw update repair`, which settles the recovery, then restarts and
-  verifies the Gateway.
+- **The killed update stopped the Gateway and this update was run with
+  `--no-restart`.** Run `openclaw update repair`, which settles the recovery,
+  then restarts and verifies the Gateway.
 - **The Gateway started the update**, or a managed helper adopted it. Wait if
   the Gateway is still finishing it; otherwise run `openclaw update repair`.
 - **An update is still recorded as running** and its process is not known to
