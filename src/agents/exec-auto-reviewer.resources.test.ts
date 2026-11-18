@@ -18,6 +18,8 @@ import * as modelResolution from "./embedded-agent-runner/model.js";
 import { input } from "./exec-auto-review.test-support.js";
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
+import { ModelRegistry } from "./sessions/model-registry.js";
+import { acquireSimpleCompletionModelForAgent } from "./simple-completion-runtime.js";
 import {
   completionChunk,
   completionConfig,
@@ -91,6 +93,7 @@ it.for(["late-preparation", "callback-tail", "cancel-tail"] as const)(
         },
         async () => {
           const parent = new AsyncWorkScope();
+          const create = vi.spyOn(ModelRegistry, "fromCapturedSources");
           const realResolve = modelResolution.resolveModelAsync;
           const resolver = vi.spyOn(modelResolution, "resolveModelAsync");
           let transportSpy: { mockRestore(): void } | undefined;
@@ -164,6 +167,17 @@ it.for(["late-preparation", "callback-tail", "cancel-tail"] as const)(
               );
             });
           }
+          const acquire = async () => {
+            const prepared = await acquireSimpleCompletionModelForAgent({
+              cfg,
+              agentId: "main",
+              allowMissingApiKeyModes: ["aws-sdk"],
+            });
+            if ("error" in prepared) {
+              throw new Error("Fixture preparation failed");
+            }
+            return prepared;
+          };
           try {
             const reviewer = createModelExecAutoReviewer({
               cfg,
@@ -180,6 +194,8 @@ it.for(["late-preparation", "callback-tail", "cancel-tail"] as const)(
               first,
               "Reviewer settled before fixture boundary",
             );
+            const builds = create.mock.calls.length;
+            expect(builds).toBeGreaterThan(0);
             if (mode === "callback-tail" || mode === "cancel-tail") {
               finish(requests[0]!);
               await heldWorkStarted.promise;
@@ -204,13 +220,25 @@ it.for(["late-preparation", "callback-tail", "cancel-tail"] as const)(
                 drained = true;
               });
             }
-            expect(drained).toBe(false);
+            const second = await acquire();
+            try {
+              expect(create.mock.calls.length).toBe(builds);
+              expect(drained).toBe(false);
+            } finally {
+              await second[Symbol.asyncDispose]();
+            }
             finishWork.resolve();
             await first;
             await parent.drain();
             await drain;
             if (mode === "late-preparation") {
               expect(requests.length).toBe(0);
+            }
+            const after = await acquire();
+            try {
+              expect(create.mock.calls.length).toBe(builds + 1);
+            } finally {
+              await after[Symbol.asyncDispose]();
             }
           } finally {
             if (timesOut) {
@@ -224,6 +252,7 @@ it.for(["late-preparation", "callback-tail", "cancel-tail"] as const)(
             transportSpy?.mockRestore();
             fetchSpy?.mockRestore();
             resolver.mockRestore();
+            create.mockRestore();
             await resetPreparedModelRuntimeSnapshotsForTest();
             clearRuntimeAuthProfileStoreSnapshots();
             clearPluginMetadataLifecycleCaches();

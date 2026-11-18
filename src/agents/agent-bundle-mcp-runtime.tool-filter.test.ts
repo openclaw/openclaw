@@ -61,6 +61,11 @@ it("admits the same model tools on a node and the Gateway", async () => {
   }
   await node.callMcpTool({ server: "docs", tool: "query" });
   expect((await fs.readFile(logPath, "utf8")).match(/^call .*$/gm)).toEqual(["call query"]);
+  await modelTools.find((tool) => tool.name === "docs__query")?.execute("gateway-call", {});
+  expect((await fs.readFile(logPath, "utf8")).match(/^call .*$/gm)).toEqual([
+    "call query",
+    "call query",
+  ]);
 });
 
 it.each([

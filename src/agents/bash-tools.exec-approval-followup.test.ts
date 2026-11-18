@@ -10,6 +10,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { sendMessage } from "../infra/outbound/message.js";
+import * as logger from "../logger.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   claimExecApprovalFollowupRuntimeHandoff,
@@ -250,6 +251,17 @@ describe("exec approval followup", () => {
       await expect(direct()).rejects.toThrow(error);
     },
   );
+
+  it("records failed followup delivery once", async () => {
+    const warning = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    vi.mocked(sendMessage).mockRejectedValue(new Error("synthetic delivery failure"));
+    const target = { approvalId: "req-delivery-warning", ...route, direct: true };
+    await expect(sendExecApprovalFollowupResult(target, finished)).resolves.toBeUndefined();
+    await expect(sendExecApprovalFollowupResult(target, finished)).resolves.toBeUndefined();
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      "exec approval followup dispatch failed (id=req-delivery-warning): synthetic delivery failure",
+    );
+  });
 
   it("provides a summary when a no-session completion has no output", async () => {
     await direct({ resultText: "Exec finished (gateway id=req-1, code 0)" });

@@ -11,6 +11,7 @@ import {
 } from "./bash-tools.exec-approval-followup-state.js";
 import type { sendExecApprovalFollowup as sendFollowup } from "./bash-tools.exec-approval-followup.js";
 import {
+  buildExecApprovalPendingToolResult,
   buildHeadlessExecApprovalDeniedMessage,
   createExecApprovalRequestRoute,
   resolveExecApprovalWaitOutcome,
@@ -314,4 +315,57 @@ describe("buildHeadlessExecApprovalDeniedMessage", () => {
       }
     },
   );
+});
+
+describe("buildExecApprovalPendingToolResult", () => {
+  const buildResult = (
+    overrides: Partial<Parameters<typeof buildExecApprovalPendingToolResult>[0]> = {},
+  ) =>
+    buildExecApprovalPendingToolResult({
+      host: "gateway",
+      command: "uname -a",
+      cwd: "/tmp",
+      warningText: "",
+      approvalId: "approval-id",
+      approvalSlug: "approval-slug",
+      expiresAtMs: 60_000,
+      initiatingSurface: {
+        kind: "disabled",
+        channel: "discord",
+        channelLabel: "Discord",
+        accountId: "default",
+      },
+      sentApproverDms: false,
+      unavailableReason: null,
+      ...overrides,
+    });
+
+  it("keeps a local /approve prompt when the initiating Discord surface is disabled", () => {
+    const result = buildResult({ allowedDecisions: ["allow-once", "deny"] });
+    expect(result.details.status).toBe("approval-pending");
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    expect(text).toContain("/approve approval-slug allow-once");
+    expect(text).not.toContain("native chat exec approvals are not configured on Discord");
+  });
+
+  it("preserves node metadata in unavailable recovery guidance", () => {
+    const result = buildResult({
+      host: "node",
+      nodeId: "node-mac-1",
+      initiatingSurface: { kind: "enabled", channel: undefined, channelLabel: "Web UI" },
+      unavailableReason: "no-approval-route",
+    });
+    expect(result.details).toMatchObject({
+      status: "approval-unavailable",
+      host: "node",
+      nodeId: "node-mac-1",
+    });
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    expect(text).toContain(
+      "Print the web app URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox.",
+    );
+    expect(text).toContain(
+      "Inspect the node's effective exec policy with `openclaw approvals get --node node-mac-1`.",
+    );
+  });
 });

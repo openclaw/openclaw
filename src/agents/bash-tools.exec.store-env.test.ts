@@ -160,6 +160,12 @@ const runGateway = (params: ExecParams) =>
     ...params,
   });
 
+it("rejects the unsupported cwd alias before command execution", async () => {
+  await expect(runGateway({ command: "echo ok", cwd: os.tmpdir() } as never)).rejects.toThrow(
+    'exec parameter "cwd" is unsupported; use "workdir" instead',
+  );
+});
+
 it.runIf(process.platform !== "win32")("merges login-shell PATH for host=gateway", async () => {
   vi.stubEnv("OPENCLAW_EXEC_SHELL_SNAPSHOT", "0");
   vi.stubEnv("PATH", "/usr/bin");

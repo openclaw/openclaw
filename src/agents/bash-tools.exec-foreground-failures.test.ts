@@ -216,6 +216,26 @@ describe("exec foreground failures", () => {
     },
   );
 
+  it.each([true, false])(
+    "explains sandbox PTY downgrades only when requested (pty=%s)",
+    async (pty) => {
+      const { tool } = createBackendSandboxTool();
+      mockSpawn();
+
+      const result = await tool.execute("sandbox-pty", { command: "echo ok", pty });
+
+      expect(result.details.status).toBe("completed");
+      expectSpawn({ mode: "child" });
+      const text = requireTextContent(result);
+      if (pty) {
+        expect(text).toContain("Warning: PTY is unavailable in sandbox mode");
+        expect(text).toContain("running without a PTY. Use a noninteractive command");
+      } else {
+        expect(text).not.toMatch(/PTY/i);
+      }
+    },
+  );
+
   it("finalizes backend sandbox exec tokens when process spawn fails", async () => {
     const finalizeToken = { session: "remote-session" };
     const finalizeExec = vi.fn<NonNullable<BashSandboxConfig["finalizeExec"]>>(async () => {});

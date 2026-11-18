@@ -71,7 +71,7 @@ it("checkpoints headless under pressure without canceling or replaying its tool 
   );
   const execution = runCodeModeScriptHeadless({
     ctx: createHeadlessCodeModeHarness([tool]),
-    code: "const reply = await held_reply({}); text(reply.value); return reply.value;",
+    code: 'text("before"); const reply = await held_reply({}); text(reply.value); return reply.value;',
   });
   try {
     const effectSignal = expectDefined(await started.promise, "effect signal");
@@ -84,7 +84,10 @@ it("checkpoints headless under pressure without canceling or replaying its tool 
       status: "completed",
       value: "once",
       toolCallCount: 1,
-      output: [{ type: "text", text: "once" }],
+      output: [
+        { type: "text", text: "before" },
+        { type: "text", text: "once" },
+      ],
     });
     expect(tool.execute).toHaveBeenCalledOnce();
     expect(effectSignal.aborted).toBe(false);

@@ -38,7 +38,10 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import type { ExecApprovalFollowupOutcome } from "./bash-tools.exec-result.types.js";
-import { captureProcessUnhandledRejections } from "./bash-tools.exec-runtime.test-support.js";
+import {
+  captureProcessUnhandledRejections,
+  registerGatewayApprovalEventCases,
+} from "./bash-tools.exec-runtime.test-support.js";
 import type { ExecApprovalFollowupFactory } from "./bash-tools.exec-types.js";
 import { captureSecurityEvents } from "./test-helpers/security-events.js";
 
@@ -648,55 +651,17 @@ describe("processGatewayAllowlist", () => {
     expect(approvalRouteMock).toHaveBeenCalledOnce();
   });
 
-  it("publishes and records the approved Guardian review on its exec call", async () => {
-    const assessment = { decision: "allow-once", risk: "low", rationale: "read-only" } as const;
-    const command = "echo ok";
-    await configurePlanBackedCommand({ command });
-    const review = createDeferredCore<Awaited<ReturnType<ExecAutoReviewer>>>();
-    const autoReviewer = vi.fn<ExecAutoReviewer>(() => review.promise);
-    const reviews: Array<Record<string, unknown>> = [];
-    const publicationOrder: string[] = [];
-    const onApprovalReview = vi.fn((value: { status: string }) => {
-      publicationOrder.push(`stored:${value.status}`);
-    });
-    const unsubscribe = onAgentEvent((event) => {
-      if (
-        event.runId === "run-review" &&
-        event.stream === "tool" &&
-        event.data.phase === "review"
-      ) {
-        publicationOrder.push(`emitted:${String(event.data.approvalReviewOutcome)}`);
-        reviews.push(event.data);
-      }
-    });
-    try {
-      const pending = runGatewayAllowlist({
-        command,
-        ask: "on-miss",
-        autoReview: true,
-        autoReviewer,
-        runId: "run-review",
-        toolCallId: "tool-review",
-        onApprovalReview,
-      });
-      await vi.waitFor(() => expect(autoReviewer).toHaveBeenCalledOnce());
-      expect(reviews.map((event) => event.approvalReviewOutcome)).toEqual(["reviewing"]);
-      review.resolve(assessment);
-      const result = await pending;
-      expect(reviews.map((event) => event.approvalReviewOutcome)).toEqual([
-        "reviewing",
-        "approved",
-      ]);
-      expect(publicationOrder).toEqual([
-        "emitted:reviewing",
-        "stored:approved",
-        "emitted:approved",
-      ]);
-      expect(approvalRouteMock).not.toHaveBeenCalled();
-      expect(result.deniedResult).toBeUndefined();
-    } finally {
-      unsubscribe();
-    }
+  registerGatewayApprovalEventCases({
+    configurePlanBackedCommand,
+    runGatewayAllowlist,
+    approvalDecisionMock,
+    approvalRouteFixture,
+    approvalRouteMock,
+    prepareDiagnosticsExport: (output) => mockApprovedDetachedExec(completedOutcome(output)),
+    expectPending,
+    waitForFollowup,
+    readFollowupTarget: () => followupMock.mock.calls[0]?.[0],
+    requireSentFollowupText,
   });
 
   it.runIf(process.platform !== "win32")(
@@ -1025,45 +990,6 @@ describe("processGatewayAllowlist", () => {
         command: "node --version",
       }),
     ).rejects.toThrow("exec denied: allowlist miss");
-  });
-
-  it("keeps webchat diagnostics approvals as direct pasteable followups", async () => {
-    mockApprovedDetachedExec(
-      completedOutcome(
-        JSON.stringify({
-          path: "/tmp/openclaw-diagnostics.zip",
-          bytes: 1234,
-        }),
-      ),
-    );
-
-    const approvalFollowup = vi.fn<ExecApprovalFollowupFactory>(
-      async () => "Synthetic harness diagnostics: thread-1",
-    );
-
-    const result = await runGatewayAllowlist({
-      command: "openclaw gateway diagnostics export --json",
-      trigger: "diagnostics",
-      approvalFollowupMode: "direct",
-      approvalFollowup,
-      turnSourceChannel: "webchat",
-    });
-    expectPending(result);
-    await waitForFollowup();
-
-    const followupTarget = followupMock.mock.calls[0]?.[0];
-    expect(followupTarget?.direct).toBe(true);
-    const followupText = requireSentFollowupText();
-    expect(followupText).toContain("Diagnostics export created.");
-    expect(followupText).toContain("Path: /tmp/openclaw-diagnostics.zip");
-    expect(followupText).toContain("Size: 1234 bytes");
-    expect(followupText).toContain("Synthetic harness diagnostics: thread-1");
-    expect(approvalFollowup.mock.calls[0]?.[0]).toMatchObject({
-      approvalId: approvalRouteFixture.id,
-      sessionId: "sess-1",
-      trigger: "diagnostics",
-      outcome: { status: "completed", exitCode: 0 },
-    });
   });
 
   it("keeps a completed detached outcome terminal when agent follow-up registration fails", async () => {
