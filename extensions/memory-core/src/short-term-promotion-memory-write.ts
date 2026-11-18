@@ -7,6 +7,7 @@ import {
   writeFileWindowFully,
 } from "openclaw/plugin-sdk/file-access-runtime";
 import type { MemoryWorkspaceFiles } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { recordMemoryArtifactWriteProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { sha256Hex as hashMemoryContent } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { getMemoryWorkspaceMaintenance, readWorkspaceFile } from "./memory-workspace-files.js";
@@ -146,6 +147,50 @@ async function writeExistingMemoryInPlace(params: {
 export { hashMemoryContent };
 
 export async function commitMemoryContent(
+  params: MemoryFileCommit & { workspaceDir?: string },
+): Promise<void> {
+  if (!params.workspaceDir || params.content === null) {
+    return await publishMemoryContent(params);
+  }
+  const filePath = await resolveMemoryWritePath(params.filePath, params.workspaceDir);
+  const contentBefore = await readMemoryContent(filePath, params.workspaceDir);
+  const beforeHash = hashMemoryContent(contentBefore);
+  if (params.expectedHash && params.expectedHash !== beforeHash) {
+    throw new MemoryWriteConflictError(params.conflictMessage);
+  }
+  const workspaceRoot = await resolveMemoryWritePath(params.workspaceDir, params.workspaceDir);
+  let publicationError: MemoryAtomicPublicationError | undefined;
+  try {
+    await publishMemoryContent({ ...params, filePath, expectedHash: beforeHash });
+  } catch (error) {
+    if (!(error instanceof MemoryAtomicPublicationError) || error.publication !== "committed") {
+      throw error;
+    }
+    publicationError = error;
+  }
+  try {
+    // The Gateway owns provenance even when the filesystem publisher uses IPC.
+    // Record only acknowledged publication: rejection/uncertainty leaves the old
+    // row untouched, so there is no speculative artifact reservation to roll back.
+    // A crash between publication and recording remains a conservative hash gap.
+    await recordMemoryArtifactWriteProvenance({
+      workspaceDir: params.workspaceDir,
+      relativePath: path.relative(workspaceRoot, filePath).split(path.sep).join("/"),
+      contentBefore,
+      contentAfter: params.content,
+      originClass: "agent",
+      observedAt: Date.now(),
+    });
+  } catch (error) {
+    // Do not let callers roll back entry origins or retry a committed replacement.
+    throw new MemoryAtomicPublicationError("committed", error);
+  }
+  if (publicationError) {
+    throw publicationError;
+  }
+}
+
+async function publishMemoryContent(
   params: MemoryFileCommit & { workspaceDir?: string },
 ): Promise<void> {
   const files = params.workspaceDir
