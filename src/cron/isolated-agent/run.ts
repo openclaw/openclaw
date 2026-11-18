@@ -248,16 +248,7 @@ async function runCronIsolatedAgentTurnInTrace(
             };
             const awaitStartPolicy = async (onAdmitted?: () => void) => {
               assertInvocationCurrent();
-              let deferral = resolveStartDeferral();
-              while (deferral === "busy" && params.waitForIdle) {
-                await params.waitForIdle(
-                  prepared.context.runSessionKey,
-                  abortSignal,
-                  ownReplyOperation,
-                );
-                assertInvocationCurrent();
-                deferral = resolveStartDeferral();
-              }
+              const deferral = resolveStartDeferral();
               if (!deferral) {
                 onAdmitted?.();
               }

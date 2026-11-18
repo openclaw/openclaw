@@ -42,7 +42,6 @@ function schedulePayloadFromRecord(schedule: Record<string, unknown>): CronSched
     rawKind === "at" ||
     rawKind === "every" ||
     rawKind === "cron" ||
-    rawKind === "on-exit" ||
     rawKind === "stream" ||
     rawKind === "event"
       ? rawKind
@@ -65,12 +64,6 @@ function schedulePayloadFromRecord(schedule: Record<string, unknown>): CronSched
   }
   if (kind === "cron" && expr) {
     return { kind: "cron", expr, tz, staggerMs };
-  }
-  if (kind === "on-exit") {
-    const command = readNonBlankString(schedule.command);
-    return command
-      ? { kind: "on-exit", command, cwd: readNonBlankString(schedule.cwd) }
-      : undefined;
   }
   if (kind === "stream") {
     const command = schedule.command;

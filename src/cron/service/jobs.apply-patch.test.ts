@@ -47,10 +47,7 @@ describe("applyJobPatch schedule retention", () => {
     },
   );
 
-  it.each([
-    { kind: "at", at: "2026-07-19T09:00:00.000Z" },
-    { kind: "on-exit", command: "true" },
-  ] as const)(
+  it.each([{ kind: "at", at: "2026-07-19T09:00:00.000Z" }] as const)(
     "clears inherited $kind cleanup on recurring conversion but honors explicit policies",
     (previous) => {
       for (const deleteAfterRun of [undefined, false, true]) {

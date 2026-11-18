@@ -29,7 +29,6 @@ import {
   queueJob,
   queueStore,
   requestFor,
-  requestForJob,
   scheduled,
   type QueueRequest,
 } from "./run-queue.test-support.js";
@@ -786,7 +785,7 @@ it("holds scheduled requests while paused and activates an explicit request behi
   expect(jobIds((await queue.drain()).launches)).toEqual(["timed-paused"]);
 });
 
-it("launches explicit force on a disabled job and retains a consumed exit event through rearming", async () => {
+it("launches explicit force on a disabled job", async () => {
   const disabled = job("force", { enabled: false });
   const forced = await store("force", [disabled]);
   const force = requestFor(disabled, {
@@ -796,18 +795,6 @@ it("launches explicit force on a disabled job and retains a consumed exit event 
   });
   expect((await forced.request([force])).accepted).toHaveLength(1);
   expect((await forced.drain([force])).launches[0]?.job.enabled).toBe(false);
-
-  const onExit = job("exit", {
-    schedule: { kind: "on-exit", command: "synthetic-watch" },
-    state: {},
-  });
-  const exit = await store("exit", [onExit]);
-  const event = requestForJob(exit.storeKey, onExit, now);
-  expect((await exit.request([event])).accepted[0]?.job.enabled).toBe(false);
-  await exit.update(onExit.id, { enabled: true });
-  const result = await exit.drain([event]);
-  expect(result.skipped).toEqual([]);
-  expect(jobIds(result.launches)).toEqual(["exit"]);
 });
 
 it("recovers a timed request without replaying active work or reconstructing a lost manual payload", async () => {

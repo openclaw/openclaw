@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCronDeliveryPreview } from "../../../cron/delivery-preview.js";
+import { readCronRunRecordsForTests } from "../../../cron/run-history.test-support.js";
 import * as cronStore from "../../../cron/store.js";
 import {
   loadCronQuarantinedJobs,
@@ -13,6 +14,7 @@ import {
   saveCronStore,
 } from "../../../cron/store.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
+import { recordCronRun } from "../../../cron/store/run-history.js";
 import { makeCronStreamSandboxTarget } from "../../../cron/stream-sandbox.test-support.js";
 import type { CronJob } from "../../../cron/types.js";
 import { buildUpdateRehearsalPathEnv } from "../../../infra/update-rehearsal-paths.js";
@@ -104,6 +106,69 @@ it(
         name.startsWith("openclaw.sqlite.pre-startup-migration-"),
       ),
     ).toEqual([]);
+  }),
+);
+
+it(
+  "backs up and pauses saved On exit jobs without converting them or rewriting history",
+  withState(async (fixture) => {
+    const storePath = fixture.statePath("cron", "jobs.json");
+    const storeKey = cronStoreKey(storePath);
+    const sibling = job("keep-running", {
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "keep running" },
+    });
+    const legacy = job("retired-watch", { state: { lastRunStatus: "ok" } });
+    await saveJobs(storePath, sibling, legacy);
+    const schedule = { kind: "on-exit", command: "./sync-inventory.sh", cwd: "/srv/inventory" };
+    openOpenClawStateDatabase()
+      .db.prepare(
+        "UPDATE cron_jobs SET job_json = json_set(job_json, '$.schedule', json(?)) WHERE store_key = ? AND job_id = ?",
+      )
+      .run(JSON.stringify(schedule), storeKey, legacy.id);
+    await recordCronRun({
+      storeKey,
+      jobId: legacy.id,
+      runId: "original-run",
+      startedAt: 2,
+      endedAt: 3,
+      status: "succeeded",
+      summary: "Inventory synced",
+      detail: null,
+    });
+    const history = readCronRunRecordsForTests(legacy.id);
+    expect(history).toHaveLength(1);
+
+    const cfg = { cron: { store: storePath } };
+    expect(await collectLegacyCronStoreHealthFindings({ cfg })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ message: expect.stringContaining("will be paused") }),
+      ]),
+    );
+    expect(await loadCronQuarantinedJobs(storePath)).toEqual([]);
+    const applyRepair = async () => {
+      const { state } = await loadRepairStateForStore(storePath);
+      return await applyLegacyCronStoreRepair({ cfg, state });
+    };
+    const result = await applyRepair();
+    expect(result.warnings).toEqual([]);
+    const backup = result.changes.find((line) => line.startsWith("Saved pre-repair cron backup: "));
+    await expect(
+      fs.stat(expectDefined(backup).slice("Saved pre-repair cron backup: ".length)),
+    ).resolves.toBeDefined();
+    expect(result.changes.join("\n")).toMatch(
+      /Paused automation "retired-watch".*background command/,
+    );
+    expect(await readJobs(storePath)).toEqual([sibling]);
+    expect(await loadCronQuarantinedJobs(storePath)).toEqual([
+      expect.objectContaining({
+        reason: expect.stringContaining("background command"),
+        job: expect.objectContaining({ id: legacy.id, schedule, payload: legacy.payload }),
+      }),
+    ]);
+    expect(readCronRunRecordsForTests(legacy.id)).toEqual(history);
+    expect(await applyRepair()).toEqual({ changes: [], warnings: [] });
   }),
 );
 

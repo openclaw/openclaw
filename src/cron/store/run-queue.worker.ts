@@ -31,11 +31,7 @@ import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
 import { readCronEventClaimInDatabase, transferCronEventInDatabase } from "./event-ingress.js";
 import { loadedCronStoreFromRows, loadCronRows, updateCronRuntimeRow } from "./row-codec.js";
 import { recordSkippedCronRequestInDatabase } from "./run-history.kernel.js";
-import type {
-  CronRunQueueOperations,
-  CronRunRequestContext,
-  CronSkippedRequest,
-} from "./run-queue.types.js";
+import type { CronRunQueueOperations, CronSkippedRequest } from "./run-queue.types.js";
 import { receiptFromRow, receiptHandle, type CronRunReceiptDatabase } from "./run-receipt-read.js";
 import {
   activateCronRunReceiptInDatabase,
@@ -109,14 +105,6 @@ function loadJobs(db: EngineConnection, storeKey: string) {
     repairCronRuntimeAuthorityRows({ db, storeKey, jobs, jobIds: repairJobIds });
   }
   return new Map(jobs.map((job) => [job.id, job]));
-}
-
-function matchingExit(job: CronJob, context: CronRunRequestContext): boolean {
-  return (
-    job.schedule.kind === "on-exit" &&
-    context.onExitSchedule?.command === job.schedule.command &&
-    context.onExitSchedule.cwd === job.schedule.cwd
-  );
 }
 
 function skipRequest(
@@ -234,7 +222,6 @@ function requestCronRunsInDatabase(
       resolveCronJobConfigRevision(job) !== request.configRevision ||
       // Disabling a command schedule withdraws its unattended authority, including force runs.
       (!isJobEnabled(job) && (request.mode !== "force" || isPluginCommandCronJob(job))) ||
-      (request.mode === "on-exit" && !matchingExit(job, request)) ||
       (request.mode === "scheduled" &&
         (!timed ||
           timed.storeKey !== input.storeKey ||
@@ -327,15 +314,7 @@ function requestCronRunsInDatabase(
       continue;
     }
     const previousEnabled = job.enabled ?? true;
-    if (request.mode === "on-exit") {
-      job.enabled = false;
-      job.updatedAtMs = input.nowMs;
-      job.state.scheduleActivatedAtMs = input.nowMs;
-      delete job.state.nextRunAtMs;
-      delete job.state.startupCatchupAtMs;
-      delete job.state.pacedNextRunAtMs;
-      delete job.state.forcePreservedNextRunAtMs;
-    } else if (request.preserveSchedule) {
+    if (request.preserveSchedule) {
       retainManualOneShotOccurrence(job, request.scheduleOwnershipAtMs ?? input.nowMs);
     } else {
       delete job.state.forcePreservedNextRunAtMs;
@@ -468,10 +447,7 @@ function drainCronQueueInDatabase(
       : tryResolveCronJobEffectiveAgentId(job, input.defaultAgentId);
     const error = fresh
       ? undefined
-      : (!isJobEnabled(job) &&
-            ((context.mode !== "force" && context.mode !== "on-exit") ||
-              isPluginCommandCronJob(job))) ||
-          (context.mode === "on-exit" && !matchingExit(job, context))
+      : !isJobEnabled(job) && (context.mode !== "force" || isPluginCommandCronJob(job))
         ? "cron: queued job is no longer eligible"
         : !agentId ||
             !hasCanonicalCronDeliveryMode(job.delivery) ||

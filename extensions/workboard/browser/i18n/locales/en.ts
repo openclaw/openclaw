@@ -179,7 +179,6 @@ export default {
     automationNextRunDue: "Next run due now",
     automationEvery: "Every {duration}",
     automationAt: "At {time}",
-    automationOnExit: "On exit: {command}",
     automationStream: "Stream: {command}",
     automationEvent: "Event: {source}",
     automationWaitingForEvent: "Waiting for event",

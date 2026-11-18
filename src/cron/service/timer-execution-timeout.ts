@@ -18,7 +18,7 @@ import type {
   CronRunDeliveryResult,
   CronRunTelemetry,
 } from "../types.js";
-import type { CronIdleAdmissionSource, CronIdleAdmissionWait, CronServiceState } from "./state.js";
+import type { CronServiceState } from "./state.js";
 
 export type TimedCronRunOutcome = CronJobExecutionResult & {
   jobId: string;
@@ -34,7 +34,6 @@ export type TimedCronRunOutcome = CronJobExecutionResult & {
   request?: {
     executionJob: CronJob;
     preserveCadence: boolean;
-    onExitWatcherCompletion?: boolean;
     scheduleOwnershipAtMs: number;
     runId?: string;
     terminalTracker?: { emitted: boolean };
@@ -76,8 +75,6 @@ export type ConditionFiredRunSlot = "taken" | "taken-after-wait" | "stopped";
 export type ExecuteJobCoreOptions = {
   /** Queue admission supplies this fact so receipt I/O cannot reorder payload starts. */
   migrationPending?: boolean;
-  idleAdmission?: CronIdleAdmissionSource;
-  waitForIdle?: CronIdleAdmissionWait;
   deliveryAttemptFence?: CronCompletionDeliveryFence;
   activeJobMarker?: CronActiveJobMarker;
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;

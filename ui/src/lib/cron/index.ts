@@ -261,9 +261,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       agentId: agentId === null ? null : agentId || undefined,
       sessionKey,
       enabled: form.enabled,
-      ...(form.scheduleKind === "at" || form.scheduleKind === "on-exit"
-        ? { deleteAfterRun: form.deleteAfterRun }
-        : {}),
+      ...(form.scheduleKind === "at" ? { deleteAfterRun: form.deleteAfterRun } : {}),
       sessionTarget: form.sessionTarget,
       wakeMode: form.wakeMode,
       trigger,

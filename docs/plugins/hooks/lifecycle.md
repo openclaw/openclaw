@@ -54,7 +54,7 @@ The legacy `api.on("deactivate", ...)` alias was removed in August 2026. Use
 Do not rely on the internal `gateway:startup` hook for plugin-owned runtime
 services.
 
-`cron_reconciled` fires after the Gateway cron scheduler and its on-exit
+`cron_reconciled` fires after the Gateway cron scheduler and its stream
 watchers have reconciled their durable state. It fires for both initial
 startup and scheduler replacement during config reload. The event reports
 `reason` (`startup` or `reload`) and the effective `enabled` state. Disabled

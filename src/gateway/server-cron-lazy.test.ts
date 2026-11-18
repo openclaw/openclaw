@@ -36,7 +36,6 @@ describe("createLazyGatewayCronState", () => {
       cron,
       storePath: "/tmp/openclaw-cron.json",
       cronEnabled: true,
-      reconcileExitWatchers: vi.fn(async () => {}),
       reconcileStreamWatchers: vi.fn(async () => {}),
       stopStreamWatchers: vi.fn(async () => {}),
     };
@@ -80,7 +79,6 @@ describe("createLazyGatewayCronState", () => {
     );
     state.readHeartbeatSummary = vi.fn(async () => []);
     expect(lazy.readHeartbeatSummary).toBeUndefined();
-    await expect(lazy.prepareExitWatcherHandoff?.()).resolves.toBeUndefined();
     await lazy.stopStreamWatchers();
     expect(buildGatewayCronService).not.toHaveBeenCalled();
     expect(lazy.cron.getJob("demo")).toBeUndefined();
@@ -126,34 +124,17 @@ describe("createLazyGatewayCronState", () => {
     expect(start).not.toHaveBeenCalled();
   });
 
-  it("preserves a watcher owner when hot reload overtakes lazy startup", async () => {
+  it("closes the predecessor once when hot reload overtakes lazy startup", async () => {
     const finishStart = deferred();
     cron.start = vi.fn(async () => await finishStart.promise);
-    const watchers = {
-      reconcile: vi.fn(),
-      cancel: vi.fn(),
-      cancelAll: vi.fn(async () => {}),
-      activeJobIds: vi.fn(() => ["watched-job"]),
-      updateHandlers: vi.fn(),
-    };
-    const stopOwner = vi.fn(async () => {});
-    const prepareExitWatcherHandoff = vi.fn(async () => ({
-      current: () => watchers,
-      adopt: vi.fn(),
-      stopOwner,
-    }));
-    state.prepareExitWatcherHandoff = prepareExitWatcherHandoff;
+    const handOver = vi.fn(async () => {});
+    state.handOver = handOver;
     const start = lazy.cron.start();
     await vi.waitFor(() => expect(cron.start).toHaveBeenCalledOnce());
-    const handoff = await lazy.prepareExitWatcherHandoff?.();
-    expect(handoff?.current()).toBe(watchers);
-    await handoff?.stopOwner();
+    await lazy.handOver?.();
     finishStart.resolve();
     await start;
-    await handoff?.stopOwner();
-    expect(prepareExitWatcherHandoff).toHaveBeenCalledOnce();
-    expect(stopOwner).toHaveBeenCalledOnce();
-    expect(watchers.cancelAll).not.toHaveBeenCalled();
+    expect(handOver).toHaveBeenCalledOnce();
     expect(cron.stop).not.toHaveBeenCalled();
   });
 
@@ -299,9 +280,7 @@ describe("createLazyGatewayCronState", () => {
   });
 
   it("forwards watcher reconciliation and teardown hooks through the proxy", async () => {
-    await lazy.reconcileExitWatchers();
     await lazy.reconcileStreamWatchers();
-    expect(state.reconcileExitWatchers).toHaveBeenCalledTimes(1);
     expect(state.reconcileStreamWatchers).toHaveBeenCalledTimes(1);
     await lazy.stopStreamWatchers();
     expect(state.stopStreamWatchers).toHaveBeenCalledTimes(1);

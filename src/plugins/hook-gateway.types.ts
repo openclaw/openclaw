@@ -91,11 +91,6 @@ export type PluginHookGatewayCronJob = {
         anchorMs?: number;
       }
     | {
-        kind: "on-exit";
-        command?: string;
-        cwd?: string;
-      }
-    | {
         kind: "stream";
         command?: string[];
         cwd?: string;

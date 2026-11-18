@@ -48,14 +48,12 @@ function coerceSchedule(schedule: UnknownRecord) {
     rawKind === "at" ||
     rawKind === "every" ||
     rawKind === "cron" ||
-    rawKind === "on-exit" ||
     rawKind === "stream" ||
     rawKind === "event"
       ? rawKind
       : undefined;
   const exprRaw = normalizeOptionalString(next.expr) ?? "";
   const timezone = normalizeOptionalString(next.tz);
-  const commandRaw = readNonBlankString(next.command) ?? "";
   const streamCommand = normalizeCronCommandArgv(next.command);
   const cwdRaw = readNonBlankString(next.cwd) ?? "";
   const streamMode = normalizeOptionalLowercaseString(next.mode);
@@ -93,8 +91,6 @@ function coerceSchedule(schedule: UnknownRecord) {
   }
   if (kind === "stream" && streamCommand) {
     next.command = streamCommand;
-  } else if (commandRaw) {
-    next.command = commandRaw;
   } else if ("command" in next) {
     delete next.command;
   }
@@ -144,7 +140,7 @@ function coerceSchedule(schedule: UnknownRecord) {
     }
   }
 
-  if (next.kind !== "on-exit" && next.kind !== "stream") {
+  if (next.kind !== "stream") {
     delete next.command;
     delete next.cwd;
   }

@@ -406,7 +406,7 @@ it.each([true, false])("protects ambiguous choices in JSON=%s or legacy text", a
   jobs[200] = createJob(200, {
     name: last,
     enabled: false,
-    schedule: { kind: "on-exit", command: "private-exit" },
+    schedule: { kind: "stream", command: ["private-stream-source"] as [string] },
   });
   jobs[201] = createJob(201, {
     name: first,
@@ -429,7 +429,7 @@ it.each([true, false])("protects ambiguous choices in JSON=%s or legacy text", a
     const failure = formatCliJsonFailure(error);
     expect(failure.error.matches).toEqual([
       match(longId, first),
-      match("job-200", last, "on-exit", false),
+      match("job-200", last, "stream", false),
       match("job-201", first, "stream"),
     ]);
     expect(JSON.stringify(failure)).not.toContain("private-");
@@ -447,7 +447,7 @@ it.each([true, false])("protects ambiguous choices in JSON=%s or legacy text", a
       "job-200",
       "job-201",
       "every 1m; enabled: yes; status: idle",
-      "on-exit; enabled: no; status: disabled",
+      "stream; enabled: no; status: disabled",
       "stream; enabled: yes; status: idle",
     );
     expectExcludes(text, "job-001", "private-", "\u001B]", "\u0007", "\r");

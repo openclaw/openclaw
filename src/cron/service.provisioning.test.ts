@@ -215,9 +215,10 @@ it("reconciles non-timed jobs provisioned while startup execution is pending", a
   };
   const provisioned: CronJob = {
     ...job,
-    id: "provisioned-on-exit",
-    name: "Provisioned exit watcher",
-    schedule: { kind: "on-exit", command: "fixture-exit-command" },
+    id: "provisioned-stream",
+    name: "Provisioned stream watcher",
+    schedule: { kind: "stream", command: ["fixture-stream-command"] },
+    payload: { kind: "agentTurn", message: "handle a stream batch" },
     state: {},
   };
   await writeCronStoreSnapshot({ storePath, jobs: [startup] });

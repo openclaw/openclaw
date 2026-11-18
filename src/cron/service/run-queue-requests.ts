@@ -27,12 +27,7 @@ export function createCronRunRequests(
       receiptId,
       jobId: job.id,
       configRevision: resolveCronJobConfigRevision(job),
-      mode: options.onExit
-        ? ("on-exit" as const)
-        : options.mode === "force"
-          ? ("force" as const)
-          : ("if-enabled" as const),
-      onExitSchedule: options.onExit?.schedule,
+      mode: options.mode === "force" ? "force" : "if-enabled",
       event: options.event,
       preserveSchedule: isImmediateCronRunMode(options.mode),
       scheduleOwnershipAtMs: options.scheduleOwnershipAtMs ?? nowMs,
@@ -61,14 +56,12 @@ export function projectCronRunQueueRequests(
       )
       .map(({ receipt, options, eventTransferred }) => ({
         receiptId: receipt.receiptId,
-        mode: options.onExit
-          ? "on-exit"
-          : options.source === "manual" || options.source === "event"
+        mode:
+          options.source === "manual" || options.source === "event"
             ? options.mode === "force"
               ? "force"
               : "if-enabled"
             : "scheduled",
-        onExitSchedule: options.onExit?.schedule,
         event: eventTransferred ? undefined : options.event,
         evaluateTrigger: !isImmediateCronRunMode(options.mode) || options.evaluateTrigger === true,
       }))

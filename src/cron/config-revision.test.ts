@@ -111,8 +111,8 @@ it("matches SQLite normalization across optional fields, schedules, payloads, tr
       payload: { kind: "agentTurn", message, toolsAllow: [], toolsAllowIsDefault: true },
     }),
     makeJob({
-      id: "on-exit-system-event",
-      schedule: { kind: "on-exit", command: "true", cwd: "/tmp" },
+      id: "stream-system-event",
+      schedule: { kind: "stream", command: ["true"], cwd: "/tmp" },
       sessionTarget: "main",
       payload: { kind: "systemEvent", text: "Process exited" },
       delivery: undefined,

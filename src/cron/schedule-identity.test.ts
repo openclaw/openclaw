@@ -2,31 +2,11 @@ import { describe, expect, it } from "vitest";
 import { cronSchedulingInputsEqual, tryCronScheduleIdentity } from "./schedule-identity.js";
 
 describe("tryCronScheduleIdentity", () => {
-  it("preserves meaningful whitespace in on-exit command identity", () => {
-    const command = " printf %s hello\\ ";
-    const makeJob = (text: string) => ({ schedule: { kind: "on-exit", command: text } });
-    const job = makeJob(command);
-    expect(tryCronScheduleIdentity(job)).toBeDefined();
-    expect(cronSchedulingInputsEqual(job, structuredClone(job))).toBe(true);
-    for (const changedCommand of [command.trimStart(), command.trimEnd()]) {
-      expect(cronSchedulingInputsEqual(job, makeJob(changedCommand))).toBe(false);
-    }
-    expect(tryCronScheduleIdentity(makeJob(" \t "))).toBeUndefined();
+  it("treats cwd whitespace changes as a schedule input change for stream jobs", () => {
+    const baseSchedule = { kind: "stream", command: ["node", "events.mjs"], cwd: "/repo/job" };
+    const edited = { ...baseSchedule, cwd: "/repo/job " };
+    expect(cronSchedulingInputsEqual({ schedule: baseSchedule }, { schedule: edited })).toBe(false);
   });
-
-  it.each(["on-exit", "stream"] as const)(
-    "treats cwd whitespace changes as a schedule input change for %s jobs",
-    (kind) => {
-      const baseSchedule =
-        kind === "on-exit"
-          ? { kind, command: "./watch.sh", cwd: "/repo/job" }
-          : { kind, command: ["node", "events.mjs"], cwd: "/repo/job" };
-      const edited = { ...baseSchedule, cwd: "/repo/job " };
-      expect(cronSchedulingInputsEqual({ schedule: baseSchedule }, { schedule: edited })).toBe(
-        false,
-      );
-    },
-  );
 
   it("normalizes numeric schedule strings like execution does", () => {
     const numeric = {

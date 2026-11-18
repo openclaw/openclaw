@@ -89,28 +89,6 @@ function pumpCronRunQueues(state: CronServiceState, wake = true): void {
   }
 }
 
-function watchCronRunCancellation(state: CronServiceState, pending: CronLaunchContext): void {
-  const signal = pending.options.onExit?.signal;
-  if (!signal) {
-    return;
-  }
-  const cancel = () => {
-    void cancelCronRunRequests(
-      state,
-      [pending.receipt.receiptId],
-      "cron on-exit request cancelled",
-    ).catch((error: unknown) => {
-      pending.completion.reject(error);
-      state.deps.log.warn({ err: String(error) }, "cron: queued cancellation failed");
-    });
-  };
-  pending.removeCancellation = () => signal.removeEventListener("abort", cancel);
-  signal.addEventListener("abort", cancel, { once: true });
-  if (signal.aborted) {
-    cancel();
-  }
-}
-
 /** Adopt committed worker requests without taking ownership of queue order or capacity. */
 export function adoptCronRunRequests(
   state: CronServiceState,
@@ -138,7 +116,6 @@ export function adoptCronRunRequests(
     void launch.completion.promise.catch(() => {});
     launchState(state).contexts.set(entry.runReceipt.receiptId, launch);
     registerCronRunQueue(state, () => drainCronRunQueue(state));
-    watchCronRunCancellation(state, launch);
     return Object.assign({}, entry, {
       completion: launch.completion.promise,
       activation: launch.activation.promise,
@@ -213,7 +190,6 @@ export async function commitCronRunRequests(
       accepted.map(({ job }) => job),
     );
     noteLoadedCronStoreCommit(state, observedRevision);
-    options.onExit?.onReserved();
   }
   return accepted;
 }
@@ -224,7 +200,6 @@ function publishSkipped(state: CronServiceState, skipped: CronSkippedRequest) {
     return;
   }
   pending.preparation?.controller.abort();
-  pending.removeCancellation?.();
   pending.activation.resolve();
   launchState(state).contexts.delete(skipped.runReceipt.receiptId);
   // The worker writes skipped history with the same receipt; events are best effort.
@@ -253,11 +228,7 @@ function publishSkipped(state: CronServiceState, skipped: CronSkippedRequest) {
       ok: true,
       ran: false,
       reason:
-        state.stopped ||
-        pending.generation !== state.lifecycleGeneration ||
-        pending.options.onExit?.signal.aborted
-          ? "stopped"
-          : "not-due",
+        state.stopped || pending.generation !== state.lifecycleGeneration ? "stopped" : "not-due",
     });
   }
   if (!launchState(state).contexts.size && !launchState(state).running.size) {
@@ -398,7 +369,6 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
         } finally {
           // A missing cleanup row is already settled; uncertain cleanup stays
           // durable for recovery, never in the live source-admission loop.
-          refused.pending.removeCancellation?.();
           launchState(state).contexts.delete(refused.pending.receipt.receiptId);
         }
         retryAfterGuardRefusal = true;
@@ -576,7 +546,6 @@ export async function launchCronRunQueueResult(
           );
         } finally {
           launch.activation.resolve();
-          launch.removeCancellation?.();
           launchState(state).contexts.delete(entry.runReceipt.receiptId);
         }
       })
@@ -629,20 +598,6 @@ export async function stopCronRunQueue(state: CronServiceState) {
 export async function waitForCronRunQueue(state: CronServiceState) {
   await launchState(state).drain;
   await Promise.allSettled(launchState(state).running);
-}
-
-/** Waits for one job's owned work across facades of the same store. */
-export async function waitForCronJobRun(state: CronServiceState, jobId: string): Promise<boolean> {
-  const runs = listCronRunQueueOwners(state).flatMap((owner) =>
-    [...launchState(owner).contexts.values()]
-      .filter((pending) => pending.receipt.jobId === jobId)
-      .map(async (pending) => {
-        await pending.completion.promise;
-        await pending.receiptSettlement;
-      }),
-  );
-  await Promise.allSettled(runs);
-  return runs.length > 0;
 }
 
 /** Receipts same-store owners will settle; recovery takes a stopped owner's runs. */

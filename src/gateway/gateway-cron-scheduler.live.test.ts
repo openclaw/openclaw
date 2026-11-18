@@ -1,27 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type {
   CronScratchGetResult,
   CronScratchSetResult,
 } from "../../packages/gateway-protocol/src/schema/cron.types.js";
 import {
-  fixtureReceiptClientSource,
-  openFixtureReceiptChannel,
-  type FixtureReceiptChannel,
-} from "../../test/helpers/fixture-receipts.js";
-import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
-import { isProcessAlive, waitForDead } from "../../test/helpers/process-wait.js";
-import { withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { isLiveTestEnabled, logLiveProgress } from "../agents/live-test-helpers.js";
 import type { CronRunLogEntry } from "../cron/run-log-types.js";
 import type { CronJob } from "../cron/types.js";
-import { hasErrnoCode } from "../infra/errno.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 
 const describeLive = isLiveTestEnabled() ? describe : describe.skip;
@@ -59,41 +51,7 @@ async function waitForJob(
 }
 
 describeLive("cron scheduling through an isolated Gateway", () => {
-  let receipts: FixtureReceiptChannel;
-  beforeAll(async () => {
-    receipts = await openFixtureReceiptChannel();
-  });
-  afterAll(async () => {
-    await receipts.close();
-  });
-
-  async function fixturePidBeforeSettlement(
-    pidPath: string,
-    gatewayClosed: Promise<void>,
-  ): Promise<number> {
-    const readPid = async () => {
-      const text = await fs.readFile(pidPath, "utf8").catch((error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return "";
-        }
-        throw error;
-      });
-      const pid = Number.parseInt(text, 10);
-      if (!Number.isInteger(pid) || pid <= 0) {
-        throw new Error(`timeout waiting for pid in ${pidPath}`);
-      }
-      return pid;
-    };
-    // PID publication precedes the receipt; gateway exit may beat socket delivery.
-    return await Promise.race([
-      receipts.waitFor(pidPath, "ready").then(readPid),
-      gatewayClosed.then(readPid),
-    ]);
-  }
-
-  it("preserves trigger intervals, stream matches, timeout output, on-exit rearming, and declaration recovery", async ({
-    signal,
-  }) => {
+  it("preserves trigger intervals, stream matches, timeout output, and declaration recovery", async () => {
     const instance = await createOpenClawTestInstance({
       name: "cron-scheduler",
       env: {
@@ -371,153 +329,6 @@ describeLive("cron scheduling through an isolated Gateway", () => {
         logLiveProgress(
           "cron scheduler: command timeout retained progress and its timeout classification",
         );
-
-        const gateway = instance.child!;
-        const gatewayClosed = new Promise<void>((resolve) => {
-          if (gateway.exitCode !== null || gateway.signalCode !== null) {
-            resolve();
-          } else {
-            gateway.once("exit", () => resolve());
-          }
-        });
-        const onExitDir = path.join(workspace, "on-exit");
-        const releasePath = path.join(onExitDir, "release-first");
-        const payloadCountPath = path.join(onExitDir, "payload-count");
-        await fs.mkdir(onExitDir);
-        await Promise.all([
-          fs.writeFile(path.join(onExitDir, "watch-count"), "0"),
-          fs.writeFile(payloadCountPath, "0"),
-          fs.writeFile(
-            path.join(onExitDir, "watch.mjs"),
-            [
-              "import fs from 'node:fs';",
-              "import path from 'node:path';",
-              `const __dirname = ${JSON.stringify(onExitDir)};`,
-              fixtureReceiptClientSource(receipts.endpoint),
-              "const countPath = path.join(__dirname, 'watch-count');",
-              "const count = Number(fs.readFileSync(countPath, 'utf8')) + 1;",
-              "fs.writeFileSync(countPath, String(count));",
-              "const pidPath = path.join(__dirname, 'watch-' + count + '.pid');",
-              "fs.writeFileSync(pidPath, String(process.pid));",
-              "sendReceipt(pidPath, 'ready');",
-            ].join("\n"),
-          ),
-          fs.writeFile(
-            path.join(onExitDir, "payload.mjs"),
-            [
-              "import fs from 'node:fs';",
-              "import path from 'node:path';",
-              `const __dirname = ${JSON.stringify(onExitDir)};`,
-              fixtureReceiptClientSource(receipts.endpoint),
-              "const countPath = path.join(__dirname, 'payload-count');",
-              "const count = Number(fs.readFileSync(countPath, 'utf8')) + 1;",
-              "fs.writeFileSync(countPath, String(count));",
-              "const pidPath = path.join(__dirname, 'payload-' + count + '.pid');",
-              "fs.writeFileSync(pidPath, String(process.pid));",
-              "sendReceipt(pidPath, 'ready');",
-              "if (count === 1) {",
-              "  const timer = setInterval(() => {",
-              "    if (fs.existsSync(path.join(__dirname, 'release-first'))) {",
-              "      clearInterval(timer);",
-              "      console.log('on-exit payload ' + count);",
-              "    }",
-              "  }, 25);",
-              "} else { console.log('on-exit payload ' + count); }",
-            ].join("\n"),
-          ),
-        ]);
-        const onExit = await cliJson<CronJob>(instance, [
-          "cron",
-          "add",
-          "--name",
-          "on-exit-rearm",
-          "--agent",
-          "probe",
-          "--session",
-          "isolated",
-          "--no-deliver",
-          "--on-exit",
-          "node watch.mjs",
-          "--on-exit-cwd",
-          onExitDir,
-          "--command-argv",
-          JSON.stringify([process.execPath, path.join(onExitDir, "payload.mjs")]),
-          "--timeout-seconds",
-          "60",
-        ]);
-        try {
-          const firstPid = await withinTest(
-            fixturePidBeforeSettlement(path.join(onExitDir, "payload-1.pid"), gatewayClosed),
-            signal,
-          );
-          expect(isProcessAlive(firstPid)).toBe(true);
-          expect(await cliJson(instance, ["cron", "get", onExit.id])).toMatchObject({
-            enabled: false,
-          });
-          await cliJson(instance, ["cron", "enable", onExit.id]);
-          const replacementPid = await withinTest(
-            fixturePidBeforeSettlement(path.join(onExitDir, "watch-2.pid"), gatewayClosed),
-            signal,
-          );
-          await waitForDead(replacementPid, signal);
-          expect(
-            isProcessAlive(firstPid),
-            "replacement watch must exit before the first payload",
-          ).toBe(true);
-          expect(await fs.readFile(payloadCountPath, "utf8")).toBe("1");
-          expect(await cliJson(instance, ["cron", "runs", onExit.id])).toMatchObject({
-            entries: [],
-          });
-          expect(await cliJson(instance, ["cron", "get", onExit.id])).toMatchObject({
-            enabled: true,
-          });
-
-          await fs.writeFile(releasePath, "released");
-          const secondPid = await withinTest(
-            fixturePidBeforeSettlement(path.join(onExitDir, "payload-2.pid"), gatewayClosed),
-            signal,
-          );
-          // The replacement watcher joins its predecessor's payload before admission.
-          expect(isProcessAlive(firstPid)).toBe(false);
-          let completedRuns: CronRunLogEntry[] = [];
-          const completionDeadline = Date.now() + 30_000;
-          do {
-            const history = await cliJson<{ entries: CronRunLogEntry[] }>(instance, [
-              "cron",
-              "runs",
-              onExit.id,
-            ]);
-            completedRuns = history.entries;
-            if (completedRuns.length >= 2) {
-              break;
-            }
-            await delay(100);
-          } while (Date.now() < completionDeadline);
-          expect(completedRuns).toHaveLength(2);
-          // Successful command receipts are published after the command scope joins exit.
-          expect(isProcessAlive(secondPid)).toBe(false);
-          expect(new Set(completedRuns.map((run) => run.summary))).toEqual(
-            new Set(["on-exit payload 1", "on-exit payload 2"]),
-          );
-          for (const run of completedRuns) {
-            expect(run).toMatchObject({ status: "ok", completionStatus: "succeeded" });
-          }
-          expect(new Set(completedRuns.map((run) => run.runId)).size).toBe(2);
-          const settled = await waitForJob(
-            instance,
-            onExit.id,
-            (job) => !job.enabled && job.state.runningAtMs === undefined,
-          );
-          expect(settled.state.lastRunStatus).toBe("ok");
-          expect(await fs.readFile(payloadCountPath, "utf8")).toBe("2");
-          expect(await fs.readFile(path.join(onExitDir, "watch-count"), "utf8")).toBe("2");
-          await cliJson(instance, ["cron", "rm", onExit.id]);
-          logLiveProgress(
-            "cron scheduler: early replacement exit waited for the previous payload and fired exactly once",
-          );
-        } finally {
-          await fs.writeFile(releasePath, "released");
-        }
 
         const declaration = {
           name: "declaration-recovery",

@@ -160,7 +160,6 @@ export type CronRunFinalizationOutcome = CronJobExecutionResult & {
     runId?: string;
     preserveCadence: boolean;
     scheduleOwnershipAtMs: number;
-    onExitWatcherCompletion?: boolean;
   };
 };
 

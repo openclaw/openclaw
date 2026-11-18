@@ -269,9 +269,6 @@ export async function runCronSessionTurn(
         bindSessionCreation: (operation) => notices.bindCreation(operation),
         beforeDeliver,
         assertDeliveryCurrent,
-        waitForIdle: params.waitForIdle
-          ? (signal, operation) => params.waitForIdle!(expectedTarget.sessionKey, signal, operation)
-          : undefined,
         beforeStart: (operation) => {
           const cfg = getRuntimeConfig();
           if (

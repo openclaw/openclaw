@@ -49,7 +49,6 @@ describe("schedule sentence", () => {
     expect(formSentenceFrequency({ scheduleKind: "every", cronExpr: "" })).toBe("every");
     expect(formSentenceFrequency({ scheduleKind: "cron", cronExpr: "0 9 * * *" })).toBe("daily");
     expect(formSentenceFrequency({ scheduleKind: "event", cronExpr: "" })).toBeNull();
-    expect(formSentenceFrequency({ scheduleKind: "on-exit", cronExpr: "" })).toBeNull();
     expect(formSentenceFrequency({ scheduleKind: "stream", cronExpr: "" })).toBeNull();
   });
 

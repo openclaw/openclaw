@@ -1,17 +1,13 @@
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { buildCronCommandSummary } from "../cron/command-output-summary.js";
 import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
-import type { CronService } from "../cron/service.js";
 import type { CronServiceDeps } from "../cron/service/state.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
-import type { CronJob, CronPayload, CronStoredJob } from "../cron/types.js";
+import type { CronJob, CronStoredJob } from "../cron/types.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { truncateUtf16WithEllipsis } from "../shared/text-truncate.js";
-import type { CronExitResult } from "./cron-exit-watchers.js";
 import type { CronStreamFireDisposition } from "./cron-stream-watchers.js";
 
 type ResolveCronTarget = (opts?: {
@@ -109,48 +105,6 @@ export function enqueueCronSystemEvent(
     { onSettled: adoption.resolve },
   );
   return remove ? { accepted: true, remove, adopted: adoption.promise } : { accepted: false };
-}
-
-export function formatOnExitRunSummary(exit: CronExitResult): string {
-  const lines = [
-    "Watched command finished.",
-    `Exit code: ${exit.exitCode ?? "none"}`,
-    `Reason: ${exit.reason}`,
-  ];
-  const output = buildCronCommandSummary({ stdout: exit.stdout, stderr: exit.stderr });
-  return output ? `${lines.join("\n")}\n\nOutput:\n${output}` : lines.join("\n");
-}
-
-/**
- * On-exit jobs share cron execution, history, notifications, and delivery.
- * The admission owner builds their payload from its authoritative job snapshot.
- */
-export async function fireOnExitJob(
-  job: CronJob,
-  exit: CronExitResult,
-  deps: {
-    run: (
-      jobId: string,
-      payload: (current: CronJob) => CronPayload | undefined,
-    ) => ReturnType<CronService["run"]>;
-  },
-): Promise<void> {
-  const summary = formatOnExitRunSummary(exit);
-  const result = await deps.run(job.id, (current) => {
-    const payload = current.payload;
-    return payload.kind === "systemEvent"
-      ? { ...payload, text: `${payload.text}\n\n${summary}` }
-      : payload.kind === "agentTurn"
-        ? { ...payload, message: `${payload.message}\n\n${summary}` }
-        : undefined;
-  });
-  if (!result.ok || !("ran" in result && result.ran)) {
-    // Retiring a one-shot must not hide refused admission behind a fulfilled callback.
-    // Keep bounded terminal evidence in the watcher's existing failure log.
-    const reason = "reason" in result ? result.reason : "run did not start";
-    const evidence = truncateUtf16WithEllipsis(summary, 2_000);
-    throw new Error(`cron on-exit run was not admitted: ${reason}\n\n${evidence}`);
-  }
 }
 
 /** Fire one source batch through the normal trigger and payload pipeline. */

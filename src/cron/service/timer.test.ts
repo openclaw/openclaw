@@ -85,10 +85,7 @@ function scriptFixture(
 describe("cron service timer seam coverage", () => {
   afterEach(() => states.forEach(stop));
   it("startup ignores stale event schedule slots", async () => {
-    const schedules: CronJob["schedule"][] = [
-      { kind: "on-exit", command: "true" },
-      { kind: "stream", command: ["true"], mode: "line" },
-    ];
+    const schedules: CronJob["schedule"][] = [{ kind: "stream", command: ["true"], mode: "line" }];
     const jobs = schedules.map((schedule) => {
       const job = createDueMainJob({ now, wakeMode: "next-heartbeat" });
       job.id = `stale-${schedule.kind}`;

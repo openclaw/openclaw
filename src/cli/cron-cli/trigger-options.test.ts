@@ -48,7 +48,6 @@ const addArgs = ["add", "--name", "fixture", "--agent", "main"];
 const messageArgs = ["--every", "1m", "--message", "hello"];
 const addMessage = [...addArgs, ...messageArgs];
 const topicArgs = ["--channel", "telegram", "--to", "group-123", "--thread-id"];
-const onExitArgs = ["--on-exit", "pwd", "--message", "run"];
 const cron = (fields: Record<string, unknown>) => ({ kind: "cron", ...fields });
 const turn = (fields: Record<string, unknown>) => ({ kind: "agentTurn", ...fields });
 const methods = () => callGatewayFromCli.mock.calls.map(([method]) => method);
@@ -137,8 +136,6 @@ it.each`
   ${{ webhook: "https://example.invalid/hook", "clear-channel": true }} | ${"--webhook cannot be combined with chat delivery options"}
   ${{ webhook: "not-a-url" }}                                           | ${"--webhook must be a valid http(s) URL"}
   ${{ session: "main", "system-event": "wakeup", channel: "telegram" }} | ${"require an agentTurn job or a non-main command or script job with delivery"}
-  ${{ "stream-cwd": "/new-stream", "on-exit-cwd": "/repo" }}            | ${"--on-exit-cwd requires --on-exit"}
-  ${{ "on-exit": "./watch.sh", every: "5m" }}                           | ${"Choose at most one schedule change"}
   ${{ "stream-batch-ms": "100", tz: "UTC" }}                            | ${"not valid with stream schedule edits"}
 `(
   "rejects $options before Gateway access",
@@ -147,9 +144,8 @@ it.each`
 );
 
 it.each`
-  args                                                                             | message                                     | root
-  ${["edit", "job-1", "--enable", "--disable", "--json"]}                          | ${"Choose --enable or --disable, not both"} | ${"cron"}
-  ${["create", "--name", "fixture", ...onExitArgs, "--on-exit-cwd", "", "--json"]} | ${"--on-exit-cwd must not be blank"}        | ${"automations"}
+  args                                                    | message                                     | root
+  ${["edit", "job-1", "--enable", "--disable", "--json"]} | ${"Choose --enable or --disable, not both"} | ${"cron"}
 `(
   "preserves $root JSON validation errors",
   ({ args, message, root }: { args: string[]; message: string; root: string }) =>
@@ -271,7 +267,6 @@ const command = "printf %s hello\\ ";
 const streamArgs = ["--stream-command", '["node","events.mjs"]', "--message", "run"];
 it.each([
   ["--command-cwd", ["--every", "1m", "--command", "pwd"], "payload", " /repo "],
-  ["--on-exit-cwd", onExitArgs, "schedule", " /repo "],
   ["--stream-cwd", streamArgs, "schedule", " /repo "],
   ["--stream-cwd", streamArgs, "schedule", undefined],
 ] as const)("creates %s with cwd %s", async (flag, args, target, value) => {
@@ -339,7 +334,6 @@ it.each`
   ${"webhook destination replaced by owner"}                  | ${{ sessionTarget: "isolated", delivery: { mode: "webhook", to: "previous-target", threadId: 42, channel: "telegram" } }}  | ${{ "delivery-target": "owner" }}                                                                                      | ${{ delivery: { target: "owner", to: null, threadId: null, mode: "announce" } }}
   ${"explicit recipient replaces owner"}                      | ${{ delivery: { mode: "announce", target: "owner" }, sessionTarget: "isolated" }}                                          | ${{ to: "group-123" }}                                                                                                 | ${{ delivery: { target: null, to: "group-123" } }}
   ${"escaped command whitespace"}                             | ${{}}                                                                                                                      | ${{ command }}                                                                                                         | ${{ payload: { kind: "command", argv: ["sh", "-lc", command] } }}
-  ${"escaped on-exit whitespace"}                             | ${{}}                                                                                                                      | ${{ "on-exit": ` ${command}` }}                                                                                        | ${{ schedule: { kind: "on-exit", command: ` ${command}` } }}
   ${"command cwd whitespace"}                                 | ${{}}                                                                                                                      | ${{ "command-cwd": " /repo " }}                                                                                        | ${{ payload: { kind: "command", cwd: " /repo " } }}
   ${"stream line mode clears match, preserves cwd and batch"} | ${{ schedule: stream(), payload: turn({ message: "run" }) }}                                                               | ${{ "stream-mode": "line" }}                                                                                           | ${{ schedule: { ...stream(), mode: "line", match: undefined, maxBatchBytes: undefined } }}
   ${"stream cwd cleared"}                                     | ${{ schedule: stream(), payload: turn({ message: "run" }) }}                                                               | ${{ "stream-mode": "line", "stream-cwd": "" }}                                                                         | ${{ schedule: { ...stream(), cwd: undefined, mode: "line", match: undefined, maxBatchBytes: undefined } }}

@@ -51,7 +51,7 @@ import {
 } from "./legacy-quarantine-migration.js";
 import { captureLegacyCronRepairAdmission } from "./legacy-repair-admission.js";
 import { archiveLegacyCronFile } from "./quarantine-archive.js";
-import { mergeRuntimeEntryIntoConfigJob } from "./repair-plan.js";
+import { collectCronRepairRows } from "./repair-plan.js";
 import { planCronCodexRefRewriteAgainstPersistedConfig } from "./runtime-policy-migration.js";
 import {
   assertCronStateSchemaSupportedAsync,
@@ -61,7 +61,9 @@ import {
   canRepairCronDeliveryForDoctor,
   collectStoredCronCodexRuntimePolicyTargets,
   cronCodexRuntimePolicyTargetKey,
+  hasRetiredOnExitSchedule,
   normalizeStoredCronJobs,
+  RETIRED_ON_EXIT_SCHEDULE_REASON,
   recoverValidQuarantinedCronScheduleJobs,
   type CronCodexRuntimePolicyTarget,
 } from "./store-migration.js";
@@ -154,16 +156,7 @@ export async function loadLegacyCronRepairState(params: {
       projectedOwnersByJobId.set(jobId, { kind: "explicit", agentId });
     }
   }
-  const invalidConfigRows: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
-  const currentJobs =
-    loaded.configJobs.length > 0
-      ? loaded.configJobs.map((job, index) =>
-          mergeRuntimeEntryIntoConfigJob({
-            job,
-            runtimeEntry: loaded.configJobRuntimeEntries[index],
-          }),
-        )
-      : (loaded.store.jobs as unknown as Array<Record<string, unknown>>);
+  const { invalidConfigRows, currentJobs } = collectCronRepairRows(loaded);
   for (const job of currentJobs) {
     const jobId = normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
     const sqlOwner = jobId ? sqlOwners.get(jobId) : undefined;
@@ -236,6 +229,11 @@ export async function applyLegacyCronStoreRepair(params: {
   if (quarantineRecovery.recoveredJobs.length > 0) {
     state.rawJobs.push(...quarantineRecovery.recoveredJobs);
   }
+  // The Gateway may have quarantined the unsupported row before Doctor ran.
+  const retiredQuarantine = state.persistedQuarantine.filter(
+    (entry) =>
+      entry.reason !== RETIRED_ON_EXIT_SCHEDULE_REASON && hasRetiredOnExitSchedule(entry.job),
+  );
   const runtimePolicyPlan =
     params.migrateCodexModelRefs === true
       ? planCronCodexRefRewriteAgainstPersistedConfig({
@@ -322,6 +320,7 @@ export async function applyLegacyCronStoreRepair(params: {
     retirementChanges.length > 0 ||
     state.invalidConfigRows.length > 0 ||
     normalized.mutated ||
+    retiredQuarantine.length > 0 ||
     notifyMigration.changed ||
     quarantineRecovery.recoveredJobs.length > 0;
   const changed = state.legacyQuarantine !== undefined || storeChanged;
@@ -336,6 +335,7 @@ export async function applyLegacyCronStoreRepair(params: {
         )
       : (state.legacyQuarantine?.jobs ?? [])),
     ...state.invalidConfigRows,
+    ...retiredQuarantine.map((entry) => ({ ...entry, reason: RETIRED_ON_EXIT_SCHEDULE_REASON })),
     ...normalized.removedJobs.map((entry) => ({
       sourceIndex: entry.sourceIndex,
       reason: entry.reason,
@@ -344,9 +344,12 @@ export async function applyLegacyCronStoreRepair(params: {
   ];
   const quarantine =
     quarantineEntries.length > 0 ? { entries: quarantineEntries, nowMs: Date.now() } : undefined;
-  const deleteQuarantineEntries = quarantineRecovery.recoveredEntries.filter((entry) =>
-    persistedQuarantineEntrySet.has(entry),
-  );
+  const deleteQuarantineEntries = [
+    ...quarantineRecovery.recoveredEntries.filter((entry) =>
+      persistedQuarantineEntrySet.has(entry),
+    ),
+    ...retiredQuarantine,
+  ];
 
   if (storeChanged || quarantine) {
     try {
@@ -405,6 +408,15 @@ export async function applyLegacyCronStoreRepair(params: {
     }
   }
 
+  for (const entry of quarantineEntries) {
+    if (entry.reason === RETIRED_ON_EXIT_SCHEDULE_REASON && entry.job) {
+      const id = normalizeOptionalStringifiedId(entry.job.id) ?? "unknown ID";
+      const name = normalizeOptionalString(entry.job.name) ?? id;
+      changes.push(
+        `Paused automation "${name}" (${id}) and kept its definition and run history. ${entry.reason}`,
+      );
+    }
+  }
   changes.push(...retirementChanges);
   if (normalized.issues.reconciledOwnerAccount) {
     changes.push(

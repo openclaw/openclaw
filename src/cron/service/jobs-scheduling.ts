@@ -366,11 +366,7 @@ export function isJobEnabled(job: Pick<CronJob, "enabled">): boolean {
 }
 
 export function isTimeScheduledJob(job: Pick<CronJob, "schedule">): boolean {
-  return (
-    job.schedule.kind !== "on-exit" &&
-    job.schedule.kind !== "stream" &&
-    job.schedule.kind !== "event"
-  );
+  return job.schedule.kind !== "stream" && job.schedule.kind !== "event";
 }
 
 /** Computes the next run timestamp for enabled jobs across every/at/cron schedules. */

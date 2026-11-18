@@ -98,13 +98,6 @@ export type CronSessionRunPreparation = {
   scratch?: CronJobScratchState;
 };
 
-export type CronIdleAdmissionWait = (
-  ownSessionKey?: string,
-  signal?: AbortSignal,
-  ownReplyOperation?: ReplyOperationObservation,
-) => Promise<void>;
-export type CronIdleAdmissionSource = { signal: AbortSignal; assertCurrent: () => void };
-
 export type CronServiceDeps = {
   /** Shares the Gateway's state-directory selection across admission checks. */
   env?: NodeJS.ProcessEnv;
@@ -237,7 +230,6 @@ export type CronServiceDeps = {
   };
   runIsolatedAgentJob: (params: {
     occurrence: ScheduledOccurrence;
-    waitForIdle?: CronIdleAdmissionWait;
     deliveryAttemptFence: CronCompletionDeliveryFence | null;
     job: CronJob;
     admissionSource?: AdmittedRunContext["admissionSource"];
@@ -259,7 +251,6 @@ export type CronServiceDeps = {
   /** Shared-conversation work settles through the session controller's ordinary turn owner. */
   runSessionEvent?: (params: {
     occurrence: ScheduledOccurrence;
-    waitForIdle?: CronIdleAdmissionWait;
     sessionPreparation?: CronSessionRunPreparation;
     deliveryContext?: DeliveryContext;
     admissionSource: NonNullable<AdmittedRunContext["admissionSource"]>;
@@ -445,7 +436,6 @@ export function describeCronHostExecutionRestriction(
     hostExecutionDisabled &&
     (job.payload.kind === "command" ||
       job.payload.kind === "script" ||
-      job.schedule.kind === "on-exit" ||
       (job.schedule.kind === "stream" && !job.streamSandbox) ||
       job.trigger)
   ) {

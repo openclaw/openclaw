@@ -88,14 +88,6 @@ it.each([
   });
 });
 
-it("permits explicit on-exit edits through admitted management", async () => {
-  await withAdminTool("unknown", undefined, async (tool, calls) => {
-    const patch = { schedule: { kind: "on-exit", command: "make", cwd: "/repo" } };
-    await tool.execute("on-exit-update", { action: "update", jobId, job: patch });
-    expect(calls).toEqual(updateCalls(patch));
-  });
-});
-
 it("does not expose stream creation through a management grant", async () => {
   await withAdminTool("unknown", undefined, async (tool, calls) => {
     await expect(

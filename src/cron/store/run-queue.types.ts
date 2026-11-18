@@ -5,8 +5,7 @@ import type { CronRunReceiptHandle } from "./run-receipt.types.js";
 
 export type CronRunRequestContext = {
   receiptId: string;
-  mode: "scheduled" | "force" | "if-enabled" | "on-exit";
-  onExitSchedule?: { kind: "on-exit"; command: string; cwd?: string };
+  mode: "scheduled" | "force" | "if-enabled";
   event?: CronEventAdmission;
   /** Set when a manual or stream run still evaluates the job's condition before its payload. */
   evaluateTrigger?: boolean;

@@ -29,7 +29,7 @@ import {
   cronAbortErrorClassification,
   isSetupTimeoutErrorText,
 } from "./execution-errors.js";
-import type { CronIdleAdmissionSource, CronServiceState } from "./state.js";
+import type { CronServiceState } from "./state.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 import type { CronJobRunResult, ExecuteJobCoreOptions } from "./timer-execution-timeout.js";
 import { executeJobCore } from "./timer-execution.js";
@@ -45,7 +45,6 @@ import { resolveDeliveryState } from "./timer-trigger.js";
 type CronRunTimeout = { timeoutMs: number; reason: string };
 type CronCoreRunOptions = {
   migrationPending?: boolean;
-  idleAdmission?: CronIdleAdmissionSource;
   runId?: string;
   activeJobMarker?: CronActiveJobMarker;
   streamBatch?: string;
@@ -331,17 +330,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
     onCancel: () => operatorCancellation.resolve(operatorCancellationMarker),
   });
   const jobTimeoutMs = resolveCronJobTimeoutMs(job);
-  const onIdleSourceAbort = () => {
-    if (!runAbortController.signal.aborted) {
-      runAbortController.abort(opts?.idleAdmission?.signal.reason);
-      operatorCancellation.resolve(operatorCancellationMarker);
-    }
-  };
   try {
-    opts?.idleAdmission?.signal.addEventListener("abort", onIdleSourceAbort, { once: true });
-    if (opts?.idleAdmission?.signal.aborted) {
-      onIdleSourceAbort();
-    }
     const timeout = createDeferredCore<CronRunTimeout>();
 
     // Ordinary turns report admission separately for the shorter setup watchdog.
@@ -388,7 +377,6 @@ async function executeJobCoreWithTimeoutUnfinalized(
     const executionIdentity = opts?.executionIdentity;
     const coreOptions: ExecuteJobCoreOptions = {
       migrationPending: opts?.migrationPending,
-      idleAdmission: opts?.idleAdmission,
       deliveryAttemptFence,
       activeJobMarker: opts?.activeJobMarker,
       streamBatch: opts?.streamBatch,
@@ -460,7 +448,6 @@ async function executeJobCoreWithTimeoutUnfinalized(
       watchdog?.dispose();
     }
   } finally {
-    opts?.idleAdmission?.signal.removeEventListener("abort", onIdleSourceAbort);
     releaseCronTaskRun?.();
   }
 }

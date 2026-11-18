@@ -56,6 +56,7 @@ type CronStoreIssueKey =
   | "legacyDeliveryMode"
   | "migratedScheduledToolPolicy"
   | "reconciledOwnerAccount"
+  | "retiredOnExitSchedule"
   | "invalidSchedule"
   | "invalidPayload";
 
@@ -154,6 +155,15 @@ export function canRepairCronDeliveryForDoctor(delivery: unknown): boolean {
   );
 }
 
+export const RETIRED_ON_EXIT_SCHEDULE_REASON =
+  "On exit schedules were removed. For a one-time wait, run a background command in the conversation and let its exit wake the conversation.";
+
+export function hasRetiredOnExitSchedule(job: Record<string, unknown> | undefined): boolean {
+  return (
+    isRecord(job?.schedule) && normalizeOptionalLowercaseString(job.schedule.kind) === "on-exit"
+  );
+}
+
 /** Normalize persisted cron jobs in place and report issues plus rows to quarantine. */
 export function normalizeStoredCronJobs(
   jobs: Array<Record<string, unknown>>,
@@ -181,6 +191,17 @@ export function normalizeStoredCronJobs(
   const codexRuntimePolicyTargets = new Map<string, CronCodexRuntimePolicyTarget>();
 
   for (const [sourceIndex, raw] of jobs.entries()) {
+    if (hasRetiredOnExitSchedule(raw)) {
+      // No other schedule can represent this wait without risking a second command launch.
+      issues.retiredOnExitSchedule = (issues.retiredOnExitSchedule ?? 0) + 1;
+      removedJobs.push({
+        job: structuredClone(raw),
+        reason: RETIRED_ON_EXIT_SCHEDULE_REASON,
+        sourceIndex,
+      });
+      mutated = true;
+      continue;
+    }
     if (!canRepairCronDeliveryForDoctor(raw.delivery)) {
       unsupportedDeliveryModeJobs.push(storedCronJobId(raw) ?? "<unnamed>");
       keptJobs.push(raw);
@@ -365,9 +386,7 @@ export function normalizeStoredCronJobs(
     const sched = raw.schedule;
     if (isRecord(sched)) {
       const kind = normalizeOptionalLowercaseString(sched.kind) ?? "";
-      const canonicalKind = ["at", "every", "cron", "on-exit", "stream"].includes(kind)
-        ? kind
-        : undefined;
+      const canonicalKind = ["at", "every", "cron", "stream"].includes(kind) ? kind : undefined;
       if (canonicalKind && sched.kind !== canonicalKind) {
         sched.kind = canonicalKind;
         trackChange("legacyScheduleKind");

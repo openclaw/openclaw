@@ -19,8 +19,6 @@ type ScheduleOptionInput = {
   at?: unknown;
   cron?: unknown;
   every?: unknown;
-  onExit?: unknown;
-  onExitCwd?: unknown;
   streamCommand?: unknown;
   streamCwd?: unknown;
   streamMode?: unknown;
@@ -57,7 +55,7 @@ export function resolveCronCreateScheduleFromArgs(
   if (positionalSchedule) {
     if (countChosenSchedules(normalized) > 0) {
       throw new CronCliError(
-        "Choose a positional schedule or one of --at, --every, --cron, --on-exit, or --stream-command.",
+        "Choose a positional schedule or one of --at, --every, --cron, or --stream-command.",
       );
     }
     normalized.every = /^every\s+(.+)$/iu.exec(positionalSchedule)?.[1]?.trim() ?? "";
@@ -77,7 +75,7 @@ export function resolveCronCreateScheduleFromArgs(
   const chosen = countChosenSchedules(normalized);
   if (chosen !== 1) {
     throw new CronCliError(
-      "Choose exactly one schedule: --at, --every, --cron, --on-exit, or --stream-command",
+      "Choose exactly one schedule: --at, --every, --cron, or --stream-command",
     );
   }
   return expectDefined(resolveDirectSchedule(normalized), "created cron schedule");
@@ -182,15 +180,10 @@ export function applyExistingCronSchedulePatch(
 }
 
 function normalizeScheduleOptions(options: ScheduleOptionInput) {
-  for (const value of [options.at, options.every, options.cron, options.onExit]) {
+  for (const value of [options.at, options.every, options.cron]) {
     if (typeof value === "string" && !value.trim()) {
       throw new CronCliError("Schedule values must not be blank");
     }
-  }
-  const onExitCommand = readNonBlankString(options.onExit) ?? "";
-  const onExitCwd = readNonBlankString(options.onExitCwd);
-  if (onExitCwd && !onExitCommand) {
-    throw new CronCliError("--on-exit-cwd requires --on-exit.");
   }
   const staggerRaw = normalizeOptionalString(options.stagger) ?? "";
   if (typeof options.stagger === "string" && !staggerRaw) {
@@ -222,8 +215,6 @@ function normalizeScheduleOptions(options: ScheduleOptionInput) {
     at: normalizeOptionalString(options.at) ?? "",
     every: normalizeOptionalString(options.every) ?? "",
     cronExpr: normalizeOptionalString(options.cron) ?? "",
-    onExitCommand,
-    onExitCwd,
     streamCommand: parseCronStreamCommandArgv(options.streamCommand),
     streamCwd: readNonBlankString(options.streamCwd),
     streamCwdSupplied: options.streamCwd !== undefined,
@@ -252,13 +243,8 @@ function hasStreamSchedulePatch(options: NormalizedScheduleOptions): boolean {
 }
 
 function countChosenSchedules(options: NormalizedScheduleOptions): number {
-  return [
-    options.at,
-    options.every,
-    options.cronExpr,
-    options.onExitCommand,
-    options.streamCommand,
-  ].filter(Boolean).length;
+  return [options.at, options.every, options.cronExpr, options.streamCommand].filter(Boolean)
+    .length;
 }
 
 function resolveDirectSchedule(
@@ -300,16 +286,6 @@ function resolveDirectSchedule(
       expr: options.cronExpr,
       tz,
       staggerMs: options.requestedStaggerMs,
-    };
-  }
-  if (options.onExitCommand) {
-    if (options.tz || options.requestedStaggerMs !== undefined) {
-      throw new CronCliError("--tz/--stagger/--exact are not valid with --on-exit");
-    }
-    return {
-      kind: "on-exit",
-      command: options.onExitCommand,
-      ...(options.onExitCwd ? { cwd: options.onExitCwd } : {}),
     };
   }
   if (options.streamCommand) {

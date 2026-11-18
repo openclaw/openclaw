@@ -15,7 +15,7 @@ import { mutateCronJobsInWorker } from "./guarded-mutation.worker.js";
 import { cronStoreKey } from "./key.js";
 import { loadCronStoreFromDatabase } from "./load.kernel.js";
 import { finalizeCronRunsInWorker } from "./run-finalization.worker.js";
-import { queueJob, queueStore, requestForJob, scheduled } from "./run-queue.test-support.js";
+import { queueJob, queueStore, scheduled } from "./run-queue.test-support.js";
 import {
   cancelCronRequestsInWorker,
   drainCronQueueInWorker,
@@ -280,56 +280,50 @@ it.each(["cancel", "disable", "quiet check"] as const)(
 );
 
 const now = 1_800_000_000_000;
-const makeJob = (id: string, onExit = false) =>
+const makeJob = (id: string) =>
   queueJob(id, now, {
     payload: { kind: "command", argv: ["echo", "synthetic"] },
-    ...(onExit ? { schedule: { kind: "on-exit", command: "synthetic-watch" } as const } : {}),
   });
 
-it.each([false, true])(
-  "keeps authored job bytes and row ownership when requesting an exit event: %s",
-  async (onExit) => {
-    await withOpenClawTestState({ label: "cron-queue-authored-data" }, async (fixture) => {
-      const storeKey = fixture.statePath("cron", "jobs.json");
-      const job = makeJob("authored", onExit);
-      const queue = await queueStore(storeKey, [job], now);
-      await closeOpenClawStateDatabaseAsync();
-      let db = openOpenClawStateDatabase().db;
-      db.prepare(
-        "UPDATE cron_jobs SET owner_agent_id = 'main', grant_definition_generation = 17, job_json = json_set(json_remove(job_json, '$.enabled'), '$.authoredNote', 'preserve me') WHERE store_key = ? AND job_id = ?",
-      ).run(storeKey, job.id);
-      const read = () =>
-        db
-          .prepare(
-            "SELECT job_json, agent_id, owner_agent_id, sort_order, updated_at, grant_definition_revision, grant_definition_generation, grant_definition_updated_at FROM cron_jobs WHERE store_key = ? AND job_id = ?",
-          )
-          .get(storeKey, job.id);
-      const before = read()!;
-      await closeOpenClawStateDatabaseAsync();
-      const context = captureOpenClawStateWorkerContext();
-      await executeOpenClawStateWorker(context, { type: "cron.initializeRunReceipts", input: {} });
-      const current = (await queue.read()).jobs[0]!;
-      const result = await queue.request([requestForJob(storeKey, current, now)]);
-      expect(result.rejected).toEqual([]);
-      expect(result.accepted).toHaveLength(1);
-      await closeOpenClawStateDatabaseAsync();
-      db = openOpenClawStateDatabase().db;
-      const after = read()!;
-      expect({ ...after, job_json: undefined }).toEqual({ ...before, job_json: undefined });
-      expect(onExit ? JSON.parse(String(after.job_json)) : after.job_json).toEqual(
-        onExit ? { ...JSON.parse(String(before.job_json)), enabled: false } : before.job_json,
-      );
-      expect(result.accepted[0]?.job.state.queuedAtMs).toBe(now);
-    });
-  },
-);
+it("keeps authored job bytes and row ownership when requesting a scheduled run", async () => {
+  await withOpenClawTestState({ label: "cron-queue-authored-data" }, async (fixture) => {
+    const storeKey = fixture.statePath("cron", "jobs.json");
+    const job = makeJob("authored");
+    const queue = await queueStore(storeKey, [job], now);
+    await closeOpenClawStateDatabaseAsync();
+    let db = openOpenClawStateDatabase().db;
+    db.prepare(
+      "UPDATE cron_jobs SET owner_agent_id = 'main', grant_definition_generation = 17, job_json = json_set(json_remove(job_json, '$.enabled'), '$.authoredNote', 'preserve me') WHERE store_key = ? AND job_id = ?",
+    ).run(storeKey, job.id);
+    const read = () =>
+      db
+        .prepare(
+          "SELECT job_json, agent_id, owner_agent_id, sort_order, updated_at, grant_definition_revision, grant_definition_generation, grant_definition_updated_at FROM cron_jobs WHERE store_key = ? AND job_id = ?",
+        )
+        .get(storeKey, job.id);
+    const before = read()!;
+    await closeOpenClawStateDatabaseAsync();
+    const context = captureOpenClawStateWorkerContext();
+    await executeOpenClawStateWorker(context, { type: "cron.initializeRunReceipts", input: {} });
+    const current = (await queue.read()).jobs[0]!;
+    const result = await queue.request([scheduled(storeKey, current, now)]);
+    expect(result.rejected).toEqual([]);
+    expect(result.accepted).toHaveLength(1);
+    await closeOpenClawStateDatabaseAsync();
+    db = openOpenClawStateDatabase().db;
+    const after = read()!;
+    expect({ ...after, job_json: undefined }).toEqual({ ...before, job_json: undefined });
+    expect(after.job_json).toEqual(before.job_json);
+    expect(result.accepted[0]?.job.state.queuedAtMs).toBe(now);
+  });
+});
 
 it("preserves a durable claim when its runtime queue marker is absent", async () => {
   await withOpenClawTestState({ label: "cron-queue-claim-conflict" }, async (fixture) => {
     const storeKey = fixture.statePath("cron", "jobs.json");
     const job = makeJob("claimed");
     const queue = await queueStore(storeKey, [job], now);
-    const request = requestForJob(storeKey, job, now);
+    const request = scheduled(storeKey, job, now);
     const first = await queue.request([request]);
     expect(first.accepted).toHaveLength(1);
     await closeOpenClawStateDatabaseAsync();
@@ -367,7 +361,7 @@ it("keeps requested occurrences and siblings intact when activation rolls back",
     const queue = await queueStore(storeKey, jobs, now);
     const context = captureOpenClawStateWorkerContext();
     await executeOpenClawStateWorker(context, { type: "cron.initializeRunReceipts", input: {} });
-    const requests = jobs.map((job) => requestForJob(storeKey, job, now));
+    const requests = jobs.map((job) => scheduled(storeKey, job, now));
     expect((await queue.request(requests)).accepted).toHaveLength(2);
     await closeOpenClawStateDatabaseAsync();
     const database = openOpenClawStateDatabase();

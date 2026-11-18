@@ -1,15 +1,10 @@
 import fs from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-  nextEventLoopTurn,
-} from "../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { waitForFast } from "../../test/helpers/vitest-wait.js";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { prepareRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
@@ -43,7 +38,6 @@ import {
   type RuntimeConfigWriteApplicationStatus,
 } from "../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store.js";
 import {
   consumeGatewayRestartIntent,
   isGatewayRestartExternallyAllowed,
@@ -116,7 +110,6 @@ import {
 import { installWatcherMock } from "./config-reload.watcher.test-support.js";
 import { applyHookMappings, commitHookTransformMappingReload } from "./hooks-mapping.js";
 import { createChannelManager } from "./server-channels.js";
-import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import {
   GatewayConfigReloadSupersededError,
   type GatewayHotReloadPublication,
@@ -146,11 +139,6 @@ import {
   makePluginReloadResult,
   publishConfigWrite,
 } from "./server-reload-handlers.config.test-support.js";
-import {
-  createSupervisedExitWatcherFixture,
-  fixtureLifetime,
-  waitForFast,
-} from "./server-reload-handlers.process.test-support.js";
 import { registerGatewayTargetedServiceReloadTests } from "./server-reload-handlers.services.test-support.js";
 import { registerGatewaySupersededReloadTests } from "./server-reload-handlers.supersession.test-support.js";
 import { createGatewayReloadHandlers as createGatewayReloadHandlersImpl } from "./server-reload-hot.js";
@@ -185,7 +173,6 @@ const makeRebuiltCron = (cron = makeCron(), storePath = "/tmp/rebuilt-cron.json"
   cron,
   storePath,
   cronEnabled: true,
-  reconcileExitWatchers: vi.fn(async () => {}),
   reconcileStreamWatchers: vi.fn(async () => {}),
   stopStreamWatchers: vi.fn(async () => {}),
 });
@@ -397,7 +384,6 @@ const hoisted = vi.hoisted(() => ({
     cron: { start: vi.fn(async () => {}), stop: vi.fn() },
     storePath: "/tmp/rebuilt-cron.json",
     cronEnabled: true,
-    reconcileExitWatchers: vi.fn(async () => {}),
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
   })),
@@ -828,7 +814,6 @@ beforeEach((context) => {
 });
 
 afterEach(async () => {
-  await fixtureLifetime.cleanup();
   restoreActivePluginRegistrySnapshot(pluginRegistrySnapshot);
   process.removeListener("SIGUSR2", testGatewayRestartListener);
   setGatewayRestartPolicy({ allowExternal: false });
@@ -1693,118 +1678,6 @@ describe("gateway hot reload model state", () => {
       }
     },
   );
-
-  it("keeps a supervised on-exit child alive exactly once across lazy cron reload", ({ signal }) =>
-    fixtureLifetime.run(async () => {
-      const fixtureDir = autoCleanupTempDirs.make("openclaw-cron-exit-reload-");
-      const { markerPath, releasePath, command, childStarted, spawning, spawn } =
-        await createSupervisedExitWatcherFixture(fixtureDir);
-      const config = {
-        // This fixture runs cron without a heartbeat wake handler.
-        agents: { defaults: { heartbeat: { every: "0m" } } },
-        session: { mainKey: "main", store: path.join(fixtureDir, "sessions.json") },
-        cron: { enabled: true, store: path.join(fixtureDir, "jobs.json") },
-      } as OpenClawConfig;
-      const previousCronFactory = hoisted.buildGatewayCronService.getMockImplementation();
-      assert(previousCronFactory, "expected the default cron test factory");
-      let state: ReturnType<ReloadHandlerParams["getState"]> | undefined;
-
-      vi.stubEnv("OPENCLAW_STATE_DIR", fixtureDir);
-      vi.stubEnv("OPENCLAW_SKIP_CRON", "0");
-      hoisted.runtimeConfig.value = config;
-      setRuntimeConfigSnapshot(config, config);
-
-      const scheduler = createTestGatewayScheduler("fake-timers");
-      try {
-        const actualCron =
-          await vi.importActual<typeof import("./server-cron.js")>("./server-cron.js");
-        hoisted.buildGatewayCronService.mockImplementation(
-          (params) =>
-            actualCron.buildGatewayCronService(
-              params as Parameters<typeof actualCron.buildGatewayCronService>[0],
-            ) as unknown as ReturnType<typeof hoisted.buildGatewayCronService>,
-        );
-        const initialCronState = createLazyGatewayCronState({
-          storePath: await resolveCronJobsStorePathFromConfigAsync(config),
-          scheduler,
-          cfg: config,
-          deps: {} as never,
-          broadcast: vi.fn(),
-        });
-        state = {
-          ...createDefaultGatewayReloadState(),
-          cronState: initialCronState,
-        };
-        await initialCronState.cron.start();
-        const job = await initialCronState.cron.add({
-          name: "preserve the real watched child",
-          enabled: true,
-          schedule: { kind: "on-exit", command },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "systemEvent", text: "watched child finished" },
-        });
-        await initialCronState.reconcileExitWatchers();
-        expect(spawn).toHaveBeenCalledOnce();
-        const watchedRun = await withinTest(spawning, signal);
-        await withinTest(
-          awaitGateBeforeSettlement(
-            childStarted,
-            watchedRun.wait(),
-            "expected the supervised cron exit watcher to start",
-          ),
-          signal,
-        );
-        expect(await readFile(markerPath, "utf8")).toBe("run\n");
-
-        const resolveGatewayContext = vi.fn(() => undefined);
-        const handlers = createGatewayReloadHandlers({
-          scheduler,
-          resolveGatewayContext,
-          getState: () => {
-            if (!state) {
-              throw new Error("expected gateway state");
-            }
-            return state;
-          },
-          setState: (nextState) => {
-            state = nextState;
-          },
-        });
-
-        await withGatewayRestartSignal(async () => {
-          await handlers.applyHotReload(createCronRestartPlan(), config);
-
-          expect(hoisted.buildGatewayCronService).toHaveBeenCalledWith(
-            expect.objectContaining({ resolveGatewayContext }),
-          );
-          expect(watchedRun.activity.resultSettled).toBe(false);
-          expect(await readFile(markerPath, "utf8")).toBe("run\n");
-          expect(spawn).toHaveBeenCalledOnce();
-
-          await writeFile(releasePath, "release");
-          await expect(withinTest(watchedRun.wait(), signal)).resolves.toMatchObject({
-            reason: "exit",
-            exitCode: 0,
-          });
-          await waitForFast(
-            () => expect(state?.cronState.cron.getJob(job.id)?.enabled).toBe(false),
-            { timeout: 10_000 },
-          );
-          expect(await readFile(markerPath, "utf8")).toBe("run\n");
-          expect(spawn).toHaveBeenCalledOnce();
-        });
-      } finally {
-        await fixtureLifetime.verifyCleanup(async () => {
-          hoisted.buildGatewayCronService.mockImplementation(previousCronFactory);
-          await writeFile(releasePath, "release").catch(() => {});
-          await state?.cronState.cron.stopAndDrain?.();
-          await scheduler.stop();
-          spawn.mockRestore();
-          vi.unstubAllEnvs();
-        });
-      }
-    }));
 
   it("passes an agent-entry-local refresh scope through the commit and rebuild", async () => {
     const logReload = makeReloadLogger();

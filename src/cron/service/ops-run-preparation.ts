@@ -159,17 +159,10 @@ export async function inspectManualRunPreflight(
   if (state.stopped) {
     return { ok: true, ran: false, reason: "stopped" };
   }
-  const job =
-    opts?.onExit || opts?.event
-      ? state.store?.jobs.find((entry) => entry.id === id)
-      : findJobOrThrow(state, id);
-  if (
-    !job ||
-    (opts?.onExit &&
-      (job.schedule.kind !== "on-exit" ||
-        job.schedule.command !== opts.onExit.schedule.command ||
-        job.schedule.cwd !== opts.onExit.schedule.cwd))
-  ) {
+  const job = opts?.event
+    ? state.store?.jobs.find((entry) => entry.id === id)
+    : findJobOrThrow(state, id);
+  if (!job) {
     return { ok: true, ran: false, reason: "not-due" };
   }
   if (
@@ -180,9 +173,6 @@ export async function inspectManualRunPreflight(
   }
   assertCronHostExecutionAllowed(state, job);
   assertCanonicalCronDeliveryMode(job.delivery);
-  if (opts?.onExit && (!isJobEnabled(job) || job.state.autoDisabled)) {
-    return { ok: true, ran: false, reason: "disabled" };
-  }
   if (mode === "if-enabled" && (!isJobEnabled(job) || job.state.autoDisabled)) {
     return { ok: true, ran: false, reason: "disabled" };
   }

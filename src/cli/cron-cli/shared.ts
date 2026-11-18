@@ -351,7 +351,7 @@ export function createCronAmbiguousNameError(jobs: readonly CronJob[]): CronCliE
         name: job.name,
         // Event command text is unnecessary for choosing a job and can contain credentials.
         schedule:
-          job.schedule?.kind === "on-exit" || job.schedule?.kind === "stream"
+          job.schedule?.kind === "stream"
             ? job.schedule.kind
             : formatSchedule(job.schedule, job.trigger !== undefined),
         enabled: job.enabled,
@@ -584,10 +584,6 @@ const formatSchedule = (
   }
   if (schedule?.kind === "every") {
     return `every ${formatExactDuration(schedule.everyMs)}${suffix}`;
-  }
-  if (schedule?.kind === "on-exit") {
-    const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";
-    return `on-exit ${schedule.command}${cwd}`;
   }
   if (schedule?.kind === "stream") {
     const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";

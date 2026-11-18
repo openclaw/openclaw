@@ -150,7 +150,6 @@ export function getInvalidPersistedCronJobReason(
     scheduleKind !== "at" &&
     scheduleKind !== "every" &&
     scheduleKind !== "cron" &&
-    scheduleKind !== "on-exit" &&
     scheduleKind !== "stream" &&
     scheduleKind !== "event" &&
     scheduleKind !== "sandbox-stream"
@@ -206,12 +205,6 @@ export function getInvalidPersistedCronJobReason(
       return "invalid-schedule";
     }
   }
-  if (scheduleKind === "on-exit") {
-    const command = scheduleRecord.command;
-    if (typeof command !== "string" || command.trim().length === 0) {
-      return "invalid-schedule";
-    }
-  }
   if (scheduleKind === "stream" || scheduleKind === "sandbox-stream") {
     const command = scheduleRecord.command;
     const mode = scheduleRecord.mode ?? "line";
@@ -249,7 +242,6 @@ export function getInvalidPersistedCronJobReason(
       typeof script !== "string" ||
       script.trim().length === 0 ||
       scheduleKind === "at" ||
-      scheduleKind === "on-exit" ||
       scheduleKind === "event"
     ) {
       return "invalid-trigger";

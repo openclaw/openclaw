@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { ReplyOperationObservation } from "../sessions/reply-operation-state.js";
 import { activeSessionOperations } from "../sessions/session-controller.state.js";
-import { hasActiveCronJobsForAgent, isCronReplyOperationWaitingForIdle } from "./active-jobs.js";
+import { hasActiveCronJobsForAgent } from "./active-jobs.js";
 import { resolveCronDeliverySessionKey } from "./session-target.js";
 import type { CronJob } from "./types.js";
 
@@ -15,7 +15,7 @@ export function isCronExecutionIdle(
   _ownSessionKey?: string,
   ownReplyOperation?: ReplyOperationObservation,
 ): boolean {
-  if (hasActiveCronJobsForAgent(agentId, job.id, { excludeIdleWaiters: true })) {
+  if (hasActiveCronJobsForAgent(agentId, job.id)) {
     return false;
   }
   const sessionKey =
@@ -27,8 +27,9 @@ export function isCronExecutionIdle(
       return false;
     }
     return !(
-      (operation === ownReplyOperation && !operation.abortSignal.aborted && !operation.result) ||
-      isCronReplyOperationWaitingForIdle(operation)
+      operation === ownReplyOperation &&
+      !operation.abortSignal.aborted &&
+      !operation.result
     );
   });
 }

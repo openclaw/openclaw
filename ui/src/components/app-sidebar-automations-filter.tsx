@@ -103,7 +103,6 @@ function automationFilterOptions(context: ApplicationContext | undefined) {
         { value: "every", label: t("cron.form.every") },
         { value: "cron", label: t("cron.form.cronOption") },
         { value: "event", label: t("cron.events.label") },
-        { value: "on-exit", label: t("cron.form.repeatOnExit") },
         { value: "stream", label: t("cron.form.repeatStream") },
       ]),
       choice("lastRun", t("cron.jobs.lastRun"), [

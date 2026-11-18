@@ -129,7 +129,6 @@ function createPluginReloadHandler(
       cron: { start: vi.fn(), stop: vi.fn() } as never,
       storePath: fixture.state.path("cron.sqlite"),
       cronEnabled: false,
-      reconcileExitWatchers: vi.fn(async () => {}),
       reconcileStreamWatchers: vi.fn(async () => {}),
       stopStreamWatchers: vi.fn(async () => {}),
     },

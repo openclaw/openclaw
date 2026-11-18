@@ -570,7 +570,6 @@ describe("cron method validation", () => {
       name: "foreign session target",
       fields: { sessionTarget: "session:agent:worker:telegram:direct:alice" },
     },
-    { name: "operator-only watcher", fields: { schedule: { kind: "on-exit", command: "deploy" } } },
   ] satisfies Array<{ name: string; fields: Partial<CronJob> }>)(
     "hides a same-agent job with a $name",
     async ({ fields }) => {

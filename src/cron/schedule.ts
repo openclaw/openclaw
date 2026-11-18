@@ -236,9 +236,9 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     return asDateTimestampMs(anchor + steps * everyMs);
   }
 
-  if (schedule.kind === "on-exit" || schedule.kind === "stream" || schedule.kind === "event") {
+  if (schedule.kind === "stream" || schedule.kind === "event") {
     // Event-driven trigger: never time-due. The gateway watcher calls
-    // enqueueRun when the watched command exits or a stream batch closes.
+    // enqueueRun when a stream batch closes or an event arrives.
     return undefined;
   }
 

@@ -31,15 +31,10 @@ describe("persisted cron trigger shape", () => {
     );
   });
 
-  it("rejects triggers on at and on-exit schedules", () => {
+  it("rejects triggers on one-shot time schedules", () => {
     expect(
       getInvalidPersistedCronJobReason(
         candidate({ schedule: { kind: "at", at: "2026-08-01T00:00:00.000Z" } }),
-      ),
-    ).toBe("invalid-trigger");
-    expect(
-      getInvalidPersistedCronJobReason(
-        candidate({ schedule: { kind: "on-exit", command: "make build" } }),
       ),
     ).toBe("invalid-trigger");
   });

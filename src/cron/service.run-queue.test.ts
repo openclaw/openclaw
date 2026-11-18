@@ -410,96 +410,6 @@ it.for([
   },
 );
 
-it.for(["complete", "cancel", "lost-result"] as const)(
-  "handles a same-store on-exit predecessor without joining unrelated work: %s",
-  async (outcome, { signal }) => {
-    const schedule = { kind: "on-exit", command: "synthetic-exit" } as const;
-    const job = { ...commandJob("exit-wait"), schedule };
-    const unrelated = commandJob("unrelated-wait");
-    const storePath = await storeJobs([job, unrelated]);
-    const targetEntered = createDeferred();
-    const unrelatedEntered = createDeferred();
-    const releaseTarget = createDeferred();
-    const releaseUnrelated = createDeferred();
-    const accepted = createDeferred();
-    let targetRuns = 0;
-    const runCommandJob = vi.fn(async ({ job: current }: { job: CronJob }) => {
-      if (current.id === unrelated.id) {
-        unrelatedEntered.resolve();
-        await releaseUnrelated.promise;
-      } else if (++targetRuns === 1) {
-        targetEntered.resolve();
-        await releaseTarget.promise;
-      }
-      return { status: "ok" as const };
-    });
-    const createService = () => new CronService(serviceDeps(storePath, { runCommandJob }));
-    const cron = createService();
-    const sibling = createService();
-    const controller = new AbortController();
-    const pending: Array<Promise<unknown>> = [];
-    let restoreFinalization: (() => void) | undefined;
-    try {
-      const first = cron.run(job.id, "force");
-      void first.catch(() => {});
-      const other = cron.run(unrelated.id, "force");
-      pending.push(first, other);
-      await withinTest(Promise.all([targetEntered.promise, unrelatedEntered.promise]), signal);
-      if (outcome === "lost-result") {
-        const execute = stateWorker.executeOpenClawStateWorker;
-        const finalization = vi
-          .spyOn(stateWorker, "executeOpenClawStateWorker")
-          .mockImplementation((context, command) =>
-            command.type === "cron.finalizeRuns"
-              ? Promise.reject(new Error("synthetic terminal write failure"))
-              : execute(context, command),
-          );
-        restoreFinalization = () => finalization.mockRestore();
-      }
-      const exit = sibling.runOnExit(job.id, {
-        schedule,
-        signal: controller.signal,
-        commitGuard() {},
-        onReserved: () => accepted.resolve(),
-      });
-      pending.push(exit);
-      if (outcome === "cancel") {
-        controller.abort();
-        await expect(withinTest(exit, signal)).resolves.toMatchObject({
-          ok: true,
-          ran: false,
-          reason: "stopped",
-        });
-        releaseTarget.resolve();
-        await withinTest(first, signal);
-        expect(targetRuns).toBe(1);
-      } else if (outcome === "lost-result") {
-        releaseTarget.resolve();
-        await expect(withinTest(first, signal)).rejects.toThrow("synthetic terminal write failure");
-        await expect(withinTest(exit, signal)).resolves.toMatchObject({
-          ok: true,
-          ran: false,
-          reason: "already-running",
-        });
-        expect(targetRuns).toBe(1);
-      } else {
-        releaseTarget.resolve();
-        await withinTest(accepted.promise, signal);
-        await expect(withinTest(exit, signal)).resolves.toMatchObject({ ok: true, ran: true });
-        expect(targetRuns).toBe(2);
-      }
-      expect((await cron.readJob(unrelated.id))?.state.runningAtMs).toBeDefined();
-    } finally {
-      controller.abort();
-      restoreFinalization?.();
-      releaseTarget.resolve();
-      releaseUnrelated.resolve();
-      await Promise.allSettled(pending);
-      await stopServices(cron, sibling);
-    }
-  },
-);
-
 it("keeps owned running work out of recovery and queue database polling", async ({ signal }) => {
   const job = commandJob("owned-running");
   const storePath = await storeJobs([job]);
@@ -587,21 +497,19 @@ it("joins a running job before restarting after scheduler cleanup fails", async 
   }
 });
 
-it("shares capacity across sibling services for timer, manual, stream, and consumed exit requests", async ({
+it("shares capacity across sibling services for timer, manual, and stream requests", async ({
   signal,
 }) => {
   const clock = createGatewaySchedulerClock(NOW);
   const release = createDeferred();
   const capacityFilled = createDeferred();
-  const exitAccepted = createDeferred();
   const timerRequested = createDeferred();
+  const streamRequested = createDeferred();
   const blockers = Array.from({ length: 8 }, (_, index) => commandJob(`blocker-${index}`));
   const manual = commandJob("queued-manual");
   const disabled = commandJob("queued-disabled");
   const removed = commandJob("queued-removed");
   const timed = commandJob("queued-timer", NOW + 10_000);
-  const exitSchedule = { kind: "on-exit" as const, command: "synthetic-watch" };
-  const exit: CronJob = { ...commandJob("queued-exit"), schedule: exitSchedule, state: {} };
   const streamSchedule = { kind: "stream" as const, command: ["synthetic-stream"] };
   const stream: CronJob = {
     ...commandJob("queued-stream"),
@@ -609,7 +517,7 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
     payload: { kind: "agentTurn", message: "configured stream payload" },
     state: { streamSourceIdentity: "synthetic-source" },
   };
-  const storePath = await storeJobs([...blockers, manual, disabled, removed, timed, stream, exit]);
+  const storePath = await storeJobs([...blockers, manual, disabled, removed, timed, stream]);
   let active = 0;
   let peakActive = 0;
   let blockersStarted = 0;
@@ -644,7 +552,7 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
   const { cron: sibling } = createService();
   sibling.pauseScheduling();
   const pending: Array<Promise<unknown>> = [];
-  const stopObserving = observeCronJobCommits(timed.id, (runtime) => {
+  let stopObserving = observeCronJobCommits(timed.id, (runtime) => {
     if (runtime.queuedAtMs !== undefined) {
       timerRequested.resolve();
     }
@@ -680,6 +588,12 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
       expect(active).toBe(8);
       expect(executed).toEqual([]);
     }
+    stopObserving();
+    stopObserving = observeCronJobCommits(stream.id, (runtime) => {
+      if (runtime.queuedAtMs !== undefined) {
+        streamRequested.resolve();
+      }
+    });
     const streamRun = sibling.run(stream.id, "force", {
       payload: { kind: "agentTurn", message: "accepted stream payload" },
       streamBatch: "line one\nline two",
@@ -687,27 +601,17 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
       streamSourceIdentity: "synthetic-source",
     });
     pending.push(streamRun);
-    const exitRun = sibling.runOnExit(exit.id, {
-      schedule: exitSchedule,
-      signal,
-      commitGuard() {},
-      onReserved: () => exitAccepted.resolve(),
-      payload: () => ({ kind: "command", argv: ["synthetic", "accepted exit"] }),
-    });
-    pending.push(exitRun);
     await withinTest(
-      awaitGateBeforeSettlement(exitAccepted.promise, exitRun, "exit was not accepted"),
+      awaitGateBeforeSettlement(streamRequested.promise, streamRun, "stream did not queue its run"),
       signal,
     );
-
     const queued = (await loadCronStore(storePath)).jobs;
-    for (const job of [manual, timed, stream, exit]) {
+    for (const job of [manual, timed, stream]) {
       expect(
         queued.find((candidate) => candidate.id === job.id)?.state.queuedAtMs,
         `${job.id}: queued run remains behind shared capacity`,
       ).toEqual(expect.any(Number));
     }
-    expect(queued.find((job) => job.id === exit.id)?.enabled).toBe(false);
     expect(executed).toEqual([]);
     expect(runIsolatedAgentJob).not.toHaveBeenCalled();
 
@@ -718,18 +622,10 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
     }
     expect(await cron.waitForManualRun(manualAck.runId, 60_000, signal)).toBe(true);
     expect(peakActive).toBe(8);
-    expect(executed.map((job) => job.id).toSorted()).toEqual(
-      [exit.id, manual.id, timed.id].toSorted(),
-    );
-    expect(executed.find((job) => job.id === exit.id)).toMatchObject({
-      enabled: false,
-      payload: { kind: "command", argv: ["synthetic", "accepted exit"] },
-    });
+    expect(executed.map((job) => job.id).toSorted()).toEqual([manual.id, timed.id].toSorted());
     expect(runIsolatedAgentJob).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ message: "accepted stream payload\n\nline one\nline two" }),
     );
-    const persistedExit = (await loadCronStore(storePath)).jobs.find((job) => job.id === exit.id);
-    expect(persistedExit).toMatchObject({ enabled: false, state: { lastRunStatus: "ok" } });
   } finally {
     release.resolve();
     stopObserving();
