@@ -1,10 +1,13 @@
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { resolveContextTokensForModel } from "../../agents/context.js";
 import type { PreparedCompactionSession } from "../../agents/embedded-agent-runner/run/compaction-accounting-bridge.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
 import { resolveManualCompactionCliTarget } from "../../agents/session-runtime-compat.js";
 import { preflightManualSessionCompaction } from "../../agents/sessions/manual-compaction-preflight.js";
 import { sessionManagerOpenCompaction } from "../../agents/sessions/session-manager-core.js";
+import { sessionManagerReadTranscriptBranch } from "../../agents/sessions/session-manager-view-types.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
@@ -78,11 +81,14 @@ export async function prepareGatewaySessionCompaction(
     return { entry };
   }
   try {
-    const preflight = preflightManualSessionCompaction(sessionManager.getBranch(), {
-      enabled: true,
-      reserveTokens: 0,
-      keepRecentTokens: 0,
-    });
+    const preflight = preflightManualSessionCompaction(
+      sessionManager[sessionManagerReadTranscriptBranch](),
+      {
+        enabled: true,
+        reserveTokens: 0,
+        keepRecentTokens: 0,
+      },
+    );
     return { entry, preparedSession, reason: preflight.compactable ? undefined : preflight.reason };
   } catch {
     // Preserve the existing compaction error path for malformed transcripts.
@@ -102,6 +108,20 @@ export async function runGatewaySessionCompaction(
     storePath: params.storePath,
   };
   const resolvedModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
+  // Capture the foreground window before a separate compaction.model is selected.
+  const configuredWindow = floorPositiveFiniteNumber(
+    resolveContextTokensForModel({
+      cfg: params.cfg,
+      provider: resolvedModel.provider,
+      model: resolvedModel.model,
+      allowAsyncLoad: false,
+    }),
+  );
+  const sessionWindow = floorPositiveFiniteNumber(params.entry.contextTokens);
+  const contextTokenBudget =
+    configuredWindow !== undefined && sessionWindow !== undefined
+      ? Math.min(configuredWindow, sessionWindow)
+      : (configuredWindow ?? sessionWindow);
   const workspaceDir =
     resolveIngressWorkspaceOverrideForSessionRun({
       spawnedBy: params.entry.spawnedBy,
@@ -139,8 +159,12 @@ export async function runGatewaySessionCompaction(
           : undefined,
       conversationRoutePeerId: primaryConversation?.routeContext?.peerId,
       chatType: primaryConversation?.kind,
+      messageChannel: primaryConversation?.channel,
+      skillsSnapshot: params.entry.skillsSnapshot,
+      toolOverrides: params.entry.toolOverrides,
       provider: resolvedModel.provider,
       model: resolvedModel.model,
+      contextTokenBudget,
       authProfileId:
         compactionCliTarget.cliSessionBinding?.authProfileId ?? params.entry.authProfileOverride,
       authProfileIdSource: resolveCollapsedSessionAuthPinSource(params.entry),

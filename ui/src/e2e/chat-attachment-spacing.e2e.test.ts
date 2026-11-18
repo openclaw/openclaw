@@ -97,9 +97,16 @@ function attachment(index = 0) {
 }
 
 async function gap(above: Locator, below: Locator) {
-  const upper = (await above.boundingBox())!;
-  const lower = (await below.boundingBox())!;
-  return lower.y - upper.y - upper.height;
+  const lowerHandle = await below.evaluateHandle((element) => element);
+  try {
+    // Both edges must share a layout snapshot while the transcript moves.
+    return await above.evaluate((element, lower) => {
+      const upperRect = element.getBoundingClientRect();
+      return lower.getBoundingClientRect().top - upperRect.bottom;
+    }, lowerHandle);
+  } finally {
+    await lowerHandle.dispose();
+  }
 }
 
 async function expectGap(above: Locator, below: Locator, reference: number) {
@@ -147,8 +154,14 @@ suite.define(() => {
                 const reference = await gap(blocks.nth(1), blocks.nth(2));
                 expect(reference).toBeGreaterThan(0);
                 const expectedBefore = reference * (name === "heading" ? 1.5 : 1);
-                // Wide desktop tables reserve extra space after their compact toolbar/table block.
-                const expectedAfter = name === "table" && width === 1440 ? 24 : reference;
+                // A heading sits close to the block it introduces. Wide desktop tables
+                // reserve extra space after their compact toolbar/table block.
+                const expectedAfter =
+                  name === "heading"
+                    ? reference * 0.4
+                    : name === "table" && width === 1440
+                      ? 24
+                      : reference;
                 await expect
                   .poll(async () =>
                     Math.max(

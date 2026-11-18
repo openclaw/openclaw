@@ -67,6 +67,13 @@ export type MatrixSnapshotStateReader = {
   openKeyedStoreV2: <T>(options: OpenKeyedStoreOptions) => Pick<PluginStateKeyedStore<T>, "lookup">;
 };
 
+/** Snapshot reads and sealing use bounded stores, including Doctor's narrow state adapter. */
+export type MatrixSnapshotStateAccess = {
+  openKeyedStoreV2: <T>(
+    options: OpenKeyedStoreOptions,
+  ) => Pick<PluginStateKeyedStore<T>, "lookup" | "lookupMany" | "entries" | "register">;
+};
+
 export function openMatrixRecoveryKeyStoreOptions(storageRootDir: string) {
   return {
     namespace: RECOVERY_KEY_NAMESPACE,
@@ -131,7 +138,7 @@ export async function writeMatrixRecoveryKeyStateForPathAsync(params: {
 
 export async function readMatrixIdbSnapshotJson(
   storageRootDir: string,
-  stateRuntime: MatrixSnapshotStateRuntime = getMatrixRuntime().state,
+  stateRuntime: MatrixSnapshotStateAccess = getMatrixRuntime().state,
 ): Promise<string | null> {
   const store = stateRuntime.openKeyedStoreV2<MatrixIdbSnapshotRecord>(
     openMatrixIdbSnapshotStoreOptions(storageRootDir),
@@ -183,7 +190,7 @@ export async function readMatrixIdbSnapshotOwnerGeneration(
 export async function sealMatrixIdbSnapshotOwnerGeneration(
   storageRootDir: string,
   generation: string,
-  stateRuntime: MatrixSnapshotStateRuntime = getMatrixRuntime().state,
+  stateRuntime: MatrixSnapshotStateAccess = getMatrixRuntime().state,
 ): Promise<void> {
   const store = stateRuntime.openKeyedStoreV2<MatrixIdbSnapshotRecord>(
     openMatrixIdbSnapshotStoreOptions(storageRootDir),

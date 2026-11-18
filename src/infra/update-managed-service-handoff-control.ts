@@ -1,6 +1,9 @@
 import type { ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import { forceKillChildProcessTree } from "../process/child-process-tree.js";
+import { monotonicDeadlineAfter, monotonicNow } from "../shared/monotonic-time.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
+import type { ManagedHandoffParentStore } from "./update-managed-service-handoff-worker.js";
 
 // The private admission pipe must not change the installed CLI's stdin lifetime.
 const HANDOFF_COMMAND_RUNNER_SCRIPT = String.raw`
@@ -321,6 +324,28 @@ export type HandoffChild = ChildProcess & {
   stdout: NonNullable<ChildProcess["stdout"]>;
 };
 
+export async function resolveHandoffLauncherStartIdentity(
+  child: HandoffChild,
+  store: Pick<ManagedHandoffParentStore, "processIdentity">,
+): Promise<string> {
+  // Failed spawn handles are not processes and must never be signalled.
+  if (!child.pid) {
+    await once(child, "spawn");
+  }
+  try {
+    const identity = child.pid
+      ? (await store.processIdentity(child.pid, child.spawnargs)).startIdentity
+      : null;
+    if (identity === null) {
+      throw new Error("managed update handoff process start identity is unavailable");
+    }
+    return identity;
+  } catch (error) {
+    forceKillChildProcessTree(child);
+    throw error;
+  }
+}
+
 export function unrefHandoffPipe(pipe: HandoffChild["stdin"] | HandoffChild["stdout"]): void {
   if ("unref" in pipe && typeof pipe.unref === "function") {
     pipe.unref();
@@ -386,12 +411,16 @@ export function waitForHandoffResponse(
     // The canonical updater owns activation/finalization budgets. Once closed,
     // the parent joins its helper instead of inventing a shorter shutdown timer.
     if (command !== "closed") {
-      cancelTimeout = scheduleAbsoluteDeadline(Date.now() + timeoutMs, () => {
-        const phase = command ? "respond" : "signal readiness";
-        onOutputError(
-          new Error(`managed update handoff did not ${phase} within ${timeoutMs / 1000} seconds`),
-        );
-      });
+      cancelTimeout = scheduleAbsoluteDeadline(
+        monotonicDeadlineAfter(timeoutMs),
+        () => {
+          const phase = command ? "respond" : "signal readiness";
+          onOutputError(
+            new Error(`managed update handoff did not ${phase} within ${timeoutMs / 1000} seconds`),
+          );
+        },
+        monotonicNow,
+      );
     }
     if (settled) {
       return;

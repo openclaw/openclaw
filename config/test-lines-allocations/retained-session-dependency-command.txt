@@ -1,2 +1,0 @@
-# Real offline command seals source/expected state, restores original disk custody, rejects profile drift, and keeps credentials absent.
-329

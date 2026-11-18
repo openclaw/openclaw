@@ -192,6 +192,7 @@ public enum ChatSessionSidebarModel {
         activeAgentID: String? = nil,
         groups: [OpenClawChatSessionGroup] = [],
         excludesMainSession: Bool = false,
+        includeEmptyGroups: Bool = false,
         query: String,
         rankedSearch: Bool = false,
         sessionRoutingContract: String? = nil,
@@ -303,8 +304,9 @@ public enum ChatSessionSidebarModel {
             result.append(Section(id: "pinned", title: "Pinned", nodes: pinned))
         }
         for group in orderedGroups {
-            let nodes = self.tree(from: unpinned.filter { $0.category == group.name }, identity: identity)
-            if !nodes.isEmpty {
+            let nodes = self.tree(
+                from: unpinned.filter { $0.category == group.name }, identity: identity)
+            if !nodes.isEmpty || includeEmptyGroups {
                 result.append(Section(id: "group:\(group.name)", title: group.name, nodes: nodes))
             }
         }

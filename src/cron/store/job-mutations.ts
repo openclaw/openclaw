@@ -1,5 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  sessionCreatorProfileId,
+  sessionIsolationProfileId,
+} from "../../config/sessions/session-entry-provenance.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { assertCronBindApplies } from "../bind-parent.js";
 import { retireTransferredCronAuthority } from "../human-owner.js";
@@ -218,8 +222,12 @@ export function planCronJobMutation(
         }
         if (options.createdActor) {
           nextJob.createdActor = options.createdActor;
-          if (options.createdActor.type === "human" && options.createdActor.source === "profile") {
-            nextJob.ownerProfileId = options.createdActor.id;
+          // Human-requested work follows the initiator; autonomous jobs keep their existing default.
+          const ownerProfileId =
+            sessionCreatorProfileId(options.createdActor) ??
+            sessionIsolationProfileId(options.createdActor);
+          if (ownerProfileId) {
+            nextJob.ownerProfileId = ownerProfileId;
           }
         }
         if (options.sourceConversation) {

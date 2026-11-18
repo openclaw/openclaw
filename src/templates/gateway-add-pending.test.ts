@@ -1,0 +1,783 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, expect, it, vi } from "vitest";
+import { readConfigFileSnapshot } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  deleteSessionEntryLifecycle,
+  loadSessionEntryReadOnly,
+  loadTranscriptEvents,
+} from "../config/sessions/session-accessor.js";
+import { readTranscriptEventMessage } from "../config/sessions/session-accessor.sqlite-read.js";
+import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
+import { resolveSessionWorkStartError } from "../config/sessions/session-work-start.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { deleteAgentConfigEntry } from "../gateway/server-methods/agents-config-mutations.js";
+import { createDeletionCron } from "../gateway/server-methods/agents-delete.fixture.test-support.js";
+import { deleteGatewayAgent } from "../gateway/server-methods/agents-delete.js";
+import { completeAgentOnboarding } from "../gateway/server-methods/agents-onboarding.js";
+import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
+import { reviveAgentDatabasesAfterConfigCommit } from "../gateway/server-reload-agent-databases.js";
+import { createGatewaySession } from "../gateway/session-create-service.js";
+import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
+import { readAgentDeletionJournalAsync } from "../state/agent-deletion-journal.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { withResolvedClawHubSource } from "./clawhub-source.js";
+import {
+  applyTemplateAddForGateway,
+  TemplateGatewayPlanBlockedError,
+} from "./gateway-add-apply.js";
+import {
+  buildGatewayTemplateAddPlan,
+  planTemplateAddForGateway,
+  projectGatewayTemplateAddPlan,
+} from "./gateway-add-plan.js";
+import { readTemplateManifestFile } from "./reader.js";
+
+const { resolveSource } = vi.hoisted(() => ({ resolveSource: vi.fn() }));
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+});
+// mock-isolation: Fixed registry artifact; planner, leases, workspace, config and canonical session writes remain real.
+vi.mock("./clawhub-source.js", async (original) => ({
+  ...(await original<typeof import("./clawhub-source.js")>()),
+  withResolvedClawHubSource: resolveSource,
+}));
+// mock-isolation: No live websocket clients exist in this service-boundary scenario.
+vi.mock("../gateway/server-methods/session-change-event.js", () => ({
+  emitSessionsChanged: vi.fn(),
+}));
+
+it.each([
+  "applied",
+  "restart-required",
+  "revoked",
+  "abort-before-commit",
+  "admitted-applied",
+  "admitted-recreated",
+  "admitted-session-replaced",
+  "admitted-source-retry",
+  "admitted-runtime-retry",
+  "admitted-config-retry",
+  "admitted-reviewed-chat-retry",
+] as const)(
+  "prepares empty ordinary Template chat before runtime publication: %s",
+  async (outcome) => {
+    await withOpenClawTestState({ label: "template-agent-first-integration" }, async (state) => {
+      const root = state.path("template-source");
+      await fs.mkdir(root);
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({
+          name: "@fixture/template-first",
+          version: "1.0.0",
+          openclaw: { template: "CLAW.md" },
+        }),
+      );
+      await fs.writeFile(path.join(root, "SOUL.md"), "A calm fixture personality.\n");
+      const manifest = path.join(root, "CLAW.md");
+      await fs.writeFile(
+        manifest,
+        "---\n" +
+          JSON.stringify({
+            schemaVersion: 1,
+            agent: { id: "fixture-first", name: "First Fixture" },
+            workspace: { bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } } },
+          }) +
+          "\n---\n",
+      );
+      const source = await readTemplateManifestFile(root);
+      if (!source.ok) {
+        throw new Error("Invalid fixture manifest");
+      }
+      source.source = {
+        ...source.source,
+        kind: "package",
+        name: "@fixture/template-first",
+        version: "1.0.0",
+        integrityKind: "artifact",
+      };
+      resolveSource.mockImplementation(
+        async (input: Parameters<typeof withResolvedClawHubSource>[0]) => ({
+          value: await input.run(
+            source,
+            {
+              riskAcknowledgementRequired: false,
+              trustRecord: {
+                clawhubTrustDisposition: "clean",
+                clawhubTrustCheckedAt: "2026-11-04T00:00:00.000Z",
+              },
+            },
+            async () => source,
+          ),
+        }),
+      );
+      let sourceEntered = false;
+      let sourceFailed = false;
+      const sourceImplementation = resolveSource.getMockImplementation()!;
+      resolveSource.mockImplementation(async (...args) => {
+        sourceEntered = true;
+        if (outcome === "admitted-source-retry" && !sourceFailed) {
+          sourceFailed = true;
+          throw new Error("Transient fixture download failure");
+        }
+        if (outcome === "admitted-session-replaced") {
+          const key = "agent:fixture-first:main";
+          const entry = loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey: key })!;
+          await deleteSessionEntryLifecycle({
+            agentId: "fixture-first",
+            storePath: resolveSessionStorePathCore(config.session?.store, {
+              agentId: "fixture-first",
+            }),
+            target: { canonicalKey: key, storeKeys: [key] },
+            expectedSessionId: entry.sessionId,
+            expectedLifecycleRevision: entry.lifecycleRevision,
+            archiveTranscript: false,
+            deleteTranscriptWithoutArchive: true,
+            requireWriteSuccess: true,
+          });
+          const successor = await createGatewaySession({
+            cfg: (await readConfigFileSnapshot()).config,
+            agentId: "fixture-first",
+            key,
+            commandSource: "webchat",
+          });
+          if (!successor.ok) {
+            throw new Error(successor.error.message);
+          }
+        }
+        return sourceImplementation(...args);
+      });
+      let config: OpenClawConfig = {
+        gateway: { controlUi: { experimental: { templates: true } } },
+        agents: {
+          entries: { main: { workspace: state.path("existing-workspace") } },
+          defaults: { model: "ollama/test-model" },
+        },
+      };
+      await state.writeConfig(config);
+      setRuntimeConfigSnapshot(config);
+      const reviewPlan = async () =>
+        projectGatewayTemplateAddPlan(
+          await buildGatewayTemplateAddPlan(source, { config, sourceMcpServers: {} }),
+          source,
+          { riskAcknowledgementRequired: false },
+          config,
+        );
+      const review = outcome.startsWith("admitted-") ? await reviewPlan() : undefined;
+      const outsideCreation = AsyncLocalStorage.snapshot();
+      let recreating = false;
+      let admittedSessionId: string | undefined;
+      let current = true;
+      let publicationReached = false;
+      let runtimeFailed = false;
+      let configFailed = false;
+      const sessionKey = "agent:fixture-first:main";
+      const prepareAgentChat = vi.fn(
+        async (
+          agentId: string,
+          prospectiveConfig: OpenClawConfig,
+          pending?: { initializationPending: true },
+        ) => {
+          const options = {
+            req: { type: "req", id: "template-add", method: "templates.add.apply" },
+            context: { getRuntimeConfig: () => config },
+            client: { connect: { client: { mode: "ui" }, scopes: ["operator.admin"] } },
+            respond: vi.fn(),
+          } as unknown as GatewayRequestHandlerOptions;
+          const prepared = await completeAgentOnboarding(options, agentId, {
+            config: prospectiveConfig,
+            ...pending,
+          });
+          if (prepared.status !== "completed" || !prepared.rollback) {
+            throw new Error(prepared.status === "error" ? prepared.error : "Missing rollback");
+          }
+          if (outcome === "admitted-recreated" && recreating) {
+            const database = {
+              agentId,
+              path: resolveOpenClawAgentSqlitePath({ agentId, env: state.env }),
+              env: state.env,
+            };
+            const read = () =>
+              withSessionHistoryWorkerDatabase(database, (owner) =>
+                owner.readExactEntries({ env: state.env, sessionKeys: [sessionKey] }),
+              );
+            expect((await read()).entries.map((row) => row.sessionKey)).toContain(sessionKey);
+            await expect(outsideCreation(read)).rejects.toThrow(
+              "Agent database belongs to an active agent creation claim",
+            );
+          }
+          return prepared.rollback;
+        },
+      );
+      const onAgentReady = vi.fn(async () => {
+        expect(publicationReached).toBe(true);
+        expect(config.agents?.entries).toHaveProperty("fixture-first");
+        const initialized = loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey });
+        expect(initialized?.initializationPending).toBeUndefined();
+        if (admittedSessionId) {
+          expect(initialized?.sessionId).toBe(admittedSessionId);
+        }
+        expect(
+          await fs.readFile(
+            path.join(config.agents!.entries!["fixture-first"]!.workspace!, "SOUL.md"),
+            "utf8",
+          ),
+        ).toBe("A calm fixture personality.\n");
+      });
+      const applyInput = {
+        source: { packageName: "@fixture/template-first", version: "1.0.0" },
+        ...(outcome.startsWith("admitted-")
+          ? { agentId: "fixture-first", planIntegrity: review!.planIntegrity }
+          : {}),
+        getPlanningContext: async () => ({ config, sourceMcpServers: {} }),
+        policyConfig: { configPath: state.configPath, env: state.env },
+        configWriteOptions: {
+          beforeCommit: async () => {
+            if (
+              outcome === "abort-before-commit" ||
+              (outcome === "admitted-config-retry" && !configFailed)
+            ) {
+              configFailed = true;
+              throw new Error("Fixture config admission refused");
+            }
+          },
+        },
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Fixture authority expired");
+          }
+        },
+        prepareAgentChat,
+        waitForAgentRuntime: async () => {
+          if (outcome === "admitted-recreated" && recreating) {
+            const committed = (await readConfigFileSnapshot()).config;
+            expect(committed.agents?.entries).toHaveProperty("fixture-first");
+            expect(await readAgentDeletionJournalAsync("fixture-first")).toBeUndefined();
+            setRuntimeConfigSnapshot(committed);
+            await reviveAgentDatabasesAfterConfigCommit(["fixture-first"], (message) => {
+              throw new Error(message);
+            });
+          }
+          const entry = loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey });
+          expect(entry?.sessionId).toBeTruthy();
+          const events = await loadTranscriptEvents({
+            agentId: "fixture-first",
+            sessionKey,
+            sessionId: entry!.sessionId,
+          });
+          expect(events.map(readTranscriptEventMessage).filter(Boolean)).toEqual([]);
+          if (!sourceEntered) {
+            expect(entry?.initializationPending).toBe(true);
+            admittedSessionId = entry!.sessionId;
+            expect(resolveSessionWorkStartError(sessionKey, entry)).toContain("still initializing");
+            config = (await readConfigFileSnapshot()).config;
+            setRuntimeConfigSnapshot(config);
+            return "applied";
+          }
+          publicationReached = true;
+          config = (await readConfigFileSnapshot()).config;
+          setRuntimeConfigSnapshot(config);
+          if (outcome === "revoked") {
+            current = false;
+          }
+          if (
+            (outcome === "admitted-runtime-retry" || outcome === "admitted-reviewed-chat-retry") &&
+            !runtimeFailed
+          ) {
+            runtimeFailed = true;
+            return "applied-restart-required";
+          }
+          return outcome === "restart-required" ? "applied-restart-required" : "applied";
+        },
+        onAgentReady,
+      } satisfies Parameters<typeof applyTemplateAddForGateway>[0];
+      let result = await applyTemplateAddForGateway(applyInput);
+      if (outcome === "admitted-recreated") {
+        expect(result).toMatchObject({ status: "complete", sessionKey });
+        const previousSessionId = admittedSessionId;
+        const deletion = createDeletionCron(state);
+        try {
+          await expect(
+            deleteGatewayAgent("fixture-first", true, deletion.context),
+          ).resolves.toMatchObject({
+            ok: true,
+            failed: [],
+          });
+        } finally {
+          await deletion.stop();
+        }
+        expect(await readAgentDeletionJournalAsync("fixture-first")).toMatchObject({
+          cleanupCompleted: true,
+          deleteFiles: true,
+        });
+        config = (await readConfigFileSnapshot()).config;
+        expect(config.agents?.entries).not.toHaveProperty("fixture-first");
+        setRuntimeConfigSnapshot(config);
+        await expect(
+          beginSessionEffect({
+            agentId: "fixture-first",
+            scope: "agent:fixture-first",
+            identities: [sessionKey],
+          }),
+        ).rejects.toThrow("deletion is in progress");
+        sourceEntered = false;
+        publicationReached = false;
+        admittedSessionId = undefined;
+        prepareAgentChat.mockClear();
+        onAgentReady.mockClear();
+        applyInput.planIntegrity = (await reviewPlan()).planIntegrity;
+        recreating = true;
+        result = await applyTemplateAddForGateway(applyInput);
+        expect(admittedSessionId).not.toBe(previousSessionId);
+        expect(await readAgentDeletionJournalAsync("fixture-first")).toBeUndefined();
+      }
+      if (outcome === "admitted-reviewed-chat-retry") {
+        // The reviewed path writes this real pending entry before runtime admission
+        // fails. Its persisted shape has no creation-mode discriminator.
+        expect(result).toMatchObject({
+          status: "partial",
+          agentRetained: true,
+          initializationPending: true,
+        });
+        const retained = loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey })!;
+        const checkpoint = structuredClone(retained.templateInitialization);
+        expect(checkpoint?.configured?.planDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
+        expect(checkpoint).not.toHaveProperty("mode");
+        const before = structuredClone(config.agents!.entries!["fixture-first"]!);
+        const files = await fs.readdir(before.workspace!);
+        const profile = path.join(before.workspace!, "SOUL.md");
+        const original = await fs.stat(profile);
+        const onAgentCreated = vi.fn();
+        result = await applyTemplateAddForGateway({
+          ...applyInput,
+          mode: "chat",
+          planIntegrity: undefined,
+          onAgentCreated,
+        });
+        expect(result).toMatchObject({
+          agentId: "fixture-first",
+          sessionKey,
+          status: "partial",
+          agentRetained: true,
+          initializationPending: true,
+          readiness: { ready: false },
+          error: {
+            message: expect.stringContaining(
+              "The configured Template plan, source, workspace or agent changed",
+            ),
+          },
+        });
+        const refused = loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey })!;
+        expect(refused.sessionId).toBe(retained.sessionId);
+        expect(refused.initializationPending).toBe(true);
+        expect(refused.templateInitialization).toEqual(checkpoint);
+        expect((await readConfigFileSnapshot()).config.agents!.entries!["fixture-first"]).toEqual(
+          before,
+        );
+        expect(await fs.readdir(before.workspace!)).toEqual(files);
+        expect(onAgentCreated).not.toHaveBeenCalled();
+        expect(onAgentReady).not.toHaveBeenCalled();
+        // Refusing the mode switch must not consume or rewrite reviewed consent.
+        result = await applyTemplateAddForGateway(applyInput);
+        expect(result).toMatchObject({ status: "complete", sessionKey });
+        expect(loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey })).toMatchObject({
+          sessionId: retained.sessionId,
+        });
+        expect(
+          loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey })?.initializationPending,
+        ).toBeUndefined();
+        const after = await fs.stat(profile);
+        expect({ ino: after.ino, mtimeMs: after.mtimeMs }).toEqual({
+          ino: original.ino,
+          mtimeMs: original.mtimeMs,
+        });
+        expect(onAgentReady).toHaveBeenCalledOnce();
+        expect(prepareAgentChat).toHaveBeenCalledTimes(3);
+        return;
+      }
+      if (
+        outcome === "admitted-source-retry" ||
+        outcome === "admitted-runtime-retry" ||
+        outcome === "admitted-config-retry"
+      ) {
+        expect(result).toMatchObject({
+          status: "partial",
+          agentRetained: true,
+          initializationPending: true,
+        });
+        const retained = loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey });
+        expect(retained?.sessionId).toBe(admittedSessionId);
+        const profile = path.join(config.agents!.entries!["fixture-first"]!.workspace!, "SOUL.md");
+        if (outcome === "admitted-config-retry") {
+          expect(result.error?.code).toBe("add_failed");
+          expect(result.error?.message).toContain("Fixture config admission refused");
+          await expect(fs.stat(profile)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        const before = outcome === "admitted-runtime-retry" ? await fs.stat(profile) : undefined;
+        // A rerun from a new client has only the kept agent's ID and the catalog coordinate.
+        const rerun = { agentId: "fixture-first", config, sourceMcpServers: {} };
+        expect(
+          await planTemplateAddForGateway({ ...rerun, source: applyInput.source }),
+        ).toMatchObject({ blockers: [], planIntegrity: review!.planIntegrity });
+        const newerVersion = await planTemplateAddForGateway({
+          ...rerun,
+          source: { ...applyInput.source, version: "1.0.1" },
+        });
+        expect(newerVersion.blockers).toContainEqual(
+          expect.objectContaining({ code: "agent_id_collision" }),
+        );
+        result = await applyTemplateAddForGateway(applyInput);
+        if (before) {
+          const after = await fs.stat(profile);
+          expect({ ino: after.ino, mtimeMs: after.mtimeMs }).toEqual({
+            ino: before.ino,
+            mtimeMs: before.mtimeMs,
+          });
+        }
+        expect(result, JSON.stringify(result)).toMatchObject({ status: "complete", sessionKey });
+        expect(loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey })?.sessionId).toBe(
+          admittedSessionId,
+        );
+        expect(prepareAgentChat).toHaveBeenCalledTimes(2);
+      } else {
+        expect(prepareAgentChat).toHaveBeenCalledOnce();
+      }
+      if (outcome === "admitted-session-replaced") {
+        expect(result).toMatchObject({
+          status: "partial",
+          agentRetained: true,
+          initializationPending: true,
+        });
+        expect(result.error?.message).toContain("pending ordinary session changed");
+        expect(
+          loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey })?.sessionId,
+        ).not.toBe(admittedSessionId);
+        expect(
+          loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey })?.initializationPending,
+        ).toBeUndefined();
+        expect(
+          await fs.readdir(config.agents!.entries!["fixture-first"]!.workspace!),
+        ).not.toContain("SOUL.md");
+        expect(onAgentReady).not.toHaveBeenCalled();
+        return;
+      }
+      if (outcome === "abort-before-commit") {
+        expect(result).toMatchObject({ status: "partial" });
+        expect(publicationReached).toBe(false);
+        expect((await readConfigFileSnapshot()).config.agents?.entries).not.toHaveProperty(
+          "fixture-first",
+        );
+        expect(loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey })).toBeUndefined();
+      } else {
+        expect(publicationReached, JSON.stringify(result)).toBe(true);
+        expect(config.agents?.entries).toHaveProperty("fixture-first");
+        expect(
+          loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey })?.sessionId,
+        ).toBeTruthy();
+        expect(result).toMatchObject({
+          agentId: "fixture-first",
+          status:
+            outcome === "applied" ||
+            outcome === "admitted-applied" ||
+            outcome === "admitted-recreated" ||
+            outcome === "admitted-source-retry" ||
+            outcome === "admitted-runtime-retry" ||
+            outcome === "admitted-config-retry"
+              ? "complete"
+              : "partial",
+        });
+        expect(result.sessionKey).toBe(sessionKey);
+        if (
+          outcome !== "applied" &&
+          outcome !== "admitted-applied" &&
+          outcome !== "admitted-recreated" &&
+          outcome !== "admitted-source-retry" &&
+          outcome !== "admitted-runtime-retry" &&
+          outcome !== "admitted-config-retry"
+        ) {
+          expect(result.agentRetained).toBe(true);
+        }
+      }
+      expect(onAgentReady).toHaveBeenCalledTimes(
+        outcome === "applied" ||
+          outcome === "admitted-applied" ||
+          outcome === "admitted-recreated" ||
+          outcome === "admitted-source-retry" ||
+          outcome === "admitted-runtime-retry" ||
+          outcome === "admitted-config-retry"
+          ? 1
+          : 0,
+      );
+    });
+  },
+);
+
+it("publishes the ordinary durable agent and empty canonical chat before resolving Template source", async () => {
+  await withOpenClawTestState({ label: "template-before-source" }, async (state) => {
+    const config: OpenClawConfig = {
+      gateway: { controlUi: { experimental: { templates: true } } },
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: { workspace: state.path("existing-workspace") },
+          existing: { workspace: state.path("existing-other-workspace") },
+        },
+        defaults: { model: "ollama/test-model" },
+      },
+    };
+    await state.writeConfig(config);
+    setRuntimeConfigSnapshot(config);
+    const entered = Promise.withResolvers<void>();
+    const source = Promise.withResolvers<never>();
+    resolveSource.mockImplementation(async () => {
+      entered.resolve();
+      return await source.promise;
+    });
+    const onAgentReady = vi.fn();
+    const prepareAgentChat = vi.fn(
+      async (
+        agentId: string,
+        prospectiveConfig: OpenClawConfig,
+        pending?: { initializationPending: true },
+      ) => {
+        const prepared = await completeAgentOnboarding(
+          {
+            req: { type: "req", id: "template-held", method: "templates.add.apply" },
+            context: { getRuntimeConfig: () => config },
+            client: { connect: { client: { mode: "ui" }, scopes: ["operator.admin"] } },
+            respond: vi.fn(),
+          } as unknown as GatewayRequestHandlerOptions,
+          agentId,
+          { config: prospectiveConfig, ...pending },
+        );
+        if (prepared.status !== "completed" || !prepared.rollback) {
+          throw new Error("Session preparation failed");
+        }
+
+        return prepared.rollback;
+      },
+    );
+    const existing = await createGatewaySession({
+      cfg: config,
+      agentId: "main",
+      key: "agent:main:existing-fixture",
+      commandSource: "webchat",
+      requestingOperatorScopes: ["operator.admin"],
+      creation: { via: "operator" },
+    });
+    if (!existing.ok) {
+      throw new Error("Cannot initialize existing Gateway state");
+    }
+    const baseline = (await readConfigFileSnapshot()).config;
+    expect(Object.keys(baseline.agents!.entries!)).toEqual(["main", "existing"]);
+    expect(baseline.agents!.ownership).toBe("explicit");
+    const applying = applyTemplateAddForGateway({
+      source: { packageName: "@fixture/template-first", version: "1.0.0" },
+      agentId: "fixture-first",
+      getPlanningContext: async () => ({
+        config: (await readConfigFileSnapshot()).config,
+        sourceMcpServers: {},
+      }),
+      policyConfig: { configPath: state.configPath, env: state.env },
+      assertCurrent: () => {},
+      prepareAgentChat,
+      waitForAgentRuntime: async () => "applied",
+      onAgentReady,
+    });
+    const settled = applying.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    await Promise.race([
+      entered.promise,
+      settled.then((result) => {
+        throw new Error("Add settled before source: " + JSON.stringify(result));
+      }),
+    ]);
+    try {
+      const stored = (await readConfigFileSnapshot()).config;
+      expect(stored.agents?.entries).toHaveProperty("fixture-first");
+      const entry = loadSessionEntryReadOnly({
+        agentId: "fixture-first",
+        sessionKey: "agent:fixture-first:main",
+      });
+      expect(entry?.sessionId).toBeTruthy();
+      expect(entry?.initializationPending).toBe(true);
+      expect(resolveSessionWorkStartError("agent:fixture-first:main", entry)).toContain(
+        "still initializing",
+      );
+      const events = await loadTranscriptEvents({
+        agentId: "fixture-first",
+        sessionKey: "agent:fixture-first:main",
+        sessionId: entry!.sessionId,
+      });
+      expect(events.map(readTranscriptEventMessage).filter(Boolean)).toEqual([]);
+      expect(await fs.readdir(stored.agents!.entries!["fixture-first"]!.workspace!)).not.toContain(
+        "SOUL.md",
+      );
+      const secondary = await createGatewaySession({
+        cfg: stored,
+        agentId: "fixture-first",
+        key: "agent:fixture-first:secondary",
+        commandSource: "webchat",
+      });
+      expect(secondary.ok).toBe(true);
+      const effect = await beginSessionEffect({
+        agentId: "fixture-first",
+        scope: "agent:fixture-first",
+        identities: ["agent:fixture-first:secondary"],
+        run: { runId: "pending-secondary-run" },
+      }).then(
+        (value) => {
+          value.release();
+          return "admitted";
+        },
+        (error: unknown) => error,
+      );
+      expect(effect).toMatchObject({ reason: "initialization_pending" });
+      expect(onAgentReady).not.toHaveBeenCalled();
+    } finally {
+      source.reject(new Error("Fixture source verification rejected"));
+      await settled;
+    }
+    expect(await settled).toMatchObject({
+      value: {
+        status: "partial",
+        agentId: "fixture-first",
+        agentRetained: true,
+        sessionKey: "agent:fixture-first:main",
+      },
+    });
+    expect((await readConfigFileSnapshot()).config.agents?.entries).toHaveProperty("fixture-first");
+    expect(prepareAgentChat).toHaveBeenCalledOnce();
+  });
+});
+
+it.each([false, true])("drops a blocked review's agent (chat cleanup fails: %s)", async (fails) => {
+  await withOpenClawTestState({ label: "template-blocked-review" }, async (state) => {
+    const root = state.path("template-source");
+    await fs.mkdir(root);
+    await fs.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        name: "@fixture/template-blocked",
+        version: "1.0.0",
+        openclaw: { template: "CLAW.md" },
+      }),
+    );
+    await fs.writeFile(
+      path.join(root, "CLAW.md"),
+      "---\n" +
+        JSON.stringify({
+          schemaVersion: 1,
+          agent: { id: "fixture-blocked", name: "Blocked Fixture" },
+          mcpServers: { docs: { command: "template-docs" } },
+        }) +
+        "\n---\nA calm fixture personality.\n",
+    );
+    const source = await readTemplateManifestFile(root);
+    if (!source.ok) {
+      throw new Error("Invalid fixture manifest");
+    }
+    source.source = {
+      ...source.source,
+      kind: "package",
+      name: "@fixture/template-blocked",
+      version: "1.0.0",
+      integrityKind: "artifact",
+    };
+    const trust = {
+      riskAcknowledgementRequired: false,
+      trustRecord: {
+        clawhubTrustDisposition: "clean" as const,
+        clawhubTrustCheckedAt: "2026-11-04T00:00:00.000Z",
+      },
+    };
+    resolveSource.mockImplementation(
+      async (input: Parameters<typeof withResolvedClawHubSource>[0]) => ({
+        value: await input.run(source, trust, async () => source),
+      }),
+    );
+    const config: OpenClawConfig = {
+      gateway: { controlUi: { experimental: { templates: true } } },
+      agents: {
+        entries: { main: { workspace: state.path("existing-workspace") } },
+        defaults: { model: "ollama/test-model" },
+      },
+    };
+    await state.writeConfig(config);
+    setRuntimeConfigSnapshot(config);
+    const sourceMcpServers = { docs: { command: "operator-docs" } };
+    const review = projectGatewayTemplateAddPlan(
+      await buildGatewayTemplateAddPlan(source, { config, sourceMcpServers }),
+      source,
+      trust,
+      config,
+    );
+    expect(review.blockers).not.toEqual([]);
+    const sessionKey = "agent:fixture-blocked:main";
+    let admittedWorkspace: string | undefined;
+
+    await expect(
+      applyTemplateAddForGateway({
+        source: { packageName: "@fixture/template-blocked", version: "1.0.0" },
+        agentId: review.target.agentId,
+        planIntegrity: review.planIntegrity,
+        getPlanningContext: async () => ({
+          config: (await readConfigFileSnapshot()).config,
+          sourceMcpServers,
+        }),
+        policyConfig: { configPath: state.configPath, env: state.env },
+        assertCurrent: () => {},
+        prepareAgentChat: async (agentId, prospectiveConfig, pending) => {
+          const prepared = await completeAgentOnboarding(
+            {
+              req: { type: "req", id: "template-blocked", method: "templates.add.apply" },
+              context: { getRuntimeConfig: () => config },
+              client: { connect: { client: { mode: "ui" }, scopes: ["operator.admin"] } },
+              respond: vi.fn(),
+            } as unknown as GatewayRequestHandlerOptions,
+            agentId,
+            { config: prospectiveConfig, ...pending },
+          );
+          if (prepared.status !== "completed" || !prepared.rollback) {
+            throw new Error("Session preparation failed");
+          }
+          return fails
+            ? Object.assign(async () => {
+                throw new Error("Session store unavailable");
+              }, prepared.rollback)
+            : prepared.rollback;
+        },
+        waitForAgentRuntime: async () => {
+          const admitted = (await readConfigFileSnapshot()).config.agents?.entries?.[
+            "fixture-blocked"
+          ];
+          admittedWorkspace = admitted?.workspace;
+          expect(loadSessionEntryReadOnly({ agentId: "fixture-blocked", sessionKey })).toBeTruthy();
+          return "applied";
+        },
+        rollbackNewAgent: async (agentId, expectedAgentConfig) => {
+          await deleteAgentConfigEntry({
+            agentId,
+            validate: (agent) => expect(agent).toEqual(expectedAgentConfig),
+          });
+        },
+      }),
+    ).rejects.toBeInstanceOf(TemplateGatewayPlanBlockedError);
+
+    expect(admittedWorkspace).toBeTruthy();
+    expect((await readConfigFileSnapshot()).config.agents?.entries).not.toHaveProperty(
+      "fixture-blocked",
+    );
+    if (!fails) {
+      expect(loadSessionEntryReadOnly({ agentId: "fixture-blocked", sessionKey })).toBeUndefined();
+      await expect(fs.stat(admittedWorkspace!)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  });
+});

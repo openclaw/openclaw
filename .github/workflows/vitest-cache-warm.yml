@@ -35,7 +35,7 @@ jobs:
       matrix:
         # Hybrid's hosted lanes cannot read Blacksmith's backend-local cache.
         # Dependency publication must not queue behind long code warming.
-        platform: ${{ fromJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && '["linux", "linux-hosted", "macos"]' || '["linux", "macos"]') }}
+        platform: ${{ fromJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && '["linux-hosted", "macos"]' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && '["linux", "linux-hosted", "macos"]' || '["linux", "macos"]') }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -57,6 +57,32 @@ jobs:
         with:
           path: ${{ steps.setup-node-env.outputs.node-toolchain-cache-path }}
           key: ${{ steps.setup-node-env.outputs.node-toolchain-cache-key }}
+
+      - name: Populate fresh hosted Linux dependency store
+        if: ${{ runner.os == 'Linux' && runner.environment == 'github-hosted' && steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.pnpm-store-cache-key != '' && steps.setup-node-env.outputs.pnpm-store-cache-hit != 'true' }}
+        env:
+          CI: "true"
+          DEPENDENCY_CACHE: "false"
+          DEPENDENCY_CACHE_HIT: "false"
+          FROZEN_LOCKFILE: "true"
+        run: |
+          set -euo pipefail
+          test "$PNPM_CONFIG_STORE_DIR" = "$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store"
+          # Prefix restores carry old package snapshots forward indefinitely.
+          # Rebuild only a new hosted generation; keep authenticated pnpm bootstrap assets.
+          bootstrap="$(mktemp -d "$RUNNER_TEMP/pnpm-store-bootstrap.XXXXXX")"
+          trap 'rm -rf "$bootstrap"' EXIT
+          if [[ -d "$PNPM_CONFIG_STORE_DIR/toolchain" ]]; then
+            mv "$PNPM_CONFIG_STORE_DIR/toolchain" "$bootstrap/toolchain"
+          fi
+          rm -rf "$GITHUB_WORKSPACE/node_modules" "$GITHUB_WORKSPACE/ui/node_modules"
+          find "$GITHUB_WORKSPACE/packages" "$GITHUB_WORKSPACE/extensions" "$GITHUB_WORKSPACE/examples" \
+            -mindepth 1 -maxdepth 2 \( -type d -o -type l \) -name node_modules -exec rm -rf -- {} +
+          find "$PNPM_CONFIG_STORE_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          if [[ -d "$bootstrap/toolchain" ]]; then
+            mv "$bootstrap/toolchain" "$PNPM_CONFIG_STORE_DIR/toolchain"
+          fi
+          bash .github/actions/setup-node-env/install-dependencies.sh
 
       - name: Save exact dependency cache
         if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.dependency-cache-key != '' && steps.setup-node-env.outputs.dependency-cache-hit != 'true' }}
@@ -102,7 +128,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: ${{ fromJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && '["linux", "linux-hosted"]' || '["linux"]') }}
+        platform: ${{ fromJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && '["linux-hosted"]' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && '["linux", "linux-hosted"]' || '["linux"]') }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

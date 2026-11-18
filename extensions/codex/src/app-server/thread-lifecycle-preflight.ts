@@ -255,6 +255,7 @@ export async function prepareCodexThreadRequestContext(
     model: startModelSelection.model,
     modelProvider: startModelProvider,
     preserveNativeModel: binding.preserveNativeModel === true,
+    preserveNativeCollaboration: binding.connectionScope === "supervision",
     nativeModelProvider:
       binding.connectionScope === "supervision" ? binding.modelProvider : undefined,
     hostSystemAgentActive: options.preflight.hostSystemAgentActive,

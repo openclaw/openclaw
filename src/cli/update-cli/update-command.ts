@@ -1,4 +1,5 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { usesGitReleases } from "../../infra/git-release-paths.js";
 import type { PackageActivationRuntime } from "../../infra/package-update-activation-runtime.types.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
@@ -319,8 +320,22 @@ async function updateCommandInternal(
       });
     }
 
+    let releaseLayoutWarning: string | undefined;
+    const gitRelease =
+      updateInstallKind === "git" &&
+      usesGitReleases(
+        switchToGit,
+        await (
+          await import("./update-command-git.js")
+        ).gatewayServiceOwnsGitInstall(root, shouldRestart),
+        (reason) => {
+          releaseLayoutWarning = `Git release layout unavailable (${reason}); updating the checkout in place. The next update tries the release layout again.`;
+          defaultRuntime.error(`Warning: ${releaseLayoutWarning}`);
+        },
+      );
     const finalizationContext = {
       opts,
+      gitRelease,
       root,
       previousInstallRoot: discoveredRoot,
       requestedChannel,
@@ -458,6 +473,11 @@ async function updateCommandInternal(
       const installKey = captureUpdateCommandExecutorAuthority(fence).installKey;
       assertUpdatePackageActivationAdmission(installKey, { serviceRoot: managedServiceRoot });
       preUpdatePluginInstallRecords = await prepareMutableUpdateRuntime(env, fence);
+      // A Git release update never rewrites the tree this updater runs from.
+      if (gitRelease) {
+        mutableUpdatePrepared = true;
+        return;
+      }
       // Retention can walk the full dependency tree before the first staging step.
       // Record that work so the completed capacity check does not look stalled.
       const retentionStep = {
@@ -495,6 +515,7 @@ async function updateCommandInternal(
         : { updateInstallKind: "git" as const }),
       callerLegacyConfigPlan: initialization?.callerLegacyConfigPlan,
       installKind,
+      gitRelease,
       timeoutMs,
       updateStepTimeoutMs,
       startedAt,
@@ -526,6 +547,16 @@ async function updateCommandInternal(
     const { result } = executionState;
     if (retainedRuntimeStep) {
       result.steps.unshift(retainedRuntimeStep);
+    }
+    if (releaseLayoutWarning) {
+      result.steps.unshift({
+        name: "git-release-layout",
+        command: "select Git release layout",
+        cwd: root,
+        durationMs: 0,
+        exitCode: 0,
+        advisory: { kind: "recoverable-maintenance", message: releaseLayoutWarning },
+      });
     }
     result.runId = run.runId;
     if (result.status === "skipped" && result.reason === "already-current") {

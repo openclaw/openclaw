@@ -30,7 +30,7 @@ import {
   decodeUpdateFailureReportReservation,
   type UpdateFailureReportReceipt,
 } from "./update-failure-report-receipt.js";
-import { resolveUpdateInstallRoot } from "./update-install-root.js";
+import { resolveUpdateInstallRoot, updateInstallRootsMatch } from "./update-install-root.js";
 
 export type { RestartSentinelPayload } from "./restart-sentinel-store.js";
 export type { UpdateFailureReportReceipt } from "./update-failure-report-receipt.js";
@@ -348,7 +348,13 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
         argv1: process.argv[1],
       })))
     : null;
-  const actualRoot = discoveredRoot ? resolveUpdateInstallRoot(discoveredRoot) : null;
+  // A restarted Gateway finds its root by real path; on a release link that is
+  // the release the link selects, which is the same installation.
+  const actualRoot = discoveredRoot
+    ? expectedRoot && updateInstallRootsMatch(expectedRoot, discoveredRoot)
+      ? expectedRoot
+      : resolveUpdateInstallRoot(discoveredRoot)
+    : null;
 
   const finalized = await runRestartSentinelOperation(
     {

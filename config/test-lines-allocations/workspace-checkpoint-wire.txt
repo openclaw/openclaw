@@ -1,0 +1,2 @@
+# Exact net regression growth: bounded checkpoint request bytes with unchanged durable JSON after reopening SQLite.
+44

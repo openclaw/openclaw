@@ -205,7 +205,7 @@ function createFixture() {
           } finally {
             void completion.promise.then(() => {
               wire.mockRestore();
-              admission.finish();
+              return admission.finish();
             });
           }
         }

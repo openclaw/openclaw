@@ -19,6 +19,7 @@ import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import type { ChannelCapability, createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
+import { landDueMemberOnNewSession } from "../lib/openclaw-id/member-welcome.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { openPreferredApplicationSession } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
@@ -313,6 +314,7 @@ export function bootstrapApplication(
   });
   const sidebarAttention = createSidebarAttentionStore({
     gateway,
+    config,
     agentSelection,
     agents,
     overlays,
@@ -336,7 +338,12 @@ export function bootstrapApplication(
     canPresentBrowserPanel: () => {
       return (
         shell?.element.isConnected === true &&
-        !isSettingsTakeover(selectShellRouteState(router.getState()).routeId)
+        !isSettingsTakeover(
+          selectShellRouteState(router.getState()).routeId,
+          gateway.snapshot.hello?.controlUiTabs,
+          selectShellRouteState(router.getState()).location,
+          basePath,
+        )
       );
     },
     prepareNativeUpdateFallback: () => prepareNativeUpdateFallback(overlays),
@@ -575,6 +582,26 @@ export function bootstrapApplication(
         () => startGatewayPageActivation(gateway, document, window),
         () => startGatewayPresenceActivity(gateway, document),
         () => guestWelcome?.start(),
+        () => {
+          // The bootstrap config can arrive after startup; the Labs switch gates the status read.
+          let stopLanding: (() => void) | undefined;
+          const start = () => {
+            if (!stopLanding && startsApplicationRouter && config.current.openclawIdEnabled) {
+              stopLanding = landDueMemberOnNewSession(gateway, {
+                isDefaultLanding: async () =>
+                  firstRunDefaultLanding &&
+                  isResolvedDefaultLanding(resolveInitialLocation(), history, basePath),
+                openNewSession: () => void navigateWithMode("new-session", undefined, "replace"),
+              });
+            }
+          };
+          const stopConfig = config.subscribe(start);
+          start();
+          return () => {
+            stopConfig();
+            stopLanding?.();
+          };
+        },
         () => {
           plugins.start();
           return () => plugins.dispose();

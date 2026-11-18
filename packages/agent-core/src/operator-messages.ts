@@ -2,6 +2,18 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 
 export const SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE = "openclaw.system-update";
 
+/** Rebuilding the system prefix retires earlier prompt overrides, not runtime facts. */
+export function isSystemPromptUpdateBoundary(value: unknown): boolean {
+  const entry = asOptionalRecord(value);
+  return (
+    entry?.type === "reset" ||
+    entry?.type === "compaction" ||
+    (entry?.type === "custom" &&
+      entry.customType === "openclaw.system-prompt" &&
+      asOptionalRecord(entry.data)?.restart === true)
+  );
+}
+
 /** The same kind survives raw messages, transcript entries, and bounded navigation. */
 export function getOpenClawSystemUpdateKind(value: unknown) {
   const entry = asOptionalRecord(value);

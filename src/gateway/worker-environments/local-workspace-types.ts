@@ -1,3 +1,4 @@
+import type { LocalWorkspacePausePhase } from "../../agents/sandbox/types.js";
 import type {
   ManagedWorktreeRecord,
   WorktreeWorkerAuthority,
@@ -19,9 +20,10 @@ export type LocalWorkspaceCustody = {
   worktreeId: string;
   projectionPath?: string;
   projectionRevision?: number;
-  prepareArchive?: (snapshot: string) => Promise<void>;
+  prepareArchive?: () => Promise<(snapshot: string) => Promise<void>>;
   canonicalPaths?: () => Promise<Set<string>>;
   synchronizeProjection?: () => Promise<void>;
+  markPhase?: (phase: LocalWorkspacePausePhase) => void;
   assertCurrent: () => void;
   workerAuthority: WorktreeWorkerAuthority;
 };

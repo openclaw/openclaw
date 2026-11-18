@@ -1,5 +1,5 @@
 ---
-summary: "Use an externally managed Lightpanda browser for JavaScript and DOM tasks"
+summary: "Use externally managed Lightpanda and Kitesurf browser engines"
 title: "Lightweight browsers"
 read_when:
   - You want browser tasks to use a lightweight engine instead of Chromium
@@ -17,9 +17,72 @@ and applications that require unsupported browser features.
 The examples pin Lightpanda **1.0.2**. They do not change your existing browser
 profile, install a service, or migrate a logged-in Chrome profile.
 
+## Kitesurf (experimental)
+
+[Cloudflare Kitesurf](https://github.com/cloudflare/kitesurf) parses HTML, applies
+CSS, executes JavaScript, and renders images in Workers without a Chromium
+process. It is not a Chromium distribution. Its CDP endpoint implements a subset
+of Chrome's protocol; some unsupported commands return empty success responses.
+The upstream source has an [Apache-2.0 root license](https://github.com/cloudflare/kitesurf/blob/main/LICENSE).
+This adapter does not bundle the engine or audit its transitive dependencies.
+
+Build and start a local engine using the upstream README, then select it explicitly:
+
+```json5
+{
+  browser: {
+    profiles: {
+      kitesurf: {
+        engine: "kitesurf",
+        cdpUrl: "ws://127.0.0.1:8787/devtools/browser",
+        attachOnly: true,
+      },
+    },
+  },
+}
+```
+
+Use `profile: "kitesurf"` on browser calls. OpenClaw never launches or deploys
+Kitesurf. Each profile needs its own endpoint. Targets live only for the CDP
+connection; disconnecting loses them. Closing one Kitesurf tab preserves other
+tabs on that connection. Do not use this profile to preserve logins.
+
+The initial adapter admits navigation, tabs, text, efficient AI snapshots with
+`refs: "aria"`, semantic click/type/fill/select/press/wait/evaluate/close, and
+screenshots. Screenshot fidelity is experimental and may differ from Chromium.
+PDF, downloads, uploads, dialogs, emulation, logs, visual actions, scoped/native
+snapshots, and action batches are not exposed. Keep Chromium for those workflows.
+This is an OpenClaw qualification boundary, not a claim that upstream lacks every
+unexposed feature.
+
+Cloudflare deployment requires the Workers Paid plan and Dynamic Workers.
+Deployment is optional and separate from OpenClaw. Protect a deployed endpoint
+with authentication; upstream has no built-in authentication. OpenClaw does not
+currently provide a Kitesurf-specific Cloudflare Access service-token setup flow.
+Do not put service-token secrets in a CDP URL. Local development needs no deployment.
+
+### Compare engines
+
+The existing opt-in benchmark runs the same synthetic form workflow through
+OpenClaw's browser routes, including a checked, exactly-once submission:
+
+```bash
+node --import ./scripts/tsx.mjs extensions/browser/scripts/bench-lightweight.ts --endpoint ws://127.0.0.1:8787/devtools/browser --engine kitesurf --iterations 10 --output kitesurf-benchmark.json
+```
+
+For local fixtures, start the **local test engine only** with Kitesurf's
+`KITESURF_ALLOW_PRIVATE_NETWORK=1` variable (for example pass
+`--var KITESURF_ALLOW_PRIVATE_NETWORK:1` to `wrangler dev`). Do not enable this on
+an exposed service. The benchmark separately scopes OpenClaw's navigation policy
+to its fixture. See the Lightpanda benchmark below for native Chromium/Lightpanda
+comparisons. External endpoints report no engine memory or startup measurement;
+null means unavailable, not zero. Run engines serially with the same iteration
+count and record engine revisions, host, and failures. This is a synthetic
+compatibility/latency test, not a general web-compatibility or cost ranking.
+
 ## Browser plugin architecture
 
-The bundled Browser plugin owns both engine adapters. Chromium and Lightpanda
+The bundled Browser plugin owns the engine adapters. Chromium, Lightpanda, and Kitesurf
 use the same `browser` tool, profile selection, route admission, navigation
 policy, and session lifecycle. The registered adapter selects capabilities,
 CDP normalization, snapshot defaults, and connection lifetime; it does not add

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   UPDATE_NPM_ERROR_CODES,
+  UPDATE_RUN_CAUSES,
   UPDATE_RUN_DRIVER_LIMIT,
   UPDATE_RUN_PHASES,
   UPDATE_RUN_STATUSES,
@@ -14,7 +15,10 @@ import {
 } from "./update-doctor-config-schema.js";
 import { updateRecoveryCaptureStateSchema } from "./update-recovery-receipt-schema.js";
 import { updateRecoverySchema } from "./update-recovery.js";
-import { UpdateRunDriverSchema as driver } from "./update-run-driver-schema.js";
+import {
+  RecordedUpdateRunDriverSchema as recordedDriver,
+  UpdateRunDriverSchema as driver,
+} from "./update-run-driver-schema.js";
 import { UPDATE_RUN_TEXT_LIMIT, UPDATE_RUN_DIAGNOSTIC_LIMIT } from "./update-run-limits.js";
 import { UpdateSnapshotCapacitySchema } from "./update-snapshot-capacity-schema.js";
 
@@ -222,6 +226,24 @@ const UpdateRunStepSchema = z.object({
   }).optional(),
 });
 
+const packageReleaseIdentity = z.object({
+  path: z.string().max(1024),
+  identity: z
+    .string()
+    .regex(/^\d+:\d+$/u)
+    .max(64),
+  version: z.string().max(128).nullable(),
+  build: z.string().max(96).nullable(),
+});
+
+/** Bounded so three paths leave room in origin's byte budget beside the other receipts. */
+export const UpdateRunPackageReleaseSchema = z.object({
+  slot: z.string().max(1024),
+  from: packageReleaseIdentity,
+  to: packageReleaseIdentity,
+  adoption: z.literal(true).optional(),
+});
+
 export const UpdateRunRecordSchema = z.object({
   runId: z.uuid(),
   createdAtMs: timestamp,
@@ -240,7 +262,7 @@ export const UpdateRunRecordSchema = z.object({
     admission: admission.optional(),
     candidateAdmission: candidateAdmission.optional(),
     updateRecoveryCapture: updateRecoveryCaptureStateSchema.optional(),
-    driver: driver.optional(),
+    driver: recordedDriver.optional(),
     managedHandoff: z.object({ parent: driver, helper: driver }).optional(),
     packageStage: z
       .object({
@@ -249,8 +271,10 @@ export const UpdateRunRecordSchema = z.object({
         identity: z.object({ dev: z.number(), ino: z.number(), birthtimeMs: z.number() }),
       })
       .optional(),
+    // Advice for the next run about a release link switch; always rechecked on disk.
+    packageRelease: UpdateRunPackageReleaseSchema.optional(),
     previousDrivers: z
-      .array(driver)
+      .array(recordedDriver)
       .max(UPDATE_RUN_DRIVER_LIMIT - 1)
       .optional(),
     requester: z
@@ -273,6 +297,7 @@ export const UpdateRunRecordSchema = z.object({
     campaignId: text.optional(),
     doctorHint: text.optional(),
     nextAction: text.optional(),
+    cause: z.enum(UPDATE_RUN_CAUSES).optional(),
   }),
   target: z.object({
     channel: text.optional(),

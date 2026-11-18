@@ -350,7 +350,7 @@ export function streamWithIdleTimeout(
       sourceSignal?.addEventListener("abort", abortFromSourceSignal, { once: true });
     }
     const cleanupSourceSignal = () => {
-      endWatchdogRequest?.();
+      endWatchdogRequest?.(Date.now() + SESSION_WATCHDOG_WARNING_MS);
       clearRequestDeadline();
       sourceSignal?.removeEventListener("abort", abortFromSourceSignal);
     };
@@ -439,7 +439,7 @@ export function streamWithIdleTimeout(
           clearTimers();
           rejectIdleTimeout?.(error);
         };
-        const armTimer = (progress = true) => {
+        const armTimer = (progress = false) => {
           if (!guardIterationGaps || settled || (!producerCompletion && !rejectIdleTimeout)) {
             clearTimers();
             return;

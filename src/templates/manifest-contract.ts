@@ -1,9 +1,9 @@
 import type { ToolProfileId } from "../agents/tool-policy-shared.js";
 
 export const TEMPLATE_SCHEMA_VERSION = 1 as const;
-export const TEMPLATE_PACKAGE_KINDS = ["skill", "plugin"] as const;
+const TEMPLATE_PACKAGE_KINDS = ["skill", "plugin"] as const;
 export const TEMPLATE_PACKAGE_SOURCE = "clawhub" as const;
-export const TEMPLATE_EXTENSION_FORMATS = ["openclaw", "claude", "codex", "cursor"] as const;
+const TEMPLATE_EXTENSION_FORMATS = ["openclaw", "claude", "codex", "cursor"] as const;
 
 export type TemplatePackageKind = (typeof TEMPLATE_PACKAGE_KINDS)[number];
 export type TemplatePackageSource = typeof TEMPLATE_PACKAGE_SOURCE;
@@ -32,6 +32,7 @@ export type TemplateSourceIdentity = {
 export type TemplateCronJob = {
   id: string;
   name?: string;
+  enabled?: boolean;
   schedule: { cron: string; timezone: string };
   session: "main" | "isolated";
   message: string;
@@ -54,9 +55,16 @@ export type TemplateDiagnostic = {
   phase: "parse" | "schema" | "policy" | "plan" | "mutation";
   path: string;
   message: string;
+  /** Runtime plugin id to add to plugins.allow when only the allowlist blocks the plugin. */
+  allowlistPluginId?: string;
 };
 
 export type TemplateOpenClawAgentSettings = {
+  /**
+   * Author's preferred model as an exact `provider/model` ref. A preference, not a
+   * requirement: Add applies it only when the receiving host offers that model.
+   */
+  model?: string;
   groupChat?: {
     mentionPatterns?: string[];
   };

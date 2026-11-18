@@ -14,6 +14,7 @@ export default definePluginEntry({
   description: "Bounded, evidence-backed research",
   register(api) {
     let service: { scheduler: PluginServiceSchedulerV1; jobs: ResearchJobs } | undefined;
+    let compatibilityError: Error | undefined;
     registerResearchViewApi(api, () => {
       if (!service || service.scheduler.signal.aborted) {
         return undefined;
@@ -24,6 +25,13 @@ export default definePluginEntry({
       apiVersion: 3,
       id: "deep-research-jobs",
       async start(context) {
+        compatibilityError = undefined;
+        if (!context.sessionWork) {
+          compatibilityError = new Error(
+            "Deep research requires Gateway session-work support. Update OpenClaw and restart the Gateway.",
+          );
+          throw compatibilityError;
+        }
         const { ResearchJobs } = await loadJobs();
         context.scheduler.signal.throwIfAborted();
         const jobs = new ResearchJobs(api, context.scheduler, context.sessionWork, () => {
@@ -57,7 +65,10 @@ export default definePluginEntry({
             context.assertInvocationCurrent();
             const owner = service;
             if (!owner) {
-              throw new Error("Deep research requires the running Gateway job service.");
+              throw (
+                compatibilityError ??
+                new Error("Deep research requires the running Gateway job service.")
+              );
             }
             owner.scheduler.signal.throwIfAborted();
             const jobs = owner.jobs;

@@ -57,6 +57,7 @@ import {
   readGoalChatUserMessages,
   registerGoalChatRestartSettlementCase,
   registerGoalChatOperationCollisionCases,
+  registerGoalChatSpawnCases,
 } from "./server.chat-goal.test-support.js";
 import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { seedDeletedSessionTranscript } from "./session-history-fixture.test-support.js";
@@ -84,7 +85,7 @@ const runEmbeddedAgent = vi.spyOn(embeddedAgent, "runEmbeddedAgent");
 
 installGatewayTestHooks({ scope: "suite" });
 const temporaryDirs = createTempDirTracker();
-const sessionKey = "agent:main:main";
+let sessionKey = "agent:main:main";
 const sessionId = "goal-chat-session";
 const client: GatewayClient = {
   connId: "goal-chat-ui",
@@ -105,6 +106,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  sessionKey = "agent:main:main";
   storePath = path.join(temporaryDirs.make("openclaw-goal-chat-"), "sessions.json");
   testState.sessionStorePath = storePath;
   await writeSessionStore({
@@ -305,6 +307,15 @@ function holdGoalReceipt() {
 }
 
 describe("Goal chat admission and continuation", () => {
+  registerGoalChatSpawnCases({
+    scope,
+    runEmbeddedAgent,
+    rpc,
+    setSessionKey: (key) => {
+      sessionKey = key;
+    },
+  });
+
   registerGoalAutomaticContinuationCases(scope, runEmbeddedAgent, rpc, goalStart, userMessages);
   registerGoalReplacementCases(scope, runEmbeddedAgent, rpc, goalStart, () => context, client);
 

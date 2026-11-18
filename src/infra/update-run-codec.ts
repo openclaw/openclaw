@@ -11,7 +11,8 @@ import { resolveRequiredHomeDir } from "./home-dir.js";
 import { normalizeUpdateFailureFacts } from "./update-failure-facts.js";
 import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import type { UpdateRunRedactionFacts } from "./update-run-mutation.types.js";
-import type { UpdateRunRecord } from "./update-run-record.js";
+import { isUpdateOwedStepRow } from "./update-run-owed-step.js";
+import { toUpdateRunDriver, type UpdateRunRecord } from "./update-run-record.js";
 import { UpdateRunRecordSchema } from "./update-run-schema.js";
 
 const JSON_BYTES = 16 * 1024;
@@ -204,7 +205,10 @@ function boundedJson(
           item.step !== "diagnostic:database rollback" &&
           item.step !== "finalize:data-at-risk" &&
           !(typeof item.detail === "string" && parseDoctorRetirementWideningLine(item.detail)) &&
-          !(typeof item.step === "string" && item.step.startsWith("finalize:doctor-lint:"))
+          !(
+            typeof item.step === "string" &&
+            (item.step.startsWith("finalize:doctor-lint:") || isUpdateOwedStepRow(item.step))
+          )
             ? {
                 ...item,
                 detail: undefined,
@@ -259,13 +263,42 @@ function boundedJson(
   return json;
 }
 
+/**
+ * Driver boot namespaces only let a later update skip a repair after a restart. They
+ * yield before recovery receipts fail or admission identities and routing are evicted;
+ * diagnostic text is still shortened first. A run without them keeps explicit repair.
+ */
 function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
+  const json = boundedOriginJsonWithNamespaces(origin);
+  if (json !== undefined) {
+    return json;
+  }
+  const { driver, previousDrivers } = origin;
+  return (
+    boundedOriginJsonWithNamespaces({
+      ...origin,
+      driver: driver && toUpdateRunDriver(driver),
+      previousDrivers: previousDrivers?.map(toUpdateRunDriver),
+    }) ?? throwOversizedReceipts()
+  );
+}
+
+function throwOversizedReceipts(): never {
+  throw new Error("Update run recovery receipts exceed the origin byte limit");
+}
+
+/** Undefined when receipts or admission identities do not fit beside namespaces. */
+function boundedOriginJsonWithNamespaces(origin: UpdateRunRecord["origin"]): string | undefined {
+  const hasNamespaces = [origin.driver, ...(origin.previousDrivers ?? [])].some(
+    (driver) => driver?.namespace !== undefined,
+  );
   const {
     driver,
     previousDrivers,
     updateRecoveryCapture,
     managedHandoff,
     packageStage,
+    packageRelease,
     windowsUserSid,
     requester,
     sessionKey,
@@ -281,10 +314,11 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
     updateRecoveryCapture,
     managedHandoff,
     packageStage,
+    packageRelease,
     windowsUserSid,
   });
   if (Buffer.byteLength(retained) > JSON_BYTES) {
-    throw new Error("Update run recovery receipts exceed the origin byte limit");
+    return hasNamespaces ? undefined : throwOversizedReceipts();
   }
   const routing = { requester, sessionKey, deliveryContext, campaignId };
   const hasAdmission = origin.admission !== undefined || origin.candidateAdmission !== undefined;
@@ -296,6 +330,7 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
         updateRecoveryCapture,
         managedHandoff,
         packageStage,
+        packageRelease,
         windowsUserSid,
         ...routing,
       })
@@ -319,12 +354,14 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
     "candidateVersion",
     "installedVersion",
     "fallbackReason",
+    // A closed enum: halving it would make the stored record fail validation on read.
+    "cause",
   ]);
   const minimumDiagnostics = JSON.stringify(
     mapJsonText(diagnostics, (text, key) => (key && preservedTextFields.has(key) ? text : "")),
   );
   if (Buffer.byteLength(minimumDiagnostics) > diagnosticBudget) {
-    return retained;
+    return hasNamespaces ? undefined : retained;
   }
   const boundedDiagnostics = boundedJson(diagnostics, diagnosticBudget, preservedTextFields);
   return `{${[identities.slice(1, -1), boundedDiagnostics.slice(1, -1)].filter(Boolean).join(",")}}`;
@@ -372,6 +409,7 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
     updateRecoveryCapture,
     managedHandoff,
     packageStage,
+    packageRelease,
     windowsUserSid,
     ...originDiagnostics
   } = input.origin;
@@ -403,6 +441,7 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
     updateRecoveryCapture,
     managedHandoff,
     packageStage,
+    packageRelease,
     windowsUserSid,
   });
   // Shipped readers parse recovery strictly. Its named risk lives in a retained step fact.

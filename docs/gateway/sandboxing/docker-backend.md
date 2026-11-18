@@ -145,11 +145,29 @@ user-namespace and root-user restrictions.
 ### Shell environment
 
 Sandboxed `exec` commands default `HOME` to the sandbox workspace root, even when
-`workdir` selects a task subdirectory. Home-based configuration and package stores
-therefore persist across commands in that workspace. Explicit `sandbox.docker.env`
+`workdir` selects a task subdirectory. Home-based configuration
+therefore persists across commands in that workspace. Explicit `sandbox.docker.env`
 or command `env` values can override `HOME` and XDG paths. The host user's home and
 package stores are not mounted or inherited by this default; separate sandbox
 workspaces keep separate stores.
+
+Managed task workspaces default XDG, npm, pip, uv, and Bun caches to
+`/tmp/openclaw-deps/cache`; pnpm uses `/tmp/openclaw-deps/data/pnpm/store`.
+These share the existing 4 GiB dependency tmpfs limit, not separate quotas.
+Explicit sandbox and command environment settings still override these defaults.
+Cache exhaustion reports no space left; remove disposable cache contents or use
+an explicitly mounted, non-projected disk path through the existing environment
+settings. Increasing a workspace result limit does not fix cache exhaustion.
+
+Workspace capture and transfer omit exact tool-owned cache roots left by older
+sandboxes: `.npm/_cacache`, `.npm/_logs`, `.cache/pip`, `.cache/uv`, `.pnpm-store`,
+`.bun/install/cache`, `.cargo/registry`, `.cargo/git`, and `.gradle/caches`.
+Cargo and Gradle retain their workspace configuration; their cache subdirectories
+use this exclusion policy. Files elsewhere in `.npm`, `.cache`, `.cargo`, and
+`.gradle`, nested project fixtures, and staged inputs remain workspace data.
+Caches already on disk are not deleted. Large user files still hit the result
+size guard; a recognized cache in a nested project names its cache class and the
+environment setting for moving it outside the workspace before recovery.
 
 ### Docker daemon
 

@@ -235,8 +235,9 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     ...(progressRefresh ? { controlUiVisible: false, projectSessionActive: false } : {}),
     lifecycleGeneration,
   });
+  // A message to people never interrupts or steers the active run.
   const runInterruptCapture =
-    admittedRunAbort.entry?.input.policy.mode === "interrupt"
+    admittedRunAbort.entry?.input.policy.mode === "interrupt" && !request.humanAddressed
       ? captureSessionControllerInterruptBefore(admittedRunAbort.entry.input)
       : undefined;
   const placementService = context.workerSessionPlacementService;
@@ -333,13 +334,10 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
           throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
         }
         if (p.queueMode !== "steer" && expectedLeafEntryId !== undefined) {
-          assertExpectedLeafActive(latestSession, expectedLeafEntryId, requestedSessionId, {
-            allowEmptyAncestor: true,
-          });
+          assertExpectedLeafActive(latestSession, expectedLeafEntryId);
         }
         // Check the leaf first for typed errors; a reset must never redirect this request.
-        const expectedSessionId = requestedSessionId ?? backingSessionId;
-        if (expectedSessionId && latestSessionId !== expectedSessionId) {
+        if (backingSessionId && latestSessionId !== backingSessionId) {
           throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
         }
         pendingAcpRead = prepareChatSendAcpRefresh(params, acp, latestSession);
@@ -357,8 +355,9 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         admittedSessionId = latestSessionId ?? backingSessionId ?? clientRunId;
         if (!replyTargetsCaptured) {
           // Retain original opaque targets, including absence, across placement waits.
+          // A message to people never steers the active run.
           messageInjectionTarget =
-            p.queueMode === "steer"
+            p.queueMode === "steer" && !request.humanAddressed
               ? captureCurrentReplyMessageInjectionTarget(
                   admittedRunAbort.entry?.input.mailbox.owner.id ?? activeRunScopeKey,
                 )

@@ -1,15 +1,14 @@
 /* @vitest-environment jsdom */
 
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
-import { pathForTemplateCatalogEntry } from "../../app-route-paths.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import "../../lib/toast-host.tsx";
+// Register the toast renderer’s document-scoped avatar listener before per-test leak tracking.
+import "../../lib/toast-view.tsx";
 import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { TemplatesPage } from "../templates/page.tsx";
 import { page as templatesRoute } from "../templates/route.ts";
 import {
   cleanupAgentsHomePageTest,
@@ -17,35 +16,19 @@ import {
   setupAgentsHomePageTest,
   workflowOperator,
 } from "./agents-home-page.test-helpers.ts";
-import type { TemplateCatalogEntry } from "./templates-catalog-client.ts";
+import { createDetail } from "./templates-catalog.test-helpers.ts";
 
 beforeEach(setupAgentsHomePageTest);
 afterEach(cleanupAgentsHomePageTest);
 
-function createDetail(options: Parameters<typeof createPage>[0]) {
-  const fixture = createPage(options);
-  const [location, setLocation] = createSignal({
-    pathname: pathForTemplateCatalogEntry(workflowOperator.packageName, ""),
-    search: "",
-    hash: "",
+/** jsdom has no image decoding; tests decide when catalog artwork becomes ready. */
+function stubImageDecode(decode: () => Promise<void>) {
+  const stub = vi.fn(decode);
+  HTMLImageElement.prototype.decode = stub;
+  onTestFinished(() => {
+    Reflect.deleteProperty(HTMLImageElement.prototype, "decode");
   });
-  const view = mountSolid(
-    () =>
-      createComponent(TemplatesPage, {
-        get routeData() {
-          return { location: location(), basePath: "" };
-        },
-      }),
-    { wrapper: fixture.wrapper },
-  );
-  onTestFinished(view.unmount);
-  return {
-    ...fixture,
-    detail: view.container,
-    find: (selector: string) => view.container.querySelector<HTMLElement>(selector),
-    setPackageName: (packageName: string) =>
-      setLocation({ pathname: pathForTemplateCatalogEntry(packageName, ""), search: "", hash: "" }),
-  };
+  return stub;
 }
 
 describe("Templates discovery", () => {
@@ -179,7 +162,7 @@ describe("Templates discovery", () => {
       createRouteLoaderOptions(location, templatesRoute.loaderDeps!(context, location)),
     );
     expect(result).toEqual({ type: "notFound", data: undefined });
-    expect(ensureConfigLoaded).toHaveBeenCalledOnce();
+    expect(ensureConfigLoaded).not.toHaveBeenCalled();
     expect(page.textContent).toContain("Templates is turned off");
     expect(page.querySelector("[data-templates-explore]")).toBeNull();
     expect(page.querySelector("[data-templates-confirm]")).toBeNull();
@@ -207,6 +190,7 @@ describe("Templates discovery", () => {
     page.querySelector<HTMLButtonElement>(".agents-home__template-card-link")?.click();
     expect(navigate).toHaveBeenCalledWith("templates", {
       pathname: "/templates/packages/%40openclaw%2Fworkflow-operator",
+      search: "?version=1.2.0",
     });
     expect(request).toHaveBeenCalledWith("templates.catalog.search", {
       overview: true,
@@ -232,19 +216,14 @@ describe("Templates discovery", () => {
     await vi.waitFor(() => expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1));
   });
 
-  it("retries the selected package's catalog read while retaining its route", async () => {
+  it("retries the selected package's detail read while retaining its route", async () => {
     const { request, setTemplatesEnabled, find } = createDetail({ templatesEnabled: false });
     const original = request.getMockImplementation()!;
-    const pending = createDeferredCore<{ entries: TemplateCatalogEntry[] }>();
-    const recovered = createDeferredCore<{ entries: TemplateCatalogEntry[] }>();
+    const pending = createDeferredCore<unknown>();
+    const recovered = createDeferredCore<unknown>();
     let attempts = 0;
     request.mockImplementation((method, params, options) => {
-      if (
-        method === "templates.catalog.search" &&
-        params &&
-        typeof params === "object" &&
-        Reflect.get(params, "limit") === 100
-      ) {
+      if (method === "templates.catalog.detail") {
         return ++attempts === 1 ? pending.promise : recovered.promise;
       }
       return original(method, params, options);
@@ -264,26 +243,25 @@ describe("Templates discovery", () => {
     expect(find("[role=alert]")).toBeNull();
     expect(find(".plugin-catalog-detail__back")).toBe(back);
     expect(find("[data-templates-confirm]")).toBeNull();
-    recovered.resolve({ entries: [workflowOperator] });
+    recovered.resolve(await original("templates.catalog.detail", {}));
     await waitForSolid(() => expect(find(".plugin-capabilities")).not.toBeNull());
-    expect(request).toHaveBeenCalledWith("templates.catalog.search", {
-      query: workflowOperator.packageName,
-      limit: 100,
+    expect(request).toHaveBeenCalledWith("templates.catalog.detail", {
+      packageName: workflowOperator.packageName,
     });
   });
 
-  it("retires a pending catalog reply when the package route changes", async () => {
+  it("retires a pending detail reply when the package route changes", async () => {
     const { request, setTemplatesEnabled, setPackageName, find } = createDetail({
       templatesEnabled: false,
     });
     const original = request.getMockImplementation()!;
-    const retired = createDeferredCore<{ entries: TemplateCatalogEntry[] }>();
+    const retired = createDeferredCore<unknown>();
     request.mockImplementation((method, params, options) => {
       if (
-        method === "templates.catalog.search" &&
+        method === "templates.catalog.detail" &&
         params &&
         typeof params === "object" &&
-        Reflect.get(params, "query") === workflowOperator.packageName
+        Reflect.get(params, "packageName") === workflowOperator.packageName
       ) {
         return retired.promise;
       }
@@ -291,40 +269,33 @@ describe("Templates discovery", () => {
     });
     setTemplatesEnabled(true);
     await waitForSolid(() =>
-      expect(request).toHaveBeenCalledWith("templates.catalog.search", {
-        query: workflowOperator.packageName,
-        limit: 100,
+      expect(request).toHaveBeenCalledWith("templates.catalog.detail", {
+        packageName: workflowOperator.packageName,
       }),
     );
     setPackageName("@openclaw/missing");
     await waitForSolid(() => expect(find("[role=alert]")).not.toBeNull());
     const error = find("[role=alert]")?.textContent;
-    retired.resolve({ entries: [workflowOperator] });
+    retired.resolve(await original("templates.catalog.detail", {}));
     await retired.promise;
     await nextTurn();
     flush();
     expect(find("[role=alert]")?.textContent).toBe(error);
     expect(find(".plugin-capabilities")).toBeNull();
     expect(find("[data-templates-confirm]")).toBeNull();
-    expect(request.mock.calls.some(([method]) => method === "templates.catalog.detail")).toBe(
-      false,
-    );
+    expect(
+      request.mock.calls.filter(([method]) => method === "templates.catalog.detail"),
+    ).toHaveLength(2);
   });
 
-  it("refreshes a selected Template after reconnect and ignores the retired catalog reply", async () => {
+  it("refreshes a selected Template after reconnect and ignores the retired detail reply", async () => {
     const { request, setPhase, find } = createDetail({ templatesEnabled: true });
     await waitForSolid(() => expect(find(".plugin-capabilities")).not.toBeNull());
     const original = request.getMockImplementation()!;
-    const stale = createDeferredCore<{ entries: TemplateCatalogEntry[] }>();
+    const stale = createDeferredCore<unknown>();
     let searches = 0;
     request.mockImplementation((method, params, options) => {
-      if (
-        method === "templates.catalog.search" &&
-        params &&
-        typeof params === "object" &&
-        Reflect.get(params, "limit") === 100 &&
-        ++searches === 1
-      ) {
+      if (method === "templates.catalog.detail" && ++searches === 1) {
         return stale.promise;
       }
       return original(method, params, options);
@@ -339,18 +310,61 @@ describe("Templates discovery", () => {
     await waitForSolid(() =>
       expect(
         request.mock.calls.filter(([method]) => method === "templates.catalog.detail"),
-      ).toHaveLength(2),
+      ).toHaveLength(3),
     );
     await waitForSolid(() => expect(find(".plugin-capabilities")).not.toBeNull());
-    stale.resolve({ entries: [{ ...workflowOperator, installs: 0, latestVersion: "9.9.9" }] });
+    const response = (await original("templates.catalog.detail", {})) as {
+      detail: Record<string, unknown>;
+    };
+    stale.resolve({ detail: { ...response.detail, version: "9.9.9" } });
     await stale.promise;
     await nextTurn();
     flush();
     expect(
       request.mock.calls.filter(([method]) => method === "templates.catalog.detail"),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
     expect(find(".plugin-capabilities")).not.toBeNull();
   });
+
+  it.each([undefined, workflowOperator.latestVersion])(
+    "loads contents without search and pins Add to resolved release (version: %s)",
+    async (version) => {
+      const { detail, request, navigate, setTemplatesEnabled } = createDetail(
+        { templatesEnabled: false },
+        version,
+      );
+      const original = request.getMockImplementation()!;
+      const search = createDeferredCore<unknown>();
+      request.mockImplementation((method, params, options) =>
+        method === "templates.catalog.search" ? search.promise : original(method, params, options),
+      );
+      setTemplatesEnabled(true);
+
+      await waitForSolid(() =>
+        expect(detail.querySelector("[data-templates-confirm] button")).toHaveProperty(
+          "disabled",
+          false,
+        ),
+      );
+      expect(request).toHaveBeenCalledWith("templates.catalog.detail", {
+        packageName: workflowOperator.packageName,
+        ...(version ? { version } : {}),
+      });
+      const source = {
+        packageName: workflowOperator.packageName,
+        version: workflowOperator.latestVersion,
+      };
+      expect(request.mock.calls.some(([method]) => method === "templates.add.apply")).toBe(false);
+      detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button")?.click();
+      await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith("chat", expect.anything()));
+      expect(request).toHaveBeenCalledWith(
+        "templates.add.apply",
+        { mode: "chat", source, agentId: "workflow-operator" },
+        expect.objectContaining({ onSent: expect.any(Function) }),
+      );
+      expect(request.mock.calls.some(([method]) => method === "templates.add.plan")).toBe(false);
+    },
+  );
 
   it("retries a failed detail read without replacing the shell or admitting Add early", async () => {
     const { request, setPhase, find } = createDetail({ templatesEnabled: true });
@@ -567,389 +581,26 @@ describe("Templates discovery", () => {
     expect(search.value).toBe("retry");
     expect(page.querySelector("[data-templates-explore] [role=alert]")).toBeNull();
   });
-
-  it("reads contents before Add and opens the newly added agent chat", async () => {
-    const { detail, request, navigate } = createDetail({ templatesEnabled: true });
-
-    await vi.waitFor(() => expect(detail.querySelector(".plugin-capabilities")).not.toBeNull());
-    expect(request).toHaveBeenCalledWith("templates.catalog.detail", {
-      packageName: workflowOperator.packageName,
-      version: workflowOperator.latestVersion,
-    });
-    expect(request.mock.calls.some(([method]) => method === "templates.add.plan")).toBe(false);
-
-    await vi.waitFor(() =>
-      expect(
-        detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button")?.disabled,
-      ).toBe(false),
-    );
-    detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button")?.click();
-    await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith("chat", expect.anything()));
-    expect(request).toHaveBeenCalledWith("templates.add.apply", {
-      source: {
-        packageName: workflowOperator.packageName,
-        version: workflowOperator.latestVersion,
-      },
-    });
-  });
-
-  it("admits one Add from same-task clicks and stays busy through its completion", async () => {
-    const apply = createDeferredCore();
-    const { find, request, navigate } = createDetail({
-      templatesEnabled: true,
-      applyWait: apply.promise,
-    });
-    await waitForSolid(() =>
-      expect(find("[data-templates-confirm] button")).toHaveProperty("disabled", false),
-    );
-    const button = find("[data-templates-confirm] button")!;
-    button.click();
-    button.click();
-    expect(request.mock.calls.filter(([method]) => method === "templates.add.apply")).toHaveLength(
-      1,
-    );
-    await waitForSolid(() => {
-      expect(button.getAttribute("aria-busy")).toBe("true");
-      expect(button.textContent).toContain("Adding");
-    });
-    button.click();
-    expect(request.mock.calls.filter(([method]) => method === "templates.add.apply")).toHaveLength(
-      1,
-    );
-    apply.resolve();
-    await waitForSolid(() => expect(navigate).toHaveBeenCalledWith("chat", expect.anything()));
-  });
-
-  it("clears confirmed risk consent while the admitted Add remains busy", async () => {
-    const { find, request, navigate } = createDetail({
-      templatesEnabled: true,
-      riskConsentRequired: true,
-    });
-    await waitForSolid(() =>
-      expect(find("[data-templates-confirm] button")).toHaveProperty("disabled", false),
-    );
-    find("[data-templates-confirm] button")!.click();
-    await waitForSolid(() => expect(find(".templates-trust-warning")).not.toBeNull());
-    const original = request.getMockImplementation()!;
-    const apply = createDeferredCore();
-    request.mockImplementation(async (method, params, options) => {
-      if (method === "templates.add.apply") {
-        await apply.promise;
-      }
-      return original(method, params, options);
-    });
-    const confirm = find(".templates-add-consent__actions .btn.primary")!;
-    confirm.click();
-    confirm.click();
-    expect(request.mock.calls.filter(([method]) => method === "templates.add.apply")).toHaveLength(
-      2,
-    );
-    expect(
-      request.mock.calls.findLast(([method]) => method === "templates.add.apply")?.[1],
-    ).toHaveProperty("acknowledgeClawHubRisk", true);
-    await waitForSolid(() => {
-      expect(find(".templates-trust-warning")).toBeNull();
-      expect(find("[data-templates-confirm] button")?.getAttribute("aria-busy")).toBe("true");
-      expect(find("[data-templates-confirm] button")?.textContent).toContain("Adding");
-    });
-    apply.resolve();
-    await waitForSolid(() => expect(navigate).toHaveBeenCalledWith("chat", expect.anything()));
-  });
-
-  it("retires disconnected Add presentation without clearing a successor when the old reply lands", async () => {
-    const { find, request, navigate, setPhase } = createDetail({ templatesEnabled: true });
-    await waitForSolid(() =>
-      expect(find("[data-templates-confirm] button")).toHaveProperty("disabled", false),
-    );
-    const original = request.getMockImplementation()!;
-    const oldApply = createDeferredCore();
-    const newApply = createDeferredCore();
-    let applications = 0;
-    request.mockImplementation(async (method, params, options) => {
-      if (method === "templates.add.apply") {
-        await (applications++ === 0 ? oldApply.promise : newApply.promise);
-      }
-      return original(method, params, options);
-    });
-    find("[data-templates-confirm] button")!.click();
-    await waitForSolid(() =>
-      expect(find("[data-templates-confirm] button")?.textContent).toContain("Adding"),
-    );
-    setPhase("reconnecting");
-    await waitForSolid(() =>
-      expect(find("[data-templates-confirm] button")?.textContent).not.toContain("Adding"),
-    );
-    setPhase("connected");
-    await waitForSolid(() => {
-      expect(
-        request.mock.calls.filter(([method]) => method === "templates.catalog.detail"),
-      ).toHaveLength(2);
-      expect(find(".plugin-capabilities")).not.toBeNull();
-      expect(find("[data-templates-confirm] button")).toHaveProperty("disabled", false);
-      expect(find("[data-templates-confirm] button")?.getAttribute("aria-busy")).toBeNull();
-    });
-    find("[data-templates-confirm] button")!.click();
-    expect(applications).toBe(2);
-    await waitForSolid(() =>
-      expect(find("[data-templates-confirm] button")?.textContent).toContain("Adding"),
-    );
-    oldApply.resolve();
-    await nextTurn();
-    flush();
-    expect(find("[data-templates-confirm] button")?.getAttribute("aria-busy")).toBe("true");
-    expect(find("[data-templates-confirm] button")?.textContent).toContain("Adding");
-    expect(navigate).not.toHaveBeenCalledWith("chat", expect.anything());
-    newApply.resolve();
-    await waitForSolid(() =>
-      expect(navigate).toHaveBeenCalledWith(
-        "chat",
-        expect.objectContaining({ pathname: "/chat/workflow-operator-2" }),
-      ),
-    );
-    expect(applications).toBe(2);
-  });
-
-  it("retries an acknowledged agent handoff without applying the Template again", async () => {
-    const { find, request, navigate } = createDetail({ templatesEnabled: true });
-    await waitForSolid(() =>
-      expect(find("[data-templates-confirm] button")).toHaveProperty("disabled", false),
-    );
-    const original = request.getMockImplementation()!;
-    let rosterUnavailable = true;
-    vi.useFakeTimers({ toFake: ["Date"] });
-    request.mockImplementation((method, params, options) => {
-      if (method === "agents.list" && rosterUnavailable) {
-        vi.setSystemTime(Date.now() + 15_001);
-        throw new Error("Roster unavailable");
-      }
-      return original(method, params, options);
-    });
-    find("[data-templates-confirm] button")!.click();
-    await waitForSolid(() =>
-      expect(find("[role=alert] button")?.textContent).toContain("Open chat"),
-    );
-    expect(request.mock.calls.filter(([method]) => method === "templates.add.apply")).toHaveLength(
-      1,
-    );
-    expect(navigate).not.toHaveBeenCalledWith("chat", expect.anything());
-    rosterUnavailable = false;
-    find("[role=alert] button")!.click();
-    await waitForSolid(() =>
-      expect(navigate).toHaveBeenCalledWith(
-        "chat",
-        expect.objectContaining({ pathname: "/chat/workflow-operator" }),
-      ),
-    );
-    expect(request.mock.calls.filter(([method]) => method === "templates.add.apply")).toHaveLength(
-      1,
-    );
-  });
-
-  it("retains the selected Template on revalidation and clears it when the package changes", async () => {
-    const { detail, request, setPackageName } = createDetail({ templatesEnabled: true });
-
-    await vi.waitFor(() =>
-      expect(detail.querySelector(".plugin-capabilities")?.textContent).toContain("AGENTS.md"),
-    );
-    const selected = detail.querySelector(".plugin-capabilities");
-    const searches = request.mock.calls.filter(([method]) => method === "templates.catalog.search");
-    setPackageName(workflowOperator.packageName);
-    await waitForSolid(() => {
-      expect(detail.querySelector(".plugin-capabilities")).toBe(selected);
-      expect(
-        request.mock.calls.filter(([method]) => method === "templates.catalog.search"),
-      ).toEqual(searches);
-    });
-    setPackageName("@openclaw/another-template");
-
-    await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("templates.catalog.search", {
-        query: "@openclaw/another-template",
-        limit: 100,
-      }),
-    );
-    await vi.waitFor(() => expect(detail.querySelector(".plugin-capabilities")).toBeNull());
-    expect(detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button")).toBeNull();
-  });
-
-  it("retires a pending Add when the package route changes", async () => {
-    let finishApply: (() => void) | undefined;
-    const applyWait = new Promise<void>((resolve) => {
-      finishApply = resolve;
-    });
-    const { detail, request, navigate, setPackageName } = createDetail({
-      templatesEnabled: true,
-      applyWait,
-    });
-
-    await vi.waitFor(() =>
-      expect(
-        detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button")?.disabled,
-      ).toBe(false),
-    );
-    detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button")?.click();
-    await vi.waitFor(() =>
-      expect(request.mock.calls.some(([method]) => method === "templates.add.apply")).toBe(true),
-    );
-
-    setPackageName("@openclaw/another-template");
-    await vi.waitFor(() => expect(detail.querySelector(".plugin-capabilities")).toBeNull());
-    setPackageName(workflowOperator.packageName);
-    await vi.waitFor(() =>
-      expect(
-        detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button")?.disabled,
-      ).toBe(false),
-    );
-    finishApply?.();
-    detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button")?.click();
-    await vi.waitFor(() =>
-      expect(navigate).toHaveBeenCalledWith(
-        "chat",
-        expect.objectContaining({ pathname: "/chat/workflow-operator-2" }),
-      ),
-    );
-    expect(navigate.mock.calls.filter(([route]) => route === "chat")).toHaveLength(1);
-  });
-
-  it("asks before acknowledging a ClawHub trust warning", async () => {
-    const { detail, request, navigate } = createDetail({
-      templatesEnabled: true,
-      riskConsentRequired: true,
-      clawHubTrustWarning: "Review this release before adding it.",
-    });
-
-    await vi.waitFor(() =>
-      expect(
-        detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button")?.disabled,
-      ).toBe(false),
-    );
-    detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button")?.click();
-
-    await vi.waitFor(() =>
-      expect(detail.querySelector(".templates-trust-warning")?.textContent).toContain(
-        "Review this release before adding it.",
-      ),
-    );
-    expect(request.mock.calls.filter(([method]) => method === "templates.add.apply")).toHaveLength(
-      1,
-    );
-    expect(
-      request.mock.calls.find(([method]) => method === "templates.add.apply")?.[1],
-    ).not.toHaveProperty("acknowledgeClawHubRisk");
-    expect(navigate).not.toHaveBeenCalledWith("chat", expect.anything());
-
-    detail.querySelector<HTMLButtonElement>(".templates-add-consent__actions .btn")?.click();
-    await vi.waitFor(() => expect(detail.querySelector(".templates-add-consent")).toBeNull());
-    detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button")?.click();
-    await vi.waitFor(() =>
-      expect(
-        request.mock.calls.filter(([method]) => method === "templates.add.apply"),
-      ).toHaveLength(2),
-    );
-    expect(
-      request.mock.calls.findLast(([method]) => method === "templates.add.apply")?.[1],
-    ).not.toHaveProperty("acknowledgeClawHubRisk");
-    await vi.waitFor(() => expect(detail.querySelector(".templates-trust-warning")).not.toBeNull());
-
-    detail
-      .querySelector<HTMLButtonElement>(".templates-add-consent__actions .btn.primary")
-      ?.click();
-    await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith("chat", expect.anything()));
-    expect(
-      request.mock.calls.findLast(([method]) => method === "templates.add.apply")?.[1],
-    ).toHaveProperty("acknowledgeClawHubRisk", true);
-  });
-
-  it.each(["plugin", "skill"] as const)("asks before applying a %s review plan", async (kind) => {
-    const { detail, request, navigate } = createDetail({
-      templatesEnabled: true,
-      reviewRequiredOnce: kind,
-    });
-
-    await vi.waitFor(() =>
-      expect(
-        detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button")?.disabled,
-      ).toBe(false),
-    );
-    detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button")?.click();
-
-    await vi.waitFor(() =>
-      expect(detail.querySelector(".templates-add-consent")?.textContent).toContain(
-        kind === "plugin" ? "@openclaw/workflow-tools" : "@openclaw/research",
-      ),
-    );
-    if (kind === "plugin") {
-      expect(detail.querySelector(".templates-add-consent")?.textContent).toContain(
-        "Conversation access: Allowed",
-      );
-    }
-    expect(request.mock.calls.filter(([method]) => method === "templates.add.plan")).toHaveLength(
-      1,
-    );
-    expect(request.mock.calls.filter(([method]) => method === "templates.add.apply")).toHaveLength(
-      1,
-    );
-    expect(navigate).not.toHaveBeenCalledWith("chat", expect.anything());
-
-    detail
-      .querySelector<HTMLButtonElement>(".templates-add-consent__actions .btn.primary")
-      ?.click();
-    await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith("chat", expect.anything()));
-    const applyParams = request.mock.calls.findLast(
-      ([method]) => method === "templates.add.apply",
-    )?.[1];
-    expect(applyParams).toHaveProperty("planIntegrity", "sha256:reviewed-plan");
-    expect(applyParams).not.toHaveProperty("acknowledgeClawHubRisk");
-  });
-
-  it("requires both consents when trust and plugin review are needed", async () => {
-    const { detail, request, navigate } = createDetail({
-      templatesEnabled: true,
-      riskConsentRequired: true,
-      reviewRequiredOnce: "plugin",
-    });
-
-    await vi.waitFor(() =>
-      expect(
-        detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button")?.disabled,
-      ).toBe(false),
-    );
-    detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button")?.click();
-    await vi.waitFor(() => expect(detail.querySelector(".templates-trust-warning")).not.toBeNull());
-    detail
-      .querySelector<HTMLButtonElement>(".templates-add-consent__actions .btn.primary")
-      ?.click();
-
-    await vi.waitFor(() =>
-      expect(detail.querySelector(".templates-add-consent")?.textContent ?? "").toContain(
-        "@openclaw/workflow-tools",
-      ),
-    );
-    expect(request.mock.calls.filter(([method]) => method === "templates.add.apply")).toHaveLength(
-      2,
-    );
-    expect(navigate).not.toHaveBeenCalledWith("chat", expect.anything());
-
-    detail
-      .querySelector<HTMLButtonElement>(".templates-add-consent__actions .btn.primary")
-      ?.click();
-    await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith("chat", expect.anything()));
-    const applyParams = request.mock.calls.findLast(
-      ([method]) => method === "templates.add.apply",
-    )?.[1];
-    expect(applyParams).toHaveProperty("acknowledgeClawHubRisk", true);
-    expect(applyParams).toHaveProperty("planIntegrity", "sha256:reviewed-plan");
-  });
 });
 
 it.each(["card", "detail"])(
-  "shows Template artwork and falls back on an image error in the %s",
+  "shows Template artwork and falls back to the Blobster in the %s",
   async (surface) => {
     const templateIconUrl = `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`;
-    const options = { templateIconUrl, templatesEnabled: true };
-    const container = surface === "card" ? createPage(options).page : createDetail(options).detail;
+    stubImageDecode(() => Promise.resolve());
+    const create = (iconUrl?: string) => {
+      const options = { templateIconUrl: iconUrl, templatesEnabled: true };
+      return surface === "card" ? createPage(options).page : createDetail(options).detail;
+    };
     const selector =
       surface === "card" ? ".agents-home__template-art" : ".plugin-catalog-detail__icon";
+    // Only the Blobster fallback has two filled eyes; its stroke takes the container's color.
+    const blobsterEyes = `${selector} svg[stroke="currentColor"] circle[fill="currentColor"]`;
+    const withoutArtwork = create();
+    await waitForSolid(() => expect(withoutArtwork.querySelectorAll(blobsterEyes)).toHaveLength(2));
+    expect(withoutArtwork.querySelector(`${selector} img`)).toBeNull();
+
+    const container = create(templateIconUrl);
     await waitForSolid(() =>
       expect(container.querySelector(`${selector} img`)?.getAttribute("src")).toBe(templateIconUrl),
     );
@@ -958,6 +609,51 @@ it.each(["card", "detail"])(
     expect(image.getAttribute("crossorigin")).toBe("anonymous");
     image.dispatchEvent(new Event("error"));
     await waitForSolid(() => expect(container.querySelector(`${selector} img`)).toBeNull());
-    expect(container.querySelector(`${selector} svg`)).not.toBeNull();
+    expect(container.querySelectorAll(blobsterEyes)).toHaveLength(2);
   },
 );
+
+it.each(["decoded", "failed"] as const)(
+  "keeps the catalog placeholders until first-screen artwork has %s",
+  async (outcome) => {
+    const templateIconUrl = `https://clawhub.ai/api/v1/skill-icons/${"b".repeat(64)}`;
+    const artwork = createDeferredCore();
+    const decode = stubImageDecode(() => artwork.promise);
+    const { page } = createPage({ templateIconUrl, templatesEnabled: true });
+    await waitForSolid(() => expect(decode).toHaveBeenCalledOnce());
+    const preloaded = decode.mock.contexts[0] as HTMLImageElement;
+    // The preload must share the card image's request mode to reuse its response.
+    expect(preloaded.src).toBe(templateIconUrl);
+    expect(preloaded.crossOrigin).toBe("anonymous");
+    expect(preloaded.referrerPolicy).toBe("no-referrer");
+    await nextTurn();
+    expect(page.querySelector("[data-templates-entry]")).toBeNull();
+    expect(page.querySelectorAll("[data-templates-placeholder]")).not.toHaveLength(0);
+
+    if (outcome === "decoded") {
+      artwork.resolve();
+    } else {
+      artwork.reject(new Error("decode failed"));
+    }
+    await waitForSolid(() => expect(page.querySelector("[data-templates-entry]")).not.toBeNull());
+    expect(page.querySelector("[data-templates-placeholder]")).toBeNull();
+    expect(page.querySelector(".agents-home__template-art img")?.getAttribute("src")).toBe(
+      templateIconUrl,
+    );
+  },
+);
+
+it("stops waiting for slow artwork after the reveal budget", async () => {
+  vi.useFakeTimers();
+  try {
+    const templateIconUrl = `https://clawhub.ai/api/v1/skill-icons/${"c".repeat(64)}`;
+    stubImageDecode(() => new Promise<void>(() => {}));
+    const { page } = createPage({ templateIconUrl, templatesEnabled: true });
+    await vi.advanceTimersByTimeAsync(499);
+    expect(page.querySelector("[data-templates-entry]")).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    await waitForSolid(() => expect(page.querySelector("[data-templates-entry]")).not.toBeNull());
+  } finally {
+    vi.useRealTimers();
+  }
+});
