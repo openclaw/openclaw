@@ -51,6 +51,9 @@ timeout, preparation invalidation and other retryable refusals keep the wake pen
 with its last error, and the sweeper wakes it again. There is no attempt limit,
 retry ladder or expiry. A permanent refusal withholds the result with that error;
 it stays readable in the child session and is not dispatched again.
+A requester bound to a removed managed worktree is a permanent refusal and needs
+an explicit worktree restore before it can accept new work. An in-progress removal
+is transient and keeps the wake pending.
 Ordinary completion delivery retains its existing frozen-result retry policy and
 delivery identity; it does not start a new requester-settle attempt.
 Explicit Stop, retired work, and intentional delivery suppression still take
