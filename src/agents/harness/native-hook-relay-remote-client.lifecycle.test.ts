@@ -23,6 +23,7 @@ vi.mock("node:fs/promises", () => ({
 vi.mock("node:https", () => ({ request: boundary.request }));
 
 it.each(["response", "error"] as const)("joins the socket after %s delivery", async (mode) => {
+  vi.stubEnv("NODE_USE_ENV_PROXY", undefined);
   const entered = createDeferred();
   const response = Object.assign(new EventEmitter(), { statusCode: 200 });
   const request = Object.assign(new EventEmitter(), {

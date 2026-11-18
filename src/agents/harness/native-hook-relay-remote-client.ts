@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
-import { request } from "node:https";
+import { Agent, request } from "node:https";
 import type {
   InvokeNativeHookRelayParams,
   NativeHookRelayProcessResponse,
@@ -54,6 +54,13 @@ export async function invokeRemoteNativeHookRelay(
   }
   signal.throwIfAborted();
   const body = JSON.stringify(params);
+  // Node applies NODE_USE_ENV_PROXY to its global agent only, and `agent: false` bypasses it.
+  // In a sandbox whose only egress is an explicit proxy, honor the switch on a fresh agent that
+  // never pools, so the relay still owns its one socket. TLS stays end to end through CONNECT.
+  const agent =
+    process.env.NODE_USE_ENV_PROXY === "1"
+      ? new Agent({ keepAlive: false, maxSockets: 1, proxyEnv: process.env })
+      : false;
   return await new Promise((resolve, reject) => {
     let outcome:
       | { ok: true; value: NativeHookRelayProcessResponse }
@@ -70,7 +77,7 @@ export async function invokeRemoteNativeHookRelay(
       {
         method: "POST",
         // The cold relay owns this socket through close, never an idle pooled connection.
-        agent: false,
+        agent,
         signal,
         headers: {
           authorization: `Bearer ${credential.token}`,
@@ -118,6 +125,9 @@ export async function invokeRemoteNativeHookRelay(
     req.on("error", () => fail("Native hook callback connection failed"));
     // An error or response end does not yet prove the owned socket closed.
     req.once("close", () => {
+      if (agent) {
+        agent.destroy();
+      }
       if (outcome?.ok) {
         resolve(outcome.value);
       } else {
