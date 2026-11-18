@@ -239,16 +239,18 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   params.markSessionSubscribePhase?.("accessFacts");
   // SAFETY: The host-owned method registry carries the PluginRegistry selected for dispatch.
   const pluginRegistry = params.methodRegistry.pluginRegistry as PluginRegistry | undefined;
-  const authorizeMethod = () =>
-    withPluginRuntimeRegistryScope(pluginRegistry, () =>
-      authorizeGatewayMethod(
-        params.method,
-        params.client,
-        params.requestParams,
-        params.methodRegistry,
-        params.context,
-      ),
-    );
+  const scopeAuthorization = withPluginRuntimeRegistryScope(pluginRegistry, () =>
+    authorizeGatewayMethod(
+      params.method,
+      params.client,
+      params.requestParams,
+      params.methodRegistry,
+      params.context,
+    ),
+  );
+  if (scopeAuthorization.error) {
+    return { error: scopeAuthorization.error };
+  }
   const unavailableDuringStartup = () =>
     errorShape(ErrorCodes.UNAVAILABLE, `${params.method} unavailable during gateway startup`, {
       retryable: true,
@@ -282,10 +284,6 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   while (true) {
     signal?.throwIfAborted();
     startupReadSignal?.throwIfAborted();
-    const scopeAuthorization = authorizeMethod();
-    if (scopeAuthorization.error) {
-      return { error: scopeAuthorization.error };
-    }
     const uploadError = gatewayRouterUploadPolicyError(params, params.methodRegistry);
     if (uploadError) {
       return { error: uploadError };
@@ -515,8 +513,7 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       assertChatRoutingCurrent?.();
     };
     const authorizeCurrent = (assertCurrent?: () => void, release?: () => void) => {
-      const current = authorizeMethod();
-      const authorizationError = current.error ?? startupError();
+      const authorizationError = startupError();
       if (authorizationError) {
         release?.();
         return authorizationError;
@@ -530,10 +527,6 @@ export async function authorizeGatewayRequestPreDispatch(params: {
           return error.error;
         }
         throw error;
-      }
-      if (current.sessionScope !== scopeAuthorization.sessionScope) {
-        release?.();
-        return errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed");
       }
       return null;
     };

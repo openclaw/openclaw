@@ -1,5 +1,5 @@
 import { intersectOperatorScopes, roleScopesAllow } from "../../shared/operator-scope-compat.js";
-import { prepareUserProfileRolePolicyAuthority } from "../../state/user-channel-identity-operations.js";
+import { prepareUserProfileSelectionAuthority } from "../../state/user-channel-identity-operations.js";
 import { currentOwnerDevicePrincipal } from "../openclaw-id/tunnel-principal.js";
 import { hasCurrentGatewayOperatorAccess } from "../operator-access-policy.js";
 import {
@@ -13,7 +13,7 @@ import {
   hasCurrentPersonalGatewaySource,
   isSyntheticGatewayCaller,
 } from "./gateway-personal-caller.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
+import type { GatewayClient, GatewayRequestHandlerOptions } from "./types.js";
 type Request = Pick<GatewayRequestHandlerOptions, "client" | "context" | "signal">;
 type PersonalProfileScope =
   | "operator.read"
@@ -21,7 +21,7 @@ type PersonalProfileScope =
   | "operator.sessions.read"
   | "operator.admin";
 
-/** Intersect the live role ceiling with the socket grant, preserving scope implications. */
+/** Admit the role ceiling against the socket grant, preserving scope implications. */
 export function currentPersonalProfileClient(
   options: Request,
   scope: PersonalProfileScope,
@@ -88,52 +88,46 @@ export function currentPersonalProfileClient(
   };
 }
 
-/** Prepare canonical role facts off-thread; live checks consume the profile owner's revisions. */
+/** Bind the authenticated credential owner once; retain only cancellation and owner isolation. */
 export async function preparePersonalProfileAction(
   options: Request,
   scope: PersonalProfileScope = "operator.read",
   callerSignal?: AbortSignal,
-): Promise<{ owner: string; signal: AbortSignal; assertCurrent: () => void }> {
+): Promise<{
+  owner: string;
+  client: GatewayClient;
+  signal: AbortSignal;
+  assertCurrent: () => void;
+}> {
   const { client, context } = options;
-  const profileReference = client?.authenticatedUserProfile?.profileId;
-  const userId = client?.authenticatedUserId;
-  const access = client?.internal?.operatorAccessAuthority;
-  const signals = [options.signal, callerSignal, client?.connectionSignal].filter(
-    (signal): signal is AbortSignal => signal !== undefined,
-  );
-  const signal = AbortSignal.any(signals);
-  const assertConnection = () => {
-    signal.throwIfAborted();
-    if (!hasCurrentPersonalGatewaySource(client, context)) {
-      throw new Error(
-        "Personal profile requires a current authenticated human Gateway connection.",
-      );
-    }
-    if (
-      client.authenticatedUserProfile?.profileId !== profileReference ||
-      client.authenticatedUserId !== userId ||
-      client.internal?.operatorAccessAuthority !== access
-    ) {
-      throw new Error("Personal profile owner changed; retry from your current profile.");
-    }
-  };
-  assertConnection();
-  const profile = profileReference
-    ? await prepareUserProfileRolePolicyAuthority(profileReference)
-    : undefined;
-  assertConnection();
+  if (!hasCurrentPersonalGatewaySource(client, context)) {
+    throw new Error("Personal profile requires a current authenticated human Gateway connection.");
+  }
+  const profileReference = client.authenticatedUserProfile?.profileId;
+  if (!profileReference) {
+    throw new Error(
+      "Personal profile requires a verified durable user profile; sign in and try again.",
+    );
+  }
+  const profile = await prepareUserProfileSelectionAuthority(profileReference);
   if (!profile) {
     throw new Error(
       "Personal profile requires a verified durable user profile; sign in and try again.",
     );
   }
+  const admittedClient = currentPersonalProfileClient(options, scope, profile.profileId);
+  if (!admittedClient) {
+    throw new Error("Personal profile requires an authenticated Gateway connection.");
+  }
+  const owner = profile.profileId;
+  // The transport's signal can revoke access; only action-owned cancellation survives admission.
+  const signal = callerSignal ?? AbortSignal.any([]);
   const assertCurrent = () => {
-    assertConnection();
+    signal.throwIfAborted();
+    // Never follow a merged profile to somebody else's credentials.
     if (!profile.isCurrent()) {
       throw new Error("Personal profile owner changed; retry from your current profile.");
     }
-    currentPersonalProfileClient(options, scope, profile);
   };
-  assertCurrent();
-  return { owner: profile.profileId, signal, assertCurrent };
+  return { owner, client: admittedClient, signal, assertCurrent };
 }
