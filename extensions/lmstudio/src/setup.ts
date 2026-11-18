@@ -143,7 +143,26 @@ function buildLmstudioSetupProviderConfig(params: {
     ...(resolvedAuth ? { auth: resolvedAuth } : {}),
     ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {}),
     headers: params.headers,
-    models: params.models,
+    models: params.models.map((model) => {
+      // Discovery caps are synthesized. Saved model limits override provider defaults,
+      // and only the provider default must fit the final selected/served context.
+      const modelMaxTokens = params.existingProvider?.models?.find(
+        (entry) => entry.id === model.id,
+      )?.maxTokens;
+      const providerMaxTokens = params.existingProvider?.maxTokens;
+      return {
+        ...model,
+        maxTokens:
+          modelMaxTokens ??
+          (providerMaxTokens !== undefined
+            ? Math.min(
+                providerMaxTokens,
+                model.contextWindow ?? providerMaxTokens,
+                model.contextTokens ?? providerMaxTokens,
+              )
+            : model.maxTokens),
+      };
+    }),
   };
 }
 
