@@ -1,5 +1,8 @@
 import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveChannelProgressDraftConfig } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  resolveChannelProgressDraftConfig,
+  resolveChannelProgressDraftMaxLines,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
@@ -11,6 +14,7 @@ import {
   resolveSlackReplyBlocks,
   type PreparedSlackReply,
 } from "../../reply-blocks.js";
+import { SLACK_STREAM_MESSAGE_TASK_BUDGET } from "../../stream-size.js";
 import { getOrCreateWeakOwnerMap, readLruMapEntry, writeLruMapEntry } from "../lru-map-cache.js";
 import { resolveSlackTimestampMs } from "./timestamp.js";
 import type { PreparedSlackMessage } from "./types.js";
@@ -70,6 +74,23 @@ export function resolveExplicitSlackProgressTitle(
   }
   const trimmed = label.trim();
   return trimmed && trimmed.toLowerCase() !== "auto" ? trimmed : undefined;
+}
+
+/**
+ * Task rows per native stream message. `progress.maxLines` caps it only when
+ * the account sets the key itself: its default (eight) sizes the draft card's
+ * rolling window, and a native message without it holds Slack's 50 rows. A
+ * message needs one slot for a row it carries (the quiet card's summary row,
+ * a tool still running) and one for new work, so the cap is at least two.
+ */
+export function resolveSlackNativeMessageRowLimit(
+  entry: Parameters<typeof resolveChannelProgressDraftConfig>[0],
+): number {
+  if (resolveChannelProgressDraftConfig(entry).maxLines === undefined) {
+    return SLACK_STREAM_MESSAGE_TASK_BUDGET;
+  }
+  const maxLines = resolveChannelProgressDraftMaxLines(entry, SLACK_STREAM_MESSAGE_TASK_BUDGET);
+  return Math.max(2, Math.min(maxLines, SLACK_STREAM_MESSAGE_TASK_BUDGET));
 }
 
 export function resolveSlackProgressStyle(

@@ -34,7 +34,8 @@ Creating the first config, or overriding a value inherited from an included
 config file, still needs the Gateway stopped: stop it through its service
 owner, wait for it to exit, then rerun the command.
 
-Routing order:
+`--terminal-path <launcher>` runs only Tauri desktop terminal integration and rejects
+all other setup options. Otherwise, routing order is:
 
 1. Any onboarding option (`--wizard`, `--baseline`, workspace, reset,
    non-interactive, flow, mode, Gateway, daemon, skip, import, remote, or auth
@@ -142,6 +143,21 @@ plaintext or SecretRef storage mode. `--gateway-token`, `--gateway-token-ref-env
 and `--gateway-password` configure a local Gateway and are not valid in remote
 mode. For remote token SecretRefs, set `OPENCLAW_GATEWAY_TOKEN` and use
 `--remote-token` with `--secret-input-mode ref`.
+
+### Desktop terminal PATH integration
+
+The Tauri desktop app automatically runs `setup --terminal-path <launcher>` after
+qualifying its app-managed local CLI, before baseline or Gateway service setup.
+This path-only operation exposes that existing launcher in new terminals; it
+does not create config, workspace, sessions, credentials, or a Gateway service,
+and it does not select a remote connection. It rejects other setup options.
+
+On POSIX systems it appends guarded shell startup integration, including custom
+zsh and fish config locations. On Windows it appends to the current user PATH,
+preserving existing entries, registry string type, and expandable references.
+An existing selected CLI or offline configured profile keeps its terminal
+default. A partial PATH failure is reported without removing the installed CLI;
+repair the named startup file or user PATH and retry the local app setup.
 
 ### Baseline mode
 

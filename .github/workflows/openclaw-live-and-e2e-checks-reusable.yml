@@ -3236,6 +3236,7 @@ jobs:
         if: steps.create_prepublish_plugin_registry.outputs.manifest_sha256 != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: docker-e2e-prepublish-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/prepublish-plugin-registry/
           if-no-files-found: error
@@ -4435,7 +4436,7 @@ jobs:
         include:
           - suite_id: native-live-src-agents
             label: Native live agents
-            command: OPENCLAW_LIVE_OPENAI_COMPACTION=1 OPENCLAW_LIVE_OPENAI_COMPACTION_FULL=0 node .release-harness/scripts/test-live-shard.mjs native-live-src-agents
+            command: OPENCLAW_LIVE_RETAINED_CHILD=1 OPENCLAW_LIVE_OPENAI_COMPACTION=1 OPENCLAW_LIVE_OPENAI_COMPACTION_FULL=0 node .release-harness/scripts/test-live-shard.mjs native-live-src-agents
             timeout_minutes: 60
             profile_env_only: false
             profiles: stable full

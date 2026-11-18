@@ -89,33 +89,6 @@ function requireCronConfigRevision(revision: string | null | undefined): string 
   throw new Error(t("cron.missingConfigRevision"));
 }
 
-export function updateCronJobsFilter(
-  state: CronState,
-  patch: Partial<
-    Pick<
-      CronState,
-      | "cronJobsQuery"
-      | "cronJobsEnabledFilter"
-      | "cronJobsScheduleKindFilter"
-      | "cronJobsLastStatusFilter"
-      | "cronJobsTriggerFilter"
-      | "cronJobsSortBy"
-      | "cronJobsSortDir"
-    >
-  >,
-) {
-  if (patch.cronJobsQuery !== undefined) {
-    state.cronJobsQuery = patch.cronJobsQuery;
-  }
-  state.cronJobsEnabledFilter = patch.cronJobsEnabledFilter ?? state.cronJobsEnabledFilter;
-  state.cronJobsScheduleKindFilter =
-    patch.cronJobsScheduleKindFilter ?? state.cronJobsScheduleKindFilter;
-  state.cronJobsLastStatusFilter = patch.cronJobsLastStatusFilter ?? state.cronJobsLastStatusFilter;
-  state.cronJobsTriggerFilter = patch.cronJobsTriggerFilter ?? state.cronJobsTriggerFilter;
-  state.cronJobsSortBy = patch.cronJobsSortBy ?? state.cronJobsSortBy;
-  state.cronJobsSortDir = patch.cronJobsSortDir ?? state.cronJobsSortDir;
-}
-
 function clearCronEditState(state: CronState) {
   retireCronSelectedJobRead(state);
   state.cronError = null;

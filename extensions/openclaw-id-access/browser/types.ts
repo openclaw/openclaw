@@ -39,6 +39,7 @@ export type Member = {
   accountId: string;
   role: string;
   roleDefined?: boolean;
+  recoveryKit?: boolean;
   peerKeys: string[];
   email?: string | null;
   displayName?: string | null;
@@ -52,6 +53,18 @@ export type RemovalSummary = { devices: number; connectionsClosed: number; runsC
 
 /** A local personal profile with no OpenClaw ID linked yet. */
 export type ExistingProfile = { id: string; displayName: string | null };
+
+/** Owner-only accepted recovery-kit use, independent of current member/device membership. */
+export type MemberRecoveryUse = {
+  seq: number;
+  accountId: string;
+  memberName: string;
+  deviceLabel: string;
+  peerKey: string;
+  peerFp: string;
+  /** Gateway-observed admission time, Unix seconds. */
+  usedAt: number;
+};
 
 /** One invite as the Gateway lists it to owners. */
 export type Invite = {
@@ -77,6 +90,16 @@ export type Invite = {
   };
 };
 
+/** Small public role summary, not the full permission definition. */
+export type Role = { name: string; requiresSandbox: boolean } & (
+  | { defined: false }
+  | {
+      defined: true;
+      sessions: "none" | "view" | "suggest" | "write";
+      admin: boolean;
+    }
+);
+
 /**
  * The claw's link state: `openclawId.status` returns only linked, clawId, hostname and
  * rootPub; `openclawId.people` (owner only) returns all of it.
@@ -89,7 +112,8 @@ export type Link = {
   seq?: number;
   ownerDevices?: OwnerDevice[];
   members?: Member[];
-  roles?: Array<{ name: string; defined: boolean; requiresSandbox: boolean }>;
+  roles?: Role[];
+  recoveryUses?: MemberRecoveryUse[];
   /** Default engine liveness; null means this backend is not probed here. */
   sandboxBackend?: { backend: string; available: boolean | null };
   invites?: Invite[];
@@ -112,6 +136,7 @@ export type StatusResult = {
   channel: "local_operator" | "tunnel" | null;
   /** Whether `openclawId.people` answers this client (loopback operator or an owner device). */
   owner?: boolean;
+  connection?: { kind: "member"; role: MemberRole } | { kind: "owner" | "local" | "none" };
 };
 
 /** Owner-only public node projection; never contains the invitation proof key. */

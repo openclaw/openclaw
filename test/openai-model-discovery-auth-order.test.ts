@@ -360,6 +360,9 @@ describe("Provider model discovery auth preparation", () => {
             provider: providerId,
             ...(resolvedProfile ? { profileId: resolvedProfile } : {}),
             status: "ready",
+            ...(providerId === "openai"
+              ? { modelIdCatalog: { baseUrl: "https://api.openai.com/v1", modelIds: [modelId] } }
+              : {}),
           },
         ],
         action: "write",

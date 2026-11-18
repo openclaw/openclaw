@@ -41,6 +41,7 @@ import { readModelPromptProjection } from "../../../sessions/user-turn-transcrip
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import { decideContextPressure } from "../../context-pressure.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers/context-file.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
@@ -443,7 +444,7 @@ export function installEmbeddedAttemptContextGuards(input: {
       request: Pick<
         Parameters<typeof resolveProjectedRequestPressure>[0],
         "context" | "previousRequest" | "fixedTokenPressure"
-      > & { measuredContextTokens?: number },
+      > & { measuredContextTokens?: number; boundarySafe?: () => boolean },
     ) => {
       // Deferring maintenance never authorizes an over-window provider request.
       const deferThreshold = activeSession[agentSessionDeferThresholdCompaction];
@@ -460,6 +461,7 @@ export function installEmbeddedAttemptContextGuards(input: {
         !deferThreshold &&
         compaction?.enabled !== false &&
         (request.measuredContextTokens ?? request.previousRequest?.contextTokens ?? 0) >= threshold;
+      // The reserve only selects the compaction target; context-pressure owns the verdict.
       const decision = resolveProjectedRequestPressure({
         ...request,
         // Provider projections may contain text that the transcript owner cannot rewrite.
@@ -486,13 +488,24 @@ export function installEmbeddedAttemptContextGuards(input: {
         replay: {
           model: attempt.model,
           sessionId: attempt.sessionId,
-          authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
           enabled: input.getCompactionReplayEnabled(),
         },
       });
       await publishEmbeddedRequestContext(attempt, decision.estimatedPromptTokens);
-      if (decision.route !== "fits") {
-        pendingMidTurnPrecheckRequest = { ...decision, route: decision.route };
+      const pressure = decideContextPressure({
+        estimatedPromptTokens: decision.estimatedPromptTokens,
+        windowTokens: contextTokenBudget,
+        maintenanceDue: decision.route !== "fits",
+        // Evaluated lazily: only due maintenance needs the tool-batch evidence.
+        boundarySafe: decision.route !== "fits" && (request.boundarySafe?.() ?? false),
+        runId: attempt.runId,
+      });
+      if (pressure) {
+        pendingMidTurnPrecheckRequest = {
+          ...decision,
+          pressure,
+          route: decision.route === "fits" ? "compact_only" : decision.route,
+        };
         throw new MidTurnPrecheckSignal(pendingMidTurnPrecheckRequest);
       }
       return decision.estimatedPromptTokens;

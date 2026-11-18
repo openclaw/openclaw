@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
@@ -9,8 +10,15 @@ import {
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
+import { claimSystemEventTurn } from "../../infra/system-events.js";
+import type { SubsystemLogger } from "../../logging/subsystem.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
-import type { SessionEventOutcome } from "./session-event-contract.js";
+import type {
+  SessionEventOptions,
+  SessionEventOutcome,
+  SessionEventReceipt,
+} from "./session-event-contract.js";
 
 /** Reconcile settled controller facts without changing event custody or retry policy. */
 export function resolveSessionEventTerminalOutcome(params: {
@@ -44,6 +52,7 @@ export function resolveSessionEventTerminalOutcome(params: {
     buildAgentRunTerminalOutcomeFromLifecycleEvent({
       phase: failed || aborted || failure ? "error" : "end",
       data: {
+        ...(failed && result.code === "run_stalled" ? { status: "timeout" } : {}),
         ...(aborted ? { aborted: true } : {}),
         ...(aborted && result.code === "aborted_for_supersession"
           ? { stopReason: AGENT_RUN_SUPERSEDED_STOP_REASON }
@@ -66,4 +75,51 @@ export function resolveSessionEventTerminalOutcome(params: {
         ? "completed"
         : "failed";
   return { failure, terminalOutcome, status };
+}
+
+export async function waitForSessionEventReadmission(attempt: number, signal: AbortSignal) {
+  // Yield before fresh authority; cancellation can end retention during the wait.
+  await delay(100 * 2 ** attempt, undefined, { signal }).catch((error: unknown) => {
+    if (!signal.aborted) {
+      throw error;
+    }
+  });
+}
+
+export function readmitSessionEventOccurrence(params: {
+  text: string;
+  options: SessionEventOptions &
+    Required<Pick<SessionEventOptions, "agentId" | "sessionKey" | "occurrences">>;
+  attempt: number;
+  adopted: boolean;
+  occurrenceId: string;
+  enqueue: (text: string, options: SessionEventOptions, attempt: number) => SessionEventReceipt;
+  log: Pick<SubsystemLogger, "error">;
+}): { receipt?: SessionEventReceipt; failure?: Error | string } {
+  const { options } = params;
+  // These fresh readmission options retain passive custody only until adoption.
+  options.preserveOccurrenceOnRejection =
+    options.preserveOccurrenceOnRejection && !params.adopted ? true : undefined;
+  try {
+    return { receipt: params.enqueue(params.text, options, params.attempt) };
+  } catch (error) {
+    if (!options.preserveOccurrenceOnRejection) {
+      // A released occurrence without a producer contract must be consumed.
+      claimSystemEventTurn(
+        resolveSystemEventQueueKey(options.sessionKey, options.agentId),
+        options.occurrences,
+        () => {},
+        options.agentId,
+      )?.cancel();
+    }
+    const failure = error instanceof Error ? error : String(error);
+    params.log.error("session event policy readmission rejected", {
+      source: options.source,
+      agentId: options.agentId,
+      sessionKey: options.sessionKey,
+      eventId: params.occurrenceId,
+      error: String(failure),
+    });
+    return { failure };
+  }
 }

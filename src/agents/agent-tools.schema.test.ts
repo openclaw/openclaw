@@ -282,7 +282,6 @@ describe("finalized tool parameter schemas", () => {
     const tool = wrapToolWithBeforeToolCallHook(normalized, {
       agentId: "main",
       sessionKey: "e2e-null-args",
-      loopDetection: { enabled: true },
     });
     const { messages, events, streamCalls } = await runToolCall(
       tool,

@@ -329,12 +329,17 @@ Components partition V8-serialized facts using marginal removal sizes:
 references and all remaining admission facts. `receipt_entry` removes the postimage
 entry and the complete entry-metadata receipts (including their small envelopes).
 `receipt_events` then removes appended events and transcript authority receipts.
-`receipt_other` includes everything left, including the append value and model
-prompt projection. Shared objects belong to the last component still referencing
-them. The components sum exactly to each sampled fact payload's V8 size; port,
-decision-cell and transport framing bytes are excluded. This is byte attribution,
-not a measurement of structured-clone allocation. Unsupported graphs increment
-`result="unmeasured"` samples instead of contributing bytes.
+`receipt_value` then removes the phase result and transcript append result, including
+reloads, initial entries and model prompt projections; `receipt_other` includes
+everything left. Shared objects belong to the last component still referencing
+them. Native cloning can change V8 array encoding sizes, so each receipt remainder
+is capped at the previous remainder. Attribution is approximate, but receipt
+components sum exactly to the worker-recorded `payloadBytes` (zero total-byte
+error). Port, decision-cell and transport framing bytes are excluded. This is byte
+attribution, not structured-clone allocation. If serialization fails, the known
+receipt total goes to `receipt_other` and its component samples increment
+`result="unmeasured"`. Unsupported admission facts without a known size still
+contribute no bytes.
 
 For ordinary appends with one committed receipt, divide each component's sampled
 bytes by receipt samples to estimate bytes per append (including all admission
@@ -345,7 +350,7 @@ sum by (component) (
   rate(openclaw_worker_authority_component_sampled_bytes_total{request_class="session.actor.appendTranscriptEvent"}[15m])
 )
 /
-scalar(sum(rate(openclaw_worker_authority_component_samples_total{request_class="session.actor.appendTranscriptEvent",component="receipt_other",result="measured"}[15m])))
+scalar(sum(rate(openclaw_worker_authority_component_samples_total{request_class="session.actor.appendTranscriptEvent",component="receipt_other"}[15m])))
 ```
 
 Check sample counts and unmeasured samples before interpreting a short window.
@@ -1400,6 +1405,51 @@ OpenTelemetry's `openclaw.gc.duration_ms` uses the corresponding
 `openclaw.gc.kind`, `openclaw.gc.thread`, and optional `openclaw.gc.worker_slot`
 attributes.
 
+## Plugin metric families
+
+Enabling Prometheus alone exports core metrics, not every plugin's metrics. To add a plugin's counters, gauges, and histograms to the same scrape, set `plugins.entries.<id>.allowMetrics` to `true` for **that plugin**. If omitted or `false`, its `api.metrics` is undefined. Other plugins are unaffected.
+
+```json5
+{
+  plugins: {
+    entries: {
+      "diagnostics-prometheus": { enabled: true },
+      "my-plugin": { enabled: true, allowMetrics: true },
+    },
+  },
+}
+```
+
+This controls plugin-published metrics, not core measurements or a plugin's own HTTP routes. Anyone who can read the shared scrape can read these metrics; don't put secrets or personal identifiers in labels. The opt-in does not enable the plugin or an exporter. An opted-in plugin can register before Prometheus starts. Samples recorded with no listener are discarded, not buffered. Starting or stopping the exporter does not require the producer to restart. Today only `diagnostics-prometheus` exports these families.
+
+Plugin code can use the optional API:
+
+```ts
+const metrics = api.metrics?.register({
+  families: [
+    { name: "retain_total", type: "counter", help: "Retains by outcome", labels: ["outcome"] },
+    {
+      name: "recall_seconds",
+      type: "histogram",
+      help: "Recall latency",
+      buckets: [0.05, 0.1, 0.5, 1, 5],
+    },
+  ],
+});
+metrics?.counter("retain_total").inc({ outcome: "ok" });
+metrics?.histogram("recall_seconds").observe({}, 0.12);
+```
+
+- The host prefixes every family with `openclaw_plugin_<plugin id>_`; non `[a-z0-9_]` characters in the id become `_`. The example above exports `openclaw_plugin_my_plugin_retain_total` for a plugin with id `my-plugin`. Two plugins cannot register the same exported name, and a histogram also reserves its `_bucket`, `_sum` and `_count` names, so no other family (from the same plugin or another) can use them.
+- Names match `[a-z][a-z0-9_]*`, counters end in `_total`, label names are declared up front, and histogram buckets are finite and strictly ascending. `register()` throws on an invalid declaration, so the error shows up when the plugin loads.
+- Every sample must carry exactly the declared labels. A sample with other labels is dropped and the plugin logger warns once per family. Label values that fail the low-cardinality policy (`[A-Za-z0-9_.:-]`, up to 120 characters) are exported as `other`.
+- Plugin families have no reserve. They use the shared pool, each family keeps at most 128 label sets, and drops appear in `openclaw_prometheus_family_series_dropped_total{family="openclaw_plugin_..."}`. Core family reserves are unchanged, so plugin traffic cannot starve them.
+- Samples are recorded only while the exporter runs and reset when it stops, like core metrics. Record from runtime paths (routes, services, hooks): the exporter starts after plugins register.
+- Samples are accepted only while the recording plugin instance is the published one. During a reload the replacement instance can register the same families without disturbing the live one, but samples it records before the reload commits (from `register()` or a service start) are dropped, and the live instance keeps recording. If the reload fails and the previous instance is restored, its families and recorders keep working without registering again.
+- Calling `register()` again from the same instance replaces that instance's families: a family left out disappears from the next scrape, and recorders from the earlier call stop recording. A family whose type, help, labels or buckets changed across a reload starts over under its new shape once the reload commits: when the previous instance is disposed, or at the first new sample, whichever comes first.
+- When a plugin instance is disposed (disabled, uninstalled, or replaced by a committed reload), the families no other instance of that plugin still declares are dropped from the scrape and their names are released. Its retained recorders stop recording, and `register()` on its retained `api.metrics` throws.
+- The TypeScript type is `NonNullable<OpenClawPluginApi["metrics"]>`; the SDK exports no separate name for it.
+
 ## Label policy
 
 <AccordionGroup>
@@ -1435,7 +1485,7 @@ attributes.
 
     These budgets cover 170 RPC methods (including two client kinds per method), 400 worker request/queue label sets, 400 worker phase label sets, 200 WebSocket event names, 390 worker heap-space label sets, and 250 main/worker GC label sets without using the shared pool. Worker heap spaces multiply `script × space`; GC can multiply `thread × kind × reason × slot`. The GC `reason` and reusable Code Mode `slot` labels retain callback attribution and per-isolate correlation with heap samples. Worker phases multiply `kind × request_class × phase`: 400 fully timed request combinations would need 2,800 phase entries, exceeding that family's 1,024-entry limit. Reservations guarantee capacity, not unlimited cardinality.
 
-    Rejected new-series observations increment `openclaw_prometheus_series_dropped_total` and `openclaw_prometheus_family_series_dropped_total{family="..."}`. Repeated observations of the same rejected label set increment again; these counters do not count unique rejected sets. Both counters bypass admission, so saturation cannot hide drops. The family label comes only from the fixed catalog, never from diagnostic label values. The exporter also logs one warning per affected family per process, including across exporter restarts.
+    Rejected new-series observations increment `openclaw_prometheus_series_dropped_total` and `openclaw_prometheus_family_series_dropped_total{family="..."}`. Repeated observations of the same rejected label set increment again; these counters do not count unique rejected sets. Both counters bypass admission, so saturation cannot hide drops. The family label comes only from the fixed catalog or a host-admitted plugin family name, never from diagnostic label values. The exporter also logs one warning per affected family per process, including across exporter restarts.
 
     Drop counters reset when the exporter stops. Drops can reflect legitimate combinations of bounded labels as well as an upstream cardinality leak. Inspect the named family before changing its labels or budget. The exporter never raises its cap automatically; the family reserve is a guarantee of capacity, not complete coverage for arbitrarily many label combinations.
 

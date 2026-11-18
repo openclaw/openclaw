@@ -3,6 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import * as tar from "tar";
+import { hasErrnoCode } from "../infra/errno.js";
 import { root as fsSafeRoot, walkDirectory } from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { digestTemplateBytes, digestTemplateValue } from "./digest.js";
@@ -25,30 +26,32 @@ export async function snapshotTemplateDependencyDirectory(params: {
   rootDir: string;
   path?: string;
 }): Promise<TemplateDirectorySnapshot> {
-  if (
-    params.path !== undefined &&
-    (!isSafeTemplateRelativePath(params.path) ||
-      portableTemplatePathKey(params.path)
-        .split("/")
-        .some((part) => part === ".git" || part === "node_modules"))
-  ) {
+  const excluded = (path: string) =>
+    portableTemplatePathKey(path)
+      .split("/")
+      .some((part) => part === ".git" || part === "node_modules");
+  if (params.path !== undefined && !isSafeTemplateRelativePath(params.path)) {
     throw new Error("Bundled dependency path must be package-relative.");
+  }
+  if (params.path !== undefined && excluded(params.path)) {
+    throw new Error("Bundled dependency path must not be inside a .git or node_modules folder.");
   }
   const directory = resolve(params.rootDir, params.path ?? "");
   await assertNoSymlinkParents({
     rootDir: params.rootDir,
     targetPath: directory,
-    allowMissing: false,
+    allowMissing: true,
     messagePrefix: "Bundled dependency",
   });
-  const stat = await lstat(directory);
+  const stat = await lstat(directory).catch((error: unknown) => {
+    if (hasErrnoCode(error, "ENOENT")) {
+      throw new Error(`Bundled dependency folder ${params.path ?? "."} does not exist.`);
+    }
+    throw error;
+  });
   if (!stat.isDirectory() || stat.isSymbolicLink()) {
     throw new Error("Bundled dependency must be a regular directory.");
   }
-  const excluded = (path: string) =>
-    portableTemplatePathKey(path)
-      .split("/")
-      .some((part) => part === ".git" || part === "node_modules");
   const walked = await walkDirectory(directory, {
     // Read one boundary level so depth exhaustion cannot silently omit eligible files.
     maxDepth: MAX_TEMPLATE_DIRECTORY_DEPTH + 1,

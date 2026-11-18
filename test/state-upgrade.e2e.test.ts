@@ -1,6 +1,6 @@
 // Start this build's Gateway on real prior-release state and prove the
 // copy-and-swap upgrade: it starts, user data survives, and the old files keep
-// their exact bytes under `.pre-<version>`.
+// their exact bytes under `.pre-<buildId>`.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -9,13 +9,10 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { listDirectoryTreeStrictSync } from "../src/infra/directory-walk.js";
 import { UPGRADE_SET_ASIDE_SCOPE } from "../src/state/sqlite-copy-swap.js";
+import { createDoctorChain } from "../src/state/state-upgrade-doctor.js";
 import { ChainStepError } from "../src/state/state-upgrade-validate.js";
-import {
-  createDoctorChain,
-  UPGRADE_REPORT_SCOPE,
-  upgradeStateDirectory,
-} from "../src/state/state-upgrade.js";
-import { VERSION } from "../src/version.js";
+import { upgradeStateDirectory } from "../src/state/state-upgrade.js";
+import { resolveRuntimeServiceBuildId, VERSION } from "../src/version.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 
 const corpusDir = fileURLToPath(new URL("./fixtures/state-corpus-populated/", import.meta.url));
@@ -116,7 +113,9 @@ function upgradedText(stateDir: string): string {
 }
 
 const cases = [
+  { release: "2026.7.1", failStep: undefined },
   { release: "2026.7.1-blob", failStep: undefined },
+  { release: "2026.7.35", failStep: undefined },
   { release: "2026.8.35", failStep: undefined },
   { release: "2026.9.37", failStep: undefined },
   { release: "2026.10.10", failStep: undefined },
@@ -240,9 +239,13 @@ describe("Gateway start upgrades prior-release state by copy and swap", () => {
         }
         await instance.stopGateway();
 
-        // The old bytes survive unchanged under the preserved name.
+        // The old bytes survive under the build that upgraded them: this process, or the Gateway's dist.
+        const builtBy = failStep
+          ? resolveRuntimeServiceBuildId()
+          : JSON.parse(fs.readFileSync(new URL("../dist/build-info.json", import.meta.url), "utf8"))
+              .buildId;
         for (const [file, digest] of before) {
-          expect(sha256(`${file}.pre-${VERSION}`), file).toBe(digest);
+          expect(sha256(`${file}.pre-${builtBy ?? VERSION}`), file).toBe(digest);
         }
         const state = new DatabaseSync(path.join(instance.stateDir, "state", "openclaw.sqlite"), {
           readOnly: true,
@@ -252,7 +255,7 @@ describe("Gateway start upgrades prior-release state by copy and swap", () => {
             (
               state
                 .prepare("SELECT payload_json FROM diagnostic_events WHERE scope = ?")
-                .get(UPGRADE_REPORT_SCOPE) as { payload_json: string }
+                .get("upgrade.report") as { payload_json: string }
             ).payload_json,
           );
           expect(report).toMatchObject(

@@ -35,6 +35,9 @@ it.each(["versions", "snapshot", "strict", "read-error"] as const)(
     const before = fs.readFileSync(source);
     const input = createStateSnapshotInput(root, stateDir, stagingRoot);
     const inventory = await readUpdateCandidateStateInventoryInProcess(input);
+    // Inventory must preserve the source family before the later header inspection.
+    expect(fs.existsSync(`${source}-wal`)).toBe(false);
+    expect(fs.existsSync(`${source}-shm`)).toBe(false);
     const logger = logging.getChildLogger({ subsystem: "infra/sqlite-snapshot" });
     const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
     vi.spyOn(logging, "getChildLogger").mockReturnValue(logger);

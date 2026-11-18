@@ -467,7 +467,15 @@
       "automationEvent": "事件：{source}",
       "automationWaitingForEvent": "等待事件",
       "dependencyStatusNotLoaded": "未加载",
-      "automationDisabled": "已禁用"
+      "automationDisabled": "已禁用",
+      "dispatchFirstFailure": "首次启动失败：{message}",
+      "findLabel": "查找或添加标签",
+      "createLabel": "添加“{label}”",
+      "noMatchingLabels": "没有匹配的标签。",
+      "noKnownLabels": "已加载的卡片中还没有标签。",
+      "labelLengthLimit": "标签最多可包含 40 个字符。",
+      "bulkLabelLimit": "这会使某张所选卡片的标签超过 12 个。请减少选择的标签。",
+      "labelLimit": "已选择 12 个标签。请先移除一个，再添加其他标签。"
     }
   },
   "zh-TW": {
@@ -938,7 +946,15 @@
       "automationEvent": "事件：{source}",
       "automationWaitingForEvent": "等待事件",
       "dependencyStatusNotLoaded": "未載入",
-      "automationDisabled": "已停用"
+      "automationDisabled": "已停用",
+      "dispatchFirstFailure": "首次啟動失敗：{message}",
+      "findLabel": "尋找或新增標籤",
+      "createLabel": "新增「{label}」",
+      "noMatchingLabels": "沒有符合的標籤。",
+      "noKnownLabels": "已載入的卡片中尚無標籤。",
+      "labelLengthLimit": "標籤最多可包含 40 個字元。",
+      "bulkLabelLimit": "這會使所選卡片的標籤超過 12 個。請減少選取的標籤。",
+      "labelLimit": "已選取 12 個標籤。請先移除一個，再新增其他標籤。"
     }
   },
   "pt-BR": {
@@ -1409,7 +1425,15 @@
       "automationEvent": "Evento: {source}",
       "automationWaitingForEvent": "Aguardando evento",
       "dependencyStatusNotLoaded": "Não carregado",
-      "automationDisabled": "Desativado"
+      "automationDisabled": "Desativado",
+      "dispatchFirstFailure": "Primeira falha na inicialização: {message}",
+      "findLabel": "Busque ou adicione uma etiqueta",
+      "createLabel": "Adicionar “{label}”",
+      "noMatchingLabels": "Nenhuma etiqueta correspondente.",
+      "noKnownLabels": "Ainda não há etiquetas nos cartões carregados.",
+      "labelLengthLimit": "As etiquetas podem ter até 40 caracteres.",
+      "bulkLabelLimit": "Isso faria com que um cartão selecionado tivesse mais de 12 etiquetas. Escolha menos etiquetas.",
+      "labelLimit": "12 etiquetas selecionadas. Remova uma para adicionar outra."
     }
   },
   "de": {
@@ -1880,7 +1904,15 @@
       "automationEvent": "Ereignis: {source}",
       "automationWaitingForEvent": "Warten auf Ereignis",
       "dependencyStatusNotLoaded": "Nicht geladen",
-      "automationDisabled": "Deaktiviert"
+      "automationDisabled": "Deaktiviert",
+      "dispatchFirstFailure": "Erster Startfehler: {message}",
+      "findLabel": "Label suchen oder hinzufügen",
+      "createLabel": "„{label}“ hinzufügen",
+      "noMatchingLabels": "Keine passenden Labels.",
+      "noKnownLabels": "Noch keine Labels in den geladenen Karten.",
+      "labelLengthLimit": "Labels dürfen bis zu 40 Zeichen lang sein.",
+      "bulkLabelLimit": "Dadurch würde eine ausgewählte Karte mehr als 12 Labels erhalten. Wählen Sie weniger Labels aus.",
+      "labelLimit": "12 Labels ausgewählt. Entfernen Sie eines, um ein weiteres hinzuzufügen."
     }
   },
   "es": {
@@ -2351,7 +2383,15 @@
       "automationEvent": "Evento: {source}",
       "automationWaitingForEvent": "Esperando un evento",
       "dependencyStatusNotLoaded": "Sin cargar",
-      "automationDisabled": "Desactivado"
+      "automationDisabled": "Desactivado",
+      "dispatchFirstFailure": "Primer fallo de inicio: {message}",
+      "findLabel": "Buscar o añadir una etiqueta",
+      "createLabel": "Añadir «{label}»",
+      "noMatchingLabels": "No hay etiquetas que coincidan.",
+      "noKnownLabels": "Aún no hay etiquetas en las tarjetas cargadas.",
+      "labelLengthLimit": "Las etiquetas pueden tener hasta 40 caracteres.",
+      "bulkLabelLimit": "Esto haría que una tarjeta seleccionada tuviera más de 12 etiquetas. Elige menos etiquetas.",
+      "labelLimit": "12 etiquetas seleccionadas. Elimina una para añadir otra."
     }
   },
   "ja-JP": {
@@ -2822,7 +2862,15 @@
       "automationEvent": "イベント：{source}",
       "automationWaitingForEvent": "イベント待機中",
       "dependencyStatusNotLoaded": "未読み込み",
-      "automationDisabled": "無効"
+      "automationDisabled": "無効",
+      "dispatchFirstFailure": "初回起動の失敗: {message}",
+      "findLabel": "ラベルを検索または追加",
+      "createLabel": "「{label}」を追加",
+      "noMatchingLabels": "一致するラベルがありません。",
+      "noKnownLabels": "読み込まれたカードにはまだラベルがありません。",
+      "labelLengthLimit": "ラベルは40文字まで入力できます。",
+      "bulkLabelLimit": "この操作を行うと、選択したカードのラベルが12個を超えます。選択するラベルを減らしてください。",
+      "labelLimit": "ラベルが12個選択されています。別のラベルを追加するには、1個削除してください。"
     }
   },
   "ko": {
@@ -3293,7 +3341,15 @@
       "automationEvent": "이벤트: {source}",
       "automationWaitingForEvent": "이벤트 대기 중",
       "dependencyStatusNotLoaded": "불러오지 않음",
-      "automationDisabled": "비활성화됨"
+      "automationDisabled": "비활성화됨",
+      "dispatchFirstFailure": "첫 시작 실패: {message}",
+      "findLabel": "라벨 검색 또는 추가",
+      "createLabel": "“{label}” 추가",
+      "noMatchingLabels": "일치하는 라벨이 없습니다.",
+      "noKnownLabels": "불러온 카드에 아직 라벨이 없습니다.",
+      "labelLengthLimit": "라벨은 최대 40자까지 입력할 수 있습니다.",
+      "bulkLabelLimit": "선택한 카드의 라벨이 12개를 초과하게 됩니다. 라벨을 더 적게 선택하세요.",
+      "labelLimit": "라벨 12개를 선택했습니다. 다른 라벨을 추가하려면 하나를 제거하세요."
     }
   },
   "fr": {
@@ -3764,7 +3820,15 @@
       "automationEvent": "Événement : {source}",
       "automationWaitingForEvent": "En attente d’un événement",
       "dependencyStatusNotLoaded": "Non chargé",
-      "automationDisabled": "Désactivé"
+      "automationDisabled": "Désactivé",
+      "dispatchFirstFailure": "Premier échec de démarrage : {message}",
+      "findLabel": "Rechercher ou ajouter une étiquette",
+      "createLabel": "Ajouter « {label} »",
+      "noMatchingLabels": "Aucune étiquette correspondante.",
+      "noKnownLabels": "Aucune étiquette dans les cartes chargées pour le moment.",
+      "labelLengthLimit": "Les étiquettes peuvent contenir jusqu’à 40 caractères.",
+      "bulkLabelLimit": "Cela attribuerait plus de 12 étiquettes à une carte sélectionnée. Choisissez moins d’étiquettes.",
+      "labelLimit": "12 étiquettes sélectionnées. Retirez-en une pour en ajouter une autre."
     }
   },
   "hi": {
@@ -4235,7 +4299,15 @@
       "automationEvent": "घटना: {source}",
       "automationWaitingForEvent": "घटना की प्रतीक्षा है",
       "dependencyStatusNotLoaded": "लोड नहीं हुआ",
-      "automationDisabled": "अक्षम"
+      "automationDisabled": "अक्षम",
+      "dispatchFirstFailure": "शुरू करने का पहला प्रयास विफल: {message}",
+      "findLabel": "लेबल खोजें या जोड़ें",
+      "createLabel": "“{label}” जोड़ें",
+      "noMatchingLabels": "कोई मेल खाने वाला लेबल नहीं मिला।",
+      "noKnownLabels": "लोड किए गए कार्ड में अभी कोई लेबल नहीं है।",
+      "labelLengthLimit": "लेबल में अधिकतम 40 वर्ण हो सकते हैं।",
+      "bulkLabelLimit": "इससे किसी चुने हुए कार्ड में 12 से ज़्यादा लेबल हो जाएंगे। कम लेबल चुनें।",
+      "labelLimit": "12 लेबल चुने गए हैं। दूसरा जोड़ने के लिए एक हटाएं।"
     }
   },
   "ar": {
@@ -4706,7 +4778,15 @@
       "automationEvent": "الحدث: {source}",
       "automationWaitingForEvent": "في انتظار حدث",
       "dependencyStatusNotLoaded": "غير محمّل",
-      "automationDisabled": "معطّل"
+      "automationDisabled": "معطّل",
+      "dispatchFirstFailure": "أول فشل في بدء التشغيل: {message}",
+      "findLabel": "ابحث عن تصنيف أو أضفه",
+      "createLabel": "إضافة «{label}»",
+      "noMatchingLabels": "لا توجد تصنيفات مطابقة.",
+      "noKnownLabels": "لا توجد تصنيفات في البطاقات المحمّلة بعد.",
+      "labelLengthLimit": "يمكن أن يصل طول التصنيف إلى 40 حرفًا.",
+      "bulkLabelLimit": "سيؤدي هذا إلى تجاوز عدد التصنيفات في إحدى البطاقات المحددة 12 تصنيفًا. اختر تصنيفات أقل.",
+      "labelLimit": "تم تحديد 12 تصنيفًا. أزل أحدها لإضافة تصنيف آخر."
     }
   },
   "it": {
@@ -5177,7 +5257,15 @@
       "automationEvent": "Evento: {source}",
       "automationWaitingForEvent": "In attesa di un evento",
       "dependencyStatusNotLoaded": "Non caricato",
-      "automationDisabled": "Disabilitata"
+      "automationDisabled": "Disabilitata",
+      "dispatchFirstFailure": "Primo errore di avvio: {message}",
+      "findLabel": "Trova o aggiungi un'etichetta",
+      "createLabel": "Aggiungi “{label}”",
+      "noMatchingLabels": "Nessuna etichetta corrispondente.",
+      "noKnownLabels": "Non ci sono ancora etichette nelle schede caricate.",
+      "labelLengthLimit": "Le etichette possono contenere fino a 40 caratteri.",
+      "bulkLabelLimit": "Questa operazione assegnerebbe più di 12 etichette a una scheda selezionata. Scegli meno etichette.",
+      "labelLimit": "12 etichette selezionate. Rimuovine una per aggiungerne un'altra."
     }
   },
   "tr": {
@@ -5648,7 +5736,15 @@
       "automationEvent": "Olay: {source}",
       "automationWaitingForEvent": "Olay bekleniyor",
       "dependencyStatusNotLoaded": "Yüklenmedi",
-      "automationDisabled": "Devre dışı"
+      "automationDisabled": "Devre dışı",
+      "dispatchFirstFailure": "İlk başlatma hatası: {message}",
+      "findLabel": "Etiket bulun veya ekleyin",
+      "createLabel": "“{label}” etiketini ekle",
+      "noMatchingLabels": "Eşleşen etiket yok.",
+      "noKnownLabels": "Yüklenen kartlarda henüz etiket yok.",
+      "labelLengthLimit": "Etiketler en fazla 40 karakter olabilir.",
+      "bulkLabelLimit": "Bu işlem, seçili kartlardan birinin 12'den fazla etikete sahip olmasına neden olur. Daha az etiket seçin.",
+      "labelLimit": "12 etiket seçildi. Başka bir etiket eklemek için birini kaldırın."
     }
   },
   "uk": {
@@ -6119,7 +6215,15 @@
       "automationEvent": "Подія: {source}",
       "automationWaitingForEvent": "Очікування події",
       "dependencyStatusNotLoaded": "Не завантажено",
-      "automationDisabled": "Вимкнено"
+      "automationDisabled": "Вимкнено",
+      "dispatchFirstFailure": "Перша помилка запуску: {message}",
+      "findLabel": "Знайти або додати мітку",
+      "createLabel": "Додати «{label}»",
+      "noMatchingLabels": "Відповідних міток немає.",
+      "noKnownLabels": "У завантажених картках ще немає міток.",
+      "labelLengthLimit": "Мітки можуть містити до 40 символів.",
+      "bulkLabelLimit": "Унаслідок цієї дії вибрана картка матиме понад 12 міток. Виберіть менше міток.",
+      "labelLimit": "Вибрано 12 міток. Видаліть одну, щоб додати іншу."
     }
   },
   "id": {
@@ -6590,7 +6694,15 @@
       "automationEvent": "Peristiwa: {source}",
       "automationWaitingForEvent": "Menunggu peristiwa",
       "dependencyStatusNotLoaded": "Belum dimuat",
-      "automationDisabled": "Dinonaktifkan"
+      "automationDisabled": "Dinonaktifkan",
+      "dispatchFirstFailure": "Kegagalan awal saat memulai: {message}",
+      "findLabel": "Cari atau tambahkan label",
+      "createLabel": "Tambahkan “{label}”",
+      "noMatchingLabels": "Tidak ada label yang cocok.",
+      "noKnownLabels": "Belum ada label pada kartu yang dimuat.",
+      "labelLengthLimit": "Label dapat berisi hingga 40 karakter.",
+      "bulkLabelLimit": "Tindakan ini akan membuat salah satu kartu yang dipilih memiliki lebih dari 12 label. Kurangi jumlah label yang dipilih.",
+      "labelLimit": "12 label dipilih. Hapus satu untuk menambahkan label lain."
     }
   },
   "pl": {
@@ -7061,7 +7173,15 @@
       "automationEvent": "Zdarzenie: {source}",
       "automationWaitingForEvent": "Oczekiwanie na zdarzenie",
       "dependencyStatusNotLoaded": "Nie wczytano",
-      "automationDisabled": "Wyłączona"
+      "automationDisabled": "Wyłączona",
+      "dispatchFirstFailure": "Pierwszy błąd uruchomienia: {message}",
+      "findLabel": "Znajdź lub dodaj etykietę",
+      "createLabel": "Dodaj „{label}”",
+      "noMatchingLabels": "Brak pasujących etykiet.",
+      "noKnownLabels": "We wczytanych kartach nie ma jeszcze etykiet.",
+      "labelLengthLimit": "Etykiety mogą mieć maksymalnie 40 znaków.",
+      "bulkLabelLimit": "Spowodowałoby to przekroczenie limitu 12 etykiet na jednej z wybranych kart. Wybierz mniej etykiet.",
+      "labelLimit": "Wybrano 12 etykiet. Usuń jedną, aby dodać kolejną."
     }
   },
   "th": {
@@ -7532,7 +7652,15 @@
       "automationEvent": "เหตุการณ์: {source}",
       "automationWaitingForEvent": "กำลังรอเหตุการณ์",
       "dependencyStatusNotLoaded": "ยังไม่ได้โหลด",
-      "automationDisabled": "ปิดใช้งาน"
+      "automationDisabled": "ปิดใช้งาน",
+      "dispatchFirstFailure": "การเริ่มทำงานล้มเหลวครั้งแรก: {message}",
+      "findLabel": "ค้นหาหรือเพิ่มป้ายกำกับ",
+      "createLabel": "เพิ่ม “{label}”",
+      "noMatchingLabels": "ไม่พบป้ายกำกับที่ตรงกัน",
+      "noKnownLabels": "ยังไม่มีป้ายกำกับในการ์ดที่โหลดไว้",
+      "labelLengthLimit": "ป้ายกำกับมีความยาวได้ไม่เกิน 40 อักขระ",
+      "bulkLabelLimit": "การดำเนินการนี้จะทำให้การ์ดที่เลือกมีป้ายกำกับเกิน 12 รายการ โปรดเลือกป้ายกำกับให้น้อยลง",
+      "labelLimit": "เลือกป้ายกำกับแล้ว 12 รายการ ลบออกหนึ่งรายการเพื่อเพิ่มรายการใหม่"
     }
   },
   "vi": {
@@ -8003,7 +8131,15 @@
       "automationEvent": "Sự kiện: {source}",
       "automationWaitingForEvent": "Đang chờ sự kiện",
       "dependencyStatusNotLoaded": "Chưa tải",
-      "automationDisabled": "Đã tắt"
+      "automationDisabled": "Đã tắt",
+      "dispatchFirstFailure": "Lỗi khởi động đầu tiên: {message}",
+      "findLabel": "Tìm hoặc thêm nhãn",
+      "createLabel": "Thêm “{label}”",
+      "noMatchingLabels": "Không có nhãn phù hợp.",
+      "noKnownLabels": "Chưa có nhãn nào trong các thẻ đã tải.",
+      "labelLengthLimit": "Nhãn có thể dài tối đa 40 ký tự.",
+      "bulkLabelLimit": "Thao tác này sẽ khiến một thẻ được chọn có hơn 12 nhãn. Hãy chọn ít nhãn hơn.",
+      "labelLimit": "Đã chọn 12 nhãn. Hãy xóa một nhãn để thêm nhãn khác."
     }
   },
   "nl": {
@@ -8474,7 +8610,15 @@
       "automationEvent": "Gebeurtenis: {source}",
       "automationWaitingForEvent": "Wachten op gebeurtenis",
       "dependencyStatusNotLoaded": "Niet geladen",
-      "automationDisabled": "Uitgeschakeld"
+      "automationDisabled": "Uitgeschakeld",
+      "dispatchFirstFailure": "Eerste opstartfout: {message}",
+      "findLabel": "Zoek een label of voeg er een toe",
+      "createLabel": "Voeg “{label}” toe",
+      "noMatchingLabels": "Geen overeenkomende labels.",
+      "noKnownLabels": "Nog geen labels in de geladen kaarten.",
+      "labelLengthLimit": "Labels mogen maximaal 40 tekens bevatten.",
+      "bulkLabelLimit": "Hierdoor zou een geselecteerde kaart meer dan 12 labels krijgen. Kies minder labels.",
+      "labelLimit": "12 labels geselecteerd. Verwijder er een om een ander toe te voegen."
     }
   },
   "fa": {
@@ -8945,7 +9089,15 @@
       "automationEvent": "رویداد: {source}",
       "automationWaitingForEvent": "در انتظار رویداد",
       "dependencyStatusNotLoaded": "بارگذاری نشده",
-      "automationDisabled": "غیرفعال"
+      "automationDisabled": "غیرفعال",
+      "dispatchFirstFailure": "اولین خطا در شروع: {message}",
+      "findLabel": "جستجو یا افزودن برچسب",
+      "createLabel": "افزودن «{label}»",
+      "noMatchingLabels": "هیچ برچسبی مطابق جستجو یافت نشد.",
+      "noKnownLabels": "هنوز هیچ برچسبی در کارت‌های بارگذاری‌شده وجود ندارد.",
+      "labelLengthLimit": "برچسب‌ها می‌توانند حداکثر ۴۰ نویسه داشته باشند.",
+      "bulkLabelLimit": "با این کار، تعداد برچسب‌های یکی از کارت‌های انتخاب‌شده از ۱۲ بیشتر می‌شود. برچسب‌های کمتری انتخاب کنید.",
+      "labelLimit": "۱۲ برچسب انتخاب شده است. برای افزودن برچسب دیگر، یکی را حذف کنید."
     }
   },
   "ru": {
@@ -9416,7 +9568,15 @@
       "automationEvent": "Событие: {source}",
       "automationWaitingForEvent": "Ожидание события",
       "dependencyStatusNotLoaded": "Не загружено",
-      "automationDisabled": "Отключено"
+      "automationDisabled": "Отключено",
+      "dispatchFirstFailure": "Первая ошибка запуска: {message}",
+      "findLabel": "Найти или добавить метку",
+      "createLabel": "Добавить «{label}»",
+      "noMatchingLabels": "Подходящих меток нет.",
+      "noKnownLabels": "В загруженных карточках пока нет меток.",
+      "labelLengthLimit": "Метка может содержать до 40 символов.",
+      "bulkLabelLimit": "В результате в одной из выбранных карточек будет больше 12 меток. Выберите меньше меток.",
+      "labelLimit": "Выбрано 12 меток. Удалите одну, чтобы добавить другую."
     }
   },
   "sv": {
@@ -9826,7 +9986,15 @@
       "eventArchived": "Arkiverad",
       "eventUnarchived": "Återställd från arkivet",
       "eventStale": "Inaktuell session",
-      "automationDisabled": "Inaktiverad"
+      "automationDisabled": "Inaktiverad",
+      "dispatchFirstFailure": "Första startfelet: {message}",
+      "findLabel": "Sök efter eller lägg till en etikett",
+      "createLabel": "Lägg till ”{label}”",
+      "noMatchingLabels": "Inga matchande etiketter.",
+      "noKnownLabels": "Det finns inga etiketter på de inlästa korten ännu.",
+      "labelLengthLimit": "Etiketter får innehålla högst 40 tecken.",
+      "bulkLabelLimit": "Detta skulle ge ett markerat kort fler än 12 etiketter. Välj färre etiketter.",
+      "labelLimit": "12 etiketter valda. Ta bort en för att lägga till en annan."
     }
   },
   "ca": {
@@ -10236,7 +10404,15 @@
       "eventArchived": "Arxivat",
       "eventUnarchived": "Desarxivat",
       "eventStale": "Sessió obsoleta",
-      "automationDisabled": "Desactivada"
+      "automationDisabled": "Desactivada",
+      "dispatchFirstFailure": "Primer error d'inici: {message}",
+      "findLabel": "Cerca o afegeix una etiqueta",
+      "createLabel": "Afegeix «{label}»",
+      "noMatchingLabels": "No hi ha cap etiqueta que coincideixi.",
+      "noKnownLabels": "Encara no hi ha etiquetes a les targetes carregades.",
+      "labelLengthLimit": "Les etiquetes poden tenir fins a 40 caràcters.",
+      "bulkLabelLimit": "Això faria que una de les targetes seleccionades tingués més de 12 etiquetes. Tria menys etiquetes.",
+      "labelLimit": "Has seleccionat 12 etiquetes. Elimina'n una per afegir-ne una altra."
     }
   }
 }

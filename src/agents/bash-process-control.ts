@@ -186,11 +186,13 @@ export async function drainAgentExecProcesses(
 /**
  * Session reset and delete end everything the session still runs: in-flight
  * commands, `background: true` services and adopted survivors. After a reset
- * nothing would manage them. Durable processes deliberately survive.
+ * nothing would manage them. Durable processes deliberately survive. `startedBy`
+ * leaves processes a later incarnation of the same key started after that time.
  */
 export async function stopSessionExecProcesses(
   scopeKeys: Iterable<string>,
   assertCurrent: () => void,
+  startedBy = Number.POSITIVE_INFINITY,
 ): Promise<void> {
   const keys = new Set(scopeKeys);
   await drainExecSessions(
@@ -198,6 +200,7 @@ export async function stopSessionExecProcesses(
       (session) =>
         session.scopeKey !== undefined &&
         keys.has(session.scopeKey) &&
+        session.startedAt <= startedBy &&
         !session.durable &&
         (!session.exited || session.finalizing),
     ),

@@ -28,6 +28,7 @@ type AuthorityComponent =
   | "admission_other"
   | "receipt_entry"
   | "receipt_events"
+  | "receipt_value"
   | "receipt_other";
 type ComponentSample = { bytes: number; samples: number; unmeasured: number };
 
@@ -94,16 +95,15 @@ function recordAuthorityPayload(
     return;
   }
   const components: AuthorityComponent[] = receipt
-    ? ["receipt_entry", "receipt_events", "receipt_other"]
+    ? ["receipt_entry", "receipt_events", "receipt_value", "receipt_other"]
     : ["admission_entry", "admission_other"];
   const totals = ((counter.payloadComponents ??= {})[label] ??= {});
   let bytes: number[] | undefined;
+  let total =
+    receipt && typeof message.payloadBytes === "number" ? message.payloadBytes : undefined;
   try {
     const facts = receipt ? committed.facts : message.facts;
-    const total =
-      receipt && typeof message.payloadBytes === "number"
-        ? message.payloadBytes
-        : serialize(facts).byteLength;
+    total ??= serialize(facts).byteLength;
     if (receipt && isRecord(facts) && isRecord(facts.receipt)) {
       const strippedReceipt: Record<string, unknown> = {
         ...facts.receipt,
@@ -114,8 +114,10 @@ function recordAuthorityPayload(
         ...facts,
         receipt: strippedReceipt,
       };
-      const afterEntries = serialize(noEntries).byteLength;
-      const other = serialize({
+      // Native cloning can change V8's array encoding. Bound each remainder by
+      // its predecessor so main-side sizing cannot discard the worker's bytes.
+      const afterEntries = Math.min(total, serialize(noEntries).byteLength);
+      const noEvents = {
         ...noEntries,
         receipt: {
           ...noEntries.receipt,
@@ -124,8 +126,21 @@ function recordAuthorityPayload(
             "authorityReceipts",
           ),
         },
-      }).byteLength;
-      bytes = [total - afterEntries, afterEntries - other, other];
+      };
+      const afterEvents = Math.min(afterEntries, serialize(noEvents).byteLength);
+      // The phase result and transcript.append can alias the same append value.
+      const other = Math.min(
+        afterEvents,
+        serialize({
+          ...noEvents,
+          value: undefined,
+          receipt: {
+            ...noEvents.receipt,
+            transcript: withoutField(noEvents.receipt.transcript, "append"),
+          },
+        }).byteLength,
+      );
+      bytes = [total - afterEntries, afterEntries - afterEvents, afterEvents - other, other];
     } else if (
       !receipt &&
       isRecord(facts) &&
@@ -141,7 +156,7 @@ function recordAuthorityPayload(
       }).byteLength;
       bytes = [total - other, other];
     } else {
-      bytes = receipt ? [0, 0, total] : [0, total];
+      bytes = receipt ? [0, 0, 0, total] : [0, total];
     }
     // Marginal V8 sizes preserve shared references. Unsupported graphs remain explicitly unmeasured.
     if (bytes.some((value) => value < 0)) {
@@ -157,6 +172,10 @@ function recordAuthorityPayload(
       sample.samples++;
     } else {
       sample.unmeasured++;
+      // A failed breakdown must not erase a receipt's independently known total.
+      if (component === "receipt_other" && total !== undefined) {
+        sample.bytes += total;
+      }
     }
   }
 }

@@ -57,7 +57,8 @@ export async function installTemplateMcpServersStateless(
       if (!listed.ok) {
         throw new Error(listed.error);
       }
-      const configured = listed.mcpServers[action.id];
+      // `listed.mcpServers` has `${VAR}` references substituted; a manifest keeps them.
+      const configured = listed.authoredConfig?.mcp?.servers?.[action.id];
       const configDigest = digestTemplateMcpServer(server);
       if (configured && digestTemplateMcpServer(configured) !== configDigest) {
         throw new Error(
@@ -123,7 +124,7 @@ export async function rollbackStatelessTemplateMcpServers(
         if (!listed.ok) {
           throw new Error(listed.error);
         }
-        const configured = listed.mcpServers[ref.name];
+        const configured = listed.authoredConfig?.mcp?.servers?.[ref.name];
         if (!configured) {
           refs.splice(refs.indexOf(ref), 1);
           return;
@@ -133,7 +134,8 @@ export async function rollbackStatelessTemplateMcpServers(
         }
         const removed = await unsetConfiguredMcpServer({
           name: ref.name,
-          expectedServer: configured,
+          // The config writer checks this against the substituted entry.
+          expectedServer: listed.mcpServers[ref.name],
           skipLifecycleLease: true,
           assertCurrent,
           assertCurrentAsync: async () => {

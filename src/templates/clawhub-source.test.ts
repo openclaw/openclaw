@@ -424,6 +424,7 @@ describe("public ClawHub Template catalog", () => {
     expect(detail).toMatchObject({
       packageName: personalPackageName,
       version,
+      agentId: "research-briefing",
       agentName: "Research Briefing",
       channel: "community",
       official: false,
@@ -883,6 +884,24 @@ describe("verified ClawHub Template source", () => {
     mocks.download.mockClear();
     await expectCode(resolveRef("@mallory/research-briefing"), "clawhub_identity_mismatch");
     expect(mocks.download).not.toHaveBeenCalled();
+  });
+
+  it("previews a publisher-qualified reference to a Template stored under an unscoped name", async () => {
+    await selectPackage({ ...communityPackage(), name: "research-briefing" });
+    const preview = (ref: string) =>
+      readClawHubTemplatePreview({
+        packageName: ref,
+        version,
+        kind: "instruction",
+        name: "USER.md",
+      });
+
+    await expect(preview(personalPackageName)).resolves.toEqual({
+      kind: "instruction",
+      name: "USER.md",
+      content: "# Reader preferences\n",
+    });
+    await expectCode(preview("@mallory/research-briefing"), "clawhub_identity_mismatch");
   });
 
   it("requires personal-release risk acknowledgement and never persists denied content", async () => {

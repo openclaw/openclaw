@@ -453,6 +453,8 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Bootstrap Pending");
+    expect(prompt).toContain("sourceTool=template_add_setup");
+    expect(prompt).toContain("BOOTSTRAP.md last in that same turn");
     expect(prompt.match(/## \/tmp\/openclaw\/BOOTSTRAP\.md/g)).toHaveLength(1);
     expect(prompt.match(/Ask who I am\./g)).toHaveLength(1);
   });
@@ -522,6 +524,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(onRenderedSkillsPrompt).toHaveBeenCalledWith(scenario.listed ? SKILLS : "");
     expect(prompt).toContain("read the complete instructions before task actions");
     if (!scenario.listed) {
+      expect(prompt).toContain("Before specialized or unfamiliar tasks");
       expect(prompt).toContain("search with `skills.search(query)` inside `exec`");
       expect(prompt).toContain('use `skills.read("<name>")` inside `exec`');
     }

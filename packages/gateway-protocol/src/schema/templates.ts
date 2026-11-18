@@ -1,5 +1,6 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { MAX_TEMPLATE_UPLOAD_BASE64_LENGTH } from "../template-source-limits.js";
 import { closedObject } from "./closed-object.js";
 import { PluginDeclaredSurfaceSchema, PluginOperatorGrantsSchema } from "./plugins.js";
 import { NonEmptyString } from "./primitives.js";
@@ -10,7 +11,7 @@ const TemplatePackageName = Type.String({
 });
 const TemplateArtifactIntegrity = Type.String({ pattern: "^sha256-[A-Za-z0-9+/]{43}=$" });
 const TemplateBundledDigest = Type.String({ pattern: "^sha256:[a-f0-9]{64}$" });
-const TemplateCatalogCoordinateSchema = closedObject({
+export const TemplateCatalogCoordinateSchema = closedObject({
   packageName: TemplatePackageName,
   version: NonEmptyString,
 });
@@ -113,6 +114,7 @@ export const TemplatesCatalogDetailParamsSchema = closedObject({
 export const TemplatesCatalogDetailSchema = closedObject({
   ...TemplatesCatalogEntrySchema.properties,
   version: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   agentName: Type.Optional(NonEmptyString),
   agentDescription: Type.Optional(Type.String()),
   workspaceFiles: Type.Integer({ minimum: 0 }),
@@ -288,18 +290,47 @@ export const TemplateSkillAcknowledgementSchema = Type.Union([
 ]);
 
 export const TemplatesAddPlanParamsSchema = closedObject({
-  source: TemplateCatalogCoordinateSchema,
+  source: Type.Union([
+    TemplateCatalogCoordinateSchema,
+    closedObject({ kind: Type.Literal("local"), path: NonEmptyString }),
+    closedObject({
+      kind: Type.Literal("upload"),
+      archiveBase64: Type.String({ minLength: 4, maxLength: MAX_TEMPLATE_UPLOAD_BASE64_LENGTH }),
+    }),
+  ]),
   agentId: Type.Optional(NonEmptyString),
 });
 
-export const TemplatesAddApplyParamsSchema = closedObject({
-  source: TemplateCatalogCoordinateSchema,
+export const TemplatesAddReviewedApplyParamsSchema = closedObject({
+  source: Type.Union([
+    TemplateCatalogCoordinateSchema,
+    closedObject({ kind: Type.Literal("local"), path: NonEmptyString }),
+    closedObject({
+      kind: Type.Literal("upload"),
+      archiveBase64: Type.String({ minLength: 4, maxLength: MAX_TEMPLATE_UPLOAD_BASE64_LENGTH }),
+    }),
+  ]),
   agentId: Type.Optional(NonEmptyString),
   planIntegrity: Type.Optional(NonEmptyString),
   acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
   acknowledgeCapabilities: Type.Optional(Type.Array(TemplatePluginAcknowledgementSchema)),
   acknowledgeSkillWarnings: Type.Optional(Type.Array(TemplateSkillAcknowledgementSchema)),
 });
+
+export const TemplatesAddApplyParamsSchema = Type.Union([
+  TemplatesAddReviewedApplyParamsSchema,
+  // Chat-based Add has no reviewed plan: the Gateway creates the agent and the
+  // agent's own conversation continues setup. agentId is the preferred id; the
+  // Gateway answers with the unused id it chose.
+  closedObject({
+    mode: Type.Literal("chat"),
+    source: TemplateCatalogCoordinateSchema,
+    agentId: NonEmptyString,
+    // Retry targets this admitted agent, even if the setup receipt was consumed.
+    resume: Type.Optional(Type.Literal(true)),
+    acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
+  }),
+]);
 
 export const TemplatesUpdatePlanParamsSchema = closedObject({
   agentId: NonEmptyString,
@@ -534,6 +565,16 @@ export const TemplateLifecyclePlanResultSchema = closedObject({
   ),
   trustWarning: Type.Optional(NonEmptyString),
   manifestDisclosure: Type.Optional(TemplateManifestDisclosureSchema),
+  // Local-source review text read from the same verified archive as this plan.
+  reviewFiles: Type.Optional(
+    Type.Array(
+      closedObject({
+        path: NonEmptyString,
+        content: Type.Optional(Type.String()),
+        workspacePaths: Type.Optional(Type.Array(NonEmptyString)),
+      }),
+    ),
+  ),
   riskAcknowledgementRequired: Type.Boolean(),
   configuredAccess: Type.Optional(TemplateConfiguredAccessSchema),
   scheduledJobs: Type.Optional(TemplateScheduledJobsSchema),
@@ -562,6 +603,7 @@ export type TemplateResourceStatus = Static<typeof TemplateResourceStatusSchema>
 export type TemplateStatusEntry = Static<typeof TemplateStatusEntrySchema>;
 export type TemplatesStatusResult = Static<typeof TemplatesStatusResultSchema>;
 export type TemplatesAddApplyParams = Static<typeof TemplatesAddApplyParamsSchema>;
+export type TemplatesAddReviewedApplyParams = Static<typeof TemplatesAddReviewedApplyParamsSchema>;
 export type TemplatesAddPlanParams = Static<typeof TemplatesAddPlanParamsSchema>;
 export type TemplatesUpdatePlanParams = Static<typeof TemplatesUpdatePlanParamsSchema>;
 export type TemplatesUpdateApplyParams = Static<typeof TemplatesUpdateApplyParamsSchema>;

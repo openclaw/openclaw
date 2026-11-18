@@ -5,7 +5,6 @@ import { bindPreparedToolAuthority } from "../../agents/harness/tool-authority-p
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { isOperatorAuthorityUnavailable } from "../../infra/operator-authority-error.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import type {
   ReplyMessageInjectionOutcome,
@@ -140,7 +139,6 @@ export async function runActiveReplySteer(
   };
   let delivery: ReturnType<typeof prepareSteeringDelivery> | undefined;
   let releaseToolAuthority: (() => void) | undefined;
-  let steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
   const parked = reserveSteerCandidate(queueKey, followupRun, resolvedQueue, runFollowup);
   if (!parked) {
     return "handled";
@@ -226,7 +224,7 @@ export async function runActiveReplySteer(
     ) {
       return await fallback("reply-owner-ended");
     }
-    steerSessionId = activeReplyOperation.sessionId;
+    const steerSessionId = activeReplyOperation.sessionId;
     if (!backendAtArrival) {
       // The exact operation survived startup; capture its first available backend
       // before policy preparation can yield or replace that attachment.
@@ -381,6 +379,9 @@ export async function runActiveReplySteer(
             allowCollaborativeSteering: true,
           }
         : {}),
+      ...(followupRun.run.approvalReviewerDeviceId
+        ? { inputRequesterDeviceId: followupRun.run.approvalReviewerDeviceId }
+        : {}),
       personalToolParticipant: {
         operatorAuthority: followupRun.operatorAuthority,
         requesterOrigin: followupRun.run.requesterOrigin,
@@ -481,20 +482,7 @@ export async function runActiveReplySteer(
         if (replayForbidden) {
           parked.consume("consumed");
         } else {
-          try {
-            assertReadCurrent();
-            parked.fallback();
-          } catch (error) {
-            if (isOperatorAuthorityUnavailable(error)) {
-              parked.fallback();
-            } else {
-              diagnosticLogger.warn("steering followup unavailable: source authority lost", {
-                sessionId: steerSessionId,
-                runId: params.opts?.runId,
-              });
-              parked.consume();
-            }
-          }
+          parked.fallback();
         }
       }
     } finally {

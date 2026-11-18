@@ -556,6 +556,10 @@ OpenClaw subagent sessions still own execution. One dispatch pass:
 4. Claims a small batch of ready cards and starts worker runs through the
    Gateway subagent runtime.
 
+The Control UI reports the counts from that pass. Marking a card for planning
+does not mean it has been specified or decomposed. If workers cannot start, the
+result shows the first start failure alongside the total failure count.
+
 Idle scans leave ready-card history unchanged. Existing dispatch counters and
 timestamps remain as historical values; new launches use the card's launch,
 attempt, and execution history.
@@ -778,6 +782,8 @@ it stays visible for follow-up.
 New cards can start from Workboard templates (`bugfix`, `docs`, `release`,
 `pr_review`, `plugin`). Templates prefill title, notes, labels, and priority.
 The template id is stored as card metadata.
+
+Card forms, inline label editing, and bulk edits offer searchable labels from the currently loaded cards in the board and agent scope. You can add a new label directly; commas are part of a label, not a separator in these controls. Selections remain drafts until Save or Apply. Bulk label modes keep their distinct meanings: Keep unchanged, Add, Replace (empty clears labels), and Remove. Adding labels is blocked if a selected card would exceed its existing 12-label limit. The loaded suggestions are not a complete label catalog.
 
 <a id="dashboard-workflow" />
 

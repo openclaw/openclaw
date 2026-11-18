@@ -27,7 +27,6 @@ import { SessionBackgroundLayoutScope } from "../../components/session-backgroun
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
-import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { focusComposerInput } from "../../lib/composer-input.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -53,16 +52,22 @@ import { NewSessionComposerTextareaContext } from "./composer-textarea-context.t
 import { NewSessionComposer } from "./composer.tsx";
 import { ConnectMachineDialog } from "./connect-machine-dialog-view.tsx";
 import { isWorktreeNameValid } from "./create-params.ts";
-import { DraftError, NewSessionBody, preloadNewSessionSubmission } from "./draft-body.solid.tsx";
+import {
+  CreationComposer,
+  CreationComposerLoading,
+  DraftError,
+  NewSessionBody,
+  preloadNewSessionSubmission,
+} from "./draft-body.solid.tsx";
 import { DraftMobileHeader } from "./draft-mobile-header.tsx";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import { createNewSessionTitle } from "./draft-title.ts";
 import { DraftWelcome } from "./draft-welcome.tsx";
 import {
+  DraftWelcomeHint,
   NEW_SESSION_DOCKED_LAYOUT_QUERY,
   NewSessionIncognitoControl,
   NewSessionIncognitoNotice,
-  NewSessionWelcomeHint,
 } from "./incognito-control-view.tsx";
 import { restoredInstantThreadPage } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
@@ -78,9 +83,6 @@ import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
 registerNewSessionSetupEnglish();
 
-const CreationComposer = lazy(() => import("./creation-composer-render.tsx"), {
-  export: "CreationComposer",
-});
 const AttachmentDetailPanel = lazy(
   async () => {
     await import("../../styles/chat/sidebar.css");
@@ -455,7 +457,7 @@ function renderPageContent(host: PageHost, shell: NewSessionPageProps) {
     return () => stops.forEach((stop) => stop());
   });
   const dockedLayout = createMediaQuerySource(NEW_SESSION_DOCKED_LAYOUT_QUERY);
-  const [incognitoNoteOpen, setIncognitoNoteOpen] = createSignal(false);
+  const [noteOpen, setNoteOpen] = createSignal(false);
   const visibilityControl = {
     get visibility() {
       return page().submission.visibility;
@@ -470,7 +472,7 @@ function renderPageContent(host: PageHost, shell: NewSessionPageProps) {
     setVisibility: (visibility: Parameters<DraftSubmissionFlow["setVisibility"]>[0]) => {
       owner.submission.setVisibility(visibility);
       // Say what Incognito means when it is turned on; restored drafts stay quiet.
-      setIncognitoNoteOpen(owner.submission.visibility === "incognito" && dockedLayout.read());
+      setNoteOpen(owner.submission.visibility === "incognito" && dockedLayout.read());
     },
   };
   const completed = () => page().submission.completedSubmission;
@@ -522,13 +524,7 @@ function renderPageContent(host: PageHost, shell: NewSessionPageProps) {
           </Show>
         ));
         const welcomeHint = children(() => (
-          <Show when={!catalog.isTarget(page().data)} fallback={page().welcomeHint()}>
-            <NewSessionWelcomeHint
-              hint={page().welcomeHint()}
-              noteOpen={incognitoNoteOpen()}
-              onNoteOpenChange={setIncognitoNoteOpen}
-            />
-          </Show>
+          <DraftWelcomeHint page={page()} open={noteOpen()} setOpen={setNoteOpen} />
         ));
         onSettled(() => {
           renderedPages.add(host);
@@ -592,7 +588,7 @@ function renderPageContent(host: PageHost, shell: NewSessionPageProps) {
                       <LazyViewError error={error()} onRetry={reset} inline />
                     )}
                   >
-                    <Loading fallback={<LoadingState />}>
+                    <Loading fallback={<CreationComposerLoading />}>
                       <CreationComposer
                         composer={composer()}
                         onOpenImage={owner.setImageLightbox}
