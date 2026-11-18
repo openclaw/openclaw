@@ -34,7 +34,7 @@ export async function inspectUpdateRecoveryBackups(readRun = getUpdateRunAsync) 
       forwardResolved.add(ref.manifestSha256);
     }
   }
-  const inspected = await Promise.all(
+  const classified = await Promise.all(
     snapshots.map(async ({ ref, manifest, outcome }) => {
       if (forwardResolved.has(ref.manifestSha256)) {
         return {
@@ -91,39 +91,49 @@ export async function inspectUpdateRecoveryBackups(readRun = getUpdateRunAsync) 
       } catch (error) {
         ambiguity = `update outcome is unreadable: ${formatErrorMessage(error)}`;
       }
-      if (
-        !unchanged &&
-        !terminalOutcome &&
-        !ambiguity &&
-        snapshots.length - forwardResolved.size > 1
-      ) {
-        ambiguity =
-          "other recovery sets exist; restoring this set could discard newer database writes";
-      }
-      const status: "stale" | "ambiguous" | "unresolved" =
-        terminalOutcome || unchanged ? "stale" : ambiguity ? "ambiguous" : "unresolved";
-      const nextAction =
-        status === "unresolved"
-          ? `Preserve current state and inspect ${ref.manifestPath} before manual recovery. See https://docs.openclaw.ai/cli/update/repair-and-recovery#original-state-captures`
-          : unchanged
-            ? "openclaw update cleanup"
-            : "openclaw update status --json";
-      const reason = terminalOutcome
-        ? `stale: its update already ${terminalOutcome === "committed" ? "succeeded" : "restored state"}`
-        : unchanged
-          ? "stale: its update failed before changing the installation or state"
-          : (ambiguity ?? "unresolved after a failed update");
-      return {
-        ref,
-        runId: manifest.runId,
-        captureStatus: outcome.status,
-        status,
-        terminalOutcome,
-        nextAction,
-        message: `Update recovery set ${ref.manifestPath}: ${reason}. ${status === "unresolved" ? `Retained original state requires manual inspection. ${nextAction}` : unchanged ? `Nothing needs recovery; retire it with \`${nextAction}\`.` : `Automatic restoration is refused; inspect with \`${nextAction}\`.`}${status === "ambiguous" ? " Resolve the recorded outcome before attempting recovery." : ""}`,
-      };
+      return { ref, manifest, outcome, terminalOutcome, unchanged, ambiguity };
     }),
   );
+  // Completed captures cannot compete with a failed capture for recovery. Count
+  // only after all outcomes are known; unreadable and manual evidence stays conservative.
+  const competing = classified.filter((entry) =>
+    entry.unchanged !== undefined
+      ? !entry.terminalOutcome && !entry.unchanged
+      : entry.status !== "forward-resolved",
+  );
+  const inspected = classified.map((entry) => {
+    if (entry.unchanged === undefined) {
+      return entry;
+    }
+    const { ref, manifest, outcome, terminalOutcome, unchanged } = entry;
+    let { ambiguity } = entry;
+    if (!unchanged && !terminalOutcome && !ambiguity && competing.length > 1) {
+      ambiguity =
+        "other recovery sets exist; restoring this set could discard newer database writes";
+    }
+    const status: "stale" | "ambiguous" | "unresolved" =
+      terminalOutcome || unchanged ? "stale" : ambiguity ? "ambiguous" : "unresolved";
+    const nextAction =
+      status === "unresolved"
+        ? `Preserve current state and inspect ${ref.manifestPath} before manual recovery. See https://docs.openclaw.ai/cli/update/repair-and-recovery#original-state-captures`
+        : unchanged
+          ? "openclaw update cleanup"
+          : "openclaw update status --json";
+    const reason = terminalOutcome
+      ? `stale: its update already ${terminalOutcome === "committed" ? "succeeded" : "restored state"}`
+      : unchanged
+        ? "stale: its update failed before changing the installation or state"
+        : (ambiguity ?? "unresolved after a failed update");
+    return {
+      ref,
+      runId: manifest.runId,
+      captureStatus: outcome.status,
+      status,
+      terminalOutcome,
+      nextAction,
+      message: `Update recovery set ${ref.manifestPath}: ${reason}. ${status === "unresolved" ? `Retained original state requires manual inspection. ${nextAction}` : unchanged ? `Nothing needs recovery; retire it with \`${nextAction}\`.` : `Automatic restoration is refused; inspect with \`${nextAction}\`.`}${status === "ambiguous" ? " Resolve the recorded outcome before attempting recovery." : ""}`,
+    };
+  });
   return [
     ...inspected,
     ...evidence
