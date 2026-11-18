@@ -1,0 +1,3 @@
+# Preserve later-turn sessions_yield coverage while proving that pending native
+# completions wait for live siblings and wake immediately after final settlement.
+15

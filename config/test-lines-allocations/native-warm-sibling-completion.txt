@@ -1,0 +1,3 @@
+# Preserve pending warm completion while sibling work runs, and cover cold-resume
+# and custody behavior when no idle parent subscription remains.
+38

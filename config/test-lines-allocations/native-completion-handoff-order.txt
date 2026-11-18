@@ -1,0 +1,3 @@
+# Distinct regressions for concurrent terminal siblings, protected live siblings,
+# and optional native yielded completion input versus visible/error/abort boundaries.
+111

@@ -1,4 +1,5 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { resolveReplyExecOverrides } from "../../auto-reply/reply/get-reply-exec-overrides.js";
 import { prepareGoalContinuationContext } from "../../auto-reply/reply/goal-continuation-return.js";
 import {
   buildGroupIntro,
@@ -21,13 +22,18 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
-import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
+import {
+  isCronSessionKey,
+  isSubagentSessionKey,
+  normalizeAgentId,
+} from "../../routing/session-key.js";
 import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { recordSessionHumanDirectMessage } from "../../sessions/session-state-events.js";
 import { resolveEffectiveAgentSkillFilter } from "../../skills/discovery/agent-filter.js";
 import { resolveSessionSkillExecutionWorkspace } from "../../skills/loading/workspace-skill-roots.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
+import { listAgentEntries } from "../agent-roster.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { isSyntheticSourceReplyTurn } from "../reply-completion.js";
 import { loadExecDefaultsRuntime, loadSkillsRuntime } from "./runtime-loaders.js";
@@ -338,6 +344,40 @@ export async function prepareEmbeddedSessionState(params: {
         text: returnedResultPrompt ? extraSystemPrompt : conversationPrompt || deliveryFormat || "",
       },
     };
+  }
+  if (
+    sessionEntry &&
+    opts.inputProvenance?.kind === "inter_session" &&
+    (opts.inputProvenance.sourceTool === "subagent_announce" ||
+      opts.inputProvenance.sourceTool === "agent_harness_completion")
+  ) {
+    const [{ buildExecOverridePromptHint }, { resolveEmbeddedFullAccessState }] = await Promise.all(
+      [
+        import("../../auto-reply/reply/get-reply-run-helpers.js"),
+        import("../embedded-agent-runner/sandbox-info.js"),
+      ],
+    );
+    const agentEntry = listAgentEntries(cfg).find(
+      (entry) => normalizeAgentId(entry.id) === normalizeAgentId(sessionAgentId),
+    );
+    const execOverrides = resolveReplyExecOverrides({
+      sessionEntry,
+      agentExecDefaults: agentEntry?.tools?.exec,
+    });
+    const elevatedLevel = opts.bashElevated?.allowed ? opts.bashElevated.defaultLevel : "off";
+    const fullAccess = resolveEmbeddedFullAccessState({ execElevated: opts.bashElevated });
+    const execHint = buildExecOverridePromptHint({
+      execOverrides,
+      elevatedLevel,
+      fullAccessAvailable: fullAccess.available,
+      fullAccessBlockedReason: fullAccess.blockedReason,
+    });
+    if (execHint) {
+      preparedOpts = {
+        ...preparedOpts,
+        extraSystemPrompt: [preparedOpts.extraSystemPrompt, execHint].filter(Boolean).join("\n\n"),
+      };
+    }
   }
   prepareGoalContinuationContext({ runId: params.runId, sessionKey, sessionEntry });
   return {

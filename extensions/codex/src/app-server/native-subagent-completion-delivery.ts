@@ -17,6 +17,7 @@ type CompletionDeliveryDependencies = {
   children: ReadonlyMap<string, ChildState>;
   parents: ReadonlyMap<string, ParentState>;
   retiredParents: Pick<WeakSet<ParentState>, "has">;
+  hasIdleParentThread?: (threadId: string) => boolean;
   unregisterChild: (child: ChildState) => void;
   abandon: (state: ParentState, child: ChildState, assertCurrent: () => void) => Promise<void>;
   settleNestedCompletion: (
@@ -32,6 +33,8 @@ const completionDeliveryOwners = new Map<string, ChildState>();
 
 export class CodexNativeSubagentCompletionDelivery {
   private readonly attempts = new Map<ChildState, Promise<void>>();
+  private readonly parentAttempts = new Map<ParentState, Promise<void>>();
+  private readonly siblingWaiters = new Set<ChildState>();
 
   constructor(private readonly dependencies: CompletionDeliveryDependencies) {}
 
@@ -41,13 +44,52 @@ export class CodexNativeSubagentCompletionDelivery {
       return existing;
     }
     // Publish the shared attempt before releasing a client can synchronously close it.
-    const attempt = Promise.resolve().then(() => this.deliverAttempt(state, childState));
+    const previous = this.parentAttempts.get(state) ?? Promise.resolve();
+    const attempt = previous.catch(() => {}).then(() => this.deliverAttempt(state, childState));
+    this.parentAttempts.set(state, attempt);
     this.attempts.set(childState, attempt);
     const release = () => {
       this.attempts.delete(childState);
+      if (this.parentAttempts.get(state) === attempt) {
+        this.parentAttempts.delete(state);
+      }
     };
     void attempt.then(release, release);
+    this.resumeSiblingWaiters(state, childState);
     return attempt;
+  }
+
+  private hasLiveSiblings(state: ParentState): boolean {
+    return [...this.dependencies.children.values()].some(
+      (child) =>
+        child.parentThreadId === state.parentThreadId &&
+        !child.terminal &&
+        !child.settledWithoutCompletion,
+    );
+  }
+
+  resumeSiblingWaiters(state: ParentState, active?: ChildState): void {
+    if (this.hasLiveSiblings(state)) {
+      return;
+    }
+    for (const waiting of this.siblingWaiters) {
+      if (waiting.parentThreadId !== state.parentThreadId) {
+        continue;
+      }
+      this.siblingWaiters.delete(waiting);
+      clearTimeout(waiting.completionDeliveryTimer);
+      waiting.completionDeliveryTimer = undefined;
+      if (waiting === active) {
+        continue;
+      }
+      const resume = () => {
+        if (this.isCurrent(state, waiting)) {
+          this.finish(state, waiting);
+        }
+      };
+      const pending = this.attempts.get(waiting) ?? Promise.resolve();
+      void pending.then(resume, resume);
+    }
   }
 
   async join(child: ChildState): Promise<void> {
@@ -98,7 +140,27 @@ export class CodexNativeSubagentCompletionDelivery {
         deferredToForeground = state.owners.size > 0;
         return;
       }
+      // A protected idle subscription can still serve a warm continuation.
+      // Without one, cold resume must wait for the sibling's protection to end.
+      if (
+        this.hasLiveSiblings(state) &&
+        !this.dependencies.hasIdleParentThread?.(state.parentThreadId)
+      ) {
+        this.siblingWaiters.add(childState);
+        await this.scheduleRetry(
+          state,
+          childState,
+          "Native sibling work retains the parent thread",
+          false,
+        );
+        return;
+      }
       const historyOwner = childState.historyOwner;
+      // A sibling may settle while the handoff is awaiting the Gateway. Retain
+      // that wakeup until this attempt has finished, without racing the next one.
+      if (this.hasLiveSiblings(state)) {
+        this.siblingWaiters.add(childState);
+      }
       const delivery = await this.dependencies.deliver({
         scope: state.completionScope,
         completionCustody: childState.completionCustody,
@@ -144,7 +206,11 @@ export class CodexNativeSubagentCompletionDelivery {
         return;
       }
       const error = delivery.error ?? "completion delivery did not produce a parent response";
-      await this.scheduleRetry(state, childState, error);
+      const siblingBlocked = this.hasLiveSiblings(state);
+      if (siblingBlocked) {
+        this.siblingWaiters.add(childState);
+      }
+      await this.scheduleRetry(state, childState, error, !siblingBlocked);
     } catch (error) {
       if (!this.isCurrent(state, childState)) {
         return;
@@ -154,7 +220,16 @@ export class CodexNativeSubagentCompletionDelivery {
         return;
       }
       const message = formatErrorMessage(error);
-      await this.scheduleRetry(state, childState, message, !childState.completionDeliveryAbandoned);
+      const siblingBlocked = this.hasLiveSiblings(state);
+      if (siblingBlocked) {
+        this.siblingWaiters.add(childState);
+      }
+      await this.scheduleRetry(
+        state,
+        childState,
+        message,
+        !siblingBlocked && !childState.completionDeliveryAbandoned,
+      );
       embeddedAgentLog.warn("Failed to deliver Codex native subagent completion", {
         parentThreadId: state.parentThreadId,
         childThreadId: completion.childThreadId,
@@ -227,6 +302,7 @@ export class CodexNativeSubagentCompletionDelivery {
   }
 
   release(childState: ChildState): void {
+    this.siblingWaiters.delete(childState);
     childState.completionCustody?.release();
     clearTimeout(childState.completionDeliveryTimer);
     const deliveryOwnerKey = childState.deliveryOwnerKey;
