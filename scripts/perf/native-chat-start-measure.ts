@@ -14,7 +14,7 @@ import {
   signEd25519Payload,
 } from "../../src/infra/ed25519-signature.ts";
 import { extractTextFromChatContent } from "../../src/shared/chat-content.ts";
-import { createDeferredCore } from "../../src/shared/deferred.ts";
+import { createDeferredCore, type Deferred } from "../../src/shared/deferred.ts";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
 import { observeTurnStartReceipt } from "./turn-start-report.ts";
 
@@ -113,7 +113,7 @@ export async function measureNativeChatStart(options: {
         firstToolStartMs?: number;
         completedMs?: number;
         finalText?: string | null;
-        done: ReturnType<typeof createDeferredCore>;
+        done: Deferred;
       }
     | undefined;
   const client = new GatewayClient({

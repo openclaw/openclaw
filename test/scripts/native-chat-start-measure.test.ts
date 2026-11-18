@@ -10,20 +10,24 @@ import {
 } from "../../scripts/perf/native-chat-start-measure.ts";
 import { reserveTestPortListener } from "../../src/test-utils/port-claims.ts";
 
-it.each([
-  "local mock",
-  "external provider",
-  "wrong runtime",
-  "missing mock receipt",
-  "rejected ACK",
-  "wrong stop PID",
-  "released materialized main",
-  "main runtime override",
-  "main model override",
-  "additional agent",
-])("validates the %s fixture before recording native-identity receipts", async (kind) => {
+// The driver only accepts ports 30000-65534, but Linux test pools can allocate lower ones.
+it.each(
+  [
+    "local mock",
+    "external provider",
+    "wrong runtime",
+    "missing mock receipt",
+    "rejected ACK",
+    "wrong stop PID",
+    "released materialized main",
+    "main runtime override",
+    "main model override",
+    "additional agent",
+  ].map((kind, index) => [kind, 31840 + index] as const),
+)("validates the %s fixture before recording native-identity receipts", async (kind, port) => {
   let providerRequests = 0;
   const reservation = await reserveTestPortListener({
+    port,
     offsets: [0],
     createListener: () =>
       createServer((_request, response) => {
@@ -50,7 +54,7 @@ it.each([
     await reservation.releaseListener();
     await reservation.claim.release();
   });
-  const mockUrl = `http://127.0.0.1:${reservation.claim.port}/v1`;
+  const mockUrl = `http://127.0.0.1:${port}/v1`;
   const methods: string[] = [];
   server.on("connection", (peer) => {
     peer.send(
@@ -70,10 +74,8 @@ it.each([
         expect(frame.params.device).toMatchObject({ nonce: "synthetic-challenge" });
         payload = { type: "hello-ok", policy: { maxPayload: 1048576, tickIntervalMs: 30000 } };
       } else if (frame.method === "config.get") {
-        const config = createNativeChatStartConfig(
-          reservation.claim.port + 1,
-          reservation.claim.port,
-        );
+        const config = createNativeChatStartConfig(port + 1, port);
+
         assert(config.models?.providers?.openai);
         config.models.providers.openai.apiKey = "__OPENCLAW_REDACTED__";
         assert(config.agents);
@@ -103,11 +105,8 @@ it.each([
       } else if (frame.method === "status") {
         payload = { pid: kind === "wrong stop PID" ? 456 : 123 };
       } else if (frame.method === "gateway.stop.request") {
-        expect(frame.params.target).toEqual({
-          pid: 123,
-          ownerId: "synthetic-owner",
-          port: reservation.claim.port,
-        });
+        expect(frame.params.target).toEqual({ pid: 123, ownerId: "synthetic-owner", port });
+
         payload = { ok: true, pid: 123, status: "scheduled" };
       } else {
         expect(frame.method).toBe("chat.send");
@@ -146,11 +145,11 @@ it.each([
     });
   });
   const measurement = measureNativeChatStart({
-    url: `ws://127.0.0.1:${reservation.claim.port}`,
+    url: `ws://127.0.0.1:${port}`,
     mockUrl,
     samples: 2,
     timeoutMs: 5000,
-    stopTarget: { pid: 123, ownerId: "synthetic-owner", port: reservation.claim.port },
+    stopTarget: { pid: 123, ownerId: "synthetic-owner", port },
   });
   if (["main runtime override", "main model override", "additional agent"].includes(kind)) {
     await expect(measurement).rejects.toThrow("agent overrides are not this fixture");
