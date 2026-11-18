@@ -36,7 +36,7 @@ explicit invalidation, and failed-catalog handling remain unchanged.
 - `plugins.entries.codex.enabled` is `true`.
 - `plugins.entries.codex.config.codexPlugins.enabled` is `true`.
 - Codex app-server reports `0.149.0` or newer. The official plugin ships
-  `@openai/codex` `0.160.1` and may select a newer installed Codex; newer
+  `@openai/codex` `0.169.0` and may select a newer installed Codex; newer
   custom, remote, and macOS desktop-owned binaries continue with a
   compatibility warning and normal runtime validation.
 - The target Codex app-server can see the expected marketplace, plugin, and
@@ -54,6 +54,13 @@ explicit invalidation, and failed-catalog handling remain unchanged.
 - OpenClaw excludes the `visualize@openai-bundled` skill from Codex threads.
   That skill emits Codex-specific inline visualization directives, while
   OpenClaw visualizations use the `show_widget` tool on supported surfaces.
+
+New OpenAI models can require a newer Codex version than your OpenClaw release
+bundles. GPT-6.2 requires Codex `0.166.0` or newer, which the current `0.169.0`
+bundle already satisfies. For upgrades between OpenClaw releases, follow
+[Newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
+With a ChatGPT/Codex login, select the **Codex** runtime for your session.
+Installing Codex alone does not fix automatic routing or grant model access.
 
 `codexPlugins` has no effect on OpenClaw-provider runs, ACP conversation
 bindings, or other harnesses, because those paths never create Codex
