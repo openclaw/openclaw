@@ -10,7 +10,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { discoverOpenClawPlugins } from "./discovery.js";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
+import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { isPathInside, openPluginRootFileSync } from "./path-safety.js";
 import {
   checkPluginCacheEntry,
@@ -68,6 +71,54 @@ function fixture(files: Record<string, string> = {}, aliases: Record<string, str
   }
   return { root, file };
 }
+
+function installedFixture(id: string) {
+  const { file } = fixture({
+    [`bundled/${id}/index.js`]: 'throw new Error("metadata must not execute code");',
+  });
+  const root = file(`bundled/${id}`);
+  const write = (version?: string) => {
+    const metadata = {
+      manifest: JSON.stringify({ id, version, configSchema: { type: "object" } }),
+      packageJson: JSON.stringify({
+        name: `@fixture/${id}`,
+        version,
+        openclaw: { extensions: ["./index.js"] },
+      }),
+    };
+    fs.writeFileSync(path.join(root, "openclaw.plugin.json"), metadata.manifest);
+    fs.writeFileSync(path.join(root, "package.json"), metadata.packageJson);
+    return metadata;
+  };
+  const env = {
+    OPENCLAW_HOME: file("home"),
+    OPENCLAW_BUNDLED_PLUGINS_DIR: file("bundled"),
+    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+  };
+  return { file, root, write, env };
+}
+
+it("keeps registry metadata and index fingerprints on the captured generation", () => {
+  const id = "generation-owner";
+  const { write, env } = installedFixture(id);
+  const first = write("1.0.0");
+  const discovery = discoverOpenClawPlugins({ env, installRecords: {} });
+  expect(discovery.candidates.find((candidate) => candidate.idHint === id)).toBeDefined();
+  write("2.0.0");
+  const registry = loadPluginManifestRegistryCore({ env, discovery, installRecords: {} });
+  const records = buildInstalledPluginIndexRecords({
+    candidates: discovery.candidates,
+    registry,
+    diagnostics: [],
+    installRecords: {},
+  });
+  expect(registry.plugins.find((plugin) => plugin.id === id)?.version).toBe("1.0.0");
+  const hash = (text: string) => crypto.createHash("sha256").update(text).digest("hex");
+  expect(records.find((record) => record.pluginId === id)).toMatchObject({
+    manifestHash: hash(first.manifest),
+    packageJson: { hash: hash(first.packageJson) },
+  });
+});
 
 function checkEntry(rootDir: string, relativePath: string, rootRealPath?: string) {
   return checkPluginCacheEntry({ rootDir, relativePath, rootRealPath, rejectHardlinks: true });

@@ -6,6 +6,7 @@ import { insertRegistryWorktreeInDatabase } from "../../agents/worktrees/registr
 import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { tryBeginGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
+import * as spawnDiagnostics from "../../process/spawn-diagnostics.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
@@ -414,6 +415,16 @@ describe("placement recovery session admission with persisted placements", () =>
       },
     });
     const coordinated = coordinate(harness);
+    using spawns = vi.spyOn(spawnDiagnostics, "recordChildProcessSpawn");
+    const gitSpawns = () =>
+      spawns.mock.calls.filter(
+        ([command]) => path.basename(command).replace(/\.exe$/, "") === "git",
+      );
+    const inventoryRoots = () =>
+      gitSpawns().flatMap(([, child]) => {
+        const args = child.spawnargs;
+        return args.includes("for-each-ref") ? [args[args.indexOf("-C") + 1]!] : [];
+      });
 
     await coordinated.reconcile("startup");
     for (let sweep = 0; sweep < 3; sweep++) {
@@ -435,6 +446,7 @@ describe("placement recovery session admission with persisted placements", () =>
     for (let sweep = 0; sweep < 8; sweep++) {
       await coordinated.reconcileActive();
     }
+    expect(new Set(inventoryRoots())).toEqual(new Set(roots));
     expect(await readCleanupRef(orphanRoot)).toBe("");
   });
 

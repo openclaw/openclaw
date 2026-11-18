@@ -488,6 +488,35 @@ it.each([false, true])(
   },
 );
 
+it("forwards buffered parent receipts after adopting the migrated run", async () => {
+  const steps: unknown[] = [];
+  const input = {
+    ...workerInput({
+      ...finalizationParams({ runId: "handoff-run" }, "/fixture/candidate"),
+      result: { status: "ok", mode: "git", root: "/fixture/candidate", steps, durationMs: 0 },
+    }),
+    executor: undefined,
+    bufferedSteps: [
+      {
+        step: "git-verify-head",
+        status: "completed",
+        startedAtMs: 1,
+        endedAtMs: 37,
+        exitCode: 0,
+      },
+    ],
+    resultPath: "/fixture/result.json",
+  };
+  fixture.terminal.mockReturnValue({ runId: "handoff-run", status: "succeeded" });
+
+  await runWorker(input);
+  expect(fixture.recordStep).toHaveBeenCalledWith(
+    "handoff-run",
+    input.bufferedSteps[0],
+    expect.anything(),
+  );
+});
+
 type DeadlineCase = [
   name: string,
   version: number | undefined,

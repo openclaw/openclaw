@@ -45,6 +45,14 @@ function createdKey(params: unknown) {
   return params.key;
 }
 
+async function expectListedKeys(page: Page, keys: string[]) {
+  for (const key of keys) {
+    await expect
+      .poll(() => page.locator(`.sidebar-recent-session[data-session-key="${key}"]`).count())
+      .toBe(1);
+  }
+}
+
 async function expectPlainJson(prompt: Locator, message: string) {
   const text = prompt.locator(".chat-text");
   await text.locator("pre code").waitFor({ state: "visible" });
@@ -350,7 +358,7 @@ suite.define(() => {
     }
   });
 
-  it("does not submit IME confirmation before deliberate Enter", async () => {
+  it("creates sessions after deliberate Enter and retains them across reconnect", async () => {
     const page = await openPage(createControlUiE2eContextOptions());
     const gateway = await installMockGateway(page);
     await page.goto(`${suite.server.baseUrl}new`);
@@ -367,6 +375,28 @@ suite.define(() => {
     });
     const firstKey = createdKey((await gateway.waitForRequest("sessions.create")).params);
     await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(firstKey));
+    await page.getByRole("link", { name: "New session" }).first().click();
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+    await page.locator(".new-session-page__message").fill("verify another default mock");
+    await page.locator(".new-session-page__message").press("Enter");
+    await waitForRequestCount(gateway, 2, "sessions.create");
+    expect((await gateway.getRequests("sessions.create")).at(-1)).toMatchObject({
+      params: { agentId: "main", message: "verify another default mock" },
+    });
+    const secondKey = createdKey(
+      (await gateway.waitForRequest("sessions.create", { after: 1 })).params,
+    );
+    await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(secondKey));
+    await expectListedKeys(page, [firstKey, secondKey]);
+    await expect.poll(() => page.locator(".new-session-page__error").count()).toBe(0);
+    const listRequestsBeforeReconnect = (await gateway.getRequests("sessions.list", rosterMatch))
+      .length;
+    await gateway.closeLatest(1006, "mock reconnect");
+    await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(1);
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
+      .toBeGreaterThan(listRequestsBeforeReconnect);
+    await expectListedKeys(page, [firstKey, secondKey]);
   });
 
   it("keeps the submitted preview and restores its thinking choice after a rejected edit", async () => {
