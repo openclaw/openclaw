@@ -44,6 +44,7 @@ describe("worker environment runtime upgrades", () => {
     state: "idle" | "attached" = "attached",
     bootstrapReceipt: WorkerAdmissionHandshake = support.BOOTSTRAP_RECEIPT,
     targetReceipt: WorkerAdmissionHandshake = currentReceipt,
+    nodeRecovery = false,
   ) {
     const environmentId = "worker-runtime-upgrade";
     type Transition = Parameters<typeof testState.store.transition>[0];
@@ -57,7 +58,28 @@ describe("worker environment runtime upgrades", () => {
       environmentId,
       providerId: "fake",
       profileId: "development",
-      profileSnapshot: { settings: { region: "test", desktop: true } },
+      profileSnapshot: {
+        settings: { region: "test", desktop: true },
+        ...(nodeRecovery
+          ? {
+              runtimePreparation: {
+                source: "image",
+                key: "a".repeat(64),
+                cacheKey: "b".repeat(64),
+                contractVersion: 2,
+                target: { machineClass: "small", platform: "linux" },
+                artifacts: {
+                  nodeBootstrapSha256: "c".repeat(64),
+                  enabledPluginIds: [],
+                  workerBundleHash: bootstrapReceipt.bundleHash,
+                  workerArchiveSha256: "e".repeat(64),
+                  openclawVersion: "2026.7.2",
+                  protocolFeatures: [],
+                },
+              },
+            }
+          : {}),
+      },
       provisionOperationId: `provision:${environmentId}`,
     });
     await transition("requested", "provisioning");
@@ -69,6 +91,7 @@ describe("worker environment runtime upgrades", () => {
     }
     await transition(node ? "provisioning" : "bootstrapping", "ready", {
       ...support.readyPatch(environmentId, { ...bootstrapReceipt, installKind: "bundle" }),
+      sharedHost: false,
       desktop: support.DESKTOP,
       ...(node ? { leaseId: `lease:${environmentId}`, nodeDeviceId: `node:${environmentId}` } : {}),
     });
@@ -113,7 +136,42 @@ describe("worker environment runtime upgrades", () => {
       expect(sshEndpoint).toEqual(environment.sshEndpoint);
       return install();
     });
+    const currentNodeRuntime = {
+      nodeBootstrap: {
+        ...support.NODE_BOOTSTRAP,
+        sha256: "f".repeat(64),
+        openclawVersion: "2026.9.27",
+      },
+      workerBundle: {
+        url: "https://gateway.example.test/worker",
+        token: "runtime-worker-token",
+        bundleHash: targetReceipt.bundleHash,
+        protocolFeatures: [...targetReceipt.protocolFeatures],
+        sha256: support.BUNDLE_ARTIFACT.tarballSha256,
+        bytes: support.BUNDLE_ARTIFACT.tarballBytes,
+        packageRelativePath: `worker-artifacts/${support.BUNDLE_ARTIFACT.tarballSha256}.tgz`,
+      },
+    };
+    const prepareNodeRuntime = vi.fn<
+      NonNullable<support.WorkerEnvironmentServiceOptions["prepareNodeRuntime"]>
+    >(async (_record, _artifact, _signal, assertCurrent) => {
+      assertCurrent?.();
+      return currentNodeRuntime;
+    });
+    const closeNodeRuntime = vi.fn();
+    const resumeNode = vi.fn<
+      NonNullable<import("../../plugins/types.js").WorkerProvider["resumeNode"]>
+    >(async (request) => {
+      request.assertCurrent();
+    });
     const provider = {
+      ...(nodeRecovery
+        ? {
+            requiresNodeEnrollment: true as const,
+            inspect: async () => ({ status: "active" as const, sharedHost: false }),
+            resumeNode,
+          }
+        : {}),
       provision: vi.fn(support.createProvider().provision),
       destroy: vi.fn(async () => {}),
     };
@@ -149,6 +207,7 @@ describe("worker environment runtime upgrades", () => {
           nodeTunnelManager,
           placementStore: gate,
           ensureNodeWorkerBundle,
+          ...(nodeRecovery ? { prepareNodeRuntime, closeNodeRuntime } : {}),
         },
       );
       return { gate, service };
@@ -160,6 +219,10 @@ describe("worker environment runtime upgrades", () => {
       placement,
       placements,
       oldCredential,
+      currentNodeRuntime,
+      prepareNodeRuntime,
+      closeNodeRuntime,
+      resumeNode,
       events,
       stop,
       install,
@@ -188,6 +251,58 @@ describe("worker environment runtime upgrades", () => {
       },
     };
   }
+
+  it.each(["idle", "active", "pending"] as const)(
+    "admits current node artifacts only for an idle exclusive placement (%s)",
+    async (scenario) => {
+      const busy = scenario !== "idle";
+      const h = await setupUpgrade(
+        "node",
+        "attached",
+        support.BOOTSTRAP_RECEIPT,
+        currentReceipt,
+        true,
+      );
+      if (busy) {
+        const claim = await h.placements.claimTurn({
+          ...REQUEST,
+          claimId: "live-before-upgrade",
+          runId: "live-before-upgrade",
+          owner: { kind: "worker", ...h.owner },
+        });
+        if (scenario === "pending") {
+          await h.placements.markWorkspaceResultPending(claim);
+          h.service.fenceWorkerTurnForRecovery(claim);
+        }
+      }
+      const updating = h.service.resumeNode(h.owner.environmentId, {
+        signal: new AbortController().signal,
+        assertCurrent() {},
+        upgradeRuntime: true,
+      });
+      if (busy) {
+        await expect(updating).rejects.toThrow(
+          scenario === "pending" ? "pending workspace recovery" : "current turn",
+        );
+        expect(h.prepareNodeRuntime).not.toHaveBeenCalled();
+        expect(h.resumeNode).not.toHaveBeenCalled();
+      } else {
+        await updating;
+        expect(h.resumeNode.mock.calls[0]?.[0]).toMatchObject({
+          leaseId: h.environment.leaseId,
+          deviceId: h.environment.nodeDeviceId,
+          nodeBootstrapSha256: "f".repeat(64),
+          openclawVersion: "2026.9.27",
+          runtime: h.currentNodeRuntime,
+        });
+        expect(h.closeNodeRuntime).toHaveBeenCalledExactlyOnceWith(h.currentNodeRuntime);
+        h.expectRetained({ nodeDeviceId: h.environment.nodeDeviceId });
+        expect(h.placements.get(REQUEST.sessionId)?.generation).toBe(h.placement!.generation);
+        expect(h.provision).not.toHaveBeenCalled();
+        expect(h.destroy).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("upgrades the node idle runtime while retaining its machine and workspace", async () => {
     const h = await setupUpgrade("node", "idle");

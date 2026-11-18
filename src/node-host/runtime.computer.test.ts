@@ -138,7 +138,7 @@ async function withComputer(
 }
 
 describe("private worker computer runtime", () => {
-  it("awaits the registered provider preparation before publishing the first manifest", async () => {
+  it("connects with mandatory commands while joining private provider preparation before use", async () => {
     const gate = createDeferredCore();
     const entered = createDeferredCore();
     const prepare = vi.fn(() => {
@@ -153,10 +153,18 @@ describe("private worker computer runtime", () => {
     try {
       await entered.promise;
       expect(prepare).toHaveBeenCalledOnce();
-      expect(prepared).toBe(false);
-      gate.resolve();
       const host = await starting;
-      expect(await host.invoke({ operation: "capabilities" })).toMatchObject({ ok: true });
+      expect(prepared).toBe(true);
+      expect(host.prepared.manifest.commands).not.toContain("computer.act");
+      let invoked = false;
+      const invoking = host.invoke({ operation: "capabilities" }).then((result) => {
+        invoked = true;
+        return result;
+      });
+      await setImmediate();
+      expect(invoked).toBe(false);
+      gate.resolve();
+      expect(await invoking).toMatchObject({ ok: true });
       await host.runtime.cancelAll();
       await host.invoke({ operation: "capabilities" });
       expect(prepare).toHaveBeenCalledOnce();

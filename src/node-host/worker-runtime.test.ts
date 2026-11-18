@@ -54,7 +54,7 @@ vi.mock("./mcp.js", async (importOriginal) => ({
   startNodeHostMcpManager: async () => ({ descriptors: [], close: async () => {} }),
 }));
 vi.mock("./plugin-node-host.js", () => ({
-  ensureNodeHostPluginRegistry: async () => {},
+  ensureNodeHostPluginRegistry: async () => ({ ready: Promise.resolve(), isReady: () => true }),
   invokeRegisteredNodeHostCommand: async () => null,
   isRegisteredNodeHostCommandDuplex: () => false,
   listRegisteredNodeHostCapsAndCommands: () => ({ caps: [], commands: [], nodePluginTools: [] }),

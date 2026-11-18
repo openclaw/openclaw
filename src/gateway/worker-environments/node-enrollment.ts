@@ -118,11 +118,36 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     return { artifact, url: url.url, tlsFingerprint };
   };
 
-  const reserve = (record: WorkerEnvironmentRecord, operationSignal?: AbortSignal) => {
+  const reserve = (
+    record: WorkerEnvironmentRecord,
+    operationSignal?: AbortSignal,
+    assertRecoveryCurrent?: () => void,
+  ) => {
     signal.throwIfAborted();
     operationSignal?.throwIfAborted();
     const admission = options.store.get(record.environmentId);
-    if (!isProvisioningOwner(admission, record)) {
+    const isOwnerCurrent = (
+      current: WorkerEnvironmentRecord | undefined,
+    ): current is WorkerEnvironmentRecord => {
+      if (!assertRecoveryCurrent) {
+        return isProvisioningOwner(current, record);
+      }
+      assertRecoveryCurrent();
+      return (
+        current?.state === "attached" &&
+        record.state === "attached" &&
+        current.ownerEpoch === record.ownerEpoch &&
+        current.leaseId === record.leaseId &&
+        current.nodeDeviceId === record.nodeDeviceId &&
+        current.nodeSetupId === record.nodeSetupId &&
+        current.provisionOperationId === record.provisionOperationId &&
+        current.destroyRequestedAtMs === null &&
+        current.sharedHost === false &&
+        current.attachedSessionIds.length === 1 &&
+        current.attachedSessionIds[0] === record.attachedSessionIds[0]
+      );
+    };
+    if (!isOwnerCurrent(admission)) {
       throw new Error("Worker node enrollment is no longer provisioning");
     }
     // Reserve the generation before asynchronous preparation, so a stale completion
@@ -158,7 +183,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     const current = () => {
       enrollmentSignal.throwIfAborted();
       const live = options.store.get(record.environmentId);
-      if (active.get(record.environmentId) !== binding || !isProvisioningOwner(live, record)) {
+      if (active.get(record.environmentId) !== binding || !isOwnerCurrent(live)) {
         throw new Error("Worker node enrollment is no longer provisioning");
       }
       return live;
@@ -229,11 +254,16 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
 
   const prepareRuntime = async (
     record: WorkerEnvironmentRecord,
-    bundle: TransferArtifact,
+    bundle: TransferArtifact & { bundleHash?: string; protocolFeatures?: readonly string[] },
     operationSignal?: AbortSignal,
+    assertRecoveryCurrent?: () => void,
   ): Promise<WorkerNodeRuntimePreparation> => {
     await options.store.ready();
-    const { binding, enrollmentSignal, current } = reserve(record, operationSignal);
+    const { binding, enrollmentSignal, current } = reserve(
+      record,
+      operationSignal,
+      assertRecoveryCurrent,
+    );
     try {
       const prepared = await prepare(record, enrollmentSignal);
       const owner = current();
@@ -248,6 +278,8 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
       const runtime: WorkerNodeRuntimePreparation = {
         ...grantRuntime(prepared, enrollmentSignal, isAuthorized, transferBytes),
         workerBundle: {
+          ...(bundle.bundleHash ? { bundleHash: bundle.bundleHash } : {}),
+          ...(bundle.protocolFeatures ? { protocolFeatures: [...bundle.protocolFeatures] } : {}),
           ...grantArtifact(prepared, bundle, enrollmentSignal, isAuthorized, transferBytes),
           packageRelativePath: workerBundleArchiveRelativePath(bundle.tarballSha256),
         },

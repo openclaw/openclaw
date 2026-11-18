@@ -1,8 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { WorkerProvider } from "../../plugins/types.js";
+import * as runtimeVersion from "../../version.js";
+import {
+  createNodeRegistryRuntime,
+  updateNodeRunnerInventory,
+  waitForNodeWorkerSupervisor,
+} from "../node-registry-private.js";
+import { NodeRegistry } from "../node-registry.js";
+import { createWorkerSupervisorNodeClient } from "../server-methods/nodes.runner-inventory.test-support.js";
 import { createWorkerRuntimeRefreshWaiter } from "../server-worker-placement-runtime-refresh.js";
 import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
 import { testState } from "./service.test-support.js";
 
@@ -87,6 +98,27 @@ describe("same enrolled node admission recovery", () => {
         inspect,
         provision,
       }),
+      {
+        placementStore: createWorkerSessionPlacementGate(placements),
+        prepareNodeRuntime: async (_record, _artifact, _signal, assertCurrent) => {
+          assertCurrent?.();
+          return {
+            nodeBootstrap: {
+              ...support.NODE_BOOTSTRAP,
+              sha256: "b".repeat(64),
+              openclawVersion: "2026.7.2",
+            },
+            workerBundle: {
+              url: "https://gateway.example.test/worker",
+              token: "synthetic-worker-token",
+              sha256: "e".repeat(64),
+              bytes: 1,
+              packageRelativePath: `worker-artifacts/${"e".repeat(64)}.tar.gz`,
+            },
+          };
+        },
+        closeNodeRuntime() {},
+      },
     );
     const waiter = createWorkerRuntimeRefreshWaiter({
       environments: service,
@@ -107,6 +139,111 @@ describe("same enrolled node admission recovery", () => {
     };
   }
 
+  it.each(["older version", "same version, stale build"] as const)(
+    "waits for the upgraded connected node before admission: %s",
+    async (mode) => {
+      const h = await setup({ connected: true });
+      const { nodeRegistry, nodeWorkerSupervisorTransport } = createNodeRegistryRuntime(
+        () => new NodeRegistry(),
+      );
+      const connect = (connectionId: string, version: string, buildId: string) => {
+        const client = createWorkerSupervisorNodeClient(connectionId);
+        if (!client.connect.device) {
+          throw new Error("Node fixture requires device identity");
+        }
+        client.connect.device.id = "device-1";
+        client.connect.client.version = version;
+        client.connect.client.buildId = buildId;
+        nodeRegistry.register(client, {
+          pairingIdentity: "identity-a",
+          pairingGeneration: "generation-a",
+        });
+        updateNodeRunnerInventory({
+          registry: nodeRegistry,
+          nodeId: "device-1",
+          connId: connectionId,
+          declaration: {
+            protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+            workerHost: { enabled: true, capacity: { total: 1, available: 1 } },
+          },
+        });
+      };
+      connect(
+        "old-runtime",
+        mode === "older version" ? "2026.1.1" : runtimeVersion.VERSION,
+        "old-build",
+      );
+      vi.spyOn(runtimeVersion, "resolveRuntimeServiceBuildId").mockReturnValue("current-build");
+      const resumeGate = createDeferred();
+      const resuming = createDeferred();
+      const oldProof = createDeferred();
+      const checkedVersion = createDeferred();
+      const originalRead = nodeWorkerSupervisorTransport.getCurrentNode.bind(
+        nodeWorkerSupervisorTransport,
+      );
+      vi.spyOn(nodeWorkerSupervisorTransport, "getCurrentNode").mockImplementation(
+        async (nodeId) => {
+          const proof = await originalRead(nodeId);
+          oldProof.resolve();
+          return proof;
+        },
+      );
+      const resume = vi.spyOn(h.service, "resumeNode").mockImplementation(async (_id, request) => {
+        request.assertCurrent();
+        resuming.resolve();
+        await resumeGate.promise;
+        request.assertCurrent();
+      });
+      const waiter = createWorkerRuntimeRefreshWaiter({
+        environments: h.service,
+        isStopping: () => false,
+        hasCurrentRunner: (id) => nodeWorkerSupervisorTransport.hasCurrentRunner(id),
+      });
+      let versionReads = 0;
+      waiter.bind(
+        (id, options) => waitForNodeWorkerSupervisor(nodeRegistry, id, options),
+        (id) => {
+          if (++versionReads > 1) {
+            checkedVersion.resolve();
+          }
+          return nodeRegistry.get(id)?.version;
+        },
+        (id) => nodeRegistry.get(id)?.client.connect.client.buildId,
+      );
+      const controller = new AbortController();
+      let finished = false;
+      const waiting = waiter
+        .wait({ placement: h.placement, signal: controller.signal, assertCurrent() {} })
+        .then(() => {
+          finished = true;
+        });
+      try {
+        expect(
+          await Promise.race([
+            resuming.promise.then(() => "upgrade"),
+            oldProof.promise.then(() => "old runner"),
+          ]),
+        ).toBe("upgrade");
+        resumeGate.resolve();
+        await checkedVersion.promise;
+        expect(finished).toBe(false);
+        connect("upgraded-runtime", runtimeVersion.VERSION, "current-build");
+        await waiting;
+        expect(finished).toBe(true);
+        expect(resume).toHaveBeenCalledOnce();
+        expect(resume.mock.calls[0]?.[1]).toMatchObject({ upgradeRuntime: true });
+        expect(h.provision).not.toHaveBeenCalled();
+        expect(testState.store.get(h.environment.environmentId)).toEqual(h.environment);
+      } finally {
+        resumeGate.resolve();
+        controller.abort();
+        await waiting.catch(() => {});
+        nodeRegistry.unregister("old-runtime");
+        nodeRegistry.unregister("upgraded-runtime");
+      }
+    },
+  );
+
   it("restarts the exact enrolled lease before reconnect without provisioning or changing custody", async () => {
     const h = await setup();
     await h.waiter.wait({
@@ -122,7 +259,9 @@ describe("same enrolled node admission recovery", () => {
       openclawVersion: "2026.7.2",
       platform: "linux",
     });
-    expect(() => h.resumeNode.mock.calls[0]![0].assertCurrent()).toThrow("owner changed");
+    expect(() => h.resumeNode.mock.calls[0]![0].assertCurrent()).toThrow(
+      "placement authority changed",
+    );
     expect(h.provision).not.toHaveBeenCalled();
     expect(testState.store.get(h.environment.environmentId)).toEqual(h.environment);
   });

@@ -1,8 +1,9 @@
-import type { WorkerProvider } from "../../plugins/types.js";
+import type { WorkerNodeRuntimePreparation, WorkerProvider } from "../../plugins/types.js";
 import { assertWorkerResourceReceiptMatch } from "../../plugins/worker-resource-receipt.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
+import { MAX_NODE_BOOTSTRAP_TIMEOUT_MS } from "./bootstrap-timeouts.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
@@ -40,6 +41,9 @@ type WorkerRuntimeRefreshOptions = Pick<
   | "credentialBroker"
   | "callProvider"
   | "withLock"
+  | "prepareInstallation"
+  | "prepareNodeRuntime"
+  | "closeNodeRuntime"
 > &
   Pick<
     ReturnType<typeof createWorkerProviderOwnerLifecycle>,
@@ -169,7 +173,7 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
   // Retained wake already owns the environment lock; share the resumer without reacquiring it.
   const resumeNodeInOperation = async (
     environmentId: string,
-    request: { signal: AbortSignal; assertCurrent: () => void },
+    request: { signal: AbortSignal; assertCurrent: () => void; upgradeRuntime?: true },
   ) => {
     request.assertCurrent();
     const record = store.get(environmentId);
@@ -181,13 +185,19 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
     const resume = provider.resumeNode;
     const deviceId = record.nodeDeviceId;
     if (!resume || !preparation || !deviceId || !record.leaseId) {
-      return;
+      return undefined;
     }
     const signal = AbortSignal.any([request.signal, options.ownerSignal]);
+    let authority:
+      | Awaited<ReturnType<WorkerSessionPlacementGate["prepareWorkerRuntimeRefresh"]>>
+      | undefined;
+    let runtime: WorkerNodeRuntimePreparation | undefined;
+    let retainedCleanupOnly = false;
     let open = true;
     const assertCurrent = () => {
       signal.throwIfAborted();
       request.assertCurrent();
+      authority?.assertCurrent();
       const current = requireCurrentOwner(record);
       if (
         !open ||
@@ -208,33 +218,83 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
     };
     try {
       assertCurrent();
-      await options.callProvider(environmentId, "resume-node", async () => {
-        assertCurrent();
-        // A persisted isolation default cannot authorize a process launch. This
-        // observation qualifies recovery only; ordinary turn admission owns loss.
-        const inspection = await provider.inspect(lease);
-        assertWorkerResourceReceiptMatch(record.resourceReceipt, inspection.resourceReceipt);
-        requireWorkerLeaseStatus(inspection);
-        assertCurrent();
-        if (inspection.status !== "active" || inspection.sharedHost !== false) {
-          throw serviceError(
-            "invalid_state",
-            "Worker node recovery requires an active dedicated lease",
-          );
-        }
-        await resume({
-          ...lease,
-          deviceId,
-          nodeBootstrapSha256: preparation.artifacts.nodeBootstrapSha256,
-          openclawVersion: preparation.artifacts.openclawVersion,
-          platform: preparation.target.platform,
-          assertCurrent,
-        });
-        assertCurrent();
-      });
+      await options.callProvider(
+        environmentId,
+        "resume-node",
+        async () => {
+          assertCurrent();
+          // A persisted isolation default cannot authorize a process launch. This
+          // observation qualifies recovery only; ordinary turn admission owns loss.
+          const inspection = await provider.inspect(lease);
+          assertWorkerResourceReceiptMatch(record.resourceReceipt, inspection.resourceReceipt);
+          requireWorkerLeaseStatus(inspection);
+          assertCurrent();
+          if (inspection.status !== "active" || inspection.sharedHost !== false) {
+            throw serviceError(
+              "invalid_state",
+              "Worker node recovery requires an active dedicated lease",
+            );
+          }
+          if (request.upgradeRuntime) {
+            const sessionId = record.attachedSessionIds[0];
+            if (record.state !== "attached" || !sessionId || !options.placementStore) {
+              throw serviceError(
+                "invalid_state",
+                "Worker node upgrade requires its exclusive placement",
+              );
+            }
+            authority = await options.placementStore.prepareWorkerRuntimeRefresh({
+              sessionId,
+              environmentId,
+              ownerEpoch: record.ownerEpoch,
+              idleOnly: true,
+              ...(record.retention ? { allowRetainedCleanup: true as const } : {}),
+            });
+            assertCurrent();
+            retainedCleanupOnly = Boolean(authority.retainedCleanupOnly || authority.reclaimResult);
+            if (!retainedCleanupOnly) {
+              if (!options.prepareNodeRuntime) {
+                throw serviceError(
+                  "invalid_state",
+                  "Current node runtime preparation is unavailable",
+                );
+              }
+              const bundle = await options.prepareInstallation("bundle", signal);
+              assertCurrent();
+              if (bundle.install !== "bundle") {
+                throw new Error("Node runtime upgrade requires a bundle artifact");
+              }
+              runtime = await options.prepareNodeRuntime(record, bundle, signal, assertCurrent);
+              assertCurrent();
+            }
+          }
+          await resume({
+            ...lease,
+            deviceId,
+            nodeBootstrapSha256:
+              runtime?.nodeBootstrap.sha256 ?? preparation.artifacts.nodeBootstrapSha256,
+            openclawVersion:
+              runtime?.nodeBootstrap.openclawVersion ?? preparation.artifacts.openclawVersion,
+            ...(runtime ? { runtime } : {}),
+            ...(retainedCleanupOnly ? { retainedRuntimeOnly: true as const } : {}),
+            platform: preparation.target.platform,
+            assertCurrent,
+          });
+          assertCurrent();
+        },
+        request.upgradeRuntime ? MAX_NODE_BOOTSTRAP_TIMEOUT_MS : undefined,
+      );
+      return retainedCleanupOnly ? { retainedCleanupOnly: true as const } : undefined;
     } finally {
       // Timeout closes this invocation, while callProvider retains unsettled work.
       open = false;
+      try {
+        if (runtime) {
+          options.closeNodeRuntime?.(runtime);
+        }
+      } finally {
+        authority?.release();
+      }
     }
   };
   const resumeNode: typeof resumeNodeInOperation = (environmentId, request) =>

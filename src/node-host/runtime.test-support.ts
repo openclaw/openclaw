@@ -58,7 +58,10 @@ vi.mock("./node-worker-workspace.js", () => ({
 }));
 
 vi.mock("./plugin-node-host.js", () => ({
-  ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
+  ensureNodeHostPluginRegistry: vi.fn(async () => ({
+    ready: Promise.resolve(),
+    isReady: () => true,
+  })),
   hasRegisteredNodeHostCommandActiveWork: mocks.pluginHasActiveWork,
   notifyRegisteredNodeHostCommandDisconnect: mocks.disconnectPlugins,
   isRegisteredNodeHostCommandDuplex: vi.fn((command: string) => command === "test.duplex"),
