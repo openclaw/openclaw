@@ -402,9 +402,12 @@ suite.define(() => {
             }),
           )
           .toBe(true);
-        expect((await loading.boundingBox())!.y).toBeGreaterThanOrEqual(
-          (await manage.boundingBox())!.y + (await manage.boundingBox())!.height - 1,
+        const lastAccount = popover.locator('[data-chat-account-option^="account:"]').last();
+        const [loaderBox, accountBox, manageBox] = await Promise.all(
+          [loading, lastAccount, manage].map((row) => row.boundingBox()),
         );
+        expect(loaderBox!.y).toBeGreaterThanOrEqual(accountBox!.y + accountBox!.height - 1);
+        expect(loaderBox!.y + loaderBox!.height).toBeLessThanOrEqual(manageBox!.y + 1);
         expect(await currentOption.isVisible()).toBe(true);
         expect(await gateway.getRequests(rpc)).toHaveLength(baseline + 1);
         await gateway.deferNext(rpc, { cursor: "accounts-page-3" });

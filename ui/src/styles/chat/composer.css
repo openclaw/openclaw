@@ -4896,7 +4896,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 
 .chat-controls__account-popover .chat-controls__account-manage {
   min-height: 36px;
-  scroll-margin-bottom: 28px;
   padding: 0 12px 0 8px;
   gap: 8px;
 }

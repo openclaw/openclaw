@@ -79,6 +79,19 @@ export function ChatModelAccountOptions(
     const renderer = renderRow();
     return renderer ? renderer(key, render) : render();
   };
+  const pagination = () => (
+    <Show when={!renderRow() && props.open && (props.onNextPage || props.loading)}>
+      <div class="chat-controls__account-page-end" role="presentation">
+        <Show when={props.onNextPage}>{(next) => <AccountPageSentinel onVisible={next()} />}</Show>
+        <Show when={props.loading}>
+          <div class="chat-controls__account-page-loader" role="status">
+            <span class="btn__spinner chat-controls__account-spinner" aria-hidden="true" />
+            <span class="sr-only">{t("common.loading")}</span>
+          </div>
+        </Show>
+      </div>
+    </Show>
+  );
   return (
     <>
       <div
@@ -94,6 +107,7 @@ export function ChatModelAccountOptions(
             const key = createMemo(() => `account:${option().value}`);
             return (
               <>
+                <Show when={option().value === "manage"}>{pagination()}</Show>
                 {row(key(), () => (
                   <div
                     class={
@@ -168,20 +182,10 @@ export function ChatModelAccountOptions(
             );
           }}
         </For>
+        <Show when={!props.options.some((option) => option.value === "manage")}>
+          {pagination()}
+        </Show>
       </div>
-      <Show when={!renderRow() && props.open && (props.onNextPage || props.loading)}>
-        <div class="chat-controls__account-page-end">
-          <Show when={props.onNextPage}>
-            {(next) => <AccountPageSentinel onVisible={next()} />}
-          </Show>
-          <Show when={props.loading}>
-            <div class="chat-controls__account-page-loader" role="status">
-              <span class="btn__spinner chat-controls__account-spinner" aria-hidden="true" />
-              <span class="sr-only">{t("common.loading")}</span>
-            </div>
-          </Show>
-        </div>
-      </Show>
       <Show when={props.error}>
         {row("error:accounts", () => (
           <div class="chat-controls__account-error">
