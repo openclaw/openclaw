@@ -59,6 +59,15 @@ Subagents, incognito sessions, drafts, and adopted rows from other session catal
 
 With the default hybrid reload mode, the source Gateway applies plugin configuration automatically. Start or restart the source node host after changing plugin configuration. Changing filters or removing a session's matching group or person involvement revokes new and in-flight transcript reads; a receiver that already read text may retain that text.
 
+## Source Gateway publication
+
+Configure source publication independently from its reader transport. On the source, opt in with `share.gateway: true`, select `share.groups`,
+and set `share.involvingProfileId`. Add the exact approved reader device IDs to
+`share.gatewayDeviceIds`. Missing or empty device grants publish nothing over
+Gateway RPC. The device reads sessions matching both the groups and canonical
+person; it does not become that person. Requests cannot change these filters.
+Merged profile IDs remain supported; unknown or removed people publish nothing.
+
 ## Enable the receiver and pair the source
 
 On the receiver Gateway:

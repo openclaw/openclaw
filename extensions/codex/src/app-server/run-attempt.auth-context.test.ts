@@ -57,6 +57,7 @@ describe("runCodexAppServerAttempt authenticated hook context", () => {
       sandboxSessionKey: "global",
       messageTo: "telegram:-100123",
       senderId: "sender-a",
+      approvalReviewerDeviceId: "device-a",
       channelContext: {
         sender: { id: "stale-sender", profile: "sender-profile" },
         chat: { id: "stale-chat", thread: "chat-thread" },
@@ -71,6 +72,7 @@ describe("runCodexAppServerAttempt authenticated hook context", () => {
         channelId: "-100123",
         chatId: "-100123",
         senderId: "sender-a",
+        requesterDeviceId: "device-a",
         channelContext: {
           sender: { id: "sender-a", profile: "sender-profile" },
           chat: { id: "-100123", thread: "chat-thread" },
@@ -83,6 +85,7 @@ describe("runCodexAppServerAttempt authenticated hook context", () => {
     const contexts = await compactWithHooks({
       trigger: "cron",
       senderId: "must-not-leak",
+      approvalReviewerDeviceId: "must-not-leak",
       channelContext: { sender: { id: "must-not-leak" }, chat: { id: "must-not-leak" } },
     });
     for (const context of contexts) {
@@ -91,7 +94,7 @@ describe("runCodexAppServerAttempt authenticated hook context", () => {
         channel: "telegram",
         trigger: "cron",
       });
-      for (const key of ["senderId", "chatId", "channelContext"]) {
+      for (const key of ["senderId", "chatId", "channelContext", "requesterDeviceId"]) {
         expect(context).not.toHaveProperty(key);
       }
     }

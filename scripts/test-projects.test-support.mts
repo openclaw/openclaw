@@ -3738,12 +3738,15 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ["security-review-script", "security-review-rollout"],
   ],
   [
-    /^scripts\/github\/(?:guard-review|security-review-policy)\.mjs$/u,
+    /^scripts\/(?:github\/(?:dependency-manifests|guard-review|security-review-policy)|lib\/release-version)\.mjs$/u,
     [
       "dependency-guard-script",
       "security-sensitive-guard-script",
       "security-review-script",
       "security-review-rollout",
+      "security-review-admission",
+      "security-review-workflow",
+      "pr-merge-prior-ci",
     ],
   ],
   [/^scripts\/github\/guard-shared\.mjs$/u, ["security-review-script", "security-review-event"]],

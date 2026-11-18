@@ -16,6 +16,7 @@ type ExtensionMatrixRow = {
   extensions_csv: string;
   includePatterns: string[];
   requires_bun?: boolean;
+  pretest_build_mode?: "runtime" | "private-qa";
   task: string;
   test_runtime_policy?: string;
   vitest_config: string;

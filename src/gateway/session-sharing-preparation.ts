@@ -15,7 +15,6 @@ import type {
 import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import type { SessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
-import { createSessionStoreRegistryMutationFilter } from "../config/sessions/session-store-target-inventory.js";
 import {
   captureSessionStoreEnvironment,
   captureSessionStoreInventoryRouting,
@@ -40,10 +39,7 @@ import {
 } from "../sessions/session-row-changes.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import type { AgentDatabaseRegistryChange } from "../state/openclaw-agent-db-contract.js";
-import {
-  isOpenClawAgentDatabaseRegistryChange,
-  prepareOpenClawAgentDatabaseRegistrySnapshotRead,
-} from "../state/openclaw-agent-db-registry-listing.js";
+import { isOpenClawAgentDatabaseRegistryChange } from "../state/openclaw-agent-db-registry-listing.js";
 import { matchesAgentDatabaseReadCandidatePath } from "../state/openclaw-agent-db-resources.js";
 import {
   getPendingOpenClawAgentDatabasePreparation,
@@ -107,6 +103,7 @@ export async function prepareSessionMutationFacts(
   let invalidated = false;
   let pendingTopologyChanges: SessionRowChange[] | undefined;
   let facts: PreparedSessionSourceFacts | undefined;
+  let missingDatabaseIdentity: string | undefined;
   let assertRegistryPublication: (() => void) | undefined;
   let followRegistration: ((change: AgentDatabaseRegistryChange) => void) | undefined;
   let creation: SessionEntryCreationOperation | undefined;
@@ -347,29 +344,12 @@ export async function prepareSessionMutationFacts(
       identity: admitted.get(candidate.path)?.key,
       birthtime: admitted.get(candidate.path)?.birthtime,
     }));
-    const registryScope: Parameters<typeof createSessionStoreRegistryMutationFilter>[0] = {
-      captured: capturedSources,
-      preparedSources: acquisition.sources,
-    };
-    const registryFilter = createSessionStoreRegistryMutationFilter(registryScope);
-    const registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead(
-      { env: environment.env },
-      registryFilter,
+    const { registryScope, registryFilter, registry } = acquisition.prepareRegistry(
+      capturedSources,
+      agentId,
+      environment.env,
+      () => (facts?.target === null ? missingDatabaseIdentity : undefined),
     );
-    if (storage) {
-      const {
-        followRegistration: followRegistryRegistration,
-        assertCurrent: assertRegistryCurrent,
-      } = registry;
-      releases.push(
-        storage.observeRegistration((change) => {
-          assertActive();
-          assertRoutingCurrent(params.cfg);
-          followRegistryRegistration(change);
-          assertRegistryCurrent();
-        }),
-      );
-    }
     const preparedInventory = await prepareSessionStoreCandidatesInWorker(
       {
         config: environment.config,
@@ -594,6 +574,13 @@ export async function prepareSessionMutationFacts(
       if (!params.allowMissing) {
         throw new SessionMutationFactsUnavailableError();
       }
+      const selectedDatabase = resolveUnsuffixedSqliteTargetFromSessionStorePath(
+        selected.storePath,
+      );
+      missingDatabaseIdentity = candidateIdentities.find(
+        ({ candidate, identity }) =>
+          candidate.path === selectedDatabase.path && identity.birthtime === undefined,
+      )?.identity.key;
       facts = {
         target: null,
         membership: new Set(),

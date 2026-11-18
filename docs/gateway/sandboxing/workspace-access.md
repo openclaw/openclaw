@@ -416,9 +416,16 @@ Release records `Local workspace unpause` with the same `reason`, elapsed
 `phaseDurationsMs` lists every cumulative phase lasting at least one second;
 shorter phases are omitted. Fixed `operation.*` sub-phases distinguish Git-state
 verification, pristine source checks, canonical snapshot preparation, and commit
-bookkeeping during base refresh. These use the same exclusive timing field;
-they include awaited worker and Git work, not
-just Gateway CPU time. Initial workspace-lease acquisition precedes the pause.
+bookkeeping during base refresh. These use the same exclusive timing field and
+include awaited worker and Git work, not just Gateway CPU time.
+Publication also reports reconciliation phases (`scan`, `staging`, `materialization`,
+`preflight`, `patch`, `apply`, `acceptance`, and `cleanup`). Its fixed `operation.*`
+sub-phases separate source admission, Git policy preparation, snapshot safety checks,
+index copying, Git staging, admitted-path pruning, attribute verification, and
+temporary-index cleanup. The diagnostics timeline observes these same structural
+phases without file paths or content. Timings preserve the existing consistency pause;
+they do not establish that a long operation waited for a fixed timeout.
+Initial workspace-lease acquisition precedes the pause.
 Resume inspection, generation validation, and unpause
 are separated as `resumeInspect`, `resumeAuthority`, and `unpause`. Engine-command
 times include broker admission, transport, and command completion, not just engine

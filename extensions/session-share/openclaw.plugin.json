@@ -1,9 +1,13 @@
 {
   "id": "session-share",
-  "categories": ["inbox-collaboration"],
+  "categories": [
+    "inbox-collaboration"
+  ],
   "activation": {
     "onStartup": false,
-    "onConfigPaths": ["plugins.entries.session-share"]
+    "onConfigPaths": [
+      "plugins.entries.session-share"
+    ]
   },
   "uiHints": {
     "share.groups": {
@@ -13,6 +17,14 @@
     "share.involvingProfileId": {
       "label": "Involving Person",
       "help": "Optional exact source-local profile ID (including merge aliases). Narrows the required shared groups to canonical owners or profile participants. Mentions alone, names, and logins do not match."
+    },
+    "share.gateway": {
+      "label": "Serve Gateway Session Reads",
+      "help": "Allow explicitly granted paired devices to read selected groups AND the canonical person with the closed publication-read scope."
+    },
+    "share.gatewayDeviceIds": {
+      "label": "Publication Reader Devices",
+      "help": "Exact source-approved paired device IDs. Missing or empty grants no Gateway reads. Devices do not impersonate the selected person."
     },
     "nodes": {
       "label": "Paired Node Attribution",
@@ -32,13 +44,17 @@
       "id": "session-sharing",
       "title": "Session sharing",
       "order": 10,
-      "properties": ["share"]
+      "properties": [
+        "share"
+      ]
     },
     {
       "id": "node-attribution",
       "title": "Node attribution",
       "order": 20,
-      "properties": ["nodes"]
+      "properties": [
+        "nodes"
+      ]
     }
   ],
   "configSchema": {
@@ -48,12 +64,32 @@
       "share": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["groups"],
+        "required": [
+          "groups"
+        ],
         "properties": {
           "groups": {
             "type": "array",
             "uniqueItems": true,
-            "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          "gateway": {
+            "type": "boolean",
+            "default": false
+          },
+          "gatewayDeviceIds": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^\\S+$"
+            }
           },
           "involvingProfileId": {
             "type": "string",
@@ -69,8 +105,15 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "owner": { "type": "string", "pattern": "^(github|profile):[^\\s:]+$", "maxLength": 512 },
-            "linkGitHubIdentities": { "type": "boolean", "default": false }
+            "owner": {
+              "type": "string",
+              "pattern": "^(github|profile):[^\\s:]+$",
+              "maxLength": 512
+            },
+            "linkGitHubIdentities": {
+              "type": "boolean",
+              "default": false
+            }
           }
         }
       }

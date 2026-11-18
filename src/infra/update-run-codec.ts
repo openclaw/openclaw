@@ -299,6 +299,7 @@ function boundedOriginJsonWithNamespaces(origin: UpdateRunRecord["origin"]): str
     managedHandoff,
     packageStage,
     packageRelease,
+    gitActivation,
     windowsUserSid,
     requester,
     sessionKey,
@@ -315,6 +316,7 @@ function boundedOriginJsonWithNamespaces(origin: UpdateRunRecord["origin"]): str
     managedHandoff,
     packageStage,
     packageRelease,
+    gitActivation,
     windowsUserSid,
   });
   if (Buffer.byteLength(retained) > JSON_BYTES) {
@@ -331,6 +333,7 @@ function boundedOriginJsonWithNamespaces(origin: UpdateRunRecord["origin"]): str
         managedHandoff,
         packageStage,
         packageRelease,
+        gitActivation,
         windowsUserSid,
         ...routing,
       })
@@ -410,6 +413,7 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
     managedHandoff,
     packageStage,
     packageRelease,
+    gitActivation,
     windowsUserSid,
     ...originDiagnostics
   } = input.origin;
@@ -442,6 +446,7 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
     managedHandoff,
     packageStage,
     packageRelease,
+    gitActivation,
     windowsUserSid,
   });
   // Shipped readers parse recovery strictly. Its named risk lives in a retained step fact.
