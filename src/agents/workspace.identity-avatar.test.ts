@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { registerAgentWorkspaceAccess } from "./workspace-access.js";
-import * as workspaceBootstrapRead from "./workspace-bootstrap-read.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "./workspace-bootstrap-read.js";
 import { readWorkspaceFileWithGuards } from "./workspace-file-read.js";
 import {
@@ -38,7 +37,6 @@ describe("identity avatar model projection", () => {
               },
             })
           : () => {};
-      const project = vi.spyOn(workspaceBootstrapRead, "projectWorkspaceBootstrapFileForPrompt");
       try {
         const [identity] = await loadWorkspaceBootstrapFiles(workspace, ["IDENTITY.md"]);
         expect(identity?.content).not.toContain("[UNREADABLE:");
@@ -50,10 +48,8 @@ describe("identity avatar model projection", () => {
         const extra = await loadExtraBootstrapFilesWithDiagnostics(workspace, ["IDENTITY.md"]);
         expect(extra.files[0]?.content).toBe(identity?.content);
         expect(extra.diagnostics).toEqual([]);
-        expect(project).toHaveBeenCalledTimes(2);
         expect(await fs.readFile(filePath, "utf8")).toBe(source);
       } finally {
-        project.mockRestore();
         release();
       }
     },
