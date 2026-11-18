@@ -76,6 +76,7 @@ async function createControlsFixture(
     requestHandlers: {
       "sessions.patch": { ok: true, key: selectedSession.key, entry: selectedSession },
       "sessions.list": sessionsResult,
+      "users.listModelAccounts": { accounts: [], links: [], profileId: "viewer" },
     },
   });
   const context = createInitializationContext();
@@ -162,7 +163,7 @@ describe("chat pane model-setting permissions", () => {
     const standard = container.querySelector<HTMLButtonElement>('[data-chat-speed-option="off"]')!;
     expect(standard.getAttribute("aria-checked")).toBe("true");
     expect(standard.disabled).toBe(false);
-    expect(state.request).not.toHaveBeenCalled();
+    expect(state.request).toHaveBeenCalledExactlyOnceWith("users.listModelAccounts", {});
     state.request.mockImplementation(async (method, params) => {
       if (method === "sessions.patch") {
         if (
@@ -417,7 +418,9 @@ describe("chat pane model-setting permissions", () => {
       container.querySelector<HTMLButtonElement>('[data-chat-speed-option="on"]')!.click();
       await controls.permissionPicker.onSelect("guarded");
       await getPendingChatPickerPatch(state, state.sessionKey);
-      expect(state.request).not.toHaveBeenCalled();
+      expect(state.request.mock.calls.filter(([method]) => method === "sessions.patch")).toEqual(
+        [],
+      );
     },
   );
 });

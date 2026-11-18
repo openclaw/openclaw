@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createUniqueId, For, Show, useContext } from "solid-js";
+import { createMemo, createSignal, createUniqueId, For, Show, useContext } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Popover } from "../../../components/solid/popover.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -9,16 +9,31 @@ import { ChatModelSearchContext } from "./chat-model-picker-search.ts";
 import type { ModelPickerRowRenderer } from "./chat-model-picker-window.tsx";
 
 function AccountPageSentinel(props: { onVisible: () => void }) {
-  let sentinel!: HTMLSpanElement;
+  const [sentinel, setSentinel] = createSignal<HTMLSpanElement>();
   createIntersectionObserver(
-    () => [sentinel],
+    () => {
+      const target = sentinel();
+      return target ? [target] : [];
+    },
     (entries) => {
       if (entries.some((entry) => entry.isIntersecting)) {
         props.onVisible();
       }
     },
   );
-  return <span ref={sentinel} class="chat-controls__account-page-sentinel" aria-hidden="true" />;
+  // Intersect just inside the last row so keyboard focus can reveal the sentinel too.
+  return (
+    <span
+      ref={setSentinel}
+      aria-hidden="true"
+      style={{
+        position: "absolute",
+        inset: "-12px 0 auto",
+        height: "1px",
+        "pointer-events": "none",
+      }}
+    />
+  );
 }
 
 export function ChatModelAccountSectionView(
@@ -33,7 +48,7 @@ export function ChatModelAccountSectionView(
         label={t("chat.modelAccounts.section")}
         triggerClass={[
           "chat-controls__account-trigger",
-          { "chat-controls__account-trigger--pending": pending() },
+          { "chat-controls__account-trigger--locked": props.disabled },
         ]}
         class="chat-controls__settings-popover chat-controls__account-popover"
         placement="bottom-start"
@@ -55,7 +70,11 @@ export function ChatModelAccountSectionView(
             </span>
             <Show when={!props.disabled}>
               <Show when={pending()} fallback={<Icon name="chevronDown" />}>
-                <span class="btn__spinner chat-controls__account-spinner" aria-hidden="true" />
+                <span
+                  class="btn__spinner chat-controls__account-spinner"
+                  aria-hidden="true"
+                  style={{ color: "var(--muted)" }}
+                />
               </Show>
             </Show>
           </>
@@ -81,17 +100,36 @@ export function ChatModelAccountOptions(
   };
   const pagination = () => (
     <Show when={!renderRow() && props.open && (props.onNextPage || props.loading)}>
-      <div class="chat-controls__account-page-end" role="presentation">
+      <div role="presentation" style={{ position: "relative", height: "34px" }}>
         <Show when={props.onNextPage}>{(next) => <AccountPageSentinel onVisible={next()} />}</Show>
         <Show when={props.loading}>
-          <div class="chat-controls__account-page-loader" role="status">
+          <div
+            class="chat-controls__account-page-loader"
+            role="status"
+            style={{ display: "grid", height: "100%", "place-items": "center" }}
+          >
             <Show
               when={props.loading === "more"}
               fallback={
-                <span class="btn__spinner chat-controls__account-spinner" aria-hidden="true" />
+                <span
+                  class="btn__spinner chat-controls__account-spinner"
+                  aria-hidden="true"
+                  style={{ color: "var(--muted)" }}
+                />
               }
             >
-              <span class="chat-controls__account-page-skeleton" aria-hidden="true" />
+              <span
+                class="chat-controls__account-page-skeleton"
+                aria-hidden="true"
+                style={{
+                  "justify-self": "start",
+                  width: "42%",
+                  height: "12px",
+                  "margin-inline-start": "8px",
+                  "border-radius": "4px",
+                  background: "var(--skeleton-base-raised)",
+                }}
+              />
             </Show>
             <span class="sr-only">{t("common.loading")}</span>
           </div>

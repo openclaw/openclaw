@@ -4770,14 +4770,10 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 /* A locked account is a label, not a control; this follows the hover rule to win. */
-.chat-controls__account-trigger:disabled:not(.chat-controls__account-trigger--pending) {
+.chat-controls__account-trigger.chat-controls__account-trigger--locked {
   min-width: 0;
   padding: 0;
   background: none;
-}
-
-.chat-controls__account-trigger--pending {
-  cursor: default;
 }
 
 .chat-controls__account-popover {
@@ -4855,38 +4851,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 .chat-controls__account-popover .chat-controls__model-option-action {
   width: 24px;
   margin: 0;
-}
-
-.chat-controls__account-page-end {
-  position: relative;
-  min-height: 34px;
-}
-
-/* Intersect just inside the last row, including when keyboard focus reveals it. */
-.chat-controls__account-page-sentinel {
-  position: absolute;
-  inset: -12px 0 auto;
-  height: 1px;
-  pointer-events: none;
-}
-
-.chat-controls__account-page-loader {
-  display: grid;
-  min-height: 34px;
-  place-items: center;
-}
-
-.chat-controls__account-page-skeleton {
-  justify-self: start;
-  width: 42%;
-  height: 12px;
-  margin-inline-start: 8px;
-  border-radius: 4px;
-  background: var(--skeleton-base-raised);
-}
-
-.chat-controls__account-spinner {
-  color: var(--muted);
 }
 
 .chat-controls__account-popover .chat-controls__inline-select-check svg {
