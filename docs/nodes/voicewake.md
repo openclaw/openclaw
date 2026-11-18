@@ -8,13 +8,14 @@ title: "Voice wake"
 
 Wake words are **one global list owned by the Gateway** — there are no per-node custom lists. Any node or app UI can edit the list; the Gateway persists the change and broadcasts it to every connected client.
 
+- **Control UI**: wake-word editor under **Settings → Talk**.
 - **macOS**: local Voice Wake enable/disable toggle. Requires macOS 26+; see [Voice wake (macOS)](/platforms/mac/voicewake) for runtime/PTT details.
 - **iOS**: local Voice Wake enable/disable toggle in Settings.
 - **Android**: local Voice Wake enable/disable toggle and wake-word editor in Settings → Voice. Requires Android on-device speech recognition.
 
 ## Storage
 
-Wake words and routing rules live in the Gateway state database, `~/.openclaw/state/openclaw.sqlite` by default (override with `OPENCLAW_STATE_DIR`), under the `config_machine_state` keys `voicewake.triggers` and `voicewake.routing`. Legacy `settings/voicewake.json` and `settings/voicewake-routing.json` are `openclaw doctor --fix` migration inputs only — runtime never reads them.
+Wake words and routing rules live in the Gateway state database, `~/.openclaw/state/openclaw.sqlite` by default (override with `OPENCLAW_STATE_DIR`), under the `config_machine_state` keys `voicewake.triggers` and `voicewake.routing`. The state keys and the Gateway methods below name the wake-word list `triggers`. Legacy `settings/voicewake.json` and `settings/voicewake-routing.json` are `openclaw doctor --fix` migration inputs only — runtime never reads them.
 
 ## Protocol
 
@@ -63,7 +64,7 @@ Both broadcast to every WebSocket client with read scope (macOS app, WebChat, an
 
 - **macOS**: calls `voicewake.set`/`voicewake.get` and listens for `voicewake.changed` to stay in sync with other clients.
 - **iOS**: calls `voicewake.set`/`voicewake.get` and listens for `voicewake.changed` to keep local wake-word detection responsive.
-- **Android**: calls `voicewake.set`/`voicewake.get`, listens for `voicewake.changed`, and advertises `voiceWake` while enabled. Recognition stays on-device and foreground-only; it pauses while Talk, manual dictation, voice-note capture, or message speech owns audio.
+- **Android**: calls `voicewake.set`/`voicewake.get`, listens for `voicewake.changed`, and advertises `voiceWake` while enabled. Recognition stays on-device and can continue in the background while the node foreground service holds microphone access; a cold background start waits until the app is visible. It pauses while Talk, manual dictation, voice-note capture, or message speech owns audio.
 
 ## Related
 

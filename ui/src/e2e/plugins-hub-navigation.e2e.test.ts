@@ -2,13 +2,22 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
+import type {
+  PluginDiscoveryEntry,
+  PluginsCatalogBrowseResult,
+  PluginsListResult,
+} from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import {
+  discoveryCategories,
+  discoveryResult,
+} from "../test-helpers/plugins-e2e-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
-  name: "Control UI Plugins hub navigation",
+  name: "Control UI Plugins workspace navigation",
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
@@ -17,7 +26,7 @@ const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 let proofDir: string;
 beforeEach(() => {
   if (captureUiProof) {
-    proofDir = createControlUiE2eArtifactDir("plugins-hub-shell");
+    proofDir = createControlUiE2eArtifactDir("plugins-workspace-shell");
   }
 });
 
@@ -34,7 +43,7 @@ const methodResponses = {
   "config.get": {
     config: {},
     sourceConfig: {},
-    hash: "plugins-hub-config",
+    hash: "plugins-workspace-config",
     issues: [],
     raw: "{}",
     valid: true,
@@ -57,41 +66,48 @@ const methodResponses = {
     diagnostics: [],
     mutationAllowed: true,
   },
-  "skills.proposals.historyStatus": {
-    hasScanned: false,
-    hasMore: false,
-    ideasFound: 0,
-    reviewedSessions: 0,
-    lastScanReviewed: 0,
+  "plugins.catalog.browse": discoveryResult,
+  "plugins.catalog.categories": discoveryCategories,
+  "skills.workshop.list": {
+    agentId: "main",
+    mode: "auto",
+    root: "/tmp/openclaw-e2e/agents/main/workshop-skills",
+    skills: [],
+    archived: [],
   },
-  "skills.proposals.list": {
-    proposals: [],
-    schema: "openclaw.skill-workshop.proposals-manifest.v1",
-    installedSkills: [],
-    updatedAt: "2026-08-17T12:00:00.000Z",
-  },
+  "skills.workshop.changes": { changes: [] },
   "skills.status": {
     workspaceDir: "/tmp/openclaw-e2e/workspace",
     managedSkillsDir: "/tmp/openclaw-e2e/skills",
     skills: [],
   },
+  "skills.search": {
+    results: [
+      {
+        slug: "calendar",
+        installRef: "@fixture/calendar",
+        displayName: "Calendar",
+        score: 1,
+        registry: "https://clawhub.ai",
+      },
+    ],
+  },
+  "skills.library.list": {
+    entries: [],
+    profileId: "alice",
+    multipleProfiles: true,
+    defaultTarget: "personal",
+    canManageWorkspace: true,
+    defaultSelectionLimit: 64,
+  },
 };
 
-type HubGeometry = {
-  contentLeft: number;
-  contentWidth: number;
+type HeaderGeometry = {
   height: number;
   left: number;
   title: string;
-  titleVisible: boolean;
   top: number;
   width: number;
-};
-
-type ControlGeometry = {
-  bottom: number;
-  height: number;
-  top: number;
 };
 
 async function createContext(viewport: { height: number; width: number }): Promise<BrowserContext> {
@@ -103,87 +119,77 @@ async function createContext(viewport: { height: number; width: number }): Promi
   });
 }
 
-async function hubGeometry(page: Page): Promise<HubGeometry> {
-  const tabs = page.locator(".plugins-hub-tabs");
-  await tabs.waitFor({ state: "visible" });
-  return tabs.evaluate((element) => {
+async function headerGeometry(page: Page): Promise<HeaderGeometry> {
+  const header = page.locator(".plugins-hub-header");
+  await header.waitFor({ state: "visible" });
+  return header.evaluate((element) => {
     const rect = element.getBoundingClientRect();
-    const title = document.querySelector<HTMLElement>(".content-header .page-title");
-    const workshop = document.querySelector<HTMLElement>(".content--skill-workshop");
-    const contentColumn =
-      workshop && workshop.getClientRects().length > 0
-        ? workshop
-        : document.querySelector<HTMLElement>(".settings-page--wide");
-    if (!contentColumn) {
-      throw new Error("Plugins hub content column did not render");
-    }
-    const contentRect = contentColumn.getBoundingClientRect();
     return {
-      contentLeft: contentRect.left,
-      contentWidth: contentRect.width,
       height: rect.height,
       left: rect.left,
-      title: title?.textContent?.trim() ?? "",
-      titleVisible: (title?.getClientRects().length ?? 0) > 0,
+      title: element.querySelector("h1")?.textContent?.trim() ?? "",
       top: rect.top,
       width: rect.width,
     };
   });
 }
 
-function expectStableGeometry(actual: HubGeometry, expected: HubGeometry) {
-  expect(actual.title).toBe("Plugins");
-  expect(actual.titleVisible).toBe(true);
+function expectStableHeader(actual: HeaderGeometry, expected: HeaderGeometry) {
   expect(Math.abs(actual.left - expected.left)).toBeLessThanOrEqual(1);
   expect(Math.abs(actual.top - expected.top)).toBeLessThanOrEqual(1);
   expect(Math.abs(actual.width - expected.width)).toBeLessThanOrEqual(1);
-  expect(Math.abs(actual.height - expected.height)).toBeLessThanOrEqual(1);
-  expect(Math.abs(actual.contentLeft - expected.contentLeft)).toBeLessThanOrEqual(1);
-  expect(Math.abs(actual.contentWidth - expected.contentWidth)).toBeLessThanOrEqual(1);
 }
 
-async function skillsToolbarGeometry(page: Page): Promise<ControlGeometry[]> {
-  const selectors = [
-    ".plugins-toolbar--fields > .settings-segmented",
-    ".skills-toolbar__agent .agent-select__trigger",
-    ".skills-toolbar__search .settings-input",
-    ".plugins-toolbar--fields > .plugins-toolbar__hint",
-    ".plugins-toolbar--fields > .btn",
-  ];
-  return page.locator(selectors.join(", ")).evaluateAll((elements) =>
-    elements.map((element) => {
-      const rect = element.getBoundingClientRect();
-      return { bottom: rect.bottom, height: rect.height, top: rect.top };
-    }),
+async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skill-workshop") {
+  const expected = {
+    plugins: {
+      title: "Plugins",
+      subtitle: "Add capabilities with plugins.",
+      docs: "https://docs.openclaw.ai/plugins/manage-plugins",
+    },
+    skills: {
+      title: "Skills",
+      subtitle: "Manage your agent skills",
+      docs: "https://docs.openclaw.ai/tools/skills",
+    },
+    "skill-workshop": {
+      title: "Skill workshop",
+      subtitle: "Skills your agent learned, recent changes, and undo.",
+      docs: "https://docs.openclaw.ai/tools/skill-workshop",
+    },
+  }[active];
+  const header = page.locator(".plugins-hub-header");
+  expect(await header.getByRole("heading", { level: 1 }).textContent()).toBe(expected.title);
+  // The phone's floating header carries the title, leaving it for assistive tech.
+  const floatingHeader = (await page.locator(".shell--floating-header").count()) > 0;
+  await expect
+    .poll(() =>
+      header.evaluate((element) => {
+        const title = element.querySelector(".page-title")?.getBoundingClientRect();
+        return title ? title.width > 1 && title.height > 1 : null;
+      }),
+    )
+    .toBe(!floatingHeader);
+  expect(await header.locator(".page-subtitle").textContent()).toContain(expected.subtitle);
+  expect(await header.getByRole("link", { name: "Learn more" }).getAttribute("href")).toBe(
+    expected.docs,
   );
 }
 
-function expectAlignedControlRow(controls: ControlGeometry[]) {
-  expect(controls).toHaveLength(5);
-  for (const metric of ["top", "bottom", "height"] as const) {
-    const values = controls.map((control) => control[metric]);
-    expect(
-      Math.max(...values) - Math.min(...values),
-      `${metric}: ${values.join(", ")}`,
-    ).toBeLessThanOrEqual(1);
-  }
-}
-
-async function expectStatusFilterContained(page: Page) {
-  const geometry = await page
-    .locator(".plugins-toolbar--fields > .settings-segmented")
-    .evaluate((element) => ({
-      containerTop: element.getBoundingClientRect().top,
-      containerBottom: element.getBoundingClientRect().bottom,
-      optionTop: Math.min(
-        ...Array.from(element.children, (child) => child.getBoundingClientRect().top),
-      ),
-      optionBottom: Math.max(
-        ...Array.from(element.children, (child) => child.getBoundingClientRect().bottom),
-      ),
-    }));
-  expect(geometry.optionTop).toBeGreaterThanOrEqual(geometry.containerTop - 1);
-  expect(geometry.optionBottom).toBeLessThanOrEqual(geometry.containerBottom + 1);
+async function installButtonPresentation(page: Page) {
+  const button = page.getByRole("button", { name: /^Install /u }).first();
+  await button.waitFor({ state: "visible" });
+  return button.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      background: style.backgroundColor,
+      color: style.color,
+      border: style.border,
+      padding: style.padding,
+      font: style.font,
+      height: element.getBoundingClientRect().height,
+    };
+  });
 }
 
 async function captureScreenshot(page: Page, name: string) {
@@ -193,32 +199,300 @@ async function captureScreenshot(page: Page, name: string) {
   await writeFile(
     path.join(proofDir, name),
     await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-      page.locator(".plugins-hub-tabs"),
+      page.locator(".plugins-hub-header"),
     ]),
   );
 }
 
-async function selectHubTab(
-  page: Page,
-  name: "Installed" | "Discover" | "Skills" | "Workshop",
-  target: { pathname: string; routeId: string },
-) {
-  const tab = page
-    .locator(".plugins-hub-tabs")
-    .getByRole("tab", { name: new RegExp(`^${name}`, "u") });
-  await tab.click();
-  await waitForControlUiRoute(page, target);
-  await expect.poll(() => tab.getAttribute("active")).not.toBeNull();
+// The Customize sidebar lists the hub's pages; a mobile layout keeps it in the drawer.
+function customizeSidebar(page: Page, mobile: boolean) {
+  const sidebar = page.locator("openclaw-app-sidebar .sidebar-customize");
+  const expand = () =>
+    mobile
+      ? page.getByRole("button", { name: "Expand sidebar", exact: true }).click()
+      : Promise.resolve();
+  return {
+    sidebar,
+    row: (name: string) => sidebar.getByRole("link", { name, exact: true }),
+    // Choosing Customize from the page menu selects its sidebar.
+    select: async () => {
+      await expand();
+      await page.locator("openclaw-app-sidebar [data-rail-more]").click();
+      await page
+        .locator(".sidebar-pages-menu")
+        .getByRole("link", { name: "Customize", exact: true })
+        .click();
+    },
+    open: async (name: string) => {
+      await expand();
+      await sidebar.getByRole("link", { name, exact: true }).click();
+    },
+  };
 }
 
 suite.define(() => {
+  it("keeps model-provider video capabilities discoverable in Media across pagination", async () => {
+    const context = await createContext({ width: 1200, height: 928 });
+    const page = await context.newPage();
+    const local: PluginsListResult = {
+      plugins: ["novita", "zai"].map((id) => {
+        return {
+          id,
+          name: id === "zai" ? "Z.AI" : "Novita",
+          packageName: "@openclaw/" + id,
+          clawhubPackage: "@openclaw/" + id,
+          origin: "bundled",
+          installed: true,
+          enabled: true,
+          state: "enabled" as const,
+          description: "Model inference and video generation.",
+          categories: ["models"],
+          capabilityCategories: ["media"],
+        };
+      }),
+      diagnostics: [],
+      mutationAllowed: true,
+    };
+    expect(local.plugins.map((plugin) => plugin.categories)).toEqual([["models"], ["models"]]);
+    expect(local.plugins.map((plugin) => plugin.capabilityCategories)).toEqual([
+      ["media"],
+      ["media"],
+    ]);
+    // Gateway wire fixtures; the catalog owners test category derivation and joining.
+    const novita = {
+      id: "ch_QG9wZW5jbGF3L25vdml0YQ",
+      catalog: {
+        name: "Novita",
+        packageName: "@openclaw/novita",
+        summary: "Model inference and video generation.",
+        official: true,
+        author: "openclaw",
+        categories: ["models", "media"],
+        publishedToClawHub: true,
+      },
+      local: {
+        present: true,
+        installed: true,
+        enabled: true,
+        state: "enabled",
+        pluginId: "novita",
+        action: "manage",
+      },
+    } satisfies PluginDiscoveryEntry;
+    const zai = {
+      id: "ch_QG9wZW5jbGF3L3phaQ",
+      catalog: { ...novita.catalog, name: "Z.AI", packageName: "@openclaw/zai" },
+      local: { ...novita.local, pluginId: "zai" },
+    } satisfies PluginDiscoveryEntry;
+    const fal = {
+      id: "ch_QG9wZW5jbGF3L2ZhbA",
+      catalog: {
+        name: "fal",
+        packageName: "@openclaw/fal",
+        summary: "Image, video, and music generation.",
+        family: "code-plugin",
+        official: true,
+        categories: ["media"],
+        downloads: 1000,
+        publishedToClawHub: true,
+      },
+      local: {
+        present: false,
+        installed: false,
+        enabled: false,
+        state: "not-installed",
+        action: "install",
+      },
+    } satisfies PluginDiscoveryEntry;
+    const publishedNovita = {
+      id: novita.id,
+      catalog: {
+        ...fal.catalog,
+        name: "Novita",
+        packageName: "@openclaw/novita",
+        categories: ["models", "media"],
+      },
+      local: novita.local,
+    } satisfies PluginDiscoveryEntry;
+    // The baseline exposed purpose metadata but no derived Media membership.
+    const beforeNovita = { ...novita, catalog: { ...novita.catalog, categories: ["models"] } };
+    const beforeZai = { ...zai, catalog: { ...zai.catalog, categories: ["models"] } };
+    const catalogPages = {
+      beforeAll: {
+        items: [fal, beforeNovita, beforeZai],
+        categories: discoveryCategories.categories,
+      },
+      beforeModels: { items: [beforeNovita, beforeZai] },
+      beforeMedia: { items: [fal], nextCursor: "media-page-two" },
+      all: { items: [fal, novita, zai], categories: discoveryCategories.categories },
+      models: { items: [novita, zai] },
+      media: { items: [fal, novita, zai], nextCursor: "media-page-two" },
+      nextMedia: { items: [publishedNovita] },
+    } satisfies Record<string, PluginsCatalogBrowseResult>;
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["plugins.list", "plugins.catalog.browse", "plugins.catalog.categories"],
+      methodResponses: {
+        ...methodResponses,
+        "plugins.list": local,
+        "plugins.catalog.browse": captureUiProof ? catalogPages.beforeAll : catalogPages.all,
+      },
+    });
+    try {
+      await page.goto(suite.server.baseUrl + "plugins");
+      const chips = page.locator(".plugin-catalog-chips");
+      await chips.getByRole("button", { name: "Media", exact: true }).waitFor();
+      const cards = page.locator(".plugin-catalog-card:not(.plugin-catalog-card--skeleton)");
+      const expectFilteredCards = async (category: string, names: string[]) => {
+        await expect
+          .poll(async () => ({
+            selected: await chips
+              .getByRole("button", { name: category, exact: true })
+              .getAttribute("aria-pressed"),
+            names: await page
+              .locator(".plugin-catalog-grid--results .plugin-catalog-card__primary-link")
+              .evaluateAll((links) =>
+                links.map((link) => link.getAttribute("aria-label") ?? "").toSorted(),
+              ),
+          }))
+          .toEqual({ selected: "true", names: names.toSorted() });
+      };
+      if (captureUiProof) {
+        await gateway.setMethodResponse("plugins.catalog.browse", catalogPages.beforeModels);
+        await chips.getByRole("button", { name: "Models", exact: true }).click();
+        await gateway.waitForRequest("plugins.catalog.browse", { match: { category: "models" } });
+        await expectFilteredCards("Models", ["Novita", "Z.AI"]);
+        await captureScreenshot(page, "models-discovery-before.png");
+        await gateway.setMethodResponse("plugins.catalog.browse", catalogPages.beforeMedia);
+        await chips.getByRole("button", { name: "Media", exact: true }).click();
+        await gateway.waitForRequest("plugins.catalog.browse", { match: { category: "media" } });
+        await expectFilteredCards("Media", ["fal"]);
+        await captureScreenshot(page, "media-discovery-before.png");
+        await gateway.setMethodResponse("plugins.catalog.browse", catalogPages.all);
+        await chips.getByRole("button", { name: "All", exact: true }).click();
+      }
+      await expect
+        .poll(() => page.locator('[data-catalog-section="models"] .plugin-catalog-card').count())
+        .toBe(2);
+      await expect
+        .poll(() => page.locator('[data-catalog-section="media"] .plugin-catalog-card').count())
+        .toBe(3);
+      if (captureUiProof) {
+        const priorModels = (
+          await gateway.getRequests("plugins.catalog.browse", { category: "models" })
+        ).length;
+        await gateway.setMethodResponse("plugins.catalog.browse", catalogPages.models);
+        await chips.getByRole("button", { name: "Models", exact: true }).click();
+        await gateway.waitForRequest("plugins.catalog.browse", {
+          after: priorModels,
+          match: { category: "models" },
+        });
+        await expectFilteredCards("Models", ["Novita", "Z.AI"]);
+        await captureScreenshot(page, "models-discovery-after.png");
+      }
+      const priorMedia = (
+        await gateway.getRequests("plugins.catalog.browse", { category: "media" })
+      ).length;
+      await gateway.setMethodResponse("plugins.catalog.browse", catalogPages.media);
+      await chips.getByRole("button", { name: "Media", exact: true }).click();
+      await gateway.waitForRequest("plugins.catalog.browse", {
+        after: priorMedia,
+        match: { category: "media" },
+      });
+      await expectFilteredCards("Media", ["fal", "Novita", "Z.AI"]);
+      for (const name of ["Novita", "Z.AI"]) {
+        expect(await cards.filter({ hasText: name }).count()).toBe(1);
+      }
+      await captureScreenshot(page, "media-discovery-after.png");
+      await gateway.setMethodResponse("plugins.catalog.browse", catalogPages.nextMedia);
+      await page.getByRole("button", { name: "Load more", exact: true }).click();
+      await gateway.waitForRequest("plugins.catalog.browse", {
+        match: { category: "media", cursor: "media-page-two" },
+      });
+      await expect
+        .poll(() => page.getByRole("button", { name: "Load more", exact: true }).count())
+        .toBe(0);
+      expect(await cards.count()).toBe(3);
+      expect(await cards.filter({ hasText: "Novita" }).count()).toBe(1);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("loads category filters independently of cards and recovers a failed category read", async () => {
+    const context = await createContext({ width: 1200, height: 928 });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["plugins.list", "plugins.catalog.browse", "plugins.catalog.categories"],
+      deferredMethods: ["plugins.catalog.browse", "plugins.catalog.categories"],
+      methodResponses,
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}plugins`);
+      await gateway.waitForRequest("plugins.catalog.browse");
+      const chips = page.locator(".plugin-catalog-chips");
+      await chips.locator(".plugin-catalog-chip--skeleton").first().waitFor();
+      expect(await chips.getByRole("button").count()).toBe(3);
+      expect(await chips.getByRole("button", { name: "All", exact: true }).isEnabled()).toBe(true);
+      await expectHeaderCopy(page, "plugins");
+      await gateway.rejectDeferred("plugins.catalog.categories", {
+        message: "Categories temporarily unavailable",
+      });
+      const error = page
+        .getByRole("alert")
+        .filter({ hasText: "Categories temporarily unavailable" });
+      await error.waitFor();
+      expect(await chips.locator(".plugin-catalog-chip--skeleton").count()).toBe(0);
+      await error.getByRole("button", { name: "Try again" }).click();
+      await chips.getByRole("button", { name: "Channels", exact: true }).waitFor();
+      expect(await page.locator(".plugin-catalog-grid--skeleton").count()).toBeGreaterThan(0);
+      expect(await chips.locator(".plugin-catalog-chip--skeleton").count()).toBe(0);
+      expect(await gateway.getRequests("plugins.catalog.categories")).toHaveLength(2);
+      await gateway.resolveDeferred("plugins.catalog.browse");
+      await page
+        .locator(".plugin-catalog-card:not(.plugin-catalog-card--skeleton)")
+        .first()
+        .waitFor();
+      await chips.getByRole("button", { name: "Featured", exact: true }).click();
+      await gateway.waitForRequest("plugins.catalog.browse", { match: { intent: "featured" } });
+      expect(await gateway.getRequests("plugins.catalog.categories")).toHaveLength(2);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("redirects the retired discovery URL to the Plugins workspace", async () => {
+    const context = await createContext({ height: 768, width: 1366 });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      featureMethods: [
+        "config.get",
+        "plugins.list",
+        "plugins.catalog.browse",
+        "plugins.catalog.categories",
+      ],
+      methodResponses,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/plugins/discover?query=calendar#featured`);
+      await waitForControlUiRoute(page, { pathname: "/plugins", routeId: "plugins" });
+      const location = new URL(page.url());
+      expect(`${location.pathname}${location.search}${location.hash}`).toBe(
+        "/plugins?query=calendar#featured",
+      );
+      await page.getByRole("searchbox", { name: "Search plugins", exact: true }).waitFor();
+    } finally {
+      await context.close();
+    }
+  });
+
   it.each([
     { label: "desktop", viewport: { height: 1053, width: 2048 } },
-    { label: "laptop", viewport: { height: 768, width: 1366 } },
+    { label: "laptop", viewport: { height: 928, width: 1200 } },
     { label: "tablet", viewport: { height: 1024, width: 768 } },
     { label: "narrow", viewport: { height: 852, width: 393 } },
   ])(
-    "keeps the hub shell fixed through every $label tab transition",
+    "keeps the Plugins/Skills shell coherent through every $label transition",
     async ({ label, viewport }) => {
       const context = await createContext(viewport);
       const page = await context.newPage();
@@ -227,129 +501,170 @@ suite.define(() => {
           "agents.list",
           "config.get",
           "plugins.list",
-          "skills.proposals.historyStatus",
-          "skills.proposals.list",
+          "plugins.catalog.browse",
+          "plugins.catalog.categories",
+          "skills.workshop.changes",
+          "skills.workshop.list",
           "skills.status",
+          "skills.search",
+          "skills.library.list",
         ],
         methodResponses,
       });
 
       try {
-        await page.goto(`${suite.server.baseUrl}settings/plugins`);
+        await page.goto(`${suite.server.baseUrl}plugins`);
         await page.addStyleTag({
           content:
             "*, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; }",
         });
-        await waitForControlUiRoute(page, { pathname: "/settings/plugins", routeId: "plugins" });
-        const installed = await hubGeometry(page);
-        expect(installed.title).toBe("Plugins");
-        expect(installed.titleVisible).toBe(true);
-        const layout = await page.evaluate(() => {
-          const title = document.querySelector<HTMLElement>(".hub-page-header__title");
-          const tabs = document.querySelector<HTMLElement>(".plugins-hub-tabs");
-          const content = document.querySelector<HTMLElement>("#plugins-global-search");
-          if (!title || !tabs || !content) {
-            throw new Error("Plugins hub layout did not render");
-          }
-          return {
-            aboveTabs: tabs.getBoundingClientRect().top - title.getBoundingClientRect().bottom,
-            belowTabs: content.getBoundingClientRect().top - tabs.getBoundingClientRect().bottom,
-            contentLeft: content.getBoundingClientRect().left,
-            tabsLeft: tabs.getBoundingClientRect().left,
-            titleLeft: title.getBoundingClientRect().left,
-          };
-        });
-        expect(Math.abs(layout.tabsLeft - layout.titleLeft)).toBeLessThanOrEqual(1);
-        expect(layout.aboveTabs).toBeGreaterThan(0);
-        expect(Math.abs(layout.belowTabs - layout.aboveTabs)).toBeLessThanOrEqual(1);
-        if (label === "desktop") {
-          expect(Math.abs(layout.tabsLeft - layout.contentLeft)).toBeLessThanOrEqual(1);
-        }
-        await captureScreenshot(page, `${label}-01-installed.png`);
+        await page.evaluate(() => document.fonts.ready.then(() => undefined));
+        await waitForControlUiRoute(page, { pathname: "/plugins", routeId: "plugins" });
+        await page.getByRole("searchbox", { name: "Search plugins", exact: true }).waitFor();
+        const pluginsHeader = await headerGeometry(page);
+        await captureScreenshot(page, `${label}-01-installed-plugins.png`);
+        expect(pluginsHeader.title).toBe("Plugins");
+        await expectHeaderCopy(page, "plugins");
+        // The Customize sidebar replaces the hub's tabs.
+        expect(await page.getByRole("tab").count()).toBe(0);
+        const pluginInstallPresentation = await installButtonPresentation(page);
+        const mobile = viewport.width <= 900;
+        const customize = customizeSidebar(page, mobile);
 
-        await selectHubTab(page, "Discover", {
-          pathname: "/settings/plugins/discover",
-          routeId: "plugins",
-        });
-        expectStableGeometry(await hubGeometry(page), installed);
-        await captureScreenshot(page, `${label}-02-discover.png`);
+        await customize.open("Skills");
+        await waitForControlUiRoute(page, { pathname: "/skills", routeId: "skills" });
+        expectStableHeader(await headerGeometry(page), pluginsHeader);
+        await expectHeaderCopy(page, "skills");
+        expect(await installButtonPresentation(page)).toEqual(pluginInstallPresentation);
+        await captureScreenshot(page, `${label}-02-skills.png`);
 
-        await selectHubTab(page, "Skills", { pathname: "/skills", routeId: "skills" });
-        expectStableGeometry(await hubGeometry(page), installed);
-        const needsSetupFilter = page.locator(
-          'wa-radio.settings-segmented__btn[value="needs-setup"]',
-        );
-        await needsSetupFilter.click();
-        await expect
-          .poll(() =>
-            needsSetupFilter.evaluate((element) =>
-              element.classList.contains("settings-segmented__btn--active"),
-            ),
-          )
-          .toBe(true);
-        if (label === "desktop") {
-          expectAlignedControlRow(await skillsToolbarGeometry(page));
-        }
-        await expectStatusFilterContained(page);
-        await captureScreenshot(page, `${label}-03-skills.png`);
-
-        await selectHubTab(page, "Workshop", {
+        await customize.open("Skill workshop");
+        await waitForControlUiRoute(page, {
           pathname: "/skills/workshop",
           routeId: "skill-workshop",
         });
-        await captureScreenshot(page, `${label}-04-workshop-skills.png`);
-        expectStableGeometry(await hubGeometry(page), installed);
-        const workshopShellBottom = await page
-          .locator(".plugins-hub-header")
-          .evaluate((element) => element.getBoundingClientRect().bottom);
-        const workshopControlsTop = await page
-          .locator(".sw-header-controls")
-          .evaluate((element) => element.getBoundingClientRect().top);
-        expect(workshopControlsTop).toBeGreaterThanOrEqual(workshopShellBottom);
+        expectStableHeader(await headerGeometry(page), pluginsHeader);
+        await expectHeaderCopy(page, "skill-workshop");
+        if (!mobile) {
+          expect(await customize.row("Skill workshop").getAttribute("aria-current")).toBe("page");
+        }
+        await captureScreenshot(page, `${label}-03-workshop.png`);
 
-        await page.locator("#skill-workshop-mode-tab-suggestions").click();
+        await customize.open("Skills");
+        await waitForControlUiRoute(page, { pathname: "/skills", routeId: "skills" });
+        expectStableHeader(await headerGeometry(page), pluginsHeader);
+        await expectHeaderCopy(page, "skills");
+        await customize.open("Plugins");
+        await waitForControlUiRoute(page, { pathname: "/plugins", routeId: "plugins" });
+        expectStableHeader(await headerGeometry(page), pluginsHeader);
+        await expectHeaderCopy(page, "plugins");
+      } finally {
+        await context.close();
+      }
+    },
+  );
+  it("lists the Customize pages in its sidebar", async () => {
+    const context = await createContext({ width: 1280, height: 800 });
+    const page = await context.newPage();
+    const config = { gateway: { controlUi: { experimental: { templates: true } } } };
+    await installMockGateway(page, {
+      featureMethods: ["config.get", "plugins.list", "plugins.catalog.browse"],
+      methodResponses: {
+        ...methodResponses,
+        "config.get": {
+          ...methodResponses["config.get"],
+          config,
+          sourceConfig: config,
+          raw: JSON.stringify(config),
+        },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await waitForControlUiRoute(page, { routeId: "chat" });
+      const customize = customizeSidebar(page, false);
+      await customize.select();
+      await waitForControlUiRoute(page, { pathname: "/plugins", routeId: "plugins" });
+      await customize.row("Templates").waitFor();
+      expect(
+        await customize.sidebar
+          .locator(":scope > .nav-item")
+          .evaluateAll((rows) => rows.map((row) => row.textContent)),
+      ).toEqual(["Plugins", "Skills", "Skill workshop", "Templates"]);
+      expect(await customize.row("Plugins").getAttribute("aria-current")).toBe("page");
+      // Templates follows its experimental flag; selection follows the open page.
+      await customize.open("Templates");
+      await waitForControlUiRoute(page, { pathname: "/templates", routeId: "templates" });
+      expect(await customize.row("Templates").getAttribute("aria-current")).toBe("page");
+      expect(await customize.row("Plugins").getAttribute("aria-current")).toBeNull();
+    } finally {
+      await context.close();
+    }
+  });
+  it.each([
+    {
+      locale: "en",
+      direction: "ltr",
+      wheel: 1,
+      initial: ["true", "false"],
+      final: ["false", "true"],
+    },
+    {
+      locale: "ar",
+      direction: "rtl",
+      wheel: -1,
+      initial: ["false", "true"],
+      final: ["true", "false"],
+    },
+  ])(
+    "reports physical discovery scroll edges in $direction",
+    async ({ locale, direction, wheel, initial, final }) => {
+      const context = await createContext({ width: 390, height: 844 });
+      const page = await context.newPage();
+      try {
+        const config = { ui: { prefs: { locale } } };
+        const profileId = "scroll-operator";
+        await installMockGateway(page, {
+          authMethod: "trusted-proxy",
+          authMode: "trusted-proxy",
+          presenceUsers: [{ id: profileId, self: true }],
+          bootstrapPreferences: { profileId, config, entries: {} },
+          featureMethods: [
+            "plugins.list",
+            "plugins.catalog.browse",
+            "plugins.catalog.categories",
+            "config.get",
+          ],
+          methodResponses: {
+            ...methodResponses,
+            "config.get": {
+              ...methodResponses["config.get"],
+              config,
+              sourceConfig: config,
+              runtimeConfig: config,
+            },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "plugins");
+        await expect.poll(() => page.locator("html").getAttribute("dir")).toBe(direction);
+        const chips = page.locator(".plugin-catalog-chips");
         await expect
-          .poll(() => page.locator("#skill-workshop-mode-tab-suggestions").getAttribute("active"))
-          .not.toBeNull();
-        expectStableGeometry(await hubGeometry(page), installed);
-        const suggestionsLayout = await page
-          .locator(".content--skill-workshop")
-          .evaluate((element) => {
-            const style = getComputedStyle(element);
-            return { display: style.display, overflowY: style.overflowY };
-          });
-        expect(suggestionsLayout).toEqual({
-          display: "flex",
-          overflowY: viewport.width <= 768 ? "auto" : "hidden",
-        });
-        await captureScreenshot(page, `${label}-05-workshop-suggestions.png`);
-
-        await page.locator("#skill-workshop-mode-tab-skills").click();
-        await expect
-          .poll(() => page.locator("#skill-workshop-mode-tab-skills").getAttribute("active"))
-          .not.toBeNull();
-        expectStableGeometry(await hubGeometry(page), installed);
-        const skillsLayout = await page.locator(".content--skill-workshop").evaluate((element) => {
-          const style = getComputedStyle(element);
-          return { display: style.display, overflowY: style.overflowY };
-        });
-        expect(skillsLayout).toEqual({
-          display: "flex",
-          overflowY: viewport.width <= 768 ? "auto" : "hidden",
-        });
-
-        await selectHubTab(page, "Skills", { pathname: "/skills", routeId: "skills" });
-        expectStableGeometry(await hubGeometry(page), installed);
-        await selectHubTab(page, "Discover", {
-          pathname: "/settings/plugins/discover",
-          routeId: "plugins",
-        });
-        expectStableGeometry(await hubGeometry(page), installed);
-        await selectHubTab(page, "Installed", {
-          pathname: "/settings/plugins",
-          routeId: "plugins",
-        });
-        expectStableGeometry(await hubGeometry(page), installed);
+          .poll(() => chips.evaluate((element) => element.scrollWidth - element.clientWidth))
+          .toBeGreaterThan(4);
+        const edges = () =>
+          chips.evaluate((element: HTMLElement) => [
+            element.dataset.atStart,
+            element.dataset.atEnd,
+          ]);
+        await expect.poll(edges).toEqual(initial);
+        await chips.hover();
+        const distance = await chips.evaluate(
+          (element) => element.scrollWidth - element.clientWidth,
+        );
+        await page.mouse.wheel((wheel * distance) / 2, 0);
+        await expect.poll(edges).toEqual(["false", "false"]);
+        await page.mouse.wheel(wheel * distance, 0);
+        await expect.poll(edges).toEqual(final);
       } finally {
         await context.close();
       }

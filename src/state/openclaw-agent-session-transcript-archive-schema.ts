@@ -1,34 +1,29 @@
-import type { DatabaseSync } from "node:sqlite";
-import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 
 export const SESSION_TRANSCRIPT_ARCHIVES_TABLE = "session_transcript_archives";
 
-const ARCHIVE_SCHEMA_START = `CREATE TABLE IF NOT EXISTS ${SESSION_TRANSCRIPT_ARCHIVES_TABLE} (`;
-const ARCHIVE_SCHEMA_END = "CREATE TABLE IF NOT EXISTS transcript_rewrite_watermarks (";
-const ENSURED_DATABASES = new WeakSet<DatabaseSync>();
+const ensureNativeSessionTranscriptArchiveSchema = createSqliteSchemaEnsurer(
+  () =>
+    extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, SESSION_TRANSCRIPT_ARCHIVES_TABLE, {
+      endMarker: "CREATE TABLE IF NOT EXISTS transcript_rewrite_watermarks (",
+      includeEndMarker: false,
+      errorMessage: "OpenClaw session transcript archive schema markers are missing.",
+    }),
+  {
+    tables: [SESSION_TRANSCRIPT_ARCHIVES_TABLE, "session_transcript_cold_archives"],
+    indexes: [
+      "idx_agent_session_transcript_archives_pending",
+      "idx_agent_session_transcript_archives_retention",
+    ],
+  },
+);
 
-function sessionTranscriptArchiveSchemaSql(): string {
-  const start = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(ARCHIVE_SCHEMA_START);
-  const end = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(ARCHIVE_SCHEMA_END, start);
-  if (start === -1 || end === -1) {
-    throw new Error("OpenClaw session transcript archive schema markers are missing.");
+/** Lazily installs SQLite archives; PostgreSQL admits them with the agent schema. */
+export function ensureSessionTranscriptArchiveSchema(database: EngineConnection): void {
+  if (!isPostgresSqlConnection(database)) {
+    ensureNativeSessionTranscriptArchiveSchema(database);
   }
-  return OPENCLAW_AGENT_SCHEMA_SQL.slice(start, end);
-}
-
-/** Lazily installs the additive canonical archive owner on first archive use. */
-export function ensureSessionTranscriptArchiveSchema(db: DatabaseSync): void {
-  if (ENSURED_DATABASES.has(db)) {
-    return;
-  }
-  const ensure = () => {
-    db.exec(sessionTranscriptArchiveSchemaSql()); // sqlite-allow-raw -- Canonical additive DDL only.
-  };
-  if (db.isTransaction) {
-    ensure();
-    return;
-  }
-  runSqliteImmediateTransactionSync(db, ensure);
-  ENSURED_DATABASES.add(db);
 }

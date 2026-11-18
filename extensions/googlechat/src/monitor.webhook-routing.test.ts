@@ -1,4 +1,3 @@
-// Googlechat tests cover monitor.webhook routing plugin behavior.
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -6,50 +5,38 @@ import {
   createEmptyPluginRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { verifyGoogleChatRequest } from "./auth.js";
 import { registerGoogleChatWebhookTarget } from "./monitor-routing.js";
 
-vi.mock("./auth.js", () => ({
-  verifyGoogleChatRequest: vi.fn(),
-}));
+// mock-isolation: routing cases supply verification outcomes without live Google credentials.
+vi.mock("./auth.js", () => ({ verifyGoogleChatRequest: vi.fn() }));
 
-function createWebhookRequest(params: {
-  authorization?: string;
-  payload: unknown;
-  path?: string;
-}): IncomingMessage {
-  const req = new EventEmitter() as IncomingMessage & {
-    destroyed?: boolean;
-    destroy: (error?: Error) => IncomingMessage;
-    on: (event: string, listener: (...args: unknown[]) => void) => IncomingMessage;
-  };
+function request(authorization = "", payload?: unknown): IncomingMessage {
+  const req = new EventEmitter() as IncomingMessage;
   req.method = "POST";
-  req.url = params.path ?? "/googlechat";
-  req.headers = {
-    authorization: params.authorization ?? "",
-    "content-type": "application/json",
-  };
+  req.url = "/googlechat";
+  req.headers = { authorization, "content-type": "application/json" };
+  Object.assign(req, { socket: { remoteAddress: "127.0.0.1" } });
+  if (payload === undefined) {
+    return req;
+  }
   req.destroyed = false;
-  (req as unknown as { socket: { remoteAddress: string } }).socket = {
-    remoteAddress: "127.0.0.1",
-  };
   req.destroy = () => {
     req.destroyed = true;
     return req;
   };
-
-  const originalOn = req.on.bind(req);
-  let bodyScheduled = false;
+  const on = req.on.bind(req);
+  let scheduled = false;
   req.on = ((event: string, listener: (...args: unknown[]) => void) => {
-    const result = originalOn(event, listener);
-    if (!bodyScheduled && event === "data") {
-      bodyScheduled = true;
+    const result = on(event, listener);
+    if (!scheduled && event === "data") {
+      scheduled = true;
       void Promise.resolve().then(() => {
-        req.emit("data", Buffer.from(JSON.stringify(params.payload), "utf-8"));
+        req.emit("data", Buffer.from(JSON.stringify(payload), "utf-8"));
         if (!req.destroyed) {
           req.emit("end");
         }
@@ -57,243 +44,112 @@ function createWebhookRequest(params: {
     }
     return result;
   }) as IncomingMessage["on"];
-
   return req;
 }
 
-function createHeaderOnlyWebhookRequest(params: {
-  authorization?: string;
-  path?: string;
-}): IncomingMessage {
-  const req = new EventEmitter() as IncomingMessage;
-  req.method = "POST";
-  req.url = params.path ?? "/googlechat";
-  req.headers = {
-    authorization: params.authorization ?? "",
-    "content-type": "application/json",
-  };
-  (req as unknown as { socket: { remoteAddress: string } }).socket = {
-    remoteAddress: "127.0.0.1",
-  };
-  return req;
-}
-
-const baseAccount = (accountId: string) =>
-  ({
-    accountId,
-    enabled: true,
-    credentialSource: "none",
+function target(accountId: string) {
+  return {
+    account: {
+      accountId,
+      enabled: true,
+      credentialSource: "none",
+      config: {},
+    } as ResolvedGoogleChatAccount,
     config: {},
-  }) as ResolvedGoogleChatAccount;
+    runtime: { log: vi.fn() },
+    core: {} as PluginRuntime,
+    path: "/googlechat",
+    statusSink: vi.fn(),
+    mediaMaxMb: 5,
+    ingress: { receive: vi.fn(async () => ({ kind: "ignored" as const })) },
+  };
+}
 
-type WebhookRouteHandler = ReturnType<
-  typeof createEmptyPluginRegistry
->["httpRoutes"][number]["handler"];
-let webhookRouteHandler: WebhookRouteHandler | undefined;
+const unregister: Array<() => void> = [];
+let registry = createEmptyPluginRegistry();
 
 function registerTwoTargets() {
-  const registry = createEmptyPluginRegistry();
+  registry = createEmptyPluginRegistry();
   setActivePluginRegistry(registry);
-  const sinkA = vi.fn();
-  const sinkB = vi.fn();
-  const logA = vi.fn();
-  const logB = vi.fn();
-  const core = {} as PluginRuntime;
-  const config = {} as OpenClawConfig;
-  const ingress = { receive: vi.fn(async () => ({ kind: "ignored" as const })) };
-
-  const unregisterA = registerGoogleChatWebhookTarget({
-    account: baseAccount("A"),
-    config,
-    runtime: { log: logA },
-    core,
-    path: "/googlechat",
-    statusSink: sinkA,
-    mediaMaxMb: 5,
-    ingress,
+  return ["A", "B"].map((id) => {
+    const entry = target(id);
+    unregister.push(registerGoogleChatWebhookTarget(entry));
+    return entry;
   });
-  const unregisterB = registerGoogleChatWebhookTarget({
-    account: baseAccount("B"),
-    config,
-    runtime: { log: logB },
-    core,
-    path: "/googlechat",
-    statusSink: sinkB,
-    mediaMaxMb: 5,
-    ingress,
-  });
-  webhookRouteHandler = expectDefined(registry.httpRoutes[0], "Google Chat webhook route").handler;
-
-  return {
-    logA,
-    logB,
-    sinkA,
-    sinkB,
-    unregister: () => {
-      unregisterA();
-      unregisterB();
-    },
-  };
 }
 
-async function dispatchWebhookRequest(req: IncomingMessage) {
+async function dispatch(req: IncomingMessage) {
   const res = createMockServerResponse();
-  await expectDefined(webhookRouteHandler, "Google Chat webhook route handler")(req, res);
+  await expectDefined(registry.httpRoutes[0], "Google Chat webhook route").handler(req, res);
   return res;
 }
 
-async function expectVerifiedRoute(params: {
-  request: IncomingMessage;
-  expectedStatus: number;
-  sinkA: ReturnType<typeof vi.fn>;
-  sinkB: ReturnType<typeof vi.fn>;
-  expectedSink: "none" | "A" | "B";
-}) {
-  const res = await dispatchWebhookRequest(params.request);
-  expect(res.statusCode).toBe(params.expectedStatus);
-  const expectedCounts =
-    params.expectedSink === "A" ? [1, 0] : params.expectedSink === "B" ? [0, 1] : [0, 0];
-  expect(params.sinkA).toHaveBeenCalledTimes(expectDefined(expectedCounts[0], "sink A count"));
-  expect(params.sinkB).toHaveBeenCalledTimes(expectDefined(expectedCounts[1], "sink B count"));
-}
+afterEach(() => {
+  for (const stop of unregister.splice(0)) {
+    stop();
+  }
+  setActivePluginRegistry(createEmptyPluginRegistry());
+});
+afterAll(() => {
+  vi.doUnmock("./auth.js");
+  vi.resetModules();
+});
 
-function mockSecondVerifierSuccess() {
-  vi.mocked(verifyGoogleChatRequest)
-    .mockResolvedValueOnce({ ok: false, reason: "invalid" })
-    .mockResolvedValueOnce({ ok: true });
-}
+it("rejects a foreign route collision instead of storing an unreachable target", () => {
+  registry = createEmptyPluginRegistry();
+  const existingRoute = {
+    path: "/googlechat",
+    match: "exact" as const,
+    auth: "plugin" as const,
+    handler: () => {},
+    pluginId: "other-plugin",
+    source: "other-webhook",
+  };
+  registry.httpRoutes.push(existingRoute);
+  setActivePluginRegistry(registry);
+  expect(() => registerGoogleChatWebhookTarget(target("A"))).toThrow("route replacement denied");
+  expect(registry.httpRoutes).toEqual([existingRoute]);
+});
 
-describe("Google Chat webhook routing", () => {
-  afterEach(() => {
-    webhookRouteHandler = undefined;
-    setActivePluginRegistry(createEmptyPluginRegistry());
-  });
-
-  afterAll(() => {
-    vi.doUnmock("./auth.js");
-    vi.resetModules();
-  });
-
-  it("rejects a foreign route collision instead of storing an unreachable target", () => {
-    const registry = createEmptyPluginRegistry();
-    const existingRoute = {
-      path: "/googlechat",
-      match: "exact" as const,
-      auth: "plugin" as const,
-      handler: () => {},
-      pluginId: "other-plugin",
-      source: "other-webhook",
-    };
-    registry.httpRoutes.push(existingRoute);
-    setActivePluginRegistry(registry);
-
-    expect(() =>
-      registerGoogleChatWebhookTarget({
-        account: baseAccount("A"),
-        config: {},
-        runtime: { log: vi.fn() },
-        core: {} as PluginRuntime,
-        path: "/googlechat",
-        statusSink: vi.fn(),
-        mediaMaxMb: 5,
-        ingress: { receive: vi.fn(async () => ({ kind: "ignored" as const })) },
-      }),
-    ).toThrow("route replacement denied");
-
-    expect(registry.httpRoutes).toEqual([existingRoute]);
-  });
-
-  it("rejects ambiguous routing when multiple targets on the same path verify successfully", async () => {
+it.each([
+  { name: "rejects ambiguous verified targets", ambiguous: true, addon: false },
+  { name: "routes past a failed verifier", ambiguous: false, addon: false },
+  { name: "routes add-on systemIdToken requests", ambiguous: false, addon: true },
+])("$name", async ({ ambiguous, addon }) => {
+  if (ambiguous) {
     vi.mocked(verifyGoogleChatRequest).mockResolvedValue({ ok: true });
-
-    const { sinkA, sinkB, unregister } = registerTwoTargets();
-
-    try {
-      await expectVerifiedRoute({
-        request: createWebhookRequest({
-          authorization: "Bearer test-token",
-          payload: { type: "ADDED_TO_SPACE", space: { name: "spaces/AAA" } },
-        }),
-        expectedStatus: 401,
-        sinkA,
-        sinkB,
-        expectedSink: "none",
-      });
-    } finally {
-      unregister();
-    }
-  });
-
-  it("routes to the single verified target when earlier targets fail verification", async () => {
-    mockSecondVerifierSuccess();
-
-    const { logA, logB, sinkA, sinkB, unregister } = registerTwoTargets();
-
-    try {
-      await expectVerifiedRoute({
-        request: createWebhookRequest({
-          authorization: "Bearer test-token",
-          payload: { type: "ADDED_TO_SPACE", space: { name: "spaces/BBB" } },
-        }),
-        expectedStatus: 200,
-        sinkA,
-        sinkB,
-        expectedSink: "B",
-      });
-      expect(logA).not.toHaveBeenCalled();
-      expect(logB).not.toHaveBeenCalled();
-    } finally {
-      unregister();
-    }
-  });
-
-  it("rejects invalid bearer before attempting to read the body", async () => {
-    vi.mocked(verifyGoogleChatRequest).mockResolvedValue({ ok: false, reason: "invalid" });
-    const { unregister } = registerTwoTargets();
-
-    try {
-      const req = createHeaderOnlyWebhookRequest({
-        authorization: "Bearer invalid-token",
-      });
-      const onSpy = vi.spyOn(req, "on");
-      const res = await dispatchWebhookRequest(req);
-      expect(res.statusCode).toBe(401);
-      expect(onSpy.mock.calls.map(([event]) => event)).not.toContain("data");
-    } finally {
-      unregister();
-    }
-  });
-
-  it("supports add-on requests that provide systemIdToken in the body", async () => {
-    mockSecondVerifierSuccess();
-    const { sinkA, sinkB, unregister } = registerTwoTargets();
-
-    try {
-      await expectVerifiedRoute({
-        request: createWebhookRequest({
-          payload: {
-            commonEventObject: { hostApp: "CHAT" },
-            authorizationEventObject: { systemIdToken: "addon-token" },
-            chat: {
-              eventTime: "2026-03-02T00:00:00.000Z",
-              user: { name: "users/12345", displayName: "Test User" },
-              messagePayload: {
-                space: { name: "spaces/AAA" },
-                message: {
-                  name: "spaces/AAA/messages/add-on-1",
-                  text: "Hello from add-on",
-                },
-              },
-            },
+  } else {
+    vi.mocked(verifyGoogleChatRequest)
+      .mockResolvedValueOnce({ ok: false, reason: "invalid" })
+      .mockResolvedValueOnce({ ok: true });
+  }
+  const targets = registerTwoTargets();
+  const payload = addon
+    ? {
+        commonEventObject: { hostApp: "CHAT" },
+        authorizationEventObject: { systemIdToken: "addon-token" },
+        chat: {
+          messagePayload: {
+            space: { name: "spaces/AAA" },
+            message: { name: "spaces/AAA/messages/add-on-1", text: "Hello from add-on" },
           },
-        }),
-        expectedStatus: 200,
-        sinkA,
-        sinkB,
-        expectedSink: "B",
-      });
-    } finally {
-      unregister();
-    }
-  });
+        },
+      }
+    : { type: "ADDED_TO_SPACE", space: { name: "spaces/AAA" } };
+  expect((await dispatch(request(addon ? "" : "Bearer test-token", payload))).statusCode).toBe(
+    ambiguous ? 401 : 200,
+  );
+  expect(targets.map((entry) => entry.statusSink.mock.calls.length)).toEqual(
+    ambiguous ? [0, 0] : [0, 1],
+  );
+  expect(targets.map((entry) => entry.runtime.log.mock.calls)).toEqual([[], []]);
+});
+
+it("rejects invalid bearer before attempting to read the body", async () => {
+  vi.mocked(verifyGoogleChatRequest).mockResolvedValue({ ok: false, reason: "invalid" });
+  registerTwoTargets();
+  const req = request("Bearer invalid-token");
+  const on = vi.spyOn(req, "on");
+  expect((await dispatch(req)).statusCode).toBe(401);
+  expect(on.mock.calls.map(([event]) => event)).not.toContain("data");
 });

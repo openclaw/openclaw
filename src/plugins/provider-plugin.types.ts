@@ -1,7 +1,7 @@
+import type { AgentMessage, StreamFn } from "../../packages/agent-core/src/types.js";
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
-import type { AgentMessage, StreamFn } from "../agents/runtime/index.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ModelProviderConfig } from "../config/types.js";
@@ -45,6 +45,7 @@ import type {
   ProviderReplayPolicy,
   ProviderReplayPolicyContext,
   ProviderSanitizeReplayHistoryContext,
+  ProviderSanitizeReplayHistoryContextV2,
   ProviderValidateReplayTurnsContext,
   ProviderNormalizeToolSchemasContext,
   ProviderToolSchemaDiagnostic,
@@ -59,6 +60,7 @@ import type {
   ProviderNormalizeModelIdContext,
   ProviderNormalizeTransportContext,
   ProviderPrepareRuntimeAuthContext,
+  ProviderPrepareRuntimeAuthContextV2,
   ProviderPreparedRuntimeAuth,
   ProviderResolveUsageAuthContext,
   ProviderResolvedUsageAuth,
@@ -95,6 +97,8 @@ import type {
 export type ProviderPlugin = {
   id: string;
   pluginId?: string;
+  /** Loader-owned dependency root, shared by lightweight and full registration. */
+  pluginRoot?: string;
   label: string;
   docsPath?: string;
   aliases?: string[];
@@ -114,6 +118,8 @@ export type ProviderPlugin = {
    */
   envVars?: string[];
   auth: ProviderAuthMethod[];
+  /** Physical credential owner, matching canonical catalog metadata. */
+  authScope?: "agent" | "plugin";
   /**
    * Legacy text-provider catalog hook.
    *
@@ -235,6 +241,7 @@ export type ProviderPlugin = {
    */
   buildReplayPolicy?: (ctx: ProviderReplayPolicyContext) => ProviderReplayPolicy | null | undefined;
   /**
+   * @deprecated Use sanitizeReplayHistoryAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release.
    * Provider-owned replay-history sanitization.
    *
    * Runs after OpenClaw performs generic transcript cleanup. Use this for
@@ -243,6 +250,10 @@ export type ProviderPlugin = {
    */
   sanitizeReplayHistory?: (
     ctx: ProviderSanitizeReplayHistoryContext,
+  ) => Promise<AgentMessage[] | null | undefined> | AgentMessage[] | null | undefined;
+  /** Replay hook with worker-backed persistence; preferred over the legacy hook when both exist. */
+  sanitizeReplayHistoryAsync?: (
+    ctx: ProviderSanitizeReplayHistoryContextV2,
   ) => Promise<AgentMessage[] | null | undefined> | AgentMessage[] | null | undefined;
   /**
    * Provider-owned final replay-turn validation.
@@ -321,12 +332,20 @@ export type ProviderPlugin = {
    * provider-specific compat payload patches that do not justify a separate
    * transport implementation.
    */
-  wrapStreamFn?: (ctx: ProviderWrapStreamFnContext) => StreamFn | null | undefined;
+  wrapStreamFn?: (ctx: ProviderWrapStreamFnContext) =>
+    | (StreamFn & {
+        /** A decorator that leaves shared request and output compatibility policy active. */
+        preservesGenericCompatibility?: boolean;
+      })
+    | null
+    | undefined;
   /**
    * Provider-owned wrapper for direct `completeSimple` callers.
    *
    * Opt in only when the provider must enforce the same wire contract outside
    * the embedded agent runtime.
+   * The factory runs once per prepared model; its returned stream retains
+   * wrapper-local state and reads per-request options on each invocation.
    */
   wrapSimpleCompletionStreamFn?: (ctx: ProviderWrapStreamFnContext) => StreamFn | null | undefined;
   /** Cheap, idempotent provider repair after local-service health and before each request. */
@@ -373,6 +392,10 @@ export type ProviderPlugin = {
    */
   prepareRuntimeAuth?: (
     ctx: ProviderPrepareRuntimeAuthContext,
+  ) => Promise<ProviderPreparedRuntimeAuth | null | undefined>;
+  /** Preferred exchange for chat and Decision inference; takes precedence over the legacy hook. */
+  prepareRuntimeAuthV2?: (
+    ctx: ProviderPrepareRuntimeAuthContextV2,
   ) => Promise<ProviderPreparedRuntimeAuth | null | undefined>;
   /**
    * Usage/billing auth resolution hook.
@@ -474,14 +497,16 @@ export type ProviderPlugin = {
    *
    * Prefer this over the individual thinking capability hooks when a provider
    * or model exposes a custom set of thinking levels. OpenClaw stores the
-   * canonical `id`, shows `label` when provided, and downgrades stale stored
-   * values by profile rank.
+   * canonical `id`, shows `label` when provided, and clamps execution by profile
+   * rank without replacing the stored preference.
    */
   resolveThinkingProfile?: (
     ctx: ProviderDefaultThinkingPolicyContext,
   ) => ProviderThinkingProfile | null | undefined;
   /** Whether Fast can affect this selected request; undefined retains existing unknown behavior. */
   resolveFastModeSupport?: (ctx: ProviderFastModePolicyContext) => boolean | undefined;
+  /** Known model/route service tiers; undefined retains account discovery and route defaults. */
+  resolveServiceTiers?: (ctx: ProviderFastModePolicyContext) => readonly string[] | undefined;
   /**
    * Provider-owned system-prompt contribution.
    *
@@ -587,9 +612,10 @@ export type ProviderPlugin = {
    * OpenClaw calls this before falling back to the shared `shared model runtime` OAuth
    * refreshers. Use it when the provider has a custom refresh endpoint, or when
    * the provider needs custom refresh-failure behavior that should stay out of
-   * core auth-profile code.
+   * core auth-profile code. The optional second argument is the caller's
+   * effective config; prefer it over reading global runtime config.
    */
-  refreshOAuth?: (cred: OAuthCredential) => Promise<OAuthCredential>;
+  refreshOAuth?: (cred: OAuthCredential, config?: OpenClawConfig) => Promise<OAuthCredential>;
   /**
    * Provider-owned auth-doctor hint.
    *
@@ -627,7 +653,11 @@ export type ProviderPlugin = {
    * Keep process/network I/O here; OpenClaw publishes the completed result for this generation.
    */
   prepareSyntheticAuth?: (
-    ctx: ProviderResolveSyntheticAuthContext & { env?: NodeJS.ProcessEnv; signal?: AbortSignal },
+    ctx: ProviderResolveSyntheticAuthContext & {
+      env?: NodeJS.ProcessEnv;
+      signal?: AbortSignal;
+      pluginRoot?: string;
+    },
   ) => Promise<ProviderSyntheticAuthResult | null | undefined>;
   /**
    * Provider-owned external auth profile discovery.

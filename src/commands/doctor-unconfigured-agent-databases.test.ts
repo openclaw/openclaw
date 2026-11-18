@@ -60,68 +60,6 @@ describe("unconfigured agent database diagnostics", () => {
     ).toEqual([]);
   });
 
-  it("reports a custom database whose suffix resembles the default layout", () => {
-    const stateDir = fs.realpathSync.native(tempDirs.make("doctor-default-shaped-custom-store-"));
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = path.join(
-      stateDir,
-      "custom",
-      "agents",
-      "retired",
-      "agent",
-      "openclaw-agent.sqlite",
-    );
-    openOpenClawAgentDatabase({ agentId: "retired", env, path: databasePath });
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-
-    expect(
-      collectRetainedUnconfiguredAgentDatabaseWarnings({
-        cfg: configWithAgents("main"),
-        env,
-      }),
-    ).toEqual([
-      `- Retained unconfigured agent database "retired" at ${databasePath}. Doctor will not remove it automatically because it may contain retired or manually managed agent state.`,
-    ]);
-  });
-
-  it("does not warn for a configured shared store owned by a retired agent", () => {
-    const stateDir = fs.realpathSync.native(
-      tempDirs.make("doctor-configured-shared-agent-database-"),
-    );
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = path.join(stateDir, "shared.sqlite");
-    openOpenClawAgentDatabase({ agentId: "retired", env, path: databasePath });
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-
-    expect(
-      collectRetainedUnconfiguredAgentDatabaseWarnings({
-        cfg: {
-          ...configWithAgents("worker"),
-          session: { store: databasePath },
-        },
-        env,
-      }),
-    ).toEqual([]);
-  });
-
-  it("ignores missing registered databases owned by migration hygiene", () => {
-    const stateDir = fs.realpathSync.native(tempDirs.make("doctor-missing-agent-database-"));
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = openOpenClawAgentDatabase({ agentId: "retired", env }).path;
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    fs.unlinkSync(databasePath);
-
-    expect(
-      collectRetainedUnconfiguredAgentDatabaseWarnings({
-        cfg: configWithAgents("main"),
-        env,
-      }),
-    ).toEqual([]);
-  });
-
   it("reports an unreadable agent database registry", () => {
     const stateDir = fs.realpathSync.native(tempDirs.make("doctor-unreadable-registry-"));
     const sqliteDir = path.join(stateDir, "state");

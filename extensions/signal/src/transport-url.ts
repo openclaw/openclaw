@@ -1,5 +1,7 @@
 // Signal transport URLs are canonicalized before config writes and network use.
 import { isIP } from "node:net";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 export function normalizeSignalTransportUrl(value: string): string {
   const trimmed = value.trim();
@@ -54,4 +56,44 @@ export function buildSignalTransportHttpUrl(host: string, port: number): string 
   const normalizedHost = normalizeSignalTransportHost(host);
   const authorityHost = normalizedHost.includes(":") ? `[${normalizedHost}]` : normalizedHost;
   return normalizeSignalTransportUrl(`http://${authorityHost}:${port}`);
+}
+
+/** Validate the opt-in shape without filesystem side effects during config resolution. */
+export function assertSignalSocketTransport(transport: {
+  socketPath?: unknown;
+  url?: unknown;
+  httpHost?: unknown;
+  httpPort?: unknown;
+  receiveMode?: unknown;
+}): void {
+  if (transport.socketPath === undefined) {
+    return;
+  }
+  if (
+    typeof transport.socketPath !== "string" ||
+    !/^\/(?!\/)[^\0]+$/.test(transport.socketPath) ||
+    transport.socketPath.endsWith("/") ||
+    path.posix.normalize(transport.socketPath) !== transport.socketPath ||
+    Buffer.byteLength(transport.socketPath, "utf8") > 103
+  ) {
+    throw new Error(
+      "Signal transport.socketPath must be a normalized absolute POSIX socket file path of at most 103 UTF-8 bytes.",
+    );
+  }
+  if (
+    transport.url !== undefined ||
+    transport.httpHost !== undefined ||
+    transport.httpPort !== undefined
+  ) {
+    throw new Error(
+      "Signal transport.socketPath cannot be combined with url, httpHost, or httpPort.",
+    );
+  }
+  if (transport.receiveMode === "on-start") {
+    throw new Error("Signal socket transport requires receiveMode manual (or omitted).");
+  }
+}
+
+export function buildSignalSocketUrl(socketPath: string): string {
+  return `unix://${pathToFileURL(socketPath).pathname}`;
 }

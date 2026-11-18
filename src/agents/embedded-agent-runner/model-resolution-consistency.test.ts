@@ -1,3 +1,10 @@
+const compactionSessionInput = () => ({
+  agentId: "main",
+  sessionId: "compact-session",
+  sessionKey: "agent:main:compact-session",
+  sessionFile: "agent:main:compact-session",
+});
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   prepareModelRunCapabilities,
@@ -18,6 +25,7 @@ const resolveHookModelSelectionMock = vi.hoisted(() =>
 const loadManifestMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn(() => undefined));
 const resolveEmbeddedCompactionThinkingLevelMock = vi.hoisted(() => vi.fn(() => "off"));
+const logWarnMock = vi.hoisted(() => vi.fn());
 
 const emptyModelRegistry = {
   find: vi.fn((_provider: string, _modelId: string) => null),
@@ -55,10 +63,14 @@ const resolveModelAsyncMock = vi.fn(
       authStorage: options?.authStorage ?? authStorage,
       modelRegistry: options?.modelRegistry ?? emptyModelRegistry,
     };
+    if (modelId === "missing-compaction-model") {
+      return { ...stores, error: "Provider-specific model resolution failed" };
+    }
     if (options?.allowBundledStaticCatalogFallback) {
       return {
         ...stores,
         model: { ...staticCatalogModel, provider, id: modelId, name: modelId },
+        logicalRef: { provider, model: modelId },
       };
     }
     return {
@@ -95,10 +107,6 @@ vi.mock("../harness/selection.js", () => ({
   })),
 }));
 
-vi.mock("../openai-routing.js", () => ({
-  resolveSelectedOpenAIRuntimeProvider: ({ provider }: { provider: string }) => provider,
-}));
-
 vi.mock("../prepared-model-runtime.js", () => ({
   prepareModelRuntimeSnapshot: vi.fn(),
 }));
@@ -128,6 +136,7 @@ vi.mock("./compaction-runtime-preparation.js", () => ({
     modelId,
   }),
   prepareCompactionHarnessAuth: vi.fn(async () => ({
+    ok: true,
     runtimeAuthProfileStore: {},
     runtimeAuthPreparation: {
       plan: { selectedAuthMode: "api-key" },
@@ -157,13 +166,15 @@ vi.mock("../provider-runtime-auth-protection.js", () => ({
 
 vi.mock("../provider-secret-egress.js", () => ({
   unwrapSecretSentinelsForProviderEgress: (value: unknown) => value,
+  unwrapModelHeaderSentinelsForProviderEgress: (model: unknown) => model,
 }));
 
 vi.mock("../provider-request-config.js", () => ({
   applyPreparedRuntimeAuthToModel: (model: unknown) => model,
 }));
 
-vi.mock("../sandbox.js", () => ({
+vi.mock("../sandbox/context.js", async () => ({
+  ...(await vi.importActual<typeof import("../sandbox/context.js")>("../sandbox/context.js")),
   resolveSandboxContext: vi.fn(async () => undefined),
 }));
 
@@ -171,12 +182,17 @@ vi.mock("./compaction-runtime-context.js", () => ({
   resolveEmbeddedCompactionThinkingLevel: resolveEmbeddedCompactionThinkingLevelMock,
 }));
 
-vi.mock("./logger.js", () => ({
-  log: { warn: vi.fn() },
-}));
+vi.mock("./logger.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./logger.js")>();
+  return {
+    ...actual,
+    log: { ...actual.log, warn: logWarnMock },
+  };
+});
 
 const { resolveEmbeddedRunModelSetup } = await import("./run/model-setup.js");
 const { prepareDirectCompactionAttempt } = await import("./direct-compaction-preparation.js");
+const { prepareCompactionHarnessAuth } = await import("./compaction-runtime-preparation.js");
 
 function createPreparedModelRuntime(config: Record<string, unknown>) {
   return {
@@ -185,6 +201,7 @@ function createPreparedModelRuntime(config: Record<string, unknown>) {
     workspaceDir: "/tmp/openclaw-model-resolution",
     pluginRegistry: {},
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     createStores: () => ({ authStorage, modelRegistry: emptyModelRegistry }),
   };
@@ -192,6 +209,7 @@ function createPreparedModelRuntime(config: Record<string, unknown>) {
 
 describe("embedded model resolution consistency", () => {
   beforeEach(() => {
+    logWarnMock.mockClear();
     resolveHookModelSelectionMock.mockReset().mockImplementation(async ({ provider, modelId }) => ({
       provider,
       modelId,
@@ -256,7 +274,7 @@ describe("embedded model resolution consistency", () => {
         modelIdNormalization: {
           providers: {
             "custom-provider": {
-              aliases: { "legacy-model": "modern-model" },
+              aliases: { "legacy-model": "modern-model", "modern-model": "unexpected-second-pass" },
             },
           },
         },
@@ -268,7 +286,7 @@ describe("embedded model resolution consistency", () => {
         agentId: "worker",
         provider: initial.provider,
         model: initial.modelId,
-        requestedRouteResolution: "resolved",
+        requestedRouteResolution: "raw",
         fallbacksOverride: [],
         manifestPlugins,
       }),
@@ -301,6 +319,7 @@ describe("embedded model resolution consistency", () => {
     const preparedModelRuntime = createPreparedModelRuntime(config);
 
     const chat = await resolveEmbeddedRunModelSetup({
+      assertCurrent: () => {},
       runParams: {
         config,
         prompt: "hello",
@@ -316,16 +335,17 @@ describe("embedded model resolution consistency", () => {
       onHooksResolved: vi.fn(),
       preparedModelRuntime: preparedModelRuntime as never,
     });
-    expect(chat.model).toMatchObject({ provider: PROVIDER, id: STATIC_MODEL_ID });
+    expect(chat.model).toMatchObject({
+      provider: PROVIDER,
+      id: STATIC_MODEL_ID,
+      compactionThinkingDefault: "off",
+    });
 
     const compaction = await prepareDirectCompactionAttempt({
       config,
       provider: target.provider,
       model: target.modelId,
-      agentId: "main",
-      sessionId: "compact-session",
-      sessionKey: "agent:main:compact-session",
-      sessionFile: "agent:main:compact-session",
+      ...compactionSessionInput(),
       workspaceDir: preparedModelRuntime.workspaceDir,
       preparedModelRuntime: preparedModelRuntime as never,
     });
@@ -345,6 +365,57 @@ describe("embedded model resolution consistency", () => {
         compactionThinkingDefault: "off",
       }),
     );
+  });
+
+  it("labels an unresolved compaction model independently of provider error text", async () => {
+    const config = {};
+    const preparedModelRuntime = createPreparedModelRuntime(config);
+    const compaction = await prepareDirectCompactionAttempt({
+      config,
+      provider: "test-provider",
+      model: "missing-compaction-model",
+      ...compactionSessionInput(),
+      workspaceDir: preparedModelRuntime.workspaceDir,
+      preparedModelRuntime: preparedModelRuntime as never,
+    });
+
+    expect(compaction).toMatchObject({
+      ok: false,
+      result: {
+        ok: false,
+        compacted: false,
+        reason: "Provider-specific model resolution failed",
+      },
+    });
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("outcome=failed reason=compaction_model_unresolved "),
+    );
+    expect(logWarnMock).not.toHaveBeenCalledWith(expect.stringContaining(" detail="));
+  });
+
+  it("returns compaction auth failure details without logging provider prose", async () => {
+    const config = {};
+    const preparedModelRuntime = createPreparedModelRuntime(config);
+    const error = new Error("private_compaction_auth_payload");
+    vi.mocked(prepareCompactionHarnessAuth).mockResolvedValueOnce({ ok: false, error });
+
+    const compaction = await prepareDirectCompactionAttempt({
+      config,
+      provider: PROVIDER,
+      model: STATIC_MODEL_ID,
+      ...compactionSessionInput(),
+      workspaceDir: preparedModelRuntime.workspaceDir,
+      preparedModelRuntime: preparedModelRuntime as never,
+    });
+
+    expect(compaction).toMatchObject({
+      ok: false,
+      result: { ok: false, compacted: false, reason: error.message },
+    });
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("outcome=failed reason=unknown "),
+    );
+    expect(JSON.stringify(logWarnMock.mock.calls)).not.toContain(error.message);
   });
 
   it("resolves route-bound thinking compatibility for the final model", () => {

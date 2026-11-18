@@ -1,19 +1,26 @@
-// Destructive cleanup must not remove state owned by an independently running Gateway.
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createNonExitingRuntime } from "../runtime.js";
+import { registerMaintenanceCommands } from "../cli/program/register.maintenance.js";
+import { resolveGatewayService } from "../daemon/service.js";
+import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
+import { createNonExitingRuntime, defaultRuntime } from "../runtime.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import * as cleanupUtils from "./cleanup-utils.js";
 
 const gatewayService = vi.hoisted(() => ({
   notLoadedText: "is not installed",
   isLoaded: vi.fn(async () => false),
+  isAbsent: vi.fn(async () => true),
   stop: vi.fn(async () => undefined),
   uninstall: vi.fn(async () => undefined),
 }));
@@ -25,8 +32,9 @@ vi.mock("../config/config.js", async () => ({
     return configState.isNixMode;
   },
 }));
-vi.mock("../daemon/service.js", () => ({
-  resolveGatewayService: () => gatewayService,
+vi.mock("../daemon/service.js", async () => ({
+  ...(await vi.importActual<typeof import("../daemon/service.js")>("../daemon/service.js")),
+  resolveGatewayService: vi.fn(() => gatewayService),
 }));
 const { resetCommand } = await import("./reset.js");
 const { uninstallCommand } = await import("./uninstall.js");
@@ -56,6 +64,7 @@ afterEach(async () => {
   liveOwners.clear();
   testStates.clear();
   configState.isNixMode = false;
+  vi.restoreAllMocks();
   vi.clearAllMocks();
   const failures = results.filter((result) => result.status === "rejected");
   if (failures.length > 0) {
@@ -87,10 +96,9 @@ async function startLiveStateOwner(state: OpenClawTestState): Promise<ChildProce
     setInterval(() => {}, 1_000);
   `;
   const env = { ...state.env };
-  delete env.NODE_ENV;
-  delete env.VITEST;
-  delete env.VITEST_POOL_ID;
-  delete env.VITEST_WORKER_ID;
+  for (const key of ["NODE_ENV", "VITEST", "VITEST_POOL_ID", "VITEST_WORKER_ID"]) {
+    delete env[key];
+  }
   const child = spawn(
     process.execPath,
     ["--import", "tsx", "--input-type=module", "--eval", script, "openclaw", "gateway"],
@@ -114,132 +122,281 @@ async function startLiveStateOwner(state: OpenClawTestState): Promise<ChildProce
   return child;
 }
 
-async function readFiles(paths: readonly string[]): Promise<Buffer[]> {
-  return await Promise.all(paths.map((filePath) => fs.readFile(filePath)));
+async function makeState(env?: NodeJS.ProcessEnv) {
+  const state = await createOpenClawTestState({
+    prefix: "openclaw-cleanup-",
+    env,
+    layout: "split",
+    scenario: "minimal",
+    applyEnv: true,
+  });
+  testStates.add(state);
+  return state;
 }
 
-describe("destructive cleanup with a live unmanaged state owner", () => {
+function quietRuntime(runtime = createNonExitingRuntime()) {
+  vi.spyOn(runtime, "log").mockImplementation(() => {});
+  vi.spyOn(runtime, "error").mockImplementation(() => {});
+  return runtime;
+}
+
+function runCleanup(
+  uninstall: boolean,
+  runtime: ReturnType<typeof createNonExitingRuntime>,
+  all = false,
+) {
+  const options = { yes: true, nonInteractive: true };
+  return uninstall
+    ? uninstallCommand(runtime, { ...options, ...(all ? { all: true } : { state: true }) })
+    : resetCommand(runtime, { ...options, scope: "full" });
+}
+
+async function readFiles(paths: readonly string[]): Promise<Buffer[]> {
+  return Promise.all(paths.map((filePath) => fs.readFile(filePath)));
+}
+
+describe.each([
+  ["reset", "--scope", "full"],
+  ["uninstall", "--state", "--workspace"],
+])("registered %s workspace guard", (...args) => {
   it.each([
-    {
-      command: "unmanaged reset --scope full",
-      nixMode: false,
-      preservesWorkspace: false,
-      serviceChecks: 1,
-      aggregatesFailure: false,
-      run: (runtime: ReturnType<typeof createNonExitingRuntime>) =>
-        resetCommand(runtime, { scope: "full", yes: true, nonInteractive: true }),
-    },
-    {
-      command: "Nix reset --scope full",
-      nixMode: true,
-      preservesWorkspace: false,
-      serviceChecks: 0,
-      aggregatesFailure: false,
-      run: (runtime: ReturnType<typeof createNonExitingRuntime>) =>
-        resetCommand(runtime, { scope: "full", yes: true, nonInteractive: true }),
-    },
-    {
-      command: "uninstall --state",
-      nixMode: false,
-      preservesWorkspace: true,
-      serviceChecks: 0,
-      aggregatesFailure: true,
-      run: (runtime: ReturnType<typeof createNonExitingRuntime>) =>
-        uninstallCommand(runtime, { state: true, yes: true, nonInteractive: true }),
-    },
-  ])(
-    "refuses $command until the SQLite owner exits",
-    async ({ aggregatesFailure, nixMode, preservesWorkspace, run, serviceChecks }) => {
-      const state = await createOpenClawTestState({
-        prefix: "openclaw-cleanup-live-state-",
-        layout: "split",
-        scenario: "minimal",
-        applyEnv: true,
-      });
-      testStates.add(state);
-      configState.isNixMode = nixMode;
-      const workspacePath = path.join(state.workspaceDir, "project.bin");
-      await state.writeConfig({
-        agents: { entries: { main: { default: true, workspace: state.workspaceDir } } },
-      });
-      const markerPath = await state.writeText("keep.txt", "preserved");
-      await fs.mkdir(path.dirname(workspacePath), { recursive: true });
-      await fs.writeFile(workspacePath, Buffer.from([0, 1, 2, 3, 255]));
+    { agentId: "123", warningPath: 'agents.entries["123"].workspace' },
+    { agentId: "constructor", warningPath: "agents.entries.constructor.workspace" },
+    { agentId: "123", warningPath: undefined },
+  ])("handles workspace warning $warningPath for $agentId", async ({ agentId, warningPath }) => {
+    const state = await makeState({ OPENCLAW_TEST_MISSING_WORKSPACE: undefined });
+    await state.writeConfig({
+      ...(!warningPath
+        ? { env: { vars: { constructor: "${OPENCLAW_TEST_MISSING_WORKSPACE}" } } }
+        : {}),
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: {
+          [agentId]: {
+            workspace: warningPath ? "${OPENCLAW_TEST_MISSING_WORKSPACE}" : state.workspaceDir,
+          },
+          main: { workspace: state.workspaceDir },
+        },
+      },
+      talk: { agentId: "main" },
+    });
+    const removeState = vi.spyOn(cleanupUtils, "removeStateAndLinkedPaths").mockResolvedValue(true);
+    const removeWorkspaces = vi.spyOn(cleanupUtils, "removeWorkspaceDirs").mockResolvedValue([]);
+    const removePath = vi.spyOn(cleanupUtils, "removePath").mockResolvedValue({ ok: true });
+    quietRuntime(defaultRuntime);
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(createNonExitingRuntime().exit);
+    const program = new Command();
+    registerMaintenanceCommands(program);
+    const run = program.parseAsync([...args, "--yes", "--non-interactive"], { from: "user" });
 
-      const databasePath = state.statePath("state", "openclaw.sqlite");
-      await fs.mkdir(path.dirname(databasePath), { recursive: true });
-      const owner = await startLiveStateOwner(state);
-      const livePaths = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`];
-      const liveBytes = await readFiles(livePaths);
-      const configBytes = await fs.readFile(state.configPath);
+    if (warningPath) {
+      await expect(run).rejects.toMatchObject({ name: "ExitError", code: 1 });
+      expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(warningPath));
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining("workspace configuration could not be resolved"),
+      );
+      expect(removeState).not.toHaveBeenCalled();
+      expect(removeWorkspaces).not.toHaveBeenCalled();
+    } else {
+      await expect(run).resolves.toBe(program);
+      expect(removeState).toHaveBeenCalledOnce();
+      expect(removeWorkspaces).toHaveBeenCalledWith([state.workspaceDir], defaultRuntime, {
+        dryRun: false,
+        removeStateRows: false,
+      });
+    }
+    expect(removePath).not.toHaveBeenCalled();
+  });
+});
 
-      const blockedRuntime = createNonExitingRuntime();
-      vi.spyOn(blockedRuntime, "log").mockImplementation(() => {});
-      vi.spyOn(blockedRuntime, "error").mockImplementation(() => {});
-      if (aggregatesFailure) {
-        await expect(run(blockedRuntime)).rejects.toMatchObject({ name: "ExitError", code: 1 });
-        expect(blockedRuntime.error).toHaveBeenCalledWith(
-          expect.stringMatching(/Gateway|state directory/i),
-        );
-      } else {
-        await expect(run(blockedRuntime)).rejects.toThrow(/Gateway|state directory/i);
-      }
+it.each([
+  ["unmanaged reset --scope full", false, 1, false, false],
+  ["Nix reset --scope full", true, 0, false, false],
+  ["uninstall --state", false, 0, true, false],
+  ["managerless uninstall --all", false, 0, true, true],
+] as const)(
+  "refuses %s until the SQLite owner exits",
+  async (_command, nixMode, serviceChecks, uninstall, all) => {
+    if (all) {
+      mockProcessPlatform("linux");
+    }
+    const state = await makeState();
+    configState.isNixMode = nixMode;
+    const workspaceDir = uninstall && !all ? state.root : state.workspaceDir;
+    const workspacePath = path.join(workspaceDir, "project.bin");
+    await state.writeConfig({ agents: { entries: { main: { workspace: workspaceDir } } } });
+    const markerPath = await state.writeText("keep.txt", "preserved");
+    await fs.mkdir(path.dirname(workspacePath), { recursive: true });
+    await fs.writeFile(workspacePath, Buffer.from([0, 1, 2, 3, 255]));
+    const cachePath = await state.writeText("completions/openclaw.bash", "# cached completion\n");
+    const profilePath = path.join(state.home, ".bashrc");
+    const retainedProfile = '# User settings\r\nexport PATH="$HOME/.local/bin:$PATH"\n';
+    const completionHook = `# OpenClaw Completion\nsource "${cachePath}"\n`;
+    await fs.mkdir(state.home, { recursive: true });
+    await fs.writeFile(profilePath, completionHook + retainedProfile);
+
+    const databasePath = state.statePath("state", "openclaw.sqlite");
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    const owner = await startLiveStateOwner(state);
+    const livePaths = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`];
+    const preservedPaths = [...livePaths, state.configPath, markerPath, profilePath, workspacePath];
+    const liveBytes = await readFiles(preservedPaths);
+
+    const blockedRuntime = quietRuntime();
+    if (uninstall) {
+      await expect(runCleanup(uninstall, blockedRuntime, all)).rejects.toMatchObject({
+        name: "ExitError",
+        code: 1,
+      });
+      expect(blockedRuntime.error).toHaveBeenCalledWith(
+        expect.stringMatching(/Gateway|state directory/i),
+      );
+    } else {
+      await expect(runCleanup(uninstall, blockedRuntime, all)).rejects.toThrow(
+        /Gateway|state directory/i,
+      );
+    }
+    if (!all) {
       expect(gatewayService.isLoaded).toHaveBeenCalledTimes(serviceChecks);
-      expect(owner.exitCode).toBeNull();
-      await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("preserved");
-      await expect(readFiles(livePaths)).resolves.toEqual(liveBytes);
-      await expect(fs.readFile(state.configPath)).resolves.toEqual(configBytes);
+    }
+    expect(owner.exitCode).toBeNull();
+    await expect(readFiles(preservedPaths)).resolves.toEqual(liveBytes);
 
-      await stopLiveStateOwner(owner);
-      const offlineRuntime = createNonExitingRuntime();
-      vi.spyOn(offlineRuntime, "log").mockImplementation(() => {});
-      vi.spyOn(offlineRuntime, "error").mockImplementation(() => {});
-      await expect(run(offlineRuntime)).resolves.toBeUndefined();
+    await stopLiveStateOwner(owner);
+    await expect(runCleanup(uninstall, quietRuntime(), all)).resolves.toBeUndefined();
+    await expect(fs.readFile(profilePath, "utf8")).resolves.toBe(
+      uninstall ? retainedProfile : completionHook + retainedProfile,
+    );
 
-      if (preservesWorkspace) {
-        await expect(fs.readFile(workspacePath)).resolves.toEqual(Buffer.from([0, 1, 2, 3, 255]));
-        await expect(fs.access(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
-        for (const filePath of livePaths) {
-          await expect(fs.access(filePath)).rejects.toMatchObject({ code: "ENOENT" });
-        }
-      } else {
-        await expect(fs.access(state.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    if (uninstall && !all) {
+      await expect(fs.readFile(workspacePath)).resolves.toEqual(Buffer.from([0, 1, 2, 3, 255]));
+      for (const filePath of [markerPath, ...livePaths]) {
+        await expect(fs.access(filePath)).rejects.toMatchObject({ code: "ENOENT" });
       }
-      await expect(fs.access(state.configPath)).rejects.toMatchObject({ code: "ENOENT" });
-    },
-  );
+    } else {
+      await expect(fs.access(state.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    await expect(fs.access(state.configPath)).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);
 
-  it("preserves state when workspace configuration is invalid", async () => {
+it("preserves a live unmanaged Gateway workspace when uninstall selects service and workspace only", async () => {
+  const state = await makeState();
+  await state.writeConfig({ agents: { defaults: { workspace: state.workspaceDir } } });
+  await fs.mkdir(state.workspaceDir, { recursive: true });
+  const marker = path.join(state.workspaceDir, "project.txt");
+  await fs.writeFile(marker, "user data");
+  openOpenClawStateDatabase({ env: state.env });
+  const owner = await startLiveStateOwner(state);
+  const runtime = quietRuntime();
+  const uninstall = () =>
+    uninstallCommand(runtime, {
+      service: true,
+      workspace: true,
+      yes: true,
+      nonInteractive: true,
+    });
+
+  await expect(uninstall()).rejects.toMatchObject({ name: "ExitError", code: 1 });
+  await expect(fs.readFile(marker, "utf8")).resolves.toBe("user data");
+  expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("owns this state directory"));
+  await stopLiveStateOwner(owner);
+
+  await expect(uninstall()).resolves.toBeUndefined();
+  await expect(fs.access(state.workspaceDir)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(fs.access(state.configPath)).resolves.toBeUndefined();
+});
+
+it.skipIf(process.platform !== "linux")(
+  "uninstalls state and workspace with no manager or installed service",
+  async () => {
+    mockSystemAccountHome();
     const state = await createOpenClawTestState({
-      prefix: "openclaw-cleanup-invalid-config-",
-      layout: "split",
+      prefix: "openclaw-managerless-uninstall-",
+      layout: "home",
       scenario: "minimal",
       applyEnv: true,
+      env: {
+        DBUS_SESSION_BUS_ADDRESS: undefined,
+        DBUS_SYSTEM_BUS_ADDRESS: undefined,
+        SYSTEMD_UNIT_PATH: undefined,
+        SUDO_USER: undefined,
+        OPENCLAW_SERVICE_MARKER: undefined,
+      },
     });
     testStates.add(state);
-    const workspaceDir = state.statePath("nested-workspace");
-    const workspacePath = path.join(workspaceDir, "project.bin");
-    const markerPath = await state.writeText("keep.txt", "preserved");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.writeFile(workspacePath, Buffer.from([9, 8, 7, 6]));
-    await fs.writeFile(
-      state.configPath,
-      `{"agents":{"entries":{"main":{"workspace":${JSON.stringify(workspaceDir)}}}`,
-    );
-    const configBytes = await fs.readFile(state.configPath);
-    const runtime = createNonExitingRuntime();
-    vi.spyOn(runtime, "log").mockImplementation(() => {});
-    vi.spyOn(runtime, "error").mockImplementation(() => {});
+    await state.writeConfig({ agents: { defaults: { workspace: state.workspaceDir } } });
+    await fs.mkdir(state.workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(state.workspaceDir, "project.txt"), "remove selected workspace");
 
-    await expect(
-      uninstallCommand(runtime, { state: true, yes: true, nonInteractive: true }),
-    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("workspace configuration could not be resolved"),
+    // Only host service-manager files are synthetic; configuration, state ownership,
+    // and selected file removal run through their real implementations.
+    const lstat = fs.lstat;
+    vi.spyOn(fs, "lstat").mockImplementation((file, ...args) =>
+      String(file).includes("/systemd")
+        ? Promise.reject(Object.assign(new Error("missing"), { code: "ENOENT" }))
+        : lstat(file, ...args),
     );
-    await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("preserved");
-    await expect(fs.readFile(workspacePath)).resolves.toEqual(Buffer.from([9, 8, 7, 6]));
-    await expect(fs.readFile(state.configPath)).resolves.toEqual(configBytes);
-  });
+    const access = fs.access;
+    vi.spyOn(fs, "access").mockImplementation((file, ...args) =>
+      String(file).includes("/systemd/")
+        ? Promise.reject(Object.assign(new Error("missing"), { code: "ENOENT" }))
+        : access(file, ...args),
+    );
+    const readdir = fs.readdir;
+    vi.spyOn(fs, "readdir").mockImplementation((file, options) =>
+      String(file).includes("/systemd/")
+        ? Promise.resolve([])
+        : readdir(file, { ...options, recursive: false }),
+    );
+    const native = vi.spyOn(await import("../daemon/exec-file.js"), "execFileUtf8");
+    native.mockResolvedValue({
+      stdout: "",
+      stderr: "busctl not found",
+      code: 1,
+      termination: "error",
+      errorCode: "ENOENT",
+    });
+    const actual =
+      await vi.importActual<typeof import("../daemon/service.js")>("../daemon/service.js");
+    vi.mocked(resolveGatewayService).mockReturnValueOnce(actual.resolveGatewayService());
+    const runtime = quietRuntime();
+
+    const error = await runCleanup(true, runtime, true).then(
+      () => null,
+      (failure: unknown) => failure,
+    );
+    expect({ error, messages: vi.mocked(runtime.error).mock.calls }).toEqual({
+      error: null,
+      messages: [["No Gateway service to remove. Continuing uninstall."]],
+    });
+
+    expect(native).not.toHaveBeenCalled();
+    await expect(fs.access(state.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(state.workspaceDir)).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);
+
+it("preserves state when workspace configuration is invalid", async () => {
+  const state = await makeState();
+  const workspaceDir = state.statePath("nested-workspace");
+  const workspacePath = path.join(workspaceDir, "project.bin");
+  const markerPath = await state.writeText("keep.txt", "preserved");
+  await fs.mkdir(workspaceDir, { recursive: true });
+  await fs.writeFile(workspacePath, Buffer.from([9, 8, 7, 6]));
+  await fs.writeFile(
+    state.configPath,
+    `{"agents":{"entries":{"main":{"workspace":${JSON.stringify(workspaceDir)}}}`,
+  );
+  const preservedPaths = [markerPath, workspacePath, state.configPath];
+  const preservedBytes = await readFiles(preservedPaths);
+  const runtime = quietRuntime();
+
+  await expect(runCleanup(true, runtime)).rejects.toMatchObject({ name: "ExitError", code: 1 });
+
+  expect(runtime.error).toHaveBeenCalledWith(
+    expect.stringContaining("workspace configuration could not be resolved"),
+  );
+  await expect(readFiles(preservedPaths)).resolves.toEqual(preservedBytes);
 });

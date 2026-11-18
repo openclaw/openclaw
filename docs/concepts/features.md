@@ -51,7 +51,8 @@ title: "Features"
 
 **Auth and providers:**
 
-- 35+ model providers (Anthropic, OpenAI, Google, and more)
+- Many [model providers](/providers) (Anthropic, OpenAI, Google, and more) — the
+  provider directory is the maintained list
 - Subscription auth via OAuth (e.g. OpenAI Codex)
 - Custom and self-hosted provider support (vLLM, SGLang, Ollama, llama.cpp, LM Studio, and
   any OpenAI-compatible or Anthropic-compatible endpoint)

@@ -4,11 +4,11 @@ import {
   type ComputerUseV2ActionName,
 } from "openclaw/plugin-sdk/computer-use";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
+import { asOptionalRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import type { CuaDriverSession, CuaToolResult } from "./driver-client.js";
 import {
   adoptGeneration,
-  clearDialogRef,
   invalidateBrowserReferences,
   issueBrowserElementRef,
   issueBrowserObservation,
@@ -22,36 +22,7 @@ import {
   type CuaFrameState,
 } from "./frame.js";
 
-const CUA_WIRE_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(1, 14);
-const CUA_COMMON_ACTION_NAMES = [
-  "screenshot",
-  ...CUA_WIRE_ACTION_NAMES.filter((action) => action !== "hold_key"),
-  "list_apps",
-  "list_windows",
-  "get_accessibility_tree",
-  "get_cursor_position",
-  "get_window_state",
-  "launch_app",
-  "kill_app",
-  "bring_to_front",
-  "set_value",
-  "zoom",
-  "get_browser_state",
-  "browser_prepare",
-  "browser_navigate",
-  "browser_click",
-  "browser_type",
-  "browser_dialog",
-  "browser_set_input_files",
-  "browser_download",
-  "browser_pointer",
-  "escalate_scope",
-  "get_recording_state",
-  "start_recording",
-  "stop_recording",
-  "replay_trajectory",
-  "invoke_menu",
-] as const;
+export const CUA_WIRE_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(1, 14);
 
 const NativeAppSchema = z.object({
   pid: z.number().int().nonnegative().nullable().optional(),
@@ -118,9 +89,11 @@ const PARTIAL_EFFECT = 1 as import("@trycua/cua-driver").ActionEffect;
 const VALUE_READBACK_EVIDENCE = 0 as import("@trycua/cua-driver").ActionEvidenceKind;
 
 export function platformActions(platform: NodeJS.Platform): ComputerUseV2ActionName[] {
-  return CUA_COMMON_ACTION_NAMES.filter(
+  return COMPUTER_USE_V2_ACTION_NAMES.filter(
     (action) =>
-      platform === "linux" || (action !== "left_mouse_down" && action !== "left_mouse_up"),
+      action !== "hold_key" &&
+      action !== "wait" &&
+      (platform === "linux" || (action !== "left_mouse_down" && action !== "left_mouse_up")),
   );
 }
 
@@ -235,7 +208,9 @@ export async function callWindowTool(
     throw new Error("COMPUTER_STALE_OBSERVATION: computer driver generation changed during action");
   }
   adoptGeneration(state, driver.generation);
-  const refusalCode = result.errorCode ?? structuredRefusalCode(result);
+  // The SDK also puts successful diagnostic codes in errorCode.
+  const refusalCode =
+    (result.isError ? result.errorCode : undefined) ?? structuredRefusalCode(result);
   if (result.isError || refusalCode) {
     if (
       refusalCode &&
@@ -256,32 +231,38 @@ export async function callWindowTool(
 }
 
 function structuredRefusalCode(result: CuaToolResult): string | undefined {
-  if (!result.structuredJson) {
+  if (!result.structuredContent && !result.structuredJson) {
     return undefined;
   }
   try {
-    const value = JSON.parse(result.structuredJson) as {
-      status?: unknown;
-      refusal?: { code?: unknown };
-    };
-    return value.status === "refused" && typeof value.refusal?.code === "string"
-      ? value.refusal.code
+    const value: unknown =
+      result.structuredContent ??
+      (result.structuredJson ? JSON.parse(result.structuredJson) : undefined);
+    const refusal = isRecord(value) ? asOptionalRecord(value.refusal) : undefined;
+    return isRecord(value) && value.status === "refused" && typeof refusal?.code === "string"
+      ? refusal.code
       : undefined;
   } catch {
+    // Malformed optional refusal metadata cannot supply a refusal code.
     return undefined;
   }
 }
 
 export function projectedToolDetails(result: CuaToolResult, tool: string): Record<string, unknown> {
+  if (result.structuredContent) {
+    return result.structuredContent;
+  }
   if (!result.structuredJson) {
     throw new Error(`COMPUTER_DRIVER_ERROR: ${tool} returned no structuredContent`);
   }
   try {
     const value: unknown = JSON.parse(result.structuredJson);
-    if (value && typeof value === "object" && !Array.isArray(value)) {
-      return value as Record<string, unknown>;
+    if (isRecord(value)) {
+      return value;
     }
-  } catch {}
+  } catch {
+    // Malformed JSON is reported by the driver error below.
+  }
   throw new Error(`COMPUTER_DRIVER_ERROR: ${tool} returned invalid structuredContent`);
 }
 
@@ -533,10 +514,7 @@ export function browserObservation(
     }
   }
   const boundedElements = elements.slice(0, MAX_BROWSER_ELEMENTS);
-  const page =
-    structured.page && typeof structured.page === "object" && !Array.isArray(structured.page)
-      ? (structured.page as Record<string, unknown>)
-      : undefined;
+  const page = asOptionalRecord(structured.page);
   return {
     ok: true,
     observation: {
@@ -553,13 +531,9 @@ export function browserObservation(
         : {}),
       ...(typeof structured.snapshot_id === "string"
         ? { snapshot: { format: "dom_refs_v1" } }
-        : structured.snapshot &&
-            typeof structured.snapshot === "object" &&
-            !Array.isArray(structured.snapshot)
+        : isRecord(structured.snapshot)
           ? {
-              snapshot: projectSemanticBrowserSnapshot(
-                structured.snapshot as Record<string, unknown>,
-              ),
+              snapshot: projectSemanticBrowserSnapshot(structured.snapshot),
             }
           : {}),
       ...(typeof structured.url === "string" ? { url: structured.url } : {}),
@@ -604,15 +578,8 @@ export function browserToolEnvelope(
       }
     }
     const endpointOwnership = structured.endpoint_ownership;
-    if (
-      endpointOwnership &&
-      typeof endpointOwnership === "object" &&
-      !Array.isArray(endpointOwnership) &&
-      typeof (endpointOwnership as Record<string, unknown>).method === "string"
-    ) {
-      details.endpointOwnership = {
-        method: (endpointOwnership as Record<string, unknown>).method,
-      };
+    if (isRecord(endpointOwnership) && typeof endpointOwnership.method === "string") {
+      details.endpointOwnership = { method: endpointOwnership.method };
     }
   } else if (tool === "browser_navigate") {
     if (typeof structured.url === "string") {
@@ -647,9 +614,7 @@ function projectSemanticBrowserSnapshot(snapshot: Record<string, unknown>) {
       ? { selectedNodes: snapshot.selected_nodes }
       : {}),
     ...(typeof snapshot.total_nodes === "number" ? { totalNodes: snapshot.total_nodes } : {}),
-    ...(snapshot.omitted && typeof snapshot.omitted === "object" && !Array.isArray(snapshot.omitted)
-      ? { omitted: snapshot.omitted }
-      : {}),
+    ...(isRecord(snapshot.omitted) ? { omitted: snapshot.omitted } : {}),
     ...(typeof snapshot.continuation === "string" ? { continuation: snapshot.continuation } : {}),
   };
 }
@@ -662,7 +627,7 @@ export function browserDialogEnvelope(
   const structured = projectedToolDetails(result, "browser_dialog");
   const present = structured.present === true;
   if (!present) {
-    clearDialogRef(state);
+    state.dialog = undefined;
   }
   const details: Record<string, unknown> = { present };
   if (typeof structured.kind === "string") {

@@ -6,14 +6,22 @@
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntriesLower } from "@openclaw/normalization-core/string-normalization";
-import {
-  resolveThreadBindingSpawnPolicy,
-  supportsAutomaticThreadBindingSpawn,
-} from "../channels/thread-bindings-policy.js";
+import { supportsThreadBindingSpawn } from "../channels/conversation-resolution.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
+import { resolveThreadBindingSpawnPolicy } from "../channels/thread-bindings-policy.js";
 import { resolveChannelCapabilities } from "../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
-import { resolveChannelPromptCapabilities } from "./channel-tools.js";
+import { normalizeMessageChannel } from "../utils/message-channel-normalize.js";
+import {
+  resolveChannelMessageToolHints,
+  resolveChannelPromptCapabilities,
+  resolveChannelReactionGuidance,
+} from "./channel-tools.js";
+import {
+  resolveSpawnRequesterConversationTarget,
+  type SpawnRequesterConversationSource,
+} from "./spawn-requester-origin.js";
 
 const THREAD_BOUND_SUBAGENT_SPAWN_CAPABILITY = "threadbound-subagent-spawn";
 const THREAD_BOUND_ACP_SPAWN_CAPABILITY = "threadbound-acp-spawn";
@@ -42,6 +50,7 @@ export function collectRuntimeChannelCapabilities(params: {
   cfg?: OpenClawConfig;
   channel?: string | null;
   accountId?: string | null;
+  requester?: SpawnRequesterConversationSource;
 }): string[] | undefined {
   if (!params.channel) {
     return undefined;
@@ -51,7 +60,13 @@ export function collectRuntimeChannelCapabilities(params: {
   const internalChannelCapabilities =
     params.channel === INTERNAL_MESSAGE_CHANNEL ? ["markdownDetails"] : [];
   const threadSpawnCapabilities: string[] = [];
-  if (params.cfg && supportsAutomaticThreadBindingSpawn(params.channel)) {
+  const { requester, ...channelContext } = params;
+  const conversation = resolveSpawnRequesterConversationTarget(requester ?? {});
+  if (
+    params.cfg &&
+    (conversation.to || conversation.threadId != null) &&
+    supportsThreadBindingSpawn(params.channel)
+  ) {
     for (const [kind, capability] of [
       ["subagent", THREAD_BOUND_SUBAGENT_SPAWN_CAPABILITY],
       ["acp", THREAD_BOUND_ACP_SPAWN_CAPABILITY],
@@ -63,15 +78,38 @@ export function collectRuntimeChannelCapabilities(params: {
         kind,
       });
       if (policy.enabled && policy.spawnEnabled) {
-        // Thread-bound spawn is only advertised when both policy gates are enabled.
         threadSpawnCapabilities.push(capability);
       }
     }
   }
-  const channelPromptCapabilities = params.cfg ? resolveChannelPromptCapabilities(params) : [];
-  return mergeRuntimeCapabilities(resolveChannelCapabilities(params), [
+  const channelPromptCapabilities = params.cfg
+    ? resolveChannelPromptCapabilities(channelContext)
+    : [];
+  return mergeRuntimeCapabilities(resolveChannelCapabilities(channelContext), [
     ...channelPromptCapabilities,
     ...internalChannelCapabilities,
     ...threadSpawnCapabilities,
   ]);
+}
+
+/** Shared channel facts for ordinary and compaction system prompts. */
+export function resolveRuntimeChannelPromptContext(
+  params: Parameters<typeof collectRuntimeChannelCapabilities>[0],
+) {
+  const runtimeChannel = normalizeMessageChannel(params.channel);
+  const context = { cfg: params.cfg, channel: runtimeChannel, accountId: params.accountId };
+  const runtimeCapabilities = collectRuntimeChannelCapabilities({
+    ...context,
+    requester: params.requester,
+  });
+  return {
+    runtimeChannel,
+    ...(runtimeChannel && getChannelPlugin(runtimeChannel)?.agentPrompt?.customInlineButtonHint
+      ? { customInlineButtonHint: true }
+      : {}),
+    runtimeCapabilities,
+    reactionGuidance:
+      runtimeChannel && params.cfg ? resolveChannelReactionGuidance(context) : undefined,
+    messageToolHints: runtimeChannel ? resolveChannelMessageToolHints(context) : undefined,
+  };
 }

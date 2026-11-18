@@ -5,10 +5,6 @@ import type {
 } from "../plugins/install-security-scan.types.js";
 import { promptText } from "./prompt.js";
 
-function canPromptForInstallPolicyWarning(): boolean {
-  return process.stdin.isTTY && process.stdout.isTTY;
-}
-
 export function resolveInstallPolicyWarningAcknowledgementCliOptions(params: {
   acknowledgeInstallPolicyWarning?: boolean;
   allowPrompt?: boolean;
@@ -16,7 +12,8 @@ export function resolveInstallPolicyWarningAcknowledgementCliOptions(params: {
   const canPrompt =
     !params.acknowledgeInstallPolicyWarning &&
     params.allowPrompt !== false &&
-    canPromptForInstallPolicyWarning();
+    process.stdin.isTTY &&
+    process.stdout.isTTY;
   return params.acknowledgeInstallPolicyWarning
     ? {
         onInstallPolicyWarning: async () => ({ status: "approved" as const }),

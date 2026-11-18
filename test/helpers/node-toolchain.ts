@@ -1,10 +1,21 @@
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { resolveExecutablePath } from "../../src/infra/executable-path.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 
 /** Resolve explicit Node tools instead of substituting the test runner's runtime. */
 export function requireNodeTool(command: "node" | "npm"): string {
-  const executable = resolveExecutablePath(command);
+  if (command === "node") {
+    return resolveTestNodeExecPath();
+  }
+  // `pnpm test` puts node_modules/.bin first on PATH, where the npm dependency's
+  // shell shim would shadow the toolchain's npm CLI. Prefer npm beside Node.
+  const bundled = path.join(
+    path.dirname(resolveTestNodeExecPath()),
+    process.platform === "win32" ? "npm.cmd" : "npm",
+  );
+  const executable = existsSync(bundled) ? bundled : resolveExecutablePath(command);
   if (!executable) {
     throw new Error(`Node tool fixture requires ${command} on PATH.`);
   }

@@ -1,7 +1,12 @@
-import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
-import type { TeamsMeetingsConfig, TeamsMeetingsMode, TeamsMeetingsTransport } from "../config.js";
+import type { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 
-type TeamsMeetingsManualActionReason =
+type TeamsMeetingsConfig = ReturnType<
+  ReturnType<typeof MeetingPlatformAdapter.createPluginConfigSchema>["resolveConfig"]
+>;
+export type TeamsMeetingsMode = TeamsMeetingsConfig["defaultMode"];
+type TeamsMeetingsTransport = "chrome" | "chrome-node";
+
+export type TeamsMeetingsManualActionReason =
   | "teams-login-required"
   | "teams-admission-required"
   | "teams-permission-required"
@@ -11,7 +16,7 @@ type TeamsMeetingsManualActionReason =
   | "teams-session-conflict"
   | "browser-control-unavailable";
 
-type TeamsMeetingsSpeechBlockedReason =
+export type TeamsMeetingsSpeechBlockedReason =
   | TeamsMeetingsManualActionReason
   | "not-in-call"
   | "browser-unverified"
@@ -28,6 +33,4 @@ type TeamsMeetingsPluginTypes = ReturnType<
   >
 >;
 export type TeamsMeetingsTranscriptSnapshot = TeamsMeetingsPluginTypes["TranscriptSnapshot"];
-export type TeamsMeetingsJoinRequest = TeamsMeetingsPluginTypes["JoinRequest"];
 export type TeamsMeetingsChromeHealth = TeamsMeetingsPluginTypes["ChromeHealth"];
-export type TeamsMeetingsSession = TeamsMeetingsPluginTypes["Session"];

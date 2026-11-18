@@ -16,7 +16,8 @@ internal class GatewayStoreMigration(
     val activeEntry = legacyActiveEntry()
     migrateCredentials(activeEntry?.stableId)
     migrateDeviceTokens(activeEntry?.stableId)
-    migrateNotificationSessionKey(activeEntry?.stableId)
+    val legacyNotificationKey = "notifications.forwarding.sessionKey"
+    prefs.movePlainString(legacyNotificationKey, activeEntry?.stableId?.let { "$legacyNotificationKey.$it" })
     prefs.putString(
       GatewayRegistryStore.STORAGE_KEY,
       json.encodeToString(
@@ -47,15 +48,8 @@ internal class GatewayStoreMigration(
     }
 
     val stableId = prefs.getPlainString("gateway.lastDiscoveredStableID").orEmpty().trim()
-    return stableId
-      .takeIf { it.isNotEmpty() }
-      ?.let {
-        GatewayRegistryEntry(
-          stableId = it,
-          kind = GatewayRegistryEntryKind.DISCOVERED,
-          name = it,
-        )
-      }
+    if (stableId.isEmpty()) return null
+    return GatewayRegistryEntry(stableId = stableId, kind = GatewayRegistryEntryKind.DISCOVERED, name = stableId)
   }
 
   private fun migrateCredentials(activeStableId: String?) {
@@ -94,10 +88,5 @@ internal class GatewayStoreMigration(
       if (suffix.split('.').size != 2) continue
       prefs.moveSecureString(key, activeStableId?.let { "$prefix$it.$suffix" })
     }
-  }
-
-  private fun migrateNotificationSessionKey(activeStableId: String?) {
-    val legacyKey = "notifications.forwarding.sessionKey"
-    prefs.movePlainString(legacyKey, activeStableId?.let { "$legacyKey.$it" })
   }
 }

@@ -1,4 +1,5 @@
 import { mulawToPcm } from "./audio-codec.js";
+import type { RealtimeVoiceAudioFormat } from "./provider-types.js";
 
 const PCM16_MAX_AMPLITUDE = 32_768;
 const MULAW_LINEAR_SAMPLES = (() => {
@@ -8,6 +9,23 @@ const MULAW_LINEAR_SAMPLES = (() => {
 })();
 
 export type AudioEnergyStats = { peak: number; rms: number };
+
+/** Ignore decoded transport silence below -66 dBFS while retaining quiet speech. */
+export function isRealtimeVoiceAudioAudible(
+  audio: Buffer,
+  format: RealtimeVoiceAudioFormat,
+): boolean {
+  const minimumPeak = 16;
+  if (format.encoding === "g711_ulaw") {
+    return audio.some((sample) => Math.abs(MULAW_LINEAR_SAMPLES[sample] ?? 0) >= minimumPeak);
+  }
+  for (let offset = 0; offset + 1 < audio.byteLength; offset += 2) {
+    if (Math.abs(audio.readInt16LE(offset)) >= minimumPeak) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /** Read RMS and absolute peak from complete little-endian signed PCM16 samples. */
 export function readPcm16AudioStats(audio: Buffer): AudioEnergyStats {

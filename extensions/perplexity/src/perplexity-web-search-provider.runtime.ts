@@ -1,10 +1,14 @@
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-// Perplexity provider module implements model/runtime integration.
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
+  readProviderJsonResponse,
+  resolveProviderRequestHeaders,
+} from "openclaw/plugin-sdk/provider-http";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
+import {
+  externalContentStamp,
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   isoToPerplexityDate,
-  MAX_SEARCH_COUNT,
   normalizeFreshness,
   parseWebSearchTimeFilters,
   readCachedSearchPayload,
@@ -13,6 +17,7 @@ import {
   readProviderEnvValue,
   readStringArrayParam,
   readStringParam,
+  readWebSearchQueryAndCount,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
@@ -85,16 +90,6 @@ function resolvePerplexityRequestModel(baseUrl: string, model: string): string {
   return model.startsWith("perplexity/") ? model.slice("perplexity/".length) : model;
 }
 
-function buildPerplexityRequestHeaders(apiKey: string, acceptJson = false): Record<string, string> {
-  return {
-    "Content-Type": "application/json",
-    ...(acceptJson ? { Accept: "application/json" } : {}),
-    Authorization: `Bearer ${apiKey}`,
-    "HTTP-Referer": "https://openclaw.ai",
-    "X-Title": "OpenClaw Web Search",
-  };
-}
-
 function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
   const topLevel = (data.citations ?? []).filter((url): url is string =>
     Boolean(normalizeOptionalString(url)),
@@ -111,9 +106,7 @@ function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
       const url =
         typeof annotation.url_citation?.url === "string"
           ? annotation.url_citation.url
-          : typeof annotation.url === "string"
-            ? annotation.url
-            : undefined;
+          : annotation.url;
       const normalizedUrl = normalizeOptionalString(url);
       if (normalizedUrl) {
         citations.push(normalizedUrl);
@@ -121,133 +114,6 @@ function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
     }
   }
   return uniqueStrings(citations);
-}
-
-async function runPerplexitySearchApi(params: {
-  query: string;
-  apiKey: string;
-  count: number;
-  timeoutSeconds: number;
-  signal?: AbortSignal;
-  country?: string;
-  searchDomainFilter?: string[];
-  searchRecencyFilter?: string;
-  searchLanguageFilter?: string[];
-  searchAfterDate?: string;
-  searchBeforeDate?: string;
-  maxTokens?: number;
-  maxTokensPerPage?: number;
-}): Promise<Array<Record<string, unknown>>> {
-  const body: Record<string, unknown> = {
-    query: params.query,
-    max_results: params.count,
-  };
-  if (params.country) {
-    body.country = params.country;
-  }
-  if (params.searchDomainFilter?.length) {
-    body.search_domain_filter = params.searchDomainFilter;
-  }
-  if (params.searchRecencyFilter) {
-    body.search_recency_filter = params.searchRecencyFilter;
-  }
-  if (params.searchLanguageFilter?.length) {
-    body.search_language_filter = params.searchLanguageFilter;
-  }
-  if (params.searchAfterDate) {
-    body.search_after_date_filter = params.searchAfterDate;
-  }
-  if (params.searchBeforeDate) {
-    body.search_before_date_filter = params.searchBeforeDate;
-  }
-  if (params.maxTokens !== undefined) {
-    body.max_tokens = params.maxTokens;
-  }
-  if (params.maxTokensPerPage !== undefined) {
-    body.max_tokens_per_page = params.maxTokensPerPage;
-  }
-
-  const headers = buildPerplexityRequestHeaders(params.apiKey, true);
-  return withTrustedWebSearchEndpoint(
-    {
-      url: PERPLEXITY_SEARCH_ENDPOINT,
-      timeoutSeconds: params.timeoutSeconds,
-      signal: params.signal,
-      init: {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-      },
-    },
-    async (res) => {
-      if (!res.ok) {
-        return await throwWebSearchApiError(res, "Perplexity Search", {
-          headers,
-          signal: params.signal,
-        });
-      }
-      const data = await readProviderJsonResponse<PerplexitySearchApiResponse>(
-        res,
-        "Perplexity Search",
-      );
-      return (data.results ?? []).map((entry) => ({
-        title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
-        url: entry.url ?? "",
-        description: entry.snippet ? wrapWebContent(entry.snippet, "web_search") : "",
-        published: entry.date ?? undefined,
-        siteName: resolveSiteName(entry.url) || undefined,
-      }));
-    },
-  );
-}
-
-async function runPerplexitySearch(params: {
-  query: string;
-  apiKey: string;
-  baseUrl: string;
-  model: string;
-  timeoutSeconds: number;
-  signal?: AbortSignal;
-  freshness?: string;
-}): Promise<{ content: string; citations: string[] }> {
-  const endpoint = `${params.baseUrl.trim().replace(/\/$/, "")}/chat/completions`;
-  const body: Record<string, unknown> = {
-    model: resolvePerplexityRequestModel(params.baseUrl, params.model),
-    messages: [{ role: "user", content: params.query }],
-  };
-  if (params.freshness) {
-    body.search_recency_filter = params.freshness;
-  }
-
-  const headers = buildPerplexityRequestHeaders(params.apiKey);
-  return withTrustedWebSearchEndpoint(
-    {
-      url: endpoint,
-      timeoutSeconds: params.timeoutSeconds,
-      signal: params.signal,
-      init: {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-      },
-    },
-    async (res) => {
-      if (!res.ok) {
-        return await throwWebSearchApiError(res, "Perplexity", { headers, signal: params.signal });
-      }
-      const data = await readProviderJsonResponse<PerplexitySearchResponse>(res, "Perplexity");
-      const content = data.choices?.[0]?.message?.content;
-      if (typeof content !== "string" || !content.trim()) {
-        throw new Error(
-          "Perplexity search returned no final answer. Retry the query or choose another search provider.",
-        );
-      }
-      return {
-        content,
-        citations: extractPerplexityCitations(data),
-      };
-    },
-  );
 }
 
 export async function executePerplexitySearch(
@@ -269,14 +135,7 @@ export async function executePerplexitySearch(
     };
   }
 
-  const query = readStringParam(args, "query", { required: true });
-  const count =
-    readPositiveIntegerParam(args, "count", {
-      max: MAX_SEARCH_COUNT,
-      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
-    }) ??
-    searchConfig?.maxResults ??
-    undefined;
+  const { query, count } = readWebSearchQueryAndCount(args, searchConfig);
   const rawFreshness = readStringParam(args, "freshness");
   const freshness = rawFreshness ? normalizeFreshness(rawFreshness, "perplexity") : undefined;
   if (rawFreshness && !freshness) {
@@ -368,6 +227,7 @@ export async function executePerplexitySearch(
 
   const cacheKey = buildSearchCacheKey([
     "perplexity",
+    sha256Hex(runtime.apiKey),
     runtime.transport,
     runtime.baseUrl,
     runtime.model,
@@ -390,32 +250,81 @@ export async function executePerplexitySearch(
 
   const start = Date.now();
   const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
-  const result =
-    runtime.transport === "chat_completions"
-      ? await runPerplexitySearch({
-          query,
-          apiKey: runtime.apiKey,
-          baseUrl: runtime.baseUrl,
-          model: runtime.model,
-          timeoutSeconds,
-          signal,
-          freshness,
-        })
-      : await runPerplexitySearchApi({
-          query,
-          apiKey: runtime.apiKey,
-          count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
-          timeoutSeconds,
-          signal,
-          country: country ?? undefined,
-          searchDomainFilter: domainFilter,
-          searchRecencyFilter: freshness,
-          searchLanguageFilter: language ? [language] : undefined,
-          searchAfterDate: dateAfter ? isoToPerplexityDate(dateAfter) : undefined,
-          searchBeforeDate: dateBefore ? isoToPerplexityDate(dateBefore) : undefined,
-          maxTokens: maxTokens ?? undefined,
-          maxTokensPerPage: maxTokensPerPage ?? undefined,
-        });
+  const searchCount = structured ? resolveSearchCount(count, DEFAULT_SEARCH_COUNT) : 0;
+  const searchLanguageFilter = language ? [language] : undefined;
+  const searchAfterDate = structured && dateAfter ? isoToPerplexityDate(dateAfter) : undefined;
+  const searchBeforeDate = structured && dateBefore ? isoToPerplexityDate(dateBefore) : undefined;
+  const label = structured ? "Perplexity Search" : "Perplexity";
+  const endpoint = structured
+    ? PERPLEXITY_SEARCH_ENDPOINT
+    : `${runtime.baseUrl.trim().replace(/\/$/, "")}/chat/completions`;
+  const body = structured
+    ? {
+        query,
+        max_results: searchCount,
+        ...(country ? { country } : {}),
+        ...(domainFilter?.length ? { search_domain_filter: domainFilter } : {}),
+        ...(freshness ? { search_recency_filter: freshness } : {}),
+        ...(searchLanguageFilter?.length ? { search_language_filter: searchLanguageFilter } : {}),
+        ...(searchAfterDate ? { search_after_date_filter: searchAfterDate } : {}),
+        ...(searchBeforeDate ? { search_before_date_filter: searchBeforeDate } : {}),
+        ...(maxTokens !== undefined ? { max_tokens: maxTokens } : {}),
+        ...(maxTokensPerPage !== undefined ? { max_tokens_per_page: maxTokensPerPage } : {}),
+      }
+    : {
+        model: resolvePerplexityRequestModel(runtime.baseUrl, runtime.model),
+        messages: [{ role: "user", content: query }],
+        ...(freshness ? { search_recency_filter: freshness } : {}),
+      };
+  const defaultHeaders = {
+    "Content-Type": "application/json",
+    ...(structured ? { Accept: "application/json" } : {}),
+    Authorization: `Bearer ${runtime.apiKey}`,
+  };
+  const headers =
+    omitNullRequestHeaders(
+      resolveProviderRequestHeaders({
+        provider: "perplexity",
+        // The direct Perplexity API is this provider's default endpoint. Other hosts such as
+        // OpenRouter keep their own endpoint so the policy attributes them as that vendor.
+        baseUrl:
+          !structured && !isDirectPerplexityBaseUrl(runtime.baseUrl) ? runtime.baseUrl : undefined,
+        capability: "other",
+        transport: "http",
+        defaultHeaders,
+      }),
+    ) ?? defaultHeaders;
+  const result = await withTrustedWebSearchEndpoint(
+    {
+      url: endpoint,
+      timeoutSeconds,
+      signal,
+      init: { method: "POST", headers, body: JSON.stringify(body) },
+    },
+    async (res) => {
+      if (!res.ok) {
+        return await throwWebSearchApiError(res, label, { headers, signal });
+      }
+      if (structured) {
+        const data = await readProviderJsonResponse<PerplexitySearchApiResponse>(res, label);
+        return (data.results ?? []).slice(0, searchCount).map((entry) => ({
+          title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
+          url: entry.url ?? "",
+          description: entry.snippet ? wrapWebContent(entry.snippet, "web_search") : "",
+          published: entry.date ?? undefined,
+          siteName: resolveSiteName(entry.url) || undefined,
+        }));
+      }
+      const data = await readProviderJsonResponse<PerplexitySearchResponse>(res, label);
+      const content = data.choices?.[0]?.message?.content;
+      if (typeof content !== "string" || !content.trim()) {
+        throw new Error(
+          "Perplexity search returned no final answer. Retry the query or choose another search provider.",
+        );
+      }
+      return { content, citations: extractPerplexityCitations(data) };
+    },
+  );
   const resultFields = Array.isArray(result)
     ? { results: result }
     : {
@@ -427,12 +336,7 @@ export async function executePerplexitySearch(
     provider: "perplexity",
     ...(Array.isArray(result) ? { count: result.length } : { model: runtime.model }),
     tookMs: Date.now() - start,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: "perplexity",
-      wrapped: true,
-    },
+    externalContent: externalContentStamp("perplexity"),
     ...resultFields,
   };
 

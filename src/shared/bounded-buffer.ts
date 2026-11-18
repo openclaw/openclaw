@@ -4,7 +4,8 @@ type BoundedBufferOverflow<T> =
   | { mode: "fail-closed"; onOverflow: () => void };
 
 export class BoundedBuffer<T> {
-  protected values: T[] = [];
+  protected values: (T | undefined)[] = [];
+  private head = 0;
   private size = 0;
   private closed = false;
 
@@ -34,28 +35,33 @@ export class BoundedBuffer<T> {
     }
     this.values.push(value);
     this.size += valueSize;
-    let dropped = 0;
     // Leave the newest value for fitting; preserve the > comparison for NaN capacities.
-    for (const oldest of this.values) {
-      if (!(this.size > this.capacity) || dropped === this.values.length - 1) {
-        break;
-      }
+    while (this.size > this.capacity && this.head < this.values.length - 1) {
+      // SAFETY: head points to a pushed T; only slots before head have been cleared.
+      const oldest = this.values[this.head] as T;
       this.size -= this.measure(oldest);
-      dropped += 1;
+      this.values[this.head] = undefined;
+      this.head += 1;
     }
-    this.values.splice(0, dropped);
     if (this.size > this.capacity) {
       const fitted = this.overflow.fit?.(value, this.capacity);
       this.values = fitted === undefined ? [] : [fitted];
+      this.head = 0;
       this.size = fitted === undefined ? 0 : this.measure(fitted);
+    } else if (this.head * 2 >= this.values.length) {
+      // Amortize compaction across evictions instead of shifting every retained value per push.
+      this.values = this.values.slice(this.head);
+      this.head = 0;
     }
     return true;
   }
 
   drain(): T[] {
-    const values = this.values;
+    const values = this.head === 0 ? this.values : this.values.slice(this.head);
     this.values = [];
+    this.head = 0;
     this.size = 0;
-    return values;
+    // SAFETY: the captured suffix excludes cleared slots and preserves every pushed T, including undefined.
+    return values as T[];
   }
 }

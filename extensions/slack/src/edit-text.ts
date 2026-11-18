@@ -1,4 +1,3 @@
-// Slack plugin module implements edit text behavior.
 import type { Block, KnownBlock } from "@slack/web-api";
 import { buildSlackCompleteBlocksFallbackText } from "./blocks-fallback.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";

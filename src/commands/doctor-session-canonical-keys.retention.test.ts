@@ -1,199 +1,159 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { readSessionArchiveText } from "../../test/helpers/session-archive.js";
 import {
-  loadExactSessionEntryReadOnly,
+  ensureTranscriptGenerationsForCanonicalRepair,
   loadTranscriptEvents,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
+import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
+import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
+import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";
-import { insertLegacySession } from "./doctor-session-canonical-keys.test-support.js";
+import { createCanonicalRepairFixture } from "./doctor-session-repair-fixture.test-support.js";
+import { sessionSqlFixture } from "./doctor-session-sqlite.sql.test-support.js";
+import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
 describe("doctor canonical session-key retention repair", () => {
-  it("copies only a cross-store winner and archives its stale same-store duplicate", async () => {
-    await withStateDirEnv("openclaw-doctor-canonical-cross-store-", async ({ stateDir }) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
-      const mainStore = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
-      const opsStore = resolveSessionStorePathCore(storeTemplate, { agentId: "ops", env });
-      const cfg = {
-        agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
-        session: { mainKey: "shared", store: storeTemplate },
-      } as OpenClawConfig;
-
-      replaceSessionEntrySync(
-        {
-          agentId: "main",
+  it.each(["current", "historical", "damaged"])(
+    "restores foreign-agent %s cold history by its physical store owner before repair",
+    async (variant) => {
+      await withStateDirEnv("doctor-renamed-cold-", async ({ stateDir }) => {
+        const { cfg, env, scope, insert, database, load, repair } = createCanonicalRepairFixture(
+          stateDir,
+          undefined,
+          ["newname"],
+        );
+        const sessionKey = "agent:oldname:conversation";
+        const entry = { sessionId: "renamed-cold-history", updatedAt: 1 };
+        const source = { ...scope("newname"), sessionKey, entry };
+        insert(sessionKey, entry, "Preserve renamed history 🦞", "newname");
+        await withDoctorSqliteMaintenanceLock({
           env,
-          sessionKey: "agent:main:shared",
-          storePath: mainStore,
-        },
-        {
-          previousSessionId: "destination-only-previous",
-          sessionId: "retained-destination",
-          updatedAt: 5,
-        },
-      );
-      const destinationDatabase = openOpenClawAgentDatabase({
-        agentId: "main",
-        env,
-        path: resolveSqliteTargetFromSessionStorePath(mainStore, { agentId: "main", env }).path,
-      });
-      destinationDatabase.db
-        .prepare(
-          "INSERT INTO session_windows (session_id, session_key, reason, session_scope, created_at, updated_at) VALUES ('destination-only-previous', 'agent:main:shared', 'recovery', 'conversation', 4, 4)",
-        )
-        .run();
-      destinationDatabase.db
-        .prepare(
-          "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES ('destination-only-previous', 0, ?, 4)",
-        )
-        .run(
-          JSON.stringify({
-            id: "destination-only-message",
-            message: { content: "destination-only history", role: "user" },
+          operation: "session SQLite import",
+          run: async () => {
+            await ensureTranscriptGenerationsForCanonicalRepair([source]);
+            sessionSqlFixture(database("newname").db)`UPDATE session_windows
+            SET transcript_updated_at = 1 WHERE session_id = ${entry.sessionId}`.run();
+            expect(
+              await runSessionColdStorageMaintenance({
+                config: {
+                  ...cfg,
+                  session: {
+                    ...cfg.session,
+                    maintenance: { coldStorage: { enabled: true, afterDays: 1 } },
+                  },
+                },
+              }),
+            ).toMatchObject({ archivedTranscripts: 1 });
+          },
+        });
+        const cold = readSessionColdTranscript(database("newname").db, entry.sessionId);
+        expect(cold?.storage).toBe("file");
+        if (!cold) {
+          throw new Error("Expected a cold archive");
+        }
+        const archivePath = resolveSessionColdArchivePath(source.storePath, cold.archive_name);
+        const archiveBytes = fs.readFileSync(archivePath);
+        const selectedEntry =
+          variant === "historical" ? { sessionId: "renamed-current", updatedAt: 2 } : entry;
+        if (variant === "historical") {
+          // Retain a historical window no longer mentioned by the current entry.
+          sessionSqlFixture(database("newname").db)`UPDATE session_nodes
+          SET current_session_id = ${selectedEntry.sessionId}, entry_json = ${JSON.stringify(selectedEntry)}
+          WHERE session_key = ${sessionKey}`.run();
+        }
+        expect(await repair(false)).toMatchObject({ foundGroups: 1, repairedGroups: 0 });
+        expect(readSessionColdTranscript(database("newname").db, entry.sessionId)).toEqual(cold);
+
+        if (variant === "damaged") {
+          const damaged = Buffer.from(archiveBytes);
+          damaged[0] = damaged[0]! ^ 1;
+          fs.writeFileSync(archivePath, damaged);
+          await expect(repair()).rejects.toThrow("failed verification");
+          expect(load(sessionKey, "newname")?.entry.sessionId).toBe(entry.sessionId);
+          expect(readSessionColdTranscript(database("newname").db, entry.sessionId)).toEqual(cold);
+          expect(fs.readFileSync(archivePath)).toEqual(damaged);
+          fs.writeFileSync(archivePath, archiveBytes);
+        }
+        expect(await repair()).toMatchObject({ foundGroups: 1, repairedGroups: 1 });
+        expect(load(sessionKey, "newname")).toBeUndefined();
+        expect(load(sessionKey, "oldname")?.entry.sessionId).toBe(selectedEntry.sessionId);
+        const restored = await loadTranscriptEvents({
+          ...scope("oldname"),
+          sessionKey,
+          sessionId: entry.sessionId,
+        });
+        expect(restored).toEqual([
+          {
+            id: "renamed-cold-history-message",
+            message: { role: "user", content: "Preserve renamed history 🦞" },
             parentId: null,
             type: "message",
-          }),
-        );
+          },
+        ]);
+        expect(await repair()).toMatchObject({ foundGroups: 0, repairedGroups: 0 });
+      });
+    },
+  );
 
-      insertLegacySession({
-        agentId: "ops",
-        entry: {
-          previousSessionId: "destination-only-previous",
-          sessionId: "winner",
-          updatedAt: 20,
-        },
-        env,
-        eventText: "winner history",
-        sessionKey: "agent:main:main ",
-        storePath: opsStore,
-      });
-      const sourceDatabase = openOpenClawAgentDatabase({
-        agentId: "ops",
-        env,
-        path: resolveSqliteTargetFromSessionStorePath(opsStore, { agentId: "ops", env }).path,
-      });
+  it("copies only a cross-store winner and archives its stale same-store duplicate", async () => {
+    await withStateDirEnv("openclaw-doctor-canonical-cross-store-", async ({ stateDir }) => {
+      const { scope, insert, load, transcript, database, repair } = createCanonicalRepairFixture(
+        stateDir,
+        "shared",
+        ["main", "ops"],
+      );
+      const key = "agent:main:shared";
+      const previousId = "destination-only-previous";
+
+      insert(key, { sessionId: previousId, updatedAt: 4 }, "destination-only history");
+      replaceSessionEntrySync(
+        { ...scope(), sessionKey: key },
+        { previousSessionId: previousId, sessionId: "retained-destination", updatedAt: 5 },
+      );
+      const destination = sessionSqlFixture(database().db);
+      destination`UPDATE session_windows SET reason = 'recovery'
+        WHERE session_id = ${previousId}`.run();
+
+      insert(
+        `${key} `,
+        { previousSessionId: previousId, sessionId: "winner", updatedAt: 20 },
+        "winner history",
+        "ops",
+      );
+      const source = sessionSqlFixture(database("ops").db);
       for (const [label, sourceSessionKey] of [
-        ["winner", "agent:main:main "],
-        ["loser", "agent:main:main"],
+        ["winner", `${key} `],
+        ["loser", key],
       ] as const) {
-        sourceDatabase.db
-          .prepare(
-            "INSERT INTO conversations (conversation_id, channel, account_id, kind, peer_id, delivery_target, metadata_json, created_at, updated_at) VALUES (?, 'webchat', 'default', 'direct', ?, ?, '{}', 10, 10)",
-          )
-          .run(`${label}-conversation`, label, label);
-        sourceDatabase.db
-          .prepare(
-            "INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, created_at, updated_at) VALUES (?, 'turn', ?, ?, ?, 'sent', 10, 10)",
-          )
-          .run(`${label}-operation`, `${label}-conversation`, sourceSessionKey, `${label}-hash`);
+        source`INSERT INTO conversations (conversation_id, channel, account_id, kind, peer_id, delivery_target, metadata_json, created_at, updated_at)
+          VALUES (${label + "-conversation"}, 'webchat', 'default', 'direct', ${label}, ${label}, '{}', 10, 10)`.run();
+        source`INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, created_at, updated_at)
+          VALUES (${label + "-operation"}, 'turn', ${label + "-conversation"}, ${sourceSessionKey}, ${label + "-hash"}, 'sent', 10, 10)`.run();
       }
-      insertLegacySession({
-        agentId: "ops",
-        entry: { sessionId: "loser", updatedAt: 10 },
-        env,
-        eventText: "loser history",
-        sessionKey: "agent:main:main",
-        storePath: opsStore,
-      });
+      insert(key, { sessionId: "loser", updatedAt: 10 }, "loser history", "ops");
 
-      const report = await repairCanonicalSessionKeys({ apply: true, cfg, env });
+      const report = await repair();
 
-      expect(report).toMatchObject({
-        foundGroups: 1,
-        removedRows: 2,
-        repairedGroups: 1,
-        scannedStores: 2,
-      });
+      expect(load(key, "main")?.entry.sessionId).toBe("winner");
+      expect(load(`${key} `, "ops")).toBeUndefined();
+      expect(load(key, "ops")).toBeUndefined();
+      await transcript(key, "winner", "winner history");
+      await transcript(key, "loser");
+      await transcript(key, previousId, "destination-only history");
       expect(
-        loadExactSessionEntryReadOnly({
-          agentId: "main",
-          env,
-          sessionKey: "agent:main:shared",
-          storePath: mainStore,
-        })?.entry.sessionId,
-      ).toBe("winner");
+        destination`SELECT operation_id, source_session_key FROM conversation_deliveries ORDER BY operation_id`.all(),
+      ).toEqual([{ operation_id: "winner-operation", source_session_key: key }]);
       expect(
-        loadExactSessionEntryReadOnly({
-          agentId: "ops",
-          env,
-          sessionKey: "agent:main:main ",
-          storePath: opsStore,
-        }),
-      ).toBeUndefined();
+        destination`SELECT previous_session_id, session_entry_provenance FROM session_windows WHERE session_id = 'winner'`.get(),
+      ).toEqual({ previous_session_id: previousId, session_entry_provenance: 1 });
       expect(
-        loadExactSessionEntryReadOnly({
-          agentId: "ops",
-          env,
-          sessionKey: "agent:main:main",
-          storePath: opsStore,
-        }),
-      ).toBeUndefined();
-      await expect(
-        loadTranscriptEvents({
-          agentId: "main",
-          env,
-          sessionId: "winner",
-          sessionKey: "agent:main:shared",
-          storePath: mainStore,
-        }),
-      ).resolves.toEqual([
-        expect.objectContaining({
-          message: expect.objectContaining({ content: "winner history" }),
-        }),
-      ]);
-      await expect(
-        loadTranscriptEvents({
-          agentId: "main",
-          env,
-          sessionId: "loser",
-          sessionKey: "agent:main:shared",
-          storePath: mainStore,
-        }),
-      ).resolves.toEqual([]);
-      await expect(
-        loadTranscriptEvents({
-          agentId: "main",
-          env,
-          sessionId: "destination-only-previous",
-          sessionKey: "agent:main:shared",
-          storePath: mainStore,
-        }),
-      ).resolves.toEqual([
-        expect.objectContaining({
-          message: expect.objectContaining({ content: "destination-only history" }),
-        }),
-      ]);
-      expect(
-        destinationDatabase.db
-          .prepare(
-            "SELECT operation_id, source_session_key FROM conversation_deliveries ORDER BY operation_id",
-          )
-          .all(),
-      ).toEqual([{ operation_id: "winner-operation", source_session_key: "agent:main:shared" }]);
-      expect(
-        destinationDatabase.db
-          .prepare(
-            "SELECT previous_session_id, session_entry_provenance FROM session_windows WHERE session_id = 'winner'",
-          )
-          .get(),
-      ).toEqual({ previous_session_id: "destination-only-previous", session_entry_provenance: 1 });
-      expect(
-        sourceDatabase.db
-          .prepare("SELECT operation_id FROM conversation_deliveries ORDER BY operation_id")
-          .all(),
+        source`SELECT operation_id FROM conversation_deliveries ORDER BY operation_id`.all(),
       ).toEqual([]);
       const loserArchive = report.archivedTranscriptDirectories
         .flatMap((directory) =>
@@ -203,80 +163,52 @@ describe("doctor canonical session-key retention repair", () => {
             .map((name) => path.join(directory, name)),
         )
         .at(0);
-      expect(loserArchive).toBeDefined();
-      expect(readSessionArchiveContentSync(loserArchive as string)).toContain("loser history");
+      expect(readSessionArchiveText(loserArchive as string)).toContain("loser history");
     });
   });
 
-  it("copies a lone cross-store winner's normalized delivery key", async () => {
+  it("copies a lone cross-store winner's normalized delivery key and retained progress", async () => {
     await withStateDirEnv(
       "openclaw-doctor-canonical-cross-store-delivery-",
       async ({ stateDir }) => {
-        const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-        const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
-        const mainStore = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
-        const opsStore = resolveSessionStorePathCore(storeTemplate, { agentId: "ops", env });
-        const cfg = {
-          agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
-          session: { mainKey: "work", store: storeTemplate },
-        } as OpenClawConfig;
-        insertLegacySession({
-          agentId: "ops",
-          entry: { sessionId: "winner", updatedAt: 20 },
-          env,
-          sessionKey: "agent:main:main ",
-          storePath: opsStore,
-        });
-        const sourceDatabase = openOpenClawAgentDatabase({
-          agentId: "ops",
-          env,
-          path: resolveSqliteTargetFromSessionStorePath(opsStore, { agentId: "ops", env }).path,
-        });
-        sourceDatabase.db
-          .prepare(
-            "INSERT INTO conversations (conversation_id, channel, account_id, kind, peer_id, delivery_target, metadata_json, created_at, updated_at) VALUES ('winner-conversation', 'webchat', 'default', 'direct', 'winner', 'winner', '{}', 10, 10)",
-          )
-          .run();
-        sourceDatabase.db
-          .prepare(
-            "INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, created_at, updated_at) VALUES ('winner-operation', 'turn', 'winner-conversation', 'agent:main:main', 'hash', 'sent', 10, 10)",
-          )
-          .run();
-        sourceDatabase.db
-          .prepare(
-            "INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, created_at, updated_at) VALUES ('canonical-operation', 'turn', 'winner-conversation', 'agent:main:work', 'canonical-hash', 'sent', 10, 10)",
-          )
-          .run();
-        sourceDatabase.db
-          .prepare(
-            "INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, created_at, updated_at) VALUES ('unrelated-operation', 'turn', 'winner-conversation', 'agent:ops:other', 'unrelated-hash', 'sent', 10, 10)",
-          )
-          .run();
+        const { insert, database, expectRepair } = createCanonicalRepairFixture(stateDir, "work", [
+          "main",
+          "ops",
+        ]);
+        insert("agent:main:work ", { sessionId: "winner", updatedAt: 20 }, undefined, "ops");
+        const source = sessionSqlFixture(database("ops").db);
+        source`INSERT INTO conversations (conversation_id, channel, account_id, kind, peer_id, delivery_target, metadata_json, created_at, updated_at)
+          VALUES ('winner-conversation', 'webchat', 'default', 'direct', 'winner', 'winner', '{}', 10, 10)`.run();
+        const progressJson = JSON.stringify({ lines: ["Retained progress"], label: "Working" });
+        for (const [operationId, sourceSessionKey] of [
+          ["winner-operation", "agent:main:work"],
+          ["unrelated-operation", "agent:ops:other"],
+        ] as const) {
+          source`INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, platform_message_id, created_at, updated_at)
+            VALUES (${operationId}, 'send', 'winner-conversation', ${sourceSessionKey}, 'progress-hash', 'sent', 'progress-message', 10, 10)`.run();
+          source`INSERT INTO cache_entries (scope, key, value_json, updated_at)
+            VALUES ('conversation-progress', ${operationId}, ${progressJson}, 10)`.run();
+        }
+        source`INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, created_at, updated_at)
+          VALUES ('canonical-operation', 'turn', 'winner-conversation', 'agent:main:work', 'canonical-hash', 'sent', 10, 10)`.run();
 
-        expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
-          foundGroups: 1,
-          repairedGroups: 1,
-        });
-        const destinationDatabase = openOpenClawAgentDatabase({
-          agentId: "main",
-          env,
-          path: resolveSqliteTargetFromSessionStorePath(mainStore, { agentId: "main", env }).path,
-        });
+        await expectRepair({ foundGroups: 1, repairedGroups: 1 });
+        const destination = sessionSqlFixture(database().db);
         expect(
-          destinationDatabase.db
-            .prepare(
-              "SELECT operation_id, source_session_key FROM conversation_deliveries ORDER BY operation_id",
-            )
-            .all(),
+          destination`SELECT operation_id, source_session_key FROM conversation_deliveries ORDER BY operation_id`.all(),
         ).toEqual([
           { operation_id: "canonical-operation", source_session_key: "agent:main:work" },
           { operation_id: "winner-operation", source_session_key: "agent:main:work" },
         ]);
         expect(
-          sourceDatabase.db
-            .prepare("SELECT operation_id FROM conversation_deliveries ORDER BY operation_id")
-            .all(),
+          source`SELECT operation_id FROM conversation_deliveries ORDER BY operation_id`.all(),
         ).toEqual([{ operation_id: "unrelated-operation" }]);
+        expect(
+          destination`SELECT key, value_json FROM cache_entries WHERE scope = 'conversation-progress'`.all(),
+        ).toEqual([{ key: "winner-operation", value_json: progressJson }]);
+        expect(
+          source`SELECT key, value_json FROM cache_entries WHERE scope = 'conversation-progress'`.all(),
+        ).toEqual([{ key: "unrelated-operation", value_json: progressJson }]);
       },
     );
   });

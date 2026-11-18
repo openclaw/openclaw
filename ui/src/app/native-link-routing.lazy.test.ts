@@ -5,14 +5,11 @@ import type { NativeLinkMenu } from "../components/native-link-menu.runtime.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 
 const menuLoad = vi.hoisted(() => {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
+  const { promise, resolve } = Promise.withResolvers<void>();
   return { started: vi.fn(), ready: { promise, resolve } };
 });
 
-vi.mock("../components/native-link-menu.runtime.ts", async (importOriginal) => {
+vi.mock("../components/native-link-menu.runtime.tsx", async (importOriginal) => {
   menuLoad.started();
   await menuLoad.ready.promise;
   return importOriginal();

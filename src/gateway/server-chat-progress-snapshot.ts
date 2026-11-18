@@ -1,17 +1,204 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { Value } from "typebox/value";
+import {
+  AgentActivityItemSchema,
+  ChatRunStartupPhaseSchema,
+} from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { isCompleteAgentPreamble } from "../agents/agent-activity-presentation.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
-import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { boundedJsonUtf8Bytes, jsonStringByteLengthUpToLimit } from "../infra/json-utf8-bytes.js";
+import { freezeTrustedJsonSnapshot, isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 
+const STARTUP_PHASES = new Set<string>(ChatRunStartupPhaseSchema.anyOf.map((phase) => phase.const));
 const CHAT_RUN_PROGRESS_MAX_EVENTS = 50;
 const CHAT_RUN_PROGRESS_MAX_BYTES = 128 * 1024;
 const CHAT_RUN_PROGRESS_MAX_EVENT_BYTES = 64 * 1024;
 const CHAT_RUN_PROGRESS_MAX_REVIEWS_PER_TOOL = 16;
+const TOOL_PROGRESS_FIELDS = new Map<string, readonly string[]>([
+  ["start", ["args"]],
+  ["input_delta", ["diff"]],
+  ["update", ["partialResult"]],
+  ["review", ["review", "approvalReviewOutcome"]],
+  ["result", ["approvalReviewOutcome", "isError", "result"]],
+]);
+const isRawJSON =
+  "isRawJSON" in JSON && typeof JSON.isRawJSON === "function" ? JSON.isRawJSON : undefined;
+
+function stringifyProgressEvent(event: AgentEventPayload): string {
+  let bytes = 0;
+  const containers = new WeakMap<object, { array: boolean; count: number }>();
+  const charge = (amount: number) => {
+    bytes += amount;
+    if (bytes > CHAT_RUN_PROGRESS_MAX_EVENT_BYTES) {
+      throw new RangeError("Progress event exceeds replay budget");
+    }
+  };
+  const primitive = (value: unknown) => {
+    charge(
+      typeof value === "string"
+        ? jsonStringByteLengthUpToLimit(value, CHAT_RUN_PROGRESS_MAX_EVENT_BYTES - bytes)
+        : value === null || value === true
+          ? 4
+          : value === false
+            ? 5
+            : Buffer.byteLength(JSON.stringify(value), "utf8"),
+    );
+  };
+
+  // Native traversal owns getters and toJSON. Only already-observed primitives
+  // are measured separately, so producer callbacks execute exactly once.
+  // Boxed primitives use native coercion and the final size check; ordinary
+  // tool payloads retain early budget rejection without per-value type probes.
+  return JSON.stringify(event, function (this: object, key: string, value: unknown) {
+    const parent = containers.get(this);
+    const omitted = value === undefined || typeof value === "function" || typeof value === "symbol";
+    if (parent && (parent.array || !omitted)) {
+      if (parent.count > 0) {
+        charge(1);
+      }
+      parent.count += 1;
+      if (!parent.array) {
+        primitive(key);
+        charge(1);
+      }
+    }
+    if (omitted) {
+      if (parent?.array) {
+        charge(4);
+      }
+      return value;
+    }
+    if (value !== null && typeof value === "object") {
+      if (isRawJSON?.(value) && "rawJSON" in value && typeof value.rawJSON === "string") {
+        if (value.rawJSON.length > CHAT_RUN_PROGRESS_MAX_EVENT_BYTES - bytes) {
+          throw new RangeError("Progress event exceeds replay budget");
+        }
+        charge(Buffer.byteLength(value.rawJSON, "utf8"));
+      } else {
+        charge(2);
+        // Capture the kind before getters can revoke a proxy, and reset counts
+        // each time native JSON revisits a shared, non-cyclic container.
+        containers.set(value, { array: Array.isArray(value), count: 0 });
+      }
+    } else if (typeof value !== "bigint") {
+      primitive(value);
+    }
+    return value;
+  });
+}
+
+type ProgressEventFacts = Pick<AgentEventPayload, "stream" | "ts" | "data">;
+type CapturedProgressEvent =
+  | { kind: "event"; facts: ProgressEventFacts; event: AgentEventPayload; byteLength: number }
+  | { kind: "output"; facts: ProgressEventFacts; byteLength: number; json: string };
+
+function isCanonicalImmutableOutput(value: unknown): boolean {
+  if (!isDeeplyFrozenPlainData(value)) {
+    return false;
+  }
+  const output = asNullableRecord(value);
+  if (
+    !output ||
+    "toJSON" in output ||
+    !Object.prototype.propertyIsEnumerable.call(output, "text") ||
+    typeof output.text !== "string"
+  ) {
+    return false;
+  }
+  const keys = Reflect.ownKeys(output);
+  if (keys.length === 1) {
+    return true;
+  }
+  if (keys.length !== 2 || !Object.prototype.propertyIsEnumerable.call(output, "liveOutput")) {
+    return false;
+  }
+  const live = asNullableRecord(output.liveOutput);
+  return Boolean(
+    live &&
+    !("toJSON" in live) &&
+    Reflect.ownKeys(live).length === 2 &&
+    Object.prototype.propertyIsEnumerable.call(live, "text") &&
+    Object.prototype.propertyIsEnumerable.call(live, "omittedChars") &&
+    typeof live.text === "string" &&
+    typeof live.omittedChars === "number" &&
+    Number.isSafeInteger(live.omittedChars) &&
+    live.omittedChars >= 0 &&
+    !Object.is(live.omittedChars, -0),
+  );
+}
+
+function captureProgressEvent(
+  event: AgentEventPayload,
+  deferOutput: boolean,
+): CapturedProgressEvent | undefined {
+  try {
+    // Only the fresh tool-output envelope has fully controlled predicate facts.
+    // Inherited JSON transforms can reshape those facts and keep eager capture.
+    const serializedOutput = deferOutput && !("toJSON" in event) && !("toJSON" in event.data);
+    if (
+      serializedOutput &&
+      typeof event.runId === "string" &&
+      Number.isFinite(event.seq) &&
+      !Object.is(event.seq, -0) &&
+      Number.isFinite(event.ts) &&
+      !Object.is(event.ts, -0) &&
+      (event.sessionKey === undefined || typeof event.sessionKey === "string") &&
+      (event.agentId === undefined || typeof event.agentId === "string") &&
+      isCanonicalImmutableOutput(event.data.partialResult)
+    ) {
+      // Canonical immutable facts need no JSON copy. Keep the existing byte
+      // budget and generic native capture for mutable/custom producer values.
+      const size = boundedJsonUtf8Bytes(event, CHAT_RUN_PROGRESS_MAX_EVENT_BYTES);
+      if (!size.complete) {
+        return undefined;
+      }
+      const captured = freezeTrustedJsonSnapshot(event);
+      return { kind: "event", facts: captured, event: captured, byteLength: size.bytes };
+    }
+    const json = stringifyProgressEvent(event);
+    const byteLength = Buffer.byteLength(json, "utf8");
+    if (byteLength > CHAT_RUN_PROGRESS_MAX_EVENT_BYTES) {
+      return undefined;
+    }
+    if (serializedOutput) {
+      // Capture producer getters/toJSON now, but decode only the retained receipt
+      // when recovery reads it. Output bodies are not used by owner predicates.
+      const { partialResult: _partialResult, ...data } = event.data;
+      return {
+        kind: "output",
+        facts: { stream: event.stream, ts: event.ts, data },
+        byteLength,
+        json,
+      };
+    }
+    // Generic progress predicates consume the captured native JSON facts.
+    const captured: AgentEventPayload = JSON.parse(json);
+    freezeTrustedJsonSnapshot(captured);
+    if (!asNullableRecord(captured.data)) {
+      return undefined;
+    }
+    return { kind: "event", facts: captured, event: captured, byteLength };
+  } catch {
+    return undefined;
+  }
+}
 
 export type ChatRunProgressSnapshot = {
-  events: AgentEventPayload[];
+  entries: CapturedProgressEvent[];
   byteLength: number;
   lastSeq: number;
 };
+
+/** Materialize frozen replay events from the owner's immutable captured receipts. */
+export function readChatRunProgressEvents(
+  snapshot: ChatRunProgressSnapshot | undefined,
+): AgentEventPayload[] | undefined {
+  return snapshot?.entries.map((entry) =>
+    entry.kind === "output"
+      ? freezeTrustedJsonSnapshot<AgentEventPayload>(JSON.parse(entry.json))
+      : entry.event,
+  );
+}
 
 export function updateChatRunProgressSnapshot(
   snapshot: ChatRunProgressSnapshot | undefined,
@@ -19,37 +206,57 @@ export function updateChatRunProgressSnapshot(
   mode: "full" | "summary" = "full",
 ): ChatRunProgressSnapshot | undefined {
   const data = event.data ?? {};
+  if ((event.stream === "tool" || event.stream === "item") && data.display === false) {
+    return snapshot;
+  }
   const phase = typeof data.phase === "string" ? data.phase : "";
   const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId.trim() : "";
   const review = asNullableRecord(data.review) ?? undefined;
   const reviewId = typeof review?.id === "string" ? review.id.trim() : "";
-  const isStartupStatus =
+  const isStartupStatus = event.stream === "run_status" && STARTUP_PHASES.has(phase);
+  const isModelWait =
     event.stream === "run_status" &&
-    [
-      "preparing_workspace",
-      "naming_worktree",
-      "creating_worktree",
-      "running_setup",
-      "provisioning_environment",
-      "preparing_context",
-      "starting_model",
-    ].includes(phase);
+    (phase === "waiting_for_model" ||
+      (phase === "starting_model" &&
+        snapshot?.entries.some(
+          ({ facts: candidate }) =>
+            candidate.stream === "run_status" && candidate.data.phase === "waiting_for_model",
+        )));
   const isRetryStatus = event.stream === "run_status" && phase === "retrying";
+  const isFallbackStatus = event.stream === "lifecycle" && phase === "fallback_step";
+  const isFinishing = event.stream === "lifecycle" && phase === "finishing";
+  const isCompaction = event.stream === "compaction" && (phase === "start" || phase === "end");
   const isAssistant =
     event.stream === "assistant" &&
-    Boolean(snapshot?.events.some((candidate) => candidate.stream === "run_status"));
+    Boolean(
+      snapshot?.entries.some(
+        ({ facts: candidate }) =>
+          candidate.stream === "run_status" ||
+          (candidate.stream === "lifecycle" &&
+            (candidate.data.phase === "fallback_step" || candidate.data.phase === "finishing")),
+      ),
+    );
   const preambleItemId =
     typeof data.itemId === "string" && data.itemId.trim()
       ? data.itemId.trim()
       : typeof data.id === "string" && data.id.trim()
         ? data.id.trim()
         : "";
+  const toolFields = TOOL_PROGRESS_FIELDS.get(phase);
   const isTool =
     event.stream === "tool" &&
     Boolean(toolCallId) &&
-    ["start", "input_delta", "update", "review", "result"].includes(phase) &&
+    toolFields !== undefined &&
     (phase !== "review" || (mode === "full" && Boolean(reviewId)));
   const isPreamble = event.stream === "item" && data.kind === "preamble";
+  const isItem = event.stream === "item" && (Boolean(preambleItemId) || isPreamble);
+  const validItem: boolean =
+    !isItem ||
+    isPreamble ||
+    Value.Check({ ...AgentActivityItemSchema, additionalProperties: true }, data);
+  if (isItem && !isPreamble && !validItem) {
+    return snapshot;
+  }
   const isUsage = event.stream === "usage";
   const isNotice = event.stream === "notice" && phase === "warning";
   const guardianTargetItemId =
@@ -64,53 +271,80 @@ export function updateChatRunProgressSnapshot(
     isGuardian &&
     phase === "completed" &&
     Boolean(guardianTargetItemId) &&
-    snapshot?.events.some(
-      (candidate) =>
+    snapshot?.entries.some(
+      ({ facts: candidate }) =>
         candidate.stream === event.stream &&
         candidate.data.phase === "strict_review_required" &&
         candidate.data.reviewId === data.reviewId,
     );
-  if (mode === "summary" && !isTool && !isPreamble && !isUsage && !isRetryStatus && !isAssistant) {
-    return snapshot;
-  }
+  const isSummaryProgress =
+    isModelWait ||
+    isTool ||
+    isItem ||
+    isUsage ||
+    isRetryStatus ||
+    isFallbackStatus ||
+    isFinishing ||
+    isCompaction ||
+    isAssistant ||
+    isNotice;
   if (
-    !isTool &&
-    !isPreamble &&
-    !isUsage &&
-    !isStartupStatus &&
-    !isRetryStatus &&
-    !isAssistant &&
-    !isStandaloneGuardian &&
-    !isNotice &&
-    !resolvesStrictReview
+    !isSummaryProgress &&
+    (mode === "summary" || (!isStartupStatus && !isStandaloneGuardian && !resolvesStrictReview))
   ) {
     return snapshot;
   }
 
-  const next = snapshot ?? { events: [], byteLength: 0, lastSeq: 0 };
+  const next = snapshot ?? { entries: [], byteLength: 0, lastSeq: 0 };
   // Agent events are run-sequenced. Reject delayed duplicates so reconnect
   // state cannot resurrect a tool that a newer result already completed.
   if (event.seq <= next.lastSeq) {
     return next;
   }
   next.lastSeq = event.seq;
-  const matchesPreamble = (candidate: AgentEventPayload) =>
+  if (
+    isPreamble &&
+    !preambleItemId &&
+    !(typeof data.progressText === "string" && data.progressText.trim())
+  ) {
+    return next;
+  }
+  if (
+    isPreamble &&
+    !isCompleteAgentPreamble({
+      phase,
+      progressText: typeof data.progressText === "string" ? data.progressText : undefined,
+    })
+  ) {
+    return next;
+  }
+  const matchesPreamble = (candidate: ProgressEventFacts) =>
     candidate.stream === "item" &&
     candidate.data?.kind === "preamble" &&
     (candidate.data.itemId ?? "") === preambleItemId;
-  const previousPreamble = preambleItemId ? next.events.find(matchesPreamble) : undefined;
+  const previousPreamble = preambleItemId
+    ? next.entries.find(({ facts: candidate }) => matchesPreamble(candidate))?.facts
+    : undefined;
   const previousUsage = isUsage
-    ? next.events.find((candidate) => candidate.stream === "usage")
+    ? next.entries.find(({ facts: candidate }) => candidate.stream === "usage")?.facts
     : undefined;
 
-  const removeWhere = (predicate: (candidate: AgentEventPayload) => boolean) => {
-    next.events = next.events.filter((candidate) => !predicate(candidate));
-    next.byteLength = next.events.reduce((total, candidate) => total + jsonUtf8Bytes(candidate), 0);
+  const removeWhere = (predicate: (candidate: ProgressEventFacts) => boolean) => {
+    next.entries = next.entries.filter((entry) => {
+      if (!predicate(entry.facts)) {
+        return true;
+      }
+      next.byteLength -= entry.byteLength;
+      return false;
+    });
   };
 
   if (
     isStartupStatus &&
-    next.events.some((candidate) => candidate.stream === "tool" || candidate.stream === "item")
+    !isModelWait &&
+    next.entries.some(
+      ({ facts: candidate }) => candidate.stream === "tool" || candidate.stream === "item",
+    )
   ) {
     return next;
   }
@@ -118,14 +352,32 @@ export function updateChatRunProgressSnapshot(
   if (isUsage) {
     // Context-only updates must retain the run total already reported by completed responses.
     removeWhere((candidate) => candidate.stream === "usage");
-  } else if (isStartupStatus || isRetryStatus || isAssistant || isTool || isPreamble) {
+  } else if (
+    isStartupStatus ||
+    isRetryStatus ||
+    isFallbackStatus ||
+    isFinishing ||
+    isCompaction ||
+    isAssistant ||
+    isTool ||
+    isItem
+  ) {
     // Progress clears transient statuses; retry waits may begin after tools completed.
     removeWhere((candidate) => {
-      if (candidate.stream === "run_status" || candidate.stream === "assistant") {
+      if (
+        candidate.stream === "run_status" ||
+        candidate.stream === "assistant" ||
+        (isCompaction && candidate.stream === "compaction") ||
+        (candidate.stream === "lifecycle" &&
+          (candidate.data.phase === "fallback_step" || candidate.data.phase === "finishing"))
+      ) {
         return true;
       }
       if (isPreamble) {
         return matchesPreamble(candidate);
+      }
+      if (isItem) {
+        return candidate.stream === "item" && candidate.data.itemId === preambleItemId;
       }
       if (!isTool || candidate.stream !== "tool" || candidate.data?.toolCallId !== toolCallId) {
         return false;
@@ -157,40 +409,35 @@ export function updateChatRunProgressSnapshot(
   }
 
   const storedData: Record<string, unknown> = isTool
-    ? mode === "summary"
-      ? {
-          phase,
-          name: typeof data.name === "string" ? data.name : undefined,
-          toolCallId,
-        }
-      : {
-          phase,
-          name: typeof data.name === "string" ? data.name : undefined,
-          toolCallId,
-          args: phase === "start" ? data.args : undefined,
-          partialResult: phase === "update" ? data.partialResult : undefined,
-          diff: phase === "input_delta" ? data.diff : undefined,
-          review: phase === "review" ? data.review : undefined,
-          approvalReviewOutcome:
-            phase === "review" || phase === "result" ? data.approvalReviewOutcome : undefined,
-          isError: phase === "result" ? data.isError : undefined,
-          result: phase === "result" ? data.result : undefined,
-        }
+    ? {
+        phase,
+        name: typeof data.name === "string" ? data.name : undefined,
+        toolCallId,
+        ...(phase === "update" && data.outputOnly === true ? { outputOnly: true } : {}),
+      }
     : isAssistant
       ? {} // Reconnect needs the progress sequence, not another copy of buffered assistant text.
       : isPreamble
         ? {
             kind: "preamble",
+            phase: data.phase,
+            title: data.title,
+            status: data.status,
             itemId: preambleItemId || undefined,
             progressText: data.progressText,
           }
         : { ...previousUsage?.data, ...data };
+  if (isTool && mode === "full") {
+    for (const field of toolFields) {
+      storedData[field] = data[field];
+    }
+  }
   for (const key of Object.keys(storedData)) {
     if (storedData[key] === undefined) {
       delete storedData[key];
     }
   }
-  let storedEvent: AgentEventPayload = {
+  const storedEvent: AgentEventPayload = {
     runId: event.runId,
     seq: event.seq,
     stream: event.stream,
@@ -200,50 +447,52 @@ export function updateChatRunProgressSnapshot(
     ...(event.sessionKey ? { sessionKey: event.sessionKey } : {}),
     ...(event.agentId ? { agentId: event.agentId } : {}),
   };
-  let eventBytes = jsonUtf8Bytes(storedEvent);
-  if (eventBytes > CHAT_RUN_PROGRESS_MAX_EVENT_BYTES && isTool) {
+  const deferOutput = isTool && mode === "full" && phase === "update" && data.outputOnly === true;
+  let captured = captureProgressEvent(storedEvent, deferOutput);
+  if (!captured && isTool) {
     delete storedData.args;
     delete storedData.partialResult;
     delete storedData.diff;
     delete storedData.result;
-    storedEvent = { ...storedEvent, data: storedData };
-    eventBytes = jsonUtf8Bytes(storedEvent);
+    captured = captureProgressEvent(storedEvent, deferOutput);
   }
-  if (eventBytes > CHAT_RUN_PROGRESS_MAX_EVENT_BYTES) {
+  if (!captured) {
     return next;
   }
-  next.events.push(storedEvent);
-  next.byteLength += eventBytes;
+  next.entries.push(captured);
+  next.byteLength += captured.byteLength;
   if (phase === "review") {
-    const reviews = next.events.filter(
-      (candidate) =>
+    const reviews = next.entries.filter(
+      ({ facts: candidate }) =>
         candidate.stream === "tool" &&
         candidate.data?.toolCallId === toolCallId &&
         candidate.data?.phase === "review",
     );
     const overflow = reviews.length - CHAT_RUN_PROGRESS_MAX_REVIEWS_PER_TOOL;
     if (overflow > 0) {
-      const evicted = new Set(reviews.slice(0, overflow));
+      const evicted = new Set(reviews.slice(0, overflow).map((entry) => entry.facts));
       removeWhere((candidate) => evicted.has(candidate));
     }
   }
   while (
-    next.events.length > CHAT_RUN_PROGRESS_MAX_EVENTS ||
+    next.entries.length > CHAT_RUN_PROGRESS_MAX_EVENTS ||
     next.byteLength > CHAT_RUN_PROGRESS_MAX_BYTES
   ) {
     // The single usage snapshot is current run state, not evictable activity history.
-    const oldest = next.events.find((candidate) => candidate.stream !== "usage");
+    const oldest = next.entries.find(({ facts: candidate }) => candidate.stream !== "usage")?.facts;
     if (!oldest) {
       break;
     }
     const oldestToolCallId =
-      oldest.stream === "tool" && typeof oldest.data?.toolCallId === "string"
+      (oldest.stream === "tool" || oldest.stream === "item") &&
+      typeof oldest.data?.toolCallId === "string"
         ? oldest.data.toolCallId
         : "";
     // Review/update events depend on their start. Evict the complete owner group.
     removeWhere((candidate) =>
       oldestToolCallId
-        ? candidate.stream === "tool" && candidate.data?.toolCallId === oldestToolCallId
+        ? (candidate.stream === "tool" || candidate.stream === "item") &&
+          candidate.data?.toolCallId === oldestToolCallId
         : candidate === oldest,
     );
   }

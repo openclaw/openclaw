@@ -1,42 +1,50 @@
-import { request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
+import { Agent as HttpAgent, request as httpRequest } from "node:http";
+import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { TLSSocket } from "node:tls";
 import { normalizeTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createNodeProxyAgent } from "../infra/net/node-proxy-agent.js";
+import { registerManagedProxyGatewayLoopbackBypass } from "../infra/net/proxy/proxy-lifecycle.js";
 
-const GATEWAY_HTTP_PROBE_MAX_RESPONSE_CHARS = 1024;
+const GATEWAY_HTTP_PROBE_MAX_RESPONSE_CHARS = 64 * 1024;
+const directHttpAgent = new HttpAgent({ keepAlive: false });
+// Do not reuse sockets or TLS sessions: certificate renewal must expose the
+// listener's current certificate to the pin check on every local probe.
+const directHttpsAgent = new HttpsAgent({ keepAlive: false, maxCachedSessions: 0 });
 
-export type GatewayHttpProbeResponse = {
+type GatewayHttpProbeResponse = {
   statusCode: number;
   body: string;
-};
-
-type GatewayLocalProbeTarget = {
-  url: string;
   tlsFingerprint?: string;
 };
 
 export type ConfiguredGatewayLocalProbe = {
   requestHttp(params: {
     host: string;
-    pathname: "/healthz" | "/readyz";
+    pathname: "/healthz" | "/readyz" | "/startupz";
     port: number;
     timeoutMs: number;
     signal?: AbortSignal;
   }): Promise<GatewayHttpProbeResponse | null>;
-  resolveWebSocketTarget(port: number): Promise<GatewayLocalProbeTarget | null>;
+  resolveWebSocketTarget(
+    port: number,
+    signal?: AbortSignal,
+  ): Promise<{
+    url: string;
+    tlsFingerprint?: string;
+  } | null>;
 };
 
-export function normalizeGatewayHttpProbeHost(host: string): string {
+function normalizeGatewayHttpProbeHost(host: string): string {
   return host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
 }
 
-export async function requestGatewayLocalHttpProbe(params: {
+async function requestGatewayLocalHttpProbe(params: {
   host: string;
-  pathname: "/healthz" | "/readyz";
+  pathname: "/healthz" | "/readyz" | "/startupz";
   port: number;
   timeoutMs: number;
-  tlsFingerprint?: string;
+  tlsFingerprints?: readonly string[];
   signal?: AbortSignal;
 }): Promise<GatewayHttpProbeResponse | null> {
   params.signal?.throwIfAborted();
@@ -53,26 +61,41 @@ export async function requestGatewayLocalHttpProbe(params: {
       clearTimeout(deadline);
       resolve(result);
     };
-    const request = params.tlsFingerprint ? httpsRequest : httpRequest;
+    const pins = params.tlsFingerprints?.map(normalizeTlsFingerprint);
+    const host = normalizeGatewayHttpProbeHost(params.host);
+    const protocol = pins ? "https" : "http";
+    const authority = host.includes(":") ? `[${host}]` : host;
+    const targetUrl = `${protocol}://${authority}:${params.port}${params.pathname}`;
+    registerManagedProxyGatewayLoopbackBypass(targetUrl);
+    const proxyAgent = createNodeProxyAgent({
+      mode: "env",
+      targetUrl,
+      protocol,
+      agentOptions: { keepAlive: false, maxCachedSessions: 0 },
+    });
+    const request = pins ? httpsRequest : httpRequest;
     const req = request(
       {
-        hostname: normalizeGatewayHttpProbeHost(params.host),
+        hostname: host,
         port: params.port,
         path: params.pathname,
         method: "GET",
-        timeout: params.timeoutMs,
+        // agent:false reconstructs the global agent without its required proxy
+        // options. Select an explicit agent without overriding loopback policy.
+        agent: proxyAgent ?? (pins ? directHttpsAgent : directHttpAgent),
         ...(params.signal ? { signal: params.signal } : {}),
         // Self-signed local Gateway certificates are trusted only by the exact
         // configured pin below; never accept them on ordinary HTTPS requests.
-        ...(params.tlsFingerprint ? { rejectUnauthorized: false } : {}),
+        ...(pins ? { rejectUnauthorized: false } : {}),
       },
       (res) => {
-        if (params.tlsFingerprint) {
-          const peerFingerprint =
+        let tlsFingerprint: string | undefined;
+        if (pins) {
+          tlsFingerprint =
             res.socket instanceof TLSSocket
               ? normalizeTlsFingerprint(res.socket.getPeerCertificate().fingerprint256 ?? "")
               : "";
-          if (peerFingerprint !== normalizeTlsFingerprint(params.tlsFingerprint)) {
+          if (!tlsFingerprint || !pins.includes(tlsFingerprint)) {
             res.resume();
             finish(null);
             return;
@@ -82,14 +105,22 @@ export async function requestGatewayLocalHttpProbe(params: {
         res.setEncoding("utf8");
         res.on("data", (chunk: string) => {
           if (body.length + chunk.length > GATEWAY_HTTP_PROBE_MAX_RESPONSE_CHARS) {
+            finish({
+              statusCode: res.statusCode ?? 0,
+              body: "",
+              ...(tlsFingerprint ? { tlsFingerprint } : {}),
+            });
             res.destroy();
-            finish(null);
             return;
           }
           body += chunk;
         });
         res.once("end", () => {
-          finish({ statusCode: res.statusCode ?? 0, body });
+          finish({
+            statusCode: res.statusCode ?? 0,
+            body,
+            ...(tlsFingerprint ? { tlsFingerprint } : {}),
+          });
         });
         res.once("error", () => {
           finish(null);
@@ -100,13 +131,10 @@ export async function requestGatewayLocalHttpProbe(params: {
       req.destroy();
       finish(null);
     }, params.timeoutMs);
-    req.once("timeout", () => {
-      req.destroy();
-      finish(null);
-    });
     req.once("error", () => {
       finish(null);
     });
+    req.once("close", () => proxyAgent?.destroy());
     req.end();
   });
   params.signal?.throwIfAborted();
@@ -117,46 +145,60 @@ export function createConfiguredGatewayLocalProbe(
   config: OpenClawConfig,
 ): ConfiguredGatewayLocalProbe {
   const tlsConfig = config.gateway?.tls;
-  let tlsFingerprint: string | undefined;
-  let tlsFingerprintLoad: Promise<string | undefined> | null = null;
-
-  const resolveTlsFingerprint = async (): Promise<string | undefined> => {
-    if (tlsConfig?.enabled !== true) {
-      return undefined;
-    }
-    if (!tlsFingerprint) {
-      tlsFingerprintLoad ??= import("../infra/tls/gateway.js")
-        .then(({ loadGatewayTlsServerRuntime }) =>
-          loadGatewayTlsServerRuntime({ ...tlsConfig, autoGenerate: false }),
-        )
-        .then((gatewayTls) => gatewayTls.fingerprintSha256)
-        .catch(() => undefined);
-      const gatewayTls = await tlsFingerprintLoad;
-      tlsFingerprintLoad = null;
-      tlsFingerprint = gatewayTls;
-    }
-    return tlsFingerprint;
-  };
-
-  return {
-    async requestHttp(params) {
-      const resolvedTlsFingerprint = await resolveTlsFingerprint();
-      if (tlsConfig?.enabled === true && !resolvedTlsFingerprint) {
+  let inspection: Promise<string | undefined> | undefined;
+  let verified: { fingerprint: string; endpoint: string } | undefined;
+  // Health and readiness probes share their pending public-certificate read.
+  const inspectCertificate = () =>
+    (inspection ??= import("../infra/tls/gateway.js")
+      .then(async ({ inspectGatewayTlsCertificate }) => {
+        const certificate = await inspectGatewayTlsCertificate(tlsConfig);
+        return certificate.ok ? certificate.value.fingerprintSha256 : undefined;
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        inspection = undefined;
+      }));
+  const requestHttp: ConfiguredGatewayLocalProbe["requestHttp"] = async (params) => {
+    params.signal?.throwIfAborted();
+    const endpoint = `${normalizeGatewayHttpProbeHost(params.host)}:${params.port}`;
+    const previous = verified;
+    let tlsFingerprints: string[] | undefined;
+    if (tlsConfig?.enabled === true) {
+      const candidate = await inspectCertificate();
+      params.signal?.throwIfAborted();
+      // Files may precede listener acceptance. Retain only this endpoint's last
+      // verified serving pin while a replacement is incomplete or reload is off.
+      tlsFingerprints = [
+        ...(candidate ? [candidate] : []),
+        ...(previous?.endpoint === endpoint ? [previous.fingerprint] : []),
+      ];
+      if (tlsFingerprints.length === 0) {
         return null;
       }
-      return await requestGatewayLocalHttpProbe({
-        ...params,
-        ...(resolvedTlsFingerprint ? { tlsFingerprint: resolvedTlsFingerprint } : {}),
-      });
-    },
-    async resolveWebSocketTarget(port) {
-      const resolvedTlsFingerprint = await resolveTlsFingerprint();
-      if (tlsConfig?.enabled === true) {
-        return resolvedTlsFingerprint
-          ? { url: `wss://127.0.0.1:${port}`, tlsFingerprint: resolvedTlsFingerprint }
-          : null;
+    }
+    const result = await requestGatewayLocalHttpProbe({ ...params, tlsFingerprints });
+    if (result?.tlsFingerprint) {
+      verified = { fingerprint: result.tlsFingerprint, endpoint };
+    }
+    return result;
+  };
+  return {
+    requestHttp,
+    async resolveWebSocketTarget(port, signal) {
+      signal?.throwIfAborted();
+      if (tlsConfig?.enabled !== true) {
+        return { url: `ws://127.0.0.1:${port}` };
       }
-      return { url: `ws://127.0.0.1:${port}` };
+      const response = await requestHttp({
+        host: "127.0.0.1",
+        port,
+        pathname: "/healthz",
+        timeoutMs: 3_000,
+        signal,
+      });
+      return response?.tlsFingerprint
+        ? { url: `wss://127.0.0.1:${port}`, tlsFingerprint: response.tlsFingerprint }
+        : null;
     },
   };
 }

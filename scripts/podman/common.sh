@@ -118,21 +118,74 @@ resolve_user_home() {
   printf '%s' "$home"
 }
 
+write_local_control_ui_origins() {
+  python3 - "$@" <<'PY'
+import json
+import sys
+
+path, port, tmp, operation = sys.argv[1:]
+try:
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+except json.JSONDecodeError as exc:
+    print(
+        f"Warning: unable to {operation} gateway.controlUi.allowedOrigins in {path}: existing config is not strict JSON ({exc}). Leaving file unchanged.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+if not isinstance(data, dict):
+    raise SystemExit(f"{path}: expected top-level object")
+gateway = data.setdefault("gateway", {})
+if not isinstance(gateway, dict):
+    raise SystemExit(f"{path}: expected gateway object")
+gateway.setdefault("mode", "local")
+control_ui = gateway.setdefault("controlUi", {})
+if not isinstance(control_ui, dict):
+    raise SystemExit(f"{path}: expected gateway.controlUi object")
+allowed = control_ui.get("allowedOrigins")
+public_origin = gateway.get("publicOrigin")
+inherits_public_origin = "allowedOrigins" not in control_ui and isinstance(public_origin, str) and public_origin.strip()
+desired = [f"http://127.0.0.1:{port}", f"http://localhost:{port}"]
+if not isinstance(allowed, list):
+    allowed = []
+cleaned = []
+seen = set()
+# Setup replaces managed localhost ports; launch preserves and deduplicates them.
+for origin in allowed + (desired if operation == "sync" else []):
+    if not isinstance(origin, str):
+        continue
+    normalized = origin.strip()
+    if not normalized or (operation == "sync" and normalized in seen):
+        continue
+    if operation == "seed" and normalized.startswith("http://"):
+        host = normalized[len("http://") :].split(":", 1)[0]
+        if host in {"127.0.0.1", "localhost"}:
+            continue
+    cleaned.append(normalized)
+    seen.add(normalized)
+if not inherits_public_origin:
+    control_ui["allowedOrigins"] = cleaned + (desired if operation == "seed" else [])
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(data, fh, indent=2)
+    fh.write("\n")
+PY
+}
+
 generate_token_hex_32() {
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -hex 32
-    return 0
+    return $?
   fi
   if command -v python3 >/dev/null 2>&1; then
     python3 - <<'PY'
 import secrets
 print(secrets.token_hex(32))
 PY
-    return 0
+    return $?
   fi
   if command -v od >/dev/null 2>&1; then
     od -An -N32 -tx1 /dev/urandom | tr -d " \n"
-    return 0
+    return $?
   fi
   echo "Missing dependency: need openssl or python3 (or od) to generate OPENCLAW_GATEWAY_TOKEN." >&2
   exit 1

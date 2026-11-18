@@ -5,8 +5,7 @@ export const SUBAGENT_SPAWN_MODES = ["run", "session"] as const;
 export type SpawnSubagentMode = (typeof SUBAGENT_SPAWN_MODES)[number];
 
 /** Sandbox escalation policy requested for a spawned subagent. */
-const SUBAGENT_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
-export type SpawnSubagentSandboxMode = (typeof SUBAGENT_SPAWN_SANDBOX_MODES)[number];
+export type SpawnSubagentSandboxMode = "inherit" | "require";
 
 /** Prompt context relationship between the parent session and spawned subagent. */
 export const SUBAGENT_SPAWN_CONTEXT_MODES = ["isolated", "fork"] as const;

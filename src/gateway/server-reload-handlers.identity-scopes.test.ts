@@ -1,0 +1,392 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { clearFinishedSessionsForScopes } from "../agents/bash-process-registry.js";
+import { runExecProcess, type ExecProcessHandle } from "../agents/bash-tools.exec-runtime.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import {
+  resetGatewayRestartStateForInProcessRestart,
+  setGatewayRestartPolicy,
+} from "../infra/restart.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { captureGatewayAuthPolicy } from "./auth-policy.js";
+import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
+import { installWatcherMock } from "./config-reload.watcher.test-support.js";
+import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { createChannelManager } from "./server-channels.js";
+import { readGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
+import { createContext as createGatewayTestContext } from "./server-plugin-in-process-dispatch.test-support.js";
+import {
+  createManagedReloadTestParams,
+  createDirectConfigWriteFixture,
+  createConfigWriteNotification,
+  publishConfigWrite,
+} from "./server-reload-handlers.config.test-support.js";
+import { startManagedGatewayConfigReloader } from "./server-reload-managed.js";
+import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
+import {
+  createTestRuntimeSecretsActivator,
+  makePreparedSecretsSnapshot,
+} from "./server-startup-config.test-support.js";
+import { dispatchProfile } from "./server/client-fixtures.test-support.js";
+import {
+  createDispatchTestHarness,
+  createOperatorWsClient,
+} from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
+import { disconnectDisallowedGatewayPolicyClients } from "./server/ws-origin-policy.js";
+import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
+
+function resolveGeneration(config: OpenClawConfig) {
+  return resolveSharedGatewaySessionGeneration(
+    resolveGatewayAuthForConfig({ config, tailscaleMode: config.gateway?.tailscale?.mode }),
+    config.gateway?.trustedProxies,
+  );
+}
+
+let registrySnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
+const registry = createEmptyPluginRegistry();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(() => {
+  installWatcherMock();
+  registrySnapshot = captureActivePluginRegistrySnapshot();
+  setActivePluginRegistry(registry);
+  resetGatewayRestartStateForInProcessRestart();
+  resetGatewayWorkAdmission();
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearSecretsRuntimeSnapshot();
+  clearRuntimeConfigSnapshot();
+  restoreActivePluginRegistrySnapshot(registrySnapshot);
+  resetGatewayRestartStateForInProcessRestart();
+  setGatewayRestartPolicy({ allowExternal: false });
+  resetGatewayWorkAdmission();
+});
+
+const revocations = ["scopes", "allowUsers", "origin"];
+it.each(revocations)("preserves proxy runs until %s ends", (revocation) =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const effectDir = tempDirs.make("openclaw-identity-scope-effects-");
+    const effectScript = 'require("node:fs").writeFileSync(process.argv[1], "accepted effect");';
+    const processes: ExecProcessHandle[] = [];
+    const releaseEffects: Array<() => void> = [];
+    const pendingEffects: Promise<unknown>[] = [];
+    const browserOrigin = {
+      origin: "https://retained.example.test",
+      requestHost: "gateway.example.test",
+      isLocalClient: false,
+    };
+    const identity = "retained@example.test";
+    const profile = ensureProfileForEmail(identity);
+    const initialConfig: OpenClawConfig = {
+      agents: { entries: { main: {} } },
+      gateway: {
+        controlUi: { allowedOrigins: [browserOrigin.origin, "https://other.example.test"] },
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: { userHeader: "x-user", allowUsers: [identity, "other@example.test"] },
+          identityScopes: {
+            [identity]: ["operator.write", "operator.read"],
+            "other@example.test": ["operator.read"],
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(initialConfig);
+    const fixture = createDirectConfigWriteFixture(initialConfig);
+    const context = createGatewayTestContext();
+    const connection = new AbortController();
+    const close = vi.fn(() => {
+      connection.abort();
+      clients.delete(client);
+    });
+    const client = {
+      ...createOperatorWsClient({
+        socket: { close },
+        scopes: ["operator.write", "operator.read"],
+      }),
+      browserOrigin,
+      usesSharedGatewayAuth: true,
+      connectionSignal: connection.signal,
+      sharedGatewaySessionGeneration: resolveGeneration(initialConfig),
+      authenticatedUserId: identity,
+      authenticatedUserProfile: dispatchProfile(profile.id),
+      authPolicy: captureGatewayAuthPolicy(initialConfig, {
+        role: "operator",
+        authMethod: "trusted-proxy",
+        verifiedIdentity: identity,
+        browserOrigin,
+      }),
+    };
+    const clients = new Set([client]);
+    const generation = new SharedGatewaySessionGenerationState({
+      current: resolveGeneration(initialConfig),
+      required: null,
+    });
+    const channelManager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
+      getRuntimeConfig: () => initialConfig,
+      getPluginRegistry: () => registry,
+      channelLogs: {},
+      channelRuntimeEnvs: {},
+    });
+    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+    const reloader = startManagedGatewayConfigReloader(
+      createManagedReloadTestParams({
+        // Real lease and subprocess I/O must be able to finish delayed retries.
+        scheduler: new GatewayScheduler(),
+        getPluginRegistry: () => registry,
+        initialConfig,
+        channelManager,
+        startChannel: channelManager.startChannel,
+        stopChannel: channelManager.stopChannel,
+        reloadPlugins: async () => {
+          throw new Error("Unexpected plugin reload for identity scopes");
+        },
+        resolveSharedGatewaySessionGenerationForConfig: resolveGeneration,
+        sharedGatewaySessionGenerationState: generation,
+        clients,
+        reconcileRuntimePolicy: (config, phase) => {
+          if (phase === "committed") {
+            disconnectDisallowedGatewayPolicyClients(clients, config);
+          }
+        },
+        readSnapshot: fixture.readSnapshot,
+        subscribeToWrites: fixture.subscribeToWrites,
+        resolveGatewayContext: () => context,
+        activateRuntimeSecrets: createTestRuntimeSecretsActivator(async ({ config }) =>
+          makePreparedSecretsSnapshot(config),
+        ),
+        requestRecoveryRestart,
+      }),
+    );
+    const captures: NonNullable<Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>>[] =
+      [];
+    let delegated: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+    const guards: ReturnType<typeof readGatewayRequestMutationAuthority>[] = [];
+    try {
+      await reloader.ready;
+      const getConfig = reloader.getCommittedRuntimeConfig;
+      assert(getConfig);
+      context.getCommittedRuntimeConfig = getConfig;
+      context.getRuntimeConfig = getConfig;
+      const dispatch = createDispatchTestHarness({
+        buildRequestContext: () => context,
+        getRequiredSharedGatewaySessionGeneration: generation.reader,
+        extraHandlers: {
+          wake: async (options) => {
+            const captured = await captureGatewayOperatorRunAuthority({
+              client: options.client,
+              context,
+              hasCurrentClientAuthority: options.hasCurrentClientAuthority,
+            });
+            assert(captured);
+            captures.push(captured);
+            guards.push(readGatewayRequestMutationAuthority(options));
+            options.respond(true, { accepted: true });
+          },
+        },
+      });
+      const capture = async () => {
+        await dispatch.dispatcher.dispatch(
+          { type: "req", id: "scope-policy", method: "wake", params: {} },
+          client,
+        );
+        expect(dispatch.send).toHaveBeenLastCalledWith(
+          expect.objectContaining({ ok: true, payload: { accepted: true } }),
+        );
+        const original = captures.at(-1);
+        assert(original);
+        return original;
+      };
+      const original = await capture();
+      delegated = await captureGatewayOperatorRunAuthority({
+        client: { ...client, internal: { operatorRunAuthority: original.authority } },
+        context,
+      });
+      assert(delegated);
+      const expectLive = (...runs: (typeof original)[]) => {
+        for (const { authority } of runs) {
+          expect(authority.signal?.aborted).toBe(false);
+          expect(authority.assertCurrent).not.toThrow();
+        }
+      };
+      const prepareEffect = async (name: string, authority: typeof original.authority) => {
+        const entered = createDeferred();
+        const resume = createDeferred();
+        releaseEffects.push(() => resume.resolve());
+        const marker = path.join(effectDir, name);
+        const command = [process.execPath, "-e", effectScript, marker]
+          .map((arg) => JSON.stringify(arg))
+          .join(" ");
+        const outcome = withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: "agent:main:identity-scope-effect",
+            operatorAuthority: authority,
+          },
+          async () => {
+            const process = await runExecProcess({
+              command,
+              workdir: effectDir,
+              env: {},
+              usePty: false,
+              warnings: [],
+              maxOutput: 1000,
+              pendingMaxOutput: 1000,
+              notifyOnExit: false,
+              timeoutSec: null,
+              scopeKey: effectDir,
+              beforeSpawn: async () => {
+                entered.resolve();
+                await resume.promise;
+                return undefined;
+              },
+            });
+            processes.push(process);
+            expect(process.pid).toBeGreaterThan(0);
+            return await process.promise;
+          },
+        ).then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        pendingEffects.push(outcome);
+        // Only pause the existing asynchronous prelaunch hook. The exec runtime,
+        // supervisor, native child launch, and filesystem effect remain real.
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          outcome,
+          "exec settled before its prelaunch boundary",
+        );
+        await expect(fs.readFile(marker)).rejects.toMatchObject({ code: "ENOENT" });
+        return { marker, outcome, release: () => resume.resolve() };
+      };
+      const expectAccepted = async (effect: Awaited<ReturnType<typeof prepareEffect>>) => {
+        effect.release();
+        await expect(effect.outcome).resolves.toMatchObject({
+          value: { status: "completed", exitCode: 0 },
+        });
+        expect(await fs.readFile(effect.marker, "utf8")).toBe("accepted effect");
+      };
+      let revision = 0;
+      const write = async (candidate: OpenClawConfig) => {
+        const listener = fixture.ref.current;
+        assert(listener);
+        revision++;
+        const application = publishConfigWrite(
+          listener,
+          createConfigWriteNotification(
+            candidate,
+            "scopes-" + revision,
+            revision,
+            "runtime-" + revision,
+            "source-" + revision,
+          ),
+        );
+        await expect(application).resolves.toBe("applied");
+      };
+      const allowedEffect = await prepareEffect("allowed.txt", original.authority);
+      const unrelated = structuredClone(initialConfig);
+      unrelated.gateway!.auth!.identityScopes!["other@example.test"] = ["operator.admin"];
+      await write(unrelated);
+      await expectAccepted(allowedEffect);
+      expectLive(original, delegated);
+      for (const guard of guards) {
+        expect(guard.family).toBe("worker");
+        if (guard.family === "worker") {
+          expect(guard.assertWorkerCurrent).not.toThrow();
+        }
+      }
+      expect(close).not.toHaveBeenCalled();
+      const equivalent = structuredClone(unrelated);
+      equivalent.gateway!.auth!.identityScopes![identity] = ["operator.write"];
+      await write(equivalent);
+      expectLive(original);
+      await capture(); // The original connection must also admit subsequent requests.
+      expect(captures).toHaveLength(2);
+      const transportEffect = await prepareEffect("transport.txt", original.authority);
+      const oidc = structuredClone(equivalent);
+      oidc.gateway!.auth!.trustedProxy!.cloudflareAccessOidc = {
+        issuer: "https://fixture.cloudflareaccess.com",
+        providerId: "fixture-provider",
+        githubAccountIdClaim: "github_id",
+      };
+      await write(oidc);
+      expect(connection.signal.aborted).toBe(true);
+      expectLive(original);
+      expect(clients.size).toBe(0);
+      expect([...dispatch.clients.authorityClients]).toEqual([client]);
+      const otherOriginRemoved = structuredClone(oidc);
+      otherOriginRemoved.gateway!.controlUi!.allowedOrigins = [browserOrigin.origin];
+      await write(otherOriginRemoved);
+      expectLive(original);
+      const headers = structuredClone(otherOriginRemoved);
+      headers.gateway!.auth!.trustedProxy!.requiredHeaders = ["x-forwarded-proto"];
+      await write(headers);
+      expectLive(original, delegated);
+      await expectAccepted(transportEffect);
+      const revokedEffect = await prepareEffect("revoked.txt", delegated.authority);
+      const removed = structuredClone(headers);
+      if (revocation === "scopes") {
+        delete removed.gateway!.auth!.identityScopes![identity];
+      } else if (revocation === "allowUsers") {
+        removed.gateway!.auth!.trustedProxy!.allowUsers = ["other@example.test"];
+      } else {
+        removed.gateway!.controlUi!.allowedOrigins = [];
+      }
+      await write(removed);
+      expect(original.authority.signal?.aborted).toBe(true);
+      // Restore before consuming either continuation: a committed revocation is irreversible.
+      await write(initialConfig);
+      revokedEffect.release();
+      const denied = await revokedEffect.outcome;
+      expect(denied).toHaveProperty("error", expect.any(Error));
+      expect(denied).toHaveProperty(
+        "error.message",
+        expect.stringMatching(/authority is no longer active/),
+      );
+      await expect(fs.readFile(revokedEffect.marker)).rejects.toMatchObject({ code: "ENOENT" });
+      for (const { authority } of [original, delegated]) {
+        expect(authority.signal?.aborted).toBe(true);
+        expect(authority.assertCurrent).toThrow(/authority is no longer active/);
+      }
+      expect(close).toHaveBeenCalledWith(4001, "gateway policy changed");
+      expect(requestRecoveryRestart).not.toHaveBeenCalled();
+    } finally {
+      for (const release of releaseEffects) {
+        release();
+      }
+      for (const process of processes) {
+        if (!process.session.exited) {
+          process.kill();
+        }
+      }
+      await Promise.allSettled(pendingEffects);
+      clearFinishedSessionsForScopes([effectDir]);
+      await reloader.stop();
+      delegated?.release();
+      for (const captured of captures) {
+        captured.release();
+      }
+    }
+  }),
+);

@@ -17,7 +17,7 @@ This page covers the Perplexity **provider** setup. For the Perplexity **tool** 
 
 | Property    | Value                                                                  |
 | ----------- | ---------------------------------------------------------------------- |
-| Type        | Web search provider (not a model provider)                             |
+| Type        | Web search and native Decision provider                                |
 | Auth        | `PERPLEXITY_API_KEY` (native) or `OPENROUTER_API_KEY` (via OpenRouter) |
 | Config path | `plugins.entries.perplexity.config.webSearch.apiKey`                   |
 | Overrides   | `plugins.entries.perplexity.config.webSearch.baseUrl` / `.model`       |
@@ -27,8 +27,10 @@ This page covers the Perplexity **provider** setup. For the Perplexity **tool** 
 
 ```bash
 openclaw plugins install @openclaw/perplexity-plugin
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Getting started
 
@@ -85,7 +87,7 @@ with `plugins.entries.perplexity.config.webSearch.model`.
 | `language`                           | ISO 639-1 language code (`en`, `fr`, `zh`)                                              | Native only |
 | `date_after` / `date_before`         | Published-date range in `YYYY-MM-DD`                                                    | Native only |
 | `domain_filter`                      | Max 20 domains; allowlist or `-`-prefixed denylist, never mixed                         | Native only |
-| `max_tokens` / `max_tokens_per_page` | Content budget across all results / per page                                            | Native only |
+| `max_tokens` / `max_tokens_per_page` | Content budget across all results / per page; `max_tokens` max 1000000                  | Native only |
 
 Native-only filters return a descriptive error on the chat-completions path.
 `freshness` cannot be combined with `date_after`/`date_before`.
@@ -109,7 +111,48 @@ Native-only filters return a descriptive error on the chat-completions path.
     key and switches to the Sonar transport automatically. Useful if you already
     have OpenRouter billing set up and want to consolidate providers there.
   </Accordion>
+
+  <Accordion title="Integration header">
+    Requests to the Perplexity API (`api.perplexity.ai`) identify OpenClaw with
+    `X-Pplx-Integration: openclaw/<version>`. Searches routed through OpenRouter
+    send OpenRouter's app-attribution headers instead. A custom proxy `baseUrl`
+    gets neither.
+  </Accordion>
 </AccordionGroup>
+
+## Decision models
+
+The same plugin also connects directly to Perplexity's [Decisions API](https://docs.perplexity.ai/docs/decisions/quickstart),
+using the separate [Decision role](/concepts/decision-models), not Sonar chat completions.
+This requires a plugin/host release containing this integration and the prepared
+Decision V2 contract; older installed versions may provide search only.
+
+Connect with `openclaw models auth login --provider perplexity-decisions --method api-key`
+or provide `PERPLEXITY_API_KEY` to the Gateway process. Decision auth uses normal
+the separate `perplexity-decisions` provider profiles; it does **not** reuse the plugin's web-search key,
+`OPENROUTER_API_KEY`, or Sonar search routing. Existing web-search setup remains
+independent. Connecting the key leaves chat and Decision selections unchanged.
+
+Select `perplexity-decisions/pplx-decider-v1.2` in the Decision picker or set
+`agents.defaults.decisionModel` to that reference. Calls use
+`POST https://api.perplexity.ai/v1/decisions` with native `state` and named
+`questions` fields. This is **not** the OpenAI Decisions request format despite
+the matching endpoint suffix.
+
+The adapter supports text/JSON evidence, Boolean probabilities, 2–255 Choice
+options, 2–10 Score levels, and up to 128 questions. JSON state is serialized as
+text rather than interpreted as native image parts. Image input, Flash/latest
+aliases, web grounding, sorting, tags, boxes, and reasoning switches are not
+exposed by this adapter. Perplexity documents a 256K-token state-plus-question
+limit and may group questions internally; there is no client-side splitting,
+truncation, or retry. Normal proxy/TLS policy, cancellation, total deadlines,
+and dispatch-time authority checks apply.
+
+Results preserve expected fractional Score values, original distributions,
+provider-specific confidence, served model identity, and reported token usage.
+Confidence is not the chosen option's probability or a correctness guarantee.
+Use [current API prices](https://docs.perplexity.ai/docs/decisions/quickstart#pricing)
+and reported usage, not benchmark cost per task, for billing expectations.
 
 ## Related
 

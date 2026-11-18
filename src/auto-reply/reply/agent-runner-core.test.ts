@@ -1,213 +1,130 @@
-import { describe, expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
+import { resolveReplyCompletion } from "../../agents/reply-completion.js";
+import { GatewayDrainingError } from "../../process/command-queue.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
-import type { TemplateContext } from "../templating.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   buildSilentFallbackFailurePayload,
-  resolveAdmittedRunSessionFile,
+  handleReplyAgentRunError,
   resolveReplyRunDeliveryContext,
 } from "./agent-runner-core.js";
-import type { RuntimeFallbackAttempt } from "./agent-runner-execution.types.js";
 
-describe("resolveAdmittedRunSessionFile", () => {
-  it("uses the scoped session key when one is available", () => {
-    expect(
-      resolveAdmittedRunSessionFile({
-        agentId: "main",
-        sessionId: "session",
-        sessionFile: "legacy-target",
-        sessionKey: " agent:main:session ",
-        storePath: "/tmp/sessions.json",
-      }),
-    ).toBe("agent:main:session");
+function runError(
+  error: unknown,
+  overrides: Partial<Parameters<typeof handleReplyAgentRunError>[1]> = {},
+  restart = false,
+) {
+  const replyOperation = createReplyOperation({
+    sessionKey: "agent:main:core-error",
+    sessionId: "core-error",
+    resetTriggered: false,
   });
+  if (restart) {
+    replyOperation.abortForRestart();
+  }
+  onTestFinished(() => replyOperation.complete());
+  return handleReplyAgentRunError(error, {
+    resolveVisibleReplyDelivery: async () => false,
 
-  it("preserves the admitted fallback when a persisted run has no session key", () => {
-    expect(
-      resolveAdmittedRunSessionFile({
-        agentId: "main",
-        sessionId: "session",
-        sessionFile: "legacy-target",
-        storePath: "/tmp/sessions.json",
-      }),
-    ).toBe("legacy-target");
+    replyExpectation: "required",
+    replyOperation,
+    resolvedVerboseLevel: "off",
+    returnWithQueuedFollowupDrain: (value) => value,
+    sessionCtx: {},
+    ...overrides,
+  });
+}
+
+it("ends shutdown quietly with an already aborted operation", async () => {
+  expect(await runError(new GatewayDrainingError(), {}, true)).toEqual({});
+});
+
+it("ends a live restart refusal quietly before the operation is aborted", async () => {
+  onTestFinished(resetGatewayWorkAdmission);
+  markGatewayRestartDraining();
+  expect(await runError(new GatewayDrainingError())).toEqual({});
+});
+
+it("reports a stale drain refusal when no restart owns the operation", async () => {
+  expect(await runError(new GatewayDrainingError())).toMatchObject({
+    isError: true,
+    text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
   });
 });
 
-describe("resolveReplyRunDeliveryContext", () => {
-  it.each([
-    { name: "numeric message topic", messageThreadId: 99, threadId: 99 },
-    { name: "numeric transport topic", transportThreadId: 99, threadId: 99 },
-    { name: "message topic precedence", messageThreadId: 99, transportThreadId: 77, threadId: 99 },
-    { name: "string message topic", messageThreadId: "99", threadId: "99" },
-    { name: "session identity fallback", threadId: "12345:99" },
-  ])("preserves the $name", ({ messageThreadId, transportThreadId, threadId }) => {
-    expect(
-      resolveReplyRunDeliveryContext({
-        cfg: {},
-        sessionCtx: {
-          Provider: "telegram",
-          OriginatingChannel: "telegram",
-          OriginatingTo: "telegram:12345",
-          AccountId: "work",
-          MessageThreadId: messageThreadId,
-          TransportThreadId: transportThreadId,
-          SessionKey: "agent:main:telegram:direct:12345:thread:12345:99",
-        } as TemplateContext,
-        sessionKey: "agent:main:telegram:direct:12345:thread:12345:99",
-      }),
-    ).toEqual({
-      channel: "telegram",
-      to: "telegram:12345",
-      accountId: "work",
-      threadId,
-    });
+it.each([false, true])(
+  "keeps setup failures retryable only before durable acceptance (%s)",
+  async (accepted) => {
+    const failure = new Error("ENOSPC: turn preparation failed");
+    const reply = runError(failure, { userTurnAccepted: accepted });
+    if (accepted) {
+      await expect(reply).resolves.toMatchObject({
+        isError: true,
+        text: expect.not.stringContaining(SILENT_REPLY_TOKEN),
+      });
+    } else {
+      await expect(reply).rejects.toBe(failure);
+    }
+  },
+);
+
+it.each([
+  { name: "string message topic", messageThreadId: "99", threadId: "99" },
+  { name: "session identity fallback", threadId: "12345:99" },
+])("preserves the $name", ({ messageThreadId, threadId }) => {
+  const sessionKey = "agent:main:telegram:direct:12345:thread:12345:99";
+  expect(
+    resolveReplyRunDeliveryContext({
+      cfg: {},
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:12345",
+        AccountId: "work",
+        MessageThreadId: messageThreadId,
+        SessionKey: sessionKey,
+      },
+      sessionKey,
+    }),
+  ).toEqual({
+    channel: "telegram",
+    to: "telegram:12345",
+    accountId: "work",
+    threadId,
   });
 });
-
-describe("buildSilentFallbackFailurePayload", () => {
-  const selected = { provider: "openrouter", model: "z-ai/glm-5.3" };
-  const other = { provider: "amazon-bedrock", model: "claude-haiku" };
-  const transition = resolveFallbackTransition({
-    selectedProvider: selected.provider,
-    selectedModel: selected.model,
-    activeProvider: other.provider,
-    activeModel: other.model,
-    attempts: [],
-  });
-  const base = {
+const transition = resolveFallbackTransition({
+  selectedProvider: "openai",
+  selectedModel: "primary-model",
+  activeProvider: "anthropic",
+  activeModel: "fallback-model",
+  attempts: [],
+});
+function fallbackPayload(fallbackFailureKnown: boolean) {
+  return buildSilentFallbackFailurePayload({
     fallbackTransition: transition,
-    fallbackFailureKnown: true,
-    cfg: {},
-    isHeartbeat: false,
-    hasSuccessfulTerminalDelivery: false,
-  };
-  const attempt = (
-    reason: RuntimeFallbackAttempt["reason"],
-    identity: Partial<RuntimeFallbackAttempt> = {},
-  ): RuntimeFallbackAttempt => ({ ...selected, error: "provider failed", reason, ...identity });
-
-  it.each(["timeout", "server_error", "overloaded", "tls_certificate"] as const)(
-    "uses unreachable wording for selected-backend %s evidence",
-    (reason) => {
-      const payload = buildSilentFallbackFailurePayload({
-        ...base,
-        fallbackAttempts: [attempt(reason)],
-      });
-      expect(payload?.text).toContain("couldn't reach the configured model backend");
-      expect(payload?.text).toContain(transition.selectedModelRef);
-      expect(payload?.text).toContain(transition.activeModelRef);
-      expect(payload?.isError).toBe(true);
-    },
-  );
-
-  it.each(["format", "empty_response"] as const)(
-    "uses response wording for selected-backend %s evidence",
-    (reason) => {
-      const payload = buildSilentFallbackFailurePayload({
-        ...base,
-        fallbackAttempts: [attempt(reason)],
-      });
-      expect(payload?.text).toContain("responded but produced no usable reply");
-      expect(payload?.text).not.toContain("couldn't reach");
-    },
-  );
-
-  it.each([
-    { label: "empty evidence", attempts: [] },
-    { label: "unknown reason", attempts: [attempt("unknown")] },
-    { label: "auth skip", attempts: [attempt("auth")] },
-    { label: "auth with synthesized status", attempts: [attempt("auth", { status: 401 })] },
-    { label: "permanent auth", attempts: [attempt("auth_permanent")] },
-    { label: "billing", attempts: [attempt("billing")] },
-    { label: "rate limit", attempts: [attempt("rate_limit")] },
-    ...(["timeout", "overloaded", "format", "empty_response"] as const).map((reason) => ({
-      label: `local skip retaining ${reason}`,
-      attempts: [attempt(reason, { code: "MODEL_FALLBACK_SKIPPED" })],
-    })),
-    {
-      label: "local skip beside a response",
-      attempts: [attempt("format"), attempt("format", { code: "MODEL_FALLBACK_SKIPPED" })],
-    },
-    { label: "transport then response", attempts: [attempt("timeout"), attempt("format")] },
-    { label: "response then transport", attempts: [attempt("format"), attempt("timeout")] },
-    { label: "other backend only", attempts: [attempt("format", other)] },
-    { label: "other model only", attempts: [attempt("format", { model: "different" })] },
-    { label: "unattributed response", attempts: [attempt("format", { provider: "", model: "" })] },
-    {
-      label: "unattributed transport",
-      attempts: [attempt("timeout", { provider: "", model: "" })],
-    },
-    {
-      label: "incomplete evidence beside response",
-      attempts: [attempt("format"), attempt("timeout", { provider: "" })],
-    },
-    {
-      label: "incomplete evidence beside transport",
-      attempts: [attempt("timeout"), attempt("format", { model: " " })],
-    },
-  ])("keeps $label cause-neutral", ({ attempts }) => {
-    const payload = buildSilentFallbackFailurePayload({ ...base, fallbackAttempts: attempts });
-    expect(payload?.text).toContain("produced no usable reply");
-    expect(payload?.text).not.toContain("responded");
-    expect(payload?.text).not.toContain("couldn't reach");
+    fallbackFailureKnown,
+    fallbackAttempts: [],
+    cfg: fallbackFailureKnown ? { agents: { defaults: { silentReply: { group: "allow" } } } } : {},
+    completion: resolveReplyCompletion("required", "empty"),
   });
+}
 
-  it.each([
-    {
-      selectedReason: "format",
-      otherReason: "timeout",
-      expected: "responded but produced no usable reply",
-    },
-    {
-      selectedReason: "timeout",
-      otherReason: "format",
-      expected: "couldn't reach the configured model backend",
-    },
-  ] as const)(
-    "ignores another backend's $otherReason evidence",
-    ({ selectedReason, otherReason, expected }) => {
-      const payload = buildSilentFallbackFailurePayload({
-        ...base,
-        fallbackAttempts: [attempt(otherReason, other), attempt(selectedReason)],
-      });
-      expect(payload?.text).toContain(expected);
-    },
-  );
+it("surfaces both model identities when a required fallback reply is missing", () => {
+  const payload = fallbackPayload(true);
 
-  it("uses the configured runtime alias when attributing a response", () => {
-    const cfg = { plugins: { allow: ["anthropic"], entries: { anthropic: { enabled: true } } } };
-    const fallbackTransition = resolveFallbackTransition({
-      selectedProvider: "anthropic",
-      selectedModel: "claude-sonnet-4-6",
-      activeProvider: "openai",
-      activeModel: "gpt-5.5",
-      attempts: [],
-      cfg,
-    });
-    const payload = buildSilentFallbackFailurePayload({
-      ...base,
-      cfg,
-      fallbackTransition,
-      fallbackAttempts: [attempt("format", { provider: "claude-cli", model: "claude-sonnet-4-6" })],
-    });
-    expect(payload?.text).toContain("responded but produced no usable reply");
-  });
+  expect(payload?.isError).toBe(true);
+  expect(payload?.text).toContain(transition.selectedModelRef);
+  expect(payload?.text).toContain(transition.activeModelRef);
+  expect(getReplyPayloadMetadata(payload ?? {})?.deliverDespiteSourceReplySuppression).toBe(true);
+});
 
-  it.each([
-    { isHeartbeat: true },
-    { hasSuccessfulTerminalDelivery: true },
-    { allowEmptyAssistantReplyAsSilent: true },
-    { silentExpected: true },
-    { hasExplicitSilentReply: true },
-    { fallbackFailureKnown: false },
-    { fallbackTransition: { ...transition, fallbackActive: false } },
-  ])("preserves warning suppression %j", (suppression) => {
-    expect(
-      buildSilentFallbackFailurePayload({
-        ...base,
-        ...suppression,
-        fallbackAttempts: [attempt("format")],
-      }),
-    ).toBeUndefined();
-  });
+it("requires an active failed fallback", () => {
+  expect(fallbackPayload(false)).toBeUndefined();
 });

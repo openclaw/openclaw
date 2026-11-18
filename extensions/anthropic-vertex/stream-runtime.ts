@@ -1,29 +1,21 @@
-/**
- * Anthropic Vertex stream runtime. It constructs Vertex SDK clients and adapts
- * OpenClaw stream options for the shared Anthropic Messages transport.
- */
 import { AnthropicVertex as AnthropicVertexSdk } from "@anthropic-ai/vertex-sdk";
 import { GoogleAuth, type GoogleAuthOptions } from "google-auth-library";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
-  clampThinkingLevel,
   stream as streamDefault,
   type Model,
-  type ModelThinkingLevel,
   type ProviderStreamOptions,
 } from "openclaw/plugin-sdk/llm";
 import {
-  resolveClaudeFable5ModelIdentity,
-  resolveClaudeModelIdentity,
-  resolveClaudeMythos5ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   requiresClaudeMandatoryAdaptiveThinking,
-  supportsClaudeAdaptiveThinking,
-  supportsClaudeNativeMaxEffort,
-  supportsClaudeNativeXhighEffort,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { copyProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
+import {
+  applyAnthropicThinkingOptions,
+  clampMaxTokensToModel,
+  copyProviderAcceptanceObserver,
+} from "openclaw/plugin-sdk/provider-transport-runtime";
 import { EnvHttpProxyAgent, fetch as undiciFetch } from "undici";
 import { resolveAnthropicVertexClientRegion } from "./region-endpoint.js";
 import { resolveAnthropicVertexAdcCredentials, resolveAnthropicVertexProjectId } from "./region.js";
@@ -45,15 +37,9 @@ const googleAuthFetch: typeof globalThis.fetch = (input, init) => {
   ) as unknown as ReturnType<typeof globalThis.fetch>;
 };
 
-type AnthropicVertexTransportOptions = ProviderStreamOptions & {
-  client?: unknown;
-  thinkingEnabled?: boolean;
-  thinkingBudgetTokens?: number;
-  effort?: "low" | "medium" | "high" | "xhigh" | "max";
-};
+type AnthropicVertexTransportOptions = ProviderStreamOptions &
+  Parameters<typeof applyAnthropicThinkingOptions>[1] & { client?: unknown };
 
-type AnthropicVertexEffort = NonNullable<AnthropicVertexTransportOptions["effort"]>;
-type AnthropicVertexAdaptiveEffort = AnthropicVertexEffort | "xhigh";
 type AnthropicVertexClientOptions = {
   baseURL?: string;
   googleAuth: GoogleAuth;
@@ -69,88 +55,10 @@ export type AnthropicVertexStreamDeps = {
 };
 
 const defaultAnthropicVertexStreamDeps: AnthropicVertexStreamDeps = {
-  AnthropicVertex: AnthropicVertexSdk as AnthropicVertexStreamDeps["AnthropicVertex"],
+  AnthropicVertex: AnthropicVertexSdk,
   GoogleAuth,
   streamAnthropic: streamDefault,
 };
-
-function isClaudeOpus47OrNewerModel(modelId: string): boolean {
-  return supportsClaudeNativeXhighEffort({ id: modelId });
-}
-
-function isClaudeFable5Model(modelId: string): boolean {
-  return resolveClaudeFable5ModelIdentity({ id: modelId }) !== undefined;
-}
-
-function isClaudeSonnet5Model(modelId: string): boolean {
-  return resolveClaudeSonnet5ModelIdentity({ id: modelId }) !== undefined;
-}
-
-function isClaudeOpus5Model(modelId: string): boolean {
-  return resolveClaudeOpus5ModelIdentity({ id: modelId }) !== undefined;
-}
-
-function isClaudeMythos5Model(modelId: string): boolean {
-  return resolveClaudeMythos5ModelIdentity({ id: modelId }) !== undefined;
-}
-
-function supportsAdaptiveThinking(modelId: string): boolean {
-  return supportsClaudeAdaptiveThinking({ id: modelId });
-}
-
-function mapAnthropicAdaptiveEffort(
-  reasoning: ModelThinkingLevel,
-  model: Model<"anthropic-messages">,
-  modelId: string,
-): AnthropicVertexAdaptiveEffort {
-  const clampModel =
-    typeof model.params?.canonicalModelId === "string" ? { ...model, reasoning: true } : model;
-  const resolvedReasoning = clampThinkingLevel(clampModel, reasoning);
-  const mapped = model.thinkingLevelMap?.[resolvedReasoning];
-  if (typeof mapped === "string") {
-    return mapped as AnthropicVertexAdaptiveEffort;
-  }
-  const effortMap: Record<string, AnthropicVertexAdaptiveEffort> = {
-    off: "low",
-    minimal: "low",
-    low: "low",
-    medium: "medium",
-    high: "high",
-    xhigh: isClaudeFable5Model(modelId)
-      ? "xhigh"
-      : isClaudeOpus47OrNewerModel(modelId) || isClaudeMythos5Model(modelId)
-        ? "xhigh"
-        : "high",
-    max:
-      supportsClaudeNativeMaxEffort({ id: modelId }) || isClaudeMythos5Model(modelId)
-        ? "max"
-        : "high",
-  };
-  return effortMap[resolvedReasoning] ?? "high";
-}
-
-function resolveAnthropicVertexMaxTokens(params: {
-  modelMaxTokens: number | undefined;
-  requestedMaxTokens: number | undefined;
-}): number | undefined {
-  const modelMax =
-    typeof params.modelMaxTokens === "number" &&
-    Number.isFinite(params.modelMaxTokens) &&
-    params.modelMaxTokens > 0
-      ? Math.floor(params.modelMaxTokens)
-      : undefined;
-  const requested =
-    typeof params.requestedMaxTokens === "number" &&
-    Number.isFinite(params.requestedMaxTokens) &&
-    params.requestedMaxTokens > 0
-      ? Math.floor(params.requestedMaxTokens)
-      : undefined;
-
-  if (modelMax !== undefined && requested !== undefined) {
-    return Math.min(requested, modelMax);
-  }
-  return requested ?? modelMax;
-}
 
 /**
  * Create a StreamFn that routes through OpenClaw's generic model stream with an
@@ -187,40 +95,25 @@ export function createAnthropicVertexStreamFn(
     // The shared Anthropic transport must receive its canonical API or it recurses.
     const transportModel = (
       model.api === "anthropic-messages" ? model : { ...model, api: "anthropic-messages" as const }
-    ) as Model<"anthropic-messages"> & {
-      baseUrl?: string;
-      provider: string;
-    };
-    const maxTokens = resolveAnthropicVertexMaxTokens({
-      modelMaxTokens: transportModel.maxTokens,
-      requestedMaxTokens: options?.maxTokens,
-    });
-    const contractModelId = resolveClaudeModelIdentity(model);
+    ) as Model<"anthropic-messages">;
     // Sonnet 5 and Opus 5 default thinking on when the caller omits reasoning.
     const adaptiveDefaultClaude5 =
-      isClaudeSonnet5Model(contractModelId) || isClaudeOpus5Model(contractModelId);
-    const mandatoryAdaptiveThinking = requiresClaudeMandatoryAdaptiveThinking({
-      id: contractModelId,
-    });
-    const requestedReasoning = options?.reasoning;
+      resolveClaudeSonnet5ModelIdentity(transportModel) !== undefined ||
+      resolveClaudeOpus5ModelIdentity(transportModel) !== undefined;
+    // Vertex does not inherit the direct API's optional defaults for other models.
     const reasoning =
-      requestedReasoning === "off" && mandatoryAdaptiveThinking
-        ? "low"
-        : (requestedReasoning ??
-          (mandatoryAdaptiveThinking || adaptiveDefaultClaude5 ? "high" : undefined));
-    const adaptiveThinking =
-      mandatoryAdaptiveThinking ||
-      Boolean(reasoning && reasoning !== "off" && supportsAdaptiveThinking(contractModelId));
-    const temperature =
-      adaptiveThinking ||
-      isClaudeOpus47OrNewerModel(contractModelId) ||
-      isClaudeMythos5Model(contractModelId)
-        ? undefined
-        : options?.temperature;
+      options?.reasoning ??
+      (adaptiveDefaultClaude5
+        ? "high"
+        : requiresClaudeMandatoryAdaptiveThinking(transportModel)
+          ? undefined
+          : "off");
     const opts: AnthropicVertexTransportOptions = copyProviderAcceptanceObserver(options, {
       client,
-      ...(temperature !== undefined ? { temperature } : {}),
-      ...(maxTokens !== undefined ? { maxTokens } : {}),
+      ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
+      maxTokens: Math.floor(
+        clampMaxTokensToModel(transportModel, options?.maxTokens ?? transportModel.maxTokens),
+      ),
       signal: options?.signal,
       cacheRetention: options?.cacheRetention,
       sessionId: options?.sessionId,
@@ -234,36 +127,12 @@ export function createAnthropicVertexStreamFn(
       metadata: options?.metadata,
     });
 
-    if (reasoning === "off") {
-      opts.thinkingEnabled = false;
-    } else if (reasoning) {
-      if (supportsAdaptiveThinking(contractModelId)) {
-        opts.thinkingEnabled = true;
-        opts.effort = mapAnthropicAdaptiveEffort(
-          reasoning,
-          transportModel,
-          contractModelId,
-        ) as AnthropicVertexEffort;
-      } else {
-        const budgets = options?.thinkingBudgets;
-        const thinkingBudgetTokens =
-          (budgets && reasoning in budgets
-            ? budgets[reasoning as keyof typeof budgets]
-            : undefined) ?? 10000;
-        const requestMaxTokens = opts.maxTokens ?? transportModel.maxTokens;
-        opts.thinkingEnabled =
-          thinkingBudgetTokens >= 1024 && thinkingBudgetTokens < requestMaxTokens;
-        if (opts.thinkingEnabled) {
-          opts.thinkingBudgetTokens = thinkingBudgetTokens;
-        }
-      }
-    } else if (mandatoryAdaptiveThinking) {
-      opts.thinkingEnabled = true;
-      opts.effort = "high";
-    } else {
-      opts.thinkingEnabled = false;
-    }
-
+    applyAnthropicThinkingOptions(
+      transportModel,
+      opts,
+      { reasoning, thinkingBudgets: options?.thinkingBudgets },
+      "provider",
+    );
     return deps.streamAnthropic(transportModel, context, opts);
   };
 }
@@ -274,24 +143,18 @@ function resolveAnthropicVertexSdkBaseUrl(baseUrl?: string): string | undefined 
     return undefined;
   }
 
-  try {
-    const url = new URL(trimmed);
-    const normalizedPath = url.pathname.replace(/\/+$/, "");
-    if (!normalizedPath || normalizedPath === "") {
-      url.pathname = "/v1";
-      return url.toString().replace(/\/$/, "");
-    }
-    if (!normalizedPath.endsWith("/v1")) {
-      url.pathname = `${normalizedPath}/v1`;
-      return url.toString().replace(/\/$/, "");
-    }
-    return trimmed;
-  } catch {
+  const url = URL.parse(trimmed);
+  if (!url) {
     return trimmed;
   }
+  const normalizedPath = url.pathname.replace(/\/+$/, "");
+  if (!normalizedPath.endsWith("/v1")) {
+    url.pathname = `${normalizedPath}/v1`;
+    return url.toString().replace(/\/$/, "");
+  }
+  return trimmed;
 }
 
-/** Create an Anthropic Vertex stream function from model metadata and env. */
 export function createAnthropicVertexStreamFnForModel(
   model: { baseUrl?: string },
   env: NodeJS.ProcessEnv = process.env,

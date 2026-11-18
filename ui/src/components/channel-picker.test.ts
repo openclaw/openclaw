@@ -1,34 +1,42 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { updatePickers, choosePickerValue } from "../test-helpers/select-picker.ts";
-import { renderChannelPicker } from "./channel-picker.ts";
+import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { updatePickers, openPicker, choosePickerValue } from "../test-helpers/select-picker.ts";
 import type { SelectPicker } from "./select-picker.ts";
+import { ChannelPicker } from "./solid/channel-picker.tsx";
 
-afterEach(() => document.body.replaceChildren());
+afterEach(() => {
+  cleanupSolid();
+  document.body.replaceChildren();
+});
 
-describe("renderChannelPicker", () => {
-  it("renders neutral and channel artwork while preserving a missing current channel", async () => {
+describe("ChannelPicker", () => {
+  it("renders channel placeholders and neutral choices while preserving a missing current channel", async () => {
     const container = document.createElement("div");
-    render(
-      renderChannelPicker({
-        label: "Channel",
-        value: "retired-channel",
-        options: [
-          { value: "last", label: "last", kind: "neutral" },
-          { value: "telegram", label: "Telegram" },
-        ],
-        onChange: vi.fn(),
-      }),
-      container,
+    mountSolid(
+      () =>
+        createComponent(ChannelPicker, {
+          label: "Channel",
+          value: "retired-channel",
+          options: [
+            { value: "last", label: "last", kind: "neutral" },
+            { value: "telegram", label: "Telegram" },
+          ],
+          onChange: vi.fn(),
+        }),
+      { container },
     );
     await updatePickers(container);
+    await openPicker(container.querySelector("openclaw-select-picker")!);
 
     expect(
       container.querySelector('[role="option"][data-value="last"] .picker-select__leading'),
     ).toBeNull();
-    expect(container.querySelector('[role="option"][data-value="telegram"] img')).not.toBeNull();
+    const telegram = container.querySelector('[role="option"][data-value="telegram"]');
+    expect(telegram?.querySelector("img")).toBeNull();
+    expect(telegram?.querySelector(".channels-tile--fallback")?.textContent?.trim()).toBe("TE");
     expect(
       container.querySelector('[role="option"][data-value="retired-channel"]')?.textContent,
     ).toContain("retired-channel");
@@ -42,29 +50,28 @@ describe("renderChannelPicker", () => {
   it("honors disabled choices and reports enabled changes", async () => {
     const container = document.createElement("div");
     const onChange = vi.fn();
-    render(
-      renderChannelPicker({
-        label: "Channel",
-        value: "telegram",
-        options: [
-          { value: "telegram", label: "Telegram" },
-          { value: "disabled", label: "Disabled", disabled: true },
-        ],
-        onChange,
-      }),
-      container,
+    mountSolid(
+      () =>
+        createComponent(ChannelPicker, {
+          label: "Channel",
+          value: "telegram",
+          options: [
+            { value: "telegram", label: "Telegram" },
+            { value: "disabled", label: "Disabled", disabled: true },
+          ],
+          onChange,
+        }),
+      { container },
     );
     await updatePickers(container);
 
-    const picker = container.querySelector<SelectPicker>("openclaw-select-picker");
+    const picker = container.querySelector<SelectPicker>("openclaw-select-picker")!;
+    await openPicker(picker);
     expect(
       container
         .querySelector('[role="option"][data-value="disabled"]')
         ?.getAttribute("aria-disabled") === "true",
     ).toBe(true);
-    if (!picker) {
-      return;
-    }
     await choosePickerValue(picker, "disabled");
     expect(onChange).not.toHaveBeenCalled();
     await choosePickerValue(picker, "telegram");

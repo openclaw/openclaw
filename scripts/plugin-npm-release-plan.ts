@@ -1,5 +1,4 @@
 #!/usr/bin/env -S node --import tsx
-// Plugin Npm Release Plan script supports OpenClaw repository automation.
 
 import { pathToFileURL } from "node:url";
 import { collectPluginReleasePlan, parsePluginNpmReleaseArgs } from "./lib/plugin-npm-release.ts";

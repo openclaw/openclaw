@@ -1,3 +1,4 @@
+import { readPcm16AudioStats } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
@@ -9,6 +10,83 @@ const LIVE_ENABLED =
 const describeLive = LIVE_ENABLED ? describe : describe.skip;
 const LIVE_TIMEOUT_MS = 60_000;
 const MAX_PENDING_AUDIO_BYTES = 240_000;
+
+describeLive("OpenAI public Live gateway speech", () => {
+  it(
+    "continues speaking after finite microphone input ends",
+    async ({ skip }) => {
+      const apiKey = process.env.OPENAI_API_KEY?.trim();
+      if (!apiKey) {
+        skip("No OpenAI Platform API key is available");
+        return;
+      }
+      const speech = await buildOpenAISpeechProvider().synthesizeTelephony?.({
+        text: "Please count slowly from one to ten.",
+        cfg: { plugins: { enabled: true } },
+        providerConfig: {
+          apiKey,
+          baseUrl: "https://api.openai.com/v1",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+          speed: 1.4,
+        },
+        timeoutMs: 30_000,
+      });
+      expect(speech?.sampleRate).toBe(24_000);
+      expect(speech?.outputFormat).toBe("pcm");
+      if (!speech) {
+        throw new Error("No synthetic microphone audio");
+      }
+      expect(speech.audioBuffer.byteLength).toBeLessThanOrEqual(MAX_PENDING_AUDIO_BYTES);
+      let microphoneEndAt = Number.POSITIVE_INFINITY;
+      let replyBytesAfterMicrophone = 0;
+      const errors: Error[] = [];
+      const bridge = new OpenAIQuicksilverGatewayBridge(
+        {
+          providerConfig: {},
+          model: "gpt-live-1",
+          voice: "marin",
+          instructions:
+            "Follow the user's counting request directly. Speak each number slowly and clearly.",
+          audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+          onAudio: (audio) => {
+            if (Date.now() > microphoneEndAt + 1_000 && readPcm16AudioStats(audio).peak > 16) {
+              replyBytesAfterMicrophone += audio.length;
+            }
+          },
+          onClearAudio: () => {},
+          onError: (error) => errors.push(error),
+          runAgentConsult: async () => ({ text: "Count slowly from one to ten." }),
+          logger: { debug: () => {}, warn: () => {} },
+          resolveAuth: async () => ({ type: "api-key", token: apiKey }),
+        },
+        openAIRealtimeHost,
+      );
+      try {
+        await bridge.connect();
+        microphoneEndAt = Date.now() + speech.audioBuffer.byteLength / 48;
+        bridge.sendAudio(speech.audioBuffer);
+        await waitForLiveCondition(
+          () => replyBytesAfterMicrophone >= 24_000,
+          () =>
+            `No sustained speech after microphone input: audioBytes=${replyBytesAfterMicrophone} errors=${errors.length}`,
+          30_000,
+        );
+        expect(errors).toEqual([]);
+        console.log(
+          JSON.stringify({
+            proof: "public-live-continuous-input",
+            replyBytesAfterMicrophone,
+            result: "pass",
+          }),
+        );
+      } finally {
+        await bridge.close();
+      }
+    },
+    LIVE_TIMEOUT_MS,
+  );
+});
 
 async function waitForLiveCondition(
   predicate: () => boolean,
@@ -129,8 +207,8 @@ describeLive("OpenAI private realtime gateway direct transport", () => {
         expect(errors).toStrictEqual([]);
 
         closed = true;
-        bridge.close();
-        bridge.close();
+        await bridge.close();
+        await bridge.close();
         await new Promise((resolve) => {
           setTimeout(resolve, 250);
         });
@@ -150,7 +228,7 @@ describeLive("OpenAI private realtime gateway direct transport", () => {
           }),
         );
       } finally {
-        bridge.close();
+        await bridge.close();
       }
     },
     LIVE_TIMEOUT_MS,

@@ -9,7 +9,7 @@ sidebarTitle: "CLI automation"
 
 Use `openclaw onboard --non-interactive` to script setup. It requires `--accept-risk`: non-interactive setup can write credentials and daemon config without a confirmation prompt, so the flag is the explicit risk acknowledgement.
 
-Each command can install a managed Gateway with `--install-daemon`, require an already-running compatible Gateway by omitting daemon flags, explicitly leave the Gateway stopped with `--skip-daemon`, or use `--skip-health` for config-only setup. The explicit skip still probes for an existing Gateway and reports whether one is reachable, but an absent listener is informational rather than a setup failure.
+Each command can install a managed Gateway with `--install-daemon`, require an already-running compatible Gateway by omitting daemon flags, explicitly leave the Gateway stopped with `--skip-daemon`, or use `--skip-health` for config-only setup. The explicit skip still checks for an existing Gateway and reports whether one is reachable, but an absent listener is informational rather than a setup failure.
 
 <Note>
 `--json` does not imply non-interactive mode. Pass `--non-interactive --accept-risk` explicitly for scripts.
@@ -17,34 +17,27 @@ Each command can install a managed Gateway with `--install-daemon`, require an a
 
 ## Review required plugins
 
-Non-interactive onboarding cannot accept new external plugin capabilities.
+Bundled plugins and verified plugins from OpenClaw's official catalog do not
+require capability consent during setup. This includes the official Codex
+runtime installed for OpenAI setup.
+
+Non-interactive onboarding cannot accept new third-party plugin capabilities.
 `--accept-risk` acknowledges onboarding risk only; it does not grant plugin
-consent. Before automating a setup that needs an external provider or runtime,
-review that plugin's source and declared capabilities, then preinstall it with
-explicit consent. For OpenAI setup, install the official Codex runtime:
+consent. Before automating a setup that needs a third-party provider, runtime,
+or channel plugin, review its source and declared capabilities, then preinstall
+it with explicit consent:
 
 ```bash
-# After reviewing the plugin and its declared capabilities:
-openclaw plugins install codex --accept-capabilities
+openclaw plugins install <plugin-spec> --accept-capabilities
 ```
 
-The `codex` selector lets OpenClaw's official catalog choose the runtime package.
-Then run your onboarding command below. If onboarding reports a required plugin
-capability review, review and install the named plugin and rerun the same
-command. For an already-installed plugin that needs approval to enable it, use
+If onboarding reports a required plugin capability review, review and install
+the named plugin and rerun the same command. For an already-installed plugin
+that needs approval to enable it, use
 `openclaw plugins enable <plugin-id> --accept-capabilities`.
 
-External channel plugins need the same preparation before scripted
-`openclaw channels add`; for example, after reviewing Discord:
-
-```bash
-openclaw plugins install discord --accept-capabilities
-openclaw channels add --channel discord --token "$DISCORD_BOT_TOKEN"
-```
-
-Bundled plugins are exempt. Consent applies to the reviewed plugin operation,
-not every subsequent install. See
-[Capability consent](/plugins/manage-plugins#capability-consent) for artifact
+Consent applies to the reviewed plugin operation, not every subsequent install.
+See [Capability consent](/plugins/manage-plugins#capability-consent) for artifact
 review, enablement, and update rules.
 
 ## Baseline non-interactive example
@@ -193,6 +186,8 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
 
     `--custom-api-key` is optional; some endpoints do not require auth. If omitted, onboarding checks `CUSTOM_API_KEY` in env. `--custom-provider-id` is optional and auto-derived from the base URL when omitted. `--custom-compatibility` defaults to `openai` (other values: `openai-responses`, `anthropic`).
 
+    For `openai` or `openai-responses`, omit `--custom-model-id` to save the models discovered from `/v1/models` and use the first as the default. Supplying the flag skips discovery. If discovery fails or finds no usable models, rerun with an explicit ID. The `anthropic` example above requires an explicit model ID.
+
     OpenClaw infers image-input support from known vision model-id patterns (`gpt-4o`, `claude-3/4`, `gemini`, `-vl`/`vision` suffixes, and similar). Add `--custom-image-input` to force it on for an unrecognized vision model, or `--custom-text-input` to force text-only.
 
     Ref-mode variant, storing `apiKey` as `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`:
@@ -223,7 +218,7 @@ Anthropic setup-token auth remains supported, but OpenClaw prefers Claude CLI re
 ```bash
 openclaw agents add work \
   --workspace ~/.openclaw/workspace-work \
-  --model openai/gpt-5.6-sol \
+  --model openai/gpt-6-astra \
   --bind whatsapp:biz \
   --non-interactive \
   --json

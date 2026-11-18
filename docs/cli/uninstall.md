@@ -25,7 +25,8 @@ Remove any remaining CLI through the [installation-specific steps](/install/unin
 | `--dry-run`         | `false` | Print planned actions without removing files.        |
 
 With no scope flags, an interactive multiselect prompts for which components
-to remove (defaults to the Gateway service only).
+to remove (defaults to the Gateway service only). Take an archive with
+[`openclaw backup`](/cli/backup) first if you may want the state back.
 
 ## Examples
 
@@ -49,6 +50,16 @@ Uninstall reports each requested scope and exits nonzero if any requested cleanu
   refuses and asks you to stop it first.
 - `--state` preserves configured workspace directories unless `--workspace` is
   also selected.
+- Before deleting completion caches, `--state` removes their literal source
+  registrations from supported shell profiles, including both Bash startup
+  files and both Windows PowerShell profile directories. It preserves other
+  state directories' registrations, user-managed portable hooks, orphan
+  markers, and unrelated profile content and permissions.
+- `--dry-run --state` reports affected profiles without changing them. If a
+  profile cannot be read or updated, state removal stops; resolve the reported
+  profile error and retry. A concurrent profile edit detected before replacement
+  also stops cleanup. Profiles are not changed when state ownership is blocked.
+  `reset` does not remove completion registrations.
 
 ## Related
 

@@ -17,7 +17,7 @@ scenario:
     - docs/channels/group-messages.md
   codeRefs:
     - extensions/qa-lab/src/qa-transport.ts
-    - extensions/qa-lab/src/runtime-api.ts
+    - extensions/qa-lab/runtime-api.ts
   execution:
     kind: flow
     summary: Assert portable top-level reply shape while native adapters normalize transport relations.
@@ -45,14 +45,17 @@ flow:
             senderName: QA Driver
             text:
               expr: "`@openclaw reply exactly: ${config.expectedMarker}`"
-        - waitForOutbound:
-            conversation:
-              id: { ref: config.conversationId }
-              kind: group
-            textIncludes: { ref: config.expectedMarker }
-            timeoutMs:
-              expr: liveTurnTimeoutMs(env, 60000)
+          saveAs: inbound
+        - call: transport.waitForCompletedReply
+          args:
+            - inbound: { ref: inbound }
+              gateway: { expr: env.gateway }
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 60000)
           saveAs: outbound
+        - assert:
+            expr: "outbound.text.includes(config.expectedMarker) && outbound.conversation.id === inbound.conversation.id && outbound.conversation.kind === inbound.conversation.kind"
+            message: "completed delivery did not contain the exact marker in the originating conversation"
         - assert:
             expr: "!outbound.threadId && (transport.id === 'qa-channel' || !outbound.replyToId)"
             message:

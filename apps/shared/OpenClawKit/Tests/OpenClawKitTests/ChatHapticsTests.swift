@@ -27,15 +27,10 @@ private final class HapticsTestTransport: @unchecked Sendable, OpenClawChatTrans
     // user echo exists, which keeps fixture rows ordered after the user turn
     // regardless of how long the test was starved before sending.
     private let historyMessages: @Sendable () -> [AnyCodable]
-    private let stream: AsyncStream<OpenClawChatTransportEvent>
-    private let continuation: AsyncStream<OpenClawChatTransportEvent>.Continuation
 
     init(status: String, historyMessages: @escaping @Sendable () -> [AnyCodable] = { [] }) {
         self.response = OpenClawChatSendResponse(runId: "run-1", status: status)
         self.historyMessages = historyMessages
-        var continuation: AsyncStream<OpenClawChatTransportEvent>.Continuation!
-        self.stream = AsyncStream { continuation = $0 }
-        self.continuation = continuation
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
@@ -61,18 +56,13 @@ private final class HapticsTestTransport: @unchecked Sendable, OpenClawChatTrans
     }
 
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
-        self.stream
-    }
-
-    func emit(_ event: OpenClawChatTransportEvent) {
-        self.continuation.yield(event)
+        AsyncStream { $0.finish() }
     }
 }
 
 private func makeHapticsViewModel(
     status: String,
     historyMessages: @escaping @Sendable () -> [AnyCodable] = { [] }) async -> (
-    HapticsTestTransport,
     OpenClawChatViewModel,
     HapticRecorder)
 {
@@ -82,29 +72,28 @@ private func makeHapticsViewModel(
     let viewModel = await MainActor.run {
         OpenClawChatViewModel(sessionKey: "main", transport: transport, haptics: haptics)
     }
-    return (transport, viewModel, recorder)
+    return (viewModel, recorder)
 }
 
-private func sendHapticsTestMessage(_ viewModel: OpenClawChatViewModel) async {
-    await MainActor.run {
+private func sendHapticsTestMessage(_ viewModel: OpenClawChatViewModel) async throws {
+    let send = await MainActor.run {
         viewModel.input = "hello"
-        viewModel.send()
+        return viewModel.send()
     }
+    try await #require(send).value
 }
 
 struct ChatHapticsTests {
     @Test func `send acceptance fires message sent exactly once`() async throws {
-        let (_, viewModel, recorder) = await makeHapticsViewModel(status: "started")
-        await sendHapticsTestMessage(viewModel)
-        try await waitUntil("message sent haptic") { recorder.events == [.messageSent] }
-        try await Task.sleep(for: .milliseconds(20))
+        let (viewModel, recorder) = await makeHapticsViewModel(status: "started")
+        try await sendHapticsTestMessage(viewModel)
         #expect(recorder.events == [.messageSent])
     }
 
     @Test func `completion fires once for duplicate terminal events`() async throws {
-        let (transport, viewModel, recorder) = await makeHapticsViewModel(status: "started")
-        await sendHapticsTestMessage(viewModel)
-        try await waitUntil("message accepted") { recorder.events == [.messageSent] }
+        let (viewModel, recorder) = await makeHapticsViewModel(status: "started")
+        try await sendHapticsTestMessage(viewModel)
+        #expect(recorder.events == [.messageSent])
 
         let final = OpenClawChatTransportEvent.chat(OpenClawChatEventPayload(
             runId: "run-1",
@@ -112,12 +101,11 @@ struct ChatHapticsTests {
             state: "final",
             message: nil,
             errorMessage: nil))
-        transport.emit(final)
-        transport.emit(final)
-        try await waitUntil("completion haptic") {
-            recorder.events == [.messageSent, .runCompleted]
+        let refreshes = await MainActor.run {
+            (viewModel.handleTransportEvent(final), viewModel.handleTransportEvent(final))
         }
-        try await Task.sleep(for: .milliseconds(20))
+        await refreshes.0?.value
+        await refreshes.1?.value
         #expect(recorder.events == [.messageSent, .runCompleted])
     }
 
@@ -128,7 +116,7 @@ struct ChatHapticsTests {
         // is fetched (always post-send) instead of at test start, where a >1s
         // scheduling stall before send() left the row permanently "older" than
         // the user turn and the wait timed out on loaded CI runners.
-        let (_, viewModel, recorder) = await makeHapticsViewModel(status: "started") {
+        let (viewModel, recorder) = await makeHapticsViewModel(status: "started") {
             [AnyCodable([
                 "role": "assistant",
                 "content": [],
@@ -137,10 +125,7 @@ struct ChatHapticsTests {
                 "errorMessage": "provider failed",
             ] as [String: Any])]
         }
-        await sendHapticsTestMessage(viewModel)
-        try await waitUntil("run failed haptic") {
-            recorder.events == [.messageSent, .runFailed]
-        }
+        try await sendHapticsTestMessage(viewModel)
         #expect(recorder.events == [.messageSent, .runFailed])
     }
 }

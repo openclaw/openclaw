@@ -1,8 +1,12 @@
 // Normalizes MCP config records into canonical runtime shape.
-import { normalizeLowercaseStringOrEmpty as normalizeMcpString } from "@openclaw/normalization-core/string-coerce";
+import { isDeepStrictEqual } from "node:util";
+import {
+  readNonBlankString,
+  normalizeLowercaseStringOrEmpty as normalizeMcpString,
+} from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../utils.js";
+import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 
-type ConfigMcpServers = Record<string, Record<string, unknown>>;
 type OpenClawMcpHttpTransport = "sse" | "streamable-http";
 
 const CLI_MCP_TYPE_TO_OPENCLAW_TRANSPORT: Record<string, OpenClawMcpHttpTransport | "stdio"> = {
@@ -11,6 +15,54 @@ const CLI_MCP_TYPE_TO_OPENCLAW_TRANSPORT: Record<string, OpenClawMcpHttpTranspor
   sse: "sse",
   stdio: "stdio",
 };
+
+export const MCP_SERVER_TIMEOUT_ALIASES = [
+  ["connectTimeout", "connectionTimeoutMs"],
+  ["connect_timeout", "connectionTimeoutMs"],
+  ["timeout", "requestTimeoutMs"],
+] as const;
+
+/** Strict writes reject ambiguity; runtime reads retain legacy behavior with a warning. */
+export function collectMcpTransportIssues(
+  config: OpenClawConfig,
+  baseline?: OpenClawConfig,
+): ConfigValidationIssue[] {
+  return (
+    [
+      ["mcp.servers", config.mcp?.servers, baseline?.mcp?.servers],
+      ["nodeHost.mcp.servers", config.nodeHost?.mcp?.servers, baseline?.nodeHost?.mcp?.servers],
+    ] as const
+  ).flatMap(([path, servers, previous]) =>
+    Object.entries(servers ?? {}).flatMap(([name, server]) => {
+      const existing = previous?.[name];
+      if (!readNonBlankString(server.command) || !readNonBlankString(server.url)) {
+        return [];
+      }
+      // A repair's prior snapshot can be invalid outside this server entry.
+      if (
+        isRecord(existing) &&
+        isDeepStrictEqual(
+          canonicalizeConfiguredMcpServer(server),
+          migrateLegacyConfiguredMcpServer(existing),
+        )
+      ) {
+        return [];
+      }
+      return [
+        {
+          path: `${path}.${name}`,
+          message:
+            'MCP server cannot combine "command" and "url"; remove "command" and stdio options for HTTP, or remove "url" and HTTP/auth options for stdio. Doctor will not choose a transport.',
+        },
+      ];
+    }),
+  );
+}
+
+/** Reads the canonical transport prepared by config migration or bundle ingestion. */
+export function resolveConfiguredMcpTransport(server: unknown): string | undefined {
+  return isRecord(server) ? normalizeMcpString(server.transport) || undefined : undefined;
+}
 
 /** Maps CLI-native MCP type aliases to OpenClaw HTTP transport names. */
 export function resolveOpenClawMcpTransportAlias(
@@ -43,29 +95,18 @@ export function canonicalizeConfiguredMcpServer(
   if (isKnownCliMcpTypeAlias(next.type)) {
     delete next.type;
   }
-  if (typeof next.cwd !== "string" && typeof next.workingDirectory === "string") {
-    next.cwd = next.workingDirectory;
+  for (const [legacy, canonical, type] of [
+    ["workingDirectory", "cwd", "string"],
+    ["supports_parallel_tool_calls", "supportsParallelToolCalls", "boolean"],
+    ["ssl_verify", "sslVerify", "boolean"],
+    ["client_cert", "clientCert", "string"],
+    ["client_key", "clientKey", "string"],
+  ] as const) {
+    if (typeof next[legacy] === type && typeof next[canonical] !== type) {
+      next[canonical] = next[legacy];
+    }
+    delete next[legacy];
   }
-  delete next.workingDirectory;
-  if (
-    typeof next.supports_parallel_tool_calls === "boolean" &&
-    typeof next.supportsParallelToolCalls !== "boolean"
-  ) {
-    next.supportsParallelToolCalls = next.supports_parallel_tool_calls;
-  }
-  delete next.supports_parallel_tool_calls;
-  if (typeof next.ssl_verify === "boolean" && typeof next.sslVerify !== "boolean") {
-    next.sslVerify = next.ssl_verify;
-  }
-  delete next.ssl_verify;
-  if (typeof next.client_cert === "string" && typeof next.clientCert !== "string") {
-    next.clientCert = next.client_cert;
-  }
-  delete next.client_cert;
-  if (typeof next.client_key === "string" && typeof next.clientKey !== "string") {
-    next.clientKey = next.client_key;
-  }
-  delete next.client_key;
   const codex = isRecord(next.codex) ? { ...next.codex } : undefined;
   if (codex) {
     if (
@@ -80,14 +121,32 @@ export function canonicalizeConfiguredMcpServer(
   return next;
 }
 
-/** Returns a cloned map of object-shaped MCP server configs, dropping invalid entries. */
-export function normalizeConfiguredMcpServers(value: unknown): ConfigMcpServers {
-  if (!isRecord(value)) {
-    return {};
+/** Doctor and compatibility comparisons share the retired-key migration semantics. */
+export function migrateLegacyConfiguredMcpServer(
+  server: Record<string, unknown>,
+): Record<string, unknown> {
+  const next = canonicalizeConfiguredMcpServer(server);
+  if (typeof next.disabled === "boolean") {
+    if (typeof next.enabled !== "boolean") {
+      next.enabled = !next.disabled;
+    }
+    delete next.disabled;
   }
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([, server]) => isRecord(server))
-      .map(([name, server]) => [name, { ...(server as Record<string, unknown>) }]),
-  );
+  for (const [alias, canonical] of MCP_SERVER_TIMEOUT_ALIASES) {
+    if (!Object.hasOwn(next, alias)) {
+      continue;
+    }
+    const value = next[alias];
+    // Retired timeouts were seconds; preserve canonical values and discard invalid aliases.
+    if (
+      next[canonical] === undefined &&
+      typeof value === "number" &&
+      value > 0 &&
+      Number.isFinite(value * 1_000)
+    ) {
+      next[canonical] = value * 1_000;
+    }
+    delete next[alias];
+  }
+  return next;
 }

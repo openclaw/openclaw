@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { createUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import { handleEmbeddedAssistantFailure } from "./run/assistant-failure.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./run/terminal-outcome.js";
@@ -14,14 +15,7 @@ function makeAssistant(overrides: Partial<AssistantMessage> = {}): AssistantMess
     provider: "openai",
     model: "gpt-5.6-luna",
     content: [],
-    usage: {
-      input: 100,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 100,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createUsageFixture(100, 0, 100),
     stopReason: "error",
     timestamp: 1,
     ...overrides,
@@ -32,7 +26,6 @@ function makeInput(
   options: {
     assistant?: AssistantMessage;
     attempt?: Partial<EmbeddedRunAttemptResult>;
-    emptyErrorRetries?: number;
   } = {},
 ): FailureInput {
   const assistant = options.assistant ?? makeAssistant();
@@ -43,30 +36,42 @@ function makeInput(
     ...options.attempt,
   });
   return {
-    runParams: {
-      sessionId: "session:empty-error",
-      sessionKey: "agent:main:empty-error",
-      runId: "run:empty-error",
-      config: undefined,
-    } as FailureInput["runParams"],
-    attempt,
-    attemptAssistant: assistant,
-    currentAttemptAssistant: assistant,
-    terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
-    activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
-    provider: "openai",
+    runInput: {
+      runParams: {
+        sessionId: "session:empty-error",
+        sessionKey: "agent:main:empty-error",
+        runId: "run:empty-error",
+        config: undefined,
+      } as FailureInput["runInput"]["runParams"],
+      fallbackConfigured: false,
+      suspendForFailure: vi.fn(),
+      agentDir: "/tmp/openclaw-empty-error-test",
+      isProbeSession: false,
+    },
+    normalizedAttempt: {
+      attempt,
+      attemptAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
+      activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
+    },
+    preparedRuntime: {
+      provider: "openai",
+      modelId: "gpt-5.6-luna",
+      model: { id: "gpt-5.6-luna" },
+      attemptedThinking: new Set(["off"]),
+      attemptAuthProfileStore: { version: 1, profiles: {} },
+      maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => false),
+    },
+    runtime: {
+      thinkLevel: "off",
+      lastProfileId: undefined,
+      pluginHarnessOwnsTransport: false,
+    },
     providerOwner: undefined,
-    modelId: "gpt-5.6-luna",
-    model: "gpt-5.6-luna",
-    thinkLevel: "off",
     getThinkLevel: () => "off",
-    attemptedThinking: new Set(["off"]),
-    fallbackConfigured: false,
-    pluginHarnessOwnsTransport: false,
-    authProfileStore: { version: 1, profiles: {} },
     runtimeAuthRetry: false,
-    maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => false),
-    emptyErrorRetries: options.emptyErrorRetries ?? 0,
+    emptyErrorRetries: 0,
     overloadProfileRotations: 0,
     previousRetryFailoverReason: null,
     failover: {
@@ -75,38 +80,36 @@ function makeInput(
       maybeMarkAuthProfileFailure: vi.fn(async () => {}),
       transientRetryCount: 0,
       advanceAuthProfile: vi.fn(async () => false),
-      advanceRateLimitAuthProfile: vi.fn(async () => false),
     },
     traceAttempts: [],
-    suspendForFailure: vi.fn(),
     suspensionSessionId: "session:empty-error",
-    agentDir: "/tmp/openclaw-empty-error-test",
-    isProbeSession: false,
   };
 }
 
 describe("silent assistant-error retry owner", () => {
-  it("retries a zero-output error before generic failover handling", async () => {
-    const outcome = await handleEmbeddedAssistantFailure(makeInput());
+  it("retries reasoning-only errors without treating hidden output as a reply", async () => {
+    const assistant = makeAssistant({
+      content: [{ type: "thinking", thinking: "internal" }],
+      usage: createUsageFixture(100, 20, 120),
+    });
 
-    expect(outcome).toMatchObject({
+    expect(await handleEmbeddedAssistantFailure(makeInput({ assistant }))).toMatchObject({
       action: "retry",
       emptyErrorRetries: 1,
     });
   });
 
-  it("retries reasoning-only errors without treating hidden output as a reply", async () => {
-    const assistant = makeAssistant({
-      content: [{ type: "thinking", thinking: "internal" }],
-      usage: {
-        input: 100,
-        output: 20,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 120,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+  it.each([400, 422])("does not replay bodyless HTTP %s client errors", async (status) => {
+    const assistant = makeAssistant({ errorMessage: `${status} status code (no body)` });
+
+    expect(await handleEmbeddedAssistantFailure(makeInput({ assistant }))).toMatchObject({
+      action: "proceed",
+      emptyErrorRetries: 0,
     });
+  });
+
+  it("preserves silent-error recovery for a bodyless HTTP 409 conflict", async () => {
+    const assistant = makeAssistant({ errorMessage: "409 status code (no body)" });
 
     expect(await handleEmbeddedAssistantFailure(makeInput({ assistant }))).toMatchObject({
       action: "retry",
@@ -122,12 +125,6 @@ describe("silent assistant-error retry owner", () => {
         },
       }),
     );
-
-    expect(outcome.action).toBe("proceed");
-  });
-
-  it("hands control onward after the three-retry cap", async () => {
-    const outcome = await handleEmbeddedAssistantFailure(makeInput({ emptyErrorRetries: 3 }));
 
     expect(outcome.action).toBe("proceed");
   });

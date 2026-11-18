@@ -4,6 +4,17 @@
 # They centralize temporary log naming and the small success/failure print
 # pattern used by Docker scenario scripts.
 
+docker_e2e_lifecycle_trace_enabled() {
+  case "${OPENCLAW_PLUGIN_LIFECYCLE_TRACE:-}" in
+    1 | true | TRUE | yes | YES)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 docker_e2e_normalize_positive_int_value() {
   local label="${1:?missing value label}"
   local value="${2-}"
@@ -24,27 +35,30 @@ docker_e2e_read_positive_int_env() {
   docker_e2e_normalize_positive_int_value "$name" "$value"
 }
 
-run_logged() {
-  local label="$1"
-  shift
-  docker_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536 >/dev/null || return $?
-  local log_file
-  log_file="$(docker_e2e_run_log "$label")"
-  if ! "$@" >"$log_file" 2>&1; then
-    local print_status=0
-    docker_e2e_print_log "$log_file" || print_status="$?"
-    rm -f "$log_file"
-    if [ "$print_status" -ne 0 ]; then
-      return "$print_status"
+docker_e2e_restore_signal_traps() {
+  local signal
+  for signal in INT TERM HUP; do
+    if [ -n "$1" ]; then
+      eval "$1"
+    else
+      trap - "$signal"
     fi
-    return 1
-  fi
-  rm -f "$log_file"
+    shift
+  done
+}
+
+run_logged() {
+  docker_e2e_run_logged 0 "$@"
 }
 
 run_logged_print() {
-  local label="$1"
-  shift
+  docker_e2e_run_logged 1 "$@"
+}
+
+docker_e2e_run_logged() {
+  local print_success="$1"
+  local label="$2"
+  shift 2
   docker_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536 >/dev/null || return $?
   local log_file
   log_file="$(docker_e2e_run_log "$label")"
@@ -57,11 +71,13 @@ run_logged_print() {
     fi
     return 1
   fi
-  docker_e2e_print_log "$log_file" || {
-    local print_status="$?"
-    rm -f "$log_file"
-    return "$print_status"
-  }
+  if [ "$print_success" = 1 ]; then
+    docker_e2e_print_log "$log_file" || {
+      local print_status="$?"
+      rm -f "$log_file"
+      return "$print_status"
+    }
+  fi
   rm -f "$log_file"
 }
 
@@ -115,23 +131,6 @@ run_logged_print_heartbeat() {
     done
     kill -KILL "$command_pid" 2>/dev/null || true
   }
-  restore_heartbeat_traps() {
-    if [ -n "$previous_int_trap" ]; then
-      eval "$previous_int_trap"
-    else
-      trap - INT
-    fi
-    if [ -n "$previous_term_trap" ]; then
-      eval "$previous_term_trap"
-    else
-      trap - TERM
-    fi
-    if [ -n "$previous_hup_trap" ]; then
-      eval "$previous_hup_trap"
-    else
-      trap - HUP
-    fi
-  }
   cleanup_heartbeat_command() {
     local cleanup_status="${1:-$?}"
     if [ "$cleanup_done" = "1" ]; then
@@ -147,7 +146,7 @@ run_logged_print_heartbeat() {
       docker_e2e_print_log "$log_file" || true
     fi
     rm -f "$log_file"
-    restore_heartbeat_traps
+    docker_e2e_restore_signal_traps "$previous_int_trap" "$previous_term_trap" "$previous_hup_trap"
     if [ "$cleanup_status" -ge 128 ]; then
       exit "$cleanup_status"
     fi

@@ -145,7 +145,7 @@ flow:
                     const telegram = cfg.channels.telegram.accounts?.[transport.accountId] ?? cfg.channels.telegram;
                     telegram.streaming = {
                       mode: "progress",
-                      progress: { commentary: true },
+                      progress: { commentary: true, toolProgress: true },
                     };
                     await fs.writeFile(ctx.configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
                   })()
@@ -182,7 +182,7 @@ flow:
             sinceCursor: { ref: startCursor }
             finalTextIncludes: { ref: config.finalMarker }
             finalSettleMs: 1500
-            minimumPreviewEvents: 3
+            minimumPreviewEvents: 2
             timeoutMs: 90000
           saveAs: sequence
         - set: turnEvents

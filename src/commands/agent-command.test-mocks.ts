@@ -1,4 +1,4 @@
-// Agent command test mocks replace logging and runtime-heavy modules shared by agent command suites.
+// Agent command test mocks replace runtime-heavy modules shared by agent command suites.
 import { vi } from "vitest";
 import { getAgentHarnessPluginMocks } from "./agent-command-state.test-mocks.js";
 
@@ -10,25 +10,15 @@ vi.mock("../agents/harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: agentHarnessPluginMocks.ensureSelectedAgentHarnessPlugin,
 }));
 
-vi.mock("../agents/runtime-plugins.js", () => ({
-  withAgentPluginRegistry: ({ run }: { run: () => unknown }) => run(),
-}));
-
-vi.mock("../logging/subsystem.js", () => {
-  const createMockLogger = () => ({
-    subsystem: "test",
-    isEnabled: vi.fn(() => true),
-    trace: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-    fatal: vi.fn(),
-    raw: vi.fn(),
-    child: vi.fn(() => createMockLogger()),
-  });
+vi.mock("../agents/runtime-plugins.js", async () => {
+  const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
   return {
-    createSubsystemLogger: vi.fn(() => createMockLogger()),
+    withAgentPluginRegistry: ({ run }: { run: () => unknown }) => run(),
+    loadAgentRuntimePluginRegistryHandle: () => createEmptyPluginRegistry(),
+    acquireAgentRuntimePluginRegistry: async () => {
+      const registry = createEmptyPluginRegistry();
+      return { registry, primaryRegistry: registry };
+    },
   };
 });
 
@@ -38,7 +28,7 @@ vi.mock("../cli/deps.js", () => ({
 
 const acpManagerMock = vi.hoisted(() => ({
   current: {
-    resolveSession: vi.fn(() => null),
+    resolveSessionAsync: vi.fn(async () => null),
   } as unknown,
 }));
 
@@ -46,7 +36,7 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   testing: {
     resetAcpSessionManagerForTests: vi.fn(() => {
       acpManagerMock.current = {
-        resolveSession: vi.fn(() => null),
+        resolveSessionAsync: vi.fn(async () => null),
       };
     }),
     setAcpSessionManagerForTests: vi.fn((manager: unknown) => {
@@ -56,10 +46,10 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: vi.fn(() => acpManagerMock.current),
 }));
 
-vi.mock("../agents/embedded-agent.js", () => ({
+vi.mock("../agents/embedded-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/embedded-agent.js")>()),
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   runEmbeddedAgent: vi.fn(),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 
 vi.mock("../agents/model-catalog.js", () => ({
@@ -68,14 +58,23 @@ vi.mock("../agents/model-catalog.js", () => ({
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog: vi.fn(),
+  readPreparedModelCatalog: vi.fn(),
   loadPreparedModelCatalogSnapshot: vi.fn(async () => ({
     entries: [],
     routeVariants: [],
   })),
 }));
 
-vi.mock("../agents/model-selection.js", () => {
+// mock-isolation: Command suites supply deterministic model defaults and catalog fixtures while retaining real persisted-ref normalization.
+vi.mock("../agents/model-selection.js", async (importOriginal) => {
+  const {
+    inferUniqueProviderFromConfiguredModels,
+    normalizeStoredOverrideModel,
+    resolvePersistedSelectedModelRef,
+  } = await importOriginal<typeof import("../agents/model-selection.js")>();
+  const { normalizeModelRef } = await import("../agents/model-ref-shared.js");
+  const { parseModelRef: parseModelRefImpl } =
+    await import("../agents/model-selection-normalize.js");
   type ConfigWithModels = {
     meta?: { migrations?: { modelPolicyAllowlist?: boolean } };
     agents?: {
@@ -90,41 +89,10 @@ vi.mock("../agents/model-selection.js", () => {
   type ModelRef = { provider: string; model: string };
   type CatalogEntry = { id?: string; model?: string; name?: string; reasoning?: boolean };
 
-  const parseModelRefImpl = (raw: string, defaultProvider = "openai"): ModelRef | null => {
-    const value = raw.trim();
-    if (!value) {
-      return null;
-    }
-    const slash = value.indexOf("/");
-    if (slash >= 0) {
-      return {
-        provider: value.slice(0, slash).trim(),
-        model: value.slice(slash + 1).trim(),
-      };
-    }
-    return { provider: defaultProvider, model: value };
-  };
   const parseModelRef = vi.fn(parseModelRefImpl);
   const normalizeProviderId = (provider: string) => provider.trim().toLowerCase();
-  const normalizeModelRef = (provider: string, model: string): ModelRef => ({
-    provider: normalizeProviderId(provider),
-    model: model.trim(),
-  });
   const modelKey = (provider: string, model: string) =>
     `${normalizeProviderId(provider)}/${model.trim().toLowerCase()}`;
-  const isModelKeyAllowedBySet = (allowedKeys: ReadonlySet<string>, key: string) => {
-    if (allowedKeys.has(key)) {
-      return true;
-    }
-    let separator = key.indexOf("/");
-    while (separator > 0) {
-      if (allowedKeys.has(`${key.slice(0, separator + 1)}*`)) {
-        return true;
-      }
-      separator = key.indexOf("/", separator + 1);
-    }
-    return false;
-  };
   const resolvePrimary = (cfg?: ConfigWithModels): string | undefined => {
     const primary = cfg?.agents?.defaults?.model;
     if (typeof primary === "string") {
@@ -135,10 +103,6 @@ vi.mock("../agents/model-selection.js", () => {
   const resolveDefaultRef = (cfg?: ConfigWithModels): ModelRef => {
     const parsed = parseModelRefImpl(resolvePrimary(cfg) ?? "openai/gpt-5.5", "openai");
     return parsed ?? { provider: "openai", model: "gpt-5.5" };
-  };
-  const resolveModelConfig = (cfg: ConfigWithModels | undefined, ref: ModelRef) => {
-    const models = cfg?.agents?.defaults?.models ?? {};
-    return models[`${ref.provider}/${ref.model}`] ?? models[modelKey(ref.provider, ref.model)];
   };
   const resolvePolicyRefs = (cfg?: ConfigWithModels) => {
     const defaults = cfg?.agents?.defaults;
@@ -178,63 +142,17 @@ vi.mock("../agents/model-selection.js", () => {
         allowAny: policyRefs.length === 0,
       };
     }),
-    createModelVisibilityPolicy: vi.fn(
-      ({ cfg, catalog = [] }: { cfg?: ConfigWithModels; catalog?: CatalogEntry[] }) => {
-        const refs = new Set<string>();
-        const policy = resolvePolicyRefs(cfg);
-        const policyRefs = policy.refs;
-        for (const raw of policyRefs) {
-          const parsed = parseModelRefImpl(raw, "openai");
-          if (parsed) {
-            refs.add(modelKey(parsed.provider, parsed.model));
-          }
-        }
-        const primary = resolveDefaultRef(cfg);
-        refs.add(modelKey(primary.provider, primary.model));
-        const allowAny = policyRefs.length === 0;
-        const wildcardModelKeys = new Set(
-          policyRefs.filter((key) => key.endsWith("/*")).map((key) => key.trim().toLowerCase()),
-        );
-        const wildcardProviders = new Set(
-          [...wildcardModelKeys].map((key) => key.slice(0, key.indexOf("/"))),
-        );
-        const allowsKey = (key: string) => allowAny || isModelKeyAllowedBySet(refs, key);
-        return {
-          allowAny,
-          allowedKeys: refs,
-          allowedCatalog: catalog,
-          exactModelRefs: policyRefs.filter((key) => !key.endsWith("/*")),
-          providerWildcards: wildcardProviders,
-          hasConfiguredEntries: policyRefs.length > 0,
-          hasProviderWildcards: wildcardModelKeys.size > 0,
-          allowConfigPath: policy.configPath,
-          allowRepairConfigPath: "agents.defaults.modelPolicy.allow",
-          allowsKey,
-          allows: ({ provider, model }: ModelRef) => allowsKey(modelKey(provider, model)),
-          allowsByWildcard: ({ provider, model }: ModelRef) =>
-            isModelKeyAllowedBySet(wildcardModelKeys, modelKey(provider, model)),
-          resolveSelection: ({ provider, model }: ModelRef) => {
-            const key = modelKey(provider, model);
-            if (allowsKey(key)) {
-              return { provider, model };
-            }
-            const fallback = catalog[0];
-            return fallback?.id ? { provider: "openai", model: fallback.id } : null;
-          },
-          visibleCatalog: ({ catalog: visibleCatalog }: { catalog: CatalogEntry[] }) =>
-            visibleCatalog,
-        };
-      },
-    ),
     buildConfiguredModelCatalog: vi.fn(() => []),
     buildModelAliasIndex: vi.fn(() => new Map()),
-    isModelKeyAllowedBySet,
+    inferUniqueProviderFromConfiguredModels,
     isCliProvider: vi.fn(() => false),
     modelKey,
     normalizeModelRef,
+    normalizeStoredOverrideModel,
     normalizeProviderId,
     normalizeProviderIdForAuth: normalizeProviderId,
     parseModelRef,
+    resolvePersistedSelectedModelRef,
     resolveConfiguredModelRef: vi.fn(
       ({ cfg }: { cfg?: ConfigWithModels; defaultProvider?: string; defaultModel?: string }) =>
         resolveDefaultRef(cfg),
@@ -243,37 +161,15 @@ vi.mock("../agents/model-selection.js", () => {
       resolveDefaultRef(cfg),
     ),
     resolveModelRefFromString: vi.fn(
-      ({ raw, defaultProvider }: { raw: string; defaultProvider?: string }) => {
-        const ref = parseModelRef(raw, defaultProvider ?? "openai");
-        return ref ? { ref, source: "parsed" } : null;
-      },
-    ),
-    resolveThinkingDefault: vi.fn(
       ({
-        cfg,
-        provider,
-        model,
-        catalog,
-      }: {
-        cfg?: ConfigWithModels;
-        provider: string;
-        model: string;
-        catalog?: CatalogEntry[];
-      }) => {
-        const ref = normalizeModelRef(provider, model);
-        const modelThinking = resolveModelConfig(cfg, ref)?.params?.thinking;
-        if (modelThinking) {
-          return modelThinking;
-        }
-        const defaultThinking = cfg?.agents?.defaults?.thinkingDefault;
-        if (defaultThinking) {
-          return defaultThinking;
-        }
-        const entry = catalog?.find((item) => item.id === model || item.model === model);
-        if (entry?.reasoning && entry.name?.includes("4.6")) {
-          return "adaptive";
-        }
-        return entry?.reasoning ? "low" : "off";
+        raw,
+        defaultProvider,
+        ...options
+      }: { raw: string; defaultProvider?: string } & NonNullable<
+        Parameters<typeof parseModelRefImpl>[2]
+      >) => {
+        const ref = parseModelRef(raw, defaultProvider ?? "openai", options);
+        return ref ? { ref, source: "parsed" } : null;
       },
     ),
   };
@@ -300,9 +196,13 @@ vi.mock("../skills/loading/workspace-skill-prompt.js", () => ({
 }));
 
 vi.mock("../skills/loading/workspace-skill-loader.js", () => {
+  const loadVisibleSkills = vi.fn<
+    typeof import("../skills/loading/workspace-skill-loader.js").loadVisibleSkills
+  >(() => []);
   return {
-    filterWorkspaceSkills: (entries: unknown[]) => entries,
-    loadVisibleSkills: vi.fn(() => []),
+    loadVisibleSkills,
+    prepareWorkspaceSkills: async (...args: Parameters<typeof loadVisibleSkills>) =>
+      loadVisibleSkills(...args),
     loadWorkspaceSkills: vi.fn(() => []),
   };
 });
@@ -311,15 +211,12 @@ vi.mock("../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: vi.fn(() => undefined),
 }));
 
-vi.mock("../plugins/bundle-commands.js", () => ({
-  loadEnabledClaudeBundleCommands: vi.fn(() => []),
-}));
-
 vi.mock("../skills/discovery/agent-filter.js", () => ({
   resolveEffectiveAgentSkillFilter: vi.fn(() => undefined),
 }));
 
-vi.mock("../skills/runtime/session-snapshot.js", () => ({
+vi.mock("../skills/runtime/session-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../skills/runtime/session-snapshot.js")>()),
   resolveReusableWorkspaceSkillSnapshot: vi.fn(
     (params?: { existingSnapshot?: unknown; skillFilter?: string[] }) => ({
       snapshot: params?.existingSnapshot ?? {
@@ -330,11 +227,11 @@ vi.mock("../skills/runtime/session-snapshot.js", () => ({
         version: 0,
       },
       shouldRefresh: !params?.existingSnapshot,
-      snapshotVersion: 0,
     }),
   ),
 }));
 
+// mock-isolation: Command fixtures supply skill eligibility without reading the host approval store.
 vi.mock("../agents/exec-defaults.js", () => ({
-  resolveNodeExecEligibility: vi.fn(() => ({ canExec: false })),
+  resolveNodeExecEligibilityAsync: vi.fn(() => ({ canExec: false })),
 }));

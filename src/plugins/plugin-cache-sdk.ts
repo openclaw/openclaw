@@ -23,17 +23,12 @@ export type PluginRuntimeModuleResolution = {
   error?: string;
 };
 
-export type BundledPackageCacheIdentity = {
-  packageJson: string;
-  packageRoot: string;
-  packageVersion: string;
-  size: number;
-  mtimeMs: number;
-};
-
 type PreparedPluginAliases = {
+  packageRoot: string | null;
   cacheKey: string;
+  sdkRoots: string[];
   getAliasMap: () => PluginSdkAliasMap;
+  getSourceTransformAliasMap: () => PluginSdkAliasMap;
   resolveAlias: (specifier: string) => string | undefined;
 };
 
@@ -49,39 +44,24 @@ type PluginSdkHostFacts = {
   workspaceAliasesByMode: Map<string, PluginSdkAliasMap>;
 };
 
-function createPluginSdkHostFacts(): PluginSdkHostFacts {
-  return {
-    workspaceExports: new Map(),
-    subpathsByOwner: new Map(),
-    bundledAliasesByMode: new Map(),
-    workspaceAliasesByMode: new Map(),
-  };
-}
-
 /** Derived SDK facts share the plugin cache lifetime; none owns a separate expiry. */
 export function createPluginCacheSdk() {
   return {
     hosts: new Map<string, PluginSdkHostFacts>(),
     contexts: new Map<string, PreparedPluginAliases>(),
+    roots: new Set<string>(),
     packageNames: new Map<string, string | null>(),
     packageSearches: new Map<string, { first?: string | null; all?: string[] }>(),
     argvDirectories: new Map<string, string[]>(),
     devSourceRoots: new Map<string, string | null>(),
-    bundledPackages: new Map<string, BundledPackageCacheIdentity | undefined>(),
     runtimeModules: new Map<string, PluginRuntimeModuleResolution>(),
-    usableDistArtifacts: new Map<string, boolean>(),
     normalizedJitiAliases: new Map<string, PluginSdkAliasMap>(),
     aliasFacts: new WeakMap<
       PluginSdkAliasMap,
       {
         normalizedJiti?: PluginSdkAliasMap;
-        normalizedTargets?: PluginSdkAliasMap;
         moduleKey?: string;
       }
-    >(),
-    mergedAliases: new WeakMap<
-      PluginSdkAliasMap,
-      WeakMap<PluginSdkAliasMap, WeakMap<PluginSdkAliasMap, PluginSdkAliasMap>>
     >(),
     native: {
       sdkProviders: new Map<
@@ -89,6 +69,13 @@ export function createPluginCacheSdk() {
         { resolveAlias: (specifier: string) => string | undefined; order?: number }
       >(),
       nextSdkProviderOrder: 0,
+      parents: new Map<
+        string,
+        {
+          roots: Set<string>;
+          targets: Map<string, string | undefined>;
+        }
+      >(),
       aliases: new Map<string, Array<{ parentRoot: string; target: string }>>(),
       registeredHosts: new Set<string>(),
       hostRoots: new Map<string, string>(),
@@ -101,14 +88,37 @@ export function createPluginCacheSdk() {
 
 export type PluginCacheSdk = ReturnType<typeof createPluginCacheSdk>;
 
+export function cachePluginSdkAliases(cache: PluginCacheSdk, aliases: PreparedPluginAliases) {
+  cache.contexts.set(aliases.cacheKey, aliases);
+  for (const root of aliases.sdkRoots) {
+    cache.roots.add(root);
+  }
+  return aliases;
+}
+
 export function getPluginSdkHostFacts(
   cache: PluginCacheSdk,
   packageRoot: string,
 ): PluginSdkHostFacts {
   let facts = cache.hosts.get(packageRoot);
   if (!facts) {
-    facts = createPluginSdkHostFacts();
+    facts = {
+      workspaceExports: new Map(),
+      subpathsByOwner: new Map(),
+      bundledAliasesByMode: new Map(),
+      workspaceAliasesByMode: new Map(),
+    };
     cache.hosts.set(packageRoot, facts);
+  }
+  return facts;
+}
+
+export function getPluginSdkAliasFacts(sdk: PluginCacheSdk, aliasMap: PluginSdkAliasMap) {
+  const cache = sdk.aliasFacts;
+  let facts = cache.get(aliasMap);
+  if (!facts) {
+    facts = {};
+    cache.set(aliasMap, facts);
   }
   return facts;
 }

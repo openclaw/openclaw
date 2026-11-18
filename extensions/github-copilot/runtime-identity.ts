@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ModelRequestHeaders } from "openclaw/plugin-sdk/llm";
 import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 
@@ -10,7 +11,15 @@ const COPILOT_RUNTIME_INTEGRATION_ID = "copilot-developer-cli";
 export function buildCopilotRuntimeHeaders(params?: {
   config?: OpenClawConfig;
   headers?: Record<string, string>;
-}): Record<string, string> {
+}): Record<string, string>;
+export function buildCopilotRuntimeHeaders(params: {
+  config?: OpenClawConfig;
+  headers?: ModelRequestHeaders;
+}): ModelRequestHeaders;
+export function buildCopilotRuntimeHeaders(params?: {
+  config?: OpenClawConfig;
+  headers?: ModelRequestHeaders;
+}): ModelRequestHeaders {
   const provider = params?.config?.models?.providers?.["github-copilot"];
   let integrationId = COPILOT_RUNTIME_INTEGRATION_ID;
   for (const headers of [provider?.headers, provider?.request?.headers, params?.headers]) {

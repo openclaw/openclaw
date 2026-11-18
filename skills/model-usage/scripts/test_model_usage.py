@@ -4,20 +4,30 @@ Tests for model_usage helpers.
 """
 
 import argparse
+import io
 from datetime import date, timedelta
 from unittest import TestCase, main
+from unittest.mock import patch
 
 from model_usage import (
     aggregate_costs,
     coerce_finite_cost,
     filter_by_days,
     latest_day_cost,
+    load_payload,
     pick_current_model,
     positive_int,
 )
 
 
 class TestModelUsage(TestCase):
+    def test_load_payload_rejects_mismatched_provider_object(self):
+        with patch("sys.stdin", io.StringIO('{"provider":"claude","daily":[]}')):
+            with self.assertRaisesRegex(
+                RuntimeError, "^Provider 'codex' not found in codexbar payload\\.$"
+            ):
+                load_payload("-", "codex")
+
     def test_positive_int_accepts_valid_numbers(self):
         self.assertEqual(positive_int("1"), 1)
         self.assertEqual(positive_int("7"), 7)
@@ -48,35 +58,12 @@ class TestModelUsage(TestCase):
         self.assertEqual(coerce_finite_cost("1.75"), 1.75)
         self.assertEqual(coerce_finite_cost("  2.5 "), 2.5)
 
-    def test_coerce_finite_cost_rejects_booleans(self):
-        # bool is a subclass of int in Python, but is never a valid cost.
-        self.assertIsNone(coerce_finite_cost(True))
-        self.assertIsNone(coerce_finite_cost(False))
-
-    def test_coerce_finite_cost_rejects_non_finite(self):
-        self.assertIsNone(coerce_finite_cost(float("nan")))
-        self.assertIsNone(coerce_finite_cost(float("inf")))
-        self.assertIsNone(coerce_finite_cost(float("-inf")))
-        self.assertIsNone(coerce_finite_cost("NaN"))
-        self.assertIsNone(coerce_finite_cost("Infinity"))
-
     def test_coerce_finite_cost_rejects_unusable_values(self):
-        self.assertIsNone(coerce_finite_cost("not-a-number"))
-        self.assertIsNone(coerce_finite_cost(""))
-        self.assertIsNone(coerce_finite_cost(None))
-        self.assertIsNone(coerce_finite_cost({}))
-
-    def test_aggregate_costs_includes_numeric_strings(self):
-        entries = [
-            {
-                "date": "2026-05-25",
-                "modelBreakdowns": [
-                    {"modelName": "claude-sonnet-4-6", "cost": 1.50},
-                    {"modelName": "claude-sonnet-4-6", "cost": "1.75"},
-                ],
-            }
-        ]
-        self.assertEqual(aggregate_costs(entries), {"claude-sonnet-4-6": 3.25})
+        # Booleans are ints in Python, but never valid costs.
+        for value in (True, False, float("nan"), float("inf"), float("-inf"),
+                      "NaN", "Infinity", "not-a-number", "", None, {}):
+            with self.subTest(value=value):
+                self.assertIsNone(coerce_finite_cost(value))
 
     def test_aggregate_costs_ignores_bool_and_non_finite(self):
         entries = [

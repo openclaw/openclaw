@@ -6,13 +6,51 @@ import {
   resolveSetupChannelRegistration,
 } from "../../plugins/loader-channel-setup.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
+import { preparePluginModule } from "../../plugins/plugin-module-loader-cache.js";
 import {
-  getCachedPluginModuleLoader,
-  preparePluginModule,
-} from "../../plugins/plugin-module-loader-cache.js";
-import type { ChannelPlugin } from "./types.plugin.js";
+  getPluginSetupModuleLoader,
+  preparePluginSetupModuleLoader,
+  PluginSetupPreparationRequiredError,
+} from "../../plugins/plugin-setup-module.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./types.plugin.js";
 
 const log = createSubsystemLogger("channels");
+
+function prepareSetupEntryPath(
+  record: PluginManifestRecord,
+  source: string,
+  env: NodeJS.ProcessEnv,
+) {
+  return preparePluginModule({
+    modulePath: source,
+    boundaryRoot: record.rootDir,
+    boundaryLabel: "plugin root",
+    surfaceLabel: `channel setup entry ${record.id}`,
+    rejectHardlinks: shouldRejectHardlinkedPluginFiles({
+      origin: record.origin,
+      rootDir: record.rootDir,
+      env,
+    }),
+  }).modulePath;
+}
+
+/** Prepare only the setup entry selected by read-only channel resolution. */
+export async function prepareSetupChannelPluginFromManifestRecord(
+  record: PluginManifestRecord,
+  env: NodeJS.ProcessEnv,
+): Promise<ChannelSetupPluginPreparationFailure | undefined> {
+  if (!record.setupSource) {
+    return undefined;
+  }
+  let source: string;
+  try {
+    source = prepareSetupEntryPath(record, record.setupSource, env);
+  } catch (error) {
+    return { error };
+  }
+  await preparePluginSetupModuleLoader(record, source, record.rootDir);
+  return undefined;
+}
 
 export type ChannelSetupPluginLoadFailure = {
   channelId: string;
@@ -21,60 +59,49 @@ export type ChannelSetupPluginLoadFailure = {
   source?: string;
 };
 
+export type ChannelSetupPluginPreparationFailure = { error: unknown };
+
 export function loadSetupChannelPluginFromManifestRecord(params: {
   record: PluginManifestRecord;
   channelId: string;
   env: NodeJS.ProcessEnv;
+  preparationFailure?: ChannelSetupPluginPreparationFailure;
 }): { plugin?: ChannelPlugin; failure?: ChannelSetupPluginLoadFailure } {
   if (!params.record.setupSource || !params.record.channels.includes(params.channelId)) {
     return {};
   }
   try {
-    const { modulePath } = preparePluginModule({
-      modulePath: params.record.setupSource,
-      boundaryRoot: params.record.rootDir,
-      boundaryLabel: "plugin root",
-      surfaceLabel: `channel setup entry ${params.record.id}`,
-      rejectHardlinks: shouldRejectHardlinkedPluginFiles({
-        origin: params.record.origin,
-        rootDir: params.record.rootDir,
-        env: params.env,
-      }),
-    });
-    const moduleLoader = getCachedPluginModuleLoader({
+    if (params.preparationFailure) {
+      throw params.preparationFailure.error;
+    }
+    const modulePath = prepareSetupEntryPath(params.record, params.record.setupSource, params.env);
+    const moduleLoader = getPluginSetupModuleLoader(
+      params.record,
       modulePath,
-      rootDir: params.record.rootDir,
-      importerUrl: import.meta.url,
-      preferBuiltDist: true,
-      loaderFilename: import.meta.url,
-      tryNative: true,
-      cacheScopeKey: "read-only-setup-entry",
-    });
-    const registration = resolveSetupChannelRegistration(moduleLoader(modulePath));
-    if (registration.loadError) {
-      return {
-        failure: {
-          channelId: params.channelId,
+      params.record.rootDir,
+    );
+    return moduleLoader.initialize(() => {
+      const registration = resolveSetupChannelRegistration(moduleLoader(modulePath));
+      if ("loadError" in registration) {
+        // Preserve the plugin's original failure, including non-Error values.
+        throw registration.loadError;
+      }
+      if (
+        !registration.plugin ||
+        !channelPluginIdBelongsToManifest({
+          channelId: registration.plugin.id,
           pluginId: params.record.id,
-          source: params.record.setupSource,
-          message: `failed to load setup entry: ${formatErrorMessage(registration.loadError)}`,
-        },
-      };
-    }
-    if (!registration.plugin) {
-      return {};
-    }
-    if (
-      !channelPluginIdBelongsToManifest({
-        channelId: registration.plugin.id,
-        pluginId: params.record.id,
-        manifestChannels: params.record.channels,
-      })
-    ) {
-      return {};
-    }
-    return { plugin: registration.plugin };
+          manifestChannels: params.record.channels,
+        })
+      ) {
+        return {};
+      }
+      return { plugin: registration.plugin };
+    });
   } catch (error) {
+    if (error instanceof PluginSetupPreparationRequiredError) {
+      throw error;
+    }
     const detail = formatErrorMessage(error);
     log.warn(`[channels] failed to load channel setup ${params.record.id}: ${detail}`);
     return {

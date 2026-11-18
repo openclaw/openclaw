@@ -10,6 +10,7 @@ import type {
   PluginRegistryDifference,
   PluginRegistryDifferenceFacet,
 } from "./plugin-registry-snapshot.types.js";
+import { groupPluginRecords } from "./record-groups.js";
 
 export function isContainedPluginPath(
   rootPath: string,
@@ -22,9 +23,16 @@ export function isContainedPluginPath(
     const target = path.resolve(inputPath);
     for (let cursor = target; ; cursor = path.dirname(cursor)) {
       try {
-        fs.lstatSync(cursor);
+        // Successful realpath facts already establish existence within this comparison.
+        if (!cache.has(cursor)) {
+          fs.lstatSync(cursor);
+        }
         const realCursor = safeRealpathSync(cursor, cache);
-        return realCursor ? path.resolve(realCursor, path.relative(cursor, target)) : null;
+        return realCursor
+          ? cursor === target
+            ? realCursor
+            : path.resolve(realCursor, path.relative(cursor, target))
+          : null;
       } catch {
         if (cursor === path.dirname(cursor)) {
           return null;
@@ -44,6 +52,7 @@ function resolvePluginRegistryRecordContent(
   const {
     doctorContractFile: _doctorContractFile,
     manifestFile: _manifestFile,
+    sourceAdmissions: _sourceAdmissions,
     packageBuild,
     packageJson,
     ...record
@@ -59,13 +68,9 @@ function resolvePluginRegistryRecordContent(
   if (!packageJson || !comparePackageJsonPath) {
     return stableRecord;
   }
-  const {
-    fileSignature: _fileSignature,
-    path: packageJsonPath,
-    ...stablePackageJson
-  } = packageJson;
+  const { fileSignature: _fileSignature, ...stablePackageJson } = packageJson;
   return Object.assign(stableRecord, {
-    packageJson: Object.assign(stablePackageJson, { path: packageJsonPath }),
+    packageJson: stablePackageJson,
   });
 }
 
@@ -119,16 +124,15 @@ export function diffPluginRegistryRecords(
   // whole registry stale. Reporting a narrower comparison would hide the owning plugin.
   const persistedPlugins = new Map(persisted.plugins.map((plugin) => [plugin.pluginId, plugin]));
   const derivedPlugins = new Map(derived.plugins.map((plugin) => [plugin.pluginId, plugin]));
+  const persistedDiagnostics = groupPluginRecords(persisted.diagnostics, (entry) => entry.pluginId);
+  const derivedDiagnostics = groupPluginRecords(derived.diagnostics, (entry) => entry.pluginId);
   const pluginIds = new Set([
     ...persistedPlugins.keys(),
     ...derivedPlugins.keys(),
     ...Object.keys(persisted.installRecords),
     ...Object.keys(derived.installRecords),
-    ...persisted.diagnostics.flatMap((diagnostic) =>
-      diagnostic.pluginId ? [diagnostic.pluginId] : [],
-    ),
-    ...derived.diagnostics.flatMap((diagnostic) =>
-      diagnostic.pluginId ? [diagnostic.pluginId] : [],
+    ...[...persistedDiagnostics.keys(), ...derivedDiagnostics.keys()].filter(
+      (pluginId): pluginId is string => Boolean(pluginId),
     ),
   ]);
   return [...pluginIds]
@@ -152,8 +156,8 @@ export function diffPluginRegistryRecords(
         ["install", persisted.installRecords[pluginId], derived.installRecords[pluginId]],
         [
           "diagnostics",
-          persisted.diagnostics.filter((diagnostic) => diagnostic.pluginId === pluginId),
-          derived.diagnostics.filter((diagnostic) => diagnostic.pluginId === pluginId),
+          persistedDiagnostics.get(pluginId) ?? [],
+          derivedDiagnostics.get(pluginId) ?? [],
         ],
       ];
       const changed = facets

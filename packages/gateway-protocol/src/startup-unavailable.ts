@@ -1,5 +1,7 @@
 /** Structured error reason used while gateway startup sidecars are still initializing. */
 export const GATEWAY_STARTUP_UNAVAILABLE_REASON = "startup-sidecars";
+/** Base startup-admission budget shared by the server and interactive clients. */
+export const GATEWAY_STARTUP_ADMISSION_WAIT_MS = 300_000;
 /** Internal close cause that distinguishes startup retry closes from generic disconnects. */
 export const GATEWAY_STARTUP_PENDING_CLOSE_CAUSE = "startup-sidecars-pending";
 /** WebSocket close code for temporary gateway unavailability. */

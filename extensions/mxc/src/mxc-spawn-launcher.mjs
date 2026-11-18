@@ -28,93 +28,141 @@ function formatErrorStack(error) {
   return String(error);
 }
 
+// The exec supervisor or runCommandBuffered owns descendant-tree cancellation.
+// This SDK bridge must stay alive for close; exiting the launcher is not that join.
 export function forwardSignals(spawned, options = {}) {
   let exitTimer;
-  const exitGraceMs = options.exitGraceMs ?? FORWARDED_SIGNAL_EXIT_GRACE_MS;
-  const scheduleExit = (signal) => {
-    if (exitTimer) {
-      return;
-    }
-    const setTimeoutFn = options.setTimeout?.bind(undefined) ?? setTimeout;
-    exitTimer = setTimeoutFn(() => {
-      const exit = options.exit?.bind(undefined) ?? ((code) => process.exit(code));
-      exit(signalExitCode(signal));
-    }, exitGraceMs);
-    exitTimer?.unref?.();
-  };
-
+  let forcedExitCode;
+  const listeners = new Map();
   for (const signal of FORWARDED_SIGNALS) {
-    process.on(signal, () => {
+    const listener = () => {
       try {
         spawned.kill(signal);
       } catch {
-        // Ignore kill errors while the sandbox process is already exiting.
+        // The sandbox may already be closing.
       }
-      scheduleExit(signal);
-    });
+      if (exitTimer) {
+        return;
+      }
+      exitTimer = (options.setTimeout ?? setTimeout)(() => {
+        forcedExitCode = signalExitCode(signal);
+        // Reap the owned sandbox, not this launcher or its pending output.
+        try {
+          spawned.kill("SIGKILL");
+        } catch {
+          // Completion still belongs to the sandbox's close notification.
+        }
+      }, options.exitGraceMs ?? FORWARDED_SIGNAL_EXIT_GRACE_MS);
+      exitTimer?.unref?.();
+    };
+    process.on(signal, listener);
+    listeners.set(signal, listener);
   }
+  return {
+    exitCode: () => forcedExitCode,
+    dispose() {
+      if (exitTimer) {
+        (options.clearTimeout ?? clearTimeout)(exitTimer);
+      }
+      for (const [signal, listener] of listeners) {
+        process.off(signal, listener);
+      }
+    },
+  };
 }
 
 function bridgeStdio(pty) {
-  pty.onData((data) => {
-    process.stdout.write(data);
-  });
-
+  const output = pty.onData((data) => process.stdout.write(data));
+  const onData = (data) => pty.write(data);
+  const onEnd = () => pty.write("\x04");
   process.stdin.setEncoding("utf8");
-  process.stdin.on("data", (data) => {
-    pty.write(data);
-  });
-  process.stdin.on("end", () => {
-    pty.write("\x04");
-  });
+  process.stdin.on("data", onData);
+  process.stdin.on("end", onEnd);
+  return () => {
+    output.dispose();
+    process.stdin.off("data", onData);
+    process.stdin.off("end", onEnd);
+    process.stdin.pause();
+  };
 }
 
 function bridgeChildProcess(child) {
-  child.stdout?.on("data", (data) => {
-    process.stdout.write(data);
-  });
-  child.stderr?.on("data", (data) => {
-    process.stderr.write(data);
-  });
-  process.stdin.on("data", (data) => {
-    child.stdin?.write(data);
-  });
-  process.stdin.on("end", () => {
-    child.stdin?.end();
-  });
+  // pipe owns backpressure; leave process output open for natural final draining.
+  child.stdout?.pipe(process.stdout, { end: false });
+  child.stderr?.pipe(process.stderr, { end: false });
+  if (child.stdin) {
+    process.stdin.pipe(child.stdin);
+  }
+  return () => {
+    child.stdout?.unpipe(process.stdout);
+    child.stderr?.unpipe(process.stderr);
+    if (child.stdin) {
+      process.stdin.unpipe(child.stdin);
+      child.stdin.destroy();
+    }
+    process.stdin.pause();
+  };
 }
 
-export function exitOnChildProcessClose(child, options = {}) {
-  child.on("close", (exitCode, signal) => {
-    const exit = options.exit?.bind(undefined) ?? ((code) => process.exit(code));
-    exit(typeof exitCode === "number" ? exitCode : signalExitCode(signal));
-  });
+async function attachPtyProcess(spawned) {
+  const disposeStdio = bridgeStdio(spawned);
+  const signals = forwardSignals(spawned);
+  let exitSubscription;
+  try {
+    // node-pty emits onExit after its terminal output socket closes.
+    const { exitCode, signal } = await new Promise((resolve) => {
+      exitSubscription = spawned.onExit(resolve);
+    });
+    process.exitCode =
+      signals.exitCode() ?? (typeof exitCode === "number" ? exitCode : signalExitCode(signal));
+  } finally {
+    exitSubscription?.dispose();
+    signals.dispose();
+    disposeStdio();
+  }
 }
 
-function attachPtyProcess(spawned) {
-  bridgeStdio(spawned);
-  forwardSignals(spawned);
-  spawned.onExit(({ exitCode, signal }) => {
-    process.exit(typeof exitCode === "number" ? exitCode : signalExitCode(signal));
-  });
-}
-
-function attachChildProcess(spawned) {
-  bridgeChildProcess(spawned);
-  forwardSignals(spawned);
-  exitOnChildProcessClose(spawned);
+async function attachChildProcess(spawned) {
+  const disposeStdio = bridgeChildProcess(spawned);
+  const signals = forwardSignals(spawned);
+  /** @type {Error | undefined} */
+  let failure;
+  const onError = (error) => {
+    failure = error;
+  };
+  spawned.on("error", onError);
+  // EPIPE is normal when a sandbox finishes before the invoking input producer.
+  const onInputError = (error) => {
+    if (error.code !== "EPIPE") {
+      failure = error;
+      spawned.kill("SIGTERM");
+    }
+  };
+  spawned.stdin?.on("error", onInputError);
+  try {
+    const { exitCode, signal } = await new Promise((resolve) => {
+      spawned.once("close", (code, exitSignal) => resolve({ exitCode: code, signal: exitSignal }));
+    });
+    if (failure) {
+      throw failure;
+    }
+    process.exitCode =
+      signals.exitCode() ?? (typeof exitCode === "number" ? exitCode : signalExitCode(signal));
+  } finally {
+    signals.dispose();
+    disposeStdio();
+    spawned.off("error", onError);
+    spawned.stdin?.off("error", onInputError);
+  }
 }
 
 export async function launchSandbox(spawnSandboxFromConfig, config, options, bridges = {}) {
-  // Normalize sync and Promise-returning SDK implementations before selecting an I/O bridge.
   const spawned = await spawnSandboxFromConfig(config, options ?? {});
-
   if (typeof spawned.onData === "function") {
-    (bridges.pty ?? attachPtyProcess)(spawned);
-    return;
+    await (bridges.pty ?? attachPtyProcess)(spawned);
+  } else {
+    await (bridges.child ?? attachChildProcess)(spawned);
   }
-
-  (bridges.child ?? attachChildProcess)(spawned);
 }
 
 const SIGNAL_NUMBERS = new Map([
@@ -152,7 +200,7 @@ export async function main() {
     await launchSandbox(spawnSandboxFromConfig, config, options);
   } catch (error) {
     process.stderr.write(`${formatErrorStack(error)}\n`);
-    process.exit(127);
+    process.exitCode = 127;
   }
 }
 

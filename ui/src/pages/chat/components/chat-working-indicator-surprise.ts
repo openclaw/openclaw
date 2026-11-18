@@ -1,4 +1,4 @@
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
+import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 
 // One salt per page load keeps each run stable while varying the surprise between visits.
 const SURPRISE_SALT = Math.trunc(Math.random() * 0xffffffff);
@@ -20,12 +20,12 @@ const SURPRISE_CLASSES = [
 
 export function selectWorkingClawSurprise(
   key: string,
-  options: { salt?: number; eligible?: boolean } = {},
+  options: { eligible?: boolean } = {},
 ): string {
   if (options.eligible === false) {
     return "";
   }
-  const hash = (fnv1aUtf16(key) ^ (options.salt ?? SURPRISE_SALT)) >>> 0;
+  const hash = (fnv1aUtf16(key) ^ SURPRISE_SALT) >>> 0;
   if (hash % 1000 >= SURPRISE_CHANCE_PER_THOUSAND) {
     return "";
   }

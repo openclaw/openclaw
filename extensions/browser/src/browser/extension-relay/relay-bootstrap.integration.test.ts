@@ -11,6 +11,7 @@ import {
 import { executeActViaPlaywright } from "../pw-tools-core.interactions.execution.js";
 import { withConnectedDaemon } from "./relay-coexistence.test-support.js";
 
+const targetId = "fixture-target";
 afterEach(async () => {
   await stopBrowserControlService();
   clearRuntimeConfigSnapshot();
@@ -20,64 +21,50 @@ afterEach(async () => {
 it.each(["owned", "borrowed"] as const)(
   "repairs the %s relay after initial attach loss and delayed frame-tree publication",
   async (ownership) => {
-    let frameTreeHeld = createDeferred<void>();
-    let releaseFrameTree = createDeferred<void>();
-    let laterCommand = createDeferred<void>();
+    const barriers = () => ({
+      held: createDeferred<void>(),
+      release: createDeferred<void>(),
+      later: createDeferred<void>(),
+    });
+    let barrier = barriers();
     const methods = new WeakMap<object, { method?: string; checks: number }>();
     const realm = vm.createContext({});
     const objects = new Map<string, unknown>();
     const evaluated: unknown[] = [];
+    const frame = { id: targetId, loaderId: "loader", url: "https://example.com/fixture" };
     let attachAttempts = 0;
     let send: (message: Record<string, unknown>) => void;
-    const event = (context: Record<string, unknown>) =>
+    const event = (id: number, name: unknown, isDefault: boolean) =>
       send({
         type: "cdpEvent",
         tabId: 1,
         method: "Runtime.executionContextCreated",
-        params: { context },
+        params: { context: { id, name, auxData: { frameId: targetId, isDefault } } },
       });
     const requireTab = async (_tabId: number, epoch: object) => {
       const admission = methods.get(epoch)!;
       if (admission.method === "Page.getFrameTree" && ++admission.checks === 2) {
-        frameTreeHeld.resolve();
-        await releaseFrameTree.promise;
+        barrier.held.resolve();
+        await barrier.release.promise;
       }
-      return {
-        id: 1,
-        url: "https://example.com/fixture",
-        windowId: 1,
-        groupId: 1,
-        incognito: false,
-      };
+      return { id: 1 };
     };
     vi.stubGlobal("chrome", {
       debugger: {
         sendCommand: async (_target: unknown, method: string, params: Record<string, unknown>) => {
           switch (method) {
             case "Page.getFrameTree":
-              return {
-                frameTree: {
-                  frame: {
-                    id: "fixture-target",
-                    loaderId: "loader",
-                    url: "https://example.com/fixture",
-                  },
-                },
-              };
+              return { frameTree: { frame } };
             case "Target.getTargetInfo":
-              return { targetInfo: { targetId: "fixture-target", title: "Fixture" } };
+              return { targetInfo: { targetId, title: "Fixture" } };
             case "Runtime.enable":
-              event({ id: 1, name: "", auxData: { frameId: "fixture-target", isDefault: true } });
-              return {};
+              event(1, "", true);
+              break;
             case "Runtime.runIfWaitingForDebugger":
-              laterCommand.resolve();
-              return {};
+              barrier.later.resolve();
+              break;
             case "Page.createIsolatedWorld":
-              event({
-                id: 2,
-                name: params.worldName,
-                auxData: { frameId: "fixture-target", isDefault: false },
-              });
+              event(2, params.worldName, false);
               return { executionContextId: 2 };
             case "Runtime.evaluate": {
               objects.set("utility", vm.runInContext(String(params.expression), realm));
@@ -92,16 +79,15 @@ it.each(["owned", "borrowed"] as const)(
               evaluated.push(value);
               return { result: { type: "object", value } };
             }
-            default:
-              return {};
           }
+          return {};
         },
       },
     });
     const handler = createRelayCommandHandler({
       send: (message) => send(message),
       isCurrent: () => true,
-      attachDebugger: async () => ({ targetId: "fixture-target", assertCurrent: () => {} }),
+      attachDebugger: async () => ({ targetId, assertCurrent: () => {} }),
       detachDebugger: async () => {},
       createTab: async () => {},
       focusWindowForTab: async () => {},
@@ -122,37 +108,30 @@ it.each(["owned", "borrowed"] as const)(
         const ctx = createBrowserControlContext();
         expect(ctx.state().extensionRelays?.get("chrome")?.ownership).toBe(ownership);
         const profile = ctx.forProfile("chrome");
-        const listing = profile.listTabs();
-        await frameTreeHeld.promise;
-        // Unrelated bootstrap commands must progress while frame-tree publication waits.
-        await laterCommand.promise;
-        releaseFrameTree.resolve();
-        await expect(listing).resolves.toEqual([
-          expect.objectContaining({ targetId: "fixture-target" }),
-        ]);
-        expect(attachAttempts).toBe(2);
-
-        frameTreeHeld = createDeferred<void>();
-        releaseFrameTree = createDeferred<void>();
-        laterCommand = createDeferred<void>();
+        const finishListing = async (attempts: number) => {
+          const listing = expect(profile.listTabs()).resolves.toEqual([
+            expect.objectContaining({ targetId }),
+          ]);
+          void listing.catch(() => {});
+          await barrier.held.promise;
+          // Unrelated bootstrap commands must progress while frame-tree publication waits.
+          await barrier.later.promise;
+          barrier.release.resolve();
+          await listing;
+          expect(attachAttempts).toBe(attempts);
+        };
+        await finishListing(2);
+        barrier = barriers();
         extension.send(JSON.stringify({ type: "detached", tabId: 1, reason: "renderer replaced" }));
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
         });
-        const recovered = expect(profile.listTabs()).resolves.toEqual([
-          expect.objectContaining({ targetId: "fixture-target" }),
-        ]);
-        void recovered.catch(() => {});
-        await frameTreeHeld.promise;
-        await laterCommand.promise;
-        releaseFrameTree.resolve();
-        await recovered;
-        expect(attachAttempts).toBe(3);
+        await finishListing(3);
 
         const abort = new AbortController();
         const evaluation = executeActViaPlaywright({
           cdpUrl: profile.profile.cdpUrl,
-          targetId: "fixture-target",
+          targetId,
           action: { kind: "evaluate", fn: "() => 42" },
           evaluateEnabled: true,
           signal: abort.signal,
@@ -168,9 +147,11 @@ it.each(["owned", "borrowed"] as const)(
       },
       ownership === "owned"
         ? async () => {
-            await startBrowserControlServiceFromConfig();
+            const state = await startBrowserControlServiceFromConfig();
+            const relay = state?.extensionRelays?.get("chrome");
             const stopped = createDeferred<void>();
             return {
+              port: relay?.ownership === "owned" ? relay.port : null,
               stop: () => {
                 void stopBrowserControlService().then(stopped.resolve, stopped.reject);
               },

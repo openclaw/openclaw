@@ -1,9 +1,14 @@
-const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
-const SESSION_EVENT_REFRESH_MAX_WAIT_MS = 1_000;
+import {
+  monotonicDeadlineAfter,
+  monotonicNow,
+  remainingMonotonicMs,
+} from "../../../../src/shared/monotonic-time.ts";
+
+const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 5_000;
 
 type SessionEventRefreshCoordinatorOptions = {
   active: boolean;
-  refresh: () => Promise<void>;
+  refresh: (isCurrent: () => boolean) => Promise<void>;
 };
 
 /** Canonical bounded event refresh policy shared by session-list owners. */
@@ -13,59 +18,99 @@ export function createSessionEventRefreshCoordinator({
 }: SessionEventRefreshCoordinatorOptions) {
   let active = initialActive;
   let timer: ReturnType<typeof setTimeout> | 0 = 0;
-  let deadline = 0;
-  // Hidden/page-exit lifecycle holds one authoritative refresh bit. Resume
-  // redeems it once without starting network work during teardown.
+  let nextAllowed = 0;
+  let pending: object | null = null;
+  let revision = 0;
+  // Hidden pages and in-flight requests retain one trailing invalidation.
   let queued = false;
+  let retryAt: number | null = null;
+  let fallback: ReturnType<typeof setTimeout> | undefined;
 
   const clearTimer = () => {
     clearTimeout(timer);
     timer = 0;
-    deadline = 0;
+  };
+
+  const arm = (debounce = true) => {
+    if (!active || pending || !queued || timer) {
+      return;
+    }
+    const delay = debounce ? SESSION_EVENT_REFRESH_DEBOUNCE_MS * (1 - 0.2 * Math.random()) : 0;
+    timer = setTimeout(
+      start,
+      retryAt !== null
+        ? Math.max(0, remainingMonotonicMs(retryAt))
+        : Math.max(delay, remainingMonotonicMs(nextAllowed)),
+    );
   };
 
   const start = () => {
-    timer = 0;
-    deadline = 0;
-    if (!active) {
-      queued = true;
+    clearTimer();
+    if (!active || pending || !queued) {
       return;
     }
     queued = false;
-    void refresh().catch(() => {});
+    retryAt = null;
+    const request = {};
+    pending = request;
+    const started = monotonicNow();
+    const requestRevision = revision;
+    void refresh(() => pending === request && requestRevision === revision)
+      .catch(() => {})
+      .finally(() => {
+        if (pending !== request) {
+          return;
+        }
+        pending = null;
+        const elapsed = monotonicNow() - started;
+        nextAllowed = monotonicDeadlineAfter(Math.min(15_000, Math.max(5_000, 3 * elapsed)));
+        arm();
+      });
   };
 
   const absorb = () => {
+    clearTimeout(fallback);
+    fallback = undefined;
+    revision += 1;
     clearTimer();
     queued = false;
+    retryAt = null;
+  };
+  const reset = () => {
+    absorb();
+    pending = null;
+    nextAllowed = 0;
   };
 
   return {
-    schedule() {
-      if (!active) {
-        clearTimer();
+    scheduleFallback() {
+      fallback ??= setTimeout(() => {
+        fallback = undefined;
         queued = true;
-        return;
-      }
-      const now = Date.now();
-      deadline ||= now + SESSION_EVENT_REFRESH_MAX_WAIT_MS;
-      clearTimeout(timer);
-      const delay = Math.min(SESSION_EVENT_REFRESH_DEBOUNCE_MS, deadline - now);
-      timer = setTimeout(start, delay);
+        arm();
+      }, 60_000);
+    },
+    scheduleRetry(delayMs: number) {
+      retryAt = monotonicDeadlineAfter(delayMs);
+      queued = true;
+      clearTimer();
+      arm(false);
+    },
+    schedule() {
+      queued = true;
+      arm();
     },
     setActive(next: boolean, markDirty = false) {
       active = next;
       if (next) {
-        if (queued) {
-          start();
-        }
+        arm(false);
         return;
       }
       queued ||= markDirty || timer !== 0;
       clearTimer();
     },
     absorb,
-    reset: absorb,
-    dispose: absorb,
+    reset,
+    dispose: reset,
   };
 }

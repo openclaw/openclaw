@@ -1,10 +1,10 @@
 // Bounded read of the global MCP registry for security audit.
-import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasErrnoCode } from "../infra/errno.js";
+import { FsSafeError, readLocalFileSafely } from "../infra/fs-safe.js";
 
 const MAX_MCPORTER_REGISTRY_BYTES = 16 * 1024 * 1024;
-const READ_CHUNK_SIZE = 64 * 1024;
 
 export type McporterRegistryRejectReason = "oversized" | "unreadable" | "non-regular" | "malformed";
 
@@ -16,56 +16,31 @@ export type McporterRegistryReadOutcome =
   | { status: "missing" }
   | { status: "rejected"; reason: McporterRegistryRejectReason };
 
-function isEnoent(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException | null)?.code === "ENOENT";
-}
-
 export async function readBoundedMcporterRegistry(
   stateDir: string,
 ): Promise<McporterRegistryReadOutcome> {
   const registryPath = path.join(stateDir, "skills", "config", "mcporter.json");
-  let handle: fs.FileHandle | undefined;
   try {
-    // Open without O_NOFOLLOW so valid symlinked registries are followed,
-    // while still bounding the read to avoid audit OOM on oversized targets.
-    handle = await fs.open(registryPath, constants.O_RDONLY | constants.O_NONBLOCK);
-  } catch (error) {
-    // ENOENT (including a dangling symlink) means no registry; anything else
-    // means one exists but cannot be inspected.
-    return isEnoent(error) ? { status: "missing" } : { status: "rejected", reason: "unreadable" };
-  }
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile()) {
-      return { status: "rejected", reason: "non-regular" };
-    }
-    if (stat.size > MAX_MCPORTER_REGISTRY_BYTES) {
-      return { status: "rejected", reason: "oversized" };
-    }
-    const chunks: Buffer[] = [];
-    const scratch = Buffer.allocUnsafe(Math.min(READ_CHUNK_SIZE, MAX_MCPORTER_REGISTRY_BYTES + 1));
-    let total = 0;
-    while (true) {
-      const { bytesRead } = await handle.read(scratch, 0, scratch.length, null);
-      if (bytesRead === 0) {
-        break;
-      }
-      total += bytesRead;
-      if (total > MAX_MCPORTER_REGISTRY_BYTES) {
-        return { status: "rejected", reason: "oversized" };
-      }
-      chunks.push(Buffer.from(scratch.subarray(0, bytesRead)));
-    }
-    let value: unknown;
+    // Configured registry links may point outside the state directory.
+    const { buffer } = await readLocalFileSafely({
+      filePath: await fs.realpath(registryPath),
+      maxBytes: MAX_MCPORTER_REGISTRY_BYTES,
+    });
     try {
-      value = JSON.parse(Buffer.concat(chunks, total).toString("utf-8"));
+      const value: unknown = JSON.parse(buffer.toString("utf-8"));
+      return { status: "ok", value };
     } catch {
       return { status: "rejected", reason: "malformed" };
     }
-    return { status: "ok", value };
-  } catch {
-    return { status: "rejected", reason: "unreadable" };
-  } finally {
-    await handle.close();
+  } catch (error) {
+    const code = error instanceof FsSafeError ? error.code : undefined;
+    if (hasErrnoCode(error, "ENOENT") || code === "not-found") {
+      return { status: "missing" };
+    }
+    return {
+      status: "rejected",
+      reason:
+        code === "too-large" ? "oversized" : code === "not-file" ? "non-regular" : "unreadable",
+    };
   }
 }

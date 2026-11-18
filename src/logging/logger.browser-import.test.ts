@@ -1,5 +1,4 @@
 // Logger browser import tests cover safe import behavior in browser-like runtimes.
-import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -54,35 +53,30 @@ describe("logging/logger import", () => {
     });
   });
 
-  it("does not resolve the preferred temp dir at import time when node fs is unavailable", async () => {
-    const { module, resolvePreferredOpenClawTmpDir } = await importLoggerWithMockedTempResolver();
-
-    expect(resolvePreferredOpenClawTmpDir).not.toHaveBeenCalled();
-    expect(module.DEFAULT_LOG_DIR).toBe("/tmp/openclaw");
-    expect(module.DEFAULT_LOG_FILE).toBe("/tmp/openclaw/openclaw.log");
-  });
-
-  it("defers node temp resolution until active logger settings are requested", async () => {
-    const secureLogDir = path.join(process.cwd(), "secure-openclaw-temp");
-    const resolvePreferredOpenClawTmpDir = vi.fn(() => secureLogDir);
+  it("does not qualify a file when constructing a silent logger", async () => {
+    const resolvePreferredOpenClawTmpDir = vi.fn(() => {
+      throw new Error("unexpected temp resolution");
+    });
     const { module } = await importLoggerWithMockedTempResolver({
       nodeFsAvailable: true,
       resolvePreferredOpenClawTmpDir,
     });
 
     expect(resolvePreferredOpenClawTmpDir).not.toHaveBeenCalled();
-    expect(module.DEFAULT_LOG_DIR).toBe("/tmp/openclaw");
-    expect(module.DEFAULT_LOG_FILE).toBe("/tmp/openclaw/openclaw.log");
 
-    module.setLoggerConfigLoaderForTests(() => undefined);
-    expect(path.dirname(module.getResolvedLoggerSettings().file)).toBe(secureLogDir);
-    expect(resolvePreferredOpenClawTmpDir).toHaveBeenCalledOnce();
+    module.applyLoggingConfig(undefined);
+    try {
+      expect(module.getLogger().info("silent log")).toBeUndefined();
+      expect(resolvePreferredOpenClawTmpDir).not.toHaveBeenCalled();
+    } finally {
+      module.resetLogger();
+    }
   });
 
   it("disables file logging when imported in a browser-like environment", async () => {
     const { module, resolvePreferredOpenClawTmpDir } = await importLoggerWithMockedTempResolver();
 
-    expect(module.getResolvedLoggerSettings()).toStrictEqual({
+    expect(await module.getResolvedLoggerSettings()).toStrictEqual({
       level: "silent",
       file: "/tmp/openclaw/openclaw.log",
       maxFileBytes: 100 * 1024 * 1024,

@@ -23,15 +23,15 @@ impl SleepBridge {
         let end_gateway = gateway;
         let controller = Arc::new(GatewaySleepCycleController::new(
             format!("linux-sleep-{}", Uuid::new_v4()),
-            move || route_gateway.loopback_route_token(),
-            move |request_id| {
+            move || route_gateway.sleep_route(),
+            move |request_id, route| {
                 let gateway = prepare_gateway.clone();
-                async move { gateway.suspend_prepare(request_id).await }
+                async move { gateway.suspend_prepare(request_id, route).await }
             },
-            move |suspension_id| {
+            move |suspension_id, route| {
                 let gateway = resume_gateway.clone();
                 async move {
-                    gateway.suspend_resume(suspension_id).await?;
+                    gateway.suspend_resume(suspension_id, route).await?;
                     Ok(())
                 }
             },
@@ -44,7 +44,7 @@ impl SleepBridge {
         ));
         let begin_sleep_cycle: BeginSleepCycleHook = Arc::new(move || {
             // A remote or unconfigured route must not activate the driver.
-            if begin_gateway.loopback_route_token().is_none() {
+            if begin_gateway.sleep_route().is_none() {
                 return false;
             }
             begin_gateway.begin_sleep_cycle();

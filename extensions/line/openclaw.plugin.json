@@ -1,5 +1,6 @@
 {
   "id": "line",
+  "categories": ["channels"],
   "doctorContract": {
     "stateMigrations": [{ "id": "line-pre-drain-spool-rows" }]
   },

@@ -46,6 +46,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -89,7 +90,7 @@ import androidx.window.layout.WindowLayoutInfo
 import androidx.window.layout.WindowMetrics
 import androidx.window.layout.WindowMetricsCalculator
 import androidx.window.layout.WindowMetricsCalculatorDecorator
-import com.google.mlkit.common.internal.MlKitInitProvider
+import com.google.mlkit.common.sdkinternal.MlKitContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.After
@@ -386,6 +387,20 @@ class FoldAwareDialogTest {
     assertTrue(callbacks.isEmpty())
     assertEquals(0, underlyingClicks)
 
+    val dialogNode = composeRule.onNode(isDialog())
+    dialogNode.performTouchInput {
+      down(0, Offset(750f, 100f))
+      down(1, Offset(850f, 100f))
+      up(1)
+      up(0)
+    }
+    dialogNode.performTouchInput { down(Offset(750f, 100f)) }
+    val previousBounds = prompt("Modal prompt").getUnclippedBoundsInRoot()
+    emit(emptyList())
+    assertFalse(previousBounds == prompt("Modal prompt").getUnclippedBoundsInRoot())
+    dialogNode.performTouchInput { up() }
+    assertTrue("Multiple pointers and moving prompt bounds are not outside taps", callbacks.isEmpty())
+
     gesture(dialog, 750f to 100f)
     assertEquals(listOf("dismiss"), callbacks)
     composeRule.runOnIdle { backEnabled = true }
@@ -437,7 +452,7 @@ class FoldAwareDialogTest {
   fun scanErrorKeepsIllustrationMessageAndChoicesReachableWithoutLeavingThePane() {
     fontScale = 2f
     withModel { model, _ ->
-      Robolectric.buildContentProvider(MlKitInitProvider::class.java).create()
+      MlKitContext.initializeIfNeeded(RuntimeEnvironment.getApplication())
       setContent { OnboardingFlow(model) }
       composeRule.onNodeWithText("Continue").performClick()
       composeRule.onNodeWithText("Scan QR or setup code").performClick()
@@ -532,6 +547,7 @@ class FoldAwareDialogTest {
 
       emit(emptyList())
       val setupCode = Base64.getEncoder().encodeToString("""{"url":"wss://gateway.test","bootstrapToken":"synthetic-bootstrap"}""".toByteArray())
+      composeRule.onNodeWithText("Manual Gateway").performScrollTo().performClick()
       composeRule.onNode(hasSetTextAction() and hasText("Setup code")).performScrollTo().performTextReplacement(setupCode)
       composeRule.onNodeWithText("Connect").performScrollTo().performClick()
       val replace = latestDialog()

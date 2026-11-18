@@ -4,13 +4,16 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { extractCurrentPackageChangelog } from "./package-changelog.mjs";
+import { collectBundledPluginPackageDependencyErrors } from "./lib/plugin-package-dependencies.mts";
+import {
+  extractCurrentPackageChangelog,
+  readCurrentPackageChangelog,
+} from "./package-changelog.mjs";
 import { validateBundledPackageDependencyAlignment } from "./package-source-dependencies.mjs";
 
 const FULL_GIT_COMMIT_RE = /^[0-9a-f]{40}$/u;
 const ROOT_MANIFEST_PATH = "package.json";
 const AI_MANIFEST_PATH = "packages/ai/package.json";
-const CHANGELOG_PATH = "CHANGELOG.md";
 
 function parseArgs(argv) {
   const options = {
@@ -116,12 +119,26 @@ function readGitFile(ref, file, { optional = false } = {}) {
 }
 
 export function validatePackageSourceRef(ref, options = {}) {
-  return validatePackageSource({
+  const rootManifestContent = readGitFile(ref, ROOT_MANIFEST_PATH);
+  const version = validatePackageSource({
     aiManifestContent: readGitFile(ref, AI_MANIFEST_PATH, { optional: true }),
     allowUnreleasedChangelog: options.allowUnreleasedChangelog,
-    changelogContent: readGitFile(ref, CHANGELOG_PATH),
-    rootManifestContent: readGitFile(ref, ROOT_MANIFEST_PATH),
+    changelogContent: readCurrentPackageChangelog(
+      process.cwd(),
+      parseManifest(rootManifestContent, ROOT_MANIFEST_PATH).version,
+      { ref, allowUnreleased: options.allowUnreleasedChangelog },
+    ),
+    rootManifestContent,
   });
+  validatePluginDependencies(path.resolve("extensions"), { ref });
+  return version;
+}
+
+function validatePluginDependencies(directory, options = {}) {
+  const errors = collectBundledPluginPackageDependencyErrors(directory, options);
+  if (errors.length > 0) {
+    throw new Error(errors.join("\n"));
+  }
 }
 
 function readSourceFile(sourceDir, file, { optional = false } = {}) {
@@ -137,12 +154,19 @@ function readSourceFile(sourceDir, file, { optional = false } = {}) {
 
 export function validatePackageSourceDir(sourceDir, options = {}) {
   const resolvedSourceDir = path.resolve(sourceDir);
-  return validatePackageSource({
+  const rootManifestContent = readSourceFile(resolvedSourceDir, ROOT_MANIFEST_PATH);
+  const version = validatePackageSource({
     aiManifestContent: readSourceFile(resolvedSourceDir, AI_MANIFEST_PATH, { optional: true }),
     allowUnreleasedChangelog: options.allowUnreleasedChangelog,
-    changelogContent: readSourceFile(resolvedSourceDir, CHANGELOG_PATH),
-    rootManifestContent: readSourceFile(resolvedSourceDir, ROOT_MANIFEST_PATH),
+    changelogContent: readCurrentPackageChangelog(
+      resolvedSourceDir,
+      parseManifest(rootManifestContent, ROOT_MANIFEST_PATH).version,
+      { allowUnreleased: options.allowUnreleasedChangelog },
+    ),
+    rootManifestContent,
   });
+  validatePluginDependencies(path.join(resolvedSourceDir, "extensions"));
+  return version;
 }
 
 function main(argv = process.argv.slice(2)) {

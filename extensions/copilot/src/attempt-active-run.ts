@@ -5,6 +5,7 @@ import {
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { queueAgentHarnessMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { AttemptTranscriptJournal } from "./attempt-transcript-journal.js";
 import type { AttemptParamsLike } from "./attempt-types.js";
 import type { attachEventBridge, SessionLike } from "./event-bridge.js";
@@ -40,10 +41,14 @@ export function registerCopilotActiveRun(params: {
     text: string,
     options?: CopilotQueueMessageOptions,
   ) => {
-    if (options?.isInboundUserMessage !== true || options.images?.length) {
+    if (
+      options?.isInboundUserMessage !== true ||
+      options.allowPendingUserInputAnswer === false ||
+      options.images?.length
+    ) {
       return false;
     }
-    const claimed = await claimPendingAgentQuestionAnswer({
+    return await claimPendingAgentQuestionAnswer({
       sessionKey: params.input.sessionKey ?? params.input.sessionId,
       text,
       persist: options.userTurnTranscriptRecorder
@@ -52,7 +57,6 @@ export function registerCopilotActiveRun(params: {
           }
         : undefined,
     });
-    return claimed;
   };
   const queueMessage = async (text: string, options?: CopilotQueueMessageOptions) => {
     let acceptanceReported = false;
@@ -66,8 +70,13 @@ export function registerCopilotActiveRun(params: {
       options?.onQueueAccepted?.(accepted);
     };
     // The host owns question uncertainty; SDK-send rejection must not reopen it.
-    if (await claimPendingUserInputAnswer(text, options)) {
+    const claimed = await claimPendingUserInputAnswer(text, options).catch((error: unknown) => {
+      options?.onQueueSettled?.();
+      throw error;
+    });
+    if (claimed) {
       reportAcceptance(true);
+      options?.onQueueSettled?.();
       return undefined;
     }
     let messageId: string;
@@ -95,14 +104,20 @@ export function registerCopilotActiveRun(params: {
       reportAcceptance(true);
     } catch (error) {
       reportAcceptance(false);
+      options?.onQueueSettled?.();
       throw error;
     }
-    if (options?.waitForTranscriptCommit === true) {
+    const receipt =
+      options?.waitForTranscriptCommit === true || options?.onQueueSettled
+        ? params.transcriptJournal.waitForSdkUserPersisted(messageId)
+        : undefined;
+    if (receipt && options?.onQueueSettled) {
+      // Admission-only callers retain custody until this exact input commits or fails.
+      void receipt.then(options.onQueueSettled, options.onQueueSettled);
+    }
+    if (receipt && options?.waitForTranscriptCommit === true) {
       try {
-        await waitForPersistenceReceipt(
-          params.transcriptJournal.waitForSdkUserPersisted(messageId),
-          options.deliveryTimeoutMs,
-        );
+        await waitForPersistenceReceipt(receipt, options.deliveryTimeoutMs);
       } catch (error) {
         return {
           transcriptCommit: "unconfirmed" as const,
@@ -148,15 +163,14 @@ export function registerCopilotActiveRun(params: {
       params.abortActiveSession();
     },
   };
-  setActiveEmbeddedRun(
+  const attachment = setActiveEmbeddedRun(
     params.input.sessionId,
     activeRunHandle,
     params.input.sessionKey,
     params.input.sessionFile,
     params.agentId,
   );
-  params.input.replyOperation?.attachBackend(activeRunHandle);
-  return activeRunHandle;
+  return { handle: activeRunHandle, attachment };
 }
 
 async function waitForPersistenceReceipt(
@@ -164,26 +178,17 @@ async function waitForPersistenceReceipt(
   requestedTimeoutMs: number | undefined,
 ): Promise<void> {
   const timeoutMs =
-    typeof requestedTimeoutMs === "number" &&
+    requestedTimeoutMs !== undefined &&
     Number.isFinite(requestedTimeoutMs) &&
     requestedTimeoutMs > 0
       ? requestedTimeoutMs
       : DEFAULT_STEERING_DELIVERY_TIMEOUT_MS;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      receipt,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error("Copilot steering transcript receipt timed out")),
-          timeoutMs,
-        );
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  await raceWithTimeout(
+    receipt,
+    timeoutMs,
+    () => {
+      throw new Error("Copilot steering transcript receipt timed out");
+    },
+    { ref: false },
+  );
 }

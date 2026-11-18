@@ -1,5 +1,6 @@
 {
   "id": "venice",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },

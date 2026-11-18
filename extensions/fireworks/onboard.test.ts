@@ -9,19 +9,31 @@ describe("Fireworks onboarding", () => {
 
     expect(config.models?.providers?.fireworks?.models).toEqual(buildFireworksCatalogModels());
     expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
-      FIREWORKS_DEFAULT_MODEL_REF,
+      "fireworks/accounts/fireworks/routers/glm-5p3-fast",
     );
     expect(config.agents?.defaults?.models).toEqual({
-      [FIREWORKS_DEFAULT_MODEL_REF]: { alias: "GLM 5.2 Fast" },
+      [FIREWORKS_DEFAULT_MODEL_REF]: { alias: "GLM 5.3 Fast" },
     });
   });
 
-  it.each([undefined, "merge"] as const)("leaves ordinary %s catalogs runtime-owned", (mode) => {
-    const config = applyFireworksConfig({ models: { mode } });
+  it("preserves an explicitly configured retired router and its alias", () => {
+    const pinnedRef = "fireworks/accounts/fireworks/routers/glm-5p2-fast";
+    const config = applyFireworksConfig({
+      agents: {
+        defaults: { model: pinnedRef, models: { [pinnedRef]: { alias: "Pinned route" } } },
+      },
+    });
+
+    expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(pinnedRef);
+    expect(config.agents?.defaults?.models?.[pinnedRef]).toEqual({ alias: "Pinned route" });
+  });
+
+  it("leaves ordinary catalogs runtime-owned", () => {
+    const config = applyFireworksConfig({});
 
     expect(config.models?.providers?.fireworks?.models).toEqual([]);
     expect(config.agents?.defaults?.models?.[FIREWORKS_DEFAULT_MODEL_REF]).toEqual({
-      alias: "GLM 5.2 Fast",
+      alias: "GLM 5.3 Fast",
     });
     expect(applyFireworksConfig(config)).toEqual(config);
   });

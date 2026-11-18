@@ -1,5 +1,10 @@
 package ai.openclaw.app.voice
 
+import android.Manifest
+import android.os.Bundle
+import android.os.Looper
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.advanceTimeBy
@@ -13,12 +18,129 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowSpeechRecognizer
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
 @OptIn(ExperimentalCoroutinesApi::class)
 class VoiceWakeManagerTest {
+  @Test
+  @Config(sdk = [34])
+  fun segmentedWakeResultsKeepTheSameRecognizerUntilACommand() =
+    runTest {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      val adapter = AndroidOnDeviceVoiceWakeRecognizer(app, this)
+      val commands = mutableListOf<VoiceWakeMatch>()
+      val manager =
+        VoiceWakeManager(app, this, adapter, listOf("openclaw"), {
+          commands += it
+          true
+        })
+      manager.setForeground(true)
+      manager.setEnabled(true)
+      manager.setBackgroundListeningAllowed(true)
+      manager.setForeground(false)
+      shadowOf(Looper.getMainLooper()).idle()
+      val platform = checkNotNull(ShadowSpeechRecognizer.getLatestSpeechRecognizer())
+      val recognizer = shadowOf(platform)
+      try {
+        assertEquals(
+          RecognizerIntent.EXTRA_AUDIO_SOURCE,
+          recognizer.lastRecognizerIntent.getStringExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION),
+        )
+        recognizer.triggerOnReadyForSpeech(Bundle())
+        recognizer.triggerOnSegmentResults(
+          Bundle().apply { putStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION, arrayListOf("ambient words")) },
+        )
+        runCurrent()
+        assertTrue(manager.isListening.value)
+        assertFalse(recognizer.isDestroyed)
+        recognizer.triggerOnSegmentResults(
+          Bundle().apply { putStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION, arrayListOf("openclaw show status")) },
+        )
+        runCurrent()
+        assertEquals(listOf(VoiceWakeMatch("openclaw", "show status")), commands)
+        assertTrue(recognizer.isDestroyed)
+      } finally {
+        manager.setEnabled(false)
+      }
+    }
+
+  @Test
+  @Config(sdk = [34])
+  fun terminalRecognitionErrorClosesSuppliedAudio() =
+    runTest {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      val adapter = AndroidOnDeviceVoiceWakeRecognizer(app, this)
+      val events = mutableListOf<VoiceWakeRecognitionEvent>()
+      adapter.start(1, events::add)
+      shadowOf(Looper.getMainLooper()).idle()
+      val recognizer = shadowOf(checkNotNull(ShadowSpeechRecognizer.getLatestSpeechRecognizer()))
+      val source =
+        checkNotNull(
+          recognizer.lastRecognizerIntent.getParcelableExtra(
+            RecognizerIntent.EXTRA_AUDIO_SOURCE,
+            android.os.ParcelFileDescriptor::class.java,
+          ),
+        )
+      try {
+        assertTrue(source.fileDescriptor.valid())
+        recognizer.triggerOnError(SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE)
+        assertFalse(source.fileDescriptor.valid())
+        assertEquals(listOf(VoiceWakeRecognitionEvent.Error(SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE)), events)
+      } finally {
+        adapter.stop(2)
+      }
+    }
+
+  @Test
+  @Config(sdk = [34])
+  fun retiringBackgroundAuthorityOrDisablingPreventsCaptureRestart() =
+    runTest {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      for (disable in listOf(false, true)) {
+        val adapter = AndroidOnDeviceVoiceWakeRecognizer(app, this)
+        val manager = VoiceWakeManager(app, this, adapter, listOf("openclaw"), { true })
+        manager.setForeground(true)
+        manager.setEnabled(true)
+        manager.setBackgroundListeningAllowed(true)
+        manager.setForeground(false)
+        shadowOf(Looper.getMainLooper()).idle()
+        val platform = checkNotNull(ShadowSpeechRecognizer.getLatestSpeechRecognizer())
+        val recognizer = shadowOf(platform)
+        val source =
+          checkNotNull(
+            recognizer.lastRecognizerIntent.getParcelableExtra(
+              RecognizerIntent.EXTRA_AUDIO_SOURCE,
+              android.os.ParcelFileDescriptor::class.java,
+            ),
+          )
+        try {
+          recognizer.triggerOnReadyForSpeech(Bundle())
+          assertTrue(manager.isListening.value)
+          assertTrue(source.fileDescriptor.valid())
+          // Leave a real recognizer retry pending before authority is retired.
+          recognizer.triggerOnError(SpeechRecognizer.ERROR_NO_MATCH)
+          if (disable) manager.setEnabled(false) else manager.setBackgroundListeningAllowed(false)
+          recognizer.triggerOnError(SpeechRecognizer.ERROR_NO_MATCH)
+          advanceUntilIdle()
+          shadowOf(Looper.getMainLooper()).idle()
+          assertFalse(manager.isListening.value)
+          assertFalse(source.fileDescriptor.valid())
+          assertTrue(recognizer.isDestroyed)
+          assertEquals(platform, ShadowSpeechRecognizer.getLatestSpeechRecognizer())
+        } finally {
+          manager.setEnabled(false)
+        }
+      }
+    }
+
   @Test
   fun retiredRecognitionSessionDropsLateCallbacks() {
     val events = mutableListOf<VoiceWakeRecognitionEvent>()
@@ -244,7 +366,6 @@ class VoiceWakeManagerTest {
   ) : VoiceWakeRecognizer {
     var startCount = 0
     var stopCount = 0
-    var destroyCount = 0
     var stopCallbackCompleted = false
     private var onEvent: ((VoiceWakeRecognitionEvent) -> Unit)? = null
 
@@ -257,19 +378,17 @@ class VoiceWakeManagerTest {
     }
 
     override fun stop(operationId: Long) {
+      val callback = onEvent ?: return
+      onEvent = null
       stopCount += 1
       if (callbackDuringStop) {
         val completed = CountDownLatch(1)
         Thread {
-          onEvent?.invoke(VoiceWakeRecognitionEvent.Error(android.speech.SpeechRecognizer.ERROR_CLIENT))
+          callback(VoiceWakeRecognitionEvent.Error(android.speech.SpeechRecognizer.ERROR_CLIENT))
           completed.countDown()
         }.start()
         stopCallbackCompleted = completed.await(1, TimeUnit.SECONDS)
       }
-    }
-
-    override fun destroy(operationId: Long) {
-      destroyCount += 1
     }
 
     fun emit(event: VoiceWakeRecognitionEvent) {

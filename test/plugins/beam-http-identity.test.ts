@@ -1,7 +1,5 @@
 import { once } from "node:events";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import beamPlugin from "../../extensions/beam/index.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { ResolvedGatewayAuth } from "../../src/gateway/auth.js";
 import { createTestGatewayServer } from "../../src/gateway/server-http.test-harness.js";
@@ -11,14 +9,13 @@ import {
 } from "../../src/gateway/server/plugins-http.js";
 import { withTempConfig } from "../../src/gateway/test-temp-config.js";
 import { createSubsystemLogger } from "../../src/logging/subsystem.js";
-import { closePluginStateDatabase } from "../../src/plugin-state/plugin-state-store.js";
-import { createPluginRecord } from "../../src/plugins/loader-records.js";
-import { createPluginRegistry } from "../../src/plugins/registry.js";
+import { loadOpenClawPluginsAsync } from "../../src/plugins/loader.js";
 import {
+  clearActivePluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../src/plugins/runtime.js";
-import { createPluginRuntime } from "../../src/plugins/runtime/index.js";
+import { closeOpenClawStateDatabaseAsync } from "../../src/state/openclaw-state-db.js";
 import { listProfiles } from "../../src/state/user-profiles.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 
@@ -35,42 +32,36 @@ const tokenAuth: ResolvedGatewayAuth = {
   token: "synthetic-beam-operator-token",
 };
 
-function registerBeam(config: OpenClawConfig) {
-  const builder = createPluginRegistry({
-    runtime: createPluginRuntime(),
+async function registerBeam(config: OpenClawConfig) {
+  const registry = await loadOpenClawPluginsAsync({
+    config,
     logger: log,
-    activateGlobalSideEffects: false,
+    onlyPluginIds: ["beam"],
+    preferBuiltPluginArtifacts: false,
+    activate: false,
+    cache: false,
   });
-  const record = createPluginRecord({
-    id: "beam",
-    source: fileURLToPath(new URL("../../extensions/beam/index.ts", import.meta.url)),
-    origin: "bundled",
-    enabled: true,
-    configSchema: true,
-  });
-  builder.registry.plugins.push(record);
-  beamPlugin.register(builder.createApi(record, { config }));
-  setActivePluginRegistry(builder.registry);
-  const catalog = builder.registry.sessionCatalogs.find((entry) => entry.provider.id === "beam");
+  setActivePluginRegistry(registry);
+  const catalog = registry.sessionCatalogs.find((entry) => entry.provider.id === "beam");
   if (!catalog) {
     throw new Error("Beam did not register its session catalog");
   }
-  return { registry: builder.registry, catalog: catalog.provider };
+  return { registry, catalog: catalog.provider };
 }
 
 async function withBeamHttpServer(
   auth: ResolvedGatewayAuth,
-  run: (origin: string, registration: ReturnType<typeof registerBeam>) => Promise<void>,
+  run: (origin: string, registration: Awaited<ReturnType<typeof registerBeam>>) => Promise<void>,
 ) {
   const cfg: OpenClawConfig = {
-    agents: { entries: { main: { default: true } } },
+    agents: { entries: { main: {} } },
     gateway: { auth, trustedProxies: ["127.0.0.1", "::1"] },
     plugins: { entries: { beam: { enabled: true } } },
   };
   await withTempConfig({
     cfg,
     run: async () => {
-      const registration = registerBeam(cfg);
+      const registration = await registerBeam(cfg);
       const { registry } = registration;
       const server = createTestGatewayServer({
         resolvedAuth: auth,
@@ -94,8 +85,9 @@ async function withBeamHttpServer(
           server.close((error) => (error ? reject(error) : resolve()));
           server.closeAllConnections();
         });
+        await clearActivePluginRegistry(registry);
         resetPluginRuntimeStateForTest();
-        closePluginStateDatabase();
+        await closeOpenClawStateDatabaseAsync();
       }
     },
   });
@@ -121,6 +113,7 @@ async function upload(
   beamId: string,
   text: string,
   headers: Record<string, string>,
+  expectedStatus = 200,
 ) {
   const response = await fetch(`${origin}${routePath}`, {
     method: "POST",
@@ -128,9 +121,10 @@ async function upload(
     body: JSON.stringify(snapshot(beamId, text)),
     signal: AbortSignal.timeout(10_000),
   });
-  const body: unknown = await response.json();
-  expect(response.status, JSON.stringify(body)).toBe(200);
-  expect(body).toMatchObject({ ok: true, beamId });
+  const textBody = await response.text();
+  expect(response.status, textBody).toBe(expectedStatus);
+  const body: unknown = JSON.parse(textBody);
+  expect(body).toMatchObject(expectedStatus === 200 ? { ok: true, beamId } : { ok: false });
 }
 
 describe("Beam authenticated uploader identity", () => {
@@ -142,17 +136,33 @@ describe("Beam authenticated uploader identity", () => {
       const profileIds: string[] = [];
 
       await withBeamHttpServer(proxyAuth, async (origin, { catalog }) => {
-        expect(listProfiles()).toEqual([]);
+        expect(await listProfiles()).toEqual([]);
         for (const [index, principal] of principals.entries()) {
           const beamId = index === 0 ? firstBeamId : secondBeamId;
           await upload(origin, beamId, `Question from ${principal}`, {
             "x-forwarded-user": principal,
             "x-forwarded-for": "198.51.100.20",
           });
-          const profile = listProfiles().find((candidate) => candidate.emails.includes(principal));
+          const profile = (await listProfiles()).find((candidate) =>
+            candidate.emails.includes(principal),
+          );
           expect(profile).toBeDefined();
           profileIds.push(profile!.id);
+          await upload(
+            origin,
+            beamId,
+            "Forbidden read-only replacement",
+            {
+              "x-forwarded-user": principal,
+              "x-forwarded-for": "198.51.100.20",
+              "x-openclaw-scopes": "operator.read",
+            },
+            403,
+          );
           const page = await catalog.read({ agentId: "main", hostId: "gateway", threadId: beamId });
+          expect(page.items.find((item) => item.type === "userMessage")?.text).toBe(
+            `Question from ${principal}`,
+          );
           expect(page.items.find((item) => item.type === "userMessage")?.sender).toEqual({
             identity: { type: "profile", id: profile!.id },
           });
@@ -181,7 +191,7 @@ describe("Beam authenticated uploader identity", () => {
         expect(replaced.items.find((item) => item.type === "userMessage")).toMatchObject({
           text: "Shared-token replacement",
         });
-        const ownerProfile = listProfiles().find((profile) => profile.emails.length === 0);
+        const ownerProfile = (await listProfiles()).find((profile) => profile.emails.length === 0);
         expect(ownerProfile).toBeDefined();
         expect(profileIds).not.toContain(ownerProfile!.id);
         expect(replaced.items.find((item) => item.type === "userMessage")?.sender).toEqual({
@@ -191,7 +201,7 @@ describe("Beam authenticated uploader identity", () => {
         expect(
           (await read(secondBeamId)).items.find((item) => item.type === "userMessage")?.sender,
         ).toEqual({ identity: { type: "profile", id: profileIds[1] } });
-        expect(listProfiles()).toHaveLength(3);
+        expect(await listProfiles()).toHaveLength(3);
       });
     });
   });

@@ -69,3 +69,8 @@ Existing claimed-model configuration and credentials remain available.
 
 Claiming revalidates the offer against the live ClawHub API, so a withdrawn offer
 is refused even when an older cached copy still shows it.
+
+## Related
+
+- [CLI reference](/cli)
+- [`openclaw models`](/cli/models) — the models these promotions apply to

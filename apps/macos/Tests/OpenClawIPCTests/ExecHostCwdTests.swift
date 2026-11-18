@@ -1,17 +1,15 @@
 import Darwin
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
 struct ExecHostCwdTests {
     @Test(.execApprovalsStateIsolated, arguments: ["/tmp", "/private/tmp"])
     func `native full execution uses the physical temporary directory`(cwd: String) async throws {
-        var snapshot = ExecApprovalsStore.readSnapshot()
-        snapshot.file.defaults = ExecApprovalsDefaults(security: .full, ask: .off)
-        guard case .saved = ExecApprovalsStore.saveFile(snapshot.file, ifBaseHash: snapshot.hash) else {
-            Issue.record("Could not seed the test-owned exec policy")
-            return
-        }
+        try await ExecApprovalsSocketTestSupport.seedPolicy(
+            ExecApprovalsFile(version: 1, defaults: ExecApprovalsDefaults(security: .full, ask: .off)),
+            in: ExecApprovalsStore.stateDirURL())
         let response = await ExecHostExecutor.handle(ExecHostRequest(
             command: ["/bin/pwd", "-P"],
             cwd: cwd,
@@ -44,7 +42,7 @@ struct ExecHostCwdTests {
     }
 
     @Test func `cwd snapshot refuses files symlink loops and inaccessible paths`() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("openclaw-cwd-\(UUID().uuidString)")
+        let root = temporaryDirectoryForTests().appendingPathComponent("openclaw-cwd-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("file")

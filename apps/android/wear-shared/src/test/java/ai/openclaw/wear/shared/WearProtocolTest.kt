@@ -144,6 +144,7 @@ class WearProtocolTest {
     assertEquals("gateway-controls", WearProxyCapability.GatewayControls.wireValue)
     assertEquals("model-controls", WearProxyCapability.ModelControls.wireValue)
     assertEquals("model-catalog-search", WearProxyCapability.ModelCatalogSearch.wireValue)
+    assertEquals("session-scoped-model-catalog", WearProxyCapability.SessionScopedModelCatalog.wireValue)
     assertEquals("session-selection-lookup", WearProxyCapability.SessionSelectionLookup.wireValue)
     assertEquals("session-search-pagination", WearProxyCapability.SessionSearchPagination.wireValue)
     assertEquals("agent-pulse", WearProxyCapability.AgentPulse.wireValue)
@@ -256,6 +257,22 @@ class WearProtocolTest {
       WearDecodeResult.Success(bracketsInString),
       WearProtocolCodec.decode(WearProtocolCodec.encode(bracketsInString)),
     )
+
+    for (depth in listOf(WearProtocol.MAX_JSON_DEPTH, WearProtocol.MAX_JSON_DEPTH + 1)) {
+      var payload: JsonElement = JsonPrimitive(0)
+      repeat(depth - 2) { payload = JsonArray(listOf(payload)) }
+      val message =
+        WearMessage.Request(
+          requestId = "depth-$depth",
+          method = WearRpcMethod.ChatSend,
+          params = buildJsonObject { put("payload", payload) },
+        )
+      if (depth == WearProtocol.MAX_JSON_DEPTH) {
+        assertEquals(WearDecodeResult.Success(message), WearProtocolCodec.decode(WearProtocolCodec.encode(message)))
+      } else {
+        assertThrows(IllegalArgumentException::class.java) { WearProtocolCodec.encode(message) }
+      }
+    }
 
     var nestedPayload: JsonElement = JsonPrimitive(0)
     repeat(4_096) {

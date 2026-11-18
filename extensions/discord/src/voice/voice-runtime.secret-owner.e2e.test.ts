@@ -7,7 +7,6 @@ defineDiscordVoiceTests(
     vi,
     createConnectionMock,
     joinVoiceChannelMock,
-    createAudioPlayerMock,
     resolveConfiguredRealtimeVoiceProviderMock,
     assertSecretOwnerAvailableMock,
     isSecretOwnerAvailableMock,
@@ -30,7 +29,7 @@ defineDiscordVoiceTests(
           channelId: "1001",
           voiceSessionKey: "discord:g1:1001",
           route: { agentId: "agent-1", sessionKey: "discord:g1:1001" },
-          player: createAudioPlayerMock(),
+          audio: { on: vi.fn(), off: vi.fn(), stopPlayback: vi.fn() },
         },
         mode: "agent-proxy",
         onTerminalError: vi.fn(),
@@ -55,7 +54,8 @@ defineDiscordVoiceTests(
         expect(params?.isProviderAvailable?.({ id: "openai" })).toBe(false);
         expect(params?.isProviderAvailable?.({ id: "xai" })).toBe(true);
         return {
-          provider: { id: "xai", capabilities: { supportsActivationNameGating: true } },
+          provider: { id: "xai" },
+          capabilities: { supportsActivationNameGating: true },
           providerConfig: { model: "grok-voice", voice: "ara" },
         };
       });
@@ -68,7 +68,7 @@ defineDiscordVoiceTests(
           channelId: "1001",
           voiceSessionKey: "discord:g1:1001",
           route: { agentId: "agent-1", sessionKey: "discord:g1:1001" },
-          player: createAudioPlayerMock(),
+          audio: { on: vi.fn(), off: vi.fn(), stopPlayback: vi.fn() },
         },
         mode: "agent-proxy",
         onTerminalError: vi.fn(),
@@ -104,7 +104,7 @@ defineDiscordVoiceTests(
           channelId: "1001",
           voiceSessionKey: "discord:g1:1001",
           route: { agentId: "agent-1", sessionKey: "discord:g1:1001" },
-          player: createAudioPlayerMock(),
+          audio: { on: vi.fn(), off: vi.fn(), stopPlayback: vi.fn() },
         },
         mode: "agent-proxy",
         onTerminalError: vi.fn(),

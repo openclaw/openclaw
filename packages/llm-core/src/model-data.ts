@@ -5,10 +5,12 @@ export const MODEL_DATA_APIS = [
   "openai-chatgpt-responses",
   "anthropic-messages",
   "google-generative-ai",
+  "google-interactions",
   "google-vertex",
   "github-copilot",
   "bedrock-converse-stream",
   "ollama",
+  "pi-messages",
   "azure-openai-responses",
 ] as const;
 

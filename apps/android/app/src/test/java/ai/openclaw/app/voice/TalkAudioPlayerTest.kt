@@ -201,9 +201,7 @@ class TalkAudioPlayerTest {
   private fun syntheticAudio(): TalkSpeakAudio =
     TalkSpeakAudio(
       bytes = byteArrayOf(1, 2, 3),
-      provider = "test",
       outputFormat = null,
-      voiceCompatible = null,
       mimeType = "audio/mpeg",
       fileExtension = null,
     )

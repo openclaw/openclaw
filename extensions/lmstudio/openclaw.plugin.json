@@ -1,10 +1,12 @@
 {
   "id": "lmstudio",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providers": ["lmstudio"],
+  "providerCatalogEntry": "./provider-discovery.ts",
   "modelCatalog": {
     "discovery": {
       "lmstudio": "refreshable"

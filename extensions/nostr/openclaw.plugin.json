@@ -1,9 +1,16 @@
 {
   "id": "nostr",
+  "categories": [
+    "channels"
+  ],
   "doctorContract": {
     "stateMigrations": [
-      { "id": "nostr-bus-state-json-to-plugin-state" },
-      { "id": "nostr-profile-state-json-to-plugin-state" }
+      {
+        "id": "nostr-bus-state-json-to-plugin-state"
+      },
+      {
+        "id": "nostr-profile-state-json-to-plugin-state"
+      }
     ]
   },
   "name": "Nostr",
@@ -11,10 +18,23 @@
   "activation": {
     "onStartup": false
   },
-  "channels": ["nostr"],
+  "channels": [
+    "nostr"
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "controlUi": {
+    "entry": "dist/control-ui/index.js",
+    "activation": "settings-only",
+    "settingsViews": [
+      {
+        "section": "channels",
+        "panel": "detail",
+        "channelId": "nostr"
+      }
+    ]
   }
 }

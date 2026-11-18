@@ -16,11 +16,7 @@ TOKEN="mcp-e2e-$(date +%s)-$$"
 CONTAINER_NAME="openclaw-mcp-e2e-$$"
 CLIENT_LOG="$(mktemp -t openclaw-mcp-client-log.XXXXXX)"
 
-cleanup() {
-  docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  rm -f "$CLIENT_LOG"
-}
-trap cleanup EXIT
+trap 'docker_e2e_cleanup_container_run "$CONTAINER_NAME" "$CLIENT_LOG"' EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" mcp-channels
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 mcp-channels empty)"
@@ -67,7 +63,8 @@ docker_e2e_run_with_harness \
         openclaw_e2e_dump_logs \
           /tmp/mcp-channels-gateway.log \
           /tmp/mcp-channels-seed.log \
-          /tmp/mcp-channels-mock-openai.log
+          /tmp/mcp-channels-mock-openai.log \
+          /tmp/mcp-channels-client.log
       fi
       cleanup_inner
       exit \"\$status\"
@@ -78,7 +75,8 @@ docker_e2e_run_with_harness \
     tsx scripts/e2e/mcp-channels-seed.ts >/tmp/mcp-channels-seed.log
     gateway_pid=\"\$(openclaw_e2e_start_gateway \"\$entry\" $PORT /tmp/mcp-channels-gateway.log)\"
     openclaw_e2e_wait_gateway_ready \"\$gateway_pid\" /tmp/mcp-channels-gateway.log 480 $PORT
-    tsx test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts
+    tsx test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts > /tmp/mcp-channels-client.log 2>&1
+    cat /tmp/mcp-channels-client.log
   " >"$CLIENT_LOG" 2>&1
 status=${PIPESTATUS[0]}
 set -e

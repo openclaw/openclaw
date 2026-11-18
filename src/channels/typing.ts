@@ -1,10 +1,8 @@
-// Typing indicator lifecycle controller for reply dispatchers.
 import {
   parseFiniteNumber,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { createTypingKeepaliveLoop } from "./typing-lifecycle.js";
-import { createTypingStartGuard } from "./typing-start-guard.js";
 
 export type TypingCallbacks = {
   onReplyStart: () => Promise<void>;
@@ -43,20 +41,30 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
   let closed = false;
   let ttlTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const startGuard = createTypingStartGuard({
-    isSealed: () => closed,
-    onStartError: params.onStartError,
-    maxConsecutiveFailures,
-    onTrip: () => {
-      keepaliveLoop.stop();
-    },
-  });
+  let consecutiveFailures = 0;
+  let tripped = false;
+  const startTyping = async (): Promise<void> => {
+    if (closed || tripped) {
+      return;
+    }
+    try {
+      await params.start();
+      consecutiveFailures = 0;
+    } catch (error) {
+      consecutiveFailures += 1;
+      params.onStartError(error);
+      if (consecutiveFailures >= maxConsecutiveFailures) {
+        tripped = true;
+        keepaliveLoop.stop();
+      }
+    }
+  };
   // Explicit refreshes and keepalive ticks share this gate so one stalled
   // provider request cannot fan out into unbounded concurrent starts.
-  let startInFlight: ReturnType<typeof startGuard.run> | undefined;
+  let startInFlight: Promise<void> | undefined;
 
   const fireStart = async (): Promise<void> => {
-    const pending = (startInFlight ??= startGuard.run(() => params.start()));
+    const pending = (startInFlight ??= startTyping());
     try {
       await pending;
     } finally {
@@ -81,26 +89,24 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
         console.warn(`[typing] TTL exceeded (${maxDurationMs}ms), auto-stopping typing indicator`);
         fireStop();
       }
-    }, maxDurationMs);
-    ttlTimer.unref?.();
+    }, maxDurationMs).unref();
   };
 
   const clearTtlTimer = () => {
-    if (ttlTimer) {
-      clearTimeout(ttlTimer);
-      ttlTimer = undefined;
-    }
+    clearTimeout(ttlTimer);
+    ttlTimer = undefined;
   };
 
   const onReplyStart = async () => {
     if (closed) {
       return;
     }
-    startGuard.reset();
+    consecutiveFailures = 0;
+    tripped = false;
     clearTtlTimer();
     const startPromise = fireStart();
     void startPromise.then(() => {
-      if (closed || startGuard.isTripped()) {
+      if (closed || tripped) {
         return;
       }
       // Core can refresh an active reply independently of this channel loop.
@@ -124,8 +130,17 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     }
     // An admitted start may publish activity after cleanup. Its terminal stop
     // must follow that work so late acknowledgments cannot leave typing visible.
-    void (startInFlight ? startInFlight.then(stop) : stop()).catch((err: unknown) =>
-      (params.onStopError ?? params.onStartError)(err),
+    void (async () => {
+      try {
+        if (startInFlight) {
+          await startInFlight;
+        }
+        await stop();
+      } catch (err) {
+        (params.onStopError ?? params.onStartError)(err);
+      }
+    })().catch((err: unknown) =>
+      console.warn(`[typing] stop error callback failed: ${String(err)}`),
     );
   };
 

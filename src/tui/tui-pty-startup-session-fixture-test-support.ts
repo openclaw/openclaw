@@ -1,3 +1,5 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect } from "vitest";
 import {
   hasHistoricalSynchronizedFrameRow,
@@ -6,9 +8,73 @@ import {
   waitForSynchronizedFrameRows,
 } from "./tui-pty-harness-assertion-test-support.js";
 
+export type TuiStartupFixtureOptions = {
+  failInitialHistory?: boolean;
+  holdStartupHistory?: boolean;
+  holdSessionDescription?: boolean;
+};
+
+export function createTuiStartupRelease(tempDir: string, opts: TuiStartupFixtureOptions) {
+  const startupReleasePath =
+    opts.holdStartupHistory || opts.holdSessionDescription
+      ? path.join(tempDir, "startup.release")
+      : undefined;
+  let releaseStartupPromise: Promise<void> | undefined;
+  const releaseStartup = () => {
+    releaseStartupPromise ??= startupReleasePath
+      ? writeFile(startupReleasePath, "")
+      : Promise.resolve();
+    return releaseStartupPromise;
+  };
+  return {
+    env: {
+      OPENCLAW_TUI_PTY_STARTUP_RELEASE_PATH: opts.holdStartupHistory
+        ? startupReleasePath
+        : undefined,
+      OPENCLAW_TUI_PTY_SESSION_DESCRIPTION_RELEASE_PATH: opts.holdSessionDescription
+        ? startupReleasePath
+        : undefined,
+    },
+    releaseStartup,
+    wrapDispose(run: { dispose: () => Promise<void> }) {
+      if (startupReleasePath) {
+        const dispose = run.dispose;
+        // Suite cleanup must release held initialization even when its test never runs.
+        run.dispose = async () => {
+          try {
+            await releaseStartup();
+          } finally {
+            await dispose();
+          }
+        };
+      }
+    },
+  };
+}
+
 // Injects delayed session restore and history controls into the real-runTui PTY fixture.
 export const TUI_PTY_STARTUP_SESSION_FIXTURE = {
-  variables: `
+  returnedState: `
+        const returnStateKey = process.env.OPENCLAW_TUI_PTY_RETURN_STATE_KEY;
+        if (returnStateKey) {
+          const database = new DatabaseSync(
+            join(process.env.OPENCLAW_STATE_DIR!, "state", "openclaw.sqlite"),
+            { readOnly: true },
+          );
+          try {
+            const row = database.prepare(
+              "SELECT value_json FROM config_machine_state WHERE state_key = ?",
+            ).get(returnStateKey);
+            record("returned", {
+              rememberedSessionKey: row ? JSON.parse(String(row.value_json)) : null,
+            });
+          } finally {
+            database.close();
+          }
+        }
+  `,
+  variables: (failInitialHistory: boolean) => `
+      let failInitialHistory = ${JSON.stringify(failInitialHistory)};
       const restoreDelayMs = Number(process.env.OPENCLAW_TUI_PTY_RESTORE_DELAY_MS ?? 0);
       const restoreFailures = Number(process.env.OPENCLAW_TUI_PTY_RESTORE_FAILURES ?? 0);
       const reconnectHistoryDelayMs = Number(
@@ -17,7 +83,32 @@ export const TUI_PTY_STARTUP_SESSION_FIXTURE = {
       let restoreAttempts = 0;
       let reconnectDuringRestore = process.env.OPENCLAW_TUI_PTY_RECONNECT_DURING_RESTORE === "1";
   `,
+  sessionInventory: `
+      const sessionDefaults = () => ({
+        model: currentModel,
+        modelProvider: "fixture-provider",
+        contextTokens: 128,
+        thinkingLevels,
+      });
+      const fixtureSessions = () => enablePickerFixture ? [
+        sessionEntry(process.env.OPENCLAW_TUI_PTY_MAIN_SESSION_KEY ?? "main"),
+        ...Array.from({ length: Number(process.env.OPENCLAW_TUI_PTY_DECOY_COUNT ?? 0) }, (_, index) => ({
+          ...sessionEntry(pickerSessionKey + "-decoy-" + index),
+          label: pickerSessionKey + " label " + index,
+        })),
+        {
+          ...sessionEntry(pickerSessionKey),
+          derivedTitle: pickerSessionTitle,
+          lastMessagePreview: pickerSessionPreview,
+        },
+      ] : [];
+  `,
   loadHistory: `
+          if (failInitialHistory) {
+            failInitialHistory = false;
+            record("initialHistoryFailed", { sessionKey });
+            throw new Error("fixture initial history failed");
+          }
           if (reconnectHistoryReady && reconnectHistoryDelayMs > 0) {
             reconnectHistoryReady = false;
             record("reconnectHistoryPending", { sessionKey });
@@ -32,20 +123,25 @@ export const TUI_PTY_STARTUP_SESSION_FIXTURE = {
             }
             record("startupHistoryReleased", { sessionKey });
           }`,
-  listSessionsSetup: `
-          const isRestore = Boolean(opts?.search);
-  `,
-  listSessionsDelay: `
-          if (isRestore && reconnectDuringRestore) {
+  describeSessionDelay: `
+          if (reconnectDuringRestore) {
             reconnectDuringRestore = false;
             record("restoreReconnect");
             this.onDisconnected?.("fixture reconnect during restore");
             queueMicrotask(() => this.onConnected?.());
           }
-          if (isRestore && restoreDelayMs > 0) {
+          const descriptionReleasePath = process.env.OPENCLAW_TUI_PTY_SESSION_DESCRIPTION_RELEASE_PATH;
+          if (descriptionReleasePath) {
+            record("sessionDescriptionPending", { sessionKey: opts.sessionKey });
+            while (!existsSync(descriptionReleasePath)) {
+              await new Promise((resolve) => setTimeout(resolve, 5));
+            }
+            record("sessionDescriptionReleased", { sessionKey: opts.sessionKey });
+          }
+          if (restoreDelayMs > 0) {
             await new Promise((resolve) => setTimeout(resolve, restoreDelayMs));
           }
-          if (isRestore && restoreAttempts++ < restoreFailures) {
+          if (restoreAttempts++ < restoreFailures) {
             throw new Error("fixture remembered-session lookup failed");
           }
   `,
@@ -53,12 +149,13 @@ export const TUI_PTY_STARTUP_SESSION_FIXTURE = {
 
 export async function exerciseStartupHistoryRendering(
   fixture: Awaited<ReturnType<StartTuiPtyFixture>> & {
-    releaseStartupHistory: () => Promise<void>;
+    releaseStartup: () => Promise<void>;
   },
   timeoutMs: number,
+  signal: AbortSignal,
 ) {
   try {
-    await fixture.waitForLogEntry((entry) => entry.method === "startupHistoryPending", timeoutMs);
+    await fixture.waitForLogEntry((entry) => entry.method === "startupHistoryPending", signal);
     let startupOutput = "";
     const startupRows = await waitForSynchronizedFrameRows(
       {
@@ -76,13 +173,13 @@ export async function exerciseStartupHistoryRendering(
       expect.objectContaining({ method: "startupHistoryReleased" }),
     );
 
-    await fixture.releaseStartupHistory();
+    await fixture.releaseStartup();
     await waitForSynchronizedFrameRows(
       fixture.run,
       (rows) => rows.some((row) => row.includes("local ready | idle")),
       timeoutMs,
     );
   } finally {
-    await fixture.releaseStartupHistory();
+    await fixture.releaseStartup();
   }
 }

@@ -15,7 +15,7 @@ defineDiscordVoiceTests(
     createConnectionMock,
     joinVoiceChannelMock,
     entersStateMock,
-    resolveRealtimeBootstrapContextInstructionsMock,
+    resolveRealtimeVoiceAgentContextInstructionsMock,
     realtimeSessionMock,
     createRealtimeSessionMock,
     createRealtimeVoiceBridgeSessionMock,
@@ -77,6 +77,13 @@ defineDiscordVoiceTests(
       const speaking = new SpeakingMap();
       connection.receiver.speaking = {
         users: speaking.users,
+        emit: (event, userId) => {
+          if (event === "start") {
+            speaking.emit("start", userId);
+          } else if (event === "end") {
+            speaking.emit("end", userId);
+          }
+        },
         on: vi.fn(speaking.on.bind(speaking)),
         off: vi.fn(speaking.off.bind(speaking)),
       };
@@ -154,16 +161,19 @@ defineDiscordVoiceTests(
         if (recovery) {
           createRealtimeVoiceBridgeSessionMock.mockReturnValueOnce(provider);
         }
-        const pending =
-          stage === "ready"
-            ? entersStateMock
-            : stage === "bootstrap"
-              ? resolveRealtimeBootstrapContextInstructionsMock
-              : provider.connect;
-        pending.mockImplementationOnce(() => {
-          waiting.resolve();
-          return ready.promise;
-        });
+        if (stage === "bootstrap") {
+          resolveRealtimeVoiceAgentContextInstructionsMock.mockImplementationOnce(async () => {
+            waiting.resolve();
+            await ready.promise;
+            return "Agent context: shared voice agent context.";
+          });
+        } else {
+          const readiness = stage === "ready" ? entersStateMock : provider.connect;
+          readiness.mockImplementationOnce(() => {
+            waiting.resolve();
+            return ready.promise;
+          });
+        }
         const joins = vi.spyOn(f.manager, "join");
         const starting = recovery ? undefined : startTranscripts(f.manager, f.sink);
         if (recovery) {
@@ -311,6 +321,9 @@ defineDiscordVoiceTests(
           writeSpeech(f.stream, 3);
           expect(f.connection.receiver.subscribe).toHaveBeenCalledOnce();
           await vi.advanceTimersByTimeAsync(SpeakingMap.DELAY + 2_000);
+          // Worker decoding yields independently of the silence timer; drive the
+          // fake clock until the parent has published the completed recording.
+          await vi.waitFor(() => expect(f.sink).toHaveBeenCalledOnce());
           await f.received.promise;
           await entry.processingQueue;
           await Promise.all(conversations.mock.results.map((result) => result.value));
@@ -323,6 +336,7 @@ defineDiscordVoiceTests(
           );
           if (origin === "native" && mode === "stt-tts") {
             expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledExactlyOnceWith({
+              getToolAuthorityOverlay: expect.any(Function),
               sessionKey: expectDefined(entry.route?.sessionKey, "voice session route"),
               text: "Do not\nsend the update",
             });
@@ -353,6 +367,7 @@ defineDiscordVoiceTests(
           await nextSubscribed.promise;
           writeSpeech(nextStream, 4);
           nextStream.end();
+          await vi.waitFor(() => expect(f.sink).toHaveBeenCalledTimes(2));
           await nextNote.promise;
           await entry.processingQueue;
           await Promise.all(conversations.mock.results.map((result) => result.value));

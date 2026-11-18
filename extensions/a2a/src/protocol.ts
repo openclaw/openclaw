@@ -1,3 +1,4 @@
+import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import { z } from "zod";
 
 const A2A_CONTEXT_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
@@ -18,29 +19,25 @@ export type A2aMessageRecord = {
   metadata?: Record<string, unknown>;
 };
 
-type A2aTaskStatus =
-  | { state: "TASK_STATE_SUBMITTED" | "TASK_STATE_WORKING"; timestamp: string }
-  | {
-      state:
-        | "TASK_STATE_COMPLETED"
-        | "TASK_STATE_FAILED"
-        | "TASK_STATE_CANCELED"
-        | "TASK_STATE_REJECTED";
-      timestamp: string;
-      message?: A2aMessageRecord;
-    };
-
-type A2aTaskArtifact = {
-  artifactId: string;
-  name?: string;
-  parts: A2aMessagePart[];
-};
-
 export type A2aTaskRecord = {
   id: string;
   contextId: string;
-  status: A2aTaskStatus;
-  artifacts: A2aTaskArtifact[];
+  status:
+    | { state: "TASK_STATE_SUBMITTED" | "TASK_STATE_WORKING"; timestamp: string }
+    | {
+        state:
+          | "TASK_STATE_COMPLETED"
+          | "TASK_STATE_FAILED"
+          | "TASK_STATE_CANCELED"
+          | "TASK_STATE_REJECTED";
+        timestamp: string;
+        message?: A2aMessageRecord;
+      };
+  artifacts: {
+    artifactId: string;
+    name?: string;
+    parts: A2aMessagePart[];
+  }[];
   history: A2aMessageRecord[];
 };
 
@@ -85,7 +82,7 @@ export const A2aTaskRequestParamsSchema = z.object({
 
 type A2aCanonicalMethod = "SendMessage" | "GetTask";
 
-// Hermes-generation A2A 0.3 peers use dotted RPC names; only these three
+// Hermes-generation A2A 0.3 peers use dotted RPC names; only these
 // explicitly supported interoperability aliases are accepted.
 const A2A_METHOD_ALIASES: Readonly<Record<string, A2aCanonicalMethod>> = {
   SendMessage: "SendMessage",
@@ -103,13 +100,16 @@ const A2A_UNSUPPORTED_METHODS = new Set([
   "ListTasks",
   "SendStreamingMessage",
   "SubscribeToTask",
+  "GetExtendedAgentCard",
+]);
+
+const A2A_UNSUPPORTED_PUSH_METHODS = new Set([
   "CreateTaskPushNotificationConfig",
   "SetTaskPushNotificationConfig",
   "GetTaskPushNotificationConfig",
   "ListTaskPushNotificationConfig",
   "ListTaskPushNotificationConfigs",
   "DeleteTaskPushNotificationConfig",
-  "GetExtendedAgentCard",
 ]);
 
 export function resolveA2aRpcMethod(
@@ -118,11 +118,10 @@ export function resolveA2aRpcMethod(
   if (Object.hasOwn(A2A_METHOD_ALIASES, method)) {
     return A2A_METHOD_ALIASES[method];
   }
+  if (A2A_UNSUPPORTED_PUSH_METHODS.has(method)) {
+    throw new A2aProtocolError(-32003, "Push notifications are not supported");
+  }
   return A2A_UNSUPPORTED_METHODS.has(method) ? "unsupported" : undefined;
-}
-
-export function isA2aContextId(value: string): boolean {
-  return A2A_CONTEXT_PATTERN.test(value);
 }
 
 export function extractA2aMessageText(parts: unknown[]): string | undefined {
@@ -132,7 +131,7 @@ export function extractA2aMessageText(parts: unknown[]): string | undefined {
     if (!parsed.success) {
       continue;
     }
-    if (typeof parsed.data.text === "string") {
+    if (parsed.data.text !== undefined) {
       textParts.push(parsed.data.text);
     } else if (Object.hasOwn(parsed.data, "data") && parsed.data.data !== undefined) {
       textParts.push(JSON.stringify(parsed.data.data));
@@ -147,18 +146,9 @@ export function extractA2aMessageText(parts: unknown[]): string | undefined {
     return text;
   }
 
-  const encoded = Buffer.from(text);
-  let prefixBytes = A2A_MESSAGE_MAX_BYTES - Buffer.byteLength(A2A_TRUNCATION_MARKER);
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  while (prefixBytes > 0) {
-    try {
-      return decoder.decode(encoded.subarray(0, prefixBytes)) + A2A_TRUNCATION_MARKER;
-    } catch {
-      // Never split a multibyte UTF-8 character at the transport byte cap.
-      prefixBytes -= 1;
-    }
-  }
-  return A2A_TRUNCATION_MARKER.trimStart();
+  const prefixBytes = A2A_MESSAGE_MAX_BYTES - Buffer.byteLength(A2A_TRUNCATION_MARKER);
+  // Preserve TextDecoder's leading-BOM removal for truncated messages.
+  return truncateUtf8Prefix(text, prefixBytes).replace(/^\uFEFF/, "") + A2A_TRUNCATION_MARKER;
 }
 
 export class A2aProtocolError extends Error {

@@ -1,10 +1,8 @@
 import { vi } from "vitest";
+import type { AgentsListResult } from "../api/types.ts";
+import type { ApplicationRouter, RouteId } from "../app-routes.ts";
+import { createApplicationConfigCapability } from "./config.ts";
 import type { ApplicationContext } from "./context.ts";
-
-export type ShellKeyboardState = {
-  runtime: { context: ApplicationContext };
-  handleDocumentKeydown: (event: KeyboardEvent) => void;
-};
 
 export function resetAppHostTestGlobals(): void {
   vi.useRealTimers();
@@ -17,42 +15,50 @@ export function resetAppHostTestGlobals(): void {
   vi.unstubAllGlobals();
 }
 
-export type TestOptionalCustomElement = {
-  tagName: string;
-  label: string;
-  loadModule: () => Promise<unknown>;
-};
-
-let lazyElementSequence = 0;
-
-export function createLazyElementSpec(
-  label: string,
-  options: { firstError?: Error } = {},
-): TestOptionalCustomElement {
-  lazyElementSequence += 1;
-  const tagName = `openclaw-app-host-lazy-${lazyElementSequence}`;
-  let attempt = 0;
+export function committedRouterState(routeId: RouteId, pathname: string, data?: unknown) {
+  const location = { pathname, search: "", hash: "" };
   return {
-    tagName,
-    label,
-    loadModule: async () => {
-      attempt += 1;
-      if (attempt === 1 && options.firstError) {
-        throw options.firstError;
-      }
-      customElements.define(tagName, class extends HTMLElement {});
-    },
-  };
+    location,
+    resolvedLocation: location,
+    status: "success",
+    matches: [{ routeId, location, data }],
+    pendingMatches: [],
+    cachedMatches: [],
+  } as unknown as ReturnType<ApplicationRouter["getState"]>;
 }
 
-/**
- * Replay is gated on the rendered element; harnesses that model "rendered as
- * soon as the module defines the tag" install this stub on the fake shell.
- */
-export function stubRenderedWhenDefined(shell: object): void {
-  Object.defineProperty(shell, "queryRenderedElement", {
-    configurable: true,
-    value: (tagName: string) =>
-      customElements.get(tagName) ? document.createElement(tagName) : null,
-  });
+export function createShellConfigFixture() {
+  const config = createApplicationConfigCapability({ resourceBasePath: "" });
+  config.refresh = vi.fn(async () => null);
+  return config;
+}
+
+export function createRosterRefreshContext(params: {
+  previous: AgentsListResult;
+  next: AgentsListResult;
+  selectedId: string;
+}) {
+  const agentsState = { agentsList: params.previous };
+  const selectionState = { selectedId: params.selectedId, scopeId: params.selectedId };
+  const refreshList = vi.fn(
+    async () => Object.assign(agentsState, { agentsList: params.next }).agentsList,
+  );
+  const actions = {
+    refreshList,
+    invalidateFiles: vi.fn(),
+    invalidateIdentity: vi.fn(),
+    ensureIdentity: vi.fn(async () => undefined),
+    setSelection: vi.fn((agentId: string) => {
+      Object.assign(selectionState, { selectedId: agentId, scopeId: agentId });
+    }),
+    refreshConfig: vi.fn(async () => null),
+  };
+  const context = {
+    config: createShellConfigFixture(),
+    agents: { state: agentsState, refreshList, invalidateFiles: actions.invalidateFiles },
+    agentIdentity: { invalidate: actions.invalidateIdentity, ensure: actions.ensureIdentity },
+    agentSelection: { state: selectionState, set: actions.setSelection },
+    runtimeConfig: { state: { configFormDirty: false }, refreshDisplay: actions.refreshConfig },
+  } as unknown as ApplicationContext;
+  return { context, ...actions };
 }

@@ -1,5 +1,6 @@
 {
   "id": "copilot-proxy",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },

@@ -1,7 +1,18 @@
 import { createHash } from "node:crypto";
-import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
-import { basename } from "node:path";
-import { inflateRawSync } from "node:zlib";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  linkSync,
+  mkdtempSync,
+  openSync,
+  readSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { crc32, inflateRawSync } from "node:zlib";
+import { accountGithubRequest } from "./plain-gh.mjs";
 
 const ACTIONS_ARTIFACT_API_VERSION = "2026-03-10";
 const DEFAULT_MAX_ACTIONS_ARTIFACT_BYTES = 256 * 1024 * 1024;
@@ -9,6 +20,19 @@ const DEFAULT_MAX_ACTIONS_ARTIFACT_EXPANDED_BYTES = 512 * 1024 * 1024;
 
 const DEFAULT_MAX_JSON_BYTES = 2 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 60_000;
+const DEFAULT_TRANSFER_TIMEOUT_MS = 4 * 60_000;
+const TRANSIENT_NETWORK_CODES = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EAI_AGAIN",
+  "ENETUNREACH",
+  "EPIPE",
+  "ETIMEDOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
 const ARTIFACT_DIGEST_RE = /^sha256:[0-9a-f]{64}$/u;
 const ARTIFACT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/u;
 const COMMIT_SHA_RE = /^[0-9a-f]{40}$/u;
@@ -46,7 +70,7 @@ function assertTrimmedString(value, label) {
   return value;
 }
 
-function hasControlCharacters(value) {
+export function hasControlCharacters(value) {
   for (const character of value) {
     const codePoint = character.codePointAt(0);
     if (codePoint <= 0x1f || codePoint === 0x7f) {
@@ -56,7 +80,7 @@ function hasControlCharacters(value) {
   return false;
 }
 
-function boundedLimit(value, fallback, label) {
+export function boundedLimit(value, fallback, label) {
   if (value === undefined) {
     return fallback;
   }
@@ -153,7 +177,7 @@ export function sha256Digest(bytes) {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 }
 
-function compareCodeUnits(left, right) {
+export function compareCodeUnits(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
@@ -236,17 +260,6 @@ function findEndOfCentralDirectory(bytes) {
   );
 }
 
-function crc32(bytes) {
-  let crc = 0xffffffff;
-  for (const byte of bytes) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
-    }
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
 function normalizeArchivePolicy(policy) {
   if (!policy || typeof policy !== "object") {
     throw new Error("Actions artifact ZIP policy is required.");
@@ -302,7 +315,6 @@ function normalizeArchivePolicy(policy) {
   }
   return {
     expectedEntries,
-    expectedEntrySet: expectedEntries ? new Set(expectedEntries) : undefined,
     maxArchiveBytes,
     maxEntries,
     maxExpandedBytes,
@@ -650,8 +662,7 @@ export function inspectActionsArtifactZip(bytes, expectedEntries = 2, limits = {
   });
 }
 
-function requireExpectedBinding(params) {
-  const expected = params.expected;
+function requireArtifactIdentity(expected) {
   if (!expected || typeof expected !== "object") {
     throw new Error("Expected Actions artifact binding is required.");
   }
@@ -664,8 +675,22 @@ function requireExpectedBinding(params) {
     "Actions artifact size",
   );
   const runId = assertPositiveInteger(expected.runId, "workflow run ID");
-  const runAttempt = assertPositiveInteger(expected.runAttempt, "workflow run attempt");
   const workflowSha = assertCommitSha(expected.workflowSha, "workflow SHA");
+  return {
+    artifactDigest,
+    artifactId,
+    artifactName,
+    artifactSizeBytes,
+    repository,
+    runId,
+    workflowSha,
+  };
+}
+
+function requireExpectedBinding(params) {
+  const expected = params.expected;
+  const identity = requireArtifactIdentity(expected);
+  const runAttempt = assertPositiveInteger(expected.runAttempt, "workflow run attempt");
   const workflowPath = assertWorkflowPath(expected.workflowPath);
   const workflowEvent = assertTrimmedString(expected.workflowEvent, "workflow event");
   const workflowHeadBranch = assertTrimmedString(
@@ -673,7 +698,12 @@ function requireExpectedBinding(params) {
     "workflow head branch",
   );
   const runStatePolicy = assertTrimmedString(expected.runStatePolicy, "workflow run-state policy");
-  if (runStatePolicy !== "completed-success" && runStatePolicy !== "same-run-producer-success") {
+  if (
+    runStatePolicy !== "completed-success" &&
+    runStatePolicy !== "completed-success-or-failure" &&
+    runStatePolicy !== "same-run-producer-success" &&
+    runStatePolicy !== "completed-producer-success"
+  ) {
     throw new Error(`Unsupported workflow run-state policy: ${runStatePolicy}`);
   }
   const consumerRunAttempt =
@@ -681,50 +711,58 @@ function requireExpectedBinding(params) {
       ? assertPositiveInteger(expected.consumerRunAttempt, "consumer workflow run attempt")
       : undefined;
   const producerJobName =
-    runStatePolicy === "same-run-producer-success"
+    runStatePolicy === "same-run-producer-success" ||
+    runStatePolicy === "completed-producer-success"
       ? assertTrimmedString(expected.producerJobName, "producer job name")
       : undefined;
+  const producerStepName =
+    expected.producerStepName === undefined
+      ? undefined
+      : assertTrimmedString(expected.producerStepName, "producer step name");
+  if (producerStepName && !producerJobName) {
+    throw new Error("Producer step binding requires a producer-success policy.");
+  }
   if (consumerRunAttempt !== undefined && runAttempt > consumerRunAttempt) {
     throw new Error("Producer workflow run attempt must not be newer than the consumer attempt.");
   }
   return {
-    artifactDigest,
-    artifactId,
-    artifactName,
-    artifactSizeBytes,
+    ...identity,
     consumerRunAttempt,
     producerJobName,
-    repository,
+    ...(producerStepName ? { producerStepName } : {}),
     runStatePolicy,
     runAttempt,
-    runId,
     workflowEvent,
     workflowHeadBranch,
     workflowPath,
-    workflowSha,
   };
 }
 
-export function validateActionsArtifactBinding(params) {
-  const expected = requireExpectedBinding(params);
-  const artifact = params.artifactMetadata;
-  const run = params.workflowRun;
+function validateArtifactMetadata(artifact, expected) {
   if (!artifact || typeof artifact !== "object" || Array.isArray(artifact)) {
     throw new Error("Actions artifact metadata must be an object.");
-  }
-  if (!run || typeof run !== "object" || Array.isArray(run)) {
-    throw new Error("Actions workflow run metadata must be an object.");
   }
   if (
     artifact.id !== expected.artifactId ||
     artifact.name !== expected.artifactName ||
     artifact.size_in_bytes !== expected.artifactSizeBytes ||
     artifact.expired !== false ||
+    (expected.artifactExpiresAt !== undefined &&
+      artifact.expires_at !== expected.artifactExpiresAt) ||
     artifact.digest !== expected.artifactDigest ||
     artifact.workflow_run?.id !== expected.runId ||
     artifact.workflow_run?.head_sha !== expected.workflowSha
   ) {
     throw new Error("Actions artifact metadata does not match the immutable publication tuple.");
+  }
+}
+
+export function validateActionsArtifactBinding(params) {
+  const expected = requireExpectedBinding(params);
+  validateArtifactMetadata(params.artifactMetadata, expected);
+  const run = params.workflowRun;
+  if (!run || typeof run !== "object" || Array.isArray(run)) {
+    throw new Error("Actions workflow run metadata must be an object.");
   }
   if (
     run.id !== expected.runId ||
@@ -742,13 +780,30 @@ export function validateActionsArtifactBinding(params) {
     if (run.status !== "completed" || run.conclusion !== "success") {
       throw new Error("Actions workflow run does not match the immutable publication tuple.");
     }
+  } else if (expected.runStatePolicy === "completed-success-or-failure") {
+    // Observation artifacts retain per-file completeness. An unrelated failed
+    // job must not discard those results; cancelled/in-progress runs stay out.
+    if (run.status !== "completed" || !["success", "failure"].includes(run.conclusion)) {
+      throw new Error("Observation workflow attempt must be completed successfully or failed.");
+    }
+  } else if (expected.runStatePolicy === "completed-producer-success") {
+    // Protected recovery runs after the original workflow is terminal. Exact
+    // producer-step success preserves its artifacts even after cancellation.
+    if (
+      run.status !== "completed" ||
+      typeof run.conclusion !== "string" ||
+      run.conclusion.length === 0
+    ) {
+      throw new Error("Producer workflow attempt must be completed.");
+    }
   } else if (expected.runAttempt === expected.consumerRunAttempt) {
     // Environment protection can expose any nonterminal Actions transition
     // while approval propagates. Exact producer-job success remains mandatory.
     const active = ACTIVE_SAME_RUN_STATUSES.has(run.status) && run.conclusion === null;
-    const failed = run.status === "completed" && run.conclusion === "failure";
-    if (!active && !failed) {
-      throw new Error("Current producer workflow attempt must still be active or failed.");
+    const sealedTerminal =
+      run.status === "completed" && ["success", "failure"].includes(run.conclusion);
+    if (!active && !sealedTerminal) {
+      throw new Error("Current producer workflow attempt must still be active or sealed.");
     }
   } else if (
     run.status !== "completed" ||
@@ -762,7 +817,10 @@ export function validateActionsArtifactBinding(params) {
 
 export function validateActionsArtifactProducerJob(params) {
   const expected = requireExpectedBinding(params);
-  if (expected.runStatePolicy !== "same-run-producer-success") {
+  if (
+    expected.runStatePolicy !== "same-run-producer-success" &&
+    expected.runStatePolicy !== "completed-producer-success"
+  ) {
     return expected;
   }
   const response = params.workflowJobs;
@@ -782,27 +840,98 @@ export function validateActionsArtifactProducerJob(params) {
     throw new Error("Actions artifact producer job must be unique.");
   }
   const [producerJob] = matches;
+  const producerCompleted =
+    producerJob.status === "completed" &&
+    typeof producerJob.conclusion === "string" &&
+    producerJob.conclusion.length > 0;
+  // A same-attempt consumer can authenticate an already-uploaded artifact while
+  // its own parent job is still running. This never substitutes job progress for
+  // the exact successful upload step, or admits a retained/other-attempt producer.
+  const activeUpload =
+    params.allowActiveJob === true &&
+    expected.runStatePolicy === "same-run-producer-success" &&
+    expected.runAttempt === expected.consumerRunAttempt &&
+    Boolean(expected.producerStepName) &&
+    producerJob.status === "in_progress" &&
+    producerJob.conclusion === null;
   if (
     producerJob.run_id !== expected.runId ||
     producerJob.run_attempt !== expected.runAttempt ||
     producerJob.head_sha !== expected.workflowSha ||
-    producerJob.status !== "completed" ||
-    producerJob.conclusion !== "success"
+    (!producerCompleted && !activeUpload) ||
+    (!expected.producerStepName && producerJob.conclusion !== "success")
   ) {
     throw new Error("Actions artifact producer job did not complete successfully.");
+  }
+  if (expected.producerStepName) {
+    // A later publication/readback failure does not erase a completed immutable
+    // artifact upload. Require its exact successful step, not inferred progress.
+    const steps = producerJob.steps?.filter((step) => step.name === expected.producerStepName);
+    if (
+      !Array.isArray(steps) ||
+      steps.length !== 1 ||
+      steps[0].status !== "completed" ||
+      steps[0].conclusion !== "success"
+    ) {
+      throw new Error("Actions artifact producer step did not complete successfully.");
+    }
   }
   return expected;
 }
 
-async function readBoundedResponseBody(response, params) {
-  if (!response.ok || !response.body) {
-    await response.body?.cancel();
-    throw new Error(`${params.label} returned HTTP ${response.status}.`);
+class RetryableArtifactTransferError extends Error {
+  constructor(message, retryAfterMs = 0) {
+    super(message);
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+function responseRetryAfterMs(response) {
+  const value = response.headers.get("retry-after")?.trim();
+  if (value) {
+    if (/^[0-9]+$/u.test(value)) {
+      return Number(value) * 1000;
+    }
+    const retryAt = Date.parse(value);
+    if (Number.isFinite(retryAt)) {
+      return Math.max(0, retryAt - Date.now());
+    }
+  }
+  if (response.headers.get("x-ratelimit-remaining") === "0") {
+    const reset = response.headers.get("x-ratelimit-reset");
+    if (reset && /^[0-9]+$/u.test(reset)) {
+      return Math.max(0, Number(reset) * 1000 - Date.now());
+    }
+  }
+  return undefined;
+}
+
+async function consumeBoundedResponseBody(response, params, consume) {
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    const retryAfterMs = responseRetryAfterMs(response);
+    const rateLimited =
+      response.status === 429 ||
+      (response.status === 403 &&
+        (retryAfterMs !== undefined || response.headers.get("x-ratelimit-remaining") === "0"));
+    const message = `${params.label} returned HTTP ${response.status}.`;
+    if (
+      rateLimited ||
+      [408, 500, 502, 503, 504].includes(response.status) ||
+      (params.retryNotFound === true && response.status === 404)
+    ) {
+      // GitHub requires a minute for rate limits without a retry/reset header.
+      throw new RetryableArtifactTransferError(message, retryAfterMs ?? (rateLimited ? 60_000 : 0));
+    }
+    throw new Error(message);
+  }
+  if (!response.body) {
+    throw new RetryableArtifactTransferError(`${params.label} returned an empty body.`);
   }
   const contentLength = response.headers.get("content-length");
   if (contentLength !== null) {
     if (!/^(?:0|[1-9][0-9]*)$/u.test(contentLength)) {
-      await response.body?.cancel();
+      await response.body.cancel().catch(() => undefined);
       throw new Error(`${params.label} returned an invalid Content-Length.`);
     }
     const declaredBytes = Number(contentLength);
@@ -811,12 +940,11 @@ async function readBoundedResponseBody(response, params) {
       declaredBytes > params.maxBytes ||
       (params.expectedBytes !== undefined && declaredBytes !== params.expectedBytes)
     ) {
-      await response.body?.cancel();
+      await response.body.cancel().catch(() => undefined);
       throw new Error(`${params.label} Content-Length is outside the approved range.`);
     }
   }
 
-  const chunks = [];
   let totalBytes = 0;
   const reader = response.body.getReader();
   try {
@@ -833,7 +961,7 @@ async function readBoundedResponseBody(response, params) {
         await reader.cancel();
         throw new Error(`${params.label} exceeded its approved byte count.`);
       }
-      chunks.push(Buffer.from(value));
+      consume(value);
     }
   } catch (error) {
     await reader.cancel().catch(() => undefined);
@@ -842,31 +970,56 @@ async function readBoundedResponseBody(response, params) {
     reader.releaseLock();
   }
   if (totalBytes === 0) {
-    throw new Error(`${params.label} returned an empty body.`);
+    throw new RetryableArtifactTransferError(`${params.label} returned an empty body.`);
   }
   if (params.expectedBytes !== undefined && totalBytes !== params.expectedBytes) {
-    throw new Error(`${params.label} size does not match metadata.`);
+    throw new RetryableArtifactTransferError(
+      `${params.label} ended before its approved byte count.`,
+    );
   }
+  return totalBytes;
+}
+
+export async function readBoundedResponseBody(response, params) {
+  const chunks = [];
+  const totalBytes = await consumeBoundedResponseBody(response, params, (chunk) => {
+    chunks.push(Buffer.from(chunk));
+  });
   return Buffer.concat(chunks, totalBytes);
 }
 
 async function runBoundedRetry(label, operation, params) {
   let lastError;
   for (let attempt = 1; attempt <= params.attempts; attempt += 1) {
-    const remainingMs =
-      params.deadlineMs === undefined ? undefined : params.deadlineMs - Date.now();
-    if (remainingMs !== undefined && remainingMs <= 0) {
-      throw new Error(`${label} deadline exceeded.`);
-    }
+    const remainingMs = remainingTransferMs(params.deadlineMs, label);
     try {
-      return await operation(attempt, remainingMs);
+      const result = await operation(remainingMs);
+      remainingTransferMs(params.deadlineMs, label);
+      return result;
     } catch (error) {
+      const networkFailure =
+        error?.name === "TimeoutError" ||
+        error?.name === "AbortError" ||
+        TRANSIENT_NETWORK_CODES.has(error?.code) ||
+        TRANSIENT_NETWORK_CODES.has(error?.cause?.code);
+      if (!(error instanceof RetryableArtifactTransferError) && !networkFailure) {
+        throw error;
+      }
       lastError = error;
+      const retryRemainingMs = remainingTransferMs(params.deadlineMs, label);
       if (attempt === params.attempts) {
         break;
       }
-      const delayMs =
-        remainingMs === undefined ? params.delayMs : Math.min(params.delayMs, remainingMs);
+      const backoffMs = Math.min(
+        5000,
+        params.delayMs * 2 ** (attempt - 1) + Math.floor(Math.random() * params.delayMs),
+      );
+      const delayMs = Math.max(backoffMs, (error.retryAfterMs ?? 0) * 2 ** (attempt - 1));
+      if (delayMs >= retryRemainingMs) {
+        throw new Error(`${label} deadline would be exceeded before the permitted retry.`, {
+          cause: error,
+        });
+      }
       await new Promise((resolvePromise) => {
         setTimeout(resolvePromise, delayMs);
       });
@@ -880,7 +1033,16 @@ async function runBoundedRetry(label, operation, params) {
   );
 }
 
+function remainingTransferMs(deadlineMs, label) {
+  const remainingMs = deadlineMs - Date.now();
+  if (remainingMs <= 0) {
+    throw new Error(`${label} deadline exceeded.`);
+  }
+  return remainingMs;
+}
+
 async function fetchBoundedJson(url, request, params) {
+  accountGithubRequest();
   const response = await request.fetchImpl(url, {
     headers: request.headers,
     redirect: "follow",
@@ -889,14 +1051,14 @@ async function fetchBoundedJson(url, request, params) {
   const bytes = await readBoundedResponseBody(response, {
     label: params.label,
     maxBytes: params.maxBytes,
+    retryNotFound: params.retryNotFound,
   });
   let value;
   try {
     value = JSON.parse(decodeUtf8Exact(bytes, `${params.label} body`));
   } catch (error) {
-    throw new Error(
+    throw new RetryableArtifactTransferError(
       `${params.label} returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
     );
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -905,31 +1067,69 @@ async function fetchBoundedJson(url, request, params) {
   return value;
 }
 
-export async function downloadExactActionsArtifactArchive(params) {
-  const expected = params.expected;
-  if (!expected || typeof expected !== "object") {
-    throw new Error("Expected Actions artifact metadata is required.");
+function verifyArchiveBytes(bytes, expected, label) {
+  if (bytes.byteLength !== expected.artifactSizeBytes) {
+    throw new Error(`${label} size does not match metadata.`);
   }
-  const repository = assertRepository(expected.repository);
-  const artifactId = assertPositiveInteger(expected.artifactId, "Actions artifact ID");
-  const artifactName = assertArtifactName(expected.artifactName);
-  const artifactDigest = assertArtifactDigest(expected.artifactDigest);
-  const artifactSizeBytes = assertPositiveInteger(
-    expected.artifactSizeBytes,
-    "Actions artifact size",
-  );
-  const artifactExpiresAt = assertTrimmedString(
-    expected.artifactExpiresAt,
-    "Actions artifact expiry",
-  );
-  const runId = assertPositiveInteger(expected.runId, "workflow run ID");
-  const workflowSha = assertCommitSha(expected.workflowSha, "workflow SHA");
+  const digest = sha256Digest(bytes);
+  if (digest !== expected.artifactDigest) {
+    throw new Error(`${label} digest ${digest} does not match ${expected.artifactDigest}.`);
+  }
+}
+
+function readRetainedArchive(archivePath, expected, maxBytes) {
+  let bytes;
+  try {
+    bytes = readBoundedRegularFile(archivePath, { label: "Retained Actions artifact", maxBytes });
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+  verifyArchiveBytes(bytes, expected, "Retained Actions artifact");
+  return bytes;
+}
+
+function retainVerifiedArchive(archivePath, bytes, expected, maxBytes) {
+  const directory = mkdtempSync(join(dirname(archivePath), ".actions-artifact-"));
+  const temporary = join(directory, "archive.zip");
+  try {
+    writeFileSync(temporary, bytes, { flag: "wx", mode: 0o600 });
+    try {
+      // A create-only link exposes complete verified bytes without replacing a
+      // concurrent writer's file or allowing an interrupted download to look ready.
+      linkSync(temporary, archivePath);
+    } catch (error) {
+      if (error?.code !== "EEXIST") {
+        throw error;
+      }
+      if (!readRetainedArchive(archivePath, expected, maxBytes)) {
+        throw new Error("Retained Actions artifact disappeared during publication.", {
+          cause: error,
+        });
+      }
+    }
+  } finally {
+    rmSync(directory, { force: true, recursive: true });
+  }
+}
+
+function createArtifactTransfer(params, expected, digestOnly = false) {
   const token = assertTrimmedString(params.token, "GitHub token");
   const timeoutMs = boundedLimit(params.timeoutMs, DEFAULT_TIMEOUT_MS, "GitHub request timeout");
-  const deadlineMs = params.deadlineMs;
-  if (deadlineMs !== undefined && (!Number.isSafeInteger(deadlineMs) || deadlineMs <= 0)) {
-    throw new Error("GitHub request deadline must be a positive integer.");
-  }
+  const archiveTimeoutMs =
+    params.archiveTimeoutMs === undefined
+      ? timeoutMs
+      : boundedLimit(
+          params.archiveTimeoutMs,
+          DEFAULT_TRANSFER_TIMEOUT_MS,
+          "GitHub archive request timeout",
+        );
+  const explicitDeadlineMs =
+    params.deadlineMs === undefined
+      ? undefined
+      : assertPositiveInteger(params.deadlineMs, "GitHub request deadline");
   const retryAttempts =
     params.retryAttempts === undefined
       ? 3
@@ -938,14 +1138,22 @@ export async function downloadExactActionsArtifactArchive(params) {
     params.retryDelayMs === undefined
       ? 250
       : boundedLimit(params.retryDelayMs, 5_000, "GitHub retry delay");
-  const maxArchiveBytes = boundedLimit(
-    params.maxArchiveBytes,
-    DEFAULT_MAX_ACTIONS_ARTIFACT_BYTES,
-    "Actions artifact ZIP byte limit",
-  );
-  if (artifactSizeBytes > maxArchiveBytes) {
+  // Digest-only verification never retains or expands a payload. Its exact
+  // authenticated byte count is the transfer bound, including large OCI images.
+  const maxArchiveBytes = digestOnly
+    ? expected.artifactSizeBytes
+    : boundedLimit(
+        params.maxArchiveBytes,
+        DEFAULT_MAX_ACTIONS_ARTIFACT_BYTES,
+        "Actions artifact ZIP byte limit",
+      );
+  if (expected.artifactSizeBytes > maxArchiveBytes) {
     throw new Error("Actions artifact size exceeds the configured archive limit.");
   }
+  const archivePath =
+    params.archivePath === undefined
+      ? undefined
+      : assertTrimmedString(params.archivePath, "Retained Actions artifact path");
   const fetchImpl = params.fetchImpl ?? fetch;
   const headers = {
     accept: "application/vnd.github+json",
@@ -953,160 +1161,202 @@ export async function downloadExactActionsArtifactArchive(params) {
     "user-agent": "openclaw-actions-artifact",
     "x-github-api-version": ACTIONS_ARTIFACT_API_VERSION,
   };
-  const apiRoot = `https://api.github.com/repos/${repository}`;
+  const apiRoot = `https://api.github.com/repos/${expected.repository}`;
   const request = { fetchImpl, headers, timeoutMs };
-  const retry = { attempts: retryAttempts, deadlineMs, delayMs: retryDelayMs };
-  const artifactMetadata = await runBoundedRetry(
-    "GitHub Actions artifact metadata",
-    (_attempt, remainingMs) =>
-      fetchBoundedJson(
-        `${apiRoot}/actions/artifacts/${artifactId}`,
-        {
-          ...request,
-          timeoutMs: Math.min(timeoutMs, remainingMs ?? timeoutMs),
-        },
-        {
-          label: "GitHub Actions artifact metadata",
-          maxBytes: DEFAULT_MAX_JSON_BYTES,
-        },
-      ),
-    retry,
-  );
-  if (
-    artifactMetadata.id !== artifactId ||
-    artifactMetadata.name !== artifactName ||
-    artifactMetadata.size_in_bytes !== artifactSizeBytes ||
-    artifactMetadata.expired !== false ||
-    artifactMetadata.expires_at !== artifactExpiresAt ||
-    artifactMetadata.digest !== artifactDigest ||
-    artifactMetadata.workflow_run?.id !== runId ||
-    artifactMetadata.workflow_run?.head_sha !== workflowSha
-  ) {
-    throw new Error("Actions artifact metadata does not match the exact artifact tuple.");
-  }
-  const archiveBytes = await runBoundedRetry(
-    "GitHub Actions artifact download",
-    async (_attempt, remainingMs) => {
-      const response = await fetchImpl(`${apiRoot}/actions/artifacts/${artifactId}/zip`, {
-        headers,
-        redirect: "follow",
-        signal: AbortSignal.timeout(Math.min(timeoutMs, remainingMs ?? timeoutMs)),
-      });
-      const bytes = await readBoundedResponseBody(response, {
-        expectedBytes: artifactSizeBytes,
-        label: "GitHub Actions artifact download",
-        maxBytes: maxArchiveBytes,
-      });
-      const actualDigest = sha256Digest(bytes);
-      if (actualDigest !== artifactDigest) {
-        throw new Error(
-          `GitHub Actions artifact digest ${actualDigest} does not match ${artifactDigest}.`,
-        );
-      }
-      return bytes;
+  const retry = { attempts: retryAttempts, delayMs: retryDelayMs };
+  const outerDeadlineMs =
+    params.outerDeadlineMs === undefined
+      ? Infinity
+      : assertPositiveInteger(params.outerDeadlineMs, "Outer artifact acquisition deadline");
+  const phaseDeadlineMs = () =>
+    Math.min(outerDeadlineMs, explicitDeadlineMs ?? Date.now() + DEFAULT_TRANSFER_TIMEOUT_MS);
+  return {
+    json(endpoint, label, retryNotFound = false) {
+      const deadlineMs = phaseDeadlineMs();
+      return runBoundedRetry(
+        label,
+        (remainingMs) =>
+          fetchBoundedJson(
+            `${apiRoot}/${endpoint}`,
+            { ...request, timeoutMs: Math.min(timeoutMs, remainingMs) },
+            { label, maxBytes: DEFAULT_MAX_JSON_BYTES, retryNotFound },
+          ),
+        { ...retry, deadlineMs },
+      );
     },
-    retry,
+    async archive() {
+      const label = "GitHub Actions artifact download";
+      const deadlineMs = phaseDeadlineMs();
+      remainingTransferMs(deadlineMs, label);
+      // Callers validate fresh remote identity and producer state before this
+      // content-only reuse; possession of a local archive never grants authority.
+      if (archivePath) {
+        const retained = readRetainedArchive(archivePath, expected, maxArchiveBytes);
+        if (retained) {
+          remainingTransferMs(deadlineMs, label);
+          return retained;
+        }
+      }
+      const archiveBytes = await runBoundedRetry(
+        label,
+        async (remainingMs) => {
+          // Always resolve the immutable API endpoint again: signed redirect URLs
+          // may expire between attempts, but the artifact identity cannot change.
+          accountGithubRequest();
+          const response = await fetchImpl(
+            `${apiRoot}/actions/artifacts/${expected.artifactId}/zip`,
+            {
+              headers,
+              redirect: "follow",
+              signal: AbortSignal.timeout(Math.min(archiveTimeoutMs, remainingMs)),
+            },
+          );
+          const bodyPolicy = {
+            expectedBytes: expected.artifactSizeBytes,
+            label,
+            maxBytes: maxArchiveBytes,
+          };
+          if (digestOnly) {
+            const hash = createHash("sha256");
+            await consumeBoundedResponseBody(response, bodyPolicy, (chunk) => hash.update(chunk));
+            const digest = `sha256:${hash.digest("hex")}`;
+            if (digest !== expected.artifactDigest) {
+              throw new Error(
+                `${label} digest ${digest} does not match ${expected.artifactDigest}.`,
+              );
+            }
+            return digest;
+          }
+          const bytes = await readBoundedResponseBody(response, bodyPolicy);
+          verifyArchiveBytes(bytes, expected, label);
+          return bytes;
+        },
+        { ...retry, deadlineMs },
+      );
+      if (archivePath) {
+        retainVerifiedArchive(archivePath, archiveBytes, expected, maxArchiveBytes);
+      }
+      return archiveBytes;
+    },
+  };
+}
+
+// Content verification only: callers still authenticate producer authority.
+// No file, ZIP parse, expanded payload, or whole-archive allocation is created.
+export async function verifyExactActionsArtifactDigest(params) {
+  if (params.archivePath !== undefined || params.maxArchiveBytes !== undefined) {
+    throw new Error("Digest-only verification does not accept archive storage or size overrides.");
+  }
+  const expected = {
+    ...requireArtifactIdentity(params.expected),
+    artifactExpiresAt: assertTrimmedString(
+      params.expected.artifactExpiresAt,
+      "Actions artifact expiry",
+    ),
+  };
+  const transfer = createArtifactTransfer(params, expected, true);
+  const artifactMetadata = await transfer.json(
+    `actions/artifacts/${expected.artifactId}`,
+    "GitHub Actions artifact metadata",
   );
+  validateArtifactMetadata(artifactMetadata, expected);
+  const digest = await transfer.archive();
+  return { digest, artifactMetadata };
+}
+
+export async function downloadExactActionsArtifactArchive(params) {
+  const expected = {
+    ...requireArtifactIdentity(params.expected),
+    artifactExpiresAt: assertTrimmedString(
+      params.expected.artifactExpiresAt,
+      "Actions artifact expiry",
+    ),
+  };
+  const transfer = createArtifactTransfer(params, expected);
+  const replay = params.immutableReads;
+  const metadataRoute = `actions/artifacts/${expected.artifactId}`;
+  const readMetadata = async () =>
+    JSON.stringify(
+      await transfer.json(
+        metadataRoute,
+        "GitHub Actions artifact metadata",
+        // Reconcile a fresh list/detail visibility mismatch within the existing budget.
+        // Reuse the bounded retry owner without changing the selected artifact identity.
+        params.retryMetadataNotFound === true,
+      ),
+    );
+  const artifactMetadata = JSON.parse(
+    await (replay ? replay.text(metadataRoute, readMetadata) : readMetadata()),
+  );
+  validateArtifactMetadata(artifactMetadata, expected);
+  replay?.observeArchive(expected.artifactId, artifactMetadata);
+  const archiveBytes = replay
+    ? await replay.bytes(`actions/artifacts/${expected.artifactId}/zip`, () => transfer.archive())
+    : await transfer.archive();
+  // Replay is content-only: metadata above stays live, and the selected tuple
+  // must authenticate the bytes even when the carrier itself was authentic.
+  if (replay) {
+    verifyArchiveBytes(archiveBytes, expected, "GitHub Actions artifact download");
+  }
   return { archiveBytes, artifactMetadata };
 }
 
 export async function downloadActionsArtifactArchive(params) {
   const expected = requireExpectedBinding(params);
-  const token = assertTrimmedString(params.token, "GitHub token");
-  const timeoutMs = boundedLimit(params.timeoutMs, DEFAULT_TIMEOUT_MS, "GitHub request timeout");
-  const retryAttempts =
-    params.retryAttempts === undefined
-      ? 3
-      : boundedLimit(params.retryAttempts, 5, "GitHub request retry count");
-  const retryDelayMs =
-    params.retryDelayMs === undefined
-      ? 250
-      : boundedLimit(params.retryDelayMs, 5_000, "GitHub retry delay");
-  const maxArchiveBytes = boundedLimit(
-    params.maxArchiveBytes,
-    DEFAULT_MAX_ACTIONS_ARTIFACT_BYTES,
-    "Actions artifact ZIP byte limit",
-  );
-  if (expected.artifactSizeBytes > maxArchiveBytes) {
-    throw new Error("Actions artifact size exceeds the configured archive limit.");
-  }
-  const fetchImpl = params.fetchImpl ?? fetch;
-  const headers = {
-    accept: "application/vnd.github+json",
-    authorization: `Bearer ${token}`,
-    "user-agent": "openclaw-publication-artifact",
-    "x-github-api-version": ACTIONS_ARTIFACT_API_VERSION,
-  };
-  const apiRoot = `https://api.github.com/repos/${expected.repository}`;
-  const request = { fetchImpl, headers, timeoutMs };
-  const retry = {
-    attempts: retryAttempts,
-    delayMs: retryDelayMs,
-  };
-  const artifactMetadata = await runBoundedRetry(
+  const transfer = createArtifactTransfer(params, expected);
+  const artifactMetadata = await transfer.json(
+    `actions/artifacts/${expected.artifactId}`,
     "GitHub Actions artifact metadata",
-    () =>
-      fetchBoundedJson(`${apiRoot}/actions/artifacts/${expected.artifactId}`, request, {
-        label: "GitHub Actions artifact metadata",
-        maxBytes: DEFAULT_MAX_JSON_BYTES,
-      }),
-    retry,
   );
-  const workflowRun = await runBoundedRetry(
+  validateArtifactMetadata(artifactMetadata, expected);
+  const workflowRun = await transfer.json(
+    `actions/runs/${expected.runId}/attempts/${expected.runAttempt}`,
     "GitHub Actions workflow attempt",
-    () =>
-      fetchBoundedJson(
-        `${apiRoot}/actions/runs/${expected.runId}/attempts/${expected.runAttempt}`,
-        request,
-        {
-          label: "GitHub Actions workflow attempt",
-          maxBytes: DEFAULT_MAX_JSON_BYTES,
-        },
-      ),
-    retry,
   );
   validateActionsArtifactBinding({ artifactMetadata, expected, workflowRun });
   let workflowJobs;
-  if (expected.runStatePolicy === "same-run-producer-success") {
-    workflowJobs = await runBoundedRetry(
-      "GitHub Actions producer jobs",
-      () =>
-        fetchBoundedJson(
-          `${apiRoot}/actions/runs/${expected.runId}/attempts/${expected.runAttempt}/jobs?per_page=100`,
-          request,
-          {
-            label: "GitHub Actions producer jobs",
-            maxBytes: DEFAULT_MAX_JSON_BYTES,
-          },
-        ),
-      retry,
-    );
+  if (
+    expected.runStatePolicy === "same-run-producer-success" ||
+    expected.runStatePolicy === "completed-producer-success"
+  ) {
+    const jobs = [];
+    let total;
+    for (let page = 1; page <= 10; page += 1) {
+      const inventory = await transfer.json(
+        "actions/runs/" +
+          expected.runId +
+          "/attempts/" +
+          expected.runAttempt +
+          "/jobs?per_page=100" +
+          (page === 1 ? "" : "&page=" + page),
+        "GitHub Actions producer jobs",
+      );
+      if (
+        !Number.isSafeInteger(inventory.total_count) ||
+        inventory.total_count < 0 ||
+        inventory.total_count > 1000 ||
+        (total !== undefined && total !== inventory.total_count) ||
+        !Array.isArray(inventory.jobs) ||
+        inventory.jobs.length > 100
+      ) {
+        throw new Error("Actions workflow jobs inventory is incomplete.");
+      }
+      total = inventory.total_count;
+      jobs.push(...inventory.jobs);
+      if (jobs.length === total) {
+        break;
+      }
+      if (jobs.length > total || inventory.jobs.length !== 100) {
+        throw new Error("Actions workflow jobs inventory is incomplete.");
+      }
+    }
+    if (jobs.length !== total || new Set(jobs.map((job) => job.id)).size !== jobs.length) {
+      throw new Error("Actions workflow jobs inventory is incomplete or duplicated.");
+    }
+    workflowJobs = { total_count: total, jobs };
     validateActionsArtifactProducerJob({ expected, workflowJobs });
   }
-
-  const archiveBytes = await runBoundedRetry(
-    "GitHub Actions artifact download",
-    async () => {
-      const response = await fetchImpl(`${apiRoot}/actions/artifacts/${expected.artifactId}/zip`, {
-        headers,
-        redirect: "follow",
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      const bytes = await readBoundedResponseBody(response, {
-        expectedBytes: expected.artifactSizeBytes,
-        label: "GitHub Actions artifact download",
-        maxBytes: maxArchiveBytes,
-      });
-      const actualDigest = sha256Digest(bytes);
-      if (actualDigest !== expected.artifactDigest) {
-        throw new Error(
-          `GitHub Actions artifact digest ${actualDigest} does not match ${expected.artifactDigest}.`,
-        );
-      }
-      return bytes;
-    },
-    retry,
-  );
+  const archiveBytes = await transfer.archive();
   return { archiveBytes, artifactMetadata, binding: expected, workflowJobs, workflowRun };
 }
 

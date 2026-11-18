@@ -12,6 +12,14 @@ class GatewayExecApprovalParsingTest {
   private val json = Json { ignoreUnknownKeys = true }
 
   @Test
+  fun canonicalTerminalAttributionDoesNotHideTheRecordedWinner() {
+    val payload =
+      terminalPayload(status = "expired", reason = "timeout")
+        .replace("\"resolvedAtMs\":", "\"source\":{\"sessionKey\":\"agent:main:background\"},\"resolver\":{\"kind\":\"system\"},\"resolvedAtMs\":")
+    assertTrue(parseGatewayExecApprovalGetPayload(payload, json, "approval-1") is GatewayExecApprovalSnapshot.Terminal)
+  }
+
+  @Test
   fun legacyListIsOpaqueDiscoveryOnly() {
     val rows =
       parseGatewayExecApprovalListPayload(

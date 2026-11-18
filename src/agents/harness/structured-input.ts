@@ -1,3 +1,4 @@
+import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { truncateUtf16Safe } from "../../utils.js";
 import {
   boundStructuredInputText as boundText,
@@ -6,6 +7,7 @@ import {
   quoteStructuredInputValue as quote,
   readStructuredInputText,
   snapshotStructuredInput,
+  STRUCTURED_INPUT_MAX_TEXT_CHARS,
   structuredInputEntries,
   structuredInputRecord as ownRecord,
   structuredInputString as ownString,
@@ -19,14 +21,14 @@ import type {
   StructuredInputValue,
 } from "./structured-input-boundary.js";
 import { compileStructuredInputField } from "./structured-input-schema.js";
-import type { AgentHarnessUserInputQuestion } from "./user-input-bridge.js";
+import type { AgentHarnessUserInputQuestion } from "./user-input-types.js";
 
 const MAX_FORM_FIELDS = 12;
 const MAX_SCHEMA_KEYS = 24;
 const MAX_FIELD_NAME = 256;
 const MAX_MESSAGE_TEXT = 1_024;
 const MAX_URL_TEXT = 2_048;
-const MAX_URL_QUESTION_TEXT = 3_200;
+export const STRUCTURED_INPUT_URL_COMPLETED_LABEL = "I've completed this step";
 
 export { isStructuredInputRecord, snapshotStructuredInput };
 export type {
@@ -93,14 +95,19 @@ export function compileStructuredInputForm(params: {
   if (typeof required === "string") {
     return unsupported(required);
   }
-  const intro = readStructuredInputText(params.message ?? params.fallbackMessage, MAX_MESSAGE_TEXT);
+  const richDisplay = options.allowRichForms === true;
+  const intro = readStructuredInputText(
+    params.message ?? params.fallbackMessage,
+    richDisplay ? STRUCTURED_INPUT_MAX_TEXT_CHARS : MAX_MESSAGE_TEXT,
+    richDisplay,
+  );
   if (!intro) {
     return unsupported(
       `OpenClaw declined ${protocol} form display text that is invalid or over-limit.`,
     );
   }
 
-  const metadata = new Map<string, FieldMetadata>();
+  const validatedFields: Array<[string, StructuredInputRecord, FieldMetadata]> = [];
   const otherFields = new Map<string, { fieldId: string; secret: boolean }>();
   for (const [fieldId, rawSchema] of propertyEntries) {
     if (!validFieldName(fieldId) || !isStructuredInputRecord(rawSchema)) {
@@ -110,7 +117,7 @@ export function compileStructuredInputForm(params: {
     if (typeof fieldMetadata === "string") {
       return unsupported(`${protocol} form field ${quote(fieldId)} ${fieldMetadata}`);
     }
-    metadata.set(fieldId, fieldMetadata);
+    validatedFields.push([fieldId, rawSchema, fieldMetadata]);
     if (fieldMetadata.otherAnswer) {
       const target = fieldMetadata.otherQuestionId;
       if (!target || otherFields.has(target)) {
@@ -127,13 +134,9 @@ export function compileStructuredInputForm(params: {
 
   const usedQuestionIds = new Set<string>();
   const fields: StructuredInputField[] = [];
-  for (const [fieldId, rawSchema] of propertyEntries) {
-    const fieldMetadata = metadata.get(fieldId)!;
+  for (const [fieldId, fieldSchema, fieldMetadata] of validatedFields) {
     if (fieldMetadata.otherAnswer) {
       continue;
-    }
-    if (!isStructuredInputRecord(rawSchema)) {
-      return unsupported(`${protocol} form field ${quote(fieldId)} has an invalid schema.`);
     }
     const other = otherFields.get(fieldId);
     const field = compileStructuredInputField(
@@ -144,7 +147,7 @@ export function compileStructuredInputForm(params: {
         secret: fieldMetadata.secret || other?.secret === true,
         otherFieldId: other?.fieldId,
       },
-      rawSchema,
+      fieldSchema,
       options,
     );
     if (typeof field === "string") {
@@ -158,7 +161,7 @@ export function compileStructuredInputForm(params: {
   return { kind: "ready", plan: { kind: "form", intro, fields } };
 }
 
-/** Compiles a literal, non-fetching HTTP(S) confirmation question. */
+/** Keeps browser navigation separate from confirmation that the external step is complete. */
 export function compileStructuredInputUrl(params: {
   url: unknown;
   elicitationId: unknown;
@@ -174,6 +177,7 @@ export function compileStructuredInputUrl(params: {
   );
   if (
     !url ||
+    !hasHttpUrlPrefix(url) ||
     url.length > MAX_URL_TEXT ||
     url.trim() !== url ||
     hasUnsafeVisibleCharacters(url) ||
@@ -184,10 +188,8 @@ export function compileStructuredInputUrl(params: {
       `OpenClaw declined an invalid or over-limit ${params.protocolName} elicitation URL.`,
     );
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
+  const parsed = URL.parse(url);
+  if (!parsed) {
     return unsupported(`OpenClaw declined an invalid ${params.protocolName} elicitation URL.`);
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
@@ -206,14 +208,13 @@ export function compileStructuredInputUrl(params: {
       kind: "url",
       question: {
         id: "continue",
-        header: "Continue",
-        question: boundText(
-          `${message}\n\n${url}\n\nContinue with this URL?`,
-          MAX_URL_QUESTION_TEXT,
-        ),
+        header: "Browser step",
+        // Native clients without URL actions still need the literal destination.
+        question: `${message}\n\n${url}\n\nOpen the link and complete the step in your browser. Then select "${STRUCTURED_INPUT_URL_COMPLETED_LABEL}".`,
+        url,
         isOther: false,
         isSecret: false,
-        options: [{ label: "Continue" }, { label: "Decline" }],
+        options: [{ label: STRUCTURED_INPUT_URL_COMPLETED_LABEL }, { label: "Decline" }],
       },
     },
   };

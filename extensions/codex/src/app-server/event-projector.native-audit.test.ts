@@ -1,213 +1,133 @@
+import { afterEach, beforeEach } from "vitest";
+import { createNativeCommandItem } from "./event-projector-command.test-support.js";
+import {
+  createConfiguredProjection,
+  createProjection,
+} from "./event-projector-projection.test-support.js";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
   onInternalDiagnosticEvent,
   expect,
   it,
-  vi,
-  THREAD_ID,
   flushDiagnosticEvents,
   createParams,
-  createProjector,
-  buildEmptyToolTelemetry,
+  path,
   requireRecord,
   requireArray,
-  findAgentEvent,
   forCurrentTurn,
   type DiagnosticEventPayload,
+  vi,
+  TURN_ID,
+  readAttemptTerminal,
+  turnCompleted,
 } from "./event-projector.test-harness.js";
+import {
+  attachSqliteSessionTarget,
+  readTranscriptMessagesByIdentity,
+} from "./sqlite-session.test-helpers.js";
+
+function firstContent(message: unknown) {
+  return requireRecord(
+    requireArray(requireRecord(message, "assistant").content, "content")[0],
+    "tool call",
+  );
+}
+
+async function persistedProjector(key: string) {
+  const params = await createParams();
+  await attachSqliteSessionTarget(params, path.join(params.workspaceDir, "sessions.json"), key);
+  return { params, ...(await createProjection(params)) };
+}
+
+function rawCall(
+  callId: string,
+  name: string,
+  input: string | Record<string, unknown>,
+  custom = false,
+) {
+  return {
+    type: custom ? "custom_tool_call" : "function_call",
+    call_id: callId,
+    name,
+    ...(custom ? { input } : { arguments: JSON.stringify(input) }),
+  };
+}
+function rawOutput(callId: string, output: unknown, custom = false) {
+  return {
+    type: custom ? "custom_tool_call_output" : "function_call_output",
+    call_id: callId,
+    output,
+  };
+}
+function fileChange(id: string, changes: unknown[], status = "completed") {
+  return { type: "fileChange", id, changes, status };
+}
 
 registerCodexEventProjectorTestLifecycle();
 
+const diagnosticEvents: DiagnosticEventPayload[] = [];
+
+let unsubscribeDiagnostics: (() => void) | undefined;
+
+beforeEach(() => {
+  diagnosticEvents.length = 0;
+  unsubscribeDiagnostics = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+});
+
+afterEach(() => unsubscribeDiagnostics?.());
+
 describe("CodexAppServerEventProjector native tool audit projection", () => {
-  it("synthesizes normalized tool progress for Codex-native tool items", async () => {
+  it.each([
+    ["function_call", "function_call_output"],
+    ["custom_tool_call", "custom_tool_call_output"],
+    ["local_shell_call", "function_call_output"],
+    ["tool_search_call", "tool_search_output"],
+  ])("projects the raw %s lifecycle without its payload", async (callType, outputType) => {
     const onAgentEvent = vi.fn();
-    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
-    const diagnosticEvents: DiagnosticEventPayload[] = [];
-    const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
-
-    try {
-      await projector.handleNotification(
-        forCurrentTurn("item/started", {
-          startedAtMs: 1_750_000_000_000,
-          item: {
-            type: "commandExecution",
-            id: "cmd-1",
-            command: "pnpm test extensions/codex",
-            cwd: "/workspace",
-            processId: null,
-            source: "agent",
-            status: "inProgress",
-            commandActions: [],
-            aggregatedOutput: null,
-            exitCode: null,
-            durationMs: null,
-          },
-        }),
-      );
-      await projector.handleNotification(
-        forCurrentTurn("item/completed", {
-          completedAtMs: 1_750_000_000_042,
-          item: {
-            type: "commandExecution",
-            id: "cmd-1",
-            command: "pnpm test extensions/codex",
-            cwd: "/workspace",
-            processId: null,
-            source: "agent",
-            status: "completed",
-            commandActions: [],
-            aggregatedOutput: "ok",
-            exitCode: 0,
-            durationMs: 42,
-          },
-        }),
-      );
-      await flushDiagnosticEvents();
-    } finally {
-      unsubscribe();
-    }
-
-    const itemStart = findAgentEvent(onAgentEvent, {
-      stream: "item",
-      phase: "start",
-      itemId: "cmd-1",
-    }).data;
-    expect(itemStart.kind).toBe("command");
-    expect(itemStart.name).toBe("bash");
-    expect(itemStart.suppressChannelProgress).toBe(true);
-    const toolStart = findAgentEvent(onAgentEvent, {
-      stream: "tool",
-      phase: "start",
-      itemId: "cmd-1",
-      name: "bash",
-    }).data;
-    expect(toolStart.toolCallId).toBe("cmd-1");
-    expect(toolStart.args).toEqual({ command: "pnpm test extensions/codex", cwd: "/workspace" });
-    const toolResult = findAgentEvent(onAgentEvent, {
-      stream: "tool",
-      phase: "result",
-      itemId: "cmd-1",
-      name: "bash",
-    }).data;
-    expect(toolResult.toolCallId).toBe("cmd-1");
-    expect(toolResult.status).toBe("completed");
-    expect(toolResult.isError).toBe(false);
-    const toolResultPayload = requireRecord(toolResult.result, "tool result payload");
-    expect(toolResultPayload.exitCode).toBe(0);
-    expect(toolResultPayload.durationMs).toBe(42);
-    const toolDiagnosticEvents = diagnosticEvents.filter(
-      (
-        event,
-      ): event is Extract<
-        DiagnosticEventPayload,
-        {
-          type:
-            | "tool.execution.started"
-            | "tool.execution.completed"
-            | "tool.execution.error"
-            | "tool.execution.blocked";
-        }
-      > => event.type.startsWith("tool.execution."),
-    );
+    const { events } = await createConfiguredProjection({ onAgentEvent });
+    await events.raw({
+      type: callType,
+      call_id: "outer-call",
+      name: "exec",
+      input: "private code",
+    });
+    await events.raw({ type: outputType, call_id: "outer-call", output: "private result" });
     expect(
-      toolDiagnosticEvents.map((event) => ({
-        type: event.type,
-        toolName: event.toolName,
-        toolCallId: event.toolCallId,
-        durationMs: "durationMs" in event ? event.durationMs : undefined,
-        sourceTimestampMs: event.sourceTimestampMs,
-      })),
+      onAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.stream === "codex_app_server.item"),
     ).toEqual([
       {
-        type: "tool.execution.started",
-        toolName: "bash",
-        toolCallId: "cmd-1",
-        durationMs: undefined,
-        sourceTimestampMs: 1_750_000_000_000,
+        stream: "codex_app_server.item",
+        data: { phase: "started", itemId: "outer-call", type: callType },
       },
       {
-        type: "tool.execution.completed",
-        toolName: "bash",
-        toolCallId: "cmd-1",
-        durationMs: 42,
-        sourceTimestampMs: 1_750_000_000_042,
+        stream: "codex_app_server.item",
+        data: { phase: "completed", itemId: "outer-call", type: outputType },
       },
     ]);
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
-      "user",
-      "assistant",
-      "toolResult",
-    ]);
-    const assistant = requireRecord(result.messagesSnapshot[1], "assistant tool call message");
-    expect(assistant.role).toBe("assistant");
-    const assistantContent = requireArray(assistant.content, "assistant content");
-    expect(assistantContent[0]).toEqual({
-      type: "toolCall",
-      id: "cmd-1",
-      name: "bash",
-      arguments: { command: "pnpm test extensions/codex", cwd: "/workspace" },
-      input: { command: "pnpm test extensions/codex", cwd: "/workspace" },
-    });
-    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
-    expect(toolResultMessage.role).toBe("toolResult");
-    expect(toolResultMessage.toolCallId).toBe("cmd-1");
-    expect(toolResultMessage.toolName).toBe("bash");
-    expect(toolResultMessage.isError).toBe(false);
-    const toolResultContent = requireArray(toolResultMessage.content, "tool result content");
-    const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
-    expect(toolResultContentItem.type).toBe("toolResult");
-    expect(toolResultContentItem.id).toBe("cmd-1");
-    expect(toolResultContentItem.name).toBe("bash");
-    expect(toolResultContentItem.toolName).toBe("bash");
-    expect(toolResultContentItem.toolCallId).toBe("cmd-1");
-    expect(toolResultContentItem.content).toBe("ok");
   });
 
+  const workspaceRejection =
+    "patch rejected: writing outside of the project; rejected by user approval settings";
+
   it("preserves structured file-change diffs in mirrored transcript calls", async () => {
-    const projector = await createProjector();
+    const { events } = await createProjection();
     const changes = [
       {
         path: "src/updated.ts",
         kind: { type: "update", move_path: null },
-        diff: [
-          "--- a/src/updated.ts",
-          "+++ b/src/updated.ts",
-          "@@ -1 +1,2 @@",
-          "-old",
-          "+new",
-          "+another",
-          "",
-        ].join("\n"),
+        diff: "--- a/src/updated.ts\n+++ b/src/updated.ts\n@@ -1 +1,2 @@\n-old\n+new\n+another\n",
       },
-      {
-        path: "src/created.ts",
-        kind: { type: "add" },
-        diff: "first\nsecond\n",
-      },
-      {
-        path: "src/deleted.ts",
-        kind: { type: "delete" },
-        diff: "removed\n",
-      },
+      { path: "src/created.ts", kind: { type: "add" }, diff: "first\nsecond\n" },
+      { path: "src/deleted.ts", kind: { type: "delete" }, diff: "removed\n" },
     ];
 
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "fileChange",
-          id: "patch-structured",
-          changes,
-          status: "completed",
-        },
-      }),
-    );
+    await events.completed(fileChange("patch-structured", changes));
 
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    const assistant = requireRecord(result.messagesSnapshot[1], "assistant tool call message");
-    const assistantContent = requireArray(assistant.content, "assistant content");
-    const toolCall = requireRecord(assistantContent[0], "file-change tool call");
+    const result = events.result();
+    const toolCall = firstContent(result.messagesSnapshot[1]);
     const expectedChanges = [
       { ...changes[0], stat: { added: 2, removed: 1 } },
       { ...changes[1], stat: { added: 2, removed: 0 } },
@@ -215,504 +135,177 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
     ];
     expect(toolCall.name).toBe("apply_patch");
     expect(toolCall.arguments).toEqual({ changes: expectedChanges });
-    expect(toolCall.input).toEqual({ changes: expectedChanges });
   });
 
-  it.each([
-    {
-      label: "successful patch output after its native item",
-      status: "completed",
-      output: "Successfully applied patch to runtime-tool-fixture-patch.txt",
-      outputFirst: false,
-      isError: false,
-    },
-    {
-      label: "successful patch output before its native item",
-      status: "completed",
-      output: "Successfully applied patch to runtime-tool-fixture-patch.txt",
-      outputFirst: true,
-      isError: false,
-    },
-    {
-      label: "workspace rejection after its native item",
-      status: "declined",
-      output: "patch rejected: writing outside of the project; rejected by user approval settings",
-      outputFirst: false,
-      isError: true,
-    },
-    {
-      label: "workspace rejection before its native item",
-      status: "declined",
-      output: "patch rejected: writing outside of the project; rejected by user approval settings",
-      outputFirst: true,
-      isError: true,
-    },
-    {
-      label: "JSON-function patch success before its native item",
-      status: "completed",
-      output: "Successfully applied patch to runtime-tool-fixture-patch.txt",
-      outputFirst: true,
-      isError: false,
-      functionCall: true,
-    },
-    {
-      label: "JSON-function workspace rejection before its native item",
-      status: "declined",
-      output: "patch rejected: writing outside of the project; rejected by user approval settings",
-      outputFirst: true,
-      isError: true,
-      functionCall: true,
-    },
-    {
-      label: "JSON-function workspace rejection without a native FileChange item",
-      status: "declined",
-      output: "patch rejected: writing outside of the project; rejected by user approval settings",
-      outputFirst: true,
-      isError: true,
-      functionCall: true,
-      omitNativeItem: true,
-    },
-    {
-      label: "intercepted exec-command patch success before its native FileChange item",
-      status: "completed",
-      output: "Successfully applied patch to runtime-tool-fixture-patch.txt",
-      outputFirst: true,
-      isError: false,
-      functionCall: true,
-      execCommand: true,
-    },
-    {
-      label: "intercepted exec-command workspace rejection without a native FileChange item",
-      status: "declined",
-      output: "patch rejected: writing outside of the project; rejected by user approval settings",
-      outputFirst: true,
-      isError: true,
-      functionCall: true,
-      execCommand: true,
-      omitNativeItem: true,
-    },
-    {
-      label:
-        "intercepted cd-prefixed exec-command workspace rejection without a native FileChange item",
-      status: "declined",
-      output: "patch rejected: writing outside of the project; rejected by user approval settings",
-      outputFirst: true,
-      isError: true,
-      functionCall: true,
-      execCommand: true,
-      workingDirectoryPrefix: true,
-      omitNativeItem: true,
-    },
-    {
-      label: "workdir-scoped exec-command workspace rejection without a native FileChange item",
-      status: "declined",
-      output: "patch rejected: writing outside of the project; rejected by user approval settings",
-      outputFirst: true,
-      isError: true,
-      functionCall: true,
-      execCommand: true,
-      executionWorkdir: "/repo/subdir",
-      omitNativeItem: true,
-    },
-    {
-      label: "code-mode native workspace rejection without a FileChange item",
-      status: "declined",
-      output: "patch rejected: writing outside of the project; rejected by user approval settings",
-      outputFirst: true,
-      isError: true,
-      codeMode: true,
-      omitNativeItem: true,
-    },
-    {
-      label: "code-mode native invalid patch without a FileChange item",
-      status: "failed",
-      output: "apply_patch verification failed: failed to find expected lines",
-      outputFirst: true,
-      isError: true,
-      codeMode: true,
-      omitNativeItem: true,
-    },
-  ])("persists the linked Codex raw $label", async (testCase) => {
-    const projector = await createProjector();
-    const callId = "native-patch-raw-result";
-    const patchInput =
-      "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n+*** End Patch\n*** End Patch\n";
+  it.each(["custom", "function", "exec", "cd-exec", "code-mode"] as const)(
+    "persists the linked raw patch through %s (native success or raw-only rejection)",
+    async (mode) => {
+      const { params, events } = await persistedProjector("patch");
+      const callId = "native-patch-raw-result";
+      const patchInput =
+        "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n+*** End Patch\n*** End Patch\n";
 
-    await projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "functionCall" in testCase ? "function_call" : "custom_tool_call",
-          call_id: callId,
-          name:
-            "codeMode" in testCase
-              ? "exec"
-              : "execCommand" in testCase
-                ? "exec_command"
-                : "apply_patch",
-          ...("functionCall" in testCase
-            ? {
-                arguments: JSON.stringify(
-                  "execCommand" in testCase
-                    ? {
-                        cmd: `${"workingDirectoryPrefix" in testCase ? "cd /workspace && " : ""}apply_patch <<'PATCH'\n${patchInput}PATCH\n`,
-                        ...("executionWorkdir" in testCase
-                          ? { workdir: testCase.executionWorkdir }
-                          : {}),
-                      }
-                    : { input: patchInput },
-                ),
-              }
-            : {
-                input:
-                  "codeMode" in testCase
-                    ? `const result = await tools.apply_patch(${JSON.stringify(patchInput)});\ntext(result);\n`
-                    : patchInput,
-              }),
-        },
-      }),
-    );
-
-    const completed = forCurrentTurn("item/completed", {
-      item: {
-        type: "fileChange",
-        id: callId,
-        changes: [{ path: "runtime-tool-fixture-patch.txt", kind: { type: "add" } }],
-        status: testCase.status,
-      },
-    });
-    const rawOutput = forCurrentTurn("rawResponseItem/completed", {
-      item: {
-        type: "functionCall" in testCase ? "function_call_output" : "custom_tool_call_output",
-        call_id: callId,
-        output:
-          "codeMode" in testCase
-            ? [
-                {
-                  type: "input_text",
-                  text: `Script ${testCase.isError ? "failed" : "completed"}\nWall time 6.0 seconds\nOutput:\n`,
-                },
-                {
-                  type: "input_text",
-                  text: testCase.isError ? `Script error:\n${testCase.output}` : testCase.output,
-                },
-              ]
-            : testCase.output,
-      },
-    });
-    const notifications =
-      "omitNativeItem" in testCase
-        ? [rawOutput]
-        : testCase.outputFirst
-          ? [rawOutput, completed]
-          : [completed, rawOutput];
-    for (const notification of notifications) {
-      await projector.handleNotification(notification);
-    }
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    const assistant = requireRecord(result.messagesSnapshot[1], "native patch call");
-    const call = requireRecord(requireArray(assistant.content, "native patch content")[0], "call");
-    expect(call).toMatchObject({
-      type: "toolCall",
-      id: callId,
-      name: "apply_patch",
-      arguments: {
-        input: patchInput,
-        ...("workingDirectoryPrefix" in testCase
-          ? { cwd: "/workspace" }
-          : "executionWorkdir" in testCase
-            ? { cwd: testCase.executionWorkdir }
-            : {}),
-      },
-    });
-    const toolResult = requireRecord(result.messagesSnapshot[2], "native patch result");
-    expect(toolResult).toMatchObject({
-      role: "toolResult",
-      toolCallId: callId,
-      toolName: "apply_patch",
-      isError: testCase.isError,
-    });
-    const output = requireRecord(
-      requireArray(toolResult.content, "native patch result")[0],
-      "result",
-    );
-    expect(output.content).toBe(testCase.output);
-  });
-
-  it("does not double-count a successful code-mode patch and its canonical FileChange", async () => {
-    const projector = await createProjector();
-    const outerCallId = "code-mode-patch-exec";
-    const nativeCallId = "code-mode-patch-file-change";
-    const patchInput =
-      "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n";
-
-    await projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "custom_tool_call",
-          call_id: outerCallId,
-          name: "exec",
-          input: `const result = await tools.apply_patch(${JSON.stringify(patchInput)});\ntext(result);\n`,
-        },
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "fileChange",
-          id: nativeCallId,
-          changes: [{ path: "runtime-tool-fixture-patch.txt", kind: { type: "add" } }],
-          status: "completed",
-        },
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "custom_tool_call_output",
-          call_id: outerCallId,
-          output: [
-            {
-              type: "input_text",
-              text: "Script completed\nWall time 6.0 seconds\nOutput:\n",
-            },
-            { type: "input_text", text: "{}" },
-          ],
-        },
-      }),
-    );
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    const patchCalls = result.messagesSnapshot.flatMap((message) => {
-      if (message.role !== "assistant" || !Array.isArray(message.content)) {
-        return [];
+      const native = mode === "custom";
+      const custom = native || mode === "code-mode";
+      const shell = mode === "exec" || mode === "cd-exec";
+      const input = shell
+        ? {
+            cmd: `${mode === "cd-exec" ? "cd /workspace && " : ""}apply_patch <<'PATCH'\n${patchInput}PATCH\n`,
+          }
+        : mode === "function"
+          ? { input: patchInput }
+          : mode === "code-mode"
+            ? `// @exec: {}\nconst patch = \`${patchInput}\`\nconst result = await tools.apply_patch(patch)\ntext(result)`
+            : patchInput;
+      const name = mode === "code-mode" ? "exec" : shell ? "exec_command" : "apply_patch";
+      await events.raw(rawCall(callId, name, input, custom));
+      if (native) {
+        await events.completed(
+          fileChange(callId, [{ path: "runtime-tool-fixture-patch.txt", kind: { type: "add" } }]),
+        );
       }
-      return message.content.filter(
-        (block) => block.type === "toolCall" && "name" in block && block.name === "apply_patch",
+      const output = native
+        ? "Successfully applied patch to runtime-tool-fixture-patch.txt"
+        : workspaceRejection;
+      const rawResult =
+        mode === "code-mode"
+          ? [
+              { type: "input_text", text: "Script failed\nWall time 6.0 seconds\nOutput:\n" },
+              { type: "input_text", text: `Script error:\n${output}` },
+            ]
+          : output;
+      await events.raw(rawOutput(callId, rawResult, custom));
+
+      const messages = await readTranscriptMessagesByIdentity(params);
+      const call = firstContent(messages[0]);
+      expect(call).toMatchObject({
+        type: "toolCall",
+        id: callId,
+        name: "apply_patch",
+        arguments: { input: patchInput, ...(mode === "cd-exec" ? { cwd: "/workspace" } : {}) },
+      });
+      const toolResult = requireRecord(messages[1], "native patch result");
+      expect(toolResult).toMatchObject({
+        role: "toolResult",
+        toolCallId: callId,
+        toolName: "apply_patch",
+        isError: !native,
+      });
+      expect(firstContent(toolResult).text).toBe(
+        typeof rawResult === "string" ? rawResult : JSON.stringify(rawResult, null, 2),
       );
-    });
-    expect(patchCalls).toHaveLength(1);
-    expect(patchCalls[0]).toMatchObject({ id: nativeCallId, name: "apply_patch" });
-    expect(
-      result.messagesSnapshot.some(
-        (message) =>
-          message.role === "toolResult" &&
-          (message as { toolCallId?: string }).toolCallId === outerCallId,
-      ),
-    ).toBe(false);
-  });
+      const result = events.result();
+      expect(result.toolMetas).toEqual([
+        expect.objectContaining({ toolName: "apply_patch", isError: !native }),
+      ]);
+      expect(result.replayMetadata).toEqual({
+        hadPotentialSideEffects: native,
+        replaySafe: !native,
+      });
+    },
+  );
 
-  it("does not classify an unrecognized raw patch failure as a success", async () => {
-    const projector = await createProjector();
-    const callId = "native-patch-unrecognized-failure";
-    await projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "custom_tool_call",
-          call_id: callId,
-          name: "apply_patch",
-          input: "*** Begin Patch\n*** Add File: broken.txt\n+broken\n*** End Patch\n",
-        },
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "custom_tool_call_output",
-          call_id: callId,
-          output: "apply_patch failed: invalid patch",
-        },
-      }),
-    );
+  it.each(["direct rejection", "code-mode nonzero exit", "code-mode input object"])(
+    "mirrors raw command %s without a commandExecution item",
+    async (mode) => {
+      const { params, events } = await persistedProjector("command");
+      const callId = "native-exec-workspace-rejection";
+      const args = {
+        cmd: `node -e "require('node:fs').writeFileSync('../denied.txt', 'must not change')"`,
+        workdir: "/workspace",
+      };
+      const rejection =
+        "command rejected: writing outside of the project; rejected by user approval settings";
+      const output =
+        mode === "direct rejection"
+          ? rejection
+          : [
+              { type: "input_text", text: "Script completed\nWall time 0.1 seconds\nOutput:\n" },
+              {
+                type: "input_text",
+                text: JSON.stringify({
+                  chunk_id: "denied",
+                  wall_time_seconds: 0.1,
+                  exit_code: 1,
+                  output: "Error: EPERM: operation not permitted, open '../denied.txt'",
+                }),
+              },
+            ];
 
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    const toolResult = requireRecord(result.messagesSnapshot[2], "unresolved native patch result");
-    expect(toolResult).toMatchObject({
-      role: "toolResult",
-      toolCallId: callId,
-      toolName: "apply_patch",
-      isError: true,
-    });
-  });
+      const custom = mode !== "direct rejection";
+      const input = !custom
+        ? args
+        : mode === "code-mode input object"
+          ? `const args = {cmd: ${JSON.stringify(args.cmd)}, workdir: '/workspace', yield_time_ms: 1000}; text(await tools.exec_command(args));`
+          : `const result = await tools.exec_command(${JSON.stringify(args)}); text(result);`;
+      await events.raw(rawCall(callId, custom ? "exec" : "exec_command", input, custom));
+      await events.raw(rawOutput(callId, output, custom));
 
-  it.each([
-    {
-      label: "patch text quoted inside a shell heredoc",
-      command:
-        "cat <<'TEXT'\napply_patch is documented below\n*** Begin Patch\n*** Add File: fake.txt\n+not a patch invocation\n*** End Patch\nTEXT\n",
+      const messages = await readTranscriptMessagesByIdentity(params);
+      const call = firstContent(messages[0]);
+      expect(call).toMatchObject({ type: "toolCall", id: callId, name: "bash" });
+      expect(call.arguments).toEqual({ command: args.cmd, cwd: args.workdir });
+      const result = events.result();
+      expect(result.toolMetas).toEqual([
+        expect.objectContaining({ toolName: "bash", isError: true }),
+      ]);
+      expect(result.replayMetadata).toEqual({
+        hadPotentialSideEffects: mode !== "direct rejection",
+        replaySafe: mode === "direct rejection",
+      });
+      const toolResult = requireRecord(messages[1], "native exec result");
+      expect(toolResult).toMatchObject({
+        role: "toolResult",
+        toolCallId: callId,
+        toolName: "bash",
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: typeof output === "string" ? output : JSON.stringify(output, null, 2),
+          },
+        ],
+      });
     },
-    {
-      label: "a nested apply_patch heredoc",
-      command:
-        "cat <<'OUTER'\napply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: fake.txt\n+not a patch invocation\n*** End Patch\nPATCH\nOUTER\n",
-    },
-    {
-      label: "a user-created absolute-path executable",
-      command:
-        "/workspace/fake/apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: fake.txt\n+not a native patch invocation\n*** End Patch\nPATCH\n",
-    },
-    {
-      label: "an expanding unquoted patch delimiter",
-      command:
-        "apply_patch <<PATCH\n*** Begin Patch\n*** Add File: fake.txt\n+$(touch /tmp/not-a-native-patch)\n*** End Patch\nPATCH\n",
-    },
-    {
-      label: "an expanding working-directory operand",
-      command:
-        "cd $(touch /tmp/not-a-native-patch) && apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: fake.txt\n+not a native patch invocation\n*** End Patch\nPATCH\n",
-    },
-  ])("does not mistake $label for a native patch", async ({ command }) => {
-    const projector = await createProjector();
+  );
+
+  it("does not mistake patch text quoted inside a shell heredoc for a native patch", async () => {
+    const command =
+      "cat <<'TEXT'\napply_patch is documented below\n*** Begin Patch\n*** Add File: fake.txt\n+not a patch invocation\n*** End Patch\nTEXT\n";
+    const { events } = await createProjection();
     const callId = "not-a-native-patch";
 
-    await projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "function_call",
-          call_id: callId,
-          name: "exec_command",
-          arguments: JSON.stringify({ cmd: command }),
-        },
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "function_call_output",
-          call_id: callId,
-          output:
-            "patch rejected: writing outside of the project; rejected by user approval settings",
-        },
-      }),
-    );
+    await events.raw(rawCall(callId, "exec_command", { cmd: command }));
+    await events.raw(rawOutput(callId, workspaceRejection));
 
-    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const result = events.result();
     expect(
       result.messagesSnapshot.some(
         (message) =>
           message.role === "toolResult" &&
-          (message as { toolCallId?: string }).toolCallId === callId,
+          message.toolCallId === callId &&
+          message.toolName === "apply_patch",
       ),
     ).toBe(false);
-  });
-
-  it.each([
-    {
-      label: "an extra executable code-mode call",
-      source:
-        'const result = await tools.apply_patch("*** Begin Patch\\n*** Add File: fake.txt\\n+x\\n*** End Patch");\nawait tools.exec_command({cmd:"touch /tmp/not-a-native-patch"});\ntext(result);\n',
-    },
-    {
-      label: "a dynamically interpolated code-mode patch",
-      source:
-        "const result = await tools.apply_patch(`*** Begin Patch\\n${patch}\\n*** End Patch`);\ntext(result);\n",
-    },
-    {
-      label: "a mismatched code-mode output variable",
-      source:
-        'const result = await tools.apply_patch("*** Begin Patch\\n*** Add File: fake.txt\\n+x\\n*** End Patch");\ntext(other);\n',
-    },
-  ])("does not mistake $label for an isolated native patch", async ({ source }) => {
-    const projector = await createProjector();
-    const callId = "not-an-isolated-code-mode-patch";
-
-    await projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: { type: "custom_tool_call", call_id: callId, name: "exec", input: source },
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "custom_tool_call_output",
-          call_id: callId,
-          output: [
-            { type: "input_text", text: "Script failed\nWall time 6.0 seconds\nOutput:\n" },
-            {
-              type: "input_text",
-              text: "Script error:\npatch rejected: writing outside of the project; rejected by user approval settings",
-            },
-          ],
-        },
-      }),
-    );
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(
-      result.messagesSnapshot.some(
-        (message) =>
-          message.role === "toolResult" &&
-          (message as { toolCallId?: string }).toolCallId === callId,
-      ),
-    ).toBe(false);
-  });
-
-  it("does not infer a patch rejection from a successful path named denied", async () => {
-    const projector = await createProjector();
-    const callId = "successful-patch-path-named-denied";
-
-    await projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "custom_tool_call",
-          call_id: callId,
-          name: "apply_patch",
-          input:
-            "*** Begin Patch\n*** Add File: denied.txt\n+not a rejected patch\n*** End Patch\n",
-        },
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "custom_tool_call_output",
-          call_id: callId,
-          output: "Successfully applied patch to denied.txt",
-        },
-      }),
-    );
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    const toolResult = requireRecord(result.messagesSnapshot[2], "unresolved native patch result");
-    expect(toolResult).toMatchObject({
-      role: "toolResult",
-      toolCallId: callId,
-      toolName: "apply_patch",
-      isError: true,
-    });
   });
 
   it("bounds mirrored file-change diffs without losing full stats", async () => {
-    const diff = [
-      "--- a/src/large.ts",
-      "+++ b/src/large.ts",
-      "@@ -1 +1,200 @@",
-      "-old",
-      ...Array.from({ length: 200 }, (_, index) => `+${index}-${"x".repeat(96)}`),
-      "",
-    ].join("\n");
-    const projector = await createProjector();
+    const diff =
+      "--- a/src/large.ts\n+++ b/src/large.ts\n@@ -1 +1,200 @@\n-old\n" +
+      Array.from({ length: 200 }, (_, index) => `+${index}-${"x".repeat(96)}`).join("\n") +
+      "\n";
+    const { events } = await createProjection();
 
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "fileChange",
-          id: "patch-large",
-          changes: [{ path: "src/large.ts", kind: { type: "update" }, diff }],
-          status: "completed",
-        },
-      }),
+    await events.completed(
+      fileChange("patch-large", [{ path: "src/large.ts", kind: { type: "update" }, diff }]),
     );
 
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    const assistant = requireRecord(result.messagesSnapshot[1], "assistant tool call message");
-    const assistantContent = requireArray(assistant.content, "assistant content");
-    const toolCall = requireRecord(assistantContent[0], "file-change tool call");
+    const result = events.result();
+    const toolCall = firstContent(result.messagesSnapshot[1]);
     const args = requireRecord(toolCall.arguments, "file-change arguments");
     const projectedChanges = requireArray(args.changes, "projected file changes");
     const projectedChange = requireRecord(projectedChanges[0], "projected file change");
     const projectedDiff = projectedChange.diff;
-    expect(typeof projectedDiff).toBe("string");
     if (typeof projectedDiff !== "string") {
       throw new Error("Expected bounded file-change diff");
     }
@@ -723,200 +316,40 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
     expect(projectedChange.stat).toEqual({ added: 200, removed: 1 });
   });
 
-  it.each([
-    ["cancelled", "cancelled"],
-    [Object.assign(new Error("turn timed out"), { name: "TimeoutError" }), "timed_out"],
-  ] as const)(
-    "preserves enclosing %s provenance for failed native tools",
-    async (abortReason, terminalReason) => {
-      const abortController = new AbortController();
-      abortController.abort(abortReason);
-      const diagnosticEvents: DiagnosticEventPayload[] = [];
-      const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
-      const projector = await createProjector(undefined, {
-        runAbortSignal: abortController.signal,
-      });
-      const commandItem = {
-        type: "commandExecution",
-        id: "cmd-aborted",
-        command: "pnpm test extensions/codex",
-        cwd: "/workspace",
-        processId: null,
-        source: "agent",
-        status: "inProgress",
-        commandActions: [],
-        aggregatedOutput: null,
-        exitCode: null,
-        durationMs: null,
-      };
+  it("preserves enclosing timeout provenance for failed native tools", async () => {
+    const { events } = await createProjection(undefined, {
+      runAbortSignal: AbortSignal.abort(
+        Object.assign(new Error("turn timed out"), { name: "TimeoutError" }),
+      ),
+    });
+    const commandItem = createNativeCommandItem({
+      id: "cmd-aborted",
+      status: "inProgress",
+      exitCode: null,
+      durationMs: null,
+    });
 
-      try {
-        await projector.handleNotification(forCurrentTurn("item/started", { item: commandItem }));
-        await projector.handleNotification(
-          forCurrentTurn("item/completed", {
-            item: { ...commandItem, status: "failed", durationMs: 4 },
-          }),
-        );
-        await flushDiagnosticEvents();
-      } finally {
-        unsubscribe();
-      }
+    await events.started(commandItem);
+    await events.completed({ ...commandItem, status: "failed", durationMs: 4 });
+    await flushDiagnosticEvents();
 
-      expect(diagnosticEvents).toContainEqual(
-        expect.objectContaining({
-          type: "tool.execution.error",
-          toolCallId: "cmd-aborted",
-          terminalReason,
-        }),
-      );
-    },
-  );
-
-  it.each([
-    ["cancelled", "cancelled"],
-    [Object.assign(new Error("turn timed out"), { name: "TimeoutError" }), "timed_out"],
-  ] as const)(
-    "finalizes an active native tool as %s when building an interrupted result",
-    async (abortReason, terminalReason) => {
-      const abortController = new AbortController();
-      abortController.abort(abortReason);
-      const diagnosticEvents: DiagnosticEventPayload[] = [];
-      const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
-      const projector = await createProjector(undefined, {
-        runAbortSignal: abortController.signal,
-      });
-
-      try {
-        await projector.handleNotification(
-          forCurrentTurn("item/started", {
-            item: {
-              type: "commandExecution",
-              id: "cmd-active-abort",
-              command: "pnpm test extensions/codex",
-              cwd: "/workspace",
-              processId: null,
-              source: "agent",
-              status: "inProgress",
-              commandActions: [],
-              aggregatedOutput: null,
-              exitCode: null,
-              durationMs: null,
-            },
-          }),
-        );
-        projector.buildResult(buildEmptyToolTelemetry());
-        await flushDiagnosticEvents();
-      } finally {
-        unsubscribe();
-      }
-
-      expect(diagnosticEvents).toContainEqual(
-        expect.objectContaining({
-          type: "tool.execution.error",
-          toolCallId: "cmd-active-abort",
-          terminalReason,
-        }),
-      );
-      expect(
-        diagnosticEvents
-          .filter((event) => "toolCallId" in event && event.toolCallId === "cmd-active-abort")
-          .map((event) => event.type),
-      ).toEqual(["tool.execution.started", "tool.execution.error"]);
-    },
-  );
-
-  it.each([
-    [
-      "collaboration",
-      {
-        id: "collab-audit-1",
-        type: "collabAgentToolCall",
-        tool: "spawnAgent",
-        status: "completed",
-        senderThreadId: THREAD_ID,
-        receiverThreadIds: ["child-thread-1"],
-        prompt: "sensitive prompt text",
-        model: null,
-        reasoningEffort: null,
-        agentsStates: {},
-      },
-      "collab.spawnAgent",
-    ],
-    [
-      "image generation",
-      {
-        id: "image-generation-audit-1",
-        type: "imageGeneration",
-        status: "completed",
-        revisedPrompt: "sensitive revised prompt",
-        result: "sensitive image payload",
-      },
-      "image_generation",
-    ],
-    [
-      "image view",
-      {
-        id: "image-view-audit-1",
-        type: "imageView",
-        path: "/workspace/sensitive-filename.png",
-      },
-      "image_view",
-    ],
-    [
-      "sleep",
-      {
-        id: "sleep-audit-1",
-        type: "sleep",
-        durationMs: 250,
-      },
-      "sleep",
-    ],
-  ] as const)(
-    "emits metadata-only lifecycle diagnostics for native %s items",
-    async (_, item, toolName) => {
-      const diagnosticEvents: DiagnosticEventPayload[] = [];
-      const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
-      const projector = await createProjector();
-
-      try {
-        await projector.handleNotification(
-          forCurrentTurn("item/started", { item, startedAtMs: 1_750_000_000_000 }),
-        );
-        await projector.handleNotification(
-          forCurrentTurn("item/completed", { item, completedAtMs: 1_750_000_000_042 }),
-        );
-        await flushDiagnosticEvents();
-      } finally {
-        unsubscribe();
-      }
-
-      expect(
-        diagnosticEvents
-          .filter((event) => "toolCallId" in event && event.toolCallId === item.id)
-          .map((event) => ({
-            type: event.type,
-            toolName: "toolName" in event ? event.toolName : null,
-          })),
-      ).toEqual([
-        { type: "tool.execution.started", toolName },
-        { type: "tool.execution.completed", toolName },
-      ]);
-      expect(JSON.stringify(diagnosticEvents)).not.toContain("sensitive");
-    },
-  );
+    expect(diagnosticEvents).toContainEqual(
+      expect.objectContaining({
+        type: "tool.execution.error",
+        toolCallId: "cmd-aborted",
+        terminalReason: "timed_out",
+      }),
+    );
+  });
 
   it.each([
     ["completed", "tool.execution.completed", undefined, undefined],
     ["failed", "tool.execution.error", "failed", undefined],
     ["cancelled", "tool.execution.error", "cancelled", undefined],
-    [undefined, "tool.execution.error", "failed", "tool_outcome_unknown"],
-    ["future_status", "tool.execution.error", "failed", "tool_outcome_unknown"],
   ] as const)(
     "uses raw %s status for redacted native web-search audit actions",
     async (status, terminalType, terminalReason, errorCode) => {
-      const diagnosticEvents: DiagnosticEventPayload[] = [];
-      const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
-      const projector = await createProjector();
+      const { events } = await createProjection();
       const item = {
         id: "web-search-audit-1",
         type: "webSearch",
@@ -924,55 +357,231 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
         action: { type: "search", query: "sensitive query", queries: null },
       };
 
-      try {
-        await projector.handleNotification(
-          forCurrentTurn("item/started", { item, startedAtMs: 1_750_000_000_000 }),
-        );
-        await projector.handleNotification(
-          forCurrentTurn("item/completed", { item, completedAtMs: 1_750_000_000_042 }),
-        );
-        await projector.handleNotification(
-          forCurrentTurn("rawResponseItem/completed", {
-            item: {
-              id: item.id,
-              type: "web_search_call",
-              status,
-              action: item.action,
-            },
-          }),
-        );
-        await flushDiagnosticEvents();
-      } finally {
-        unsubscribe();
-      }
+      await events.started(item, { startedAtMs: 1_750_000_000_000 });
+      await events.completed(item, { completedAtMs: 1_750_000_000_042 });
+      await events.raw({ id: item.id, type: "web_search_call", status, action: item.action });
+      await flushDiagnosticEvents();
 
-      expect(
-        diagnosticEvents
-          .filter((event) => "toolCallId" in event && event.toolCallId === item.id)
-          .map((event) => ({
-            type: event.type,
-            toolName: "toolName" in event ? event.toolName : null,
-            terminalReason: "terminalReason" in event ? event.terminalReason : undefined,
-            errorCode: "errorCode" in event ? event.errorCode : undefined,
-            sourceTimestampMs: "sourceTimestampMs" in event ? event.sourceTimestampMs : undefined,
-          })),
-      ).toEqual([
+      const audit = diagnosticEvents.filter(
+        (event) => "toolCallId" in event && event.toolCallId === item.id,
+      );
+      expect(audit).toMatchObject([
         {
           type: "tool.execution.started",
           toolName: "web_search",
-          terminalReason: undefined,
-          errorCode: undefined,
           sourceTimestampMs: 1_750_000_000_000,
         },
-        {
-          type: terminalType,
-          toolName: "web_search",
-          terminalReason,
-          errorCode,
-          sourceTimestampMs: 1_750_000_000_042,
-        },
+        { type: terminalType, toolName: "web_search", sourceTimestampMs: 1_750_000_000_042 },
+      ]);
+      expect(
+        audit.map((event) => ({
+          terminalReason: "terminalReason" in event ? event.terminalReason : undefined,
+          errorCode: "errorCode" in event ? event.errorCode : undefined,
+        })),
+      ).toEqual([
+        { terminalReason: undefined, errorCode: undefined },
+        { terminalReason, errorCode },
       ]);
       expect(JSON.stringify(diagnosticEvents)).not.toContain("sensitive");
     },
   );
+});
+
+function expectUnknownOutcome(itemId: string) {
+  expect(
+    diagnosticEvents
+      .filter((event) => "toolCallId" in event && event.toolCallId === itemId)
+      .map((event) => ({
+        type: event.type,
+        terminalReason: "terminalReason" in event ? event.terminalReason : undefined,
+        errorCode: "errorCode" in event ? event.errorCode : undefined,
+      })),
+  ).toEqual([
+    { type: "tool.execution.started", terminalReason: undefined, errorCode: undefined },
+    { type: "tool.execution.error", terminalReason: "failed", errorCode: "tool_outcome_unknown" },
+  ]);
+}
+
+describe("CodexAppServerEventProjector native tool finalization", () => {
+  const activeCall = {
+    id: "mcp-grant-item",
+    server: "docs/raw-name",
+    tool: "lookup.raw",
+    arguments: { query: "exact argument", limit: 3 },
+  };
+  const mcpItem = { type: "mcpToolCall", status: "inProgress", ...activeCall };
+
+  it("correlates only a unique active MCP item using raw server and tool identities", async () => {
+    const { projector, events } = await createProjection();
+    expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
+    await events.started(mcpItem);
+    await events.started({ ...mcpItem, id: "other-server-item", server: "other-server" });
+    expect(projector.getActiveMcpToolCall(mcpItem.server)).toEqual(activeCall);
+
+    const concurrentItem = { ...mcpItem, id: "concurrent-item", pluginId: "external-plugin" };
+    await events.started(concurrentItem);
+    expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
+    await events.completed({ ...concurrentItem, status: "completed" });
+    expect(projector.getActiveMcpToolCall(mcpItem.server)?.id).toBe(mcpItem.id);
+    await events.completed({ ...mcpItem, status: "completed" });
+    expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
+  });
+
+  it.each(["receipt", "projection"] as const)(
+    "preserves active MCP correlation after a nonterminal completion at %s",
+    async (phase) => {
+      const { projector, events } = await createProjection();
+      await events.started(mcpItem);
+      expect(projector.getActiveMcpToolCall(mcpItem.server)).toEqual(activeCall);
+
+      const invalid = forCurrentTurn("turn/completed", {
+        turn: { id: TURN_ID, status: "inProgress", items: [] },
+      });
+      if (phase === "receipt") {
+        projector.recordMcpToolCallReceipt(invalid);
+      } else {
+        await projector.handleNotification(invalid);
+      }
+      expect(projector.getActiveMcpToolCall(mcpItem.server)).toEqual(activeCall);
+      expect(projector.getCompletedTurnStatus()).toBeUndefined();
+
+      const completed = turnCompleted();
+      if (phase === "receipt") {
+        projector.recordMcpToolCallReceipt(completed);
+      } else {
+        await projector.handleNotification(completed);
+      }
+      expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
+    },
+  );
+
+  it.each([
+    { label: "another thread", params: { threadId: "other-thread" } },
+    { label: "another turn", params: { turnId: "other-turn" } },
+    { label: "completed status", item: { status: "completed" } },
+    { label: "missing raw arguments", item: { arguments: undefined } },
+    { label: "missing tool", item: { tool: undefined } },
+    { label: "app context", item: { appContext: { resourceUri: "ui://app/view" } } },
+    { label: "plugin context", item: { pluginId: "external-plugin" } },
+  ])("does not correlate an MCP item from $label", async (testCase) => {
+    const { projector, events } = await createProjection();
+    await events.started(
+      { ...mcpItem, ...("item" in testCase ? testCase.item : {}) },
+      { ...("params" in testCase ? testCase.params : {}) },
+    );
+    expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
+  });
+
+  it.each(["closed", "finalized", "timed out"])(
+    "does not correlate MCP items after the turn is %s",
+    async (ending) => {
+      const { projector, events } = await createProjection();
+      await events.started(mcpItem);
+      if (ending === "closed") {
+        await projector.closeProjection();
+      } else if (ending === "finalized") {
+        events.result();
+      } else {
+        projector.markTimedOut();
+      }
+      await events.started({ ...mcpItem, id: "late-item" });
+      expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
+    },
+  );
+
+  it.each(["open page", "aborted finalization"])(
+    "keeps web-search outcomes unknown at %s without an explicit terminal",
+    async (ending) => {
+      const openPage = ending === "open page";
+      const { events } = await createProjection(
+        undefined,
+        openPage ? undefined : { runAbortSignal: AbortSignal.abort("cancelled") },
+      );
+      const item = {
+        id: "web-search-unknown",
+        type: "webSearch",
+        query: openPage ? "" : "sensitive extension query",
+        action: openPage
+          ? { type: "openPage", url: "https://example.com/sensitive" }
+          : { type: "search", query: "sensitive extension query", queries: null },
+      };
+      await events.started(item);
+      await events.completed(item);
+      if (openPage) {
+        await events.raw({
+          id: item.id,
+          type: "web_search_call",
+          status: "open",
+          action: { type: "open_page", url: "https://example.com/sensitive" },
+        });
+      } else {
+        events.result();
+      }
+      await flushDiagnosticEvents();
+      expectUnknownOutcome(item.id);
+      expect(JSON.stringify(diagnosticEvents)).not.toContain(
+        openPage ? "sensitive" : "sensitive extension query",
+      );
+    },
+  );
+
+  it("delivers completed assistant text when a native tool call finishes without a matching result", async () => {
+    const answer = "The requested publish command was denied before execution.";
+    const trajectoryRecorder = {
+      filePath: "trajectory.jsonl",
+      recordEvent: vi.fn(),
+      flush: vi.fn(async () => undefined),
+    };
+    const { events } = await createProjection(await createParams(), { trajectoryRecorder });
+
+    await events.started(
+      createNativeCommandItem({
+        id: "cmd-denied",
+        command: "node scripts/report.js --publish",
+        status: "inProgress",
+        exitCode: null,
+        durationMs: null,
+      }),
+    );
+    await events.complete([{ type: "agentMessage", id: "msg-denied", text: answer }]);
+
+    const result = events.result();
+
+    expect(readAttemptTerminal(result)).toMatchObject({
+      promptError: null,
+      promptErrorSource: null,
+    });
+    expect(result.lastToolError).toBeUndefined();
+    expect(result.assistantTexts).toEqual([answer]);
+    expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
+    expect(toolResultMessage).toMatchObject({
+      toolCallId: "cmd-denied",
+      toolName: "bash",
+      isError: true,
+    });
+    expect(toolResultMessage.details).toEqual({ reason: "missing_tool_result" });
+    expect(toolResultMessage.content).toEqual([
+      { type: "text", text: expect.stringContaining("matching tool.result") },
+    ]);
+    const finalAssistant = requireRecord(result.messagesSnapshot[3], "final assistant message");
+    expect(finalAssistant.content).toEqual([{ type: "text", text: answer }]);
+    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith(
+      "tool.result",
+      expect.objectContaining({
+        toolCallId: "cmd-denied",
+        name: "bash",
+        status: "failed",
+        isError: true,
+        success: false,
+        result: { status: "failed", reason: "missing_tool_result" },
+        output: expect.stringContaining("without a matching tool.result"),
+      }),
+    );
+  });
 });

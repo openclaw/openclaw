@@ -1,0 +1,715 @@
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, expect, it, vi } from "vitest";
+import { createReleaseEvidenceReplay } from "../../scripts/lib/release-evidence-replay.mjs";
+import {
+  authenticatePreparedNpmArtifact,
+  consumePreparedNpmPackage,
+  createPreparedNpmRelease,
+  createPreparedNpmCapacityObserver,
+  downloadPreparedNpmRelease,
+  PREPARED_NPM_MANIFEST,
+  preparedNpmArtifactName,
+  selectUnpublishedPreparedNpmPackages,
+  validatePreparedNpmRelease,
+  verifyPreparedNpmRegistry,
+} from "../../scripts/plugin-npm-prepared-release.mjs";
+import { createPluginPublicationArtifact } from "../../scripts/plugin-publication-artifact.mjs";
+import { createReleaseEvidenceClient } from "../../scripts/release-ci-summary.mjs";
+import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
+import {
+  packNpmFixture,
+  npmRegistryPackument,
+  npmWorkflowRun,
+  zipNpmFixture as archive,
+} from "./plugin-npm-publication-readback.test-support.js";
+
+const producer = {
+  repository: "openclaw/openclaw",
+  runId: 101,
+  runAttempt: 2,
+  workflowPath: ".github/workflows/plugin-npm-release.yml",
+  workflowEvent: "workflow_dispatch",
+  workflowHeadBranch: "main",
+  workflowSha: "a".repeat(40),
+};
+const sourceSha = "b".repeat(40);
+const policySha = "c".repeat(64);
+const version = "2026.9.2-beta.1";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempRoot = () => tempDirs.make("plugin-npm-prepared-");
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+});
+
+it("reports validation errors after the authorize CLI loads its cyclic imports", () => {
+  const result = spawnSync(
+    process.execPath,
+    ["scripts/plugin-npm-prepared-release.mjs", "authorize", "--artifact", "{}"],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GITHUB_REPOSITORY: "invalid-repository",
+        PREPARED_NPM_FRV_RUN_ID: "1",
+        PREPARED_NPM_FRV_RUN_ATTEMPT: "1",
+        PREPARED_NPM_EVIDENCE_ID: "",
+      },
+      timeout: 10_000,
+    },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(1);
+  expect(result.stderr).toContain("repository must use the owner/name form");
+  expect(result.stderr).toContain("[plugin-npm-prepared-release] FAILED (exit 1)");
+  expect(result.stderr).not.toContain("unsettled top-level await");
+});
+
+function digest(bytes: Buffer, algorithm = "sha256") {
+  return createHash(algorithm).update(bytes).digest("hex");
+}
+
+function plugin(extensionId: string, alreadyPublished = false) {
+  return {
+    extensionId,
+    packageDir: `extensions/${extensionId}`,
+    packageName: `@openclaw/${extensionId}`,
+    version,
+    channel: "beta",
+    publishTag: "beta",
+    installNpmSpec: `@openclaw/${extensionId}`,
+    alreadyPublished,
+  };
+}
+
+const workflowRun = (completed = false) =>
+  npmWorkflowRun(producer.runId, producer.runAttempt, completed);
+
+function metadata(id: number, name: string, bytes: Buffer = Buffer.from("artifact")) {
+  return {
+    id,
+    name,
+    digest: `sha256:${digest(bytes)}`,
+    size_in_bytes: bytes.length,
+    expired: false,
+    workflow_run: { id: producer.runId, head_sha: producer.workflowSha },
+  };
+}
+
+const expected = {
+  sourceSha,
+  workflowSha: producer.workflowSha,
+  repository: producer.repository,
+  npmDistTag: "default",
+  selectionMode: "all-publishable",
+  plugins: "",
+  publisherPolicySha256: policySha,
+};
+
+function preparation(
+  packageFields: Partial<
+    Pick<ReturnType<typeof plugin>, "version" | "channel" | "publishTag">
+  > = {},
+  route = "npm-oidc",
+  npmDistTag = "default",
+) {
+  const matrix = [
+    { ...plugin("demo"), ...packageFields },
+    { ...plugin("existing", true), ...packageFields },
+  ] as const;
+  const artifact = (entry: ReturnType<typeof plugin>, id: number) =>
+    metadata(
+      id,
+      `plugin-npm-package-${entry.extensionId}-${entry.version}-${route}-${producer.runId}-${producer.runAttempt}`,
+    );
+  const artifacts = [artifact(matrix[0], 1), artifact(matrix[1], 2)] satisfies [
+    ReturnType<typeof metadata>,
+    ReturnType<typeof metadata>,
+  ];
+  return {
+    ...expected,
+    npmDistTag,
+    producer,
+    matrix,
+    artifacts,
+    workflowRun: workflowRun(),
+    workflowJobs: {
+      total_count: matrix.length,
+      jobs: matrix.map((entry) => ({
+        name: `Preflight plugin npm package (${entry.packageName})`,
+        run_id: producer.runId,
+        run_attempt: producer.runAttempt,
+        head_sha: producer.workflowSha,
+        status: "completed",
+        conclusion: "success",
+      })),
+    },
+  };
+}
+
+function candidatePreparation(independentQ = false) {
+  const qualification = candidatePublicationFixture(
+    independentQ ? { qualificationSha: "e".repeat(40) } : {},
+  );
+  const qProducer = {
+    ...producer,
+    workflowSha: qualification.q,
+    workflowHeadBranch: qualification.branch,
+  };
+  const artifact = {
+    ...qProducer,
+    artifactId: 9001,
+    artifactName: preparedNpmArtifactName(qualification.c, qProducer),
+    artifactDigest: `sha256:${"d".repeat(64)}`,
+    artifactSizeBytes: 1024,
+  };
+  Object.assign(qualification.manifest.publicationArtifacts, { pluginNpm: artifact });
+  const qPolicy = "name: Q plugin policy\n# immutable Q bytes, never executed by P\n";
+  const policyReads: string[] = [];
+  const evidenceClient = {
+    ...qualification.client,
+    getWorkflowSource(sha: string, path?: string) {
+      if (path === producer.workflowPath) {
+        policyReads.push(sha);
+        if (sha !== qualification.q) {
+          throw new Error("The consumer requested P policy for Q artifacts");
+        }
+        return qPolicy;
+      }
+      return qualification.client.getWorkflowSource(sha, path);
+    },
+  };
+  const params = {
+    repository: qualification.repository,
+    sourceSha: qualification.c,
+    workflowSha: qualification.p,
+    workflowFullRef: qualification.publisherFullRef,
+    artifact: structuredClone(artifact),
+    fullReleaseValidationRunId: qualification.runId,
+    fullReleaseValidationRunAttempt: 1,
+    releaseTag: `v${qualification.source.projection?.version}`,
+    selectionMode: "all-publishable",
+    plugins: "",
+    npmDistTag: "default",
+    evidenceClient,
+  };
+  return { qualification, params, qPolicy, policyReads };
+}
+
+it.each([false, true])(
+  "authenticates Q != P with independent Q=%s through the FRV admission owner",
+  async (independentQ) => {
+    const { qualification, params, qPolicy, policyReads } = candidatePreparation(independentQ);
+    expect(qualification.q).not.toBe(qualification.p);
+    const admitted = await authenticatePreparedNpmArtifact(params);
+    expect(admitted.artifact).toEqual(params.artifact);
+    expect(admitted.workflowSha).toBe(qualification.q);
+    expect(admitted.publisherPolicySha256).toBe(digest(Buffer.from(qPolicy)));
+    expect(policyReads).toEqual([qualification.q]);
+    if (!admitted.revalidateAuthority) {
+      throw new Error("Missing live candidate authority");
+    }
+    const revalidate = admitted.revalidateAuthority;
+    await revalidate();
+    qualification.admission.authority.permission = "read";
+    expect(() => revalidate()).toThrow();
+  },
+);
+
+it.each([
+  "producer",
+  "digest",
+  "producer-attempt",
+  "parent-attempt",
+  "parent",
+  "selection",
+  "channel",
+  "revoked",
+  "missing-parent",
+])("rejects Q adoption with %s mismatch before reading its publisher policy", async (fault) => {
+  const { qualification, params, policyReads } = candidatePreparation(true);
+  if (fault === "producer") {
+    params.artifact.workflowSha = qualification.p;
+  }
+  if (fault === "digest") {
+    params.artifact.artifactDigest = `sha256:${"e".repeat(64)}`;
+  }
+  if (fault === "producer-attempt") {
+    params.artifact.runAttempt += 1;
+  }
+  if (fault === "parent-attempt") {
+    params.fullReleaseValidationRunAttempt = 2;
+  }
+  if (fault === "parent") {
+    params.fullReleaseValidationRunId = "9002";
+  }
+  if (fault === "selection") {
+    params.selectionMode = "selected";
+  }
+  if (fault === "channel") {
+    params.npmDistTag = "extended-stable";
+  }
+  if (fault === "revoked") {
+    qualification.admission.authority.permission = "read";
+  }
+  if (fault === "missing-parent") {
+    params.fullReleaseValidationRunId = "";
+    params.fullReleaseValidationRunAttempt = 0;
+  }
+  await expect(authenticatePreparedNpmArtifact(params)).rejects.toThrow();
+  expect(policyReads).toEqual([]);
+});
+
+function sourcePackage(root: string, entry: ReturnType<typeof plugin>) {
+  const { packageDir } = writePublishablePluginFixture(root, {
+    extensionId: entry.extensionId,
+    version: entry.version,
+    publishTo: "npm",
+  });
+  const file = join(packageDir, "package.json");
+  return { bytes: readFileSync(file), file };
+}
+
+function sourcePreparation() {
+  const input = preparation();
+  const sourceRoot = tempRoot();
+  for (const entry of input.matrix) {
+    sourcePackage(sourceRoot, entry);
+  }
+  return { sourceRoot, manifest: createPreparedNpmRelease(input) };
+}
+
+function descriptor(artifact: ReturnType<typeof metadata>) {
+  return {
+    ...producer,
+    artifactId: artifact.id,
+    artifactName: artifact.name,
+    artifactDigest: artifact.digest,
+    artifactSizeBytes: artifact.size_in_bytes,
+  };
+}
+
+function artifactFetch(artifact: ReturnType<typeof metadata>, bytes: Buffer): typeof fetch {
+  return async (request) => {
+    const input =
+      typeof request === "string" ? request : request instanceof URL ? request.href : request.url;
+    if (input.endsWith(`/artifacts/${artifact.id}/zip`)) {
+      return new Response(new Uint8Array(bytes));
+    }
+    if (input.endsWith(`/artifacts/${artifact.id}`)) {
+      return Response.json(artifact);
+    }
+    if (input.endsWith(`/runs/${producer.runId}/attempts/${producer.runAttempt}`)) {
+      return Response.json(workflowRun(true));
+    }
+    throw new Error(`Unexpected request: ${input}`);
+  };
+}
+
+async function packedPluginFixture() {
+  const root = tempRoot();
+  const entry = plugin("demo");
+  const source = sourcePackage(root, entry);
+  const evidence = join(root, "evidence");
+  const tarballName = "openclaw-demo.tgz";
+  const tarballPath = join(evidence, tarballName);
+  await packNpmFixture(join(root, "archive"), tarballPath, {
+    "package.json": source.bytes,
+    "openclaw.plugin.json": JSON.stringify({ id: "demo" }),
+    "README.md": "Prepared plugin package.\n",
+    "dist/index.js": "export default {};\n",
+  });
+  return { root, entry, source, evidence, tarballName, tarballPath };
+}
+
+it("loads and consumes the original Q bytes using authenticated Q expectations at P", async () => {
+  const { qualification, params, qPolicy } = candidatePreparation(true);
+  const { root, entry, source, evidence, tarballName, tarballPath } = await packedPluginFixture();
+  sourcePackage(root, plugin("existing", true));
+  const qProducer = {
+    ...producer,
+    workflowSha: qualification.q,
+    workflowHeadBranch: qualification.branch,
+  };
+  const input = preparation();
+  input.sourceSha = qualification.c;
+  input.producer = qProducer;
+  input.publisherPolicySha256 = digest(Buffer.from(qPolicy));
+  input.workflowRun.head_branch = qualification.branch;
+  input.workflowRun.head_sha = qualification.q;
+  for (const artifact of input.artifacts) {
+    artifact.workflow_run.head_sha = qualification.q;
+  }
+  for (const job of input.workflowJobs.jobs) {
+    job.head_sha = qualification.q;
+  }
+  const packageName = input.artifacts[0].name;
+  const created = createPluginPublicationArtifact({
+    artifactDir: evidence,
+    artifactName: packageName,
+    ...entry,
+    route: "npm-oidc",
+    targetSha: qualification.c,
+    sourcePackageJsonSha256: digest(source.bytes),
+    publicationReason: "Stable npm registry preflight selected npm-oidc.",
+    publisherPolicy: {
+      policyId: "plugin-npm-release-workflow",
+      schema: "openclaw.plugin-npm-publisher-policy/v1",
+      sha256: input.publisherPolicySha256,
+    },
+  });
+  const packageBytes = await archive({
+    [tarballName]: readFileSync(tarballPath),
+    "plugin-publication-manifest.json": readFileSync(created.manifestPath),
+  });
+  input.artifacts[0] = metadata(1, packageName, packageBytes);
+  input.artifacts[0].workflow_run.head_sha = qualification.q;
+  const manifest = createPreparedNpmRelease(input);
+  const manifestBytes = await archive({ [PREPARED_NPM_MANIFEST]: manifest });
+  const manifestArtifact = metadata(
+    10,
+    preparedNpmArtifactName(qualification.c, qProducer),
+    manifestBytes,
+  );
+  manifestArtifact.workflow_run.head_sha = qualification.q;
+  const qDescriptor = {
+    ...descriptor(manifestArtifact),
+    workflowSha: qualification.q,
+    workflowHeadBranch: qualification.branch,
+  };
+  Object.assign(qualification.manifest.publicationArtifacts, { pluginNpm: qDescriptor });
+  params.artifact = qDescriptor;
+  const authenticated = await authenticatePreparedNpmArtifact(params);
+  const fetchImpl = async (url: string) => {
+    if (url.endsWith(`/runs/${producer.runId}/attempts/${producer.runAttempt}`)) {
+      return Response.json({
+        ...workflowRun(true),
+        head_sha: qualification.q,
+        head_branch: qualification.branch,
+      });
+    }
+    if (url.includes("/artifacts/10")) {
+      return artifactFetch(manifestArtifact, manifestBytes)(url);
+    }
+    return artifactFetch(input.artifacts[0], packageBytes)(url);
+  };
+  const context = {
+    ...params,
+    ...authenticated,
+    sourceRoot: root,
+    token: "synthetic-token",
+    fetchImpl,
+  };
+  const loaded = await downloadPreparedNpmRelease({
+    ...context,
+    archivePath: join(root, "q-prepared.zip"),
+  });
+  expect(loaded.producer.workflowSha).toBe(qualification.q);
+  expect(loaded.producer.workflowSha).not.toBe(qualification.p);
+  expect(loaded.producer.workflowSha).not.toBe(qualification.c);
+  const consumed = await consumePreparedNpmPackage({
+    ...context,
+    package: loaded.packages[0],
+    sourcePackageJson: source.file,
+    cacheDir: join(root, "q-downloads"),
+    outputDir: join(root, "q-consumed"),
+  });
+  expect(consumed.tarballSha256).toBe(digest(readFileSync(tarballPath)));
+  await expect(
+    downloadPreparedNpmRelease({
+      ...context,
+      publisherPolicySha256: "e".repeat(64),
+      archivePath: join(root, "bad-policy.zip"),
+    }),
+  ).rejects.toThrow("approved source, tooling, selection, or channel");
+  if (!authenticated.revalidateAuthority) {
+    throw new Error("Missing live candidate authority");
+  }
+  await authenticated.revalidateAuthority();
+});
+
+it("seals regular stable bootstrap without granting publication authority", () => {
+  const packageFields = { version: "2026.9.32", channel: "stable", publishTag: "latest" };
+  const input = preparation(packageFields, "npm-token-bootstrap");
+  const manifest = createPreparedNpmRelease(input);
+  expect(manifest.packages).toHaveLength(input.matrix.length);
+  for (const entry of manifest.packages) {
+    expect(entry).toMatchObject({ ...packageFields, route: "npm-token-bootstrap" });
+  }
+  expect(validatePreparedNpmRelease(manifest, expected).packages).toEqual(manifest.packages);
+});
+
+it("rejects bootstrap preparation for explicit extended-stable", () => {
+  const npmDistTag = "extended-stable";
+  const packageFields = { version: "2026.9.33", channel: "stable", publishTag: npmDistTag };
+  expect(() =>
+    createPreparedNpmRelease(preparation(packageFields, "npm-token-bootstrap", npmDistTag)),
+  ).toThrow("Prepared npm token bootstrap");
+  const manifest = createPreparedNpmRelease(preparation(packageFields, "npm-oidc", npmDistTag));
+  for (const entry of manifest.packages) {
+    entry.route = "npm-token-bootstrap";
+    entry.artifact.artifactName = `plugin-npm-package-${entry.extensionId}-${entry.version}-npm-token-bootstrap-${producer.runId}-${producer.runAttempt}`;
+  }
+  expect(() => validatePreparedNpmRelease(manifest, { ...expected, npmDistTag })).toThrow(
+    "Prepared npm token bootstrap",
+  );
+});
+
+it.each(["prior-attempt", "conflicting-artifact"])(
+  "refuses to seal %s instead of falling back to an older success",
+  (fault) => {
+    const input = preparation();
+    if (fault === "prior-attempt") {
+      input.artifacts[0].name = input.artifacts[0].name.replace(/-2$/u, "-1");
+    }
+    if (fault === "conflicting-artifact") {
+      input.artifacts.push({ ...input.artifacts[0], id: 99 });
+    }
+    expect(() => createPreparedNpmRelease(input)).toThrow();
+  },
+);
+
+it("compares the complete frozen-source roster and rejects a valid subset", () => {
+  const { sourceRoot, manifest } = sourcePreparation();
+  const validation = { ...expected, sourceRoot };
+  expect(validatePreparedNpmRelease(manifest, validation).packages).toHaveLength(2);
+  manifest.packages.pop();
+  expect(() => validatePreparedNpmRelease(manifest, validation)).toThrow(
+    "complete selected frozen-source roster",
+  );
+});
+
+it("rejects another prepared sourceSha", () => {
+  const manifest = createPreparedNpmRelease(preparation());
+  expect(() =>
+    validatePreparedNpmRelease(manifest, { ...expected, sourceSha: "different" }),
+  ).toThrow();
+});
+
+it.each([false, true])(
+  "observes prepared metadata without adding reads (evidence replay: %s)",
+  async (replay) => {
+    const { sourceRoot, manifest } = sourcePreparation();
+    const bytes = await archive({ [PREPARED_NPM_MANIFEST]: manifest });
+    const artifact = {
+      ...metadata(10, preparedNpmArtifactName(sourceSha, producer), bytes),
+      expires_at: "2099-01-01T00:00:00Z",
+    };
+    const approvedArtifact = descriptor(artifact);
+    const download = {
+      ...expected,
+      sourceRoot,
+      artifact: approvedArtifact,
+      token: "synthetic-token",
+      fetchImpl: artifactFetch(artifact, bytes),
+    };
+    const capacity = vi.spyOn(console, "error").mockImplementation(() => {});
+    const requests: string[] = [];
+    const observation = createPreparedNpmCapacityObserver(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      requests.push(url);
+      const response = await download.fetchImpl(input, init);
+      response.headers.set("x-ratelimit-limit", "1000");
+      response.headers.set("x-ratelimit-remaining", String(701 - requests.length));
+      response.headers.set("x-ratelimit-reset", "1794310000");
+      response.headers.set("x-ratelimit-resource", "core");
+      response.headers.set("authorization", "must-not-log");
+      return response;
+    });
+    const admitted = await downloadPreparedNpmRelease({
+      ...download,
+      fetchImpl: observation.fetchImpl,
+      evidenceClient: replay
+        ? {
+            ...createReleaseEvidenceClient(producer.repository, {
+              immutableReads: createReleaseEvidenceReplay({}),
+            }),
+            getArtifact: () => artifact,
+          }
+        : undefined,
+      archivePath: join(sourceRoot, "prepared.zip"),
+    });
+    observation.report(0);
+    expect(requests).toHaveLength(replay ? 2 : 3);
+    expect(capacity).toHaveBeenNthCalledWith(
+      1,
+      JSON.stringify({
+        githubCapacity: {
+          phase: "before",
+          "x-ratelimit-limit": "1000",
+          "x-ratelimit-remaining": "700",
+          "x-ratelimit-reset": "1794310000",
+          "x-ratelimit-resource": "core",
+        },
+      }),
+    );
+    expect(capacity).toHaveBeenNthCalledWith(
+      2,
+      JSON.stringify({
+        githubCapacity: {
+          phase: "after",
+          "x-ratelimit-limit": "1000",
+          "x-ratelimit-remaining": replay ? "700" : "699",
+          "x-ratelimit-reset": "1794310000",
+          "x-ratelimit-resource": "core",
+        },
+        githubRequestAccounting: {
+          scope: "fetch-metadata-only",
+          fixed: replay ? 1 : 2,
+          perPackage: 0,
+          packages: 0,
+        },
+      }),
+    );
+    expect(capacity).toHaveBeenCalledTimes(2);
+    capacity.mockRestore();
+    expect(admitted.packages).toEqual(manifest.packages);
+    await expect(
+      downloadPreparedNpmRelease({
+        ...download,
+        artifact: { ...approvedArtifact, runAttempt: 1 },
+      }),
+    ).rejects.toThrow("approved producer");
+  },
+);
+
+it("consumes the original qualified package in another run without a source install or pack", async () => {
+  const { root, entry, source, evidence, tarballName, tarballPath } = await packedPluginFixture();
+  const artifactName = `plugin-npm-package-demo-${version}-npm-oidc-${producer.runId}-${producer.runAttempt}`;
+  const created = createPluginPublicationArtifact({
+    artifactDir: evidence,
+    artifactName,
+    ...entry,
+    route: "npm-oidc",
+    targetSha: sourceSha,
+    sourcePackageJsonSha256: digest(source.bytes),
+    publicationReason: "Stable npm registry preflight selected npm-oidc.",
+    publisherPolicy: {
+      policyId: "plugin-npm-release-workflow",
+      schema: "openclaw.plugin-npm-publisher-policy/v1",
+      sha256: policySha,
+    },
+  });
+  const bytes = await archive({
+    [tarballName]: readFileSync(tarballPath),
+    "plugin-publication-manifest.json": readFileSync(created.manifestPath),
+  });
+  const artifact = metadata(11, artifactName, bytes);
+  const consumeParams = {
+    ...expected,
+    token: "synthetic-token",
+    package: {
+      ...entry,
+      route: "npm-oidc",
+      artifact: descriptor(artifact),
+    },
+    sourcePackageJson: source.file,
+    cacheDir: join(root, "downloads"),
+    outputDir: join(root, "verified"),
+    fetchImpl: artifactFetch(artifact, bytes),
+  };
+  const result = await consumePreparedNpmPackage(consumeParams);
+  expect(readFileSync(result.tarballPath)).toEqual(readFileSync(tarballPath));
+  expect(result.producerRunId).toBe(producer.runId);
+  expect(result.producerRunAttempt).toBe(producer.runAttempt);
+  const registry = npmRegistryPackument(entry.packageName, version, readFileSync(tarballPath));
+  let verificationAttempt = 0;
+  const deferral = { packageName: entry.packageName, version, sourceSha };
+  const verify = (requirePublished: boolean, corePluginDeferrals: (typeof deferral)[] = []) =>
+    selectUnpublishedPreparedNpmPackages({
+      ...consumeParams,
+      outputDir: join(root, `registry-verification-${++verificationAttempt}`),
+      sourceRoot: root,
+      packages: [consumeParams.package],
+      requirePublished,
+      corePluginDeferrals,
+      fetchImpl: (url: string) =>
+        url.startsWith("https://registry.npmjs.org/")
+          ? Promise.resolve(
+              url.endsWith(".tgz")
+                ? new Response(new Uint8Array(readFileSync(tarballPath)))
+                : Response.json(registry),
+            )
+          : consumeParams.fetchImpl(url),
+    });
+  expect(await verify(true)).toEqual([]);
+  const published = registry.versions[version]!;
+  delete registry.versions[version];
+  expect(await verify(false)).toEqual([consumeParams.package]);
+  await expect(verify(true)).rejects.toThrow("complete original plugin roster");
+  expect(await verify(true, [deferral])).toEqual([]);
+  await expect(
+    verify(true, [{ ...deferral, packageName: "@openclaw/unselected" }]),
+  ).rejects.toThrow("outside the original qualified roster");
+  registry.versions[version] = published;
+  published.dist.integrity = "sha512-conflicting";
+  await expect(verify(false)).rejects.toThrow("registry bytes conflict");
+  await expect(verify(true, [deferral])).rejects.toThrow("registry bytes conflict");
+});
+function registryFixture() {
+  const bytes = Buffer.from("exact qualified bytes");
+  const tarballPath = join(tempRoot(), "qualified.tgz");
+  writeFileSync(tarballPath, bytes);
+  const name = "@openclaw/demo";
+  const packument = npmRegistryPackument(name, version, bytes);
+  const params = {
+    packageName: name,
+    version,
+    publishTags: ["beta"],
+    route: "npm-oidc",
+    tarballPath,
+    allowMissing: true,
+  };
+  const reads = { tarball: 0 };
+  const responses = {
+    registry: (_read: number) => Response.json(packument),
+    tarball: (_read: number) => new Response(new Uint8Array(bytes)),
+  };
+  let registryRequests = 0;
+  const fetchImpl = async (url: string) => {
+    return url.endsWith(".tgz")
+      ? responses.tarball(++reads.tarball)
+      : responses.registry(++registryRequests);
+  };
+  const verify = (overrides: Partial<typeof params> = {}) =>
+    verifyPreparedNpmRegistry({ ...params, fetchImpl, ...overrides });
+  return { packument, reads, responses, verify };
+}
+
+it("accepts an authoritative missing version as publication work", async () => {
+  const { packument, responses, verify } = registryFixture();
+  responses.registry = () => Response.json({ ...packument, versions: {} });
+  expect(await verify()).toEqual({ alreadyPublished: false });
+});
+
+it("waits for package propagation before verifying exact bytes", async () => {
+  vi.useFakeTimers();
+  const { packument, responses, reads, verify } = registryFixture();
+  responses.registry = (read) =>
+    read <= 18 ? new Response(null, { status: 404 }) : Response.json(packument);
+  const verified = expect(verify({ allowMissing: false })).resolves.toEqual({
+    alreadyPublished: true,
+  });
+  await vi.advanceTimersByTimeAsync(180_000);
+  await verified;
+  expect(reads.tarball).toBe(1);
+});
+
+it("rejects a zero readback timeout", async () => {
+  vi.stubEnv("OPENCLAW_NPM_READBACK_TIMEOUT_MS", "0");
+  const { verify } = registryFixture();
+  await expect(verify({ allowMissing: false })).rejects.toThrow("OPENCLAW_NPM_READBACK_TIMEOUT_MS");
+});
+
+it("refuses to bootstrap a removed OIDC package", async () => {
+  const { responses, reads, verify } = registryFixture();
+  responses.registry = () => new Response("missing", { status: 404 });
+  await expect(verify({ allowMissing: true })).rejects.toThrow();
+  expect(reads.tarball).toBe(0);
+});

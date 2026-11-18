@@ -1,99 +1,90 @@
-// Browser CDP snapshot tests cover bounded snapshot assertions.
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = "scripts/e2e/lib/browser-cdp-snapshot/assert-snapshot.mjs";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const testNodeExecPath = resolveTestNodeExecPath();
 
-function runAssertSnapshot(snapshotPath: string, env: Record<string, string | undefined> = {}) {
-  return spawnSync(process.execPath, [SCRIPT_PATH, snapshotPath], {
+function runAssertSnapshot(contents: string, env: Record<string, string | undefined> = {}) {
+  const snapshotPath = path.join(tempDirs.make("openclaw-browser-cdp-snapshot-"), "snapshot.txt");
+  fs.writeFileSync(snapshotPath, contents, "utf8");
+  return spawnSync(testNodeExecPath, [SCRIPT_PATH, snapshotPath], {
     encoding: "utf8",
     env: { ...process.env, OPENCLAW_BROWSER_CDP_SNAPSHOT_MAX_BYTES: undefined, ...env },
   });
 }
 
-describe("browser CDP snapshot assertions", () => {
-  it.each([undefined, "", " 1024 ", "9007199254740991"])("accepts snapshot limit %j", (limit) => {
-    const root = tempDirs.make("openclaw-browser-cdp-snapshot-");
-    const snapshotPath = path.join(root, "snapshot.txt");
-    writeFileSync(
-      snapshotPath,
-      [
-        'button "Save"',
-        'link "Docs" https://docs.openclaw.ai/browser-cdp-live',
-        'generic "Clickable Card" cursor:pointer',
-        'Iframe "Child"',
-        'button "Inside"',
-      ].join("\n"),
-      "utf8",
-    );
-
-    const result = runAssertSnapshot(snapshotPath, {
-      OPENCLAW_BROWSER_CDP_SNAPSHOT_MAX_BYTES: limit,
-    });
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("ok\n");
-    expect(result.stderr).toBe("");
-  });
-
-  it.each([" \t ", "0", "-1", "1.5", "1e3", "1kb", "9007199254740992"])(
-    "rejects snapshot limit %j with the untrimmed value",
-    (limit) => {
-      const root = tempDirs.make("openclaw-browser-cdp-snapshot-");
-      const result = runAssertSnapshot(path.join(root, "snapshot.txt"), {
-        OPENCLAW_BROWSER_CDP_SNAPSHOT_MAX_BYTES: limit,
-      });
-
-      expect(result.status).toBe(1);
-      expect(result.stderr.split("\n").find((line) => line.startsWith("Error: "))).toBe(
-        `Error: OPENCLAW_BROWSER_CDP_SNAPSHOT_MAX_BYTES must be a positive integer; got: ${limit}`,
-      );
-    },
+function runQuarantine(distDir: string, quarantineDir: string) {
+  const harness = fs.readFileSync("scripts/e2e/browser-cdp-snapshot-docker.sh", "utf8");
+  const definition = harness.match(
+    /^quarantine_browser_cdp_pw_ai_chunks\(\) \{\n[\s\S]*?^\}/m,
+  )?.[0];
+  return spawnSync(
+    "bash",
+    [
+      "-c",
+      ["set -euo pipefail", definition, 'quarantine_browser_cdp_pw_ai_chunks "$1" "$2"'].join("\n"),
+      "browser-cdp-quarantine",
+      distDir,
+      quarantineDir,
+    ],
+    { encoding: "utf8" },
   );
+}
 
-  it.each([undefined, ""])("keeps the default snapshot limit for %j", (limit) => {
-    const root = tempDirs.make("openclaw-browser-cdp-snapshot-");
-    const snapshotPath = path.join(root, "snapshot.txt");
-    writeFileSync(snapshotPath, "x".repeat(512 * 1024 + 1), "utf8");
+it("moves optional js/mjs chunks while preserving the loader, state, and other entries", () => {
+  const root = tempDirs.make("openclaw-browser-cdp-quarantine-");
+  const distDir = path.join(root, "dist with spaces");
+  const quarantineDir = path.join(root, "quarantine");
+  const optional = ["pw-ai-optional.js", "pw-ai-optional.mjs"];
+  const preserved = [
+    "pw-ai-module-loader.js",
+    "pw-ai-state-shared.mjs",
+    "shared.js",
+    "pw-ai-optional.js.map",
+    "nested/pw-ai-nested.mjs",
+  ];
+  fs.mkdirSync(path.join(distDir, "nested"), { recursive: true });
+  fs.mkdirSync(path.join(distDir, "pw-ai-directory.js"));
+  for (const filename of [...optional, ...preserved]) {
+    fs.writeFileSync(path.join(distDir, filename), filename);
+  }
+  fs.symlinkSync("shared.js", path.join(distDir, "pw-ai-linked.js"));
 
-    const result = runAssertSnapshot(snapshotPath, {
-      OPENCLAW_BROWSER_CDP_SNAPSHOT_MAX_BYTES: limit,
-    });
+  const result = runQuarantine(distDir, quarantineDir);
 
-    expect(result.status).toBe(1);
-    expect(result.stderr.split("\n").find((line) => line.startsWith("Error: "))).toBe(
-      "Error: browser CDP snapshot exceeded 524288 bytes: 524289 bytes",
-    );
+  expect(result.status, result.stderr).toBe(0);
+  expect(fs.readdirSync(quarantineDir).toSorted()).toEqual(optional);
+  for (const filename of optional) {
+    expect(fs.existsSync(path.join(distDir, filename))).toBe(false);
+    expect(fs.readFileSync(path.join(quarantineDir, filename), "utf8")).toBe(filename);
+  }
+  for (const filename of preserved) {
+    expect(fs.readFileSync(path.join(distDir, filename), "utf8")).toBe(filename);
+  }
+  expect(fs.lstatSync(path.join(distDir, "pw-ai-directory.js")).isDirectory()).toBe(true);
+  expect(fs.readlinkSync(path.join(distDir, "pw-ai-linked.js"))).toBe("shared.js");
+});
+
+it("rejects oversized snapshots before reading them into diagnostics", () => {
+  const result = runAssertSnapshot("x".repeat(33), {
+    OPENCLAW_BROWSER_CDP_SNAPSHOT_MAX_BYTES: "32",
   });
 
-  it("rejects oversized snapshots before reading them into diagnostics", () => {
-    const root = tempDirs.make("openclaw-browser-cdp-snapshot-");
-    const snapshotPath = path.join(root, "snapshot.txt");
-    writeFileSync(snapshotPath, "x".repeat(33), "utf8");
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("browser CDP snapshot exceeded 32 bytes");
+  expect(result.stderr).not.toContain("x".repeat(33));
+});
 
-    const result = runAssertSnapshot(snapshotPath, {
-      OPENCLAW_BROWSER_CDP_SNAPSHOT_MAX_BYTES: "32",
-    });
+it("bounds missing-needle snapshot diagnostics", () => {
+  const result = runAssertSnapshot(`${"old snapshot line\n".repeat(6 * 1024)}recent tail`);
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("browser CDP snapshot exceeded 32 bytes");
-    expect(result.stderr).not.toContain("x".repeat(33));
-  });
-
-  it("bounds missing-needle snapshot diagnostics", () => {
-    const root = tempDirs.make("openclaw-browser-cdp-snapshot-");
-    const snapshotPath = path.join(root, "snapshot.txt");
-    writeFileSync(snapshotPath, `${"old snapshot line\n".repeat(6 * 1024)}recent tail`, "utf8");
-
-    const result = runAssertSnapshot(snapshotPath);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("recent tail");
-    expect(result.stderr).toContain("truncated snapshot diagnostic");
-    expect(result.stderr.length).toBeLessThan(80 * 1024);
-  });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("recent tail");
+  expect(result.stderr).toContain("truncated snapshot diagnostic");
+  expect(result.stderr.length).toBeLessThan(80 * 1024);
 });

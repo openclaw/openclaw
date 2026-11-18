@@ -1,5 +1,6 @@
 // Matrix API module exposes the plugin public contract.
 export { MatrixClient } from "./src/matrix/sdk.js";
+export { SqliteBackedMatrixSyncStore } from "./src/matrix/client/file-sync-store.js";
 export {
   openMatrixIdbSnapshotStoreOptions,
   openMatrixRecoveryKeyStoreOptions,

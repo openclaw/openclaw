@@ -1,20 +1,289 @@
-// Shared control seam for task-ledger and process-tool cancellation.
+import {
+  activeExecRequestOwners,
+  cancelExecRequestOwners,
+  execRequestMatches,
+  readExecRequestOwners,
+  type ExecRequestIdentity,
+} from "../infra/exec-request-context.js";
+import {
+  consumeSelectedSystemEventEntries,
+  peekExecRequestSystemEventEntries,
+} from "../infra/system-events.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
-import { getSession, hasActiveBackgroundExecSession } from "./bash-process-registry.js";
+import { forgetReleasedProcesses } from "../process/supervisor/released-processes.js";
+import type { ReleasedProcess } from "../process/supervisor/types.js";
+import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
+import {
+  removeNotifyOnExit,
+  getSession,
+  listExecSessionsForCancellation,
+  markCancellationRequested,
+  markExecSessionReleased,
+  waitForExecSession,
+  waitForExecScope,
+  type ProcessSession,
+} from "./bash-process-registry.js";
 
-export function isBackgroundExecSessionActive(sessionId: string): boolean {
-  return hasActiveBackgroundExecSession(sessionId);
+export function isBackgroundExecCancellable(
+  session: ProcessSession | undefined,
+): session is ProcessSession {
+  return Boolean(
+    session?.backgrounded &&
+    !session.exited &&
+    !session.finalizing &&
+    session.processActivity &&
+    !session.processActivity.resultSettled,
+  );
+}
+
+/** One-shot runs retain process cleanup and backend finalization for the same exec scope. */
+export function registerOneShotExecScopeCleanup(
+  options:
+    | {
+        oneShotCliRun?: boolean;
+        registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
+      }
+    | undefined,
+  scopeKey: string | undefined,
+): void {
+  if (!options?.oneShotCliRun || !scopeKey || !options.registerRunCleanup) {
+    return;
+  }
+  const supervisor = getProcessSupervisor();
+  // Sandbox runtimes retain their configured lifetime; host commands still
+  // need tree cleanup, including elevated commands from sandboxed sessions.
+  const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { processTree: "owned-only" });
+  options.registerRunCleanup(async () => {
+    // Explicit services outlive the one-shot run. Hand them off first; the
+    // scope cleanup then stops only in-flight work and whatever could not be handed off.
+    const services = await releaseIndependentExecServices(scopeKey);
+    // Transport closure can precede backend finalization. Join both owners
+    // before their local artifacts or the invocation state can be released.
+    const settled = await Promise.allSettled([cleanupScope(), waitForExecScope(scopeKey)]);
+    // The run ends here, so everything it left running keeps running without OpenClaw.
+    const handedOff = [...services, ...(await forgetReleasedProcesses(scopeKey))];
+    if (handedOff.length > 0) {
+      process.stderr.write(
+        `[openclaw] Left running after this run (OpenClaw no longer tracks them; stop with kill <pid>):\n${handedOff
+          .map(({ pid, command }) => `  pid ${pid}${command ? `  ${command}` : ""}`)
+          .join("\n")}\n`,
+      );
+    }
+    const failed = settled.find((result) => result.status === "rejected");
+    if (failed) {
+      throw failed.reason;
+    }
+  });
+}
+
+async function releaseIndependentExecServices(scopeKey: string): Promise<ReleasedProcess[]> {
+  const supervisor = getProcessSupervisor();
+  const services = listExecSessionsForCancellation().filter(
+    (session) =>
+      session.scopeKey === scopeKey &&
+      session.independentService === true &&
+      !session.durable &&
+      isBackgroundExecCancellable(session),
+  );
+  const released = await Promise.all(
+    services.map(async (session) => {
+      const survivors = await supervisor.release(session.id);
+      if (survivors === undefined) {
+        return [];
+      }
+      markExecSessionReleased(session);
+      return survivors.length > 0 ? survivors : [{ pid: session.pid!, command: session.command }];
+    }),
+  );
+  return released.flat();
 }
 
 export function cancelBackgroundExecSession(sessionId: string): boolean {
   const session = getSession(sessionId);
-  if (!session?.backgrounded || session.exited || session.finalizing) {
+  if (!isBackgroundExecCancellable(session)) {
     return false;
   }
-  const supervisor = getProcessSupervisor();
-  if (!session.processActivity || session.processActivity.resultSettled) {
-    return false;
+  if (session.adopted) {
+    markCancellationRequested(session);
+    void session.adopted.stop();
+    return true;
   }
-  supervisor.cancel(sessionId, "manual-cancel");
+  if (session.durable) {
+    session.durable.cancel(captureAgentToolSourceExecutionGuard());
+  } else {
+    getProcessSupervisor().cancel(sessionId, "manual-cancel");
+  }
+  markCancellationRequested(session);
   return true;
+}
+
+/** A requested cancellation is successful only after its own terminal reason and cleanup. */
+export function isConfirmedRequestedStop(session: ProcessSession): boolean {
+  return (
+    session.cancellationRequested === true &&
+    session.exitReason === "manual-cancel" &&
+    session.finalizationFailed !== true
+  );
+}
+
+/** Stop the selected exec processes and join their cleanup before reporting completion. */
+async function drainExecSessions(
+  sessions: ProcessSession[],
+  assertCurrent: () => void,
+  label: string,
+): Promise<void> {
+  const accepted: ProcessSession[] = [];
+  const adoptedStops: Promise<unknown>[] = [];
+  const failures: unknown[] = [];
+  try {
+    for (const session of sessions) {
+      assertCurrent();
+      accepted.push(session);
+      session.requestCancelled = true;
+      if (!session.exited && !session.finalizing) {
+        markCancellationRequested(session);
+        if (session.adopted) {
+          // Adopted processes have no run to join; the stop outcome is the confirmation.
+          adoptedStops.push(session.adopted.stop());
+        } else if (session.durable) {
+          session.durable.cancel(assertCurrent);
+        } else {
+          getProcessSupervisor().cancel(session.id, "manual-cancel");
+        }
+      }
+      removeNotifyOnExit(session);
+    }
+  } catch (error) {
+    failures.push(error);
+  }
+  // Losing cancellation authority cannot release an already accepted process's cleanup.
+  await Promise.all([
+    ...adoptedStops,
+    ...accepted.filter((session) => !session.adopted).map(waitForExecSession),
+  ]);
+  if (accepted.some((session) => session.finalizationFailed || session.cleanupUncertain)) {
+    failures.push(
+      new Error("Command cleanup could not be confirmed; inspect retained process output."),
+    );
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, `${label} command cleanup is still draining`);
+  }
+}
+
+/** Agent retirement also owns independent services after their creating turns settle. */
+export async function drainAgentExecProcesses(
+  agentId: string,
+  assertCurrent: () => void,
+): Promise<void> {
+  await drainExecSessions(
+    listExecSessionsForCancellation().filter((session) => session.agentId === agentId),
+    assertCurrent,
+    `Agent ${agentId}`,
+  );
+}
+
+/**
+ * Session reset and delete end everything the session still runs: in-flight
+ * commands, `background: true` services and adopted survivors. After a reset
+ * nothing would manage them. Durable processes deliberately survive.
+ */
+export async function stopSessionExecProcesses(
+  scopeKeys: Iterable<string>,
+  assertCurrent: () => void,
+): Promise<void> {
+  const keys = new Set(scopeKeys);
+  await drainExecSessions(
+    listExecSessionsForCancellation().filter(
+      (session) =>
+        session.scopeKey !== undefined &&
+        keys.has(session.scopeKey) &&
+        !session.durable &&
+        (!session.exited || session.finalizing),
+    ),
+    assertCurrent,
+    "Session",
+  );
+}
+
+/** Select before awaited cancellation work; a later human turn cannot enter this plan. */
+export function captureExecRequestCancellation(
+  target: ExecRequestIdentity,
+  accept: (identity: ExecRequestIdentity) => boolean = () => true,
+) {
+  const queued = peekExecRequestSystemEventEntries(target);
+  const initialSessions = listExecSessionsForCancellation();
+  const residualOwners = [
+    ...initialSessions.flatMap((session) =>
+      !session.exited || session.finalizing ? (readExecRequestOwners(session) ?? []) : [],
+    ),
+    ...queued.flatMap(({ events }) =>
+      events.flatMap((event) => readExecRequestOwners(event) ?? []),
+    ),
+  ].filter((owner) => execRequestMatches(owner, target) && accept(owner.identity));
+  const owners = new Set([...activeExecRequestOwners(target, accept), ...residualOwners]);
+  const matching = (session: ProcessSession) =>
+    readExecRequestOwners(session)?.some((owner) => owners.has(owner)) === true;
+  const capturedSessions = initialSessions.filter(matching);
+  let cancelled = false;
+  return {
+    owners: [...owners],
+    // Ancestry selects descendants without rewriting completed model receipts.
+    requestRunIds: [...new Set([...owners].flatMap((owner) => Array.from(owner.turnRunIds)))],
+    cancel(select: (identity: ExecRequestIdentity) => boolean = () => true) {
+      if (cancelled || owners.size === 0) {
+        return false;
+      }
+      cancelled = true;
+      for (const owner of owners) {
+        if (!select(owner.identity)) {
+          owners.delete(owner);
+        }
+      }
+      if (owners.size === 0) {
+        return false;
+      }
+      cancelExecRequestOwners([...owners]);
+      for (const session of listExecSessionsForCancellation().filter(matching)) {
+        removeNotifyOnExit(session);
+      }
+      for (const { sessionKey, events } of queued) {
+        consumeSelectedSystemEventEntries(
+          sessionKey,
+          events.filter((event) =>
+            readExecRequestOwners(event)?.some((owner) => owners.has(owner)),
+          ),
+        );
+      }
+      return true;
+    },
+    async settle() {
+      const stoppedOwners = new Set([...owners].filter((owner) => owner.signal.aborted));
+      if (stoppedOwners.size === 0) {
+        return;
+      }
+      // Accepted Stop may reach the owner through another cancellation path. Keep
+      // captured records even if output eviction precedes this cleanup verdict.
+      const sessions = [
+        ...new Set([...capturedSessions, ...listExecSessionsForCancellation()]),
+      ].filter((session) =>
+        readExecRequestOwners(session)?.some((owner) => stoppedOwners.has(owner)),
+      );
+      const pending = sessions.map(waitForExecSession);
+      for (const owner of stoppedOwners) {
+        for (const settlement of owner.pendingProcesses) {
+          pending.push(settlement);
+        }
+      }
+      await Promise.all(pending);
+      if (
+        [...stoppedOwners].some((owner) => owner.cleanupUncertain) ||
+        sessions.some((session) => session.finalizationFailed || session.cleanupUncertain)
+      ) {
+        throw new Error(
+          "Request stopped, but command cleanup could not be confirmed. Inspect its retained process output before retrying.",
+        );
+      }
+    },
+  };
 }

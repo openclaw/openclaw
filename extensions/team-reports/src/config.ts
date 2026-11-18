@@ -1,7 +1,9 @@
+import { constants } from "node:fs";
 import { open } from "node:fs/promises";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { z } from "zod";
-import type { DiscordSourceConfig, GithubSourceConfig, Person } from "./types.js";
 
 const nonempty = z.string().min(1).regex(/\S/);
 const secretInputSchema = z.union([
@@ -13,8 +15,10 @@ const secretInputSchema = z.union([
   }),
 ]);
 const personSchema = z.strictObject({
+  // The first GitHub login is the primary/display login; remaining entries are aliases.
   github: z.array(nonempty).min(1),
   display: nonempty.optional(),
+  // Public affiliation and free-form role, access, and stewardship labels.
   affiliation: nonempty.optional(),
   roleGroup: nonempty.optional(),
   roleLabel: nonempty.optional(),
@@ -46,6 +50,7 @@ const summariesSchema = z.strictObject({
   agentId: nonempty.optional(),
 });
 const scheduleSchema = z.strictObject({
+  enabled: z.boolean().default(true),
   closedDayUtc: z
     .string()
     .regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/)
@@ -64,7 +69,7 @@ const teamReportsConfigSchema = z
       .regex(
         /^\/(?!api\/channels(?:\/|$))(?!\.{1,2}(?:\/|$))(?!.*\/\.{1,2}(?:\/|$))[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*\/*$/,
       )
-      .default("/reports"),
+      .default("/plugins/team-reports"),
     displayTimezone: nonempty.default("UTC"),
     github: githubSchema,
     discord: z
@@ -139,16 +144,32 @@ export function parseTeamReportsConfig(
 
 const peopleFileSchema = z.strictObject({ people: z.array(personSchema) });
 const MAX_PEOPLE_FILE_BYTES = 2 * 1024 * 1024;
+const peopleFileDecoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
-async function readPeopleFile(filePath: string): Promise<Person[]> {
-  const handle = await open(filePath, "r");
+async function readPeopleFile(filePath: string) {
+  // Reach the regular-file check even when the configured path is a FIFO without a writer.
+  const handle = await open(filePath, constants.O_RDONLY | constants.O_NONBLOCK);
+  const invalidFileMessage =
+    "team-reports.peopleFile must be a regular JSON file of at most 2 MiB.";
   try {
     const stat = await handle.stat();
-    if (!stat.isFile() || stat.size > MAX_PEOPLE_FILE_BYTES) {
-      throw new Error("team-reports.peopleFile must be a regular JSON file of at most 2 MiB.");
+    if (!stat.isFile()) {
+      throw new Error(invalidFileMessage);
     }
-    const data: unknown = JSON.parse(await handle.readFile("utf8"));
+    const bytes = await readFileHandleBounded(handle, MAX_PEOPLE_FILE_BYTES);
+    let text: string;
+    try {
+      text = peopleFileDecoder.decode(bytes);
+    } catch (error) {
+      throw new Error(
+        "team-reports.peopleFile must be valid UTF-8. Correct the file encoding and reload the plugin.",
+        { cause: error },
+      );
+    }
+    const data: unknown = JSON.parse(text);
     return peopleFileSchema.parse(data).people;
+  } catch (error) {
+    throw extractErrorCode(error) === "too-large" ? new Error(invalidFileMessage) : error;
   } finally {
     await handle.close();
   }
@@ -157,7 +178,7 @@ async function readPeopleFile(filePath: string): Promise<Person[]> {
 export async function resolveTeamReportsConfig(
   config: TeamReportsConfig,
   fullConfig: OpenClawConfig,
-): Promise<{ github: GithubSourceConfig; discord?: DiscordSourceConfig; people: Person[] }> {
+) {
   const people = config.peopleFile
     ? await readPeopleFile(config.peopleFile)
     : (config.people ?? []);

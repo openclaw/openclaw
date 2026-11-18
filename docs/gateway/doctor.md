@@ -1,8 +1,9 @@
 ---
 summary: "Doctor command: health checks, config migrations, and repair steps"
 read_when:
-  - Adding or modifying doctor migrations
-  - Introducing breaking config changes
+  - You need to repair stale config, state, or a gateway service
+  - You want to find the doctor page that covers your problem
+  - You are adding or modifying doctor migrations or breaking config changes
 title: "Doctor"
 sidebarTitle: "Doctor"
 ---
@@ -11,6 +12,23 @@ sidebarTitle: "Doctor"
 
 This page is an index. Doctor is documented on seven pages, one per reader job.
 Open the page that matches your task.
+
+## Database store diagnostics
+
+Doctor reports configured and observed engines separately for each discovered
+physical store, including agent databases, Matrix roots, and fixed-local safety
+and credential stores. Absent optional stores are informational and do not require
+their plugin's database port API. Unknown schema, connectivity, ownership, or backup facts
+stay unknown with an actionable next step. Read the
+[PostgreSQL Doctor guide](/gateway/postgresql#read-the-doctor-and-status-store-report)
+for field definitions, output examples, and recovery instructions. For example,
+`observed=sqlite (mismatch); schema=26, expected=26, pending=0` means the schema
+is current but the configured PostgreSQL engine has not been applied by a port.
+An older readable state or agent schema still reports its version and pending
+migrations when port validation refuses it. An inaccessible store remains in the
+report as unknown and names the permission repair; it is not reported as absent.
+JSON includes every inspected store in `databaseStores`, independent of the finding severity filter. Store findings also carry the same observations in `details`; inspecting them
+does not migrate data.
 
 ## Doctor pages
 
@@ -75,7 +93,7 @@ still resolves. Each entry points at the page that now holds the content.
 - <a id="8c-device-pairing-and-auth-drift" />[8c. Device pairing and auth drift](/gateway/doctor/gateway-and-services#8c-device-pairing-and-auth-drift)
 - <a id="9-security-warnings" />[9. Security warnings](/gateway/doctor/gateway-and-services#9-security-warnings)
 - <a id="10-systemd-linger-linux" />[10. systemd linger (Linux)](/gateway/doctor/gateway-and-services#10-systemd-linger-linux)
-- <a id="11-workspace-status-skills-plugins-and-taskflows" />[11. Workspace status (skills, plugins, and TaskFlows)](/gateway/doctor/gateway-and-services#11-workspace-status-skills-plugins-and-taskflows)
+- <a id="11-workspace-status-skills-plugins-and-taskflows" />[11. Workspace status (skills and plugins)](/gateway/doctor/gateway-and-services#11-workspace-status-skills-plugins-and-taskflows)
 - <a id="11b-bootstrap-file-size" />[11b. Bootstrap file size](/gateway/doctor/gateway-and-services#11b-bootstrap-file-size)
 - <a id="11c-shell-completion" />[11c. Shell completion](/gateway/doctor/gateway-and-services#11c-shell-completion)
 - <a id="11d-stale-channel-plugin-cleanup" />[11d. Stale channel plugin cleanup](/gateway/doctor/gateway-and-services#11d-stale-channel-plugin-cleanup)
@@ -96,3 +114,5 @@ still resolves. Each entry points at the page that now holds the content.
 
 - [Gateway runbook](/gateway)
 - [Gateway troubleshooting](/gateway/troubleshooting)
+- [`openclaw status`](/cli/status) — local diagnosis and channel checks
+- [Configuration reference](/gateway/configuration-reference) — core config keys, defaults, and links to subsystem references

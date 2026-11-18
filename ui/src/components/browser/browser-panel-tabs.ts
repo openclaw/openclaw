@@ -1,49 +1,17 @@
-import { nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import { icons } from "../icons.ts";
-import { renderPanelTabStrip, type PanelTabStripTab } from "../panel-tab-strip.ts";
+import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
+import { createIconElement } from "../markdown-icon.ts";
+import type { PanelHostedTab } from "../panel-hosted-tabs.ts";
 import type { BrowserPanelTab } from "./browser-client.ts";
 
-function tabLabel(tab: BrowserPanelTab): string {
-  if (tab.title.trim()) {
-    return tab.title.trim();
-  }
-  try {
-    return new URL(tab.url).host || t("browser.untitledTab");
-  } catch {
-    return tab.url || t("browser.untitledTab");
-  }
-}
+registerBrowserEnglish();
 
-export function renderBrowserPanelTabs(params: {
-  tabs: BrowserPanelTab[];
-  activeTargetId: string | null;
-  onSelect: (targetId: string) => void;
-  onClose: (targetId: string) => void | Promise<void>;
-  onNew: () => void;
-  /** Embedded chrome hosts the new-tab action in its toolbar instead. */
-  hideNewControl?: boolean;
-}) {
-  const tabs: PanelTabStripTab[] = params.tabs.map((tab) => {
-    const label = tabLabel(tab);
-    return {
-      id: tab.id,
-      domId: `browser-tab-${tab.id}`,
-      label,
-      title: `${t(tab.kind === "native" ? "browser.nativeTab" : "browser.remoteTab")}: ${tab.url}`,
-      icon: tab.kind === "native" ? icons.monitor : icons.globe,
-      closeLabel: `${t("browser.closeTab")}: ${label}`,
-    };
-  });
-  return renderPanelTabStrip({
-    tabs,
-    activeId: params.activeTargetId,
-    ariaControls: "browser-tab-panel",
-    onSelect: params.onSelect,
-    onClose: params.onClose,
-    onNew: params.onNew,
-    newLabel: t("browser.newTab"),
-    newTabAction: true,
-    ...(params.hideNewControl ? { newControl: nothing } : {}),
-  });
+export function browserPanelHostedTabs(tabs: BrowserPanelTab[], ownerDocument: Document) {
+  return tabs.map((tab) => ({
+    id: tab.id,
+    label: tab.title.trim() || (URL.parse(tab.url)?.host ?? tab.url) || t("browser.untitledTab"),
+    url: tab.url,
+    favicon: tab.favicon,
+    icon: createIconElement(tab.kind === "native" ? "monitor" : "globe", ownerDocument),
+  })) satisfies PanelHostedTab[];
 }

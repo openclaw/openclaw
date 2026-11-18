@@ -1,4 +1,3 @@
-// Browser tests cover periodic session-tab cleanup failure handling.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearRuntimeConfigSnapshot,
@@ -6,27 +5,24 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const registryMocks = vi.hoisted(() => ({
-  sweepTrackedBrowserTabs: vi.fn(),
-}));
+const sweep = vi.hoisted(() => vi.fn());
+// mock-isolation: Timer tests control sweep settlement without opening the tab registry.
+vi.mock("./session-tab-registry.js", () => ({ sweepTrackedBrowserTabs: sweep }));
 
-vi.mock("./session-tab-registry.js", () => registryMocks);
+import { startTrackedBrowserTabCleanupTimer as startTimer } from "./session-tab-cleanup.js";
 
-import { startTrackedBrowserTabCleanupTimer } from "./session-tab-cleanup.js";
+function setCleanup(enabled: boolean) {
+  const config = { browser: { tabCleanup: { enabled } } };
+  setRuntimeConfigSnapshot(config, config);
+}
+const tick = () => vi.advanceTimersByTimeAsync(300_000);
 
 describe("session tab cleanup timer", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    registryMocks.sweepTrackedBrowserTabs.mockReset();
+    sweep.mockReset();
     clearRuntimeConfigSnapshot();
-    const config = {
-      browser: {
-        tabCleanup: {
-          enabled: true,
-        },
-      },
-    };
-    setRuntimeConfigSnapshot(config, config);
+    setCleanup(true);
   });
 
   afterEach(() => {
@@ -35,69 +31,62 @@ describe("session tab cleanup timer", () => {
   });
 
   it("warns on sweep store failures and continues scheduling", async () => {
-    registryMocks.sweepTrackedBrowserTabs
-      .mockRejectedValueOnce(new Error("sqlite read failed"))
-      .mockResolvedValueOnce(0);
+    sweep.mockRejectedValueOnce(new Error("sqlite read failed")).mockResolvedValueOnce(0);
     const onWarn = vi.fn();
-    const stop = startTrackedBrowserTabCleanupTimer({ onWarn });
+    const stop = startTimer({ onWarn });
+    const warning = "failed to sweep tracked browser tabs: Error: sqlite read failed";
 
-    await vi.advanceTimersByTimeAsync(300_000);
-    await vi.waitFor(() =>
-      expect(onWarn).toHaveBeenCalledWith(
-        "failed to sweep tracked browser tabs: Error: sqlite read failed",
-      ),
-    );
-    await vi.advanceTimersByTimeAsync(300_000);
-    await vi.waitFor(() => expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledTimes(2));
+    await tick();
+    await vi.waitFor(() => expect(onWarn).toHaveBeenCalledWith(warning));
+    await tick();
+    await vi.waitFor(() => expect(sweep).toHaveBeenCalledTimes(2));
 
     await stop();
   });
 
   it("adopts cleanup policy changes without replacing the timer", async () => {
-    registryMocks.sweepTrackedBrowserTabs.mockResolvedValue(0);
-    const resolved = { profiles: {} } as never;
-    const getResolvedBrowserConfig = vi.fn(() => resolved);
-    const stop = startTrackedBrowserTabCleanupTimer({
-      getResolvedBrowserConfig,
-      onWarn: vi.fn(),
-    });
-
-    await vi.advanceTimersByTimeAsync(300_000);
-    await vi.waitFor(() => expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledOnce());
-    expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledWith(
-      expect.objectContaining({ getResolvedBrowserConfig }),
-    );
-
-    const disabled = { browser: { tabCleanup: { enabled: false } } };
-    setRuntimeConfigSnapshot(disabled, disabled);
-    await vi.advanceTimersByTimeAsync(300_000);
-    expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledTimes(1);
-
-    const enabled = { browser: { tabCleanup: { enabled: true } } };
-    setRuntimeConfigSnapshot(enabled, enabled);
-    await vi.advanceTimersByTimeAsync(300_000);
-    expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledTimes(2);
+    sweep.mockResolvedValue(0);
+    const getResolvedBrowserConfig = vi.fn(() => null);
+    const stop = startTimer({ getResolvedBrowserConfig, onWarn: vi.fn() });
+    const disabled = { ordinaryCleanup: false, idleMs: undefined, maxTabsPerSession: undefined };
+    for (const [index, enabled] of [true, false, true].entries()) {
+      setCleanup(enabled);
+      await tick();
+      await vi.waitFor(() => expect(sweep).toHaveBeenCalledTimes(index + 1));
+      expect(sweep).toHaveBeenLastCalledWith(expect.objectContaining({ getResolvedBrowserConfig }));
+      if (!enabled) {
+        expect(sweep).toHaveBeenLastCalledWith(expect.objectContaining(disabled));
+      }
+    }
     await stop();
   });
 
   it("waits for the active sweep and does not reschedule after stop", async () => {
-    const sweep = createDeferred<number>();
-    registryMocks.sweepTrackedBrowserTabs.mockReturnValue(sweep.promise);
-    const stop = startTrackedBrowserTabCleanupTimer({ onWarn: vi.fn() });
-    await vi.advanceTimersByTimeAsync(300_000);
-    expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledOnce();
+    const pendingSweep = createDeferred<number>();
+    sweep.mockReturnValue(pendingSweep.promise);
+    const stop = startTimer({ onWarn: vi.fn() });
+    await tick();
+    expect(sweep).toHaveBeenCalledOnce();
 
-    const stopped = vi.fn();
-    const stopping = stop().then(stopped);
-    await vi.advanceTimersByTimeAsync(300_000);
-    expect(stopped).not.toHaveBeenCalled();
-    expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledOnce();
+    const done = vi.fn();
+    const stopping = stop().then(done);
+    await tick();
+    expect([done.mock.calls.length, sweep.mock.calls.length]).toEqual([0, 1]);
 
-    sweep.resolve(0);
+    pendingSweep.resolve(0);
     await stopping;
-    await vi.advanceTimersByTimeAsync(300_000);
-    expect(stopped).toHaveBeenCalledOnce();
-    expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledOnce();
+    await tick();
+    expect([done.mock.calls.length, sweep.mock.calls.length]).toEqual([1, 1]);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("retires a timer whose service generation is no longer current", async () => {
+    let current = true;
+    const onWarn = vi.fn();
+    const stop = startTimer({ isCurrent: () => current, onWarn });
+    current = false;
+    await vi.advanceTimersByTimeAsync(900_000);
+    expect([sweep.mock.calls, onWarn.mock.calls, vi.getTimerCount()]).toEqual([[], [], 0]);
+    await stop();
   });
 });

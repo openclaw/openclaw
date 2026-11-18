@@ -1,10 +1,10 @@
-// Opens APNs HTTP/2 sessions with optional managed proxy tunneling.
 import { once } from "node:events";
 import http2 from "node:http2";
 import tls from "node:tls";
 import { decodeTextPrefix } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { openProxyConnectTunnel } from "@openclaw/proxyline";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { toErrorObject } from "./errors.js";
 import {
   getActiveManagedProxyUrl,
@@ -12,8 +12,7 @@ import {
   type ActiveManagedProxyUrl,
 } from "./net/proxy/active-proxy-state.js";
 import type { ManagedProxyTlsOptions } from "./net/proxy/proxy-tls.js";
-
-const APNS_DEFAULT_PORT = "443";
+import { apnsSendInvalidatedError } from "./push-apns-send-current.js";
 
 const APNS_AUTHORITIES = new Set([
   "https://api.push.apple.com",
@@ -29,7 +28,6 @@ const APNS_HTTP2_MIN_TIMEOUT_MS = 1000;
 type ApnsResponseBodyCapture = {
   chunks: Buffer[];
   capturedBytes: number;
-  bytes: number;
   truncated: boolean;
 };
 
@@ -56,10 +54,6 @@ type ProbeApnsHttp2ReachabilityViaProxyResult = {
   responseHeaders: Record<string, string>;
 };
 
-function apnsAbortError(signal: AbortSignal): Error {
-  return signal.reason instanceof Error ? signal.reason : new Error("APNs send invalidated");
-}
-
 function assertApnsAuthority(authority: string): ApnsAuthority {
   let parsed: URL;
   try {
@@ -72,18 +66,14 @@ function assertApnsAuthority(authority: string): ApnsAuthority {
     parsed.password ||
     parsed.pathname !== "/" ||
     parsed.search ||
-    parsed.hash
+    parsed.hash ||
+    !APNS_AUTHORITIES.has(parsed.origin)
   ) {
-    throw new Error(`Unsupported APNs authority: ${authority}`);
-  }
-  const port = parsed.port && parsed.port !== APNS_DEFAULT_PORT ? `:${parsed.port}` : "";
-  const normalized = `${parsed.protocol}//${parsed.hostname}${port}`;
-  if (!APNS_AUTHORITIES.has(normalized)) {
     throw new Error(`Unsupported APNs authority: ${authority}`);
   }
   // Return a normalized origin only. APNs paths are created by callers and
   // should never be accepted from user/config authority input.
-  return normalized as ApnsAuthority;
+  return parsed.origin as ApnsAuthority;
 }
 
 function normalizeConnectProxyUrl(proxyUrl: URL): URL {
@@ -97,10 +87,9 @@ function normalizeConnectProxyUrl(proxyUrl: URL): URL {
     decodeURIComponent(normalized.username);
     decodeURIComponent(normalized.password);
   } catch (err) {
-    throw new Error(
-      `Proxy CONNECT failed via ${normalized.origin}: ${err instanceof Error ? err.message : String(err)}`,
-      { cause: err },
-    );
+    const detail =
+      err instanceof URIError ? "URI malformed" : err instanceof Error ? err.message : String(err);
+    throw new Error(`Proxy CONNECT failed via ${normalized.origin}: ${detail}`, { cause: err });
   }
   return normalized;
 }
@@ -116,7 +105,7 @@ async function openApnsTlsTunnel(params: {
   // CONNECT ignores URL paths. Strip path metadata before Proxyline sees it so
   // tokens embedded in a configured proxy URL cannot surface in errors.
   const proxyUrl = normalizeConnectProxyUrl(params.proxyUrl);
-  const deadline = Date.now() + params.timeoutMs;
+  const deadline = monotonicNow() + params.timeoutMs;
   const proxySocket = await openProxyConnectTunnel({
     proxyUrl,
     ...(params.proxyTls ? { proxyTls: params.proxyTls } : {}),
@@ -129,7 +118,7 @@ async function openApnsTlsTunnel(params: {
   const abortController = new AbortController();
   const abortFromCaller = () => {
     if (params.signal) {
-      abortController.abort(apnsAbortError(params.signal));
+      abortController.abort(apnsSendInvalidatedError(params.signal));
     }
   };
   params.signal?.addEventListener("abort", abortFromCaller, { once: true });
@@ -146,9 +135,8 @@ async function openApnsTlsTunnel(params: {
     });
     timeout = setTimeout(
       () => abortController.abort(new Error(`Proxy CONNECT timed out after ${params.timeoutMs}ms`)),
-      Math.max(1, deadline - Date.now()),
-    );
-    timeout.unref?.();
+      Math.max(1, deadline - monotonicNow()),
+    ).unref();
     await Promise.race([
       once(targetTlsSocket, "secureConnect", { signal: abortController.signal }),
       once(targetTlsSocket, "close", { signal: abortController.signal }).then(() => {
@@ -197,7 +185,7 @@ async function openProxiedApnsHttp2Session(params: {
 
   if (params.signal?.aborted) {
     tlsSocket.destroy();
-    throw apnsAbortError(params.signal);
+    throw apnsSendInvalidatedError(params.signal);
   }
 
   // The CONNECT helper already completed the target TLS handshake; reuse that
@@ -216,7 +204,7 @@ export async function connectApnsHttp2Session(
   const proxyUrl = getActiveManagedProxyUrl();
   if (!proxyUrl) {
     if (params.signal?.aborted) {
-      throw apnsAbortError(params.signal);
+      throw apnsSendInvalidatedError(params.signal);
     }
     return http2.connect(authority);
   }
@@ -235,17 +223,15 @@ function resolveApnsHttp2TimeoutMs(timeoutMs: number): number {
 }
 
 export function createApnsResponseBodyCapture(): ApnsResponseBodyCapture {
-  return { chunks: [], capturedBytes: 0, bytes: 0, truncated: false };
+  return { chunks: [], capturedBytes: 0, truncated: false };
 }
 
 export function appendApnsResponseBodyCapture(
   capture: ApnsResponseBodyCapture,
   chunk: unknown,
-  maxBytes = APNS_RESPONSE_BODY_MAX_BYTES,
 ): void {
   const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
-  capture.bytes += buffer.byteLength;
-  const remaining = maxBytes - capture.capturedBytes;
+  const remaining = APNS_RESPONSE_BODY_MAX_BYTES - capture.capturedBytes;
   if (remaining <= 0) {
     capture.truncated = capture.truncated || buffer.byteLength > 0;
     return;
@@ -284,9 +270,8 @@ export async function probeApnsHttp2ReachabilityViaProxy(
       let status: number | undefined;
       let responseHeaders: Record<string, string> = {};
       const timeout = setTimeout(() => {
-        fail(new Error(`APNs reachability probe timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-      timeout.unref?.();
+        fail(new Error(`APNs reachability check timed out after ${timeoutMs}ms`));
+      }, timeoutMs).unref();
 
       const cleanup = () => {
         clearTimeout(timeout);
@@ -335,7 +320,7 @@ export async function probeApnsHttp2ReachabilityViaProxy(
         settled = true;
         cleanup();
         if (status === undefined || !Number.isFinite(status)) {
-          reject(new Error("APNs reachability probe ended without an HTTP/2 status"));
+          reject(new Error("APNs reachability check ended without an HTTP/2 status"));
           return;
         }
         resolve({ status, body: getApnsResponseBodyCaptureText(body), responseHeaders });

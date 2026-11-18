@@ -73,6 +73,18 @@ class AndroidPermissionSnapshotTest {
     assertFalse(snapshot.smsRead)
     assertFalse(snapshot.callLog)
     assertFalse(snapshot.photos)
+
+    shadowOf(app.packageManager).setSystemFeature(PackageManager.FEATURE_TELEPHONY, false)
+    val withoutTelephony =
+      readAndroidPermissionSnapshot(
+        context = app,
+        smsEnabled = true,
+        callLogEnabled = true,
+        photosEnabled = true,
+        backgroundLocationEnabled = true,
+      )
+    assertFalse(withoutTelephony.smsSend)
+    assertFalse(withoutTelephony.smsRead)
   }
 
   @Test

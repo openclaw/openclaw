@@ -31,7 +31,8 @@ if (commandPath && statusPath) {
       inFlight: queue?.inFlight.size ?? 0,
     };
   };
-  const writeStatus = (value) => {
+  const writeStatus = (seq, command) => {
+    const value = { seq, command, status: "completed", ...queueState(wrappedKey) };
     const pending = `${statusPath}.${process.pid}.tmp`;
     fs.writeFileSync(pending, `${JSON.stringify(value)}\n`, { mode: 0o600 });
     fs.renameSync(pending, statusPath);
@@ -59,35 +60,20 @@ if (commandPath && statusPath) {
         if (!heldOnce) {
           heldOnce = true;
           if (waitSeq) {
-            writeStatus({
-              seq: waitSeq,
-              command: "waitHeld",
-              status: "completed",
-              ...queueState(wrappedKey),
-            });
+            writeStatus(waitSeq, "waitHeld");
           }
           await gate.promise;
         }
         return originalCallback(run);
       });
-      writeStatus({
-        seq: command.seq,
-        command: "arm",
-        status: "completed",
-        ...queueState(wrappedKey),
-      });
+      writeStatus(command.seq, "arm");
       return;
     }
     if (!wrappedKey) return;
     lastSeq = command.seq;
     if (command.command === "waitHeld") {
       if (heldOnce) {
-        writeStatus({
-          seq: command.seq,
-          command: "waitHeld",
-          status: "completed",
-          ...queueState(wrappedKey),
-        });
+        writeStatus(command.seq, "waitHeld");
       } else {
         waitSeq = command.seq;
       }
@@ -95,12 +81,7 @@ if (commandPath && statusPath) {
     }
     if (command.command === "release") {
       gate.resolve();
-      writeStatus({
-        seq: command.seq,
-        command: "release",
-        status: "completed",
-        ...queueState(wrappedKey),
-      });
+      writeStatus(command.seq, "release");
       return;
     }
   };

@@ -1,360 +1,120 @@
-// Update CLI option collision tests cover update command flag registration boundaries.
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { registerUpdateCli } from "./update-cli.js";
 
 const mocks = vi.hoisted(() => ({
-  updateCleanupCommand: vi.fn(async (_opts: unknown) => {}),
-  updateCommand: vi.fn(async (_opts: unknown) => {}),
-  updateFinalizeCommand: vi.fn(async (_opts: unknown) => {}),
-  updateStatusCommand: vi.fn(async (_opts: unknown) => {}),
-  updateWizardCommand: vi.fn(async (_opts: unknown) => {}),
-  defaultRuntime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    writeStdout: vi.fn(),
-    writeJson: vi.fn(),
-    exit: vi.fn(),
-  },
+  cleanup: vi.fn(async (_opts: unknown) => {}),
+  adopt: vi.fn(async (_opts: unknown) => {}),
+  recover: vi.fn(async (_opts: unknown) => {}),
+  update: vi.fn(async (_opts: unknown) => {}),
+  finalize: vi.fn(async (_opts: unknown) => {}),
+  status: vi.fn(async (_opts: unknown) => {}),
+  wizard: vi.fn(async (_opts: unknown) => {}),
+  defaultRuntime: { error: vi.fn(), exit: vi.fn() },
 }));
 
-const {
-  updateCommand,
-  updateFinalizeCommand,
-  updateStatusCommand,
-  updateWizardCommand,
-  defaultRuntime,
-} = mocks;
-
-vi.mock("./update-cli/update-command.js", () => ({
-  updateCommand: (opts: unknown) => mocks.updateCommand(opts),
-}));
-
+// mock-isolation: test real CLI parsing without update, repair, or wizard effects.
+vi.mock("./update-cli/update-command.js", () => ({ updateCommand: mocks.update }));
+// mock-isolation: CLI parsing must not execute finalization effects.
 vi.mock("./update-cli/update-command-finalize.js", () => ({
-  updateFinalizeCommand: (opts: unknown) => mocks.updateFinalizeCommand(opts),
+  updateFinalizeCommand: mocks.finalize,
+}));
+// mock-isolation: CLI parsing must not execute repair effects.
+vi.mock("./update-cli/update-repair-command.js", () => ({ updateRepairCommand: mocks.finalize }));
+// mock-isolation: CLI parsing must not remove installed runtime state.
+vi.mock("./update-cli/cleanup.js", () => ({ updateCleanupCommand: mocks.cleanup }));
+// mock-isolation: CLI parsing must not adopt or recover an installed runtime.
+vi.mock("./update-cli/update-command-immutable.js", () => ({
+  updateAdoptImmutableCommand: mocks.adopt,
+  updateRecoverImmutableCommand: mocks.recover,
+}));
+// mock-isolation: CLI parsing must not inspect installed runtime state.
+vi.mock("./update-cli/status.js", () => ({ updateStatusCommand: mocks.status }));
+// mock-isolation: CLI parsing must not enter the interactive update wizard.
+vi.mock("./update-cli/wizard.js", () => ({ updateWizardCommand: mocks.wizard }));
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
+  defaultRuntime: mocks.defaultRuntime,
 }));
 
-vi.mock("./update-cli/update-repair-command.js", () => ({
-  updateRepairCommand: (opts: unknown) => mocks.updateFinalizeCommand(opts),
-}));
+const run = (args: string | string[]) =>
+  runRegisteredCli({
+    register: registerUpdateCli,
+    argv: ["update", ...(typeof args === "string" ? args.split(" ") : args)],
+  });
+const adoptionArgs =
+  "adopt-immutable --root /opt/example --service example.service --account openclaw --state-dir /var/lib/example --config /etc/example/openclaw.json --runtime /usr/bin/node";
+const adoptionOptions = {
+  root: "/opt/example",
+  service: {
+    unit: "example.service",
+    scope: "system",
+    account: "openclaw",
+    stateDir: "/var/lib/example",
+    configPath: "/etc/example/openclaw.json",
+    profile: null,
+  },
+  runtime: "/usr/bin/node",
+  previousUpdaterStopped: true,
+  enableActivation: true,
+  inspectReleaseRetention: true,
+};
+const sha = "a".repeat(40);
+type Invocation = { args: string | string[]; expected: unknown };
+type ForwardedInvocation = Invocation & { target: typeof mocks.update };
+beforeEach(() => vi.clearAllMocks());
 
-vi.mock("./update-cli/cleanup.js", () => ({ updateCleanupCommand: mocks.updateCleanupCommand }));
-
-vi.mock("./update-cli/status.js", () => ({
-  updateStatusCommand: (opts: unknown) => mocks.updateStatusCommand(opts),
-}));
-
-vi.mock("./update-cli/wizard.js", () => ({
-  updateWizardCommand: (opts: unknown) => mocks.updateWizardCommand(opts),
-}));
-
-vi.mock("../runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../runtime.js")>();
-  return {
-    ...actual,
-    defaultRuntime: mocks.defaultRuntime,
-  };
+it("describes the shared status deadline in rendered timeout help", async () => {
+  const program = new Command();
+  let output = "";
+  program.configureOutput({ writeOut: (text) => (output += text) }).exitOverride();
+  registerUpdateCli(program);
+  await expect(
+    program.parseAsync(["update", "status", "--help"], { from: "user" }),
+  ).rejects.toMatchObject({ code: "commander.helpDisplayed" });
+  expect(output.replace(/\s+/g, " ")).toContain(
+    "--timeout <seconds> Check timeout (default: shared 30s; longer values extend it)",
+  );
 });
 
-function firstCallOptions(mock: { mock: { calls: unknown[][] } }) {
-  return mock.mock.calls[0]?.[0];
-}
+it.each`
+  args                                                                                            | target            | expected
+  ${"--full-integrity-check"}                                                                     | ${mocks.update}   | ${expect.objectContaining({ fullIntegrityCheck: true })}
+  ${"repair --full-integrity-check"}                                                              | ${mocks.finalize} | ${expect.objectContaining({ fullIntegrityCheck: true })}
+  ${"--full-integrity-check wizard"}                                                              | ${mocks.wizard}   | ${expect.objectContaining({ fullIntegrityCheck: true })}
+  ${`${adoptionArgs} --previous-updater-stopped --enable-activation --inspect-release-retention`} | ${mocks.adopt}    | ${expect.objectContaining(adoptionOptions)}
+  ${"--timeout 600 --json recover --root /opt/example"}                                           | ${mocks.recover}  | ${{ root: "/opt/example", timeout: "600", drainTimeout: undefined, json: true }}
+  ${`--sha ${sha}`}                                                                               | ${mocks.update}   | ${expect.objectContaining({ sha })}
+  ${"--drain-timeout 30 --timeout 600"}                                                           | ${mocks.update}   | ${expect.objectContaining({ drainTimeout: "30", timeout: "600" })}
+  ${"--drain-timeout 30 recover --root /opt/example --timeout 900"}                               | ${mocks.recover}  | ${expect.objectContaining({ drainTimeout: "30", timeout: "900" })}
+  ${"--dry-run --json --yes cleanup"}                                                             | ${mocks.cleanup}  | ${{ dryRun: true, json: true, yes: true }}
+  ${"--json --timeout 31 --channel beta --yes finalize"}                                          | ${mocks.finalize} | ${expect.objectContaining({ channel: "beta", json: true, timeout: "31", yes: true })}
+  ${["--timeout", "9", "status", "--json", "--timeout", ""]}                                      | ${mocks.status}   | ${expect.objectContaining({ json: true, timeout: "" })}
+`("forwards update options for $args", async ({ args, target, expected }: ForwardedInvocation) => {
+  await run(args);
+  expect(target).toHaveBeenCalledExactlyOnceWith(expected);
+  if (target !== mocks.update) {
+    expect(mocks.update).not.toHaveBeenCalled();
+  }
+});
 
-type UpdateFinalizeCommandOptions = {
-  channel?: string;
-  json?: boolean;
-  timeout?: string;
-  restart?: boolean;
-  yes?: boolean;
-};
-
-describe("update cli option collisions", () => {
-  it.each(
-    Array.from({ length: 8 }, (_value, mask) => {
-      const flags = ["--dry-run", "--json", "--yes"];
-      return [
-        "update",
-        ...flags.filter((_, index) => mask & (1 << index)),
-        "cleanup",
-        ...flags.filter((_, index) => !(mask & (1 << index))),
-      ];
-    }),
-  )("supports cleanup options in either position: %j", async (...argv) => {
-    await runRegisteredCli({ register: registerUpdateCli, argv });
-    expect(mocks.updateCleanupCommand).toHaveBeenCalledWith({
-      dryRun: true,
-      json: true,
-      yes: true,
-    });
-    expect(updateCommand).not.toHaveBeenCalled();
-  });
-  it.each([
-    ...["--channel", "--tag", "--timeout"].flatMap((flag) =>
-      ["beta", "", "--", "--no-restart"].flatMap((value) => [[flag, value], [`${flag}=${value}`]]),
-    ),
-    ["--no-restart"],
-    ["--accept-capabilities"],
-  ])("rejects unrelated inherited cleanup option %s", async (...flags) => {
-    await runRegisteredCli({ register: registerUpdateCli, argv: ["update", ...flags, "cleanup"] });
-    expect(mocks.updateCleanupCommand).not.toHaveBeenCalled();
-    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("is not supported"));
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-    expect(updateCommand).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    "--channel",
-    "--tag",
-    "--timeout",
-    "--no-restart",
-    "--accept-capabilities",
-    "--version",
-  ])("rejects update-only or version option %s after cleanup", async (flag) => {
-    const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
-    registerUpdateCli(program);
-    await expect(
-      program.parseAsync(["update", "cleanup", flag], { from: "user" }),
-    ).rejects.toMatchObject({
-      code: "commander.unknownOption",
-      exitCode: 1,
-    });
-    expect(mocks.updateCleanupCommand).not.toHaveBeenCalled();
-    expect(updateCommand).not.toHaveBeenCalled();
-  });
-
-  it("dispatches cleanup after the parent option delimiter", async () => {
-    await runRegisteredCli({ register: registerUpdateCli, argv: ["update", "--", "cleanup"] });
-    expect(mocks.updateCleanupCommand).toHaveBeenCalledWith({
-      dryRun: false,
-      json: false,
-      yes: false,
-    });
-    expect(updateCommand).not.toHaveBeenCalled();
-  });
-
-  beforeEach(() => {
-    mocks.updateCleanupCommand.mockClear();
-    updateCommand.mockClear();
-    updateFinalizeCommand.mockClear();
-    updateStatusCommand.mockClear();
-    updateWizardCommand.mockClear();
-    defaultRuntime.log.mockClear();
-    defaultRuntime.error.mockClear();
-    defaultRuntime.writeStdout.mockClear();
-    defaultRuntime.writeJson.mockClear();
-    defaultRuntime.exit.mockClear();
-  });
-
-  it.each([
-    {
-      name: "forwards parent-captured --json/--timeout to `update status`",
-      argv: ["update", "status", "--json", "--timeout", "9"],
-      assert: () => {
-        expect(updateStatusCommand).toHaveBeenCalledTimes(1);
-        const opts = firstCallOptions(updateStatusCommand);
-        expect((opts as { json?: boolean; timeout?: string } | undefined)?.json).toBe(true);
-        expect((opts as { json?: boolean; timeout?: string } | undefined)?.timeout).toBe("9");
-      },
-    },
-    {
-      name: "forwards parent-captured options to hidden `update finalize`",
-      argv: ["update", "finalize", "--json", "--timeout", "17", "--no-restart"],
-      assert: () => {
-        expect(updateFinalizeCommand).toHaveBeenCalledTimes(1);
-        const opts = firstCallOptions(updateFinalizeCommand) as
-          | UpdateFinalizeCommandOptions
-          | undefined;
-        expect(opts?.json).toBe(true);
-        expect(opts?.timeout).toBe("17");
-        expect(opts?.restart).toBe(false);
-      },
-    },
-    {
-      name: "forwards parent-captured --json/--timeout to `update repair`",
-      argv: ["update", "repair", "--json", "--timeout", "19"],
-      assert: () => {
-        expect(updateFinalizeCommand).toHaveBeenCalledTimes(1);
-        const opts = firstCallOptions(updateFinalizeCommand);
-        expect(
-          (opts as { json?: boolean; timeout?: string; restart?: boolean } | undefined)?.json,
-        ).toBe(true);
-        expect(
-          (opts as { json?: boolean; timeout?: string; restart?: boolean } | undefined)?.timeout,
-        ).toBe("19");
-        expect(
-          (opts as { json?: boolean; timeout?: string; restart?: boolean } | undefined)?.restart,
-        ).toBe(false);
-      },
-    },
-    {
-      name: "forwards repair channel and confirmation options",
-      argv: ["update", "repair", "--channel", "beta", "--yes"],
-      assert: () => {
-        expect(updateFinalizeCommand).toHaveBeenCalledTimes(1);
-        const opts = firstCallOptions(updateFinalizeCommand);
-        expect((opts as { channel?: string; yes?: boolean } | undefined)?.channel).toBe("beta");
-        expect((opts as { channel?: string; yes?: boolean } | undefined)?.yes).toBe(true);
-      },
-    },
-    {
-      name: "keeps hidden `update finalize --no-restart` as a no-op parity flag",
-      argv: ["update", "finalize", "--no-restart"],
-      assert: () => {
-        expect(updateFinalizeCommand).toHaveBeenCalledTimes(1);
-        const opts = firstCallOptions(updateFinalizeCommand);
-        expect(
-          (opts as { json?: boolean; timeout?: string; restart?: boolean } | undefined)?.restart,
-        ).toBe(false);
-      },
-    },
-    {
-      name: "forwards parent-captured --timeout to `update wizard`",
-      argv: ["update", "wizard", "--timeout", "13"],
-      assert: () => {
-        expect(updateWizardCommand).toHaveBeenCalledTimes(1);
-        const opts = firstCallOptions(updateWizardCommand);
-        expect((opts as { timeout?: string } | undefined)?.timeout).toBe("13");
-      },
-    },
-  ])("$name", async ({ argv, assert }) => {
-    await runRegisteredCli({
-      register: registerUpdateCli as (program: Command) => void,
-      argv,
-    });
-
-    assert();
-  });
-
-  it.each([
-    { name: "repair", handler: updateFinalizeCommand },
-    { name: "finalize", handler: updateFinalizeCommand },
-    { name: "wizard", handler: updateWizardCommand },
-    { name: "status", handler: updateStatusCommand },
-  ])("rejects parent --dry-run before running update $name", async ({ name, handler }) => {
-    await runRegisteredCli({
-      register: registerUpdateCli as (program: Command) => void,
-      argv: ["update", "--dry-run", name],
-    });
-
-    expect(handler).not.toHaveBeenCalled();
-    expect(updateCommand).not.toHaveBeenCalled();
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      `--dry-run is not supported for \`openclaw update ${name}\`. Run \`openclaw update --dry-run\` instead.`,
-    );
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-  });
-
-  it.each(["repair", "finalize"])(
-    "forwards parent channel and confirmation to update %s",
-    async (name) => {
-      await runRegisteredCli({
-        register: registerUpdateCli as (program: Command) => void,
-        argv: ["update", "--channel", "beta", "--yes", name],
-      });
-
-      expect(updateFinalizeCommand).toHaveBeenCalledOnce();
-      expect(firstCallOptions(updateFinalizeCommand)).toMatchObject({
-        channel: "beta",
-        yes: true,
-      });
-    },
-  );
-
-  it.each(["repair", "finalize"])(
-    "lets the explicit update %s channel override its parent",
-    async (name) => {
-      await runRegisteredCli({
-        register: registerUpdateCli as (program: Command) => void,
-        argv: ["update", "--channel", "beta", "--yes", name, "--channel", "dev"],
-      });
-
-      expect(updateFinalizeCommand).toHaveBeenCalledOnce();
-      expect(firstCallOptions(updateFinalizeCommand)).toMatchObject({
-        channel: "dev",
-        yes: true,
-      });
-    },
-  );
-
-  it.each(["repair", "finalize"])(
-    "preserves an explicitly empty parent channel for update %s validation",
-    async (name) => {
-      await runRegisteredCli({
-        register: registerUpdateCli as (program: Command) => void,
-        argv: ["update", "--channel", "", name],
-      });
-
-      expect(updateFinalizeCommand).toHaveBeenCalledOnce();
-      expect(firstCallOptions(updateFinalizeCommand)).toMatchObject({ channel: "" });
-    },
-  );
-
-  it.each(["repair", "finalize"])(
-    "lets an explicitly empty update %s channel override its parent",
-    async (name) => {
-      await runRegisteredCli({
-        register: registerUpdateCli as (program: Command) => void,
-        argv: ["update", "--channel", "beta", name, "--channel", ""],
-      });
-
-      expect(updateFinalizeCommand).toHaveBeenCalledOnce();
-      expect(firstCallOptions(updateFinalizeCommand)).toMatchObject({ channel: "" });
-    },
-  );
-
-  it.each(["repair", "finalize"])(
-    "forwards all explicitly inherited options to update %s",
-    async (name) => {
-      await runRegisteredCli({
-        register: registerUpdateCli as (program: Command) => void,
-        argv: ["update", "--json", "--timeout", "31", "--channel", "beta", "--yes", name],
-      });
-
-      expect(updateFinalizeCommand).toHaveBeenCalledOnce();
-      expect(firstCallOptions(updateFinalizeCommand)).toMatchObject({
-        channel: "beta",
-        json: true,
-        restart: false,
-        timeout: "31",
-        yes: true,
-      } satisfies UpdateFinalizeCommandOptions);
-    },
-  );
-
-  it.each([
-    {
-      name: "status",
-      argv: ["update", "status", "--timeout", ""],
-      handler: updateStatusCommand,
-    },
-    {
-      name: "wizard",
-      argv: ["update", "wizard", "--timeout", ""],
-      handler: updateWizardCommand,
-    },
-    {
-      name: "repair",
-      argv: ["update", "repair", "--timeout", ""],
-      handler: updateFinalizeCommand,
-    },
-    {
-      name: "finalize",
-      argv: ["update", "finalize", "--timeout", ""],
-      handler: updateFinalizeCommand,
-    },
-    {
-      name: "status with a valid inherited parent timeout",
-      argv: ["update", "--timeout", "9", "status", "--timeout", ""],
-      handler: updateStatusCommand,
-    },
-  ])("preserves an explicitly empty $name timeout for validation", async ({ argv, handler }) => {
-    await runRegisteredCli({
-      register: registerUpdateCli as (program: Command) => void,
-      argv,
-    });
-
-    expect(handler).toHaveBeenCalledOnce();
-    expect(firstCallOptions(handler)).toMatchObject({ timeout: "" });
-  });
+it.each`
+  args                                  | expected
+  ${adoptionArgs}                       | ${expect.stringContaining("--previous-updater-stopped")}
+  ${["--channel", "", "cleanup"]}       | ${expect.stringContaining("is not supported")}
+  ${"--no-restart cleanup"}             | ${expect.stringContaining("is not supported")}
+  ${"--accept-capabilities cleanup"}    | ${expect.stringContaining("is not supported")}
+  ${"--reapply-local-overrides status"} | ${expect.stringContaining("--reapply-local-overrides is not supported")}
+  ${"--dry-run repair"}                 | ${"--dry-run is not supported for `openclaw update repair`. Run `openclaw update --dry-run` instead."}
+  ${`--sha ${sha} status`}              | ${expect.stringContaining("--sha is supported only")}
+  ${"--drain-timeout 30 status"}        | ${expect.stringContaining("--drain-timeout is supported only")}
+`("rejects $args before invoking an update action", async ({ args, expected }: Invocation) => {
+  await run(args);
+  const { defaultRuntime, ...commands } = mocks;
+  expect(defaultRuntime.error).toHaveBeenCalledWith(expected);
+  expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  for (const command of Object.values(commands)) {
+    expect(command).not.toHaveBeenCalled();
+  }
 });

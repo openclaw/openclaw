@@ -1,18 +1,24 @@
 // Live proof for Codex native subagent monitoring against a real app-server:
-// spawned-child lineage, detached completion delivery, and history recovery.
+// spawned-child lineage, detached completion delivery, and repeated follow-ups.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import type {
-  AgentHarnessTaskRecord,
-  AgentHarnessTaskRuntimeScope,
-} from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import { fileURLToPath } from "node:url";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  interruptCodexTurnAndWaitBestEffort,
+  terminateCodexBackgroundTerminals,
+} from "./attempt-client-cleanup.js";
 import type { CodexAppServerClient } from "./client.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { setManagedCodexPluginRoot } from "./managed-binary.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
-import { codexNativeSubagentRunId } from "./native-subagent-task-mirror.js";
+import {
+  createNativeSubagentClientOptions,
+  createNativeSubagentThreadParams,
+} from "./native-subagent-monitor.live.test-support.js";
+import { readCodexNativeSubagentNotification } from "./native-subagent-notification.js";
 import type { JsonObject } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 import { createIsolatedCodexAppServerClient } from "./shared-client.js";
@@ -29,21 +35,23 @@ type RecordedDelivery = {
   result: string;
 };
 
-function createDeliveryRecorder(taskRecords: AgentHarnessTaskRecord[] = []) {
+function traceNativeLive(phase: string, detail: JsonObject = {}): void {
+  console.info("[codex-native-live]", JSON.stringify({ at: Date.now(), phase, ...detail }));
+}
+
+function createDeliveryRecorder() {
   const deliveries: RecordedDelivery[] = [];
-  const taskRuntime = {
-    tryCreateRunningTaskRun: (params: { runId?: string }) =>
-      ({ runId: params.runId }) as AgentHarnessTaskRecord,
-    recordTaskRunProgressByRunId: () => [],
-    finalizeTaskRunByRunId: () => [],
-    listTaskRecords: () => taskRecords,
-    setDetachedTaskDeliveryStatusByRunId: () => [],
-  };
   return {
     deliveries,
     runtime: {
-      createAgentHarnessTaskRuntime: () => taskRuntime,
-      deliverAgentHarnessTaskCompletion: async (params: RecordedDelivery) => {
+      captureAgentHarnessCompletionCustody: async () => undefined,
+      createAgentHarnessCompletionEventSink: () => () => {},
+      deliverAgentHarnessCompletion: async (params: RecordedDelivery) => {
+        traceNativeLive("delivery-callback", {
+          childThreadId: params.childSessionId,
+          status: params.status,
+          resultChars: params.result.length,
+        });
         deliveries.push({
           childSessionId: params.childSessionId,
           status: params.status,
@@ -51,97 +59,566 @@ function createDeliveryRecorder(taskRecords: AgentHarnessTaskRecord[] = []) {
         });
         return { delivered: true, path: "steered" as const };
       },
-    } as never,
+    },
   };
 }
 
 async function waitFor<T>(probe: () => T | undefined, timeoutMs: number, what: string): Promise<T> {
   const deadline = Date.now() + timeoutMs;
+  traceNativeLive("wait-start", { what });
   while (Date.now() < deadline) {
     const value = probe();
     if (value !== undefined) {
+      traceNativeLive("wait-complete", { what });
       return value;
     }
     await delay(500);
   }
+  traceNativeLive("wait-timeout", { what });
   throw new Error(`timed out waiting for ${what}`);
 }
 
 describeLive("codex native subagent monitor live", () => {
-  it("delivers spawned subagent results live and recovers them from history", async () => {
+  beforeEach(() => {
+    setManagedCodexPluginRoot(fileURLToPath(new URL("../../", import.meta.url)));
+  });
+  afterEach(() => {
+    setManagedCodexPluginRoot(undefined);
+  });
+
+  it("runs native shell work again on a completed child and keeps all three results", async () => {
     const apiKey = process.env.OPENAI_API_KEY?.trim();
     if (!apiKey) {
       throw new Error("OPENAI_API_KEY is required for this live test");
     }
-    await withTempDir("openclaw-codex-native-subagent-", async (root) => {
-      let client: CodexAppServerClient | undefined;
+    await withTempDir("openclaw-codex-native-followup-", async (root) => {
+      const workspace = path.join(root, "workspace");
+      await fs.mkdir(workspace, { recursive: true });
+      const client = await createIsolatedCodexAppServerClient(
+        createNativeSubagentClientOptions(root),
+      );
       try {
-        const codexHome = path.join(root, "codex-home");
-        const workspace = path.join(root, "workspace");
-        await fs.mkdir(workspace, { recursive: true });
-        const runtime = resolveCodexAppServerRuntimeOptions({
-          pluginConfig: { appServer: { homeScope: "user" } },
-          env: {},
-        });
-        client = await createIsolatedCodexAppServerClient({
-          startOptions: {
-            ...runtime.start,
-            env: { CODEX_HOME: codexHome },
-            clearEnv: ["CODEX_API_KEY", "OPENAI_API_KEY"],
-          },
-          agentDir: path.join(root, "agent"),
-          authProfileId: null,
-          timeoutMs: 120_000,
-        });
         await client.request(
           "account/login/start",
           { type: "apiKey", apiKey },
           { timeoutMs: 60_000 },
         );
+        const started = await client.request(
+          "thread/start",
+          createNativeSubagentThreadParams(workspace),
+          { timeoutMs: 120_000 },
+        );
+        const parentThreadId = started.thread.id;
+        const completedTurns = new Set<string>();
+        const shellResults: Array<{ threadId: string; output: string }> = [];
+        const childResults: Array<{ threadId: string; turnId: string; text: string }> = [];
+        client.addNotificationHandler((notification) => {
+          const params = isJsonObject(notification.params) ? notification.params : undefined;
+          if (
+            notification.method === "turn/completed" &&
+            params?.threadId === parentThreadId &&
+            isJsonObject(params.turn) &&
+            typeof params.turn.id === "string"
+          ) {
+            completedTurns.add(params.turn.id);
+          }
+          const item = isJsonObject(params?.item) ? params.item : undefined;
+          if (
+            notification.method === "turn/completed" &&
+            typeof params?.threadId === "string" &&
+            params.threadId !== parentThreadId &&
+            isJsonObject(params.turn) &&
+            typeof params.turn.id === "string" &&
+            Array.isArray(params.turn.items)
+          ) {
+            for (const message of params.turn.items) {
+              if (
+                isJsonObject(message) &&
+                message.type === "agentMessage" &&
+                message.phase === "final_answer" &&
+                typeof message.text === "string"
+              ) {
+                childResults.push({
+                  threadId: params.threadId,
+                  turnId: params.turn.id,
+                  text: message.text,
+                });
+              }
+            }
+          }
+          if (
+            notification.method === "item/completed" &&
+            params?.threadId !== parentThreadId &&
+            typeof params?.threadId === "string" &&
+            item?.type === "commandExecution" &&
+            item.exitCode === 0 &&
+            typeof item.aggregatedOutput === "string"
+          ) {
+            shellResults.push({ threadId: params.threadId, output: item.aggregatedOutput });
+          }
+        });
+        const recorder = createDeliveryRecorder();
+        const monitor = new CodexNativeSubagentMonitor(client as never, recorder.runtime);
+        const claims = { first: 0, second: 0, third: 0 };
+        const releases = { first: 0, second: 0, third: 0 };
+        const registerParent = (owner: "first" | "second" | "third") =>
+          monitor.registerParent({
+            parentThreadId,
+            requesterSessionKey: "live:followup",
+            completionScope: {
+              requesterSessionKey: "live:followup",
+              requesterAgentId: "live",
+            },
+            agentId: "live",
+            claimDirectChild: () => {
+              claims[owner] += 1;
+              return () => {
+                releases[owner] += 1;
+              };
+            },
+          });
+        let parent = await registerParent("first");
+        const run = async (text: string) => {
+          const turn = await client.request(
+            "turn/start",
+            {
+              threadId: parentThreadId,
+              input: [{ type: "text", text, text_elements: [] }],
+            },
+            { timeoutMs: 300_000 },
+          );
+          parent.bindTurn(turn.turn.id);
+          await waitFor(
+            () => (completedTurns.has(turn.turn.id) ? true : undefined),
+            300_000,
+            "parent completion",
+          );
+        };
+        await run(
+          "Spawn exactly one native subagent. Tell it to run the shell command printf FIRST_NATIVE_SHELL, then reply exactly FIRST_RESULT. Wait for that child to finish using native collaboration. Keep the child open for a later follow-up. Reply PARENT_FIRST when done.",
+        );
+        const first = await waitFor(
+          () => childResults.find((result) => result.text === "FIRST_RESULT"),
+          60_000,
+          "first child result",
+        );
+        expect(childResults).toHaveLength(1);
+        const childThreadId = first.threadId;
+        expect(shellResults).toContainEqual({
+          threadId: childThreadId,
+          output: "FIRST_NATIVE_SHELL",
+        });
+        await parent.unregister();
+        expect(claims.first).toBe(1);
+        expect(releases.first).toBe(1);
+        const completedTurnIds = [first.turnId];
+        for (const ordinal of ["second", "third"] as const) {
+          const token = ordinal.toUpperCase();
+          parent = await registerParent(ordinal);
+          await run(
+            `Send a follow-up to that same completed child using native collaboration; do not spawn another child. Tell it to run the shell command printf ${token}_NATIVE_SHELL, then reply exactly ${token}_RESULT. Wait for its result, keep the child open for another follow-up, then reply PARENT_${token}.`,
+          );
+          const result = await waitFor(
+            () => childResults.find((candidate) => candidate.text === `${token}_RESULT`),
+            60_000,
+            `${ordinal} child result`,
+          );
+          expect(childResults).toHaveLength(completedTurnIds.length + 1);
+          expect(result.threadId).toBe(childThreadId);
+          expect(completedTurnIds).not.toContain(result.turnId);
+          completedTurnIds.push(result.turnId);
+          expect(shellResults).toContainEqual({
+            threadId: childThreadId,
+            output: `${token}_NATIVE_SHELL`,
+          });
+          await parent.unregister();
+        }
+        expect(claims).toEqual({ first: 1, second: 1, third: 1 });
+        expect(releases).toEqual({ first: 1, second: 1, third: 1 });
+        expect(recorder.deliveries).toEqual([]);
+        await monitor.dispose();
+      } finally {
+        await client.closeAndWait();
+      }
+    });
+  }, 900_000);
+
+  it("cancels the reused parent generation after its foreground owner unregisters", async () => {
+    const apiKey = process.env.OPENAI_API_KEY?.trim();
+    if (!apiKey) {
+      throw new Error("OPENAI_API_KEY is required for this live test");
+    }
+    await withTempDir("openclaw-codex-native-reused-stop-", async (root) => {
+      const workspace = path.join(root, "workspace");
+      await fs.mkdir(workspace, { recursive: true });
+      const client = await createIsolatedCodexAppServerClient(
+        createNativeSubagentClientOptions(root),
+      );
+      const releasePriorDelivery = createDeferred<void>();
+      try {
+        await client.request(
+          "account/login/start",
+          { type: "apiKey", apiKey },
+          { timeoutMs: 60_000 },
+        );
+        const started = await client.request(
+          "thread/start",
+          createNativeSubagentThreadParams(workspace),
+          { timeoutMs: 120_000 },
+        );
+        const parentThreadId = started.thread.id;
+        const completedParentTurns = new Set<string>();
+        const childTurns = new Map<string, string>();
+        const childTurnStatus = new Map<string, string>();
+        client.addNotificationHandler((notification) => {
+          const params = isJsonObject(notification.params) ? notification.params : undefined;
+          const turn = isJsonObject(params?.turn) ? params.turn : undefined;
+          if (
+            notification.method === "turn/completed" &&
+            params?.threadId === parentThreadId &&
+            typeof turn?.id === "string"
+          ) {
+            completedParentTurns.add(turn.id);
+          }
+          if (
+            notification.method === "turn/started" &&
+            typeof params?.threadId === "string" &&
+            params.threadId !== parentThreadId &&
+            typeof turn?.id === "string"
+          ) {
+            childTurns.set(params.threadId, turn.id);
+          }
+          if (
+            notification.method === "turn/completed" &&
+            typeof params?.threadId === "string" &&
+            params.threadId !== parentThreadId &&
+            typeof turn?.status === "string"
+          ) {
+            childTurnStatus.set(params.threadId, turn.status);
+          }
+        });
+
+        const deliveries: RecordedDelivery[] = [];
+        let priorDeliveryStarted = false;
+        const recorder = {
+          deliveries,
+          runtime: {
+            captureAgentHarnessCompletionCustody: async () => undefined,
+            createAgentHarnessCompletionEventSink: () => () => {},
+            deliverAgentHarnessCompletion: async (params: RecordedDelivery) => {
+              priorDeliveryStarted = true;
+              traceNativeLive("reused-prior-delivery-held", {
+                childThreadId: params.childSessionId,
+                status: params.status,
+              });
+              await releasePriorDelivery.promise;
+              deliveries.push(params);
+              return { delivered: true, path: "steered" as const };
+            },
+          },
+        };
+        let interruptIoCount = 0;
+        const monitor = new CodexNativeSubagentMonitor(client as never, recorder.runtime, {
+          interruptChildAndWait: (threadId, turnId, assertCurrent, timeoutMs) => {
+            interruptIoCount += 1;
+            traceNativeLive("reused-generation-interrupt-io", { threadId, turnId });
+            return interruptCodexTurnAndWaitBestEffort(client, {
+              threadId,
+              turnId,
+              assertCurrent,
+              timeoutMs,
+            });
+          },
+        });
+        const sessionKey = "live:reused-parent-stop";
+        const sessionId = "live-reused-parent-session";
+        const connectionFingerprint = "a".repeat(64);
+        const claims = new Map<string, string>();
+        const releases = new Set<string>();
+        const runGeneration = async (revision: string, requesterTurnRunId: string) => {
+          const requestCustody = Object.freeze({});
+          const releasePath = path.join(root, `${revision}.release`);
+          const parent = await monitor.registerParent({
+            parentThreadId,
+            requesterSessionKey: sessionKey,
+            requesterTurnRunId,
+            requestCustody,
+            completionScope: { requesterSessionKey: sessionKey, requesterAgentId: "live" },
+            historyOwner: {
+              parentThreadId,
+              sessionId,
+              lifecycleRevision: revision,
+              connectionFingerprint,
+            },
+            agentId: "live",
+            cancelChildProcesses: (threadId, _turnId, assertCurrent) =>
+              terminateCodexBackgroundTerminals(client, threadId, false, undefined, assertCurrent),
+            claimDirectChild: (childThreadId) => {
+              claims.set(revision, childThreadId);
+              return () => releases.add(childThreadId);
+            },
+          });
+          const turn = await client.request(
+            "turn/start",
+            {
+              threadId: parentThreadId,
+              input: [
+                {
+                  type: "text",
+                  text: `Spawn exactly one new native subagent. Give it this exact task: "Run this shell command exactly and wait until it exits: while [ ! -f '${releasePath}' ]; do sleep 1; done. Do not reply before the command exits. Then reply ${revision}." Do not wait for the child. Reply PARENT_${revision} immediately after spawning it.`,
+                  text_elements: [],
+                },
+              ],
+            },
+            { timeoutMs: 300_000 },
+          );
+          parent.bindTurn(turn.turn.id);
+          const childThreadId = await waitFor(
+            () => {
+              const claimed = claims.get(revision);
+              return completedParentTurns.has(turn.turn.id) &&
+                claimed &&
+                childTurns.has(claimed) &&
+                !childTurnStatus.has(claimed)
+                ? claimed
+                : undefined;
+            },
+            300_000,
+            `${revision} parent completion and active child turn`,
+          );
+          await parent.unregister();
+          traceNativeLive("reused-generation-ready", {
+            revision,
+            parentThreadId,
+            childThreadId,
+            childTurnId: childTurns.get(childThreadId) ?? null,
+          });
+          return { childThreadId, releasePath, requestCustody };
+        };
+
+        const first = await runGeneration("revision-1", "parent-run-1");
+        await fs.writeFile(first.releasePath, "release\n", "utf8");
+        await waitFor(
+          () => (priorDeliveryStarted ? true : undefined),
+          60_000,
+          "prior-generation held delivery",
+        );
+        expect(childTurnStatus.get(first.childThreadId)).toBe("completed");
+        expect(recorder.deliveries).toEqual([]);
+
+        const current = await runGeneration("revision-2", "parent-run-2");
+        expect(current.childThreadId).not.toBe(first.childThreadId);
+        expect(childTurnStatus.has(current.childThreadId)).toBe(false);
+        expect(releases.has(current.childThreadId)).toBe(false);
+
+        let foreignConsumerCalled = false;
+        await expect(
+          monitor.withDescendantCancellation(
+            {
+              parentThreadId,
+              agentId: "live",
+              sessionKey,
+              sessionId,
+              lifecycleRevision: "revision-2",
+              requesterTurnRunId: "foreign-parent-run",
+              acceptsRequest: () => false,
+              assertCurrent: () => {},
+            },
+            (cancel) => {
+              foreignConsumerCalled = true;
+              return cancel();
+            },
+          ),
+        ).rejects.toThrow("Codex descendant cancellation requester generation changed");
+        expect(foreignConsumerCalled).toBe(false);
+        expect(interruptIoCount).toBe(0);
+        traceNativeLive("reused-generation-foreign-rejected", { interruptIoCount });
+
+        let requesterCurrent = true;
+        let revokedError: unknown;
+        try {
+          await monitor.withDescendantCancellation(
+            {
+              parentThreadId,
+              agentId: "live",
+              sessionKey,
+              sessionId,
+              lifecycleRevision: "revision-2",
+              requesterTurnRunId: "parent-run-2",
+              acceptsRequest: (custody) => custody === current.requestCustody,
+              assertCurrent: () => {
+                if (!requesterCurrent) {
+                  throw new Error("live requester authority was revoked");
+                }
+              },
+            },
+            (cancel) => {
+              requesterCurrent = false;
+              return cancel();
+            },
+          );
+        } catch (error) {
+          revokedError = error;
+        }
+        const revokedMessage =
+          revokedError instanceof Error ? revokedError.message : String(revokedError);
+        traceNativeLive("reused-generation-revoked-error", {
+          message: revokedMessage,
+          interruptIoCount,
+        });
+        expect(revokedMessage).toBe("live requester authority was revoked");
+        requesterCurrent = true;
+        expect(interruptIoCount).toBe(0);
+        traceNativeLive("reused-generation-revoked-rejected", { interruptIoCount });
+
+        traceNativeLive("reused-generation-stop-start", {
+          parentThreadId,
+          selectedChildThreadId: current.childThreadId,
+          priorGenerationChildThreadId: first.childThreadId,
+        });
+        const cancellation = await monitor.withDescendantCancellation(
+          {
+            parentThreadId,
+            agentId: "live",
+            sessionKey,
+            sessionId,
+            lifecycleRevision: "revision-2",
+            requesterTurnRunId: "parent-run-2",
+            acceptsRequest: (custody) => custody === current.requestCustody,
+            assertCurrent: () => {},
+          },
+          (cancel) => cancel(),
+        );
+        traceNativeLive("reused-generation-stop-complete", {
+          killed: cancellation.killed,
+          cancelledRevision: cancellation.cancelledRequesters[0]?.lifecycleRevision ?? null,
+          selectedChildStatus: childTurnStatus.get(current.childThreadId) ?? null,
+          priorGenerationChildStatus: childTurnStatus.get(first.childThreadId) ?? "active",
+        });
+
+        expect(cancellation).toEqual({
+          killed: 1,
+          cancelledRequesters: [
+            {
+              agentId: "live",
+              sessionKey,
+              sessionId,
+              lifecycleRevision: "revision-2",
+              requesterTurnRunId: "parent-run-2",
+            },
+          ],
+        });
+        expect(childTurnStatus.get(current.childThreadId)).toBe("interrupted");
+        expect(interruptIoCount).toBe(1);
+        expect(releases.has(current.childThreadId)).toBe(true);
+        expect(recorder.deliveries).toEqual([]);
+
+        releasePriorDelivery.resolve();
+        await waitFor(() => recorder.deliveries[0], 60_000, "prior-generation delivery release");
+        await monitor.dispose();
+      } finally {
+        releasePriorDelivery.resolve();
+        await client.closeAndWait();
+      }
+    });
+  }, 900_000);
+
+  it("delivers detached spawned subagent results and verifies their native history", async () => {
+    const apiKey = process.env.OPENAI_API_KEY?.trim();
+    if (!apiKey) {
+      throw new Error("OPENAI_API_KEY is required for this live test");
+    }
+    await withTempDir("openclaw-codex-native-subagent-", async (root) => {
+      traceNativeLive("detached-scenario-start");
+      let client: CodexAppServerClient | undefined;
+      try {
+        const workspace = path.join(root, "workspace");
+        await fs.mkdir(workspace, { recursive: true });
+        client = await createIsolatedCodexAppServerClient(createNativeSubagentClientOptions(root));
+        traceNativeLive("app-server-ready");
+        await client.request(
+          "account/login/start",
+          { type: "apiKey", apiKey },
+          { timeoutMs: 60_000 },
+        );
+        traceNativeLive("login-complete");
 
         let parentThreadId = "";
         let parentTurnCompleted = false;
+        const waitCalls = new Set<string>();
+        const childTurns = new Map<string, string>();
         client.addNotificationHandler((notification) => {
-          if (notification.method !== "turn/completed") {
-            return;
-          }
           const params = isJsonObject(notification.params) ? notification.params : undefined;
-          if (params?.threadId === parentThreadId) {
+          const item = isJsonObject(params?.item) ? params.item : undefined;
+          const turn = isJsonObject(params?.turn) ? params.turn : undefined;
+          if (
+            notification.method === "turn/started" &&
+            typeof params?.threadId === "string" &&
+            params.threadId !== parentThreadId &&
+            typeof turn?.id === "string"
+          ) {
+            childTurns.set(params.threadId, turn.id);
+          }
+          const isWait = item?.type === "collabAgentToolCall" && item.tool === "wait";
+          if (isWait && typeof item.id === "string") {
+            waitCalls.add(item.id);
+          }
+          const isWaitOutput =
+            item?.type === "function_call_output" &&
+            typeof item.call_id === "string" &&
+            waitCalls.has(item.call_id);
+          const receipts = readCodexNativeSubagentNotification(notification).receipts.map(
+            (receipt) => receipt.agentPath,
+          );
+          if (
+            notification.method === "turn/started" ||
+            notification.method === "turn/completed" ||
+            notification.method === "rawResponse/completed" ||
+            item?.type === "contextCompaction" ||
+            isWait ||
+            isWaitOutput ||
+            receipts.length > 0
+          ) {
+            traceNativeLive("native-event", {
+              method: notification.method,
+              threadId: typeof params?.threadId === "string" ? params.threadId : null,
+              turnId: typeof params?.turnId === "string" ? params.turnId : (turn?.id ?? null),
+              turnStatus: turn?.status ?? null,
+              itemType: item?.type ?? null,
+              itemId: item?.id ?? item?.call_id ?? null,
+              receiptPaths: receipts,
+            });
+          }
+          if (notification.method === "turn/completed" && params?.threadId === parentThreadId) {
             parentTurnCompleted = true;
           }
         });
 
         const started = await client.request(
           "thread/start",
-          {
-            model: "gpt-5.5",
-            cwd: workspace,
-            approvalPolicy: "never",
-            sandbox: "read-only",
-            threadSource: "user",
-            experimentalRawEvents: true,
-            config: { "features.multi_agent": true },
-          },
+          createNativeSubagentThreadParams(workspace),
           { timeoutMs: 120_000 },
         );
         parentThreadId = started.thread.id;
+        traceNativeLive("parent-thread-started", { parentThreadId });
 
+        const requesterSessionKey = "live:streamed";
+        const registration = {
+          parentThreadId,
+          requesterSessionKey,
+          completionScope: { requesterSessionKey, requesterAgentId: "live" },
+          agentId: "live",
+        };
         const streamed = createDeliveryRecorder();
         const monitor = new CodexNativeSubagentMonitor(client as never, streamed.runtime);
-        monitor.registerParent({
-          parentThreadId,
-          requesterSessionKey: "live:streamed",
-          taskRuntimeScope: {
-            requesterSessionKey: "live:streamed",
-          } as AgentHarnessTaskRuntimeScope,
-          agentId: "live",
-        });
+        const parentRegistration = await monitor.registerParent(registration);
 
         // Detached-child scenario: the parent replies immediately while the
         // child still owes its own model round (plus a sleep for margin), so
         // the parent turn completes first, like an OpenClaw run cleaning up
         // after yield while its native subagent is still working.
-        await client.request(
+        traceNativeLive("parent-turn-start-request", { parentThreadId });
+        const turn = await client.request(
           "turn/start",
           {
             threadId: parentThreadId,
@@ -149,20 +626,25 @@ describeLive("codex native subagent monitor live", () => {
               {
                 type: "text",
                 text: "Spawn exactly one subagent with this exact task: 'First run the shell command sleep 20 and wait for it to finish. Then reply with exactly the word BANANA42.' Do not wait for the subagent to finish. Reply DONE immediately after spawning it.",
+                text_elements: [],
               },
             ],
           },
           { timeoutMs: 300_000 },
         );
+        parentRegistration.bindTurn(turn.turn.id);
+        traceNativeLive("parent-turn-bound", { turnId: turn.turn.id });
 
-        await waitFor(
-          () => (parentTurnCompleted ? true : undefined),
+        const childThreadId = await waitFor(
+          () => (parentTurnCompleted ? childTurns.keys().next().value : undefined),
           300_000,
-          "parent turn completion",
+          "parent completion and observed child turn",
         );
-        // The child is still sleeping when the parent turn ends; delivery after
-        // this point proves the detached path, not same-turn streaming.
+        expect(childTurns.size).toBe(1);
         expect(streamed.deliveries).toHaveLength(0);
+        traceNativeLive("parent-unregister-start", { childThreadId });
+        await parentRegistration.unregister();
+        traceNativeLive("parent-unregister-complete");
 
         const delivery = await waitFor(
           () => streamed.deliveries[0],
@@ -171,7 +653,7 @@ describeLive("codex native subagent monitor live", () => {
         );
         expect(delivery.status).toBe("succeeded");
         expect(delivery.result).toMatch(/BANANA42/iu);
-        const childThreadId = delivery.childSessionId;
+        expect(delivery.childSessionId).toBe(childThreadId);
 
         // Canonical protocol shape: lineage plus terminal turn from history.
         const read = await client.request(
@@ -192,44 +674,7 @@ describeLive("codex native subagent monitor live", () => {
         const latestTurn = isJsonObject(pageTurns[0]) ? pageTurns[0] : undefined;
         expect(latestTurn?.status).toBe("completed");
 
-        // Fresh-monitor recovery: no streamed state, only a persisted task row.
-        const recoveryRunId = codexNativeSubagentRunId(childThreadId);
-        const recovery = createDeliveryRecorder([
-          {
-            taskId: recoveryRunId,
-            runtime: "subagent",
-            taskKind: "codex-native",
-            sourceId: recoveryRunId,
-            requesterSessionKey: "live:recovery",
-            ownerKey: "live:recovery",
-            scopeKind: "session",
-            agentId: "live",
-            runId: recoveryRunId,
-            label: "Codex subagent",
-            task: "live recovery probe",
-            status: "running",
-            deliveryStatus: "not_applicable",
-            notifyPolicy: "silent",
-            createdAt: Date.now(),
-          } as AgentHarnessTaskRecord,
-        ]);
-        const recoveryMonitor = new CodexNativeSubagentMonitor(client as never, recovery.runtime);
-        recoveryMonitor.registerParent({
-          parentThreadId,
-          requesterSessionKey: "live:recovery",
-          taskRuntimeScope: {
-            requesterSessionKey: "live:recovery",
-          } as AgentHarnessTaskRuntimeScope,
-          agentId: "live",
-        });
-        const recovered = await waitFor(
-          () => recovery.deliveries[0],
-          120_000,
-          "history-based completion recovery",
-        );
-        expect(recovered.childSessionId).toBe(childThreadId);
-        expect(recovered.status).toBe("succeeded");
-        expect(recovered.result).toMatch(/BANANA42/iu);
+        await monitor.dispose();
       } finally {
         await client?.closeAndWait();
         await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });

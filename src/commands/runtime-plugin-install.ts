@@ -1,10 +1,12 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { modelSelectionShouldEnsureCopilotRuntimePlugin } from "../agents/copilot-routing.js";
-import { modelSelectionShouldEnsureCodexPlugin } from "../agents/openai-routing.js";
+import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
+import {
+  modelSelectionShouldEnsureCodexPlugin,
+  parseModelRefProvider,
+} from "../agents/openai-routing.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
 import { enablePluginWithCapabilityConsent } from "../plugins/enable.js";
@@ -15,11 +17,63 @@ import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capabili
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { createNonInteractiveLoggingPrompter } from "./non-interactive-prompter.js";
 
+const GITHUB_COPILOT_PROVIDER_ID = "github-copilot";
+
+/**
+ * Canonical id of the Copilot agent runtime plugin.
+ */
+const COPILOT_RUNTIME_ID = "copilot";
+
+function parseModelRefId(model: string | undefined): string | undefined {
+  if (typeof model !== "string") {
+    return undefined;
+  }
+  const trimmed = model.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash <= 0 || slash === trimmed.length - 1) {
+    return undefined;
+  }
+  return trimmed.slice(slash + 1);
+}
+
+/**
+ * Returns true when the selected model should trigger the external
+ * `@openclaw/copilot` runtime plugin install.
+ *
+ * Gating contract (review #2, P1):
+ *   - Model ref must use the `github-copilot/*` provider prefix.
+ *   - The user's config must explicitly opt in by setting
+ *     `agentRuntime.id: "copilot"` at the provider, model, or agent scope
+ *     (resolved via `resolveModelRuntimePolicy`).
+ *
+ * Without the explicit opt-in we fall through to the built-in GitHub
+ * Copilot provider, which has shipped support for `github-copilot/*`
+ * models for a long time and must not install the runtime plugin for
+ * users who never asked for it.
+ */
+function modelSelectionShouldEnsureCopilotRuntimePlugin(params: {
+  model?: string;
+  config?: OpenClawConfig;
+}): boolean {
+  if (parseModelRefProvider(params.model) !== GITHUB_COPILOT_PROVIDER_ID) {
+    return false;
+  }
+  const modelId = parseModelRefId(params.model);
+  const resolved = resolveModelRuntimePolicy({
+    config: params.config,
+    provider: GITHUB_COPILOT_PROVIDER_ID,
+    modelId,
+  });
+  const runtimeId = resolved.policy?.id?.trim().toLowerCase();
+  return runtimeId === COPILOT_RUNTIME_ID;
+}
+
 type RuntimePluginInstallDescriptor = {
   pluginId: string;
   label: string;
   npmSpec: string;
   warningLabel: string;
+  shouldEnsure: (params: RuntimePluginRepairParams) => boolean;
   /** Keep this official runtime package on the same release cohort as OpenClaw. */
   versionBoundToOpenClaw?: boolean;
 };
@@ -32,12 +86,6 @@ type ModelSelectionRuntimePluginsResult =
   | { ok: true; cfg: OpenClawConfig; codexInstalled: boolean }
   | { ok: false; message: string };
 
-type RuntimePluginSelection = (params: {
-  cfg: OpenClawConfig;
-  model?: string;
-  agentId?: string;
-}) => boolean;
-
 type RuntimePluginEnsureParams = {
   cfg: OpenClawConfig;
   model?: string;
@@ -46,8 +94,10 @@ type RuntimePluginEnsureParams = {
   runtime: RuntimeEnv;
   workspaceDir?: string;
   output?: "interactive" | "silent";
-  reviewOfficialArtifacts?: boolean;
   beforePersistentEffect?: () => void | Promise<void>;
+  beforePersistentApply?: () => void;
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
+  recordOfficialCapabilities?: boolean;
 };
 
 type RuntimePluginRepairParams = {
@@ -59,30 +109,34 @@ type RuntimePluginRepairParams = {
 };
 
 export const CODEX_RUNTIME_PLUGIN_ID = "codex";
-const CODEX_RUNTIME_PLUGIN_DESCRIPTOR = {
+const CODEX_RUNTIME_PLUGIN_DESCRIPTOR: RuntimePluginInstallDescriptor = {
   pluginId: CODEX_RUNTIME_PLUGIN_ID,
   label: "Codex",
   npmSpec: "@openclaw/codex",
   warningLabel: "Codex",
   versionBoundToOpenClaw: true,
+  shouldEnsure: ({ cfg, model, agentId }) =>
+    modelSelectionShouldEnsureCodexPlugin({ config: cfg, model, agentId }),
 };
-const COPILOT_RUNTIME_PLUGIN_DESCRIPTOR = {
+const COPILOT_RUNTIME_PLUGIN_DESCRIPTOR: RuntimePluginInstallDescriptor = {
   pluginId: "copilot",
   label: "GitHub Copilot agent runtime",
   npmSpec: "@openclaw/copilot",
   warningLabel: "GitHub Copilot",
+  shouldEnsure: ({ cfg, model }) =>
+    modelSelectionShouldEnsureCopilotRuntimePlugin({ config: cfg, model }),
 };
-
-function isInstalledRecordPresentOnDisk(
-  record: PluginInstallRecord | undefined,
-  env: NodeJS.ProcessEnv,
-): boolean {
-  const installPath = record?.installPath?.trim();
-  if (!installPath) {
-    return false;
-  }
-  return existsSync(path.join(resolveUserPath(installPath, env), "package.json"));
-}
+const MUSE_RUNTIME_PLUGIN_DESCRIPTOR: RuntimePluginInstallDescriptor = {
+  pluginId: "muse",
+  label: "Muse Code",
+  npmSpec: "@openclaw/muse",
+  warningLabel: "Muse Code",
+  shouldEnsure: ({ cfg, model, agentId }) =>
+    Boolean(
+      model &&
+      resolveModelRuntimePolicy({ config: cfg, modelId: model, agentId }).policy?.id === "muse",
+    ),
+};
 
 function finalizeRequiredRuntimePluginInstall(
   descriptor: RuntimePluginInstallDescriptor,
@@ -112,77 +166,61 @@ function finalizeRequiredRuntimePluginInstall(
   };
 }
 
-function adaptRuntimePluginInstallIo(params: RuntimePluginEnsureParams): {
-  prompter: WizardPrompter;
-  runtime: RuntimeEnv;
-} {
+async function ensureRuntimePluginForModelSelection(
+  params: RuntimePluginEnsureParams,
+  descriptor: RuntimePluginInstallDescriptor,
+): Promise<RuntimePluginInstallResult> {
+  if (!descriptor.shouldEnsure(params)) {
+    return { ok: true, cfg: params.cfg, required: false };
+  }
   const silent = params.output === "silent";
   const runtime = {
     ...params.runtime,
     error: () => {},
     ...(silent ? { log: () => {} } : {}),
   };
-  return {
-    prompter: silent
-      ? createNonInteractiveLoggingPrompter(
-          runtime,
-          (message) => `Runtime plugin install unexpectedly prompted: ${message}`,
-        )
-      : { ...params.prompter, note: async () => {} },
-    runtime,
-  };
-}
-
-async function ensureRuntimePluginForModelSelection(
-  params: RuntimePluginEnsureParams & {
-    descriptor: RuntimePluginInstallDescriptor;
-    shouldEnsure: RuntimePluginSelection;
-  },
-): Promise<RuntimePluginInstallResult> {
-  if (
-    !params.shouldEnsure({
-      cfg: params.cfg,
-      model: params.model,
-      agentId: params.agentId,
-    })
-  ) {
-    return { ok: true, cfg: params.cfg, required: false };
-  }
-  const io = adaptRuntimePluginInstallIo(params);
+  const prompter = silent
+    ? createNonInteractiveLoggingPrompter(
+        runtime,
+        (message) => `Runtime plugin install unexpectedly prompted: ${message}`,
+      )
+    : { ...params.prompter, note: async () => {} };
   const onCapabilityConsent =
-    params.output === "silent"
+    params.onCapabilityConsent ??
+    (params.output === "silent"
       ? async () => undefined
-      : createPluginCapabilityConsentPrompter(params.prompter);
+      : createPluginCapabilityConsentPrompter(params.prompter));
   const existingRecords = await loadInstalledPluginIndexInstallRecords({ env: process.env });
-  if (isInstalledRecordPresentOnDisk(existingRecords[params.descriptor.pluginId], process.env)) {
+  const installPath = existingRecords[descriptor.pluginId]?.installPath?.trim();
+  if (
+    installPath &&
+    existsSync(path.join(resolveUserPath(installPath, process.env), "package.json"))
+  ) {
     // A recorded install with package.json on disk can be repaired/enabled
     // without re-downloading the plugin during setup.
-    const repair = await repairRuntimePluginInstallForModelSelection({
-      cfg: params.cfg,
-      model: params.model,
-      agentId: params.agentId,
-      env: process.env,
-      descriptor: params.descriptor,
-      shouldEnsure: params.shouldEnsure,
-      onCapabilityConsent,
-      beforePersistentEffect: params.beforePersistentEffect,
-    });
-    for (const change of repair.changes) {
-      io.runtime.log?.(change);
-    }
-    for (const warning of repair.warnings) {
-      io.runtime.log?.(`${params.descriptor.warningLabel} update warning: ${warning}`);
-    }
-    const enableResult = await enablePluginWithCapabilityConsent(
-      params.cfg,
-      params.descriptor.pluginId,
+    const repair = await repairRequiredRuntimePluginInstall(
       {
-        workspaceDir: params.workspaceDir,
+        cfg: params.cfg,
+        env: process.env,
         onCapabilityConsent,
         beforePersistentEffect: params.beforePersistentEffect,
       },
+      descriptor.pluginId,
     );
-    return finalizeRequiredRuntimePluginInstall(params.descriptor, {
+    for (const change of repair.changes) {
+      runtime.log?.(change);
+    }
+    for (const warning of repair.warnings) {
+      runtime.log?.(`${descriptor.warningLabel} update warning: ${warning}`);
+    }
+    const enableResult = await enablePluginWithCapabilityConsent(params.cfg, descriptor.pluginId, {
+      workspaceDir: params.workspaceDir,
+      onCapabilityConsent,
+      recordOfficialCapabilities: params.recordOfficialCapabilities,
+      beforePersistentEffect: params.beforePersistentEffect,
+      beforePersistentApply: params.beforePersistentApply,
+    });
+    return finalizeRequiredRuntimePluginInstall(descriptor, {
       cfg: enableResult.config,
       installed: enableResult.enabled,
       status: enableResult.enabled ? "installed" : "failed",
@@ -195,25 +233,26 @@ async function ensureRuntimePluginForModelSelection(
   const result = await ensureOnboardingPluginInstalled({
     cfg: params.cfg,
     entry: {
-      pluginId: params.descriptor.pluginId,
-      label: params.descriptor.label,
+      pluginId: descriptor.pluginId,
+      label: descriptor.label,
       install: {
-        npmSpec: params.descriptor.npmSpec,
+        npmSpec: descriptor.npmSpec,
         defaultChoice: "npm",
       },
       trustedSourceLinkedOfficialInstall: true,
-      ...(params.descriptor.versionBoundToOpenClaw ? { versionBoundToOpenClaw: true } : {}),
+      ...(descriptor.versionBoundToOpenClaw ? { versionBoundToOpenClaw: true } : {}),
     },
-    prompter: io.prompter,
-    runtime: io.runtime,
+    prompter,
+    runtime,
     ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
     promptInstall: false,
     autoConfirmSingleSource: true,
     onCapabilityConsent,
-    reviewOfficialArtifacts: params.reviewOfficialArtifacts,
+    recordOfficialCapabilities: params.recordOfficialCapabilities,
     beforePersistentEffect: params.beforePersistentEffect,
+    beforePersistentApply: params.beforePersistentApply,
   });
-  return finalizeRequiredRuntimePluginInstall(params.descriptor, {
+  return finalizeRequiredRuntimePluginInstall(descriptor, {
     cfg: result.cfg,
     installed: result.installed,
     status: result.status,
@@ -222,80 +261,49 @@ async function ensureRuntimePluginForModelSelection(
 }
 
 /** Repairs missing install records for runtime plugins required by model selection. */
-async function repairRuntimePluginInstallForModelSelection(params: {
-  cfg: OpenClawConfig;
-  model?: string;
-  agentId?: string;
-  env?: NodeJS.ProcessEnv;
-  onCapabilityConsent?: PluginCapabilityConsentHandler;
-  beforePersistentEffect?: () => void | Promise<void>;
-  descriptor: RuntimePluginInstallDescriptor;
-  shouldEnsure: RuntimePluginSelection;
-}): Promise<{ required: boolean; changes: string[]; warnings: string[] }> {
-  if (
-    !params.shouldEnsure({
-      cfg: params.cfg,
-      model: params.model,
-      agentId: params.agentId,
-    })
-  ) {
-    return { required: false, changes: [], warnings: [] };
-  }
+async function repairRequiredRuntimePluginInstall(
+  params: RuntimePluginRepairParams & { beforePersistentEffect?: () => void | Promise<void> },
+  pluginId: string,
+): Promise<{ changes: string[]; warnings: string[] }> {
   const { repairMissingPluginInstallsForIds } =
     await import("./doctor/shared/missing-configured-plugin-install.js");
   const result = await repairMissingPluginInstallsForIds({
     cfg: params.cfg,
-    pluginIds: [params.descriptor.pluginId],
+    pluginIds: [pluginId],
     ...(params.env !== undefined ? { env: params.env } : {}),
     ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
     beforePersistentEffect: params.beforePersistentEffect,
   });
   return {
-    required: true,
     changes: result.changes,
     warnings: [...result.warnings, ...(result.notices ?? [])],
   };
 }
 
-function createRuntimePluginModelSelectionHelpers(
-  descriptor: RuntimePluginInstallDescriptor,
-  shouldEnsure: RuntimePluginSelection,
-) {
-  return {
-    ensure: (ensureParams: RuntimePluginEnsureParams) =>
-      ensureRuntimePluginForModelSelection({
-        ...ensureParams,
-        descriptor,
-        shouldEnsure,
-      }),
-    repair: (repairParams: RuntimePluginRepairParams) =>
-      repairRuntimePluginInstallForModelSelection({
-        ...repairParams,
-        descriptor,
-        shouldEnsure,
-      }),
-  };
+export const ensureCodexRuntimePluginForModelSelection = (params: RuntimePluginEnsureParams) =>
+  ensureRuntimePluginForModelSelection(params, CODEX_RUNTIME_PLUGIN_DESCRIPTOR);
+export const ensureCodexRuntimePluginForSupervision = (params: RuntimePluginEnsureParams) =>
+  ensureRuntimePluginForModelSelection(params, {
+    ...CODEX_RUNTIME_PLUGIN_DESCRIPTOR,
+    shouldEnsure: () => true,
+  });
+
+export async function repairModelSelectionRuntimePlugins(
+  params: RuntimePluginRepairParams,
+): Promise<string[]> {
+  const warnings: string[] = [];
+  for (const descriptor of [
+    CODEX_RUNTIME_PLUGIN_DESCRIPTOR,
+    COPILOT_RUNTIME_PLUGIN_DESCRIPTOR,
+    MUSE_RUNTIME_PLUGIN_DESCRIPTOR,
+  ]) {
+    if (descriptor.shouldEnsure(params)) {
+      const repaired = await repairRequiredRuntimePluginInstall(params, descriptor.pluginId);
+      warnings.push(...repaired.warnings);
+    }
+  }
+  return warnings;
 }
-
-const codexRuntimePluginInstall = createRuntimePluginModelSelectionHelpers(
-  CODEX_RUNTIME_PLUGIN_DESCRIPTOR,
-  ({ cfg, model, agentId }) =>
-    modelSelectionShouldEnsureCodexPlugin({ config: cfg, model, agentId }),
-);
-const copilotRuntimePluginInstall = createRuntimePluginModelSelectionHelpers(
-  COPILOT_RUNTIME_PLUGIN_DESCRIPTOR,
-  ({ cfg, model }) => modelSelectionShouldEnsureCopilotRuntimePlugin({ config: cfg, model }),
-);
-
-export const ensureCodexRuntimePluginForModelSelection = codexRuntimePluginInstall.ensure;
-export const repairCodexRuntimePluginInstallForModelSelection = codexRuntimePluginInstall.repair;
-const ensureCopilotRuntimePluginForModelSelection = copilotRuntimePluginInstall.ensure;
-export const repairCopilotRuntimePluginInstallForModelSelection =
-  copilotRuntimePluginInstall.repair;
-export const ensureCodexRuntimePluginForSupervision = createRuntimePluginModelSelectionHelpers(
-  CODEX_RUNTIME_PLUGIN_DESCRIPTOR,
-  () => true,
-).ensure;
 
 export async function ensureModelSelectionRuntimePlugins(
   params: RuntimePluginEnsureParams,
@@ -304,11 +312,18 @@ export async function ensureModelSelectionRuntimePlugins(
   if (!codex.ok) {
     return { ok: false, message: codex.message };
   }
-  const copilot = await ensureCopilotRuntimePluginForModelSelection({
-    ...params,
-    cfg: codex.cfg,
-  });
-  return copilot.ok
-    ? { ok: true, cfg: copilot.cfg, codexInstalled: codex.required }
-    : { ok: false, message: copilot.message };
+  const copilot = await ensureRuntimePluginForModelSelection(
+    { ...params, cfg: codex.cfg },
+    COPILOT_RUNTIME_PLUGIN_DESCRIPTOR,
+  );
+  if (!copilot.ok) {
+    return { ok: false, message: copilot.message };
+  }
+  const muse = await ensureRuntimePluginForModelSelection(
+    { ...params, cfg: copilot.cfg },
+    MUSE_RUNTIME_PLUGIN_DESCRIPTOR,
+  );
+  return muse.ok
+    ? { ok: true, cfg: muse.cfg, codexInstalled: codex.required }
+    : { ok: false, message: muse.message };
 }

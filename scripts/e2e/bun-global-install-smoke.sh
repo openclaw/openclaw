@@ -9,26 +9,13 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 source "$ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh"
 source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
-
-read_positive_int_env() {
-  local name="${1:?missing environment variable name}"
-  local fallback="${2:?missing fallback value}"
-  local value="${!name-}"
-  if [ -z "${!name+x}" ]; then
-    value="$fallback"
-  fi
-  if [[ ! "$value" =~ ^[0-9]+$ ]] || (( 10#$value < 1 )); then
-    echo "invalid $name: $value" >&2
-    return 2
-  fi
-  printf "%s\n" "$((10#$value))"
-}
+source "$ROOT_DIR/scripts/e2e/lib/bun-global-install/ai-candidate.sh"
 
 BUN_BIN="${BUN_BIN:-bun}"
 HOST_BUILD="${OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD:-1}"
 DIST_IMAGE="${OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE:-}"
 PACKAGE_TGZ="${OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ:-}"
-COMMAND_TIMEOUT_MS="$(read_positive_int_env OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_MS 180000)"
+COMMAND_TIMEOUT_MS="$(docker_e2e_read_positive_int_env OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_MS 180000)"
 DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_BUN_GLOBAL_SMOKE_DOCKER_COMMAND_TIMEOUT:-600s}}"
 AI_PACKAGE_TGZ=""
 REGISTRY_PID=""
@@ -46,6 +33,7 @@ MOCK_REQUEST_LOG=""
 LOCAL_AGENT_LOG=""
 GATEWAY_LOG=""
 GATEWAY_HEALTH_LOG=""
+GATEWAY_STATUS_LOG=""
 GATEWAY_AGENT_LOG=""
 DIRECT_BUN_LOG=""
 
@@ -74,57 +62,9 @@ dump_debug_logs() {
     "$LOCAL_AGENT_LOG" \
     "$GATEWAY_LOG" \
     "$GATEWAY_HEALTH_LOG" \
+    "$GATEWAY_STATUS_LOG" \
     "$GATEWAY_AGENT_LOG" \
     "$DIRECT_BUN_LOG" >&2 || true
-}
-
-prepare_ai_candidate() {
-  local ai_manifest
-  local ai_package_dir
-  local ai_tarballs
-  local root_manifest
-
-  if [ -z "$PACK_DIR" ]; then
-    PACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-bun-pack.XXXXXX")"
-  fi
-  root_manifest="$PACK_DIR/openclaw-package.json"
-  tar -xOf "$PACKAGE_TGZ" package/package.json >"$root_manifest"
-  if ! tar -tzf "$PACKAGE_TGZ" package/node_modules/@openclaw/ai/package.json >/dev/null 2>&1; then
-    if node -e '
-const manifest = require(process.argv[1]);
-process.exit(manifest.dependencies?.["@openclaw/ai"] ? 0 : 1);
-' "$root_manifest"; then
-      if [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
-        echo "OpenClaw tarball requires a verified candidate registry for unbundled @openclaw/ai" >&2
-        exit 1
-      fi
-      REQUIRED_REGISTRY_PACKAGES='["@openclaw/ai"]'
-      echo "==> Resolve candidate @openclaw/ai from the prepared package registry"
-      return
-    fi
-    echo "==> Candidate has no bundled @openclaw/ai dependency"
-    return
-  fi
-  echo "==> Extract bundled candidate @openclaw/ai package"
-  ai_package_dir="$PACK_DIR/ai-candidate"
-  mkdir -p "$ai_package_dir"
-  tar -xzf "$PACKAGE_TGZ" \
-    -C "$ai_package_dir" \
-    --strip-components=4 \
-    package/node_modules/@openclaw/ai
-  ai_manifest="$ai_package_dir/package.json"
-  node scripts/e2e/lib/bun-global-install/assertions.mjs \
-    assert-release-versions \
-    "$root_manifest" \
-    "$ai_manifest" \
-    >/dev/null
-  npm pack --ignore-scripts --silent --pack-destination "$PACK_DIR" "$ai_package_dir" >/dev/null
-  ai_tarballs=("$PACK_DIR"/openclaw-ai-*.tgz)
-  if [ "${#ai_tarballs[@]}" -ne 1 ] || [ ! -f "${ai_tarballs[0]}" ]; then
-    echo "expected one packed @openclaw/ai candidate in $PACK_DIR" >&2
-    exit 1
-  fi
-  AI_PACKAGE_TGZ="${ai_tarballs[0]}"
 }
 
 trap cleanup EXIT
@@ -242,7 +182,10 @@ main() {
   fi
 
   resolve_package_tgz
-  prepare_ai_candidate
+  if [ -z "$PACK_DIR" ]; then
+    PACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-bun-pack.XXXXXX")"
+  fi
+  prepare_ai_candidate "$PACKAGE_TGZ" "$PACK_DIR"
   openclaw_prepublish_plugin_registry_start_mounted \
     "$PACK_DIR/registry" REGISTRY_PID "$REQUIRED_REGISTRY_PACKAGES"
 
@@ -305,6 +248,7 @@ NODE
   LOCAL_AGENT_LOG="$SMOKE_DIR/local-agent.log"
   GATEWAY_LOG="$SMOKE_DIR/gateway.log"
   GATEWAY_HEALTH_LOG="$SMOKE_DIR/gateway-health.json"
+  GATEWAY_STATUS_LOG="$SMOKE_DIR/gateway-status.json"
   GATEWAY_AGENT_LOG="$SMOKE_DIR/gateway-agent.log"
   DIRECT_BUN_LOG="$SMOKE_DIR/direct-bun.log"
 
@@ -386,7 +330,7 @@ NODE
     "$gateway_port"
 
   echo "==> Representative CLI state under $runtime_label"
-  run_installed_cli status --json --timeout 1 >"$CLI_STATUS_LOG" 2>&1
+  run_installed_cli status --json >"$CLI_STATUS_LOG" 2>&1
   run_installed_cli plugins list --json >"$CLI_PLUGINS_LOG" 2>&1
 
   echo "==> Local mocked agent turn under $runtime_label"
@@ -430,6 +374,13 @@ NODE
     "$success_marker" \
     "$GATEWAY_AGENT_LOG" \
     "$MOCK_REQUEST_LOG"
+  run_installed_cli gateway call status \
+    --params '{"includeChannelSummary":false}' \
+    --token "$OPENCLAW_GATEWAY_TOKEN" \
+    --json >"$GATEWAY_STATUS_LOG" 2>&1
+  node scripts/e2e/lib/bun-global-install/assertions.mjs \
+    assert-gateway-diagnostics \
+    "$GATEWAY_STATUS_LOG"
 
   echo "bun-global-install-smoke: Bun $bun_version install with $runtime_label CLI, local agent, and Gateway runtime OK"
 
@@ -439,15 +390,19 @@ NODE
       "$bun_path" \
       "$openclaw_bin" \
       "$openclaw_version" \
-      "$runtime_label" <<'NODE'
+      "$runtime_label" \
+      "$package_root" <<'NODE'
 import fs from "node:fs";
 import path from "node:path";
 
-const [, , proofPath, bunPath, openclawPath, openclawVersion, runtime] = process.argv;
+const [, , proofPath, bunPath, openclawPath, openclawVersion, runtime, installedPackageRoot] = process.argv;
+const installedPackageVersion = JSON.parse(
+  fs.readFileSync(path.join(installedPackageRoot, "package.json"), "utf8"),
+).version;
 fs.mkdirSync(path.dirname(proofPath), { recursive: true });
 fs.writeFileSync(
   proofPath,
-  `${JSON.stringify({ bunPath, openclawPath, openclawVersion, runtime }, null, 2)}\n`,
+  `${JSON.stringify({ bunPath, openclawPath, openclawVersion, runtime, installedPackageRoot, installedPackageVersion }, null, 2)}\n`,
 );
 NODE
   fi

@@ -1,14 +1,12 @@
+import { resolveGlobalMap } from "../shared/global-singleton.js";
+
 type NamedPluginRuntimeStoreSlot = { runtime: unknown };
 type NamedPluginRuntimeStoreRegistry = Map<string, NamedPluginRuntimeStoreSlot>;
 
 const pluginRuntimeStoreRegistryKey = Symbol.for("openclaw.plugin-sdk.runtime-store-registry");
 
 function getNamedPluginRuntimeStoreRegistry(): NamedPluginRuntimeStoreRegistry {
-  const globalRecord = globalThis as typeof globalThis & {
-    [pluginRuntimeStoreRegistryKey]?: NamedPluginRuntimeStoreRegistry;
-  };
-  globalRecord[pluginRuntimeStoreRegistryKey] ??= new Map();
-  return globalRecord[pluginRuntimeStoreRegistryKey];
+  return resolveGlobalMap<string, NamedPluginRuntimeStoreSlot>(pluginRuntimeStoreRegistryKey);
 }
 
 export function getNamedPluginRuntimeStoreSlot(key: string): NamedPluginRuntimeStoreSlot {

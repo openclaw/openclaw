@@ -1,76 +1,93 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { attemptMemoryCorpus, runMemoryCorpusDeadline } from "./memory-corpus.js";
 
+beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
+const search = <T>(
+  run: Parameters<typeof runMemoryCorpusDeadline<T>>[0]["run"],
+  parentSignal?: AbortSignal,
+) => runMemoryCorpusDeadline({ operation: "memory_search", parentSignal, run });
+const partial = ["keyword match"];
+const attempt = (signal: AbortSignal, run: () => Promise<string[]>) =>
+  attemptMemoryCorpus({ signal, getPartialValue: () => partial, run });
+
 it.each(["timer", "event-loop"] as const)(
   "retains completed results when the %s reaches the corpus deadline",
   async (clock) => {
-    vi.useFakeTimers();
     const pending = createDeferred<string[]>();
-    const partial = ["permitted keyword match"];
     const startedAt = performance.now();
     let signal: AbortSignal | undefined;
-    const result = runMemoryCorpusDeadline({
-      operation: "memory_search",
-      run: async (currentSignal) => {
-        signal = currentSignal;
-        return await attemptMemoryCorpus({
-          corpus: "memory",
-          signal: currentSignal,
-          unavailableValue: [],
-          getPartialValue: () => partial,
-          run: () => pending.promise,
-        });
-      },
+    const result = search((current) => {
+      signal = current;
+      return attempt(current, () => pending.promise);
     });
     if (clock === "timer") {
-      await vi.advanceTimersByTimeAsync(15_000);
+      await vi.advanceTimersByTimeAsync(30_000);
     } else {
-      vi.spyOn(performance, "now").mockReturnValue(startedAt + 15_001);
+      vi.spyOn(performance, "now").mockReturnValue(startedAt + 30_001);
       pending.resolve(["late semantic result"]);
     }
     expect(await result).toMatchObject({
       outcome: "partial",
       value: partial,
       deadline: true,
-      error: "memory_search timed out after 15s",
+      error: "memory_search timed out after 30s",
     });
     expect(signal?.aborted).toBe(true);
     pending.resolve([]);
   },
 );
 
-it.each(["provider", "caller"] as const)(
-  "does not replace a %s failure with partial results",
-  async (source) => {
-    const parent = new AbortController();
-    const failure = new Error("memory_search timed out after 15s");
-    const result = runMemoryCorpusDeadline({
-      operation: "memory_search",
-      parentSignal: parent.signal,
-      run: async (signal) =>
-        await attemptMemoryCorpus({
-          corpus: "memory",
-          signal,
-          unavailableValue: [],
-          getPartialValue: () => ["keyword match"],
-          run: async () => {
-            if (source === "caller") {
-              parent.abort(failure);
-            }
-            throw failure;
-          },
-        }),
-    });
-    if (source === "caller") {
-      await expect(result).rejects.toBe(failure);
+it("does not replace a caller failure with partial results", async () => {
+  const parent = new AbortController();
+  const failure = new Error("memory_search timed out after 30s");
+  const result = search(
+    (signal) =>
+      attempt(signal, async () => {
+        parent.abort(failure);
+        throw failure;
+      }),
+    parent.signal,
+  );
+  await expect(result).rejects.toBe(failure);
+});
+
+it.each(["banked", "consumed"])("preserves the %s budget across a pause", async (budget) => {
+  const startedAt = performance.now();
+  const result = search(async (signal, control) => {
+    if (budget === "consumed") {
+      // The overdue timer has not been serviced when the owned phase starts.
+      vi.spyOn(performance, "now").mockReturnValue(startedAt + 30_000);
     } else {
-      expect(await result).toMatchObject({ outcome: "unavailable", value: [], deadline: false });
+      await vi.advanceTimersByTimeAsync(5_000);
     }
-  },
-);
+    control.report("pause");
+    if (budget === "banked") {
+      await vi.advanceTimersByTimeAsync(60_000);
+      control.report("resume");
+      await vi.advanceTimersByTimeAsync(24_999);
+      expect(signal.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(2);
+    }
+    expect(signal.aborted).toBe(true);
+    signal.throwIfAborted();
+  });
+  await expect(result).rejects.toThrow("memory_search timed out after 30s");
+});
+
+it("keeps caller cancellation immediate while the deadline is paused", async () => {
+  const parent = new AbortController();
+  const callerError = new Error("caller cancelled");
+  const result = search(async (signal, control) => {
+    control.report("pause");
+    await vi.advanceTimersByTimeAsync(60_000);
+    parent.abort(callerError);
+    signal.throwIfAborted();
+  }, parent.signal);
+  await expect(result).rejects.toBe(callerError);
+});

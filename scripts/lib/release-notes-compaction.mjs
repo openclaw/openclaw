@@ -16,10 +16,13 @@ export function validateReleaseNotesTag(tag) {
   }
 }
 
-function tagPinnedContributionRecordUrl(repository, tag) {
+function tagPinnedContributionRecordUrl(repository, tag, recordPath) {
   validateReleaseNotesRepository(repository);
   validateReleaseNotesTag(tag);
-  return `https://github.com/${repository}/blob/${tag}/CHANGELOG.md#complete-contribution-record`;
+  if (!/^CHANGELOG(?:\.md|\/records\/[A-Za-z0-9.-]+\.md)$/u.test(recordPath)) {
+    throw new Error(`invalid contribution record path: ${recordPath}`);
+  }
+  return `https://github.com/${repository}/blob/${tag}/${recordPath}#complete-contribution-record`;
 }
 
 function headingIndexOutsideFences(markdown, heading) {
@@ -43,13 +46,13 @@ function headingIndexOutsideFences(markdown, heading) {
   return -1;
 }
 
-export function compactReleaseNotes(section, repository, tag) {
+export function compactReleaseNotes(section, repository, tag, recordPath = "CHANGELOG.md") {
   const recordIndex = headingIndexOutsideFences(section, CONTRIBUTION_RECORD_HEADING);
   if (recordIndex < 0) {
     return null;
   }
   const editorialNotes = section.slice(0, recordIndex).trimEnd();
-  const contributionRecordUrl = tagPinnedContributionRecordUrl(repository, tag);
+  const contributionRecordUrl = tagPinnedContributionRecordUrl(repository, tag, recordPath);
   const body = [
     editorialNotes,
     "",

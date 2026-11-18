@@ -4,7 +4,6 @@ import { expect } from "vitest";
 export function expectSubagentFollowupReactivation(params: {
   replaceSubagentRunAfterSteerMock: unknown;
   broadcastToConnIds: unknown;
-  completedRun: unknown;
   childSessionKey: string;
   status: "queued" | "running";
   /**
@@ -18,9 +17,10 @@ export function expectSubagentFollowupReactivation(params: {
   expect(params.replaceSubagentRunAfterSteerMock).toHaveBeenCalledWith({
     previousRunId: "run-old",
     nextRunId: "run-new",
-    fallback: params.completedRun,
+    preserveCompletedRun: true,
+    sessionEntry: expect.objectContaining({ sessionId: "sess-followup" }),
+    assertCurrent: expect.any(Function),
     runTimeoutSeconds: 0,
-    persistenceFailure: "throw",
     ...(params.task ? { task: params.task } : {}),
   });
   expect(params.broadcastToConnIds).toHaveBeenNthCalledWith(
@@ -35,6 +35,31 @@ export function expectSubagentFollowupReactivation(params: {
       runtimeMs: 10,
     }),
     new Set(["conn-1"]),
-    { agentId: "main", dropIfSlow: true, sessionKeys: [params.childSessionKey] },
+    {
+      agentId: "main",
+      dropIfSlow: true,
+      sessionKeys: [params.childSessionKey],
+      sessionEventSubscriptionKeys: [params.childSessionKey],
+      prepareSessionProjection: expect.any(Function),
+    },
   );
+}
+
+export function completedSubagentFollowupRun(childSessionKey: string) {
+  return {
+    runId: "run-old",
+    childSessionKey,
+    controllerSessionKey: "agent:main:main",
+    requesterSessionKey: "agent:main:main",
+    requesterDisplayKey: "main",
+    task: "initial task",
+    cleanup: "keep" as const,
+    createdAt: 1,
+    execution: {
+      status: "terminal" as const,
+      startedAt: 2,
+      endedAt: 3,
+      outcome: { status: "ok" as const },
+    },
+  };
 }

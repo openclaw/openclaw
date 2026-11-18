@@ -1,60 +1,145 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import type { EmbeddedAgentQueueHandle } from "../../agents/embedded-agent-runner/run-state.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../../agents/embedded-agent-runner/runs.js";
-import {
-  addSubagentRunForTests,
-  resetSubagentRegistryForTests,
-} from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
-import {
-  createReplyOperation,
-  markReplyOperationExecutionStarted,
-} from "../../auto-reply/reply/reply-run-registry.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.test-support.js";
+import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { resolvePhysicalSessionStorePath } from "../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resetAgentEventsForTest } from "../../infra/agent-events.js";
+import { emitAgentEventForRunContext, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { registerAgentRunCapacityWait } from "../../infra/agent-run-capacity-wait.js";
 import {
+  claimAgentRunContext,
   clearAgentRunContext,
+  releaseAgentRunContext,
+  getAgentRunContext,
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
+import {
+  createReplyOperation,
+  markReplyOperationExecutionStarted,
+} from "../../sessions/session-controller.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import * as sessionUtils from "../session-utils.js";
+import { registerChatAbortController } from "../chat-abort.js";
+import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
+import * as rowInputs from "../session-utils-row.js";
+import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
+import {
+  captureRpcTargetForTest,
+  createActiveRpcSourceForTest,
+} from "./rpc-source-fixtures.test-support.js";
 import {
   identifiedClient,
+  initializeSessionReadContext,
   listSessions,
   requestContext,
   seedSessions,
   seedSessionsWithActivityTimes,
 } from "./sessions-read-cache.test-support.js";
+import { addReadSubagent, sessionReader } from "./sessions-read-fixture.test-support.js";
 
-afterEach(() => {
+function sourceRegistrar(
+  config: OpenClawConfig,
+  storePathFor = (agentId: string) => resolvePhysicalSessionStorePath({ agentId }, config),
+) {
+  return async (
+    runId: string,
+    sessionKey: string,
+    sessionId: string,
+    agentId = "main",
+    options: Parameters<typeof createActiveRpcSourceForTest>[0] = {},
+  ) => {
+    const storeScope = storePathFor(agentId);
+    const source = await createActiveRpcSourceForTest(options, {
+      agentId,
+      sessionKey,
+      sessionId,
+      storeScope,
+    });
+    rpcSourceTesting.set(runId, source);
+    return source;
+  };
+}
+
+async function changeDuringReadiness(
+  context: ReturnType<typeof requestContext>,
+  change: () => void | Promise<void>,
+) {
+  await initializeSessionReadContext(context);
+  const projection = getSessionRowProjection(context)!;
+  const ensure = projection.prepareSelection.bind(projection);
+  return vi.spyOn(projection, "prepareSelection").mockImplementationOnce(async (...args) => {
+    await change();
+    await ensure(...args);
+  });
+}
+
+async function startModelRun(runId: string, sessionKey: string, sessionId: string) {
+  registerChatAbortController({
+    target: captureRpcTargetForTest({ sessionKey, sessionId, agentId: "main" }),
+    runId,
+    agentId: "main",
+    sessionKey,
+    sessionId,
+    timeoutMs: 60_000,
+  });
+  await claimRpcSourceForTest(expectDefined(rpcSourceTesting.get(runId), "model source"));
+}
+
+function publishActiveModel(
+  runId: string,
+  sessionKey: string,
+  sessionId: string,
+  provider: string,
+  model: string,
+) {
+  registerAgentRunContext(runId, {
+    agentId: "main",
+    sessionKey,
+    sessionId,
+    projectSessionActive: true,
+  });
+  emitAgentEventForRunContext(
+    { runId, stream: "lifecycle", data: { phase: "model", provider, model } },
+    getAgentRunContext(runId)!,
+  );
+}
+
+afterEach(async () => {
   vi.restoreAllMocks();
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   resetAgentEventsForTest();
 });
 
 it("selects current work before pagination and represents an isolated cron run once", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const config: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      agents: { entries: { main: {}, work: {} } },
     };
+    setRuntimeConfigSnapshot(config);
+    const activate = sourceRegistrar(config);
     const context = requestContext(config);
-    const client = identifiedClient("viewer@example.test");
+    const { list } = sessionReader(config, "viewer@example.test", context);
     const childKey = "agent:main:subagent:child";
     const cronKey = "agent:main:cron:daily";
     const runKey = `${cronKey}:run:cron-session`;
+    const recent = Date.now() - 1_000;
     for (const [agentId, sessionKey, sessionId, updatedAt] of [
       ["main", "agent:main:local", "local-session", 40],
       ["work", "agent:work:remote", "remote-session", 30],
@@ -69,25 +154,18 @@ it("selects current work before pagination and represents an isolated cron run o
       const scope = { agentId, sessionKey };
       const entry = await upsertSessionEntryCore(scope, {
         sessionId,
-        updatedAt,
-        status: "running",
+        updatedAt: recent + updatedAt,
         visibility: "shared",
       });
-      await replaceSessionEntry(scope, { ...entry!, updatedAt });
+      await replaceSessionEntry(scope, { ...entry!, updatedAt: recent + updatedAt });
     }
-    context.chatAbortControllers.set("local-run", {
-      sessionKey: "agent:main:local",
-      sessionId: "local-session",
-      agentId: "main",
-    } as never);
-    context.chatAbortControllers.set("hidden-run", {
-      sessionKey: "agent:main:hidden",
-      controlUiVisible: false,
-    } as never);
-    context.chatAbortControllers.set("settled-run", {
-      sessionKey: "agent:main:settled",
-      projectSessionActive: false,
-    } as never);
+    for (const [name, sessionId, options] of [
+      ["local", "local-session", {}],
+      ["hidden", "hidden-session", { controlUiVisible: false }],
+      ["settled", "settled-session", { projectSessionActive: false }],
+    ] as const) {
+      await activate(`${name}-run`, `agent:main:${name}`, sessionId, "main", options);
+    }
     registerAgentRunContext("remote-run", {
       agentId: "work",
       sessionKey: "agent:work:remote",
@@ -101,36 +179,29 @@ it("selects current work before pagination and represents an isolated cron run o
       sessionId: "cron-session",
       projectSessionActive: true,
     });
-    addSubagentRunForTests({
-      runId: "child-run",
-      childSessionKey: childKey,
-      controllerSessionKey: "agent:main:parent",
-      requesterSessionKey: "agent:main:parent",
+    await addReadSubagent("child-run", childKey, "agent:main:parent", {
       requesterDisplayKey: "parent",
-      task: "Current child task",
-      cleanup: "keep",
-      createdAt: 1,
-      startedAt: 2,
     });
-    registerAgentRunContext("child-run", { sessionKey: childKey, agentId: "main" });
+    const childClaim = claimAgentRunContext(
+      "child-run",
+      { sessionKey: childKey, agentId: "main" },
+      { trackOwner: true, ownsContext: true },
+    );
     const releaseWait = registerAgentRunCapacityWait("child-run", getAgentRunLifecycleGeneration());
     try {
-      const normal = await listSessions({ client, context, request: { limit: 2 } });
+      expect(childClaim).toBeDefined();
+      const normal = await list({ limit: 2 });
       expect(normal.sessions.map((row) => row.key)).toEqual([
         "agent:main:stale-status",
         "agent:main:settled",
       ]);
-      const unchanged = await listSessions({
-        client,
-        context,
-        request: { activeOnly: false, limit: 2 },
-      });
+      const unchanged = await list({ activeOnly: false, limit: 2 });
       expect(unchanged.sessions.map((row) => row.key)).toEqual(
         normal.sessions.map((row) => row.key),
       );
 
       const request = { activeOnly: true, limit: 2 };
-      const first = await listSessions({ client, context, request });
+      const first = await list(request);
       expect(first).toMatchObject({ count: 2, totalCount: 4, nextOffset: 2 });
       expect(first.sessions).toMatchObject([
         {
@@ -142,7 +213,7 @@ it("selects current work before pagination and represents an isolated cron run o
         { key: "agent:work:remote", hasActiveRun: true, status: "running" },
       ]);
       expect(first.sessions[1]).not.toHaveProperty("activeRunIds");
-      const second = await listSessions({ client, context, request: { ...request, offset: 2 } });
+      const second = await list({ ...request, offset: 2 });
       expect(second).toMatchObject({ count: 2, totalCount: 4, nextOffset: null });
       expect(second.sessions).toMatchObject([
         { key: childKey, hasActiveRun: true, status: "queued" },
@@ -150,6 +221,7 @@ it("selects current work before pagination and represents an isolated cron run o
       ]);
     } finally {
       releaseWait?.();
+      releaseAgentRunContext("child-run", childClaim);
       for (const runId of ["remote-run", "cron-run", "child-run"]) {
         clearAgentRunContext(runId);
       }
@@ -162,9 +234,10 @@ it.each(["global", "unknown"] as const)(
   async (sessionKey) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const config: OpenClawConfig = {
-        agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
+        agents: { entries: { main: {}, ops: {} } },
         session: { scope: "global", store: state.statePath("{agentId}.sqlite") },
       };
+      setRuntimeConfigSnapshot(config);
       const sessionId = `restored-${sessionKey}`;
       const runId = `ops-${sessionKey}-run`;
       for (const agentId of ["main", "ops"]) {
@@ -174,10 +247,9 @@ it.each(["global", "unknown"] as const)(
         );
       }
       const context = requestContext(config);
-      const client = identifiedClient("viewer@example.test");
+      const { list } = sessionReader(config, "viewer@example.test", context);
       const request = { activeOnly: true, includeGlobal: true, includeUnknown: true, limit: 100 };
-      const activeOwners = async () =>
-        (await listSessions({ client, context, request })).sessions.map((row) => row.agentId);
+      const activeOwners = async () => (await list(request)).sessions.map((row) => row.agentId);
       const handle: EmbeddedAgentQueueHandle = {
         runId,
         abort: () => undefined,
@@ -221,19 +293,22 @@ it.each(["global", "unknown"] as const)(
   },
 );
 
-it.each(["global", "unknown"] as const)(
+it.for(["global", "unknown"] as const)(
   "keeps active %s owners and their physical transcript, board, and sharing rows distinct",
-  async (sentinel) => {
+  async (sentinel, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const now = Date.now();
       const agents = ["main", "ops", "research", "private"] as const;
       const config: OpenClawConfig = {
         session: { scope: "global", store: state.statePath("{agentId}.sqlite") },
-        agents: { list: agents.map((id) => ({ id, ...(id === "main" ? { default: true } : {}) })) },
+        agents: { entries: Object.fromEntries(agents.map((id) => [id, {}])) },
       };
+      setRuntimeConfigSnapshot(config);
       const context = requestContext(config);
-      const client = identifiedClient("viewer@example.test");
+      const { list } = sessionReader(config, "viewer@example.test", context);
       const storePathFor = (agentId: string) => state.statePath(`${agentId}.sqlite`);
       const boardFace = "chat" as const;
+      const activate = sourceRegistrar(config, storePathFor);
       for (const [index, agentId] of agents.entries()) {
         const sessionId = `${sentinel}-${agentId}`;
         const storePath = storePathFor(agentId);
@@ -242,11 +317,12 @@ it.each(["global", "unknown"] as const)(
         const entry = await upsertSessionEntryCore(scope, {
           sessionId,
           boardFace,
-          updatedAt: 100 - index,
+          updatedAt: now - index,
+          displayName: `${agentId.charAt(0).toUpperCase()}${agentId.slice(1)} task`,
           visibility: agentId === "private" ? "draft" : "shared",
           createdActor: { type: "human", source: "profile", id: "owner@example.test" },
         });
-        await replaceSessionEntry(scope, { ...entry!, updatedAt: 100 - index });
+        await replaceSessionEntry(scope, { ...entry!, updatedAt: now - index });
         await persistSessionTranscriptTurn(
           { agentId, storePath, sessionKey: sentinel, sessionId },
           {
@@ -258,11 +334,7 @@ it.each(["global", "unknown"] as const)(
           },
         );
         if (agentId !== "main") {
-          context.chatAbortControllers.set(`sentinel-run-${agentId}`, {
-            sessionKey: sentinel,
-            sessionId,
-            agentId,
-          } as never);
+          await activate(`sentinel-run-${agentId}`, sentinel, sessionId, agentId);
         }
       }
       const childKey = `agent:ops:subagent:${sentinel}-child`;
@@ -270,26 +342,18 @@ it.each(["global", "unknown"] as const)(
         { agentId: "ops", storePath: storePathFor("ops"), sessionKey: childKey },
         {
           sessionId: "sentinel-child",
-          updatedAt: 1,
+          updatedAt: now - 100,
           parentSessionKey: sentinel,
           spawnedBy: sentinel,
           visibility: "shared",
         },
       );
-      addSubagentRunForTests({
-        runId: "sentinel-child-run",
-        childSessionKey: childKey,
-        controllerSessionKey: sentinel,
-        requesterSessionKey: sentinel,
+      await addReadSubagent("sentinel-child-run", childKey, sentinel, {
         requesterAgentId: "ops",
         requesterDisplayKey: sentinel,
         swarmRequesterSessionKey: sentinel,
         collect: true,
         groupId: "ops-group",
-        task: "Current child task",
-        cleanup: "keep",
-        createdAt: 1,
-        startedAt: 2,
       });
       registerAgentRunContext("sentinel-child-run", { sessionKey: childKey, agentId: "ops" });
       const literalKey = `agent:ops:${sentinel}`;
@@ -302,23 +366,23 @@ it.each(["global", "unknown"] as const)(
       const literalEntry = await upsertSessionEntryCore(literalScope, {
         sessionId: literalSessionId,
         boardFace,
-        updatedAt: 1,
+        updatedAt: now - 100,
         visibility: "shared",
       });
       await replaceSessionEntry(literalScope, { ...literalEntry!, updatedAt: 1 });
-      context.chatAbortControllers.set("literal-sentinel-run", {
-        sessionKey: literalKey,
-        sessionId: literalSessionId,
-        agentId: "ops",
-      } as never);
-      new SqliteBoardStore({
+      await activate("literal-sentinel-run", literalKey, literalSessionId, "ops");
+
+      await new SqliteBoardStore({
         resolveSession: () => ({ agentId: "ops", path: storePathFor("ops"), sessionKey: sentinel }),
       }).applyOps({ sessionKey: sentinel }, [{ kind: "tab_create", tabId: "main", title: "Ops" }]);
-      const normal = await listSessions({
-        client,
-        context,
-        request: { boardFace, includeGlobal: true, includeUnknown: true },
-      });
+      const backfilled = observeSessionRowBackfill(
+        ["ops", "research"].map((agentId) =>
+          JSON.stringify([agentId, storePathFor(agentId), sentinel]),
+        ),
+        undefined,
+        (row) => JSON.stringify([row.agentId, row.storeTarget.storePath, row.key]),
+      );
+      const normal = await list({ boardFace, includeGlobal: true, includeUnknown: true });
       expect(normal.sessions).toMatchObject([
         { key: sentinel, agentId: "main", hasActiveRun: false },
         { key: literalKey, agentId: "ops", kind: "direct", hasActiveRun: true },
@@ -335,7 +399,17 @@ it.each(["global", "unknown"] as const)(
         archived: "all" as const,
         limit: 10,
       };
-      const active = await listSessions({ client, context, request });
+      await list(request);
+      await withinTest(backfilled, signal);
+      for (const agentId of ["ops", "research"]) {
+        expect(
+          getSessionRowProjection(context)?.snapshot(
+            { agentId, key: sentinel, storePath: storePathFor(agentId) },
+            { includeLastMessage: true },
+          ).row?.lastMessagePreview,
+        ).toBe(`${agentId} progress`);
+      }
+      const active = await list(request);
       expect(active).toMatchObject({ count: 3, totalCount: 3, nextOffset: null });
       expect(active.sessions).toMatchObject([
         {
@@ -344,7 +418,7 @@ it.each(["global", "unknown"] as const)(
           kind: sentinel,
           boardFace,
           hasActiveRun: true,
-          derivedTitle: "ops task",
+          derivedTitle: "Ops task",
           lastMessagePreview: "ops progress",
         },
         {
@@ -353,7 +427,7 @@ it.each(["global", "unknown"] as const)(
           kind: sentinel,
           boardFace,
           hasActiveRun: true,
-          derivedTitle: "research task",
+          derivedTitle: "Research task",
           lastMessagePreview: "research progress",
         },
         {
@@ -366,36 +440,30 @@ it.each(["global", "unknown"] as const)(
       ]);
       expect(JSON.stringify(active)).not.toContain(`${sentinel}-private`);
       for (const row of active.sessions.filter((candidate) => candidate.key === sentinel)) {
-        expect(row).not.toHaveProperty("childSessions");
-        expect(row).not.toHaveProperty("hasActiveSubagentRun");
+        const wireJson = JSON.stringify(row);
+        const wireRow: unknown = JSON.parse(wireJson);
+        expect(wireRow).not.toHaveProperty("childSessions");
+        expect(wireRow).not.toHaveProperty("hasActiveSubagentRun");
       }
       expect(active.sessions[0]?.swarm?.groups).toMatchObject([
         { groupId: "ops-group", running: 1 },
       ]);
       expect(active.sessions[1]?.swarm).toBeUndefined();
-      const scoped = await listSessions({
-        client,
-        context,
-        request: { ...request, agentId: "ops" },
-      });
+      const scoped = await list({ ...request, agentId: "ops" });
       expect(scoped.sessions.map((row) => [row.key, row.agentId])).toEqual([
         [sentinel, "ops"],
         [literalKey, "ops"],
       ]);
       const excluded = sentinel === "global" ? { includeGlobal: false } : { includeUnknown: false };
       for (const filter of [{ search: "direct" }, excluded]) {
-        const literalOnly = await listSessions({
-          client,
-          context,
-          request: { ...request, ...filter },
-        });
+        const literalOnly = await list({ ...request, ...filter });
         expect(literalOnly.sessions).toMatchObject([
           { key: literalKey, agentId: "ops", kind: "direct", sessionId: literalSessionId },
         ]);
         expect(literalOnly.count).toBe(1);
       }
       for (const hasBoard of [true, false]) {
-        const listed = await listSessions({ client, context, request: { ...request, hasBoard } });
+        const listed = await list({ ...request, hasBoard });
         expect(listed.sessions.map((row) => [row.key, row.agentId])).toEqual(
           hasBoard
             ? [[sentinel, "ops"]]
@@ -406,18 +474,14 @@ it.each(["global", "unknown"] as const)(
         );
       }
 
-      const project = sessionUtils.listSessionsFromStoreAsync;
-      vi.spyOn(sessionUtils, "listSessionsFromStoreAsync").mockImplementationOnce(
-        async (params) => {
-          const result = await project(params);
-          await upsertSessionEntryCore(
-            { agentId: "ops", storePath: storePathFor("ops"), sessionKey: sentinel },
-            { visibility: "draft" },
-          );
-          return result;
-        },
-      );
-      const restricted = await listSessions({ client, context, request });
+      const readiness = await changeDuringReadiness(context, async () => {
+        await upsertSessionEntryCore(
+          { agentId: "ops", storePath: storePathFor("ops"), sessionKey: sentinel },
+          { visibility: "draft" },
+        );
+      });
+      const restricted = await list(request);
+      expect(readiness).toHaveBeenCalled();
       expect(restricted.sessions.map((row) => [row.key, row.agentId])).toEqual([
         [sentinel, "research"],
         [literalKey, "ops"],
@@ -429,28 +493,26 @@ it.each(["global", "unknown"] as const)(
 );
 
 it.each([{ activeMinutes: 1 }, { activeOnly: true }])(
-  "collapses concurrent filtered requests into one projection: %j",
+  "reuses resident rows across concurrent filtered requests: %j",
   async (filter: SessionsListParams) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { clock, config } = await seedSessionsWithActivityTimes();
       const context = requestContext(config);
-      const loads = vi.spyOn(sessionUtils, "loadCombinedSessionStoreForGatewayCore");
-      context.chatAbortControllers.set("active-run", {
-        agentId: "main",
-        sessionKey: "agent:main:active",
-        sessionId: "main-active",
-      } as never);
-      const client = identifiedClient("owner@example.com");
+      await sourceRegistrar(config)("active-run", "agent:main:active", "main-active");
+      const { list } = sessionReader(config, "owner@example.com", context);
       clock.mockReturnValue(60_400);
       const request = { ...filter, agentId: "main", limit: 100 };
 
-      const results = await Promise.all(
-        Array.from({ length: 8 }, () => listSessions({ client, context, request })),
-      );
+      await initializeSessionReadContext(context);
+      await list(request);
+      const reads = vi.spyOn(rowInputs, "readSessionRowInputs");
+      const results = await Promise.all(Array.from({ length: 8 }, () => list(request)));
 
       expect(results[0]?.sessions.map((session) => session.key)).toEqual(["agent:main:active"]);
-      expect(results.every((result) => result === results[0])).toBe(true);
-      expect(loads).toHaveBeenCalledTimes(1);
+      for (const result of results) {
+        expect(result).toEqual(results[0]);
+      }
+      expect(reads).not.toHaveBeenCalled();
     });
   },
 );
@@ -461,7 +523,12 @@ it.each(["settled", "replaced"] as const)(
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const config = await seedSessions();
       const context = requestContext(config);
-      const client = identifiedClient("viewer@example.com");
+      const { list } = sessionReader(config, "viewer@example.com", context);
+      const activeSources = new Map<
+        string,
+        Awaited<ReturnType<typeof createActiveRpcSourceForTest>>
+      >();
+      const activate = sourceRegistrar(config);
       for (const agentId of ["main", "work"]) {
         const scope = { agentId, sessionKey: `agent:${agentId}:active` };
         const entry = loadSessionEntry(scope);
@@ -469,41 +536,154 @@ it.each(["settled", "replaced"] as const)(
           throw new Error("Missing seeded active session");
         }
         await replaceSessionEntry(scope, { ...entry, updatedAt: agentId === "main" ? 400 : 100 });
-        context.chatAbortControllers.set(`run-${agentId}`, {
+        const source = await activate(
+          `run-${agentId}`,
+          `agent:${agentId}:active`,
+          `${agentId}-active`,
           agentId,
-          sessionKey: `agent:${agentId}:active`,
-          sessionId: `${agentId}-active`,
-        } as never);
+        );
+        activeSources.set(agentId, source);
       }
-      const loads = vi.spyOn(sessionUtils, "loadCombinedSessionStoreForGatewayCore");
-      const project = sessionUtils.listSessionsFromStoreAsync;
-      const projections = vi
-        .spyOn(sessionUtils, "listSessionsFromStoreAsync")
-        .mockImplementationOnce(async (params) => {
-          const result = await project(params);
-          context.chatAbortControllers.delete("run-main");
-          if (transition === "replaced") {
-            await upsertSessionEntryCore(
-              { agentId: "main", sessionKey: "agent:main:active" },
-              { sessionId: "replacement-session" },
-            );
-            context.chatAbortControllers.set("run-replacement", {
-              agentId: "main",
-              sessionKey: "agent:main:active",
-              sessionId: "replacement-session",
-            } as never);
-          }
-          return result;
-        });
+      const readiness = await changeDuringReadiness(context, async () => {
+        expectDefined(activeSources.get("main"), "main source").release();
+        rpcSourceTesting.delete("run-main");
+
+        if (transition === "replaced") {
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: "agent:main:active" },
+            { sessionId: "replacement-session" },
+          );
+          await activate("run-replacement", "agent:main:active", "replacement-session");
+        }
+      });
       const request = { activeOnly: true, limit: 1 };
-      const pending = listSessions({ client, context, request });
-      const result = await pending;
+      const result = await list(request);
+      expect(readiness).toHaveBeenCalled();
       expect(result.sessions).toMatchObject([
-        { key: "agent:work:active", sessionId: "work-active", hasActiveRun: true },
+        transition === "replaced"
+          ? { key: "agent:main:active", sessionId: "replacement-session", hasActiveRun: true }
+          : { key: "agent:work:active", sessionId: "work-active", hasActiveRun: true },
       ]);
-      expect(result).toMatchObject({ count: 1, totalCount: 1, nextOffset: null });
-      expect(loads).toHaveBeenCalledOnce();
-      expect(projections).toHaveBeenCalledTimes(2);
+      expect(result).toMatchObject({
+        count: 1,
+        totalCount: transition === "replaced" ? 2 : 1,
+        nextOffset: transition === "replaced" ? 1 : null,
+      });
+    });
+  },
+);
+
+it.each([false, true])(
+  "refreshes the active model across aliased keys after list projection yields (known=%s)",
+  async (known) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      const context = requestContext(config);
+      const sessionKey = "agent:main:active";
+      const sessionId = "main-active";
+      const runId = "new-model-run";
+      const readiness = await changeDuringReadiness(context, async () => {
+        await startModelRun(runId, sessionKey, sessionId);
+        if (known) {
+          publishActiveModel(
+            runId,
+            "agent:main:requested",
+            sessionId,
+            "current-provider",
+            "current-model",
+          );
+        }
+      });
+      const result = await listSessions({
+        client: identifiedClient("viewer@example.com"),
+        context,
+        request: { agentId: "main", activeOnly: true, limit: 100 },
+      });
+      expect(readiness).toHaveBeenCalled();
+      const row = result.sessions.find((session) => session.key === sessionKey);
+      expect(row).toMatchObject({ hasActiveRun: true });
+      expect(row?.activeModelProvider).toBe(known ? "current-provider" : undefined);
+      expect(row?.activeModel).toBe(known ? "current-model" : undefined);
+    });
+  },
+);
+
+it.each(
+  (["configured", "inherited"] as const).flatMap((selection) =>
+    (["done", undefined] as const).map((storedStatus) => ({ selection, storedStatus })),
+  ),
+)(
+  "reconciles a completed fallback during projection ($selection selection, $storedStatus status)",
+  async ({ selection, storedStatus }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      config.agents = {
+        ...config.agents,
+        defaults: {
+          model: {
+            primary:
+              selection === "inherited"
+                ? "default-provider/default-model"
+                : "selected-provider/selected-model",
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(config);
+      const context = requestContext(config);
+      const sessionKey = "agent:main:active";
+      const sessionId = "main-active";
+      const runId = "settling-model-run";
+      if (selection === "inherited") {
+        config.session = { ...config.session, scope: "global" };
+        await upsertSessionEntryCore(
+          { agentId: "work", sessionKey: "agent:work:main" },
+          {
+            sessionId: "work-parent",
+            providerOverride: "selected-provider",
+            modelOverride: "selected-model",
+            modelOverrideSource: "user",
+            modelOverrideRouteResolution: "resolved",
+          },
+        );
+        const scope = { agentId: "main", sessionKey };
+        const entry = expectDefined(loadSessionEntry(scope), "child session");
+        await replaceSessionEntry(scope, { ...entry, parentSessionKey: "agent:work:main" });
+      }
+      await startModelRun(runId, sessionKey, sessionId);
+      publishActiveModel(runId, sessionKey, sessionId, "attempt-provider", "attempt-model");
+
+      const readiness = await changeDuringReadiness(context, async () => {
+        rpcSourceTesting.get(runId)?.input.claim?.operation?.complete();
+        rpcSourceTesting.delete(runId);
+
+        clearAgentRunContext(runId);
+        const scope = { agentId: "main", sessionKey };
+        const entry = expectDefined(loadSessionEntry(scope), "settling session");
+        await replaceSessionEntry(scope, {
+          ...entry,
+          status: storedStatus,
+          lastRunId: runId,
+          modelProvider: "fallback-provider",
+          model: "fallback-model",
+          fallbackNotice: {
+            kind: "active",
+            selectedModel: "selected-provider/selected-model",
+            activeModel: "fallback-provider/fallback-model",
+          },
+        });
+      });
+
+      const result = await listSessions({
+        client: identifiedClient("viewer@example.com"),
+        context,
+        request: { agentId: "main", limit: 100 },
+      });
+      expect(readiness).toHaveBeenCalled();
+      expect(result.sessions.find((session) => session.key === sessionKey)).toMatchObject({
+        hasActiveRun: false,
+        activeModelProvider: "fallback-provider",
+        activeModel: "fallback-model",
+      });
     });
   },
 );

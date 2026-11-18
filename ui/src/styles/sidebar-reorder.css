@@ -1,0 +1,18 @@
+.sidebar-zone-entry {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.sidebar-zone-entry > :first-child,
+.sidebar-zone-entry .nav-item {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* A nested plugin section stacks its parent link and children inside the flex row. */
+.nav-item-group {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+}

@@ -36,7 +36,7 @@ Enterprise Grid organization installation, use the dedicated
 {
   "display_information": {
     "name": "OpenClaw",
-    "description": "Slack connector for OpenClaw"
+    "description": "Slack app for OpenClaw"
   },
   "features": {
     "bot_user": { "display_name": "OpenClaw", "always_online": true },
@@ -123,7 +123,7 @@ Enterprise Grid organization installation, use the dedicated
 {
   "display_information": {
     "name": "OpenClaw",
-    "description": "Slack connector for OpenClaw"
+    "description": "Slack app for OpenClaw"
   },
   "features": {
     "bot_user": { "display_name": "OpenClaw", "always_online": true },
@@ -223,11 +223,13 @@ openclaw config patch --file ./slack.socket.patch.json5 --dry-run
 openclaw config patch --file ./slack.socket.patch.json5
 ```
 
-        Default-account credential fallback after `channels.slack` is configured:
+        Default-account credential fallback after `channels.slack` is configured. Set these
+        in the gateway process environment (export them in the shell that starts the gateway,
+        or add them to your service manager's environment):
 
 ```bash
-SLACK_APP_TOKEN=slack-app-token-example
-SLACK_BOT_TOKEN=slack-bot-token-example
+export SLACK_APP_TOKEN=slack-app-token-example
+export SLACK_BOT_TOKEN=slack-bot-token-example
 ```
 
       </Step>
@@ -254,7 +256,7 @@ openclaw gateway
 {
   "display_information": {
     "name": "OpenClaw",
-    "description": "Slack connector for OpenClaw"
+    "description": "Slack app for OpenClaw"
   },
   "features": {
     "bot_user": { "display_name": "OpenClaw", "always_online": true },
@@ -347,7 +349,7 @@ openclaw gateway
 {
   "display_information": {
     "name": "OpenClaw",
-    "description": "Slack connector for OpenClaw"
+    "description": "Slack app for OpenClaw"
   },
   "features": {
     "bot_user": { "display_name": "OpenClaw", "always_online": true },
@@ -440,7 +442,7 @@ openclaw gateway
 
 ```bash
 export SLACK_BOT_TOKEN=slack-bot-token-example
-export SLACK_SIGNING_SECRET=...
+export SLACK_SIGNING_SECRET=slack-signing-secret-example
 cat > slack.http.patch.json5 <<'JSON5'
 {
   channels: {
@@ -550,6 +552,7 @@ OpenClaw automatically drops user-scope message events authored by the resolved 
 - `botToken`, `appToken`, `signingSecret`, `relay.authToken`, and `userToken` accept plaintext
   strings or SecretRef objects.
 - Config tokens override env fallback.
+- Top-level credentials, including SecretRefs, keep the implicit `default` account active alongside named accounts when its transport credentials are complete. An explicit `accounts.default` entry overrides that implicit account.
 - `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and `SLACK_USER_TOKEN` env fallback each apply only to the default account.
 - `userToken` defaults to read-only behavior (`userTokenReadOnly: true`).
 

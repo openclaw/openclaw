@@ -1,20 +1,42 @@
 import { randomUUID } from "node:crypto";
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
+import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import {
   resolveUsableAgentCredentialModes,
   type AgentCredentialMap,
 } from "../../agents/agent-auth-credentials.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
-import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
-import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
+import * as auth from "../../agents/auth-profiles.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "../../agents/auth-profiles/path-resolve.native.js";
+import * as authRevisionRuntime from "../../agents/auth-profiles/runtime-snapshots.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { resolvePublishedModelCatalogOwner } from "../../agents/prepared-model-catalog-owner.js";
+import * as catalogRuntime from "../../agents/prepared-model-catalog.js";
+import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
+import { isPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import * as pluginRuntime from "../../plugins/runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import * as skills from "../../skills/runtime/refresh-state.js";
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
-import { ensureProfileForEmail, setDisplayName } from "../../state/user-profiles.js";
-import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { setDisplayName } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { createGatewayChatMetadataRuntime } from "./chat-metadata-runtime.js";
-import type { GatewayRequestContext } from "./types.js";
+import * as projectionRuntime from "./chat-metadata-session-projection.js";
+import type { ChatMetadataProjectionFacts } from "./chat-metadata-session-projection.js";
+import * as commands from "./commands-list-result.js";
+import * as modelLists from "./models-list-result.js";
+
+export const chatMetadataCommandFields = {
+  description: "",
+  source: "native" as const,
+  scope: "text" as const,
+  acceptsArgs: false,
+};
 
 export function connectChatMetadataAccount(profileId: string): string {
   return connectUserModelAccount({
@@ -32,12 +54,8 @@ export function connectChatMetadataAccount(profileId: string): string {
 }
 
 export async function createPersonalChatMetadataFixture() {
-  const config = {
-    agents: {
-      defaults: { model: { primary: "openai/gpt-5.6-luna" } },
-      list: [{ id: "main", default: true }],
-    },
-  } satisfies OpenClawConfig;
+  const config = createOpenAIChatMetadataConfig();
+  delete config.agents?.defaults?.models;
   const harness = createChatMetadataHarness(config, { useDefaultProjection: true });
   const owner = createChatMetadataOwner(
     config,
@@ -88,14 +106,14 @@ export function createDraftChatMetadataScope(
   };
 }
 
-export function createOpenAIChatMetadataConfig(modelIds = ["gpt-5.6-sol"]): OpenClawConfig {
+export function createOpenAIChatMetadataConfig(modelIds = ["gpt-5.6-luna"]): OpenClawConfig {
   return {
     agents: {
       defaults: {
-        model: { primary: "openai/gpt-5.6-sol" },
+        model: { primary: "openai/gpt-5.6-luna" },
         models: Object.fromEntries(modelIds.map((id) => [`openai/${id}`, {}])),
       },
-      list: [{ id: "main", default: true }],
+      entries: { main: {} },
     },
   };
 }
@@ -107,6 +125,7 @@ export function createChatMetadataOwner(
   provider = "test",
   api?: ModelCatalogEntry["api"],
 ): PreparedModelRuntimeSnapshot {
+  prepareSharedAuthStoreOwnershipForNative();
   const model = { id, name: id, provider, ...(api ? { api } : {}) };
   const authStore: AuthProfileStore = {
     version: 1,
@@ -129,26 +148,21 @@ export function createChatMetadataOwner(
     authModes: resolveUsableAgentCredentialModes(credentials),
     metadataSnapshot: createPluginMetadataSnapshotFixture(),
     allowGatewaySubagentBinding: false,
-    modelCatalog: {
-      entries: [model],
-      routeVariants: api ? [model] : [],
-    },
+    modelCatalog: { entries: [model], routeVariants: api ? [model] : [] },
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
-    createStores: () => ({
-      authStorage: { getAll: () => credentials } as never,
-      modelRegistry: {} as never,
-    }),
+    createStores() {
+      throw new Error("Chat metadata must not create executable model stores");
+    },
   };
-  setPreparedModelRuntimeAuthStore(owner, authStore);
+  bindPreparedModelRuntimeAuth(owner, { store: authStore });
   return owner;
 }
 
 export function createChatMetadataHarness(
-  initialConfig: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } },
+  initialConfig: OpenClawConfig = { agents: { entries: { main: {} } } },
   runtimeOptions: {
-    beforeRefresh?: () => Promise<void>;
-    refreshOnRead?: boolean;
     useDefaultProjection?: boolean;
     onChanged?: () => void;
   } = {},
@@ -157,40 +171,41 @@ export function createChatMetadataHarness(
   let config = initialConfig;
   let owner = createChatMetadataOwner(config, "first");
   let skillsVersion = 1;
-  let pluginRegistryVersion = 1;
   let authStore: AuthProfileStore | undefined = { version: 1, profiles: {} };
   let authStoreRevision = 1;
   const invalidProjections = new WeakSet<object>();
-  const getPreparedOwner = vi.fn((): PreparedModelRuntimeSnapshot | undefined => owner);
-  const getPreparedAuthStore = vi.fn(() => authStore);
-  const getAuthStoreRevision = vi.fn(() => authStoreRevision);
-  const getSkillsVersion = vi.fn(() => skillsVersion);
-  const getPluginRegistryVersion = vi.fn(() => pluginRegistryVersion);
-  const buildCommands = vi.fn(async () => ({
-    commands: [{ name: `command-${skillsVersion}-${pluginRegistryVersion}` }],
+  const deps = {
+    getPreparedAuthStore: vi
+      .spyOn(auth, "getPreparedRuntimeAuthProfileStoreSnapshot")
+      .mockImplementation(() => authStore),
+    getSkillsVersion: vi
+      .spyOn(skills, "getSkillsSnapshotVersion")
+      .mockImplementation(() => skillsVersion),
+    getPluginRegistryVersion: vi.spyOn(pluginRuntime, "getActivePluginRegistryVersion").mockClear(),
+    getPreparedOwner: vi
+      .spyOn(catalogRuntime, "getPublishedPreparedModelCatalogOwnerSnapshot")
+      .mockImplementation(() => owner),
+    getAuthStoreRevision: vi
+      .spyOn(authRevisionRuntime, "getRuntimeAuthProfileStoreMetadataRevision")
+      .mockImplementation(() => authStoreRevision),
+    getAuthCatalogRevision: vi
+      .spyOn(authRevisionRuntime, "getRuntimeAuthProfileStoreCatalogRevision")
+      .mockImplementation(() => authStoreRevision),
+    buildCommands: vi.spyOn(commands, "buildCommandsListResult").mockImplementation(async () => ({
+      commands: [{ ...chatMetadataCommandFields, name: `command-${skillsVersion}-1` }],
+    })),
+  };
+  onTestFinished(() => {
+    for (const spy of Object.values(deps)) {
+      spy.mockRestore();
+    }
+  });
+  const buildProjection = vi.fn(async ({ facts }: { facts: ChatMetadataProjectionFacts }) => ({
+    modelCatalog: facts.modelCatalog.entries,
+    models: facts.modelCatalog.entries,
   }));
-  const buildProjection = vi.fn(
-    async ({
-      facts,
-    }: {
-      facts: {
-        authStore: AuthProfileStore;
-        modelCatalog: ModelCatalogSnapshot;
-        owner: PreparedModelRuntimeSnapshot;
-      };
-    }) => {
-      const modelCatalog = facts.modelCatalog;
-      return {
-        modelCatalog: modelCatalog.entries,
-        models: modelCatalog.entries,
-      };
-    },
-  );
   const readProjection = vi.fn(
-    (projection: {
-      modelCatalog: ModelCatalogEntry[];
-      models?: import("../../../packages/gateway-protocol/src/index.js").ModelChoice[];
-    }) => projection,
+    (projection: { modelCatalog: ModelCatalogEntry[]; models?: ModelChoice[] }) => projection,
   );
   const context = {
     getRuntimeConfig: () => config,
@@ -199,58 +214,48 @@ export function createChatMetadataHarness(
         params?.readOnly === false && owner.loadFullModelCatalog
           ? await owner.loadFullModelCatalog()
           : owner.modelCatalog;
+      const resolved = resolvePublishedModelCatalogOwner(owner);
       return {
         ...modelCatalog,
-        agentId: owner.agentId,
-        agentDir: owner.agentDir,
-        workspaceDir: owner.workspaceDir,
-        config: owner.config,
+        agentId: resolved.agentId,
+        agentDir: resolved.agentDir,
+        workspaceDir: resolved.workspaceDir,
+        config: resolved.config,
+        catalogComplete: isPreparedModelCatalogFull(modelCatalog),
       };
     },
-    logGateway: {
-      debug: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    },
-  } as unknown as GatewayRequestContext;
+    logGateway: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  };
+  if (!useDefaultProjection) {
+    const projectionSpy = vi
+      .spyOn(projectionRuntime, "prepareChatMetadataModelProjection")
+      .mockImplementation(async (params) => {
+        const projection = await buildProjection(params);
+        return {
+          modelCatalog: projection.modelCatalog,
+          read: () => ({ models: readProjection(projection).models }),
+          isCurrent: () => !invalidProjections.has(projection),
+        };
+      });
+    onTestFinished(() => projectionSpy.mockRestore());
+  }
   const runtime = createGatewayChatMetadataRuntime({
     getConfig: () => config,
     getContext: () => context,
     log: context.logGateway,
     ...gatewayRuntimeOptions,
-    deps: {
-      getPreparedOwner,
-      getPreparedAuthStore,
-      getAuthStoreRevision,
-      getSkillsVersion,
-      getPluginRegistryVersion,
-      buildCommands,
-      ...(useDefaultProjection
-        ? {}
-        : {
-            buildProjection: async (params) => {
-              const projection = await buildProjection(params);
-              return {
-                modelCatalog: projection.modelCatalog,
-                read: () => ({ models: readProjection(projection).models }),
-                isCurrent: () => !invalidProjections.has(projection),
-              };
-            },
-          }),
-    },
   });
   return {
-    buildCommands,
+    ...deps,
     buildProjection,
     readProjection,
-    getPluginRegistryVersion,
-    getAuthStoreRevision,
-    getPreparedAuthStore,
-    getPreparedOwner,
-    getSkillsVersion,
     invalidProjections,
     runtime,
+    read: (params: Partial<Parameters<typeof runtime.read>[0]> = {}) =>
+      runtime.read({ agentId: "main", ...params }),
+    startup: (params: Partial<Parameters<typeof runtime.readStartup>[0]> = {}) =>
+      runtime.readStartup({ agentId: "main", ...params }),
+    refresh: runtime.refresh,
     setConfig(next: OpenClawConfig) {
       config = next;
     },
@@ -263,11 +268,68 @@ export function createChatMetadataHarness(
     setOwner(next: PreparedModelRuntimeSnapshot) {
       owner = next;
     },
-    setPluginRegistryVersion(next: number) {
-      pluginRegistryVersion = next;
-    },
     setSkillsVersion(next: number) {
       skillsVersion = next;
+    },
+  };
+}
+
+export function createOtherAgentChatMetadataFixture(signal: AbortSignal) {
+  const config = {
+    agents: {
+      entries: { main: {}, other: {} },
+      defaults: { model: "test/main-model", modelPolicy: { allow: ["test/*"] } },
+    },
+  };
+  const pluginRegistry = createEmptyPluginRegistry();
+  const owner = (id: string) => ({
+    ...createChatMetadataOwner(config, id, {}, "test", "openai-completions"),
+    pluginRegistry,
+  });
+  const mainOwner = owner("main-model");
+  let otherOwner = owner("other-model");
+  const harness = createChatMetadataHarness(config);
+  harness.setOwner(mainOwner);
+  harness.getPreparedOwner.mockImplementation((params) =>
+    params?.agentId === "other" ? otherOwner : mainOwner,
+  );
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const abort = () => release.resolve();
+  signal.addEventListener("abort", abort, { once: true });
+  let blockOther = false;
+  const prepare = modelLists.prepareModelsListResult;
+  const preparation = vi
+    .spyOn(modelLists, "prepareModelsListResult")
+    .mockImplementation(async (params) => {
+      if (blockOther && params.agentId === "other") {
+        entered.resolve();
+        await release.promise;
+      }
+      return prepare(params);
+    });
+  const pending: Promise<unknown>[] = [];
+  return {
+    config,
+    harness,
+    entered,
+    release,
+    pending,
+    request: {
+      agentId: "other",
+      params: { agentId: "other", view: "all" as const },
+      includeManualSelection: true,
+    },
+    holdOtherModel(id: string) {
+      otherOwner = owner(id);
+      blockOther = true;
+    },
+    async stop() {
+      release.resolve();
+      await Promise.allSettled(pending);
+      preparation.mockRestore();
+      signal.removeEventListener("abort", abort);
+      await harness.runtime.stop();
     },
   };
 }

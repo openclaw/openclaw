@@ -1,8 +1,7 @@
-import { render } from "lit";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
-import { renderChatThread } from "./chat-thread.ts";
+import { createChatThreadHarness } from "./chat-message-native.test-support.tsx";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -23,7 +22,12 @@ it.each([
       "spawn-metadata",
       "agent:main:dashboard:01234567-89ab-cdef-0123-456789abcdef",
       [
-        { role: "user", content: "Inspect the workspace", timestamp: 1_000 },
+        {
+          role: "user",
+          content: "Inspect the workspace",
+          timestamp: 1_000,
+          __openclaw: { senderId: "viewer", senderIdentity: { type: "profile", id: "viewer" } },
+        },
         { role: "assistant", content: "Workspace inspected", timestamp: 2_000 },
       ],
     );
@@ -38,13 +42,15 @@ it.each([
     props.selectedSession = row;
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
+    const view = createChatThreadHarness(container, transcript);
+    onTestFinished(() => view.unmount());
     const rerender = async () => {
-      render(renderChatThread(props, transcript), container);
-      transcript.hostUpdated();
+      view.render(props);
+      transcript.update();
       await flushDeferredRowPrune();
     };
     await rerender();
-    transcript.hostConnected();
+    transcript.start();
     // Navigation ancestry alone also describes human-created forks.
     expect(container.querySelector(".chat-avatar.user")).not.toBeNull();
     props.selectedSession = { ...row, ...metadata };
@@ -54,9 +60,12 @@ it.each([
     } else {
       expect(container.querySelector(".chat-avatar.user")).not.toBeNull();
     }
-    expect(container.querySelector(".chat-sender-name")?.textContent).toContain("Example User");
+    expect(container.querySelector(".chat-group.user .chat-sender-name")).toBeNull();
+    expect(container.querySelector(".chat-group.assistant .chat-sender-name")?.textContent).toBe(
+      "Molty",
+    );
     expect(container.textContent).toContain("Workspace inspected");
-    transcript.hostDisconnected();
+    transcript.dispose();
   },
 );
 
@@ -66,12 +75,19 @@ it("hides avatars for a subagent key before its session row loads", async () => 
   props.userName = "Example User";
   const transcript = createTestTranscript();
   const container = document.body.appendChild(document.createElement("div"));
-  render(renderChatThread(props, transcript), container);
-  transcript.hostUpdated();
-  transcript.hostConnected();
+  const view = createChatThreadHarness(container, transcript);
+  onTestFinished(() => view.unmount());
+  view.render(props);
+  transcript.update();
+  transcript.start();
   await flushDeferredRowPrune();
   expect(container.querySelectorAll(".chat-group").length).toBeGreaterThan(0);
   expect(container.querySelector(".chat-avatar, .chat-author-avatar")).toBeNull();
-  expect(container.querySelector(".chat-sender-name")?.textContent).toContain("Example User");
-  transcript.hostDisconnected();
+  expect(container.querySelector(".chat-group.user .chat-sender-name")?.textContent).toBe(
+    "Message",
+  );
+  expect(container.querySelector(".chat-group.assistant .chat-sender-name")?.textContent).toBe(
+    "Molty",
+  );
+  transcript.dispose();
 });

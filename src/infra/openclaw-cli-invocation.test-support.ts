@@ -34,12 +34,9 @@ export async function createSourceCliFixture(root: string) {
       'console.log(JSON.stringify({ source, args: process.argv.slice(2), cwd: process.cwd(), tsconfigPath: process.env.TSX_TSCONFIG_PATH, pathHead: process.env.PATH?.split(process.platform === "win32" ? ";" : ":")[0] }));',
     ].join("\n"),
   );
-  const invocation = resolveCurrentOpenClawCliInvocation([], {
-    argv1: entryPath,
-    cwd: callerCwd,
-    execArgv,
-    execPath: process.execPath,
-  });
+  const invocation = withSourceCliParent({ entryPath, execArgv }, () =>
+    resolveCurrentOpenClawCliInvocation([]),
+  );
   return { checkout, callerCwd, entryPath, execArgv, invocation };
 }
 
@@ -65,7 +62,7 @@ export function runSourceCliProbe(
 
 /** Reconstruct commands from a real source-mode parent without leaving global argv changed. */
 export function withSourceCliParent<T>(
-  fixture: Awaited<ReturnType<typeof createSourceCliFixture>>,
+  fixture: { entryPath: string; execArgv: string[] },
   run: () => T,
 ): T {
   const argv = process.argv;

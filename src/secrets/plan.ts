@@ -11,12 +11,9 @@ import {
 import { isValidSecretProviderAlias, isValidSecretRef } from "./ref-contract.js";
 import { resolvePlanTargetAgainstRegistry, type ResolvedPlanTarget } from "./target-registry.js";
 
-/** Registry target id accepted by a secrets apply plan. */
-type SecretsPlanTargetType = string;
-
 /** One planned SecretRef mutation against config or auth-profile storage. */
 export type SecretsPlanTarget = {
-  type: SecretsPlanTargetType;
+  type: string;
   /**
    * Dot path in the target config surface for operator readability.
    * Examples:
@@ -64,20 +61,10 @@ export type SecretsApplyPlan = {
   };
 };
 
-function isSecretProviderConfigShape(value: unknown): value is SecretProviderConfig {
-  return SecretProviderSchema.safeParse(value).success;
-}
-
 /** Resolves a user-supplied plan target through the registry after path safety checks. */
-export function resolveValidatedPlanTarget(candidate: {
-  type?: SecretsPlanTargetType;
-  path?: string;
-  pathSegments?: string[];
-  agentId?: string;
-  providerId?: string;
-  accountId?: string;
-  authProfileProvider?: string;
-}): ResolvedPlanTarget | null {
+export function resolveValidatedPlanTarget(
+  candidate: Partial<Omit<SecretsPlanTarget, "ref">>,
+): ResolvedPlanTarget | null {
   if (typeof candidate.type !== "string" || !candidate.type.trim()) {
     return null;
   }
@@ -134,32 +121,12 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
       return false;
     }
     const candidate = target as Partial<SecretsPlanTarget>;
-    const ref = candidate.ref as Partial<SecretRef> | undefined;
-    const resolved = resolveValidatedPlanTarget({
-      type: candidate.type,
-      path: candidate.path,
-      pathSegments: candidate.pathSegments,
-      agentId: candidate.agentId,
-      providerId: candidate.providerId,
-      accountId: candidate.accountId,
-      authProfileProvider: candidate.authProfileProvider,
-    });
+    const resolved = resolveValidatedPlanTarget(candidate);
     if (
-      typeof candidate.path !== "string" ||
-      !candidate.path.trim() ||
       (candidate.pathSegments !== undefined && !Array.isArray(candidate.pathSegments)) ||
       !resolved ||
-      !ref ||
-      typeof ref !== "object" ||
-      (ref.source !== "env" &&
-        ref.source !== "file" &&
-        ref.source !== "exec" &&
-        ref.source !== "store") ||
-      typeof ref.provider !== "string" ||
-      ref.provider.trim().length === 0 ||
-      typeof ref.id !== "string" ||
-      ref.id.trim().length === 0 ||
-      !isValidSecretRef(ref as SecretRef)
+      !candidate.ref ||
+      !isValidSecretRef(candidate.ref)
     ) {
       return false;
     }
@@ -184,7 +151,7 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
       if (!isValidSecretProviderAlias(providerAlias)) {
         return false;
       }
-      if (!isSecretProviderConfigShape(providerValue)) {
+      if (!SecretProviderSchema.safeParse(providerValue).success) {
         return false;
       }
     }

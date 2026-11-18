@@ -1,5 +1,13 @@
+import type { ChildProcess } from "node:child_process";
+import type { NodeWorkerCleanupBinding } from "../../node-host/node-worker-launch-receipt.js";
+import type { ProcessExecutionIntent } from "../linux-exec-cgroup.js";
+import type { BrokerError } from "../spawn-broker/protocol.js";
+import type { ReleasedProcess } from "./types.js";
+
 export type ServiceChildStart = {
-  type: "start";
+  executionIntent?: ProcessExecutionIntent;
+  executionScopeKey?: string;
+  type: "start" | "prepare";
   generation: string;
   command: string;
   args: string[];
@@ -8,20 +16,53 @@ export type ServiceChildStart = {
   env?: Record<string, string>;
   stdinMode: "inherit" | "pipe-open" | "pipe-closed";
   secretFd?: number;
+  terminateOnHostLoss?: true;
   controlFd?: number;
+  /** Host-owned lineage writer; absent for older hosts retained by update --no-restart. */
+  lineageFd?: number;
+  /** Keeps an enclosing worker owned until this command's cleanup completes. */
+  parentLineageFds?: number[];
+  /** Absent only for older Gateway hosts retained by update --no-restart. */
+  acknowledgeClosing?: true;
   windowsShellCommand?: string;
-};
+  /**
+   * Hand off processes still running after the root exits instead of stopping them.
+   * The host can also request this hand-off while the root runs.
+   */
+  releaseOnRootExit?: true;
+  treeOwnership?: "linux-subreaper";
+  /** Package-owned helper inherited by an admitted portable worker, never a remote command. */
+  nativeProcessOwner?: string;
+} & (
+  | { ownedWorker: true; cleanupBinding: NodeWorkerCleanupBinding }
+  | { ownedWorker?: never; cleanupBinding?: never }
+);
 
-export type ServiceChildControlMessage = {
+export type ServiceChildControlPayload =
+  | { type: "cancel"; signal: "SIGTERM" | "SIGKILL" }
+  | { type: "stdin-end" }
+  | { type: "worker-start" }
+  | { type: "launch" }
+  | { type: "worker-close" }
+  | { type: "startup-error-ack" }
+  | { type: "lineage-closed" }
+  | { type: "release" }
+  | { type: "closing-ack"; closingSequence: number };
+
+export type ServiceChildControlMessage = ServiceChildControlPayload & {
   generation: string;
   sequence: number;
-} & ({ type: "cancel"; signal: "SIGTERM" | "SIGKILL" } | { type: "startup-error-ack" });
+};
 
 export type ServiceChildAnchorPayload =
+  | { type: "prepared" }
+  | { type: "stdin-closed" }
+  | { type: "worker-message"; message: unknown }
   | {
       type: "ready";
       commandPid: number;
       anchorPid: number;
+      treeOwnership?: "linux-subreaper";
     }
   | {
       type: "root-result";
@@ -44,10 +85,18 @@ export type ServiceChildAnchorPayload =
   | {
       type: "closing";
       reason: "cancel" | "lineage-closed" | "lineage-lost" | "parent-lost";
+      descendantsReaped?: true;
+    }
+  | {
+      /** The owner gave up custody without signalling; these processes keep running. */
+      type: "released";
+      survivors: ReleasedProcess[];
     }
   | {
       type: "startup-error";
       error: string;
+      errorDetails?: BrokerError;
+      anchorPid?: number;
     };
 
 export type ServiceChildAnchorMessage = ServiceChildAnchorPayload & {
@@ -59,8 +108,36 @@ export type ServiceChildRelayMessage =
   | ServiceChildStart
   | { type: "relay-error"; generation: string; error: string };
 
+/** Host to relay: the anchor released its group; exit without joining group extinction. */
+export type ServiceChildRelayRelease = { type: "release"; generation: string };
+
+export function readServiceChildMessage(
+  raw: unknown,
+): ServiceChildRelayMessage | ServiceChildAnchorMessage {
+  // SAFETY: the spawned relay or Job anchor is the sole writer on each private protocol channel.
+  return raw as ServiceChildRelayMessage | ServiceChildAnchorMessage;
+}
+
+/** The retained private IPC peer owns delivery acknowledgement for these frames. */
+export function sendServiceChildMessage(
+  child: Pick<ChildProcess, "connected" | "send">,
+  message: ServiceChildStart | ServiceChildControlMessage,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (!child.connected) {
+      reject(new Error("service child lifecycle IPC is closed"));
+      return;
+    }
+    child.send(message, (error) => (error ? reject(error) : resolve()));
+  });
+}
+
 export function encodeServiceChildMessage(
   message: ServiceChildStart | ServiceChildControlMessage | ServiceChildAnchorMessage,
 ): string {
   return `${JSON.stringify(message)}\n`;
+}
+
+export function supportsNodeWorkerProcessOwner(platform = process.platform): boolean {
+  return platform === "linux" || platform === "darwin";
 }

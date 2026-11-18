@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-gateway-request"
+description = "Enables the gateway_request command without any pre-configured scope."
+commands.allow = ["gateway_request"]
+
+[[permission]]
+identifier = "deny-gateway-request"
+description = "Denies the gateway_request command without any pre-configured scope."
+commands.deny = ["gateway_request"]

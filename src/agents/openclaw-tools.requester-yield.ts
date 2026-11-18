@@ -1,32 +1,158 @@
-import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import type { ScheduledToolTargets } from "../cron/execution-context-registry.js";
+import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
+import { listFinishedSessions, listRunningSessions } from "./bash-process-registry.js";
+import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
+import { awaitExecsForYield, listYieldAwaitableExecs } from "./bash-tools.exec-notify.js";
+import { bindRequesterYieldCronAuthority } from "./cron-creator-authority-context.js";
+import type {
+  SessionsYieldClaimResult,
+  SessionsYieldIntent,
+  SessionsYieldRuntimeClaim,
+} from "./tools/sessions-yield-tool.js";
 
-type YieldCompletionClaim = () => boolean | Promise<boolean>;
+const SWARM_COLLECTOR_YIELD_UNSUPPORTED_ERROR =
+  "Collector runs cannot use sessions_yield because their results are collected explicitly instead of announced. Finish this turn so the collected result is recorded for whoever waits on this run.";
+
+/** Automation turns end on yield; the scheduler, not a requester continuation, owns child output. */
+export function isSchedulerOwnedRequesterYield(params: {
+  requesterSessionKey?: string;
+  scheduledToolTargets?: Pick<ScheduledToolTargets, "placement">;
+}): boolean {
+  return (
+    isCronSessionKey(params.requesterSessionKey) ||
+    params.scheduledToolTargets?.placement !== undefined
+  );
+}
+
+type YieldCompletionClaim = (
+  intent?: SessionsYieldIntent,
+) => SessionsYieldClaimResult | Promise<SessionsYieldClaimResult>;
 
 export function createRequesterYieldCallback(params: {
   requesterSessionKey?: string;
   requesterAgentId: string;
   requesterTurnRunId?: string;
-  claimYieldCompletion?: YieldCompletionClaim;
+  processScopeKey?: string;
+  swarmCollector?: boolean;
+  scheduledToolTargets?: Pick<ScheduledToolTargets, "placement">;
+  claimYieldCompletion?: () => SessionsYieldRuntimeClaim | Promise<SessionsYieldRuntimeClaim>;
 }): YieldCompletionClaim | undefined {
-  const selfClaimed = isSubagentSessionKey(params.requesterSessionKey);
-  const hasRegistryClaim = Boolean(params.requesterSessionKey && params.requesterTurnRunId);
-  if (!params.claimYieldCompletion && !selfClaimed && !hasRegistryClaim) {
+  // A collector result is read by an explicit wait, never delivered by a requester
+  // continuation, so a collector yield can only park the run its waiter is blocked
+  // on. Reject before any claim source runs so no durable yield intent is recorded.
+  if (params.swarmCollector === true) {
+    return () => ({ error: SWARM_COLLECTOR_YIELD_UNSUPPORTED_ERROR });
+  }
+  // The scheduler owns child output and delivery for every automation placement.
+  // End the model turn without arming an interactive requester continuation.
+  if (isSchedulerOwnedRequesterYield(params)) {
+    // The cron run executor resumes a yield on this run chat's wake-armed commands in place.
+    const resumesInPlace = isCronRunSessionKey(params.requesterSessionKey);
+    return () => {
+      const execs =
+        resumesInPlace && params.requesterSessionKey
+          ? listYieldAwaitableExecs({
+              agentId: params.requesterAgentId,
+              sessionKey: params.requesterSessionKey,
+            })
+          : [];
+      if (execs.length === 0) {
+        return { schedulerOwned: true };
+      }
+      awaitExecsForYield(execs);
+      return { resumesInPlace: true };
+    };
+  }
+  const requesterSessionKey = params.requesterSessionKey?.trim() || undefined;
+  const requesterChat = requesterSessionKey
+    ? { agentId: params.requesterAgentId, sessionKey: requesterSessionKey }
+    : undefined;
+  const hasRegistryClaim = Boolean(requesterSessionKey && params.requesterTurnRunId);
+  if (!params.claimYieldCompletion && !requesterSessionKey) {
     return undefined;
   }
-  return async () => {
+  const withCronAuthority = bindRequesterYieldCronAuthority(params.requesterTurnRunId);
+  const processScopeKey = resolveProcessToolScopeKey({
+    scopeKey: params.processScopeKey,
+    sessionKey: params.requesterSessionKey,
+    agentId: params.requesterAgentId,
+  });
+  return async (intent) => {
     // Runtime claims are observational. Check them before durable registry state
     // so a runtime failure cannot record a yield that never reaches onYield.
-    const runtimeClaimed = (await params.claimYieldCompletion?.()) ?? false;
-    if (!hasRegistryClaim) {
-      return runtimeClaimed || selfClaimed;
+    const runtimeClaim = (await params.claimYieldCompletion?.()) ?? false;
+    // The chat's wake-armed commands resume it on exit, bounded by their deadlines.
+    const runtimeClaimed =
+      runtimeClaim === true || listYieldAwaitableExecs(requesterChat).length > 0;
+    let registryClaimed = false;
+    if (hasRegistryClaim) {
+      const { markRequesterTurnYielded } =
+        await import("./subagents/registry/subagent-registry.js");
+      const markYielded = () =>
+        markRequesterTurnYielded({
+          requesterSessionKey: params.requesterSessionKey as string,
+          requesterAgentId: params.requesterAgentId,
+          requesterTurnRunId: params.requesterTurnRunId as string,
+        });
+      registryClaimed =
+        (await (withCronAuthority ? withCronAuthority(markYielded) : markYielded())) > 0;
     }
-    const { markRequesterTurnYielded } = await import("./subagents/registry/subagent-registry.js");
-    const registryClaimed =
-      markRequesterTurnYielded({
-        requesterSessionKey: params.requesterSessionKey as string,
-        requesterAgentId: params.requesterAgentId,
-        requesterTurnRunId: params.requesterTurnRunId as string,
-      }) > 0;
-    return runtimeClaimed || selfClaimed || registryClaimed;
+    const completionClaimed = runtimeClaimed || registryClaimed;
+    if (requesterSessionKey && params.requesterTurnRunId) {
+      const { claimSubagentYield } = await import("./subagents/registry/subagent-registry.js");
+      const claim = await claimSubagentYield({
+        runId: params.requesterTurnRunId,
+        sessionKey: requesterSessionKey,
+        agentId: params.requesterAgentId,
+        // Owned child or runtime completions resume this session; they are not an
+        // inbound continuation, so a message wait would publish a false pause notice.
+        waitForMessage: intent?.waitFor === "message" && !completionClaimed,
+        acknowledgment: intent?.acknowledgment,
+        // Exec completion cannot resume a self-paused task. An independently
+        // owned runtime/child completion can, and retains its existing claim.
+        hasPendingWork: () =>
+          !completionClaimed &&
+          (listRunningSessions().some((session) => session.scopeKey === processScopeKey) ||
+            listFinishedSessions().some(
+              (session) =>
+                session.scopeKey === processScopeKey && session.terminalPollObserved !== true,
+            )),
+      });
+      if (claim === "pending-work") {
+        return {
+          error:
+            "Background exec is still running or has an uncollected result in this subagent session, and its exit cannot resume this run. Use process to poll and collect it before yielding.",
+        };
+      }
+      if (claim !== "nothing-pending") {
+        return claim;
+      }
+    }
+    if (completionClaimed) {
+      // Recheck at commit: a command that exited meanwhile already reported its exit.
+      const execs = listYieldAwaitableExecs(requesterChat);
+      if (runtimeClaim === true || registryClaimed || execs.length > 0) {
+        awaitExecsForYield(execs);
+        return true;
+      }
+    }
+    // This turn owns no claim, but an earlier turn of the same session may still
+    // await its children: their completion resumes the session on its own, so
+    // report them instead of telling the model the work is finished. The runtime
+    // reports its own native children; the registry reports OpenClaw children.
+    const pendingChildren =
+      typeof runtimeClaim === "object" ? [...runtimeClaim.pendingChildren] : [];
+    if (requesterSessionKey) {
+      const { listUnsettledRequesterChildren } =
+        await import("./subagents/registry/subagent-registry.js");
+      pendingChildren.push(
+        ...(await listUnsettledRequesterChildren({
+          requesterSessionKey,
+          requesterAgentId: params.requesterAgentId,
+          excludeRequesterTurnRunId: params.requesterTurnRunId,
+        })),
+      );
+    }
+    return pendingChildren.length > 0 ? { pendingChildren } : false;
   };
 }

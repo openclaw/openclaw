@@ -1,0 +1,12 @@
+{
+  "id": "qa-web-output",
+  "categories": ["web"],
+  "contracts": {
+    "webFetchProviders": ["qa-web-output"],
+    "webSearchProviders": ["qa-web-output"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}

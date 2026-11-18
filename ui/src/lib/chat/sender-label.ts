@@ -1,6 +1,11 @@
+import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as normalizeLabelPart } from "@openclaw/normalization-core/string-coerce";
 import type { SessionParticipantIdentity } from "../../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { readTranscriptSenderIdentity } from "../../../../src/chat/sender-identity.js";
+
+// Keep legacy labels readable without treating their UUID suffix as profile evidence.
+const OPAQUE_ID_LABEL_SUFFIX_RE =
+  /\s+\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)$/iu;
 
 export type SenderIdentity = {
   identity?: SessionParticipantIdentity;
@@ -51,12 +56,40 @@ export function normalizeSenderIdentity(
   };
 }
 
+export function resolveMessageSender(
+  metadata: Record<string, unknown> | undefined,
+): SenderIdentity | null {
+  const identity = readTranscriptSenderIdentity(metadata?.senderIdentity);
+  return normalizeSenderIdentity({
+    identity,
+    id: metadata?.senderId,
+    name: metadata?.senderName,
+    username: metadata?.senderUsername,
+    profileAvatarUrl: identity?.type === "profile" ? metadata?.senderProfileAvatarUrl : undefined,
+  });
+}
+
+export function resolveMessageSenderLabel(
+  message: unknown,
+  sender?: SenderIdentity | null,
+): string | null {
+  const m = asOptionalRecord(message);
+  const rawLabel = readStringField(m, "senderLabel")?.trim() ?? "";
+  if (rawLabel) {
+    return rawLabel.replace(OPAQUE_ID_LABEL_SUFFIX_RE, "").trim();
+  }
+  // Full normalization already prepared the sender; null is a known absence.
+  return formatSenderLabel(
+    sender === undefined ? resolveMessageSender(asOptionalRecord(m?.["__openclaw"])) : sender,
+  );
+}
+
 export function senderIdentityKey(sender: SenderIdentity | null | undefined): string | null {
   if (!sender) {
     return null;
   }
   if (sender.identity) {
-    return JSON.stringify(sender.identity, Object.keys(sender.identity).toSorted());
+    return sessionParticipantIdentityKey(sender.identity);
   }
   return [
     sender.id ?? "",
@@ -64,4 +97,19 @@ export function senderIdentityKey(sender: SenderIdentity | null | undefined): st
     sender.username ?? "",
     sender.profileAvatarUrl ?? "",
   ].join("\u0000");
+}
+
+/** Keys a participant identity by its fields, so key order never splits one person. */
+export function sessionParticipantIdentityKey(identity: SessionParticipantIdentity): string {
+  return JSON.stringify(identity, Object.keys(identity).toSorted());
+}
+
+/**
+ * Keys the signed-in viewer, the author of local messages that carry no sender
+ * metadata. Without a profile the viewer is still one distinct person.
+ */
+export function localParticipantIdentityKey(userId: string | null | undefined): string {
+  return userId
+    ? sessionParticipantIdentityKey({ type: "profile", id: userId })
+    : JSON.stringify(["local"]);
 }

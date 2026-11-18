@@ -1,14 +1,23 @@
 import { createHash } from "node:crypto";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizePluginsConfig } from "./config-state.js";
+import { isDeepStrictEqual } from "node:util";
+import type { NormalizedPluginsConfig } from "./config-state.js";
+
+/** Captured JSON inputs ignore object key order, but preserve array order and values. */
+export function samePluginLoadInput(left: string | undefined, right: string | undefined): boolean {
+  return (
+    left === right ||
+    (left !== undefined &&
+      right !== undefined &&
+      isDeepStrictEqual(JSON.parse(left), JSON.parse(right)))
+  );
+}
 
 /** Configuration consumed during registration, independent of activation and load scope. */
 export function resolvePluginRegistrationConfigKey(params: {
-  config?: OpenClawConfig;
-  activationSourceConfig?: OpenClawConfig;
+  runtimeEntries: NormalizedPluginsConfig["entries"];
+  sourceEntries: NormalizedPluginsConfig["entries"];
 }): string {
-  const runtimeEntries = normalizePluginsConfig(params.config?.plugins).entries;
-  const sourceEntries = normalizePluginsConfig(params.activationSourceConfig?.plugins).entries;
+  const { runtimeEntries, sourceEntries } = params;
   const pluginIds = new Set([...Object.keys(runtimeEntries), ...Object.keys(sourceEntries)]);
   const inputs = [...pluginIds].toSorted().flatMap((pluginId) => {
     const { enabled: _enabled, ...runtime } = runtimeEntries[pluginId] ?? {};

@@ -56,6 +56,11 @@ describe("createRuntimeLogging", () => {
     expect(loggingMocks.childLogger.info).toHaveBeenCalledWith(meta, "info details");
     expect(loggingMocks.childLogger.warn).toHaveBeenCalledWith(meta, "warn details");
     expect(loggingMocks.childLogger.error).toHaveBeenCalledWith(meta, "error details");
+
+    logger.info("message without metadata");
+    logger.warn("message with empty metadata", {});
+    expect(loggingMocks.childLogger.info).toHaveBeenLastCalledWith("message without metadata");
+    expect(loggingMocks.childLogger.warn).toHaveBeenLastCalledWith("message with empty metadata");
   });
 
   it("resolves the child logger per call so a runtime log-level change takes effect", () => {

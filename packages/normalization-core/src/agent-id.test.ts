@@ -21,6 +21,7 @@ describe("normalization-core/agent-id", () => {
     ["my-research_agent01", true],
     ["", false],
     ["Agent not found: xyz", false],
+    ["../../../etc/passwd", false],
     ["a".repeat(65), false],
   ])("validates %j", (input, expected) => {
     expect(isValidAgentId(input)).toBe(expected);

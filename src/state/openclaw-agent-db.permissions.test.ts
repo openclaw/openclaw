@@ -1,72 +1,100 @@
-// Agent database permission failures must stay inside the SQLite commit boundary.
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-
 const chmodFailHook = vi.hoisted(() => ({
   error: undefined as Error | undefined,
+  removeTarget: undefined as string | undefined,
 }));
-
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
-  const chmodSync: typeof actual.chmodSync = ((target: unknown, mode: unknown) => {
-    if (chmodFailHook.error) {
-      throw chmodFailHook.error;
-    }
-    return (actual.chmodSync as (...args: unknown[]) => unknown)(target, mode);
-  }) as typeof actual.chmodSync;
-  return { ...actual, chmodSync, default: { ...actual, chmodSync } };
+  const chmodSync = new Proxy(actual.chmodSync, {
+    apply(target, receiver, args) {
+      if (chmodFailHook.error) {
+        throw chmodFailHook.error;
+      }
+      if (chmodFailHook.removeTarget && args[0] === chmodFailHook.removeTarget) {
+        actual.unlinkSync(chmodFailHook.removeTarget);
+      }
+      return Reflect.apply(target, receiver, args);
+    },
+  });
+  const mocked = { ...actual, chmodSync };
+  return { ...mocked, default: mocked };
 });
 
 const {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
+  closeOpenClawAgentDatabasesForTest: closeAgents,
+  openOpenClawAgentDatabase: openAgent,
+  runOpenClawAgentWriteTransaction: writeAgent,
 } = await import("./openclaw-agent-db.js");
-const { closeOpenClawStateDatabaseForTest } = await import("./openclaw-state-db.js");
+const { closeOpenClawStateDatabaseForTest: closeState } = await import("./openclaw-state-db.js");
+const fs = await vi.importActual<typeof import("node:fs")>("node:fs");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const makeOptions = () => ({
+  agentId: "worker-1",
+  env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-agent-permissions-") },
+});
+const permissionFailure = (message: string) =>
+  Object.assign(new Error(message), { code: "EACCES" });
 
 describe("agent database permission repair", () => {
   afterEach(() => {
     chmodFailHook.error = undefined;
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    chmodFailHook.removeTarget = undefined;
+    closeAgents();
+    closeState();
   });
 
-  it("rolls back an outer write when pre-commit permission repair fails", () => {
-    const stateDir = tempDirs.make("openclaw-agent-chmod-");
-    const options = {
-      agentId: "worker-1",
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    };
-    const database = openOpenClawAgentDatabase(options);
-    const before = database.db
-      .prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'")
-      .get() as { updated_at: number };
-    const permissionError = Object.assign(new Error("EACCES: chmod failed"), {
-      code: "EACCES",
-    });
+  it("refuses to open a database when permission repair fails", () => {
+    const options = makeOptions();
+    const database = openAgent(options);
+    closeAgents();
+    const permissionError = permissionFailure("EACCES: chmod failed");
+    if (process.platform !== "win32") {
+      fs.chmodSync(database.path, 0o644);
+    }
     chmodFailHook.error = permissionError;
 
-    expect(() =>
-      runOpenClawAgentWriteTransaction((writeDatabase) => {
-        writeDatabase.db
-          .prepare("UPDATE schema_meta SET updated_at = ? WHERE meta_key = 'primary'")
-          .run(before.updated_at + 1);
-      }, options),
-    ).toThrow(permissionError);
-
+    expect(() => openAgent(options)).toThrow(permissionError);
     chmodFailHook.error = undefined;
-    expect(
-      database.db.prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'").get(),
-    ).toEqual(before);
+    expect(openAgent(options).db.isOpen).toBe(true);
+  });
 
-    runOpenClawAgentWriteTransaction((writeDatabase) => {
-      writeDatabase.db
-        .prepare("UPDATE schema_meta SET updated_at = ? WHERE meta_key = 'primary'")
-        .run(before.updated_at + 2);
-    }, options);
-    expect(
-      database.db.prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'").get(),
-    ).toEqual({ updated_at: before.updated_at + 2 });
+  it.runIf(process.platform !== "win32")(
+    "leaves warm permissions untouched and repairs permission drift on reopen",
+    () => {
+      const options = makeOptions();
+      const database = openAgent(options);
+      const directory = path.dirname(database.path);
+      const files = [database.path, `${database.path}-wal`, `${database.path}-shm`];
+      const write = () =>
+        writeAgent(({ db }) => {
+          db.prepare("UPDATE schema_meta SET updated_at = updated_at + 1").run();
+        }, options);
+
+      fs.chmodSync(directory, 0o1700);
+      fs.chmodSync(database.path, 0o4600);
+      for (const file of files.slice(1)) {
+        fs.chmodSync(file, 0o644);
+      }
+      write();
+      expect(fs.statSync(database.path).mode & 0o7777).toBe(0o4600);
+      closeAgents();
+      openAgent(options);
+      expect(fs.statSync(directory).mode & 0o7777).toBe(0o700);
+      expect(fs.statSync(database.path).mode & 0o7777).toBe(0o600);
+    },
+  );
+
+  it("opens when a transient sidecar disappears during permission repair", () => {
+    const options = makeOptions();
+    const database = openAgent(options);
+    const journal = `${database.path}-journal`;
+    closeAgents();
+    fs.writeFileSync(journal, "", { mode: 0o644 });
+    fs.chmodSync(journal, 0o644);
+    chmodFailHook.removeTarget = journal;
+    expect(openAgent(options).db.isOpen).toBe(true);
+    expect(fs.existsSync(journal)).toBe(false);
   });
 });

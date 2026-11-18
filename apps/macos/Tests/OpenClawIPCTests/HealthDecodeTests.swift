@@ -13,20 +13,12 @@ struct HealthDecodeTests {
         let snap = decodeHealthSnapshot(from: data)
 
         #expect(snap?.channels["whatsapp"]?.linked == true)
+        #expect(snap?.channels["telegram"]?.probe?.elapsedMs == 800)
         #expect(snap?.sessions.count == 1)
     }
 
-    @Test func `decodes with leading noise`() {
-        let noisy = "debug: something logged\n" + self.sampleJSON + "\ntrailer"
-        let snap = decodeHealthSnapshot(from: Data(noisy.utf8))
-
-        #expect(snap?.channels["telegram"]?.probe?.elapsedMs == 800)
-    }
-
-    @Test func `fails without braces`() {
-        let data = Data("no json here".utf8)
-        let snap = decodeHealthSnapshot(from: data)
-
-        #expect(snap == nil)
+    @Test(arguments: ["no json here", "{", "}", "} diagnostic {"])
+    func `rejects output without a JSON object`(_ output: String) {
+        #expect(decodeHealthSnapshot(from: Data(output.utf8)) == nil)
     }
 }

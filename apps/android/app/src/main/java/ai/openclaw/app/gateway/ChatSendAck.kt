@@ -1,9 +1,8 @@
 package ai.openclaw.app.gateway
 
+import ai.openclaw.app.asJsonStringOrNull
+import ai.openclaw.app.node.asObjectOrNull
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 
 internal data class ChatSendAck(
   val runId: String?,
@@ -34,13 +33,9 @@ internal fun parseChatSendAck(
   try {
     val obj = json.parseToJsonElement(responseJson).asObjectOrNull()
     ChatSendAck(
-      runId = obj?.get("runId").asStringOrNull(),
-      status = obj?.get("status").asStringOrNull(),
+      runId = obj?.get("runId").asJsonStringOrNull(),
+      status = obj?.get("status").asJsonStringOrNull(),
     )
   } catch (_: Throwable) {
     ChatSendAck(runId = null, status = null)
   }
-
-private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
-
-private fun JsonElement?.asStringOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content

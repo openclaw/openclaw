@@ -1,8 +1,9 @@
-import { createRouter, type RouteLocation } from "@openclaw/uirouter";
+import { createRouter, type RouteLoaderOptions, type RouteLocation } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { page } from "./route.ts";
 
 const location: RouteLocation = {
@@ -15,18 +16,20 @@ describe("model setup route", () => {
   it.each([
     ["?firstRun=1", true],
     ["?firstRun=explicit", true],
-    ["?firstRun=0", false],
     ["?firstRun=0&firstRun=explicit", false],
     ["", false],
-  ])("interprets first-run link %s without starting provider setup", async (search, expected) => {
-    const context = {} as ApplicationContext;
-    const router = createRouter({ routes: [{ ...page, component: () => null }] });
-    try {
-      await router.navigate("model-setup", context, {}, { ...location, search });
-      expect(router.getState().matches[0]?.data).toEqual({ firstRun: expected });
-    } finally {
-      router.stop();
-    }
+  ])("preserves onboarding but redirects settings link %s to Models", async (search, firstRun) => {
+    const context = { basePath: "/ui" } as ApplicationContext;
+    const target = { ...location, pathname: "/ui/settings/model-setup", search };
+    const options: RouteLoaderOptions = createRouteLoaderOptions(target, search);
+    expect(await page.loader?.(context, options)).toEqual(
+      firstRun
+        ? { firstRun: true }
+        : {
+            type: "redirect",
+            location: { pathname: "/ui/settings/model-providers", search: "?connect=1", hash: "" },
+          },
+    );
   });
   it("keys loader data by the first-run query", () => {
     const context = {
@@ -54,7 +57,12 @@ describe("model setup route", () => {
       agentSelection: { state: { selectedId: "main" } },
     } as unknown as ApplicationContext;
     const router = createRouter({ routes: [{ ...page, component: () => null }] });
-    const navigation = router.navigate("model-setup", context);
+    const navigation = router.navigate(
+      "model-setup",
+      context,
+      {},
+      { ...location, search: "?firstRun=1" },
+    );
     try {
       await vi.waitFor(() => expect(router.getState().matches[0]?.status).toBe("success"));
     } finally {

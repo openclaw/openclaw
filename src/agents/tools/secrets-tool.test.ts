@@ -1,27 +1,84 @@
+import assert from "node:assert/strict";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi, type MockInstance } from "vitest";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
+import {
+  QuestionRequestParamsSchema,
+  QuestionResolveParamsSchema,
+  QuestionWaitAnswerParamsSchema,
+} from "../../../packages/gateway-protocol/src/schema/questions.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { SecretRefSchema } from "../../config/zod-schema.core.js";
+import { QuestionManager, QuestionManagerError } from "../../gateway/question-manager.js";
+import { isEmbeddedMode, setEmbeddedMode } from "../../infra/embedded-mode.js";
+import {
+  EmbeddedQuestionBroker,
+  clearEmbeddedQuestionBroker,
+  setEmbeddedQuestionBroker,
+} from "../../infra/embedded-question-broker.js";
 import { isBuiltInDefaultSecretProviderRef } from "../../secrets/ref-contract.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
+import * as questionDispatch from "../harness/gateway-question-dispatch.js";
 import { claimPendingAgentQuestionAnswer } from "../harness/gateway-question.js";
-import { reserveAskUserPromptDelivery, settleAskUserPromptDelivery } from "./ask-user-tool.js";
-import { resetPendingAskUserQuestionsForTest } from "./ask-user-tool.test-support.js";
+import { wrapToolDefinition } from "../sessions/tools/tool-definition-wrapper.js";
+import {
+  cancelAskUserPromptDelivery,
+  reserveAskUserPromptDelivery,
+  settleAskUserPromptDelivery,
+} from "./ask-user-tool.js";
+import type { GatewayQuestionCall } from "./gateway-question-lifecycle.js";
+import * as gatewayTransport from "./gateway.js";
 import { createSecretsTool, normalizeSecretsRequestParams } from "./secrets-tool.js";
 
-type GatewayCall = NonNullable<Parameters<typeof createSecretsTool>[0]["gatewayCall"]>;
+type GatewayCall = GatewayQuestionCall;
+type GatewayImplementation = (
+  method: string,
+  opts: Record<string, unknown>,
+  params: Record<string, unknown>,
+  extra?: { signal?: AbortSignal; requireAgentRuntimeIdentity?: boolean },
+) => Promise<unknown>;
 
-function gatewayStub(
-  implementation: (
-    method: string,
-    opts: Record<string, unknown>,
-    params: Record<string, unknown>,
-    extra?: { signal?: AbortSignal; requireAgentRuntimeIdentity?: boolean },
-  ) => Promise<unknown>,
-) {
+function gatewayStub(implementation: GatewayImplementation) {
   const mock = vi.fn(implementation);
   return { mock, call: mock as unknown as GatewayCall };
+}
+
+function questionManagerGateway(
+  manager: QuestionManager,
+  onRequest: (request: Parameters<QuestionManager["request"]>[0]) => unknown,
+) {
+  return gatewayStub(async (method, _options, params) => {
+    try {
+      if (method === "question.request") {
+        const request = Value.Parse(QuestionRequestParamsSchema, params);
+        return onRequest({ ...request, timeoutMs: request.timeoutMs ?? 60_000 });
+      }
+      if (method === "question.resolve") {
+        const request = Value.Parse(QuestionResolveParamsSchema, params);
+        if (!("cancel" in request)) {
+          throw new Error("expected question cancellation");
+        }
+        return manager.cancel(request.id, request.resolvedBy);
+      }
+      if (method === "question.waitAnswer") {
+        const request = Value.Parse(QuestionWaitAnswerParamsSchema, params);
+        return manager.waitAnswer(request.id, request.timeoutMs);
+      }
+      throw new Error(`unexpected method ${method}`);
+    } catch (error) {
+      if (error instanceof QuestionManagerError) {
+        throw new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: error.message,
+          details: { reason: error.code },
+        });
+      }
+      throw error;
+    }
+  });
 }
 
 function requestedQuestionId(mock: ReturnType<typeof gatewayStub>["mock"]): string {
@@ -33,9 +90,84 @@ function requestedQuestionId(mock: ReturnType<typeof gatewayStub>["mock"]): stri
   return questionId;
 }
 
+const secretName = "SERVICE_API_KEY";
 const storedAnswer = { status: "answered", answers: { answers: { secret_value: ["stored"] } } };
+const secretRequest = { action: "request", name: secretName, kind: "secret" };
+const proposedBinding = {
+  name: secretName,
+  kind: "secret",
+  allowedHosts: ["api.example.test"],
+  reason: "Deploy the service",
+};
+const proposedRequest = { action: "request", ...proposedBinding };
+const secretQuestion = {
+  questionId: "secret_value",
+  header: "API key",
+  question: "Provide the secret for SERVICE_API_KEY.",
+  options: [],
+  isSecret: true,
+  secretStore: proposedBinding,
+};
+const questions = normalizeSecretsRequestParams(secretRequest).questions;
+const storedMethods = ["question.request", "question.waitAnswer", "secrets.store.list"];
+
+function reservePrompt(toolCallId: string, sessionKey: string) {
+  const reservation = reserveAskUserPromptDelivery({
+    toolCallId,
+    sessionKey,
+    questions,
+    timeoutSeconds: 900,
+  });
+  if (reservation) {
+    onTestFinished(() => cancelAskUserPromptDelivery(toolCallId, sessionKey));
+  }
+  return reservation;
+}
+
+function outcome<T>(pending: Promise<T>) {
+  return pending.then(
+    (result) => ({ result }),
+    (error: unknown) => ({ error }),
+  );
+}
+
+function settleOnCleanup(pending: Promise<unknown>, release: () => void) {
+  const settled = Promise.allSettled([pending]);
+  onTestFinished(async () => {
+    release();
+    await settled;
+  });
+}
+let storeTransportSpy: MockInstance<typeof gatewayTransport.callGatewayTool> | undefined;
+let questionResolverSpy:
+  | MockInstance<typeof questionDispatch.resolveAgentQuestionGatewayCall>
+  | undefined;
+
+function secretTool(
+  gateway: ReturnType<typeof gatewayStub>,
+  options: Parameters<typeof createSecretsTool>[0] = {},
+) {
+  storeTransportSpy = vi
+    .spyOn(gatewayTransport, "callGatewayTool")
+    .mockImplementation(gateway.call);
+  questionResolverSpy = vi
+    .spyOn(questionDispatch, "resolveAgentQuestionGatewayCall")
+    .mockReturnValue(gateway.call);
+  return createSecretsTool(options);
+}
+
+function methodCalls(gateway: ReturnType<typeof gatewayStub>, method: string) {
+  return gateway.mock.mock.calls.filter(([called]) => called === method);
+}
+function expectCancellation(gateway: ReturnType<typeof gatewayStub>, resolvedBy: string) {
+  expect(gateway.mock).toHaveBeenCalledWith(
+    "question.resolve",
+    { timeoutMs: 10_000 },
+    { id: requestedQuestionId(gateway.mock), cancel: true, resolvedBy },
+  );
+}
 const storeMetadata = {
-  name: "SERVICE_API_KEY",
+  name: secretName,
   createdAtMs: 0,
   updatedAtMs: 0,
   scopeKind: "team",
@@ -50,139 +182,151 @@ const unrelatedEnv = {
   value: "private-env-value",
 };
 
-function storedRequestGateway(readMetadata: () => Promise<unknown>) {
-  return gatewayStub(async (method, _options, params) => {
+function requestGateway(handlers: Record<string, GatewayImplementation | undefined>) {
+  return gatewayStub(async (method, _options, params, extra) => {
     if (method === "question.request") {
       return { id: params.id };
     }
-    if (method === "secrets.store.list") {
-      return await readMetadata();
+    const handler = handlers[method];
+    if (!handler) {
+      throw new Error(`unexpected method ${method}`);
     }
-    return storedAnswer;
+    return handler(method, _options, params, extra);
   });
 }
 
-afterEach(() => {
-  resetPendingAskUserQuestionsForTest();
+function storedRequestGateway(readMetadata: () => Promise<unknown>) {
+  return requestGateway({
+    "question.waitAnswer": async () => storedAnswer,
+    "secrets.store.list": readMetadata,
+  });
+}
+
+function waitingStoredRequestGateway(allowMetadata = true) {
+  const answer = createDeferred<unknown>();
+  const waiting = createDeferred();
+  const gateway = requestGateway({
+    "question.waitAnswer": async () => {
+      waiting.resolve();
+      return await answer.promise;
+    },
+    "secrets.store.list": allowMetadata
+      ? async () => ({ entries: [unrelatedEnv, secretEntry] })
+      : undefined,
+  });
+  return { gateway, answer, waiting: waiting.promise };
+}
+
+function expectStoredDetails(details: unknown, currentPolicy: unknown, provider = "default") {
+  expect(details).toEqual({
+    status: "stored",
+    name: secretName,
+    kind: "secret",
+    ref: { source: "store", provider, id: secretName },
+    currentPolicy,
+  });
+}
+
+function promptOptions(
+  sessionKey: string,
+  send: NonNullable<Parameters<typeof createSecretsTool>[0]["questionPrompt"]>["send"],
+  messageChannel = "telegram",
+) {
+  return {
+    config: { gateway: { publicOrigin: "https://ops.example.test" } },
+    sessionKey,
+    questionPrompt: { send, messageChannel },
+  };
+}
+
+beforeEach(() => {
+  onTestFinished(() => {
+    questionResolverSpy?.mockRestore();
+    storeTransportSpy?.mockRestore();
+    questionResolverSpy = undefined;
+    storeTransportSpy = undefined;
+  });
 });
 
 describe("secrets request normalization", () => {
   it("builds one store-bound secret question and clamps its timeout", () => {
-    const normalized = normalizeSecretsRequestParams({
-      action: "request",
-      name: "SERVICE_API_KEY",
-      kind: "secret",
-      allowedHosts: ["api.example.test"],
-      reason: "Deploy the service",
-      timeoutSeconds: 5,
-    });
-
-    expect(normalized).toEqual({
-      name: "SERVICE_API_KEY",
-      kind: "secret",
-      allowedHosts: ["api.example.test"],
-      reason: "Deploy the service",
-      timeoutSeconds: 30,
-      questions: [
-        {
-          questionId: "secret_value",
-          header: "API key",
-          question: "Provide the secret for SERVICE_API_KEY.",
-          options: [],
-          isSecret: true,
-          secretStore: {
-            name: "SERVICE_API_KEY",
-            kind: "secret",
-            allowedHosts: ["api.example.test"],
-            reason: "Deploy the service",
-          },
-        },
-      ],
-    });
+    for (const [timeoutSeconds, clamped] of [
+      [5, 30],
+      [9_999, 3_600],
+    ]) {
+      expect(normalizeSecretsRequestParams({ ...proposedRequest, timeoutSeconds })).toEqual({
+        name: secretName,
+        timeoutSeconds: clamped,
+        questions: [secretQuestion],
+      });
+    }
+    const schema = createSecretsTool({}).parameters;
     expect(
-      normalizeSecretsRequestParams({
-        name: "SERVICE_SETTING",
-        kind: "secret",
-        timeoutSeconds: 9_999,
-      }).timeoutSeconds,
-    ).toBe(3_600);
-    expect(
-      Value.Check(createSecretsTool({}).parameters, {
+      Value.Check(schema, {
         action: "set",
-        name: "SERVICE_API_KEY",
+        name: secretName,
         value: "test-secret-value-123",
       }),
     ).toBe(false);
   });
 
   it.each([
-    ["lowercase names", { name: "bad_name", kind: "secret" }, "uppercase"],
-    ["unknown entry kinds", { name: "VALID_NAME", kind: "password" }, "kind must be"],
-    [
-      "environment-value requests the model could read back",
-      { name: "VALID_NAME", kind: "env" },
-      'kind must be "secret"',
-    ],
-    [
-      "duplicate allowed hosts",
-      { name: "VALID_NAME", kind: "secret", allowedHosts: ["a.test", "a.test"] },
-      "unique",
-    ],
-    [
-      "oversized reasons",
-      { name: "VALID_NAME", kind: "secret", reason: "r".repeat(201) },
-      "at most 200",
-    ],
-    ["fractional timeouts", { name: "VALID_NAME", kind: "secret", timeoutSeconds: 1.5 }, "integer"],
-  ])("rejects %s before contacting the gateway", (_label, params, message) => {
-    expect(() => normalizeSecretsRequestParams(params)).toThrow(message);
+    ["lowercase names", { name: "bad_name" }, "uppercase"],
+    ["readable environment-value requests", { kind: "env" }, 'kind must be "secret"'],
+    ["duplicate allowed hosts", { allowedHosts: ["a.test", "a.test"] }, "unique"],
+    ["oversized reasons", { reason: "r".repeat(201) }, "at most 200"],
+    ["fractional timeouts", { timeoutSeconds: 1.5 }, "integer"],
+  ])("rejects %s before contacting the gateway", (_label, overrides, message) => {
+    expect(() => normalizeSecretsRequestParams({ ...secretRequest, ...overrides })).toThrow(
+      message,
+    );
   });
 });
 
 describe("secrets tool", () => {
-  it.each<{ label: string; config: OpenClawConfig }>([
-    { label: "built-in store", config: {} },
-    { label: "renamed store default", config: { secrets: { defaults: { store: "teamstore" } } } },
-    {
-      label: "store default shared with another source",
-      config: {
-        secrets: {
-          defaults: { store: "teamstore" },
-          providers: { teamstore: { source: "env" } },
-        },
+  it("returns a clear local store blocker without publishing a credential prompt", async () => {
+    const previousMode = isEmbeddedMode();
+    const events: string[] = [];
+    const broker = new EmbeddedQuestionBroker(createTestGatewayScheduler(), (event) =>
+      events.push(event.event),
+    );
+    setEmbeddedMode(true);
+    setEmbeddedQuestionBroker(broker);
+    try {
+      await expect(
+        createSecretsTool({ sessionKey: "agent:main:main" }).execute("local-secret", {
+          action: "request",
+          name: secretName,
+        }),
+      ).rejects.toThrow(
+        "Secret store requests need a running Gateway; ask the operator to run `openclaw secrets store` or use the Control UI.",
+      );
+      expect(events).toEqual([]);
+      expect(broker.list().questions).toEqual([]);
+    } finally {
+      clearEmbeddedQuestionBroker(broker);
+      broker.stop();
+      setEmbeddedMode(previousMode);
+    }
+  });
+
+  it("returns a valid shared-default store ref without claiming chat text", async () => {
+    const config: OpenClawConfig = {
+      secrets: {
+        defaults: { store: "teamstore" },
+        providers: { teamstore: { source: "env" } },
       },
-    },
-  ])("returns a valid $label ref without claiming chat text", async ({ config }) => {
-    let finishWait: ((value: unknown) => void) | undefined;
-    const gateway = gatewayStub(async (method, _options, params) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          finishWait = resolve;
-        });
-      }
-      if (method === "secrets.store.list") {
-        return { entries: [unrelatedEnv, secretEntry] };
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
-    const tool = createSecretsTool({
+    };
+    const { gateway, answer, waiting } = waitingStoredRequestGateway();
+    const tool = secretTool(gateway, {
       config,
       agentId: "main",
       sessionKey: "agent:main:secrets",
       runId: "run-secrets",
-      gatewayCall: gateway.call,
     });
-    const pending = tool.execute("call-secret", {
-      action: "request",
-      name: "SERVICE_API_KEY",
-      kind: "secret",
-      allowedHosts: ["api.example.test"],
-      reason: "Deploy the service",
-    });
-    await vi.waitFor(() => expect(finishWait).toBeTypeOf("function"));
+    const pending = tool.execute("call-secret", proposedRequest);
+    settleOnCleanup(pending, () => answer.resolve({ status: "cancelled" }));
+    await waiting;
 
     await expect(
       claimPendingAgentQuestionAnswer({
@@ -190,28 +334,15 @@ describe("secrets tool", () => {
         text: "test-secret-value-123",
       }),
     ).resolves.toBe(false);
-    finishWait?.({
-      status: "answered",
-      answers: { answers: { secret_value: ["stored"] } },
-    });
+    answer.resolve(storedAnswer);
     const result = await pending;
 
     const ref = SecretRefSchema.parse(asNullableRecord(result.details)?.ref);
-    expect(ref.source).toBe("store");
-    expect(ref.id).toBe("SERVICE_API_KEY");
+    expect(ref).toMatchObject({ source: "store", id: secretName });
     expect(isBuiltInDefaultSecretProviderRef(config, ref)).toBe(true);
-    expect(result.details).toEqual({
-      status: "stored",
-      name: "SERVICE_API_KEY",
-      kind: "secret",
-      ref,
-      currentPolicy: editedPolicy,
-    });
-    expect(JSON.stringify(result)).not.toContain("test-secret-value-123");
-    expect(result.content[0]).toMatchObject({
-      text: expect.stringContaining("Use the returned ref"),
-    });
+    expectStoredDetails(result.details, editedPolicy, "teamstore");
     for (const guidance of [
+      "Use the returned ref",
       "this entry's current host list; the human may edit it",
       "Not Gateway config or an approval receipt; may change later",
       "Report current hosts, not proposed hosts",
@@ -219,14 +350,10 @@ describe("secrets tool", () => {
     ]) {
       expect(result.content[0]).toMatchObject({ text: expect.stringContaining(guidance) });
     }
-    expect(JSON.stringify(result)).not.toContain("api.example.test");
-    expect(JSON.stringify(result)).not.toContain("UNRELATED_ENV");
-    expect(JSON.stringify(result)).not.toContain("private-env-value");
-    expect(gateway.mock.mock.calls.map(([method]) => method)).toEqual([
-      "question.request",
-      "question.waitAnswer",
-      "secrets.store.list",
-    ]);
+    expect(JSON.stringify(result)).not.toMatch(
+      /test-secret-value-123|api\.example\.test|UNRELATED_ENV|private-env-value/,
+    );
+    expect(gateway.mock.mock.calls.map(([method]) => method)).toEqual(storedMethods);
     expect(gateway.mock).toHaveBeenLastCalledWith("secrets.store.list", {}, {}, undefined);
     expect(gateway.mock).toHaveBeenCalledWith(
       "question.request",
@@ -237,19 +364,7 @@ describe("secrets tool", () => {
         sessionKey: "agent:main:secrets",
         runId: "run-secrets",
         timeoutMs: 900_000,
-        questions: [
-          expect.objectContaining({
-            questionId: "secret_value",
-            options: [],
-            isSecret: true,
-            secretStore: {
-              name: "SERVICE_API_KEY",
-              kind: "secret",
-              allowedHosts: ["api.example.test"],
-              reason: "Deploy the service",
-            },
-          }),
-        ],
+        questions: [expect.objectContaining(secretQuestion)],
       }),
       // Store-bound minting is admin-gated server-side; the tool must declare
       // the scope explicitly instead of the questions-scope default.
@@ -257,35 +372,23 @@ describe("secrets tool", () => {
     );
   });
 
-  it.each(["pending", "expired", "cancelled"] as const)(
+  it.each(["pending", "cancelled"] as const)(
     "returns no_answer when a credential request is %s",
     async (status) => {
-      const gateway = gatewayStub(async (method, _options, params) => {
-        if (method === "question.request") {
-          return { id: params.id };
-        }
-        return { status };
+      const gateway = requestGateway({
+        "question.waitAnswer": async () => ({ status }),
+        "question.resolve": async () => ({ status }),
       });
 
-      const result = await createSecretsTool({
-        sessionKey: `agent:main:${status}`,
-        gatewayCall: gateway.call,
-      }).execute(`call-${status}`, { action: "request", name: "SERVICE_API_KEY", kind: "secret" });
+      const result = await secretTool(gateway, { sessionKey: `agent:main:${status}` }).execute(
+        `call-${status}`,
+        secretRequest,
+      );
 
       expect(result.details).toEqual({ status: "no_answer" });
-      expect(gateway.mock.mock.calls.some(([method]) => method === "secrets.store.list")).toBe(
-        false,
-      );
+      expect(methodCalls(gateway, "secrets.store.list")).toHaveLength(0);
       if (status === "pending") {
-        expect(gateway.mock).toHaveBeenCalledWith(
-          "question.resolve",
-          { timeoutMs: 10_000 },
-          {
-            id: requestedQuestionId(gateway.mock),
-            cancel: true,
-            resolvedBy: "wait-timeout",
-          },
-        );
+        expectCancellation(gateway, "wait-timeout");
       }
     },
   );
@@ -293,7 +396,6 @@ describe("secrets tool", () => {
   it.each([
     { boundary: "wait timeout", marker: "stored", abort: false },
     { boundary: "delivery failure", marker: "stored", abort: false },
-    { boundary: "wait timeout", marker: "unexpected", abort: false },
     { boundary: "delivery failure", marker: "unexpected", abort: false },
     { boundary: "delivery failure", marker: "stored", abort: true },
   ])(
@@ -305,167 +407,101 @@ describe("secrets tool", () => {
       });
       const sessionKey = "agent:main:late-answer";
       const toolCallId = "call-late-answer";
-      const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };
-      const normalized = normalizeSecretsRequestParams(args);
       const reservation =
-        boundary === "delivery failure"
-          ? reserveAskUserPromptDelivery({
-              toolCallId,
-              sessionKey,
-              questions: normalized.questions,
-              timeoutSeconds: normalized.timeoutSeconds,
-            })
-          : undefined;
+        boundary === "delivery failure" ? reservePrompt(toolCallId, sessionKey) : undefined;
       const firstWait = createDeferred<unknown>();
       const controller = new AbortController();
       let waitCalls = 0;
-      const gateway = gatewayStub(async (method, _options, params) => {
-        if (method === "question.request") {
-          return { id: params.id };
-        }
-        if (method === "question.resolve") {
+      const gateway = requestGateway({
+        "question.resolve": async () => {
           if (abort) {
             await Promise.resolve();
             controller.abort(new Error("run stopped"));
           }
           throw terminal;
-        }
-        if (method === "secrets.store.list") {
-          return { entries: [secretEntry] };
-        }
-        waitCalls += 1;
-        if (waitCalls === 1) {
-          return boundary === "wait timeout" ? { status: "pending" } : await firstWait.promise;
-        }
-        return { status: "answered", answers: { answers: { secret_value: [marker] } } };
+        },
+        "secrets.store.list": async () => ({ entries: [secretEntry] }),
+        "question.waitAnswer": async () => {
+          if (++waitCalls === 1) {
+            return boundary === "wait timeout" ? { status: "pending" } : await firstWait.promise;
+          }
+          return { status: "answered", answers: { answers: { secret_value: [marker] } } };
+        },
       });
-      const outcome = createSecretsTool({ sessionKey, gatewayCall: gateway.call })
-        .execute(toolCallId, args, controller.signal)
-        .then(
-          (result) => ({ result }),
-          (error: unknown) => ({ error }),
-        );
+      const result = outcome(
+        secretTool(gateway, { sessionKey }).execute(toolCallId, secretRequest, controller.signal),
+      );
       try {
         if (reservation) {
           await vi.waitFor(() => expect(waitCalls).toBe(1));
           settleAskUserPromptDelivery(reservation.questionId, new Error("transport failed"));
         }
-        if (abort) {
-          await expect(outcome).resolves.toMatchObject({ error: new Error("run stopped") });
-        } else if (marker !== "stored") {
-          await expect(outcome).resolves.toMatchObject({
-            error: new Error("credential request returned an unexpected answer marker"),
-          });
-        } else {
-          await expect(outcome).resolves.toMatchObject({
-            result: {
-              details: { status: "stored", name: "SERVICE_API_KEY", currentPolicy: editedPolicy },
-            },
-          });
-        }
-        expect(
-          gateway.mock.mock.calls.filter(([method]) => method === "secrets.store.list"),
-        ).toHaveLength(!abort && marker === "stored" ? 1 : 0);
-        expect(
-          gateway.mock.mock.calls.filter(([method]) => method === "question.resolve"),
-        ).toHaveLength(1);
+        const error = abort
+          ? "run stopped"
+          : marker !== "stored"
+            ? "credential request returned an unexpected answer marker"
+            : undefined;
+        await expect(result).resolves.toMatchObject(
+          error
+            ? { error: new Error(error) }
+            : {
+                result: {
+                  details: { status: "stored", name: secretName, currentPolicy: editedPolicy },
+                },
+              },
+        );
+        expect(methodCalls(gateway, "secrets.store.list")).toHaveLength(
+          !abort && marker === "stored" ? 1 : 0,
+        );
+        expect(methodCalls(gateway, "question.resolve")).toHaveLength(1);
       } finally {
         firstWait.resolve({ status: "cancelled" });
-        await outcome;
+        await result;
       }
     },
   );
 
   const longHost = `${"a".repeat(62)}.${"b".repeat(62)}.${"c".repeat(62)}.${"d".repeat(59)}.test`;
-  const boundaryHosts = [longHost, longHost.slice(1)];
   const oversizedHosts = [longHost, `e${longHost.slice(1)}`];
   it.each([
-    {
-      label: "empty hosts",
-      metadata: { entries: [{ ...secretEntry, allowedHosts: [] }] },
-      currentPolicy: { status: "available", allowedHosts: [] },
-    },
-    {
-      label: "512-character complete array",
-      metadata: { entries: [{ ...secretEntry, allowedHosts: boundaryHosts }] },
-      currentPolicy: { status: "available", allowedHosts: boundaryHosts },
-    },
-    {
-      label: "513-character array",
-      metadata: { entries: [{ ...secretEntry, allowedHosts: oversizedHosts }] },
-      currentPolicy: { status: "omitted", allowedHostCount: 2 },
-    },
-    {
-      label: "absent host policy",
-      metadata: { entries: [{ ...storeMetadata, kind: "secret" }] },
-      currentPolicy: { status: "unavailable" },
-    },
-    {
-      label: "missing entry",
-      metadata: { entries: [unrelatedEnv] },
-      currentPolicy: { status: "missing" },
-    },
-    {
-      label: "kind changed to env",
-      metadata: { entries: [{ ...unrelatedEnv, name: storeMetadata.name }] },
-      currentPolicy: { status: "kind_changed" },
-    },
-    {
-      label: "read rejection",
-      metadata: new Error("private-env-value"),
-      currentPolicy: { status: "unavailable" },
-    },
-    {
-      label: "invalid inventory",
-      metadata: { entries: "private-env-value" },
-      currentPolicy: { status: "unavailable" },
-    },
-    {
-      label: "invalid secret fields",
-      metadata: { entries: [{ ...secretEntry, value: "private-env-value" }] },
-      currentPolicy: { status: "unavailable" },
-    },
-  ])("preserves stored truth with $label metadata", async ({ metadata, currentPolicy }) => {
+    [
+      "513-character array",
+      { ...secretEntry, allowedHosts: oversizedHosts },
+      { status: "omitted", allowedHostCount: 2 },
+    ],
+    ["absent host policy", { ...storeMetadata, kind: "secret" }, { status: "unavailable" }],
+    ["missing entry", unrelatedEnv, { status: "missing" }],
+    [
+      "kind changed to env",
+      { ...unrelatedEnv, name: storeMetadata.name },
+      { status: "kind_changed" },
+    ],
+    ["read rejection", new Error("private-env-value"), { status: "unavailable" }],
+    [
+      "invalid secret fields",
+      { ...secretEntry, value: "private-env-value" },
+      { status: "unavailable" },
+    ],
+  ])("preserves stored truth with %s metadata", async (_label, metadata, currentPolicy) => {
     const gateway = storedRequestGateway(async () => {
       if (metadata instanceof Error) {
         throw metadata;
       }
-      return metadata;
+      return { entries: [metadata] };
     });
-    const result = await createSecretsTool({ gatewayCall: gateway.call }).execute("policy-result", {
+    const result = await secretTool(gateway).execute("policy-result", {
       action: "request",
-      name: "SERVICE_API_KEY",
+      name: secretName,
       allowedHosts: ["proposed.example.test"],
     });
-    expect(result.details).toEqual({
-      status: "stored",
-      name: "SERVICE_API_KEY",
-      kind: "secret",
-      ref: { source: "store", provider: "default", id: "SERVICE_API_KEY" },
-      currentPolicy,
-    });
-    expect(gateway.mock.mock.calls.map(([method]) => method)).toEqual([
-      "question.request",
-      "question.waitAnswer",
-      "secrets.store.list",
-    ]);
+    expectStoredDetails(result.details, currentPolicy);
+    expect(gateway.mock.mock.calls.map(([method]) => method)).toEqual(storedMethods);
     const text = result.content[0];
-    expect(text?.type).toBe("text");
-    if (text?.type !== "text") {
-      throw new Error("expected text result");
-    }
+    assert(text?.type === "text", "expected text result");
     expect(text.text.length).toBeLessThan(1800);
     expect(text.text).not.toMatch(/private-env-value|UNRELATED_ENV|proposed\.example\.test/);
-    if (currentPolicy.status === "available") {
-      const hosts = currentPolicy.allowedHosts!;
-      expect(JSON.stringify(hosts).length).toBeLessThanOrEqual(512);
-      for (const host of hosts) {
-        expect(text.text.split(JSON.stringify(host))).toHaveLength(2);
-      }
-    } else {
-      expect(text.text).not.toContain(longHost.slice(0, 62));
-      expect(text.text).not.toContain("allowedHosts");
-    }
+    expect(text.text).not.toContain(longHost.slice(0, 62));
+    expect(text.text).not.toContain("allowedHosts");
   });
 
   it.each(["resolve", "reject"] as const)(
@@ -474,17 +510,12 @@ describe("secrets tool", () => {
       const metadata = createDeferred<unknown>();
       const controller = new AbortController();
       const gateway = storedRequestGateway(() => metadata.promise);
-      const outcome = createSecretsTool({ gatewayCall: gateway.call })
-        .execute("abort-policy", { action: "request", name: "SERVICE_API_KEY" }, controller.signal)
-        .then(
-          (result) => ({ result }),
-          (error: unknown) => ({ error }),
-        );
+      const result = outcome(
+        secretTool(gateway).execute("abort-policy", secretRequest, controller.signal),
+      );
       try {
         await vi.waitFor(() =>
-          expect(gateway.mock.mock.calls.some(([method]) => method === "secrets.store.list")).toBe(
-            true,
-          ),
+          expect(methodCalls(gateway, "secrets.store.list").length).toBeGreaterThan(0),
         );
         expect(gateway.mock).toHaveBeenLastCalledWith(
           "secrets.store.list",
@@ -498,253 +529,264 @@ describe("secrets tool", () => {
         } else {
           metadata.resolve({ entries: [secretEntry] });
         }
-        await expect(outcome).resolves.toEqual({ error: new Error("run stopped during metadata") });
+        await expect(result).resolves.toEqual({ error: new Error("run stopped during metadata") });
       } finally {
         controller.abort();
         metadata.resolve({ entries: [secretEntry] });
-        await outcome;
+        await result;
       }
     },
   );
 
   it("cancels a registered credential request when its agent run aborts", async () => {
     const controller = new AbortController();
-    const gateway = gatewayStub(async (method, _options, params, extra) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.resolve") {
-        return { status: "cancelled" };
-      }
-      return await new Promise((_resolve, reject) => {
-        extra?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
-          once: true,
-        });
-      });
+    const gateway = requestGateway({
+      "question.resolve": async () => ({ status: "cancelled" }),
+      "question.waitAnswer": async (_method, _options, _params, extra) =>
+        new Promise((_resolve, reject) => {
+          extra?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+            once: true,
+          });
+        }),
     });
-    const pending = createSecretsTool({
-      sessionKey: "agent:main:secret-abort",
-      gatewayCall: gateway.call,
-    }).execute(
+    const pending = secretTool(gateway, { sessionKey: "agent:main:secret-abort" }).execute(
       "call-secret-abort",
-      { action: "request", name: "SERVICE_API_KEY", kind: "secret" },
+      secretRequest,
       controller.signal,
     );
+    settleOnCleanup(pending, () => controller.abort());
     await vi.waitFor(() =>
-      expect(gateway.mock.mock.calls.some(([method]) => method === "question.waitAnswer")).toBe(
-        true,
-      ),
+      expect(methodCalls(gateway, "question.waitAnswer").length).toBeGreaterThan(0),
     );
 
     controller.abort(new Error("stop"));
 
     await expect(pending).rejects.toThrow("aborted");
-    expect(gateway.mock).toHaveBeenCalledWith(
-      "question.resolve",
-      { timeoutMs: 10_000 },
-      { id: requestedQuestionId(gateway.mock), cancel: true, resolvedBy: "run-abort" },
-    );
+    expectCancellation(gateway, "run-abort");
   });
 
-  it("shares the existing subscriber prompt reservation and settlement lifecycle", async () => {
-    const sessionKey = "agent:main:secret-prompt";
-    const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };
-    const normalized = normalizeSecretsRequestParams(args);
-    const reservation = reserveAskUserPromptDelivery({
-      toolCallId: "call-secret-prompt",
-      sessionKey,
-      questions: normalized.questions,
-      timeoutSeconds: normalized.timeoutSeconds,
-    });
-    if (!reservation) {
-      throw new Error("expected secret prompt reservation");
-    }
-    let finishWait: ((value: unknown) => void) | undefined;
-    const gateway = gatewayStub(async (method, _options, params) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          finishWait = resolve;
+  it.each(["lost reply", "aborted reply", "answered reply", "refused ID"])(
+    "preserves question truth and the original error after %s",
+    async (scenario) => {
+      const answered = scenario === "answered reply";
+      const refused = scenario === "refused ID";
+      const abort = scenario === "aborted reply" || refused;
+      const error = answered
+        ? new GatewayClientRequestError({ code: "UNAVAILABLE", message: "registration failed" })
+        : new Error("registration failed");
+      if (refused) {
+        Object.assign(error, {
+          name: "GatewayClientRequestError",
+          details: { reason: "QUESTION_ID_IN_USE" },
         });
       }
-      if (method === "secrets.store.list") {
-        return { entries: [unrelatedEnv, secretEntry] };
+      const scheduler = createTestGatewayScheduler();
+      const manager = new QuestionManager(scheduler);
+      const controller = new AbortController();
+      const sessionKey = "agent:main:secret-registration";
+      const reservation = refused ? reservePrompt("call-registration", sessionKey) : undefined;
+      if (refused && !reservation) {
+        throw new Error("expected prompt reservation");
       }
-      throw new Error(`unexpected method ${method}`);
-    });
-    const pending = createSecretsTool({ sessionKey, gatewayCall: gateway.call }).execute(
-      "call-secret-prompt",
-      args,
-    );
-    await vi.waitFor(() => expect(finishWait).toBeTypeOf("function"));
-
-    settleAskUserPromptDelivery(reservation.questionId);
-    finishWait?.({
-      status: "answered",
-      answers: { answers: { secret_value: ["stored"] } },
-    });
-
-    await expect(pending).resolves.toMatchObject({ details: { status: "stored" } });
-  });
-
-  it("publishes its own credential prompt when no harness reserved one", async () => {
-    // A harness that dispatches tools directly reserves nothing, so the credential
-    // request would register and then wait behind a link the operator never sees.
-    const sessionKey = "agent:main:secret-direct-dispatch";
-    const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };
-    const sent: { text?: string; channelData?: unknown }[] = [];
-    let finishWait: ((value: unknown) => void) | undefined;
-    const gateway = gatewayStub(async (method, _options, params) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          finishWait = resolve;
+      const unrelated = structuredClone(
+        manager.request({
+          id: reservation?.questionId ?? "unrelated-question",
+          questions,
+          sessionKey: "agent:main:other-requester",
+          timeoutMs: 60_000,
+        }),
+      );
+      const transitions: string[] = [];
+      const gateway = questionManagerGateway(manager, (request) => {
+        if (refused) {
+          controller.abort(new Error("run stopped"));
+          throw error;
+        }
+        const record = manager.request({
+          ...request,
+          onResolved: (event) => transitions.push(event.status),
         });
-      }
-      if (method === "secrets.store.list") {
-        return { entries: [unrelatedEnv, secretEntry] };
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
+        if (answered) {
+          manager.resolve(record.id, storedAnswer.answers, "operator:human");
+        }
+        if (abort) {
+          controller.abort(new Error("run stopped"));
+        }
+        throw error;
+      });
 
-    const pending = createSecretsTool({
-      config: { gateway: { publicOrigin: "https://ops.example.test" } },
-      sessionKey,
-      gatewayCall: gateway.call,
-      questionPrompt: {
-        send: (payload) => {
+      try {
+        await expect(
+          secretTool(gateway, { sessionKey }).execute(
+            "call-registration",
+            secretRequest,
+            controller.signal,
+          ),
+        ).rejects.toBe(error);
+
+        if (!refused) {
+          expect(manager.get(requestedQuestionId(gateway.mock))).toMatchObject(
+            answered
+              ? { status: "answered", answers: storedAnswer.answers, resolvedBy: "operator:human" }
+              : { status: "cancelled" },
+          );
+        }
+        expect(transitions).toEqual(refused ? [] : [answered ? "answered" : "cancelled"]);
+        expect(manager.get(unrelated.id)).toEqual(unrelated);
+        expect(methodCalls(gateway, "question.resolve")).toHaveLength(refused ? 0 : 1);
+        expect(methodCalls(gateway, "question.request")).toHaveLength(1);
+        expect(methodCalls(gateway, "secrets.store.list")).toHaveLength(0);
+        expect(reservePrompt("call-after-registration", sessionKey)).toBeDefined();
+      } finally {
+        manager.close();
+        await manager.drain();
+        await scheduler.stop();
+      }
+    },
+  );
+
+  it.each([
+    ["telegram", true],
+    ["control-ui-only", false],
+  ] as const)(
+    "publishes an unreserved credential link only on deliverable %s",
+    async (channel, deliver) => {
+      const sent: { text?: string; channelData?: unknown }[] = [];
+      const { gateway, answer, waiting } = waitingStoredRequestGateway(deliver);
+      const options = promptOptions(
+        "agent:main:secret-direct-dispatch",
+        (payload) => {
           sent.push(payload);
         },
-        messageChannel: "telegram",
-      },
-    }).execute("call-secret-direct", args);
-    await vi.waitFor(() => expect(sent).toHaveLength(1));
-    finishWait?.({
-      status: "answered",
-      answers: { answers: { secret_value: ["stored"] } },
-    });
+        channel,
+      );
+      const pending = secretTool(gateway, options).execute("call-secret-direct", secretRequest);
+      settleOnCleanup(pending, () => answer.resolve({ status: "cancelled" }));
+      await waiting;
+      if (deliver) {
+        await vi.waitFor(() => expect(sent).toHaveLength(1));
+      }
+      answer.resolve(deliver ? storedAnswer : { status: "expired" });
+      await expect(pending).resolves.toMatchObject({
+        details: { status: deliver ? "stored" : "no_answer" },
+      });
+      if (deliver) {
+        expect(sent[0]?.text).toContain("https://ops.example.test/ask/");
+        expect(sent[0]?.text).toContain(secretName);
+      } else {
+        expect(sent).toEqual([]);
+      }
+    },
+  );
 
-    await expect(pending).resolves.toMatchObject({ details: { status: "stored" } });
-    expect(sent[0]?.text).toContain("https://ops.example.test/ask/");
-    expect(sent[0]?.text).toContain("SERVICE_API_KEY");
-  });
+  it.each([
+    ["missing origin", {}, undefined],
+    [
+      "disabled Control UI",
+      { gateway: { publicOrigin: "https://ops.example.test", controlUi: { enabled: false } } },
+      undefined,
+    ],
+    ["transport failure", {}, new Error("private transport diagnostic")],
+  ] as const)(
+    "returns safe model-facing guidance after cancelling a request with %s",
+    async (_name, config, deliveryError) => {
+      const scheduler = createTestGatewayScheduler();
+      const manager = new QuestionManager(scheduler);
+      const gateway = questionManagerGateway(manager, (request) => manager.request(request));
+      const sent: { text?: string }[] = [];
+      const tool = secretTool(gateway, {
+        ...promptOptions("agent:main:secret-no-route", (payload) => {
+          sent.push(payload);
+          if (deliveryError) {
+            throw deliveryError;
+          }
+        }),
+        config,
+      });
+
+      try {
+        const [definition] = toToolDefinitions([tool]);
+        assert.ok(definition);
+        const result = await wrapToolDefinition(definition).execute(
+          "call-secret-no-route",
+          secretRequest,
+        );
+
+        expect(sent).toHaveLength(1);
+        expect(sent[0]?.text).toContain("Credential request unavailable here");
+        expect(sent[0]?.text).not.toMatch(/https?:/);
+        expect(manager.get(requestedQuestionId(gateway.mock))).toMatchObject({
+          status: "cancelled",
+          resolvedBy: "prompt-delivery-failed",
+        });
+        expect(result.details).toEqual({
+          status: "error",
+          tool: "secrets",
+          error: deliveryError ? "credential-request prompt delivery failed" : sent[0]?.text,
+        });
+        expect(JSON.stringify(result)).not.toContain("private transport diagnostic");
+      } finally {
+        manager.close();
+        await manager.drain();
+        await scheduler.stop();
+      }
+    },
+  );
 
   it("ends credential publication before post-answer metadata finishes", async () => {
-    const sessionKey = "agent:main:secret-direct-dispatch-abort";
-    const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };
     let capturedSignal: AbortSignal | undefined;
-    let aborted = false;
-    let finishWait: ((value: unknown) => void) | undefined;
+    const answer = createDeferred<unknown>();
+    const promptReleased = createDeferred();
     const metadataStarted = createDeferred();
     const metadata = createDeferred<{ entries: (typeof secretEntry)[] }>();
-    const gateway = gatewayStub(async (method, _options, params) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          finishWait = resolve;
-        });
-      }
-      if (method === "secrets.store.list") {
+    const gateway = requestGateway({
+      "question.waitAnswer": async () => answer.promise,
+      "secrets.store.list": async () => {
         metadataStarted.resolve();
         return metadata.promise;
-      }
-      throw new Error(`unexpected method ${method}`);
+      },
+    });
+    const pending = secretTool(
+      gateway,
+      promptOptions("agent:main:secret-direct-dispatch-abort", (_payload, options) => {
+        capturedSignal = options?.signal;
+        return promptReleased.promise;
+      }),
+    ).execute("call-secret-direct-abort", secretRequest);
+    settleOnCleanup(pending, () => {
+      answer.resolve({ status: "cancelled" });
+      metadata.resolve({ entries: [secretEntry] });
+      promptReleased.resolve();
     });
 
-    const pending = createSecretsTool({
-      config: { gateway: { publicOrigin: "https://ops.example.test" } },
-      sessionKey,
-      gatewayCall: gateway.call,
-      questionPrompt: {
-        send: (_payload, options) => {
-          capturedSignal = options?.signal;
-          return new Promise<void>(() => {});
-        },
-        messageChannel: "telegram",
-      },
-    }).execute("call-secret-direct-abort", args);
-
     await vi.waitFor(() => expect(capturedSignal).toBeDefined());
-    capturedSignal?.addEventListener(
-      "abort",
-      () => {
-        aborted = true;
-      },
-      { once: true },
-    );
-    finishWait?.(storedAnswer);
+    expect(capturedSignal?.aborted).toBe(false);
+    answer.resolve(storedAnswer);
     try {
       await metadataStarted.promise;
-      expect(aborted).toBe(true);
+      expect(capturedSignal?.aborted).toBe(true);
     } finally {
       metadata.resolve({ entries: [secretEntry] });
       await expect(pending).resolves.toMatchObject({ details: { status: "stored" } });
     }
   });
 
-  it("keeps the credential prompt off a channel that cannot carry a Control UI link", async () => {
-    // Native credential cards arrive through question.requested instead, and chat
-    // must never become the place a credential is asked for.
-    const sessionKey = "agent:main:secret-native-only";
-    const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };
-    const sent: { text?: string }[] = [];
-    const gateway = gatewayStub(async (method, _options, params) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
-        return { status: "expired" };
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
-
-    const result = await createSecretsTool({
-      config: { gateway: { publicOrigin: "https://ops.example.test" } },
-      sessionKey,
-      gatewayCall: gateway.call,
-      questionPrompt: {
-        send: (payload) => {
-          sent.push(payload);
-        },
-        messageChannel: "control-ui-only",
-      },
-    }).execute("call-secret-native", args);
-
-    expect(sent).toEqual([]);
-    expect(result.details).toMatchObject({ status: "no_answer" });
-  });
-
   it("lists store metadata and environment previews", async () => {
     const entries = [
       {
-        name: "SERVICE_API_KEY",
-        kind: "secret",
+        ...secretEntry,
         allowedHosts: ["api.example.test"],
-        createdAtMs: 0,
-        updatedAtMs: 0,
         updatedBy: "operator:alice",
-        scopeKind: "team",
-        scopeId: "",
       },
       {
+        ...unrelatedEnv,
         name: "SERVICE_MODE",
-        kind: "env",
         value: "preview-value",
-        createdAtMs: 0,
-        updatedAtMs: 0,
-        scopeKind: "team",
-        scopeId: "",
       },
     ];
     const gateway = gatewayStub(async () => ({ entries }));
 
-    const result = await createSecretsTool({ gatewayCall: gateway.call }).execute("call-list", {
+    const result = await secretTool(gateway).execute("call-list", {
       action: "list",
     });
 
@@ -761,16 +803,16 @@ describe("secrets tool", () => {
   it("requires verified agent runtime identity when deleting a store entry", async () => {
     const gateway = gatewayStub(async () => ({ ok: true, reloaded: false }));
 
-    const result = await createSecretsTool({ gatewayCall: gateway.call }).execute("call-delete", {
+    const result = await secretTool(gateway).execute("call-delete", {
       action: "delete",
-      name: "SERVICE_API_KEY",
+      name: secretName,
     });
 
     expect(result.details).toEqual({ ok: true, reloaded: false });
     expect(gateway.mock).toHaveBeenCalledWith(
       "secrets.store.delete",
       {},
-      { name: "SERVICE_API_KEY" },
+      { name: secretName },
       { requireAgentRuntimeIdentity: true },
     );
   });

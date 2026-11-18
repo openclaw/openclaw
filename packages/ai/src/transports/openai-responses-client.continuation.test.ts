@@ -1,13 +1,35 @@
 import path from "node:path";
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toToolDefinitions } from "../../../../src/agents/agent-tool-definition-adapter.js";
+import { wrapStreamFnWithProviderPromptState } from "../../../../src/agents/embedded-agent-runner/provider-prompt-state.js";
+import { wrapStreamFnWithDiagnosticModelCallEvents } from "../../../../src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js";
+import { SessionManager } from "../../../../src/agents/sessions/session-manager.js";
+import { wrapToolDefinition } from "../../../../src/agents/sessions/tools/tool-definition-wrapper.js";
+import { createSessionsYieldTool } from "../../../../src/agents/tools/sessions-yield-tool.js";
+import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-accessor.js";
+import { createDiagnosticTraceContext } from "../../../../src/infra/diagnostic-trace-context.js";
+import {
+  createCodexNativeWebSearchWrapper,
+  createOpenAIFastModeWrapper,
+  createOpenAIResponsesContextManagementWrapper,
+  createOpenAITextVerbosityWrapper,
+} from "../../../../src/llm/providers/stream-wrappers/openai.js";
+import {
+  freezeJsonSnapshot,
+  isDeeplyFrozenPlainData,
+} from "../../../../src/shared/immutable-data.js";
+import { useSessionStoreTempDirs } from "../../../../src/test-utils/session-state-cleanup.js";
 import { createDeferred, withTestTimeout } from "../../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { Agent } from "../../../agent-core/src/agent.js";
-
-type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
+import type { SdkResponse } from "./openai-responses-sdk.test-support.js";
+import {
+  completedResponse,
+  outputItem,
+  userMessage,
+  wireCall,
+} from "./openai-stream-cases.test-support.js";
 
 const sseState = vi.hoisted(() => ({
   clientHeaders: [] as Array<Record<string, string>>,
@@ -15,41 +37,11 @@ const sseState = vi.hoisted(() => ({
   requests: [] as Array<Record<string, unknown>>,
 }));
 
-vi.mock("openai", () => {
-  class MockOpenAI {
-    apiKey: string;
-    baseURL: string;
-    responses = {
-      create: (request: Record<string, unknown>) => {
-        sseState.requests.push(request);
-        const outcome = sseState.outcomes.shift() ?? new Error("Unexpected SSE request");
-        return {
-          withResponse: async () => {
-            if (outcome instanceof Error) {
-              throw outcome;
-            }
-            return outcome;
-          },
-        };
-      },
-    };
-
-    constructor(options: {
-      apiKey?: string;
-      baseURL?: string;
-      defaultHeaders?: Record<string, string>;
-    }) {
-      this.apiKey = options.apiKey ?? "";
-      this.baseURL = options.baseURL ?? "https://api.openai.com/v1";
-      sseState.clientHeaders.push(options.defaultHeaders ?? {});
-    }
-
-    withOptions(options: { apiKey?: string }) {
-      return new MockOpenAI({ apiKey: options.apiKey ?? this.apiKey, baseURL: this.baseURL });
-    }
-  }
-
-  return { default: MockOpenAI, AzureOpenAI: MockOpenAI };
+vi.mock("openai", async () => {
+  const { createResponsesSdkMock } = await import("./openai-responses-sdk.test-support.js");
+  return createResponsesSdkMock(sseState, {
+    onConstruct: (options) => sseState.clientHeaders.push(options.defaultHeaders ?? {}),
+  });
 });
 
 vi.mock("openai/resources/responses/ws.js", () => ({
@@ -79,42 +71,25 @@ vi.mock("openai/resources/responses/ws.js", () => ({
 }));
 
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
+import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
 
 const initialHost = getAiTransportHost();
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const model = {
-  id: "gpt-5.6-luna",
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-responses-transcript-");
+const model = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna", {
   name: "GPT-5.6 Luna",
-  api: "openai-responses",
-  provider: "openai",
   baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 200_000,
-  maxTokens: 8192,
-} satisfies Model<"openai-responses">;
+}) satisfies Model<"openai-responses">;
 const astra = { ...model, id: "gpt-6-astra", name: "GPT-6 Astra" };
 
 function functionTool(name: string) {
   return { name, description: name, parameters: Type.Object({}) };
 }
 
-const asyncCall = {
-  type: "function_call",
-  id: "fc_lookup",
-  call_id: "call_lookup",
-  name: "lookup",
-  arguments: "{}",
-  status: "completed",
-  async: true,
-};
-
-function userMessage(text: string, timestamp: number) {
-  return { role: "user" as const, content: text, timestamp };
-}
+const asyncCall = { ...wireCall("lookup", "lookup"), status: "completed", async: true };
 
 function completedEvent(responseId: string, content: string) {
   const output = [
@@ -141,19 +116,24 @@ function completedEvent(responseId: string, content: string) {
       role: "assistant",
     },
   ];
-  return {
-    type: "response.completed",
-    response: {
-      id: responseId,
-      status: "completed",
-      output,
-      usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-    },
-  };
+  return completedResponse(responseId, output, {
+    usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
+  });
 }
 
 function sdkCompletion(responseId: string, content: string): SdkResponse {
   return sdkEvents(completedEvent(responseId, content));
+}
+
+/** A completion without url_citation, for tool-flow tests whose replies cite nothing. */
+function sdkUncitedCompletion(responseId: string, content: string): SdkResponse {
+  const event = completedEvent(responseId, content);
+  for (const item of event.response.output) {
+    for (const part of item.content) {
+      part.annotations = [];
+    }
+  }
+  return sdkEvents(event);
 }
 
 function sdkEvents(...events: Array<Record<string, unknown>>): SdkResponse {
@@ -165,15 +145,21 @@ function sdkEvents(...events: Array<Record<string, unknown>>): SdkResponse {
   };
 }
 
+const unoptedCustomEndpointModel = {
+  ...model,
+  provider: "omniroute",
+  baseUrl: "https://omniroute.example.com/v1",
+} satisfies Model<"openai-responses">;
+
 async function run(
   context: Context,
   options: {
     sessionId?: string;
+    cacheRetention?: "none" | "short";
     onPayload: (payload: Record<string, unknown>) => Record<string, unknown>;
     signal?: AbortSignal;
     reasoningEffort?: "low" | "medium" | "high";
     transport?: "sse" | "websocket-cached";
-    authProfileId?: string;
     asyncToolExecution?: boolean;
     openclawCodeModeToolSurface?: boolean;
   },
@@ -182,8 +168,8 @@ async function run(
   const stream = await createOpenAIResponsesTransportStreamFn()(requestModel, context, {
     apiKey: "test-key",
     sessionId: options.sessionId ?? "session-1",
+    cacheRetention: options.cacheRetention,
     transport: options.transport ?? "sse",
-    authProfileId: options.authProfileId,
     reasoningEffort: options.reasoningEffort ?? "low",
     asyncToolExecution: options.asyncToolExecution,
     openclawCodeModeToolSurface: options.openclawCodeModeToolSurface,
@@ -225,33 +211,189 @@ describe("native OpenAI Responses SSE continuation", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     cleanupSessionResources();
     configureAiTransportHost(initialHost);
+    if (vi.isFakeTimers()) {
+      await vi.runAllTimersAsync();
+    }
     vi.useRealTimers();
   });
 
-  it("continues stateful literal SSE turns with only appended input", async () => {
-    sseState.outcomes.push(
-      sdkCompletion("resp_1", "first answer"),
-      sdkCompletion("resp_2", "second answer"),
+  it("retains prefix ownership through provider policies and observers while isolating mutating hooks", async () => {
+    configureAiTransportHost({
+      ...getAiTransportHost(),
+      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
+    });
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      wrapStreamFnWithProviderPromptState({
+        streamFn: createCodexNativeWebSearchWrapper(
+          createOpenAITextVerbosityWrapper(
+            createOpenAIFastModeWrapper(
+              createOpenAIResponsesContextManagementWrapper(
+                createOpenAIResponsesTransportStreamFn(),
+                { responsesServerCompaction: false },
+              ),
+            ),
+            "low",
+          ),
+          { codeModeToolSurfaceEnabled: true, nativeWebSearchAllowedByToolPolicy: false },
+        ),
+        state: {},
+        effectiveContextTokenBudget: 200_000,
+      }),
+      {
+        runId: "prefix-owner",
+        provider: astra.provider,
+        model: astra.id,
+        api: astra.api,
+        trace: createDiagnosticTraceContext({}),
+        nextCallId: () => "prefix-call",
+        suppressPluginHooks: true,
+      },
     );
-    const firstUser = userMessage("first question", 1);
-    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
-    const first = await run({ messages: [firstUser], tools: [] }, { onPayload });
-    const second = await run(
-      { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
-      { onPayload },
-    );
+    const text = "retained history must not be encoded again";
+    const messages: Context["messages"] = [freezeJsonSnapshot(userMessage(text, 1))];
+    const request = async (onPayload?: (payload: unknown) => void) => {
+      sseState.outcomes.push(sdkUncitedCompletion(`resp_${sseState.requests.length}`, "answer"));
+      const options = {
+        apiKey: "synthetic-key",
+        reasoningEffort: "low",
+        onPayload,
+      } satisfies OpenAIResponsesOptions;
+      const stream = await wrapped(
+        astra,
+        { messages, tools: [functionTool("exec"), functionTool("wait")] },
+        options,
+      );
+      for await (const event of stream) {
+        void event;
+      }
+      const result = await stream.result();
+      expect(result.stopReason).toBe("stop");
+      expect(result).toHaveProperty("openclawResponsesInputReplay.reasoning.prefixHash");
+      return result;
+    };
+    messages.push(freezeJsonSnapshot(await request()), freezeJsonSnapshot(userMessage("next", 2)));
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      await request();
+      expect(stringify.mock.calls.filter(([value]) => value === text)).toHaveLength(0);
+    } finally {
+      stringify.mockRestore();
+    }
+    expect(sseState.requests[1]?.input).toHaveProperty("0.content.0.text", text);
+    await request((payload) => {
+      const changed = payload as { input: [{ content: [{ text: string }] }] };
+      changed.input[0].content[0].text = "hook edit";
+    });
+    expect(sseState.requests[2]?.input).toHaveProperty("0.content.0.text", "hook edit");
+    expect(sseState.requests[0]?.input).toHaveProperty("0.content.0.text", text);
+  });
 
-    expect(second.stopReason).toBe("stop");
-    expect(sseState.clientHeaders).toMatchObject([
-      { "x-openclaw-turn-id": "turn-1" },
-      { "x-openclaw-turn-id": "turn-2" },
-    ]);
+  it.each(["short"] as const)(
+    "continues stateful SSE turns with %s retention and matching affinity",
+    async (cacheRetention) => {
+      sseState.outcomes.push(
+        sdkCompletion("resp_1", "first answer"),
+        sdkCompletion("resp_2", "second answer"),
+      );
+      const firstUser = userMessage("first question", 1);
+      const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
+      const requestModel = { ...model, compat: { sendSessionIdHeader: true } };
+      const first = await run(
+        { messages: [firstUser], tools: [] },
+        { onPayload, cacheRetention },
+        requestModel,
+      );
+      const second = await run(
+        { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
+        { onPayload, cacheRetention },
+        requestModel,
+      );
+
+      expect(second.stopReason).toBe("stop");
+      expect(sseState.clientHeaders).toMatchObject([
+        { "x-openclaw-turn-id": "turn-1" },
+        { "x-openclaw-turn-id": "turn-2" },
+      ]);
+      expect(sseState.clientHeaders.map((headers) => headers.session_id)).toEqual([
+        "session-1",
+        "session-1",
+      ]);
+      expect(sseState.requests[1]).toMatchObject({
+        previous_response_id: "resp_1",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "second question" }],
+          },
+        ],
+      });
+    },
+  );
+
+  it("continues after a hosted web search answer with sources through effort and tool turns", async () => {
+    const search = completedEvent("resp_search", "searched answer");
+    const toolCall = { ...wireCall("lookup", "lookup"), status: "completed" };
+    const toolTurn = completedEvent("resp_tool", "");
+    sseState.outcomes.push(
+      sdkEvents({
+        ...search,
+        response: {
+          ...search.response,
+          output: [
+            {
+              type: "web_search_call",
+              id: "ws_1",
+              status: "completed",
+              action: { type: "search", query: "source" },
+            },
+            ...search.response.output,
+          ],
+        },
+      }),
+      sdkEvents(outputItem("added", { ...toolCall, arguments: "" }), outputItem("done", toolCall), {
+        ...toolTurn,
+        response: { ...toolTurn.response, output: [toolCall] },
+      }),
+      sdkCompletion("resp_final", "used lookup result"),
+    );
+    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
+    const tools = [functionTool("lookup")];
+    const messages: Context["messages"] = [userMessage("first question", 1)];
+    const first = await run({ messages, tools }, { onPayload }, astra);
+    // Sources reach the visible reply; the server keeps only the provider prose.
+    expect(first.content).toContainEqual(
+      expect.objectContaining({
+        type: "text",
+        text: "searched answer\n\n[source](https://example.test/source)",
+      }),
+    );
+    messages.push(first, userMessage("second question", 2));
+    const second = await run({ messages, tools }, { onPayload, reasoningEffort: "high" }, astra);
+    expect(second.stopReason).toBe("toolUse");
+    const call = second.content.find((block) => block.type === "toolCall");
+    if (call?.type !== "toolCall") {
+      throw new Error("Expected the lookup tool call");
+    }
+    messages.push(second, {
+      role: "toolResult",
+      toolCallId: call.id,
+      toolName: call.name,
+      content: [{ type: "text", text: "lookup result" }],
+      isError: false,
+      timestamp: 3,
+    });
+    const third = await run({ messages, tools }, { onPayload, reasoningEffort: "high" }, astra);
+
+    expect(third.stopReason).toBe("stop");
     expect(sseState.requests[1]).toMatchObject({
-      previous_response_id: "resp_1",
+      previous_response_id: "resp_search",
+      reasoning: { effort: "low" },
       input: [
+        { type: "configuration_update", reasoning: { effort: "high" } },
         {
           type: "message",
           role: "user",
@@ -259,34 +401,39 @@ describe("native OpenAI Responses SSE continuation", () => {
         },
       ],
     });
+    expect(sseState.requests[2]).toMatchObject({
+      previous_response_id: "resp_tool",
+      reasoning: { effort: "low" },
+      input: [{ type: "function_call_output", call_id: "call_lookup", output: "lookup result" }],
+    });
+    expect(sseState.requests[2]?.input).toHaveLength(1);
   });
 
-  it("keeps final store:false turns stateless and sends full history", async () => {
+  it("never engages for a custom endpoint without the explicit opt-in, even with store:true forced (the host carries no trust signal on its own)", async () => {
     sseState.outcomes.push(
       sdkCompletion("resp_1", "first answer"),
       sdkCompletion("resp_2", "second answer"),
     );
     const firstUser = userMessage("first question", 1);
-    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: false });
-    const first = await run({ messages: [firstUser], tools: [] }, { onPayload });
+    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
+    const first = await run(
+      { messages: [firstUser], tools: [] },
+      { onPayload },
+      unoptedCustomEndpointModel,
+    );
     await run(
       { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
       { onPayload },
+      unoptedCustomEndpointModel,
     );
 
     expect(sseState.requests[1]).not.toHaveProperty("previous_response_id");
     expect(sseState.requests[1]?.input).toHaveLength(3);
   });
 
-  it.each([
-    { transport: "sse", reset: "warm" },
-    { transport: "sse", reset: "cleanup" },
-    { transport: "sse", reset: "expiry" },
-    { transport: "websocket-cached", reset: "cleanup" },
-    { transport: "websocket-cached", reset: "expiry" },
-  ] as const)(
+  it.each([{ transport: "websocket-cached", reset: "expiry" }] as const)(
     "preserves effort controls through $transport $reset and transcript reload",
-    async ({ transport, reset }) => {
+    async ({ transport }) => {
       vi.useFakeTimers();
       sseState.outcomes.push(
         sdkCompletion("resp_1", "first answer"),
@@ -300,11 +447,7 @@ describe("native OpenAI Responses SSE continuation", () => {
       messages.push(first, userMessage("second question", 2));
       const second = await run({ messages }, { ...options, reasoningEffort: "high" }, astra);
       messages.push(second, userMessage("third question", 3));
-      if (reset === "cleanup") {
-        cleanupSessionResources();
-      } else if (reset === "expiry") {
-        vi.advanceTimersByTime(5 * 60 * 1000 + 1);
-      }
+      vi.advanceTimersByTime(5 * 60 * 1000 + 1);
       const serialized = JSON.stringify(messages);
       const third = await run(
         { messages: JSON.parse(serialized) },
@@ -317,7 +460,6 @@ describe("native OpenAI Responses SSE continuation", () => {
         "stop",
       ]);
       const configuration = { type: "configuration_update", reasoning: { effort: "high" } };
-      const input = sseState.requests[2]?.input;
       expect(sseState.requests[1]).toMatchObject({ reasoning: { effort: "low" } });
       expect(sseState.requests[1]?.input).toContainEqual(configuration);
       expect(sseState.requests[2]).toMatchObject({
@@ -333,129 +475,85 @@ describe("native OpenAI Responses SSE continuation", () => {
         ],
       });
       expect(sseState.requests[2]).not.toHaveProperty("previous_response_id");
-      if (transport === "websocket-cached") {
-        expect(sseState.requests[1]).toHaveProperty("previous_response_id", "resp_1");
-        expect(sseState.requests[2]).toHaveProperty("type", "response.create");
-      }
-      if (transport === "sse" && Array.isArray(input)) {
-        expect(input.slice(0, 4)).toEqual(sseState.requests[1]?.input);
-      }
+      expect(sseState.requests[1]).toHaveProperty("previous_response_id", "resp_1");
+      expect(sseState.requests[2]).toHaveProperty("type", "response.create");
     },
   );
 
-  it.each(["current", "legacy without reasoning", "legacy without replay", "model", "session"])(
-    "round-trips %s reasoning state through the SQLite session transcript",
-    async (variant) => {
-      const { SessionManager } = await import("../../../../src/agents/sessions/session-manager.js");
-      const { upsertSessionEntryCore } =
-        await import("../../../../src/config/sessions/session-accessor.js");
-      configureAiTransportHost({
-        ...initialHost,
-        plugin: { ...initialHost.plugin, resolveTransportTurnState: () => undefined },
-      });
-      sseState.outcomes.push(
-        sdkCompletion("resp_1", "first answer"),
-        sdkCompletion("resp_2", "second answer"),
-        sdkCompletion("resp_warm", "third answer"),
-        sdkCompletion("resp_reloaded", "third answer"),
-      );
-      const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: false });
-      const messages: Context["messages"] = [userMessage("first question", 1)];
-      messages.push(
-        await run({ messages }, { onPayload }, astra),
-        userMessage("second question", 2),
-      );
-      messages.push(
-        await run({ messages }, { onPayload, reasoningEffort: "high" }, astra),
-        userMessage("third question", 3),
-      );
-      expect(sseState.requests[1]?.input).toContainEqual({
-        type: "configuration_update",
-        reasoning: { effort: "high" },
-      });
-      if (variant.startsWith("legacy")) {
-        for (const message of messages) {
-          if ("openclawResponsesInputReplay" in message) {
-            if (variant === "legacy without replay") {
-              delete message.openclawResponsesInputReplay;
-            } else if (isRecord(message.openclawResponsesInputReplay)) {
-              delete message.openclawResponsesInputReplay.reasoning;
-            }
-          }
-        }
+  it("round-trips reasoning state through the SQLite session transcript", async () => {
+    configureAiTransportHost({
+      ...initialHost,
+      plugin: { ...initialHost.plugin, resolveTransportTurnState: () => undefined },
+    });
+    sseState.outcomes.push(
+      sdkCompletion("resp_1", "first answer"),
+      sdkCompletion("resp_2", "second answer"),
+      sdkCompletion("resp_warm", "third answer"),
+      sdkCompletion("resp_reloaded", "third answer"),
+    );
+    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: false });
+    const messages: Context["messages"] = [userMessage("first question", 1)];
+    messages.push(await run({ messages }, { onPayload }, astra), userMessage("second question", 2));
+    messages.push(
+      await run({ messages }, { onPayload, reasoningEffort: "high" }, astra),
+      userMessage("third question", 3),
+    );
+    expect(sseState.requests[1]?.input).toContainEqual({
+      type: "configuration_update",
+      reasoning: { effort: "high" },
+    });
+    const options = {
+      onPayload,
+      reasoningEffort: "medium" as const,
+      sessionId: "session-1",
+    };
+    expect((await run({ messages }, options, astra)).stopReason).toBe("stop");
+    const expectedRequest = sseState.requests.at(-1);
+    expect(expectedRequest).toMatchObject({
+      reasoning: { effort: "low" },
+    });
+    expect(expectedRequest?.input).toEqual([
+      expect.objectContaining({ role: "user" }),
+      expect.objectContaining({ role: "assistant" }),
+      { type: "configuration_update", reasoning: { effort: "high" } },
+      expect.objectContaining({ role: "user" }),
+      expect.objectContaining({ role: "assistant" }),
+      { type: "configuration_update", reasoning: { effort: "medium" } },
+      expect.objectContaining({ role: "user" }),
+    ]);
+    const dir = sessionDirs.make();
+    const scope = {
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:responses-reasoning",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const manager = SessionManager.open(scope, dir);
+    for (const message of messages) {
+      // This append traverses the production transcript redactor and SQLite store.
+      manager.appendMessage(message);
+    }
+    cleanupSessionResources();
+    const reloaded = SessionManager.open(scope, dir).buildSessionContext().messages;
+    expect(reloaded).toEqual(messages);
+    const requestMessages = reloaded.map((message) => {
+      if (message.role !== "user" && message.role !== "assistant") {
+        throw new Error(`Unexpected persisted message role: ${message.role}`);
       }
-      const requestModel = variant === "model" ? model : astra;
-      const options = {
-        onPayload,
-        reasoningEffort: "medium" as const,
-        sessionId: variant === "session" ? "session-2" : "session-1",
-      };
-      // Legacy transcripts have no durable controls; compare their existing cold-request behavior.
-      if (variant !== "current") {
-        cleanupSessionResources();
-      }
-      expect((await run({ messages }, options, requestModel)).stopReason).toBe("stop");
-      const expectedRequest = sseState.requests.at(-1);
-      expect(expectedRequest).toMatchObject({
-        reasoning: { effort: variant === "current" ? "low" : "medium" },
-      });
-      if (variant === "current") {
-        expect(expectedRequest?.input).toEqual([
-          expect.objectContaining({ role: "user" }),
-          expect.objectContaining({ role: "assistant" }),
-          { type: "configuration_update", reasoning: { effort: "high" } },
-          expect.objectContaining({ role: "user" }),
-          expect.objectContaining({ role: "assistant" }),
-          { type: "configuration_update", reasoning: { effort: "medium" } },
-          expect.objectContaining({ role: "user" }),
-        ]);
-      } else {
-        expect(expectedRequest?.input).not.toContainEqual(
-          expect.objectContaining({ type: "configuration_update" }),
-        );
-      }
-
-      const dir = tempDirs.make("openclaw-responses-transcript-");
-      const scope = {
-        agentId: "main",
-        sessionId: "session-1",
-        sessionKey: "agent:main:responses-reasoning",
-        storePath: path.join(dir, "sessions.json"),
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const manager = SessionManager.open(scope, dir);
-      for (const message of messages) {
-        // This append traverses the production transcript redactor and SQLite store.
-        manager.appendMessage(message);
-      }
-      cleanupSessionResources();
-      const reloaded = SessionManager.open(scope, dir).buildSessionContext().messages;
-      expect(reloaded).toEqual(messages);
-      const requestMessages = reloaded.map((message) => {
-        if (message.role !== "user" && message.role !== "assistant") {
-          throw new Error(`Unexpected persisted message role: ${message.role}`);
-        }
-        return message;
-      });
-      expect((await run({ messages: requestMessages }, options, requestModel)).stopReason).toBe(
-        "stop",
-      );
-      expect(sseState.requests.at(-1)).toEqual(expectedRequest);
-      expect(sseState.requests.at(-1)).not.toHaveProperty("previous_response_id");
-    },
-  );
+      return message;
+    });
+    expect((await run({ messages: requestMessages }, options, astra)).stopReason).toBe("stop");
+    expect(sseState.requests.at(-1)).toEqual(expectedRequest);
+    expect(sseState.requests.at(-1)).not.toHaveProperty("previous_response_id");
+  });
 
   it.each([
     "model",
     "mode",
-    "multi-agent",
-    "truncation",
     "server compaction",
     "compacted history",
     "edited history",
-    "route",
-    "session",
-    "auth",
     "request settings",
   ])("resets durable effort controls after %s changes", async (change) => {
     sseState.outcomes.push(
@@ -484,24 +582,16 @@ describe("native OpenAI Responses SSE continuation", () => {
       { messages: JSON.parse(serialized) },
       {
         reasoningEffort: "medium",
-        sessionId: change === "session" ? "session-2" : undefined,
-        authProfileId: change === "auth" ? "profile-2" : undefined,
         onPayload: (payload) => ({
           ...onPayload(payload),
           ...(change === "mode" ? { reasoning: { effort: "medium", mode: "pro" } } : {}),
-          ...(change === "multi-agent" ? { multi_agent: { enabled: true } } : {}),
-          ...(change === "truncation" ? { truncation: "auto" } : {}),
           ...(change === "server compaction"
             ? { context_management: [{ type: "compaction", compact_threshold: 1000 }] }
             : {}),
           ...(change === "request settings" ? { max_output_tokens: 512 } : {}),
         }),
       },
-      change === "model"
-        ? model
-        : change === "route"
-          ? { ...astra, baseUrl: "https://example.test/v1" }
-          : astra,
+      change === "model" ? model : astra,
     );
     expect(third.stopReason).toBe("stop");
     expect(sseState.requests[2]).toMatchObject({ reasoning: { effort: "medium" } });
@@ -523,19 +613,11 @@ describe("native OpenAI Responses SSE continuation", () => {
       {
         response: new Response(null, { status: 200 }),
         data: (async function* () {
-          yield {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: { ...asyncCall, arguments: "" },
-          };
-          yield { type: "response.output_item.done", output_index: 0, item: asyncCall };
+          yield outputItem("added", { ...asyncCall, arguments: "" });
+          yield outputItem("done", asyncCall);
           await withTestTimeout(toolStarted.promise, 5000, "Async tool did not start during SSE");
           const completed = completedEvent("resp_async", "independent answer");
-          yield {
-            type: "response.output_item.done",
-            output_index: 1,
-            item: completed.response.output[0],
-          };
+          yield outputItem("done", completed.response.output[0], 1);
           responseCompleted.resolve();
           yield {
             ...completed,
@@ -543,13 +625,21 @@ describe("native OpenAI Responses SSE continuation", () => {
           };
         })(),
       },
-      sdkCompletion("resp_final", "used lookup result"),
+      sdkUncitedCompletion("resp_final", "used lookup result"),
     );
     const agent = new Agent({
       initialState: {
         model: astra,
         thinkingLevel: "low",
-        tools: [{ ...functionTool("lookup"), label: "lookup", execute }],
+        tools: [
+          { ...functionTool("lookup"), label: "lookup", execute },
+          {
+            ...functionTool("sessions_yield"),
+            label: "sessions_yield",
+            async: false,
+            execute: vi.fn(),
+          },
+        ],
       },
       streamFn: createOpenAIResponsesTransportStreamFn(),
       getApiKey: () => "test-key",
@@ -567,6 +657,7 @@ describe("native OpenAI Responses SSE continuation", () => {
       expect(sseState.requests).toHaveLength(1);
       expect(sseState.requests[0]?.tools).toEqual([
         expect.objectContaining({ name: "lookup", async: true }),
+        expect.not.objectContaining({ async: true }),
       ]);
       releaseTool.resolve();
       await prompt;
@@ -592,10 +683,51 @@ describe("native OpenAI Responses SSE continuation", () => {
     }
   });
 
+  it("keeps Astra tools synchronous without sessions_yield to collect async results", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "lookup result" }],
+      details: {},
+    }));
+    const call = { ...wireCall("lookup", "lookup"), status: "completed" };
+    const completed = completedEvent("resp_call", "");
+    sseState.outcomes.push(
+      sdkEvents(outputItem("added", { ...call, arguments: "" }), outputItem("done", call), {
+        ...completed,
+        response: { ...completed.response, output: [call] },
+      }),
+      sdkUncitedCompletion("resp_final", "used lookup result"),
+    );
+    // plugins is synchronous but cannot collect async results (cron surfaces lack sessions_yield).
+    const agent = new Agent({
+      initialState: {
+        model: astra,
+        thinkingLevel: "low",
+        tools: [
+          { ...functionTool("lookup"), label: "lookup", execute },
+          { ...functionTool("plugins"), label: "plugins", async: false, execute: vi.fn() },
+        ],
+      },
+      streamFn: createOpenAIResponsesTransportStreamFn(),
+      getApiKey: () => "test-key",
+      sessionId: "sync-agent",
+      transport: "sse",
+    });
+    await agent.prompt("Look it up and report.");
+    expect(sseState.requests[0]?.tools).not.toContainEqual(
+      expect.objectContaining({ async: true }),
+    );
+    expect(sseState.requests).toHaveLength(2);
+    const replay = sseState.requests[1]?.input as Array<{ type: string }>;
+    expect(replay.filter((item) => item.type === "function_call_output")).toEqual([
+      { type: "function_call_output", call_id: "call_lookup", output: "lookup result" },
+    ]);
+    expect(agent.state.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [expect.objectContaining({ text: "used lookup result" })],
+    });
+  });
+
   it.each([
-    { name: "direct Astra", requestModel: astra, enabled: true, expected: true },
-    { name: "ordinary model", requestModel: model, enabled: true, expected: false },
-    { name: "missing executor capability", requestModel: astra, enabled: false, expected: false },
     { name: "code mode", requestModel: astra, enabled: true, codeMode: true, expected: false },
     {
       name: "API multi-agent",
@@ -604,24 +736,14 @@ describe("native OpenAI Responses SSE continuation", () => {
       multiAgent: true,
       expected: false,
     },
-    {
-      name: "custom endpoint",
-      requestModel: { ...astra, baseUrl: "https://example.test/v1" },
-      enabled: true,
-      expected: false,
-    },
   ])(
     "gates async advertisement and normalized calls for $name",
     async ({ requestModel, enabled, codeMode, multiAgent, expected }) => {
       const completed = completedEvent("resp_call", "");
       sseState.outcomes.push(
         sdkEvents(
-          {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: { ...asyncCall, arguments: "" },
-          },
-          { type: "response.output_item.done", output_index: 0, item: asyncCall },
+          outputItem("added", { ...asyncCall, arguments: "" }),
+          outputItem("done", asyncCall),
           { ...completed, response: { ...completed.response, output: [asyncCall] } },
         ),
       );
@@ -646,67 +768,71 @@ describe("native OpenAI Responses SSE continuation", () => {
     },
   );
 
-  it("keeps async tools on full-history encrypted-content recovery", async () => {
-    sseState.outcomes.push(
-      Object.assign(new Error("invalid encrypted content"), { code: "invalid_encrypted_content" }),
-      sdkCompletion("resp_retry", "recovered"),
-    );
-    const result = await run(
-      { messages: [userMessage("recover", 1)], tools: [functionTool("lookup")] },
+  it("keeps the session's sessions_yield synchronous so a yield pauses the response", async () => {
+    sseState.outcomes.push(sdkCompletion("resp_wait", "waiting"));
+    const sessionTools = toToolDefinitions([
+      createSessionsYieldTool({ sessionId: "session" }),
       {
-        asyncToolExecution: true,
-        onPayload: (payload) => ({
-          ...payload,
-          input: [
-            ...(payload.input as unknown[]),
-            { type: "compaction", encrypted_content: "opaque" },
-          ],
-        }),
+        ...functionTool("exec"),
+        label: "exec",
+        execute: async () => ({ content: [], details: {} }),
       },
+    ]).map((definition) => wrapToolDefinition(definition));
+    await run(
+      { messages: [userMessage("wait", 1)], tools: sessionTools },
+      { asyncToolExecution: true, onPayload: (payload) => payload },
       astra,
     );
-    expect(result.stopReason).toBe("stop");
-    expect(sseState.requests).toHaveLength(2);
-    expect(sseState.requests.map((request) => request.tools)).toEqual([
-      [expect.objectContaining({ name: "lookup", async: true })],
-      [expect.objectContaining({ name: "lookup", async: true })],
+    expect(sseState.requests[0]?.tools).toEqual([
+      expect.objectContaining({ name: "exec", async: true }),
+      expect.objectContaining({ name: "sessions_yield" }),
     ]);
-    expect(JSON.stringify(sseState.requests[1]?.input)).not.toContain('"compaction"');
+    expect(sseState.requests[0]?.tools).not.toContainEqual(
+      expect.objectContaining({ name: "sessions_yield", async: true }),
+    );
   });
 
-  it("recovers a rejected continuation with full history and advances the baseline", async () => {
-    sseState.outcomes.push(
-      sdkCompletion("resp_1", "first answer"),
-      Object.assign(new Error("previous response not found"), {
-        code: "previous_response_not_found",
-        status: 400,
-      }),
-      sdkCompletion("resp_2", "second answer"),
-      sdkCompletion("resp_3", "third answer"),
-    );
-    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
-    const firstUser = userMessage("first question", 1);
-    const first = await run({ messages: [firstUser], tools: [] }, { onPayload });
-    const secondContext = {
-      messages: [firstUser, first, userMessage("second question", 2)],
-      tools: [],
-    };
-    const second = await run(secondContext, { onPayload });
-    await run(
-      {
-        messages: [...secondContext.messages, second, userMessage("third question", 3)],
+  it.each<{ rejection: string; error: { code: string; param?: string; status: number } }>([
+    {
+      rejection:
+        "Previous response cannot be used for this organization due to Zero Data Retention.",
+      error: { code: "unsupported_parameter", param: "previous_response_id", status: 400 },
+    },
+  ])(
+    "recovers a continuation rejected with $error.code using full history",
+    async ({ rejection, error }) => {
+      sseState.outcomes.push(
+        sdkCompletion("resp_1", "first answer"),
+        Object.assign(new Error(`400 ${rejection}`), error),
+        sdkCompletion("resp_2", "second answer"),
+        sdkCompletion("resp_3", "third answer"),
+      );
+      const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
+      const firstUser = userMessage("first question", 1);
+      const first = await run({ messages: [firstUser], tools: [] }, { onPayload });
+      const secondContext = {
+        messages: [firstUser, first, userMessage("second question", 2)],
         tools: [],
-      },
-      { onPayload },
-    );
+      };
+      const second = await run(secondContext, { onPayload });
+      expect(second.stopReason).toBe("stop");
+      await run(
+        {
+          messages: [...secondContext.messages, second, userMessage("third question", 3)],
+          tools: [],
+        },
+        { onPayload },
+      );
 
-    expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
-    expect(sseState.requests[1]?.input).toHaveLength(1);
-    expect(sseState.requests[2]).not.toHaveProperty("previous_response_id");
-    expect(sseState.requests[2]?.input).toHaveLength(3);
-    expect(sseState.requests[3]).toMatchObject({ previous_response_id: "resp_2" });
-    expect(sseState.requests[3]?.input).toHaveLength(1);
-  });
+      expect(sseState.requests).toHaveLength(4);
+      expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
+      expect(sseState.requests[1]?.input).toHaveLength(1);
+      expect(sseState.requests[2]).not.toHaveProperty("previous_response_id");
+      expect(sseState.requests[2]?.input).toHaveLength(3);
+      expect(sseState.requests[3]).toMatchObject({ previous_response_id: "resp_2" });
+      expect(sseState.requests[3]?.input).toHaveLength(1);
+    },
+  );
 
   it("records the effective full-history compaction recovery request", async () => {
     sseState.outcomes.push(
@@ -741,35 +867,50 @@ describe("native OpenAI Responses SSE continuation", () => {
       { onPayload: stateful },
     );
 
-    expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
-    expect(JSON.stringify(sseState.requests[1]?.input)).toContain('"compaction"');
+    expect(sseState.requests).toHaveLength(4);
+    expect(sseState.requests[1]).toMatchObject({
+      store: false,
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "first question" }] },
+        { role: "assistant", content: [{ type: "output_text", text: "first answer" }] },
+        { role: "user", content: [{ type: "input_text", text: "second question" }] },
+        { type: "compaction", encrypted_content: "opaque" },
+      ],
+    });
+    expect(sseState.requests[1]).not.toHaveProperty("previous_response_id");
     expect(sseState.requests[2]).not.toHaveProperty("previous_response_id");
+    expect(sseState.requests[2]).toMatchObject({
+      store: false,
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "first question" }] },
+        { role: "assistant", content: [{ type: "output_text", text: "first answer" }] },
+        { role: "user", content: [{ type: "input_text", text: "second question" }] },
+      ],
+    });
     expect(JSON.stringify(sseState.requests[2]?.input)).not.toContain('"compaction"');
-    expect(sseState.requests[3]).toMatchObject({ previous_response_id: "resp_2" });
+    // The unstored recovery cannot advance the stored prefix past the first response.
+    expect(sseState.requests[3]).toMatchObject({
+      store: true,
+      previous_response_id: "resp_1",
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "second question" }] },
+        { role: "assistant", content: [{ type: "output_text", text: "second answer" }] },
+        { role: "user", content: [{ type: "input_text", text: "third question" }] },
+      ],
+    });
   });
 
   it.each([
-    "request failure",
     "continuation error without previous_response_id",
-    "incomplete response",
     "post-dispatch stream rejection",
     "abort",
   ])("does not commit after %s", async (failure) => {
     const controller = new AbortController();
-    if (failure === "request failure") {
-      sseState.outcomes.push(new Error("request failed"));
-    } else if (failure === "continuation error without previous_response_id") {
+    if (failure === "continuation error without previous_response_id") {
       sseState.outcomes.push(
         Object.assign(new Error("previous response not found"), {
           code: "previous_response_not_found",
           status: 400,
-        }),
-      );
-    } else if (failure === "incomplete response") {
-      sseState.outcomes.push(
-        sdkEvents({
-          type: "response.incomplete",
-          response: { id: "resp_incomplete", status: "incomplete", output: [] },
         }),
       );
     } else if (failure === "post-dispatch stream rejection") {

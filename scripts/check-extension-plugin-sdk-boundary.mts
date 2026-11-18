@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import path from "node:path";
-// Inventories extension imports to enforce plugin SDK boundary rules.
+import { format } from "node:util";
 import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
@@ -33,8 +33,8 @@ type BoundaryCheckIo = {
 
 const MODES = new Set<BoundaryMode>([
   "src-outside-plugin-sdk",
-  "relative-outside-package",
   "normalization-core-bypass",
+  "relative-outside-package",
 ]);
 
 const ruleTextByMode: Record<BoundaryMode, string> = {
@@ -158,55 +158,13 @@ const formatInventoryHuman = (mode: BoundaryMode, inventory: BoundaryEntry[]): s
     inventory,
   );
 
-/** Creates the extension boundary guard for the repository or an isolated fixture root. */
-export function createExtensionPluginSdkBoundaryChecker(options: { repoRoot?: string } = {}) {
-  const repoRoot = path.resolve(options.repoRoot ?? DEFAULT_REPO_ROOT);
+function createExtensionPluginSdkBoundaryChecker() {
+  const repoRoot = path.resolve(DEFAULT_REPO_ROOT);
   // Generated bundles are validated at their build owner; they are not bounded authored source.
   const generatedExtensionAssetSources = new Set(
     listGeneratedExtensionAssetSources({ rootDir: repoRoot }),
   );
-  const collectBoundaryEntries: NonNullable<
-    Parameters<
-      typeof createExtensionImportBoundaryChecker<CollectedBoundaryEntry>
-    >[0]["collectEntries"]
-  > = ({ filePath, relativeFile, references }) => {
-    const extensionRoot = relativeFile.split("/").slice(0, 2).join("/");
-    const entries: CollectedBoundaryEntry[] = [];
-    for (const { kind, line, specifier } of references) {
-      const resolvedPath = resolveBoundarySpecifier(repoRoot, specifier, filePath);
-      if (!resolvedPath) {
-        continue;
-      }
-      const modes: BoundaryMode[] = [];
-      if (
-        specifier.startsWith(".") &&
-        resolvedPath !== extensionRoot &&
-        !resolvedPath.startsWith(extensionRoot + "/")
-      ) {
-        modes.push("relative-outside-package");
-      }
-      if (resolvedPath.startsWith("src/") && !resolvedPath.startsWith("src/plugin-sdk/")) {
-        modes.push("src-outside-plugin-sdk");
-      }
-      if (isNormalizationCoreBypass(specifier, resolvedPath)) {
-        modes.push("normalization-core-bypass");
-      }
-      for (const mode of modes) {
-        entries.push({
-          mode,
-          entry: {
-            file: relativeFile,
-            line,
-            kind,
-            specifier,
-            resolvedPath,
-            reason: classifyReason(mode, kind, resolvedPath, specifier),
-          },
-        });
-      }
-    }
-    return entries;
-  };
+
   const extensionBoundaryChecker = createExtensionImportBoundaryChecker<CollectedBoundaryEntry>({
     repoRoot,
     roots: [BUNDLED_PLUGIN_ROOT_DIR],
@@ -241,7 +199,44 @@ export function createExtensionPluginSdkBoundaryChecker(options: { repoRoot?: st
           !resolvedPath.startsWith(extensionRoot + "/"))
       );
     },
-    collectEntries: collectBoundaryEntries,
+    collectEntries({ filePath, relativeFile, references }) {
+      const extensionRoot = relativeFile.split("/").slice(0, 2).join("/");
+      const entries: CollectedBoundaryEntry[] = [];
+      for (const { kind, line, specifier } of references) {
+        const resolvedPath = resolveBoundarySpecifier(repoRoot, specifier, filePath);
+        if (!resolvedPath) {
+          continue;
+        }
+        const modes: BoundaryMode[] = [];
+        if (
+          specifier.startsWith(".") &&
+          resolvedPath !== extensionRoot &&
+          !resolvedPath.startsWith(extensionRoot + "/")
+        ) {
+          modes.push("relative-outside-package");
+        }
+        if (resolvedPath.startsWith("src/") && !resolvedPath.startsWith("src/plugin-sdk/")) {
+          modes.push("src-outside-plugin-sdk");
+        }
+        if (isNormalizationCoreBypass(specifier, resolvedPath)) {
+          modes.push("normalization-core-bypass");
+        }
+        for (const mode of modes) {
+          entries.push({
+            mode,
+            entry: {
+              file: relativeFile,
+              line,
+              kind,
+              specifier,
+              resolvedPath,
+              reason: classifyReason(mode, kind, resolvedPath, specifier),
+            },
+          });
+        }
+      }
+      return entries;
+    },
     compareEntries: (left, right) => compareEntries(left.entry, right.entry),
   });
   let allInventoryByModePromise: Promise<BoundaryInventoryByMode> | undefined;
@@ -269,6 +264,25 @@ export function createExtensionPluginSdkBoundaryChecker(options: { repoRoot?: st
     argv: string[] = process.argv.slice(2),
     streams: BoundaryCheckIo = { stdout: process.stdout, stderr: process.stderr },
   ): Promise<0 | 1> {
+    if (argv.includes("--all")) {
+      if (argv.includes("--json") || argv.some((arg) => arg.startsWith("--mode="))) {
+        throw new Error("--all cannot be combined with --json or --mode");
+      }
+      let exitCode: 0 | 1 = 0;
+      // Each mode reports independently; all consume this checker's complete inventory.
+      for (const mode of MODES) {
+        try {
+          if ((await run([`--mode=${mode}`], streams)) !== 0) {
+            exitCode = 1;
+          }
+        } catch (error) {
+          writeLine(streams.stderr, `${ruleTextByMode[mode]} check failed:`);
+          writeLine(streams.stderr, format(error));
+          exitCode = 1;
+        }
+      }
+      return exitCode;
+    }
     const json = argv.includes("--json");
     const modeArg = argv.find((arg) => arg.startsWith("--mode="));
     const modeValue = modeArg?.slice("--mode=".length) ?? "src-outside-plugin-sdk";
@@ -296,9 +310,6 @@ export function createExtensionPluginSdkBoundaryChecker(options: { repoRoot?: st
 
 const defaultBoundaryChecker = createExtensionPluginSdkBoundaryChecker();
 
-/**
- * Entrypoint wrapper for the extension plugin SDK boundary check.
- */
 async function main(argv?: string[], io?: BoundaryCheckIo): Promise<0 | 1> {
   const exitCode = await defaultBoundaryChecker.main(argv, io);
   if (!io) {

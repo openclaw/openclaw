@@ -1,9 +1,12 @@
-import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNullableRecord, readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { RecallPruneOperations } from "../recall-operation-api.js";
 import {
   SHORT_TERM_META_NAMESPACE,
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
   memoryCoreStateReference,
+  memoryCoreWorkspaceEntryKey,
+  openWorkspaceStore,
   readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntry,
@@ -25,6 +28,26 @@ const SHORT_TERM_STORE_NAMESPACES = {
   recall: SHORT_TERM_RECALL_NAMESPACE,
   phase: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
 };
+
+// The workspace mutation lock covers source inspection and this atomic cleanup.
+export async function pruneShortTermStore(workspaceDir: string, keys: string[]): Promise<void> {
+  if (keys.length === 0) {
+    return;
+  }
+  const stores = [SHORT_TERM_RECALL_NAMESPACE, SHORT_TERM_PHASE_SIGNAL_NAMESPACE].map(
+    openWorkspaceStore,
+  );
+  await stores[0]!.createOperation!<RecallPruneOperations>(stores, {
+    moduleName: "recall-operation-api.js",
+    exportName: "pruneRecallEntries",
+  }).execute(
+    {
+      type: "prune",
+      input: { keys: keys.map((key) => memoryCoreWorkspaceEntryKey(workspaceDir, key)) },
+    },
+    { writeStores: [0, 1] },
+  );
+}
 
 export async function readShortTermStore(
   workspaceDir: string,
@@ -53,19 +76,19 @@ async function writeShortTermStore(
   kind: keyof typeof SHORT_TERM_STORE_NAMESPACES,
   store: ShortTermRecallStore | ShortTermPhaseSignalStore,
 ): Promise<void> {
-  await Promise.all([
-    writeMemoryCoreWorkspaceEntries({
-      namespace: SHORT_TERM_STORE_NAMESPACES[kind],
-      workspaceDir,
-      entries: Object.entries(store.entries).map(([key, value]) => ({ key, value })),
-    }),
-    writeMemoryCoreWorkspaceEntry({
-      namespace: SHORT_TERM_META_NAMESPACE,
-      workspaceDir,
-      key: kind,
-      value: { updatedAt: store.updatedAt },
-    }),
-  ]);
+  // Settle row mutations before metadata can fail and release the caller's
+  // workspace lock; an unfinished replacement could delete a later writer's rows.
+  await writeMemoryCoreWorkspaceEntries({
+    namespace: SHORT_TERM_STORE_NAMESPACES[kind],
+    workspaceDir,
+    entries: Object.entries(store.entries).map(([key, value]) => ({ key, value })),
+  });
+  await writeMemoryCoreWorkspaceEntry({
+    namespace: SHORT_TERM_META_NAMESPACE,
+    workspaceDir,
+    key: kind,
+    value: { updatedAt: store.updatedAt },
+  });
 }
 
 export function resolveStorePath(workspaceDir: string): string {
@@ -96,42 +119,26 @@ export function emptyPhaseSignalStore(nowIso: string): ShortTermPhaseSignalStore
   };
 }
 
-export function normalizeShortTermPhaseSignalStore(
-  raw: unknown,
+export async function readPhaseSignalStore(
+  workspaceDir: string,
   nowIso: string,
-): ShortTermPhaseSignalStore {
-  const record = asNullableRecord(raw);
-  if (!record) {
-    return emptyPhaseSignalStore(nowIso);
-  }
-  const entriesRaw = asNullableRecord(record?.entries);
-  if (!entriesRaw) {
-    return emptyPhaseSignalStore(nowIso);
-  }
+): Promise<ShortTermPhaseSignalStore> {
+  const record = await readShortTermStore(workspaceDir, "phase", nowIso);
   const entries: Record<string, ShortTermPhaseSignalEntry> = {};
-  for (const [mapKey, value] of Object.entries(entriesRaw)) {
+  for (const [mapKey, value] of Object.entries(record.entries)) {
     const entry = asNullableRecord(value);
     if (!entry) {
       continue;
     }
-    const key = typeof entry.key === "string" && entry.key.trim().length > 0 ? entry.key : mapKey;
+    const key = readNonBlankString(entry.key) ?? mapKey;
     const lightHits = toFiniteNonNegativeInt(entry.lightHits, 0);
     const remHits = toFiniteNonNegativeInt(entry.remHits, 0);
     if (lightHits === 0 && remHits === 0) {
       continue;
     }
-    const lastLightAt =
-      typeof entry.lastLightAt === "string" && entry.lastLightAt.trim().length > 0
-        ? entry.lastLightAt
-        : undefined;
-    const lastRemAt =
-      typeof entry.lastRemAt === "string" && entry.lastRemAt.trim().length > 0
-        ? entry.lastRemAt
-        : undefined;
-    const lastRemConsideredAt =
-      typeof entry.lastRemConsideredAt === "string" && entry.lastRemConsideredAt.trim().length > 0
-        ? entry.lastRemConsideredAt
-        : undefined;
+    const lastLightAt = readNonBlankString(entry.lastLightAt);
+    const lastRemAt = readNonBlankString(entry.lastRemAt);
+    const lastRemConsideredAt = readNonBlankString(entry.lastRemConsideredAt);
     entries[key] = {
       key,
       lightHits,
@@ -143,22 +150,9 @@ export function normalizeShortTermPhaseSignalStore(
   }
   return {
     version: 1,
-    updatedAt:
-      typeof record.updatedAt === "string" && record.updatedAt.trim().length > 0
-        ? record.updatedAt
-        : nowIso,
+    updatedAt: readNonBlankString(record.updatedAt) ?? nowIso,
     entries,
   };
-}
-
-export async function readPhaseSignalStore(
-  workspaceDir: string,
-  nowIso: string,
-): Promise<ShortTermPhaseSignalStore> {
-  return normalizeShortTermPhaseSignalStore(
-    await readShortTermStore(workspaceDir, "phase", nowIso),
-    nowIso,
-  );
 }
 
 export async function writePhaseSignalStore(

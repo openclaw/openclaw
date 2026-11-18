@@ -1,3 +1,5 @@
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../../runtime/index.js";
 
 export type ImageFactIndex = number | null;
@@ -10,54 +12,39 @@ export type MediaImageLayout = {
 export function readPersistedImageBlockFactIndexes(
   message: AgentMessage,
 ): ImageFactIndex[] | undefined {
-  const meta = Reflect.get(message, "__openclaw");
-  const value =
-    meta && typeof meta === "object" && !Array.isArray(meta)
-      ? (meta as Record<string, unknown>).mediaImageBlockFactIndexes
-      : undefined;
+  const value = asOptionalRecord(Reflect.get(message, "__openclaw"))?.mediaImageBlockFactIndexes;
   if (!Array.isArray(value)) {
     return undefined;
   }
-  return value.map((entry) =>
-    typeof entry === "number" && Number.isSafeInteger(entry) && entry >= 0 ? entry : null,
-  );
+  return value.map((entry) => asSafeIntegerInRange(entry, { min: 0 }) ?? null);
 }
 
 export function readPersistedMediaImageLayout(message: AgentMessage): MediaImageLayout | undefined {
-  const meta = Reflect.get(message, "__openclaw");
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+  const record = asOptionalRecord(
+    asOptionalRecord(Reflect.get(message, "__openclaw"))?.mediaImageLayout,
+  );
+  if (!record) {
     return undefined;
   }
-  const layout = (meta as Record<string, unknown>).mediaImageLayout;
-  if (!layout || typeof layout !== "object" || Array.isArray(layout)) {
-    return undefined;
-  }
-  const record = layout as Record<string, unknown>;
   const slots = Array.isArray(record.slots)
     ? record.slots.flatMap((entry) => {
-        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-          return [];
-        }
-        const slot = entry as Record<string, unknown>;
-        if (slot.kind !== "inline" && slot.kind !== "offloaded") {
+        const slot = asOptionalRecord(entry);
+        if (slot?.kind !== "inline" && slot?.kind !== "offloaded") {
           return [];
         }
         const kind: MediaImageLayout["slots"][number]["kind"] = slot.kind;
-        const factIndex = slot.factIndex;
+        const factIndex = asSafeIntegerInRange(slot.factIndex, { min: 0 });
         return [
           {
             kind,
-            ...(typeof factIndex === "number" && Number.isSafeInteger(factIndex) && factIndex >= 0
-              ? { factIndex }
-              : {}),
+            ...(factIndex !== undefined ? { factIndex } : {}),
           },
         ];
       })
     : [];
   const suppressedFactIndexes = Array.isArray(record.suppressedFactIndexes)
     ? record.suppressedFactIndexes.filter(
-        (entry): entry is number =>
-          typeof entry === "number" && Number.isSafeInteger(entry) && entry >= 0,
+        (entry): entry is number => asSafeIntegerInRange(entry, { min: 0 }) !== undefined,
       )
     : [];
   return slots.length > 0 || suppressedFactIndexes.length > 0

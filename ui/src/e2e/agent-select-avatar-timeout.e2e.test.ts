@@ -1,9 +1,9 @@
-// Control UI tests cover bounded authenticated agent-picker avatar fetches.
-import path from "node:path";
-import type { Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { expect, it } from "vitest";
+import type { AgentSelectElement } from "../components/agent-select.tsx";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { expectAttribute } from "./activity-assertions.test-support.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
+import { captureUiProof } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -12,109 +12,75 @@ import {
 const suite = createControlUiE2eSuite({
   name: "Control UI agent picker avatar timeout",
   startServerBeforeBrowser: true,
-  unavailableMessage: (executablePath) =>
-    `Playwright Chromium is not available at ${executablePath}`,
 });
-
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let proofDir: string;
-beforeEach(() => {
-  if (captureUiProof) {
-    proofDir = createControlUiE2eArtifactDir("agent-select-avatar-timeout");
-  }
-});
-
-async function screenshot(page: Page, name: string) {
-  if (!captureUiProof) {
-    return;
-  }
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(proofDir, name),
-  });
-}
 
 suite.define(() => {
-  it("aborts a stalled authenticated avatar request and keeps the text fallback", async () => {
+  it("keeps a stalled avatar blank, then falls back without layout shifts or refetching", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await page.clock.install();
 
       let avatarRequestCount = 0;
       let avatarAuthorization: string | undefined;
-      const failedAvatarRequests: string[] = [];
+      let failedAvatarRequests = 0;
       page.on("requestfailed", (request) => {
         if (new URL(request.url()).pathname === "/avatar/main") {
-          failedAvatarRequests.push(request.failure()?.errorText ?? "unknown");
+          failedAvatarRequests++;
         }
       });
       await page.route(/\/avatar\/main$/, (route) => {
         avatarRequestCount += 1;
         avatarAuthorization = route.request().headers().authorization;
-        // Leave the route unanswered. The page-owned deadline must cancel it.
       });
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "agent.identity.get": {
             cases: [
               {
-                match: { agentId: "main" },
-                response: {
-                  agentId: "main",
-                  avatar: "/avatar/main",
-                  avatarStatus: "local",
-                  name: "Main agent",
-                },
+                agentId: "main",
+                avatar: "/avatar/main",
+                avatarStatus: "local",
+                name: "Main agent",
               },
-              {
-                match: { agentId: "writer" },
-                response: {
-                  agentId: "writer",
-                  avatar: "",
-                  avatarStatus: "none",
-                  name: "Writer",
-                },
-              },
-            ],
+              { agentId: "writer", avatar: "", avatarStatus: "none", name: "Writer" },
+            ].map((response) => ({ match: { agentId: response.agentId }, response })),
           },
-          "agents.list": {
-            agents: [
-              { id: "main", name: "OpenClaw" },
-              { id: "writer", name: "Writer" },
-            ],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
+          "agents.list": agentRoster({ main: "OpenClaw", writer: "Writer" }, "main", "agent"),
         },
       });
 
-      const response = await page.goto(`${suite.server.baseUrl}agents`);
+      const response = await page.goto(`${suite.server.baseUrl}settings/agents`);
       expect(response?.status()).toBe(200);
       await gateway.waitForRequest("agent.identity.get");
       await expect.poll(() => avatarRequestCount).toBe(1);
-      const picker = page.locator("openclaw-agent-select");
-      await expect
-        .poll(() =>
-          picker.locator(".agent-select__avatar--text").first().getAttribute("data-avatar"),
-        )
-        .toBe("O");
+      const picker = page.locator(".settings-sidebar__agent openclaw-agent-select");
+      const avatar = picker.locator(".agent-select__trigger .agent-select__avatar");
+      const fallback = avatar.locator(".identity-avatar__fallback");
+      const face = avatar.locator(".identity-avatar__agent-face");
+      await expectAttribute(avatar, "data-avatar-state").toBe("pending");
+      await expect.poll(() => fallback.isVisible()).toBe(false);
+      const pendingBox = await avatar.boundingBox();
+      expect(pendingBox?.width).toBeGreaterThan(0);
+      const { width, height } = pendingBox!;
       expect(avatarAuthorization).toBe("Bearer e2e-device-token");
-      await screenshot(page, "01-request-stalled.png");
+      await captureUiProof(suite, page, "avatar", "01-request-stalled.png");
 
       await page.clock.runFor(30_000);
-      await expect.poll(() => failedAvatarRequests.length).toBe(1);
-      await expect.poll(() => picker.locator("img.agent-select__avatar").count()).toBe(0);
-      await expect
-        .poll(() =>
-          picker.locator(".agent-select__avatar--text").first().getAttribute("data-avatar"),
-        )
-        .toBe("O");
+      await expect.poll(() => failedAvatarRequests).toBe(1);
+      await expect.poll(() => face.isVisible()).toBe(true);
+      expect(await avatar.boundingBox()).toMatchObject({ width, height });
 
-      // A later render must use the cached miss instead of launching another fetch.
+      // Updating the label rerenders the existing image without changing its source.
+      await picker.evaluate(async (element: AgentSelectElement) => {
+        element.accessibleLabel = "Choose agent";
+        await element.updateComplete;
+      });
+      await expectAttribute(picker.locator(".agent-select__trigger"), "aria-label").toMatch(
+        /^Choose agent:/,
+      );
       await picker.locator(".agent-select__trigger").click();
+      expect(await face.isVisible()).toBe(true);
       expect(avatarRequestCount).toBe(1);
-      await screenshot(page, "02-timeout-fallback.png");
+      await captureUiProof(suite, page, "avatar", "02-timeout.png");
     });
   });
 });

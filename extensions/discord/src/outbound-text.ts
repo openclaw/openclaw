@@ -10,6 +10,7 @@ export function prepareDiscordOutboundText(
     cfg: OpenClawConfig;
     account: Pick<ResolvedDiscordAccount, "accountId" | "config">;
     tableMode?: MarkdownTableMode;
+    textLimit?: number;
   },
 ) {
   const { account } = params;
@@ -20,6 +21,10 @@ export function prepareDiscordOutboundText(
   // Both transports measure chunks after rendering and alias expansion; titles retain display names.
   return {
     renderedText,
+    textLimit:
+      typeof params.textLimit === "number" && Number.isFinite(params.textLimit)
+        ? Math.max(1, Math.min(Math.floor(params.textLimit), 2000))
+        : undefined,
     textWithMentions: rewriteDiscordKnownMentions(renderedText, {
       accountId: account.accountId,
       mentionAliases: account.config.mentionAliases,

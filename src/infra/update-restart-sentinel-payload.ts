@@ -1,16 +1,25 @@
-// Builds restart sentinel payloads for update handoff reporting.
-import {
-  buildRestartSuccessContinuation,
-  formatDoctorNonInteractiveHint,
-  type RestartSentinelPayload,
-} from "./restart-sentinel.js";
-import type { UpdateRunResult } from "./update-runner.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import { formatDoctorNonInteractiveHint, type RestartSentinelPayload } from "./restart-sentinel.js";
+import type { UpdateRunResult } from "./update-run-result.js";
+import { updateRunStepKey } from "./update-run-step-key.js";
+import { isUpdateGatewayReadinessPending } from "./update-run-step.js";
 
-// Update restart sentinel payloads carry update result details across a process
-// restart so the next gateway can report completion or failure.
-/** Metadata needed to route update restart continuation messages. */
+export type ForegroundUpdateOrigin = {
+  owner: string;
+  pid: number;
+  host: string;
+  startedAt: number;
+  port: number;
+  stateDatabasePath: string;
+  configPath: string;
+};
+
+/** Metadata needed to publish the update outcome. */
 export type UpdateRestartSentinelMeta = {
   runId?: string;
+  /** The foreground replacement Gateway verifies success after the CLI settles. */
+  completionOwner?: "gateway-restart";
+  foregroundOrigin?: ForegroundUpdateOrigin;
   /** Internal helper fact: when the owning service stop was issued. */
   serviceStoppedAtMs?: number;
   root?: string;
@@ -27,30 +36,43 @@ export type UpdateRestartSentinelMeta = {
   continuationMessage?: string | null;
 };
 
-export function normalizeControlPlaneUpdateResult(result: UpdateRunResult): UpdateRunResult {
-  const beforeSha = result.before?.sha?.trim();
-  const afterSha = result.after?.sha?.trim();
-  return result.status === "ok" &&
-    result.mode === "git" &&
-    result.postUpdate?.plugins?.changed !== true &&
-    beforeSha &&
-    afterSha &&
-    beforeSha === afterSha
-    ? { ...result, status: "skipped", reason: "already-current" }
-    : result;
+export function normalizeControlPlaneUpdateResult(input: UpdateRunResult): UpdateRunResult {
+  const lint = input.postUpdate?.plugins?.doctorLint;
+  const result =
+    lint && !input.steps.some((step) => step.name === lint.name)
+      ? { ...input, steps: [...input.steps, lint] }
+      : input;
+  if (
+    (result.status === "ok" ||
+      (result.status === "skipped" && result.reason === "already-current")) &&
+    isUpdateGatewayReadinessPending(result)
+  ) {
+    return {
+      ...result,
+      status: "skipped",
+      reason:
+        result.reason === "still-starting" ? "still-starting" : "gateway-readiness-unverified",
+    };
+  }
+  return result;
 }
 
 function resolvePersistedRecovery(result: UpdateRunResult): UpdateRunResult["recovery"] {
-  if (!result.recovery) {
+  const recovery = result.recovery;
+  if (!recovery) {
     return undefined;
   }
-  const recovery = { ...result.recovery };
-  // Restored runtimes parse this object strictly, so persist only the pre-update shape.
-  delete recovery.packageRollbackVerified;
-  return recovery;
+  // Restored runtimes parse this strictly; keep new diagnostics in the update result.
+  return recovery.serviceRestartSafe
+    ? {
+        serviceRestartSafe: true,
+        version: recovery.version,
+        buildId: recovery.buildId,
+        service: recovery.service,
+      }
+    : { serviceRestartSafe: false, reason: recovery.reason };
 }
 
-/** Build the restart sentinel payload written after update runs. */
 export function buildUpdateRestartSentinelPayload(params: {
   result: UpdateRunResult;
   meta: UpdateRestartSentinelMeta;
@@ -59,13 +81,6 @@ export function buildUpdateRestartSentinelPayload(params: {
   const result = normalizeControlPlaneUpdateResult(params.result);
   const recovery = resolvePersistedRecovery(result);
   const { meta } = params;
-  const continuation =
-    result.status === "ok"
-      ? buildRestartSuccessContinuation({
-          sessionKey: meta.sessionKey,
-          continuationMessage: meta.continuationMessage,
-        })
-      : null;
   return {
     kind: "update",
     status: result.status,
@@ -74,8 +89,10 @@ export function buildUpdateRestartSentinelPayload(params: {
     ...(meta.deliveryContext ? { deliveryContext: meta.deliveryContext } : {}),
     ...(meta.threadId ? { threadId: meta.threadId } : {}),
     message: meta.note ?? null,
-    ...(continuation ? { continuation } : {}),
-    doctorHint: formatDoctorNonInteractiveHint(),
+    doctorHint:
+      result.status === "error"
+        ? `If repair requires stopping the Gateway, run \`${formatCliCommand("openclaw update repair")}\` from a terminal outside the Gateway process tree. Do not run this repair through the Gateway's exec tool.`
+        : formatDoctorNonInteractiveHint(),
     stats: {
       ...(meta.runId || result.runId ? { runId: meta.runId ?? result.runId } : {}),
       mode: result.mode,
@@ -86,11 +103,12 @@ export function buildUpdateRestartSentinelPayload(params: {
       before: result.before ?? null,
       after: result.after ?? null,
       steps: result.steps.map((step) => ({
-        name: step.name,
+        name: updateRunStepKey(step.name),
         command: step.command,
         cwd: step.cwd,
         durationMs: step.durationMs,
         ...(step.advisory ? { advisory: true } : {}),
+        ...(step.failureFacts?.length ? { failureFacts: step.failureFacts } : {}),
         log: {
           stdoutTail: step.stdoutTail ?? null,
           stderrTail: step.stderrTail ?? null,

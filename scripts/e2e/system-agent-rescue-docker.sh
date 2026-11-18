@@ -13,11 +13,7 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-system-agent-rescue-e2e" OPENCL
 CONTAINER_NAME="openclaw-system-agent-rescue-e2e-$$"
 RUN_LOG="$(mktemp -t openclaw-system-agent-rescue-log.XXXXXX)"
 
-cleanup() {
-  docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  rm -f "$RUN_LOG"
-}
-trap cleanup EXIT
+trap 'docker_e2e_cleanup_container_run "$CONTAINER_NAME" "$RUN_LOG"' EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" system-agent-rescue
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 system-agent-rescue empty)"
@@ -33,7 +29,7 @@ docker_e2e_run_with_harness \
   bash -lc "set -euo pipefail
     source scripts/lib/openclaw-e2e-instance.sh
     openclaw_e2e_eval_test_state_from_b64 \"\${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}\"
-    tsx scripts/e2e/system-agent-rescue-docker-client.ts
+    tsx --experimental-test-module-mocks scripts/e2e/system-agent-rescue-docker-client.ts
   " >"$RUN_LOG" 2>&1
 status=${PIPESTATUS[0]}
 set -e

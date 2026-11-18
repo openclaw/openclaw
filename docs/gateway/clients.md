@@ -14,7 +14,7 @@ the wire contract: authentication, capabilities, reconnect recovery, history,
 subscriptions, and version upgrades.
 
 For frame shapes, the handshake, errors, and the complete method surface, read the
-[Gateway protocol specification](https://docs.openclaw.ai/gateway/protocol).
+[Gateway protocol specification](/gateway/protocol).
 
 ## Install the packages
 
@@ -66,7 +66,7 @@ A full interactive chat client that also renders approval prompts should request
 Add `operator.questions` only if the client handles interactive questions,
 `operator.pairing` only if it manages paired devices or nodes, and
 `operator.admin` only for administrative operations such as `config.patch`.
-The [operator scopes reference](https://docs.openclaw.ai/gateway/operator-scopes)
+The [operator scopes reference](/gateway/operator-scopes)
 defines the complete method and approval-time rules.
 
 Do not create a per-client bearer token by hand-editing `openclaw.json`. Configure
@@ -90,7 +90,7 @@ pairing mint the client token:
 
 Scope or role upgrades create a new pending pairing request. Token rotation cannot
 expand the approved pairing contract. See the
-[Devices CLI](https://docs.openclaw.ai/cli/devices) for approval, rotation, and
+[Devices CLI](/cli/devices) for approval, rotation, and
 revocation commands.
 
 ## Advertise client capabilities
@@ -124,8 +124,10 @@ handshake does not report an error.
 </Warning>
 
 Capability-gated agent tools are a separate use of the same declaration. If an
-agent tool requires a client capability, the Gateway omits that tool unless the
-originating client advertised every required capability.
+agent tool requires a client capability, the Gateway lists it using the operator
+capabilities recorded for that session. Internal wakes, including a post-restart resume input, retain
+that declaration. Current client capabilities still gate calls, and tools that
+act on a browser require their bound, connected recipient at execution.
 
 ## Validate attachments before sending
 
@@ -186,17 +188,18 @@ current in-memory run state:
 Classify the source before applying `activeRunIds`; the same omission has
 different meaning in a full snapshot and an incremental delta.
 
-| Client cache             | Read path                                                  | Class    | Required behavior                                                                                  |
-| ------------------------ | ---------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------- |
-| Web session roster       | `sessions.list`, reconnect hydration                       | Snapshot | Replace the row; omission clears cached exact IDs to unavailable.                                  |
-| Web selected session     | `chat.history.sessionInfo`                                 | Snapshot | Replace the row projection; omission clears cached exact IDs.                                      |
-| Web session events       | `sessions.changed`, `session.message`, lifecycle snapshots | Delta    | Omission is inert; `null` clears; an array replaces.                                               |
-| Android session roster   | `sessions.list`, reconnect hydration                       | Snapshot | Replace the list rows; omission clears cached exact IDs.                                           |
-| Android selected session | `chat.history.sessionInfo`, reconnect recovery             | Snapshot | Replace `activeRunIds` even while other partial history fields merge.                              |
-| Android session events   | `sessions.changed`, `session.message`, lifecycle snapshots | Delta    | Field presence controls replacement; `null` clears and omission is inert.                          |
-| Apple session roster     | `sessions.list`, reconnect hydration                       | Snapshot | Replace live rows; the offline cache strips transient active-run facts.                            |
-| Apple selected session   | `chat.history.sessionInfo`, reconnect recovery             | Snapshot | Replace both the current row and its run-ID projection; omission clears both.                      |
-| Apple session events     | `sessions.changed`, `session.message`, lifecycle snapshots | Delta    | Preserve field presence through decoding; omission is inert, `null` clears, and an array replaces. |
+| Client cache             | Read path                                                       | Class    | Required behavior                                                                                               |
+| ------------------------ | --------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------- |
+| Web session roster       | `sessions.list`, reconnect hydration                            | Snapshot | Replace the row; omission clears cached exact IDs to unavailable.                                               |
+| Web selected session     | `chat.history.sessionInfo`                                      | Snapshot | Replace the row projection; omission clears cached exact IDs.                                                   |
+| Web session events       | `sessions.changed`, `session.message`, lifecycle snapshots      | Delta    | Omission is inert; `null` clears; an array replaces.                                                            |
+| Android session roster   | `sessions.list`, reconnect hydration                            | Snapshot | Replace the list rows; omission clears cached exact IDs.                                                        |
+| Android selected session | `chat.history.sessionInfo`, reconnect recovery                  | Snapshot | Replace `activeRunIds` even while other partial history fields merge.                                           |
+| Android session events   | `sessions.changed`, `session.message`, lifecycle snapshots      | Delta    | Field presence controls replacement; `null` clears and omission is inert.                                       |
+| Apple session roster     | `sessions.list`, reconnect hydration                            | Snapshot | Replace live rows; the offline cache strips transient active-run facts.                                         |
+| Apple selected session   | `chat.history.sessionInfo`, reconnect recovery                  | Snapshot | Replace both the current row and its run-ID projection; omission clears both.                                   |
+| Apple nested event rows  | Identified nested `session` rows in `sessions.changed`          | Delta    | Merge present fields for the same session incarnation; omission is inert, `null` clears, and an array replaces. |
+| Apple incremental events | Partial `sessions.changed`, `session.message`, lifecycle fields | Delta    | Preserve field presence through decoding; omission is inert, `null` clears, and an array replaces.              |
 
 The outer event frame also has an optional `seq`, which orders events on the
 current WebSocket connection. It resets with a new connection. The `seq` inside
@@ -205,7 +208,7 @@ assistant, plan, tool, and other stream events.
 
 ## Render generated image artifacts
 
-Assistant-generated images arrive as canonical `type: "image"` content blocks.
+Assistant-generated images arrive as standard `type: "image"` content blocks.
 Managed blocks include a stable `artifactId`, a Gateway-relative `url`, MIME
 type, dimensions, size, and accessible alt text. Keep that reference in the
 transcript cache; do not persist downloaded bytes or temporary download URLs.
@@ -226,6 +229,45 @@ Resolve the image through the authenticated WebSocket connection:
 Older image blocks without `artifactId` remain displayable by existing Control
 UI clients, but native clients should show a readable attachment fallback rather
 than forward a shared owner credential.
+
+## Download inline artifacts over HTTPS
+
+For artifacts embedded in transcripts, `artifacts.download` normally returns
+`encoding: "base64"` and `data` over the existing connection. Clients that can
+reach the Gateway's HTTPS routes can pass `transport: "http"` to receive a
+Gateway-relative `url` and `expiresAt` instead, then fetch the original bytes
+with `GET`. The route also supports `HEAD` and single byte ranges. Managed media
+keeps its existing URL download path.
+
+Append `?variant=thumbnail` to an inline HTTPS download URL for a best-effort
+PNG preview, bounded to 1200 pixels on its longest side without upscaling.
+Only identified still PNG, JPEG, and WebP images are eligible. GIFs, APNGs,
+animated WebP, other formats, unknown variants, and encoding failures retain
+the original bytes, as do PNG previews that are not smaller than the source.
+Check the response MIME type: a thumbnail is `image/png` even when the
+artifact uses another image format. Omit the query for full-size downloads;
+the RPC schema and WebSocket base64 response are unchanged.
+
+Use the active Gateway's HTTPS origin and configured Control UI base path. TLS
+can terminate at the Gateway or its reverse proxy; the proxy must forward
+`/api/artifacts/download/` as well as WebSocket upgrades. A `wss://` endpoint
+alone does not establish HTTP reachability. WebSocket-only clients should omit
+`transport`; a client whose HTTP route is unavailable can repeat the same RPC
+without `transport`, preserving every session, run, task, and role filter.
+
+Inline download links expire after five minutes and belong to the issuing live
+connection and exact artifact. Reads recheck access, transcript membership,
+session generation, and content identity. Expiry, disconnection, revocation, or
+replacement makes the link unavailable. Reconnect and request a fresh download
+instead of retaining links across connections. The links contain no reusable
+Gateway credential, and responses disable caching and active document execution.
+
+The Control UI opts in for image and text previews when served from the active
+Gateway's HTTPS origin. If the HTTP fetch fails, it retries through the inline
+RPC on that same connection. Other connections retain their existing transfer
+behavior. Binary artifact previews keep a Download action rather than an
+expiring link. Each click requests fresh download authority; changing the
+connection or closing the preview cancels an in-flight download.
 
 ## Use history metadata and stable anchors
 
@@ -272,15 +314,20 @@ The shared page's pagination metadata is unchanged, so use `nextOffset`, not the
 number of returned rows, when loading another page, and merge rows by session
 key. See [Session list bootstrap](/gateway/protocol/rpc-methods#session-list-bootstrap).
 
-Merge subsequent `sessions.changed` events by `sessionKey`. Session change
-payloads can carry live `inputTokens`, `outputTokens`, `totalTokens`,
-`totalTokensFresh`, `contextTokens`, `estimatedCostUsd`, response-usage settings,
-and active-run state.
+Merge subsequent keyed `sessions.changed` events from their nested `session`
+row, using agent, session key, and session ID together to avoid applying an old
+lifecycle to its replacement. Snapshots are presented for the receiving
+connection and carry current row metadata, usage, and active-run state.
 
-Some change notifications are only invalidation signals. If an event omits the
-row fields your view needs, refresh `sessions.list`. Do not poll `usage.cost` or
-`sessions.usage` to keep a live session list current; reserve those methods for
-on-demand aggregate or detailed reports.
+Apply snapshots to existing roster members locally. Refresh `sessions.list`
+when a row is missing or the notification is a broad, keyless invalidation.
+Delete events retain the removed session ID and do not carry a replacement row.
+Notifications for aliases of the same session share publication order. Rapid
+replacement can coalesce intermediate notifications; a broad invalidation follows
+condensed updates so clients refresh the authoritative roster. The same refresh
+notification is sent when row metadata cannot be prepared.
+Do not poll `usage.cost` or `sessions.usage` to keep a live session list current;
+reserve those methods for on-demand aggregate or detailed reports.
 
 ## Backfill exec approvals
 
@@ -294,7 +341,7 @@ transition racing the list request is neither lost nor resurrected.
 
 The current wire version is `4`. General operator and WebChat clients must
 negotiate the exact current version with `minProtocol: 4` and `maxProtocol: 4`.
-Only authenticated node clients and lightweight probes have the N-1 acceptance
+Only authenticated node clients and lightweight checks have the N-1 acceptance
 window, currently protocol `3` through `4`.
 
 Protocol changes are additive first. `protocol.schema.json` includes `since`
@@ -307,7 +354,7 @@ before each upgrade.
 
 ## Related
 
-- [Gateway protocol](https://docs.openclaw.ai/gateway/protocol)
-- [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding)
-- [Gateway RPC reference](https://docs.openclaw.ai/reference/rpc)
-- [Gateway integrations for external apps](https://docs.openclaw.ai/gateway/external-apps)
+- [Gateway protocol](/gateway/protocol)
+- [Embedding OpenClaw](/gateway/embedding)
+- [Gateway RPC reference](/reference/rpc)
+- [Gateway integrations for external apps](/gateway/external-apps)

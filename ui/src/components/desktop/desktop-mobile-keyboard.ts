@@ -1,4 +1,6 @@
+import { onSettled } from "solid-js";
 import { isApplePlatform } from "../../lib/keyboard-shortcut-contract.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import type { DesktopConnectionHandle } from "./desktop-client.ts";
 
 /**
@@ -7,62 +9,71 @@ import type { DesktopConnectionHandle } from "./desktop-client.ts";
  */
 const MOBILE_KEYBOARD_SENTINEL = "________________";
 
-type MobileKeyboardOptions = {
-  connection: () => DesktopConnectionHandle | null;
-  controlling: () => boolean;
-  input: () => HTMLTextAreaElement | null | undefined;
-};
+/** Bridges the document-owned textarea to the current remote keyboard. */
+export function createDesktopMobileKeyboard(
+  connectionTarget: () => DesktopConnectionHandle | null,
+) {
+  let value = MOBILE_KEYBOARD_SENTINEL;
+  let field: HTMLTextAreaElement | undefined;
+  let modifierConnection: DesktopConnectionHandle | null = null;
+  const modifiers = new Map<string, KeyboardEvent>();
+  onSettled(() => {
+    const stopBlur = listen(window, "blur", () => modifiers.clear());
+    const stopKeyup = listen(window, "keyup", handleWindowKeyup, true);
+    return () => {
+      stopBlur();
+      stopKeyup();
+      reset();
+    };
+  });
 
-/** Bridges the desktop document's hidden textarea to the remote desktop's keyboard. */
-export class DesktopMobileKeyboard {
-  /** The document view renders this so the field always holds deletable padding. */
-  value = MOBILE_KEYBOARD_SENTINEL;
-  private modifierConnection: DesktopConnectionHandle | null = null;
-  private readonly modifiers = new Map<string, KeyboardEvent>();
-  private readonly clearModifiers = () => {
-    this.modifiers.clear();
-    window.removeEventListener("blur", this.clearModifiers);
-    window.removeEventListener("keyup", this.handleWindowKeyup, true);
-  };
-  private readonly handleWindowKeyup = (event: KeyboardEvent) => {
+  function handleWindowKeyup(event: Event): void {
     // noVNC stops canvas keyups from bubbling. Capture physical releases after focus moves,
     // but ignore our synthetic forwarding and temporary paste releases.
-    if (!event.isTrusted || event.composedPath()[0] === this.options.input()) {
+    if (
+      !(event instanceof KeyboardEvent) ||
+      !event.isTrusted ||
+      event.composedPath()[0] === field ||
+      !modifiers.has(event.code)
+    ) {
       return;
     }
-    const connection = this.currentConnection();
-    if (!connection || !this.modifiers.delete(event.code)) {
+    const connection = currentConnection();
+    if (!connection || !modifiers.delete(event.code)) {
       return;
-    }
-    if (this.modifiers.size === 0) {
-      this.clearModifiers();
     }
     connection.sendKeyboardEvent(event);
-  };
-
-  constructor(private readonly options: MobileKeyboardOptions) {}
-
-  focus(): void {
-    const input = this.options.input();
-    input?.focus({ preventScroll: true });
-    input?.setSelectionRange(input.value.length, input.value.length);
   }
 
-  reset(input?: HTMLTextAreaElement): void {
-    if (!input) {
-      this.clearModifiers();
+  function focus(event?: MouseEvent): void {
+    const connection = currentConnection();
+    if (event && connection) {
+      reconcileModifiers(event, connection);
     }
-    this.value = MOBILE_KEYBOARD_SENTINEL;
-    const target = input ?? this.options.input();
+    field?.focus({ preventScroll: true });
+    field?.setSelectionRange(field.value.length, field.value.length);
+  }
+
+  function reset(input?: HTMLTextAreaElement): void {
+    if (!input) {
+      modifiers.clear();
+      // A retired viewer must be releasable even if no keyboard input follows the handoff.
+      modifierConnection = null;
+    }
+    value = MOBILE_KEYBOARD_SENTINEL;
+    const target = input ?? field;
     if (target) {
       target.value = MOBILE_KEYBOARD_SENTINEL;
     }
   }
 
-  handleKeyboardEvent(event: KeyboardEvent): void {
-    const connection = this.currentConnection();
+  function handleKeyboardEvent(event: KeyboardEvent): void {
+    const connection = currentConnection();
     if (!connection) {
       return;
+    }
+    if (event.type === "keydown") {
+      reconcileModifiers(event, connection);
     }
     // The textarea owns local paste; forwarding its shortcut suppresses browser input.
     if (
@@ -75,36 +86,30 @@ export class DesktopMobileKeyboard {
     }
     if (["Meta", "Control", "Shift", "Alt"].includes(event.key)) {
       if (event.type === "keydown") {
-        this.modifiers.set(event.code, event);
-        // noVNC releases held keys on window blur; do not restore stale modifiers afterward.
-        window.addEventListener("blur", this.clearModifiers, { once: true });
-        window.addEventListener("keyup", this.handleWindowKeyup, true);
+        modifiers.set(event.code, event);
       } else {
-        this.modifiers.delete(event.code);
-        if (this.modifiers.size === 0) {
-          this.clearModifiers();
-        }
+        modifiers.delete(event.code);
       }
     }
     connection.sendKeyboardEvent(event);
     event.preventDefault();
   }
 
-  handleInput(event: InputEvent): void {
+  function handleInput(event: InputEvent): void {
     const input = event.currentTarget as HTMLTextAreaElement;
-    const connection = this.currentConnection();
+    const connection = currentConnection();
     if (!connection) {
-      this.reset(input);
+      reset(input);
       return;
     }
     const nextValue = input.value;
     // Paste is literal text even while the user still physically holds its shortcut modifiers.
-    const modifiers = event.inputType === "insertFromPaste" ? [...this.modifiers.values()] : [];
-    for (const modifier of modifiers) {
+    const pastedModifiers = event.inputType === "insertFromPaste" ? [...modifiers.values()] : [];
+    for (const modifier of pastedModifiers) {
       connection.sendKeyboardEvent(new KeyboardEvent("keyup", modifier));
     }
     let prefixLength = 0;
-    for (const character of this.value) {
+    for (const character of value) {
       if (!nextValue.startsWith(character, prefixLength)) {
         break;
       }
@@ -112,30 +117,59 @@ export class DesktopMobileKeyboard {
     }
     // DOM offsets use UTF-16; a removed supplementary character is one key action.
     for (
-      let remaining = Array.from(this.value.slice(prefixLength)).length;
+      let remaining = Array.from(value.slice(prefixLength)).length;
       remaining > 0;
       remaining -= 1
     ) {
       connection.sendBackspace();
     }
     connection.sendText(nextValue.slice(prefixLength));
-    for (const modifier of modifiers) {
+    for (const modifier of pastedModifiers) {
       connection.sendKeyboardEvent(modifier);
     }
     // Refill once the field drifts outside the range that keeps further deletes reportable.
     if (nextValue.length < 1 || nextValue.length > MOBILE_KEYBOARD_SENTINEL.length * 2) {
-      this.reset(input);
+      reset(input);
       return;
     }
-    this.value = nextValue;
+    value = nextValue;
   }
 
-  private currentConnection(): DesktopConnectionHandle | null {
-    const connection = this.options.controlling() ? this.options.connection() : null;
-    if (connection !== this.modifierConnection) {
-      this.clearModifiers();
-      this.modifierConnection = connection;
+  function reconcileModifiers(
+    event: MouseEvent | KeyboardEvent,
+    connection: DesktopConnectionHandle,
+  ): void {
+    // Native popups can consume keyups. Only physical snapshots may retire those
+    // modifiers; synthetic forwarding and paste events do not describe held keys.
+    if (!event.isTrusted) {
+      return;
+    }
+    for (const [code, modifier] of modifiers) {
+      if (!event.getModifierState(modifier.key)) {
+        modifiers.delete(code);
+        connection.sendKeyboardEvent(new KeyboardEvent("keyup", modifier));
+      }
+    }
+  }
+
+  function currentConnection(): DesktopConnectionHandle | null {
+    const connection = connectionTarget();
+    if (connection !== modifierConnection) {
+      modifiers.clear();
+      modifierConnection = connection;
     }
     return connection;
   }
+  return {
+    inputRef: (element: HTMLTextAreaElement) => {
+      field = element;
+      field.value = value;
+    },
+    focus,
+    reset,
+    handleKeyboardEvent,
+    handleInput,
+  };
 }
+
+export type DesktopMobileKeyboard = ReturnType<typeof createDesktopMobileKeyboard>;

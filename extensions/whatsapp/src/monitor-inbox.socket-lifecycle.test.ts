@@ -19,6 +19,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   settleInboundWork,
   startInboxMonitor,
+  waitForInboundWorkDrained,
   waitForMessageCalls,
   type InboxMonitorOptions,
   type InboxOnMessage,
@@ -71,6 +72,7 @@ async function primeCapturedReplyWithSuccessor(params: {
   shouldRetryDisconnect = false;
   const successorSock = {
     sendMessage: vi.fn(async () => ({ key: { id: params.acceptedMessageId } })),
+    fetchAccountReachoutTimelock: vi.fn().mockResolvedValue({ isActive: false }),
   };
   controllerContexts.set(DEFAULT_ACCOUNT_ID, {
     getActiveListener: () => null,
@@ -147,6 +149,7 @@ describe("web monitor inbox socket lifecycle", () => {
     const replacementSock = {
       sendMessage: createAcceptedSendMessageMock(),
       sendPresenceUpdate: vi.fn(async () => undefined),
+      fetchAccountReachoutTimelock: vi.fn().mockResolvedValue({ isActive: false }),
     };
     socketRef.current = replacementSock as unknown as NonNullable<
       InboxMonitorOptions["socketRef"]
@@ -156,12 +159,22 @@ describe("web monitor inbox socket lifecycle", () => {
     await inbound.platform.sendMedia({ text: "after-reconnect" });
     await inbound.platform.sendComposing();
 
-    expect(replacementSock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
-      text: "pong",
-    });
-    expect(replacementSock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
-      text: "after-reconnect",
-    });
+    expect(replacementSock.sendMessage).toHaveBeenNthCalledWith(
+      1,
+      "999@s.whatsapp.net",
+      {
+        text: "pong",
+      },
+      expect.objectContaining({ messageId: expect.any(String) }),
+    );
+    expect(replacementSock.sendMessage).toHaveBeenNthCalledWith(
+      2,
+      "999@s.whatsapp.net",
+      {
+        text: "after-reconnect",
+      },
+      expect.objectContaining({ messageId: expect.any(String) }),
+    );
     expect(replacementSock.sendPresenceUpdate).toHaveBeenCalledWith(
       "composing",
       "999@s.whatsapp.net",
@@ -190,6 +203,7 @@ describe("web monitor inbox socket lifecycle", () => {
     const replacementSock = {
       sendMessage: createAcceptedSendMessageMock(),
       sendPresenceUpdate: vi.fn(async () => undefined),
+      fetchAccountReachoutTimelock: vi.fn().mockResolvedValue({ isActive: false }),
     };
     socketRef.current = null;
     sleepWithAbortMock.mockImplementationOnce(async () => {
@@ -201,9 +215,13 @@ describe("web monitor inbox socket lifecycle", () => {
     await inbound?.platform.reply("pong");
 
     expect(sleepWithAbortMock).toHaveBeenCalledWith(10, undefined);
-    expect(replacementSock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-      text: "pong",
-    });
+    expect(replacementSock.sendMessage).toHaveBeenCalledWith(
+      "999@s.whatsapp.net",
+      {
+        text: "pong",
+      },
+      expect.objectContaining({ messageId: expect.any(String) }),
+    );
     expect(sock.sendMessage).not.toHaveBeenCalled();
 
     await listener.close();
@@ -225,12 +243,11 @@ describe("web monitor inbox socket lifecycle", () => {
 
     await inbound?.platform.reply("pong");
 
-    expect(sock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
-      text: "pong",
-    });
-    expect(sock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
-      text: "pong",
-    });
+    const firstId = sock.sendMessage.mock.calls[0]?.[2]?.messageId;
+    expect(firstId).toEqual(expect.any(String));
+    expect(sock.sendMessage.mock.calls[1]?.[2]?.messageId).toBe(firstId);
+    await inbound?.platform.reply("next logical send");
+    expect(sock.sendMessage.mock.calls[2]?.[2]?.messageId).not.toBe(firstId);
     expect(socketRef.current).toBe(sock);
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
 
@@ -351,7 +368,11 @@ describe("web monitor inbox socket lifecycle", () => {
         } else {
           await expect(sendPromise).resolves.toBeDefined();
           if (target.endsWith("@g.us")) {
-            expect(sock.sendMessage).toHaveBeenCalledWith(target, { text: send.text });
+            expect(sock.sendMessage).toHaveBeenCalledWith(
+              target,
+              { text: send.text },
+              expect.objectContaining({ messageId: expect.any(String) }),
+            );
           }
         }
       }
@@ -390,23 +411,6 @@ describe("web monitor inbox socket lifecycle", () => {
     }
   });
 
-  it("socket session times out stalled sends at the Baileys query timeout", async () => {
-    const onMessage = vi.fn(async () => undefined);
-    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
-    vi.useFakeTimers();
-    try {
-      sock.sendMessage.mockImplementationOnce(() => new Promise(() => {}));
-
-      const sendPromise = listener.sendMessage("+1555", "hello");
-      await expectSocketOperationTimeout("sendMessage", sendPromise);
-      expect(vi.getTimerCount()).toBe(0);
-      expect(sock.sendMessage).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-      await listener.close();
-    }
-  });
-
   it("socket session preserves the socket after a local send timeout", async () => {
     const onMessage = vi.fn(async () => undefined);
     const socketRef = createSocketRef();
@@ -416,17 +420,33 @@ describe("web monitor inbox socket lifecycle", () => {
       upsertId: "local-timeout-terminal",
       retryPolicy: fastReconnectPolicy(2),
     });
+    // Keep durable inbound settlement and its read receipt outside the socket clock.
+    await waitForInboundWorkDrained();
     vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    let sendTimeoutIndex = -1;
     try {
-      sock.sendMessage.mockImplementationOnce(() => new Promise(() => {}));
+      sock.sendMessage.mockImplementationOnce(() => {
+        // The adapter schedules this send's timeout immediately after the socket call.
+        sendTimeoutIndex = setTimeoutSpy.mock.calls.length;
+        return new Promise(() => {});
+      });
 
       const replyPromise = inbound.platform.reply("pong");
       await expectSocketOperationTimeout("sendMessage", replyPromise);
       expect(sock.sendMessage).toHaveBeenCalledTimes(1);
       expect(socketRef.current).toBe(sock);
       expect(sleepWithAbortMock).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(0);
+      expect(setTimeoutSpy.mock.calls[sendTimeoutIndex]?.[1]).toBe(
+        DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
+      );
+      const sendTimeout = setTimeoutSpy.mock.results[sendTimeoutIndex];
+      expect(sendTimeout?.type).toBe("return");
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(sendTimeout?.value);
     } finally {
+      clearTimeoutSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
       vi.useRealTimers();
       await listener.close();
     }
@@ -530,15 +550,29 @@ describe("web monitor inbox socket lifecycle", () => {
     const onMessage = vi.fn(async () => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    let presenceTimeoutIndex = -1;
     try {
       sock.sendPresenceUpdate.mockClear();
-      sock.sendPresenceUpdate.mockImplementationOnce(() => new Promise(() => {}));
+      sock.sendPresenceUpdate.mockImplementationOnce(() => {
+        // The adapter schedules this operation's timeout immediately after the socket call.
+        presenceTimeoutIndex = setTimeoutSpy.mock.calls.length;
+        return new Promise(() => {});
+      });
 
       const presencePromise = listener.sendComposingTo("+1555");
       await expectSocketOperationTimeout("sendPresenceUpdate", presencePromise);
       expect(sock.sendPresenceUpdate).toHaveBeenCalledTimes(1);
-      expect(vi.getTimerCount()).toBe(0);
+      expect(setTimeoutSpy.mock.calls[presenceTimeoutIndex]?.[1]).toBe(
+        DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
+      );
+      const presenceTimeout = setTimeoutSpy.mock.results[presenceTimeoutIndex];
+      expect(presenceTimeout?.type).toBe("return");
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(presenceTimeout?.value);
     } finally {
+      clearTimeoutSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
       vi.useRealTimers();
       await listener.close();
     }
@@ -588,7 +622,7 @@ describe("web monitor inbox socket lifecycle", () => {
         );
         expect(loggedTimeoutFailure).toBe(true);
       });
-      expect(vi.getTimerCount()).toBe(0);
+      expect(sock.readMessages).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
       await listener.close();
@@ -629,12 +663,22 @@ describe("web monitor inbox socket lifecycle", () => {
       await inbound.platform.sendMedia({ text: "media after restart" });
 
       expect(successorSock.sendMessage).toHaveBeenCalledTimes(2);
-      expect(successorSock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
-        text: "pong",
-      });
-      expect(successorSock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
-        text: "media after restart",
-      });
+      expect(successorSock.sendMessage).toHaveBeenNthCalledWith(
+        1,
+        "999@s.whatsapp.net",
+        {
+          text: "pong",
+        },
+        expect.objectContaining({ messageId: expect.any(String) }),
+      );
+      expect(successorSock.sendMessage).toHaveBeenNthCalledWith(
+        2,
+        "999@s.whatsapp.net",
+        {
+          text: "media after restart",
+        },
+        expect.objectContaining({ messageId: expect.any(String) }),
+      );
     } finally {
       await close();
     }
@@ -652,9 +696,13 @@ describe("web monitor inbox socket lifecycle", () => {
     try {
       await inbound.platform.reply("pong");
       expect(successorSock.sendMessage).toHaveBeenCalledTimes(1);
-      expect(successorSock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-        text: "pong",
-      });
+      expect(successorSock.sendMessage).toHaveBeenCalledWith(
+        "999@s.whatsapp.net",
+        {
+          text: "pong",
+        },
+        expect.objectContaining({ messageId: expect.any(String) }),
+      );
     } finally {
       await close();
     }

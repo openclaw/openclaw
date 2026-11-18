@@ -1,0 +1,50 @@
+{
+  "id": "bifrost",
+  "categories": [
+    "models"
+  ],
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": [
+    "bifrost"
+  ],
+  "modelCatalog": {
+    "discovery": {
+      "bifrost": "refreshable"
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "bifrost",
+        "envVars": [
+          "BIFROST_VIRTUAL_KEY"
+        ]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "bifrost",
+      "method": "api-key",
+      "choiceId": "bifrost-api-key",
+      "choiceLabel": "Bifrost",
+      "choiceHint": "Gateway with an optional virtual key",
+      "groupId": "bifrost",
+      "groupLabel": "Bifrost",
+      "groupHint": "OpenAI-compatible model gateway",
+      "optionKey": "bifrostApiKey",
+      "cliFlag": "--bifrost-api-key",
+      "cliOption": "--bifrost-api-key <key>",
+      "cliDescription": "Bifrost virtual key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "providerCatalogEntry": "./provider-catalog.ts"
+}

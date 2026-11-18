@@ -24,6 +24,7 @@ export type QaEvidenceMatrixCellView = {
   stage: string;
   status: string;
   surface: string;
+  entryKey: string | null;
   testId: string | null;
   title: string | null;
 };
@@ -43,6 +44,9 @@ export type QaEvidenceGalleryEntryView = {
   artifacts: QaEvidenceArtifactView[];
   coverage: QaEvidenceCoverageView[];
   failureReason: string | null;
+  /** View-only raw entry index; reporter labels are not unique identities. */
+  key: string;
+  effective: boolean;
   id: string;
   kind: string;
   sourcePath: string | null;

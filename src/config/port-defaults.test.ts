@@ -9,16 +9,10 @@ const EXPECTED_BROWSER_CDP_PORT_RANGE = {
 
 describe("port defaults", () => {
   it("derives the browser CDP range from the control port", () => {
-    expect(deriveDefaultBrowserCdpPortRange(18791)).toEqual({
-      start: EXPECTED_BROWSER_CDP_PORT_RANGE.start,
-      end: EXPECTED_BROWSER_CDP_PORT_RANGE.end,
-    });
+    expect(deriveDefaultBrowserCdpPortRange(18791)).toEqual(EXPECTED_BROWSER_CDP_PORT_RANGE);
   });
 
   it("keeps the default browser CDP range wide when derived ports would overflow", () => {
-    expect(deriveDefaultBrowserCdpPortRange(65440)).toEqual({
-      start: EXPECTED_BROWSER_CDP_PORT_RANGE.start,
-      end: EXPECTED_BROWSER_CDP_PORT_RANGE.end,
-    });
+    expect(deriveDefaultBrowserCdpPortRange(65440)).toEqual(EXPECTED_BROWSER_CDP_PORT_RANGE);
   });
 });

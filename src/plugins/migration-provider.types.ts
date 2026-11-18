@@ -10,30 +10,6 @@ export type PluginConfigMigration = (config: OpenClawConfig) =>
   | null
   | undefined;
 
-type MigrationItemStatus = "planned" | "migrated" | "skipped" | "warning" | "conflict" | "error";
-type MigrationItemKind =
-  | "auth"
-  | "config"
-  | "secret"
-  | "memory"
-  | "skill"
-  | "workspace"
-  | "session"
-  | "file"
-  | "archive"
-  | "manual";
-type MigrationItemAction =
-  | "copy"
-  | "create"
-  | "update"
-  | "merge"
-  | "append"
-  | "archive"
-  | "skip"
-  | "manual";
-
-type MigrationApplyPhase = "before-promotion" | "after-promotion";
-
 /** Provider guarantee required before onboarding defers non-rollbackable effects. */
 type MigrationDeferredApplyContract = {
   retrySafe: true;
@@ -41,16 +17,31 @@ type MigrationDeferredApplyContract = {
 
 export type MigrationItem = {
   id: string;
-  kind: MigrationItemKind | (string & {});
-  action: MigrationItemAction | (string & {});
-  status: MigrationItemStatus;
+  kind:
+    | (
+        | "auth"
+        | "config"
+        | "secret"
+        | "memory"
+        | "skill"
+        | "workspace"
+        | "session"
+        | "file"
+        | "archive"
+        | "manual"
+      )
+    | (string & {});
+  action:
+    | ("copy" | "create" | "update" | "merge" | "append" | "archive" | "skip" | "manual")
+    | (string & {});
+  status: "planned" | "migrated" | "skipped" | "warning" | "conflict" | "error";
   source?: string;
   target?: string;
   message?: string;
   reason?: string;
   sensitive?: boolean;
   /** Onboarding may defer non-rollbackable effects only for retry-safe providers. */
-  applyPhase?: MigrationApplyPhase;
+  applyPhase?: "before-promotion" | "after-promotion";
   /** Retry-safe deferred apply may report a non-mutating already-satisfied terminal result. */
   deferredCompletion?: true;
   /** Core-owned source revision bound by reviewed embedded migration flows. */
@@ -141,11 +132,7 @@ export type MigrationProviderPlugin = {
   ) => MigrationApplyResult | Promise<MigrationApplyResult>;
 };
 
-type PluginSetupAutoEnableContext = {
+export type PluginSetupAutoEnableProbe = (ctx: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-};
-
-export type PluginSetupAutoEnableProbe = (
-  ctx: PluginSetupAutoEnableContext,
-) => string | string[] | null | undefined;
+}) => string | string[] | null | undefined;

@@ -1,4 +1,3 @@
-// Feishu plugin module implements docx types behavior.
 type FeishuBlockText = {
   elements?: Array<{
     text_run?: {
@@ -13,7 +12,7 @@ type FeishuBlockTableProperty = {
   column_width?: number[];
 };
 
-export type FeishuBlockTable = {
+type FeishuBlockTable = {
   property?: FeishuBlockTableProperty;
   merge_info?: Array<{ row_span?: number; col_span?: number }>;
   cells?: string[];

@@ -68,34 +68,38 @@ export async function storeMemoryPreimage(params: {
   return retainedKeys;
 }
 
-export async function appendConsolidationSummary(params: {
-  workspaceDir: string;
-  result: MemoryConsolidationResult;
-  nowMs: number;
-}): Promise<void> {
-  const timestamp = new Date(params.nowMs).toISOString();
-  const lines = [
-    `### ${timestamp}`,
-    "",
-    `- Added: ${params.result.added}`,
-    `- Merged: ${params.result.merged}`,
-    `- Superseded: ${params.result.superseded}`,
-    ...params.result.highlights,
-    "",
-  ];
+async function appendConsolidationHistory(
+  workspaceDir: string,
+  nowMs: number,
+  bodyLines: string[],
+): Promise<void> {
+  const timestamp = new Date(nowMs).toISOString();
   await updateDreamsFile({
-    workspaceDir: params.workspaceDir,
-    updater: (existing, dreamsPath) => {
+    workspaceDir,
+    updater: (existing) => {
       const heading = "## Memory Consolidation History";
       const base = existing.includes(heading)
         ? existing.trimEnd()
         : `${existing.trimEnd()}${existing.trim() ? "\n\n" : ""}${heading}`;
       return {
-        content: `${base}\n\n${lines.join("\n")}`,
-        result: dreamsPath,
+        content: `${base}\n\n### ${timestamp}\n\n${bodyLines.join("\n")}\n`,
+        result: undefined,
       };
     },
   });
+}
+
+export async function appendConsolidationSummary(params: {
+  workspaceDir: string;
+  result: MemoryConsolidationResult;
+  nowMs: number;
+}): Promise<void> {
+  await appendConsolidationHistory(params.workspaceDir, params.nowMs, [
+    `- Added: ${params.result.added}`,
+    `- Merged: ${params.result.merged}`,
+    `- Superseded: ${params.result.superseded}`,
+    ...params.result.highlights,
+  ]);
 }
 
 export async function appendConsolidationSkippedSummary(params: {
@@ -103,18 +107,8 @@ export async function appendConsolidationSkippedSummary(params: {
   nowMs: number;
   reason: string;
 }): Promise<void> {
-  const timestamp = new Date(params.nowMs).toISOString();
-  await updateDreamsFile({
-    workspaceDir: params.workspaceDir,
-    updater: (existing, _dreamsPath) => {
-      const heading = "## Memory Consolidation History";
-      const base = existing.includes(heading)
-        ? existing.trimEnd()
-        : `${existing.trimEnd()}${existing.trim() ? "\n\n" : ""}${heading}`;
-      return {
-        content: `${base}\n\n### ${timestamp}\n\n- Rewrite skipped: ${params.reason}.\n- Fallback: append-only promotion.\n`,
-        result: undefined,
-      };
-    },
-  });
+  await appendConsolidationHistory(params.workspaceDir, params.nowMs, [
+    `- Rewrite skipped: ${params.reason}.`,
+    "- Fallback: append-only promotion.",
+  ]);
 }

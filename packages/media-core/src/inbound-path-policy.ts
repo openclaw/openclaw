@@ -42,50 +42,21 @@ function joinAbsolutePathSegments(candidatePath: string, segments: readonly stri
   return segments.length === 1 ? `${joined}/` : joined;
 }
 
-function resolveRootPatternMatch(params: {
-  candidatePath: string;
-  rootPattern: string;
-}): InboundPathRootMatch | undefined {
-  const candidateSegments = splitPathSegments(params.candidatePath);
-  const rootSegments = splitPathSegments(params.rootPattern);
-  if (candidateSegments.length < rootSegments.length) {
+function normalizeInboundPathRootPattern(value: string): string | undefined {
+  const normalized = normalizePosixAbsolutePath(value);
+  if (!normalized) {
     return undefined;
   }
-  const resolvedSegments: string[] = [];
-  for (const [idx, expected] of rootSegments.entries()) {
-    const actual = candidateSegments[idx];
-    if (!actual) {
-      return undefined;
-    }
-    if (expected === WILDCARD_SEGMENT) {
-      resolvedSegments.push(actual);
-      continue;
-    }
-    if (expected !== actual) {
-      return undefined;
-    }
-    resolvedSegments.push(expected);
-  }
-  const firstWildcardIndex = rootSegments.indexOf(WILDCARD_SEGMENT);
-  const anchorSegments =
-    firstWildcardIndex === -1 ? resolvedSegments : rootSegments.slice(0, firstWildcardIndex);
-  return {
-    anchorRoot: joinAbsolutePathSegments(params.candidatePath, anchorSegments),
-    matchedRoot: joinAbsolutePathSegments(params.candidatePath, resolvedSegments),
-  };
+  const segments = splitPathSegments(normalized);
+  return segments.length > 0 &&
+    segments.every((segment) => segment === WILDCARD_SEGMENT || !segment.includes("*"))
+    ? normalized
+    : undefined;
 }
 
 /** Validates an absolute inbound root pattern with whole-segment wildcards only. */
 export function isValidInboundPathRootPattern(value: string): boolean {
-  const normalized = normalizePosixAbsolutePath(value);
-  if (!normalized) {
-    return false;
-  }
-  const segments = splitPathSegments(normalized);
-  if (segments.length === 0) {
-    return false;
-  }
-  return segments.every((segment) => segment === WILDCARD_SEGMENT || !segment.includes("*"));
+  return normalizeInboundPathRootPattern(value) !== undefined;
 }
 
 /** Normalizes configured inbound attachment roots, dropping invalid or duplicate patterns. */
@@ -96,10 +67,7 @@ export function normalizeInboundPathRoots(roots?: readonly string[]): string[] {
     if (typeof root !== "string") {
       continue;
     }
-    if (!isValidInboundPathRootPattern(root)) {
-      continue;
-    }
-    const candidate = normalizePosixAbsolutePath(root);
+    const candidate = normalizeInboundPathRootPattern(root);
     if (!candidate || seen.has(candidate)) {
       continue;
     }
@@ -113,19 +81,7 @@ export function normalizeInboundPathRoots(roots?: readonly string[]): string[] {
 export function mergeInboundPathRoots(
   ...rootsLists: Array<readonly string[] | undefined>
 ): string[] {
-  const merged: string[] = [];
-  const seen = new Set<string>();
-  for (const roots of rootsLists) {
-    const normalized = normalizeInboundPathRoots(roots);
-    for (const root of normalized) {
-      if (seen.has(root)) {
-        continue;
-      }
-      seen.add(root);
-      merged.push(root);
-    }
-  }
-  return merged;
+  return normalizeInboundPathRoots(rootsLists.flatMap((roots) => roots ?? []));
 }
 
 /** Resolves the concrete lexical root matched by an inbound path pattern. */
@@ -141,14 +97,25 @@ export function resolveInboundPathRoot(params: {
   const roots = normalizeInboundPathRoots(params.roots);
   const effectiveRoots =
     roots.length > 0 ? roots : normalizeInboundPathRoots(params.fallbackRoots ?? undefined);
-  if (effectiveRoots.length === 0) {
-    return undefined;
-  }
+  const candidateSegments = splitPathSegments(candidatePath);
   for (const rootPattern of effectiveRoots) {
-    const resolved = resolveRootPatternMatch({ candidatePath, rootPattern });
-    if (resolved) {
-      return resolved;
+    const rootSegments = splitPathSegments(rootPattern);
+    if (
+      candidateSegments.length < rootSegments.length ||
+      rootSegments.some(
+        (expected, index) => expected !== WILDCARD_SEGMENT && expected !== candidateSegments[index],
+      )
+    ) {
+      continue;
     }
+    const resolvedSegments = candidateSegments.slice(0, rootSegments.length);
+    const firstWildcardIndex = rootSegments.indexOf(WILDCARD_SEGMENT);
+    const anchorSegments =
+      firstWildcardIndex === -1 ? resolvedSegments : rootSegments.slice(0, firstWildcardIndex);
+    return {
+      anchorRoot: joinAbsolutePathSegments(candidatePath, anchorSegments),
+      matchedRoot: joinAbsolutePathSegments(candidatePath, resolvedSegments),
+    };
   }
   return undefined;
 }

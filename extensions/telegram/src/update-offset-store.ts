@@ -1,16 +1,16 @@
-// Telegram plugin module implements update offset store behavior.
-import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getTelegramRuntime } from "./runtime.js";
 import { normalizeTelegramStateAccountId } from "./state-account-id.js";
 import {
-  fingerprintTelegramBotToken,
+  fingerprintOptionalTelegramBotToken,
   resolveTelegramBotUserIdFromToken,
 } from "./token-fingerprint.js";
 
 const STORE_VERSION = 3;
-export const TELEGRAM_UPDATE_OFFSET_NAMESPACE = "telegram.update-offsets";
-export const TELEGRAM_UPDATE_OFFSET_MAX_ENTRIES = 1_000;
+const TELEGRAM_UPDATE_OFFSET_NAMESPACE = "telegram.update-offsets";
+const TELEGRAM_UPDATE_OFFSET_MAX_ENTRIES = 1_000;
 
 type TelegramUpdateOffsetState = {
   version: number;
@@ -23,10 +23,6 @@ type TelegramUpdateOffsetStore = PluginStateKeyedStore<TelegramUpdateOffsetState
 
 function isValidUpdateId(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
-export function normalizeTelegramUpdateOffsetAccountId(accountId?: string) {
-  return normalizeTelegramStateAccountId(accountId);
 }
 
 function openUpdateOffsetStore(env?: NodeJS.ProcessEnv): TelegramUpdateOffsetStore {
@@ -42,64 +38,60 @@ function extractBotIdFromToken(token?: string): string | null {
   return botUserId === undefined ? null : String(botUserId);
 }
 
-function fingerprintFromToken(token?: string): string | null {
-  const trimmed = token?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return fingerprintTelegramBotToken(trimmed);
+function updateOffsetState(lastUpdateId: number | null, token?: string) {
+  return {
+    version: STORE_VERSION,
+    lastUpdateId,
+    botId: extractBotIdFromToken(token),
+    tokenFingerprint: fingerprintOptionalTelegramBotToken(token),
+  };
 }
 
-function safeParseState(parsed: unknown): TelegramUpdateOffsetState | null {
-  try {
-    const state = parsed as {
-      version?: number;
-      lastUpdateId?: number | null;
-      botId?: string | null;
-      tokenFingerprint?: string | null;
-    };
-    if (state?.version !== STORE_VERSION && state?.version !== 2 && state?.version !== 1) {
-      return null;
-    }
-    if (state.lastUpdateId !== null && !isValidUpdateId(state.lastUpdateId)) {
-      return null;
-    }
-    if (state.version >= 2 && state.botId !== null && typeof state.botId !== "string") {
-      return null;
-    }
-    if (
-      state.version === STORE_VERSION &&
-      state.tokenFingerprint !== null &&
-      typeof state.tokenFingerprint !== "string"
-    ) {
-      return null;
-    }
-    return {
-      version: state.version,
-      lastUpdateId: state.lastUpdateId ?? null,
-      botId: state.version >= 2 ? (state.botId ?? null) : null,
-      tokenFingerprint: state.version === STORE_VERSION ? (state.tokenFingerprint ?? null) : null,
-    };
-  } catch {
+function safeParseState(state: unknown): TelegramUpdateOffsetState | null {
+  if (!isRecord(state)) {
     return null;
   }
+  if (state.version === 1 || state.version === 2) {
+    throw new Error("Telegram update offsets require migration; run openclaw doctor --fix.");
+  }
+  if (
+    state.version !== STORE_VERSION ||
+    (state.lastUpdateId !== null && !isValidUpdateId(state.lastUpdateId)) ||
+    (state.botId !== null && typeof state.botId !== "string") ||
+    (state.tokenFingerprint !== null && typeof state.tokenFingerprint !== "string")
+  ) {
+    return null;
+  }
+  return {
+    version: STORE_VERSION,
+    lastUpdateId: state.lastUpdateId,
+    botId: state.botId,
+    tokenFingerprint: state.tokenFingerprint,
+  };
 }
 
 export type TelegramOffsetRotationReason = "bot-id-changed" | "token-rotated" | "legacy-state";
 
-export type TelegramUpdateOffsetRotationInfo = {
+type TelegramUpdateOffsetRotationInfo = {
   reason: TelegramOffsetRotationReason;
   previousBotId: string | null;
   currentBotId: string;
   staleLastUpdateId: number;
 };
 
+export type TelegramAccountRotationInfo = Omit<
+  TelegramUpdateOffsetRotationInfo,
+  "staleLastUpdateId"
+> & {
+  staleLastUpdateId: number | null;
+};
+
 function rotationForToken(
   parsed: TelegramUpdateOffsetState,
   botToken?: string,
-): TelegramUpdateOffsetRotationInfo | null {
+): TelegramAccountRotationInfo | null {
   const currentBotId = extractBotIdFromToken(botToken);
-  if (!currentBotId || parsed.lastUpdateId === null) {
+  if (!currentBotId) {
     return null;
   }
   let reason: TelegramOffsetRotationReason | null = null;
@@ -109,7 +101,7 @@ function rotationForToken(
     reason = "bot-id-changed";
   } else if (parsed.tokenFingerprint === null) {
     reason = "legacy-state";
-  } else if (parsed.tokenFingerprint !== fingerprintFromToken(botToken)) {
+  } else if (parsed.tokenFingerprint !== fingerprintOptionalTelegramBotToken(botToken)) {
     reason = "token-rotated";
   }
   return reason
@@ -128,7 +120,7 @@ export async function readTelegramUpdateOffset(params: {
   env?: NodeJS.ProcessEnv;
   onRotationDetected?: (info: TelegramUpdateOffsetRotationInfo) => void | Promise<void>;
 }): Promise<number | null> {
-  const key = normalizeTelegramUpdateOffsetAccountId(params.accountId);
+  const key = normalizeTelegramStateAccountId(params.accountId);
   let storedValue: unknown;
   try {
     storedValue = await openUpdateOffsetStore(params.env).lookup(key);
@@ -141,10 +133,52 @@ export async function readTelegramUpdateOffset(params: {
   }
   const rotation = rotationForToken(parsed, params.botToken);
   if (rotation) {
-    await params.onRotationDetected?.(rotation);
+    if (rotation.staleLastUpdateId !== null) {
+      await params.onRotationDetected?.({
+        ...rotation,
+        staleLastUpdateId: rotation.staleLastUpdateId,
+      });
+    }
     return null;
   }
   return parsed.lastUpdateId;
+}
+
+export async function prepareTelegramAccount(params: {
+  accountId: string;
+  botToken: string;
+  abortSignal?: AbortSignal;
+  onRotationDetected: (info: TelegramAccountRotationInfo) => void;
+}): Promise<number | null> {
+  const accountId = normalizeTelegramStateAccountId(params.accountId);
+  try {
+    const store = openUpdateOffsetStore();
+    const parsed = safeParseState(await store.lookup(accountId));
+    const rotation = parsed ? rotationForToken(parsed, params.botToken) : null;
+    if (rotation) {
+      params.onRotationDetected(rotation);
+      if (rotation.previousBotId !== null && rotation.previousBotId !== rotation.currentBotId) {
+        const queue = getTelegramRuntime().state.openChannelIngressQueue({ accountId });
+        if (!queue.purge) {
+          throw new Error("The host does not support ingress identity resets; update OpenClaw.");
+        }
+        params.abortSignal?.throwIfAborted();
+        await queue.purge({ signal: params.abortSignal });
+      }
+    }
+    params.abortSignal?.throwIfAborted();
+    if (!parsed || rotation) {
+      // Keep the old identity until purge commits, then replace it without an absent-marker window.
+      // Webhook-only accounts need this marker even though they have no polling cursor.
+      await store.register(accountId, updateOffsetState(null, params.botToken));
+    }
+    return rotation ? null : (parsed?.lastUpdateId ?? null);
+  } catch (err) {
+    throw new Error(
+      `telegram: failed to prepare ingress for account "${accountId}"; restart the account to retry: ${formatErrorMessage(err)}`,
+      { cause: err },
+    );
+  }
 }
 
 export async function writeTelegramUpdateOffset(params: {
@@ -156,14 +190,9 @@ export async function writeTelegramUpdateOffset(params: {
   if (!isValidUpdateId(params.updateId)) {
     throw new Error("Telegram update offset must be a non-negative safe integer.");
   }
-  const payload: TelegramUpdateOffsetState = {
-    version: STORE_VERSION,
-    lastUpdateId: params.updateId,
-    botId: extractBotIdFromToken(params.botToken),
-    tokenFingerprint: fingerprintFromToken(params.botToken),
-  };
+  const payload = updateOffsetState(params.updateId, params.botToken);
   await openUpdateOffsetStore(params.env).register(
-    normalizeTelegramUpdateOffsetAccountId(params.accountId),
+    normalizeTelegramStateAccountId(params.accountId),
     payload,
   );
 }
@@ -172,55 +201,5 @@ export async function deleteTelegramUpdateOffset(params: {
   accountId?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  await openUpdateOffsetStore(params.env).delete(
-    normalizeTelegramUpdateOffsetAccountId(params.accountId),
-  );
-}
-
-export async function listTelegramLegacyUpdateOffsetEntries(params: {
-  accountId?: string;
-  persistedPath: string;
-}): Promise<Array<{ key: string; value: TelegramUpdateOffsetState }>> {
-  const { value } = await readJsonFileWithFallback<unknown>(params.persistedPath, null);
-  const parsed = safeParseState(value);
-  if (!parsed || parsed.lastUpdateId === null) {
-    return [];
-  }
-  return [{ key: normalizeTelegramUpdateOffsetAccountId(params.accountId), value: parsed }];
-}
-
-export function shouldReplaceTelegramUpdateOffsetEntry(params: {
-  existingValue: unknown;
-  incomingValue: unknown;
-  botToken?: string;
-}): boolean {
-  const existing = safeParseState(params.existingValue);
-  const incoming = safeParseState(params.incomingValue);
-  if (!incoming || incoming.lastUpdateId === null) {
-    return false;
-  }
-  if (!existing || existing.lastUpdateId === null) {
-    return true;
-  }
-  if (!params.botToken) {
-    if (existing.botId && incoming.botId && existing.botId !== incoming.botId) {
-      return false;
-    }
-    if (
-      existing.tokenFingerprint &&
-      incoming.tokenFingerprint &&
-      existing.tokenFingerprint !== incoming.tokenFingerprint
-    ) {
-      return false;
-    }
-  }
-  const incomingRotation = rotationForToken(incoming, params.botToken);
-  if (incomingRotation) {
-    return false;
-  }
-  const existingRotation = rotationForToken(existing, params.botToken);
-  if (existingRotation) {
-    return true;
-  }
-  return incoming.lastUpdateId > existing.lastUpdateId;
+  await openUpdateOffsetStore(params.env).delete(normalizeTelegramStateAccountId(params.accountId));
 }

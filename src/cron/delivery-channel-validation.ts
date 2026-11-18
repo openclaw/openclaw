@@ -6,10 +6,11 @@ import {
   validateTargetProviderPrefix,
 } from "../infra/outbound/channel-target-prefix.js";
 import { normalizeAccountId } from "../routing/account-id.js";
-import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
+import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveFailureAlert } from "./service/failure-alerts.js";
-import type { CronDelivery, CronFailureAlert, CronJobCreate } from "./types.js";
+import { assertCanonicalCronDeliveryMode } from "./store/delivery-codec.js";
+import type { CronDelivery, CronFailureAlert, CronJobCreate, CronStoredJob } from "./types.js";
 
 function hasExplicitChannelConfigEntry(cfg: OpenClawConfig): boolean {
   const channels = cfg.channels;
@@ -96,7 +97,8 @@ function assertEnabledAnnounceAccount(params: {
   // Channels resolve account keys canonically (matrix `"Team Ops"` answers to
   // `team-ops`), so match the same way or a disabled entry is missed.
   if (
-    resolveNormalizedAccountEntry(accounts, params.accountId, normalizeAccountId)?.enabled !== false
+    resolveChannelAccountEntry(accounts, params.accountId, channel, normalizeAccountId)?.enabled !==
+    false
   ) {
     return;
   }
@@ -132,7 +134,8 @@ export async function assertValidCronAnnounceDelivery(params: {
   cfg: OpenClawConfig;
   delivery?: CronDelivery;
 }) {
-  if (params.delivery && (params.delivery.mode ?? "announce") === "announce") {
+  assertCanonicalCronDeliveryMode(params.delivery);
+  if (params.delivery?.mode === "announce") {
     assertCompatibleAnnounceTarget({
       channel: params.delivery.channel,
       to: params.delivery.to,
@@ -185,12 +188,23 @@ export async function assertValidCronFailureAlert(params: {
   cfg: OpenClawConfig;
   failureAlert?: CronFailureAlert | false;
   delivery?: CronDelivery;
+  /** Job owner and creator fields that select scoped default routes. */
+  owner?: Pick<CronJobCreate, "agentId" | "sessionKey" | "sessionTarget"> &
+    Partial<Pick<CronStoredJob, "createdActor">>;
+  defaultAgentId?: string;
 }) {
   // Validate the scheduler-owned route so prefix, global, and inheritance
   // decisions cannot diverge between mutations and actual alert delivery.
   const failureAlert = resolveFailureAlert(
-    { deps: { cronConfig: params.cfg.cron } },
-    { delivery: params.delivery, failureAlert: params.failureAlert },
+    { deps: { cronConfig: params.cfg.cron, defaultAgentId: params.defaultAgentId } },
+    {
+      agentId: params.owner?.agentId,
+      sessionKey: params.owner?.sessionKey,
+      sessionTarget: params.owner?.sessionTarget,
+      createdActor: params.owner?.createdActor,
+      delivery: params.delivery,
+      failureAlert: params.failureAlert,
+    },
   );
   if (!failureAlert || failureAlert.mode === "webhook") {
     return;
@@ -207,11 +221,17 @@ export async function assertValidCronFailureAlert(params: {
   });
 }
 
-export async function assertValidCronCreateDelivery(cfg: OpenClawConfig, job: CronJobCreate) {
+export async function assertValidCronCreateDelivery(
+  cfg: OpenClawConfig,
+  job: CronJobCreate & Partial<Pick<CronStoredJob, "createdActor">>,
+  defaultAgentId?: string,
+) {
   await assertValidCronAnnounceDelivery({ cfg, delivery: job.delivery });
   await assertValidCronFailureAlert({
     cfg,
     failureAlert: job.failureAlert,
     delivery: job.delivery,
+    owner: job,
+    defaultAgentId,
   });
 }

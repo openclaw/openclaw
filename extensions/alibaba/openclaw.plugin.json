@@ -1,5 +1,6 @@
 {
   "id": "alibaba",
+  "categories": ["media"],
   "activation": {
     "onStartup": false
   },
@@ -30,6 +31,11 @@
   ],
   "contracts": {
     "videoGenerationProviders": ["alibaba"]
+  },
+  "videoGenerationProviderMetadata": {
+    "alibaba": {
+      "authSignals": [{ "provider": "alibaba" }]
+    }
   },
   "configSchema": {
     "type": "object",

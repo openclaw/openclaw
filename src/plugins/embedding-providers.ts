@@ -4,6 +4,7 @@ import type {
   EmbeddingProviderAdapter,
   RegisteredEmbeddingProvider,
 } from "./embedding-provider-types.js";
+import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
 import {
   assertDirectPluginRegistrationReplacement,
   requireActivePluginRegistry,
@@ -11,14 +12,7 @@ import {
 } from "./runtime.js";
 
 export type {
-  EmbeddingInput,
-  EmbeddingProvider,
   EmbeddingProviderAdapter,
-  EmbeddingProviderCallOptions,
-  EmbeddingProviderCreateOptions,
-  EmbeddingProviderCreateResult,
-  EmbeddingProviderIndexIdentity,
-  EmbeddingProviderRuntime,
   RegisteredEmbeddingProvider,
 } from "./embedding-provider-types.js";
 
@@ -57,7 +51,7 @@ export function registerEmbeddingProvider(
       `embedding provider ${adapter.id}`,
     );
   }
-  const entry = { pluginId, provider: adapter, source: "runtime" };
+  const entry = { pluginId, provider: wrapCurrentPluginInstance(adapter), source: "runtime" };
   if (existingIndex === -1) {
     registry.embeddingProviders.push(entry);
   } else {

@@ -1,5 +1,28 @@
 package ai.openclaw.app.gateway
 
+import java.net.InetAddress
+import java.util.Locale
+
+/** Route advice only: Tailscale-looking addresses never grant TLS or cleartext trust. */
+internal fun isTailscaleGatewayHost(rawHost: String): Boolean {
+  val host =
+    rawHost
+      .trim()
+      .trim('[', ']')
+      .trimEnd('.')
+      .lowercase(Locale.US)
+  if (host.endsWith(".ts.net")) return true
+  val octets = host.split('.')
+  if (octets.size == 4 && octets.all { it.isNotEmpty() && it.all(Char::isDigit) }) {
+    val values = octets.map { it.toIntOrNull() ?: return false }
+    return values.all { it in 0..255 } && values[0] == 100 && values[1] in 64..127
+  }
+  if (!host.contains(':') || !host.all { it in '0'..'9' || it in 'a'..'f' || it == ':' || it == '.' }) return false
+  val bytes = runCatching { InetAddress.getByName(host).address }.getOrNull() ?: return false
+  return bytes.size == 16 &&
+    bytes.copyOfRange(0, 6).contentEquals(byteArrayOf(0xfd.toByte(), 0x7a, 0x11, 0x5c, 0xa1.toByte(), 0xe0.toByte()))
+}
+
 /** Resolved gateway address and optional metadata discovered from Bonjour/manual entry. */
 data class GatewayEndpoint(
   val stableId: String,

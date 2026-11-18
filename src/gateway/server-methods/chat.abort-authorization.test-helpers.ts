@@ -1,15 +1,12 @@
 import { expect } from "vitest";
-import {
-  handleChatAbortRequest,
-  handleChatAbortRequestWithLifecycle,
-} from "./chat-abort-handler.js";
+import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import {
   createActiveRun,
   createChatAbortContext,
   invokeChatAbortHandler,
 } from "./chat.abort.test-helpers.js";
 
-export type AbortResponsePayload = { aborted?: boolean; runIds?: string[] };
+type AbortResponsePayload = { aborted?: boolean; runIds?: string[] };
 type AbortRespond = Awaited<ReturnType<typeof invokeChatAbortHandler>>;
 
 export async function invokeAbort({
@@ -20,8 +17,6 @@ export async function invokeAbort({
   deviceId,
   preserveSideRuns,
   scopes = ["operator.write"],
-  onAuthorizedAfterQueuedAbort,
-  excludeRunIds,
 }: {
   context: ReturnType<typeof createChatAbortContext>;
   sessionKey?: string;
@@ -30,18 +25,9 @@ export async function invokeAbort({
   deviceId: string;
   preserveSideRuns?: boolean;
   scopes?: string[];
-  onAuthorizedAfterQueuedAbort?: () => boolean;
-  excludeRunIds?: ReadonlySet<string>;
 }) {
   return await invokeChatAbortHandler({
-    handler:
-      onAuthorizedAfterQueuedAbort || excludeRunIds
-        ? (options) =>
-            handleChatAbortRequestWithLifecycle(options, {
-              onAuthorizedAfterQueuedAbort,
-              excludeRunIds,
-            })
-        : handleChatAbortRequest,
+    handler: handleChatAbortRequest,
     context,
     request: {
       sessionKey,
@@ -52,12 +38,15 @@ export async function invokeAbort({
   });
 }
 
-export function createSingleAbortContext() {
+export function createSingleAbortContext(options: { storeScope?: string } = {}) {
   return createChatAbortContext({
-    chatAbortControllers: new Map([
+    sources: new Map([
       [
         "run-1",
-        createActiveRun("main", { owner: { connId: "conn-owner", deviceId: "dev-owner" } }),
+        createActiveRun("main", {
+          storeScope: options.storeScope,
+          owner: { connId: "conn-owner", deviceId: "dev-owner" },
+        }),
       ],
     ]),
   });

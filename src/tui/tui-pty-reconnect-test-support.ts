@@ -1,6 +1,8 @@
 import { expect, it } from "vitest";
 import { sleep } from "../utils/sleep.js";
 import {
+  objectFieldEquals,
+  readFixtureLog,
   startTuiFixture,
   waitForSynchronizedFrameRows,
 } from "./tui-pty-harness-fixture-test-support.js";
@@ -128,5 +130,68 @@ async function exerciseTuiReplacementReconnectRecovery(timeoutMs: number): Promi
         await fixture.cleanup();
       }
     }),
+  );
+}
+
+export function registerTuiDisconnectedDraftTests(
+  startupTimeoutMs: number,
+  startupTestTimeoutMs: number,
+): void {
+  it.for(["ordinary disconnected draft", "/tmp/window97-note.txt"])(
+    "retains disconnected draft %s for Return after reconnect",
+    { timeout: startupTestTimeoutMs },
+    async (marker, { signal }) => {
+      const fixture = await startTuiFixture({
+        holdReconnect: true,
+        env: { OPENCLAW_TUI_PTY_DISCONNECT_REASON: "fixture transport loss" },
+      });
+      try {
+        await fixture.run.waitForOutput("local ready", startupTimeoutMs);
+        await fixture.run.write("/gateway-status\r", { delay: false });
+        await fixture.waitForLogEntry((entry) => entry.method === "disconnect", signal);
+        await fixture.run.write("/help\r", { delay: false });
+        await fixture.run.waitForOutput("Slash commands:", startupTimeoutMs);
+        expect(
+          (await readFixtureLog(fixture.logPath)).filter((entry) => entry.method === "sendChat")
+            .length,
+        ).toBe(0);
+
+        await fixture.run.write(`${marker}\r`, { delay: false });
+        const rows = await waitForSynchronizedFrameRows(
+          fixture.run,
+          (frame) =>
+            frame.some((row) => row.includes("local runtime not ready — message not sent")),
+          startupTimeoutMs,
+        );
+        expect(
+          (await readFixtureLog(fixture.logPath)).filter((entry) => entry.method === "sendChat")
+            .length,
+        ).toBe(0);
+        expect(
+          rows.map((row) => row.trim()),
+          rows.join("\n"),
+        ).toContain(marker);
+
+        await fixture.releaseReconnect();
+        await waitForSynchronizedFrameRows(
+          fixture.run,
+          (frame) => frame.some((row) => row.includes("local ready")),
+          startupTimeoutMs,
+        );
+        await fixture.run.write("\r", { delay: false });
+        await fixture.waitForLogEntry(
+          (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", marker),
+          signal,
+        );
+        await fixture.run.waitForOutput(`PTY_RESPONSE: ${marker}`, startupTimeoutMs);
+        const sends = (await readFixtureLog(fixture.logPath)).filter(
+          (entry) => entry.method === "sendChat",
+        );
+        expect(sends).toHaveLength(1);
+        expect(sends[0]?.payload).toMatchObject({ message: marker });
+      } finally {
+        await fixture.cleanup();
+      }
+    },
   );
 }

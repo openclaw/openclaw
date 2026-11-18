@@ -1,113 +1,300 @@
-// Runtime web-channel plugin tests cover the public monitor facade and plugin lifecycle.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
+  loadFacadeModuleAtLocationSync,
+  resetFacadeLoaderStateForTest,
+} from "../../plugin-sdk/facade-loader.js";
+import { createPluginModuleLoader } from "../loader-module-runtime.js";
+import { adoptProcessPluginCache, createPluginCache, withPluginCache } from "../plugin-cache.js";
+import { bindPluginInstanceModuleLoader } from "../plugin-instance-module-loader.js";
+import { getPluginInstance } from "../plugin-instance-scope.js";
+import { PluginInstance } from "../plugin-instance.js";
+import { resolvePluginMetadataSnapshot } from "../plugin-metadata-snapshot.js";
+import { bindPluginRuntimeArtifactSelection } from "../plugin-runtime-artifact-binding.js";
+import { createEmptyPluginRegistry } from "../registry-empty.js";
+import type { PluginRecord } from "../registry-types.js";
+import { resetPluginRuntimeStateForTest, stageActivePluginRegistry } from "../runtime.js";
+import { createPluginRecord } from "../status.test-fixtures.js";
+import { withPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
+import { monitorWebChannel } from "./runtime-web-channel-plugin.js";
 
-const tempDirs = createTempDirTracker();
+const cold = vi.hoisted(() => ({
+  records: [] as Array<{ id: string; rootDir: string; source: string; origin: "global" }>,
+}));
+vi.mock("../plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugin-metadata-snapshot.js")>()),
+  resolvePluginMetadataSnapshot: vi.fn(() => ({ plugins: cold.records })),
+}));
 
+const temp = createTempDirTracker();
+const records: PluginRecord[] = [];
+let root: string;
+beforeEach(() => {
+  root = fs.realpathSync(temp.make("openclaw-web-runtime-"));
+  cold.records = [];
+  vi.clearAllMocks();
+  // Shared test cleanup reinstalls a default registry; this fixture owns both cold and live states.
+  resetPluginRuntimeStateForTest();
+  setRuntimeConfigSnapshot({});
+});
 afterEach(async () => {
-  const { clearPluginMetadataLifecycleCaches } = await import("../plugin-metadata-lifecycle.js");
-  clearPluginMetadataLifecycleCaches();
-  tempDirs.cleanup();
-  vi.doUnmock("./runtime-plugin-boundary.js");
-  vi.resetModules();
+  vi.restoreAllMocks();
+  const disposals = await Promise.allSettled(
+    records.splice(0).map(async (record) => await getPluginInstance(record)?.dispose()),
+  );
+  const failures: unknown[] = disposals.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  for (const cleanup of [
+    resetPluginRuntimeStateForTest,
+    resetFacadeLoaderStateForTest,
+    clearRuntimeConfigSnapshot,
+    temp.cleanup,
+  ]) {
+    try {
+      cleanup();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length) {
+    throw new AggregateError(failures, "Plugin fixture cleanup failed");
+  }
 });
 
-describe("runtime web channel plugin", () => {
-  it("forwards library monitor calls lazily with exact arguments and runtime receiver", async () => {
-    const result = { marker: "complete" };
-    const monitorWebChannel = vi.fn(async (..._args: unknown[]) => result);
-    const runtimeModule = { monitorWebChannel };
-    const loadPluginBoundaryModule = vi.fn(() => runtimeModule);
-    vi.doMock("./runtime-plugin-boundary.js", () => ({
-      loadPluginBoundaryModule,
-      resolvePluginRuntimeModulePath: () => "/tmp/runtime-api.js",
-      resolvePluginRuntimeRecordByEntryBaseNames: () => ({
-        origin: "bundled",
-        source: "test",
-      }),
-    }));
+function writeFiles(directory: string, files: Record<string, string>) {
+  for (const [name, source] of Object.entries(files)) {
+    fs.writeFileSync(path.join(directory, name), source);
+  }
+}
 
-    const library = await import("../../library.js");
-    expect(loadPluginBoundaryModule).not.toHaveBeenCalled();
-    const args = [
-      true,
-      vi.fn(),
-      false,
-      vi.fn(),
-      { log: vi.fn() },
-      new AbortController().signal,
-      { accountId: "work" },
-    ];
-    await expect(library.monitorWebChannel(...args)).resolves.toBe(result);
-    expect(monitorWebChannel).toHaveBeenCalledOnce();
-    expect(monitorWebChannel.mock.contexts[0]).toBe(runtimeModule);
-    const [receivedArgs] = monitorWebChannel.mock.calls;
-    expect(receivedArgs).toHaveLength(args.length);
-    for (const [index, arg] of args.entries()) {
-      expect(receivedArgs?.[index]).toBe(arg);
-    }
+function coldOwner(rootDir: string, id: string, source = path.join(rootDir, "index.ts")) {
+  cold.records = [{ id, rootDir, source, origin: "global" }];
+}
 
-    const monitorError = new Error("monitor failed");
-    monitorWebChannel.mockRejectedValueOnce(monitorError);
-    await expect(library.monitorWebChannel(...args)).rejects.toBe(monitorError);
+function writeSource(rootDir: string, version: string, surfaceDirectory = rootDir) {
+  fs.mkdirSync(surfaceDirectory, { recursive: true });
+  writeFiles(rootDir, { "package.json": '{"type":"module"}' });
+  writeFiles(surfaceDirectory, {
+    "state.ts": `let value = ${JSON.stringify(version)};
+    export const read = () => value;
+    export const set = (next: string) => { value = next; };`,
+    "index.ts": 'import { set } from "./state.js"; export default { register: set };',
+    "light-runtime-api.ts": 'export { read } from "./state.js";',
+    "runtime-api.ts": `import { read } from "./state.js";
+    export async function monitorWebChannel(...args: unknown[]) {
+      const { suffix } = await import("./lazy.js");
+      return [read(), suffix, ...args];
+    }`,
+    "lazy.ts": `export const suffix = ${JSON.stringify(`lazy-${version}`)};`,
   });
+}
 
-  it("reloads replaced monitor artifacts and dependencies after plugin lifecycle clears", async () => {
-    const pluginRoot = fs.realpathSync(tempDirs.make("openclaw-web-runtime-replacement-"));
-    const modulePath = path.join(pluginRoot, "runtime-api.js");
-    const dependencyPath = path.join(pluginRoot, "dependency.js");
-    fs.writeFileSync(path.join(pluginRoot, "package.json"), '{"type":"commonjs"}\n', "utf8");
+function prepare(version?: string, pluginId = "web-fixture", rootDir = root) {
+  if (version !== undefined) {
+    writeSource(rootDir, version);
+  }
+  const cache = createPluginCache();
+  const registry = createEmptyPluginRegistry();
+  const record = createPluginRecord({
+    id: pluginId,
+    rootDir,
+    source: path.join(rootDir, "index.ts"),
+    origin: "global",
+  });
+  registry.plugins.push(record);
+  records.push(record);
+  const load = withPluginCache(cache, () =>
+    createPluginModuleLoader({ tryNative: false, installNativeSdkResolver: false }),
+  );
+  const entry = load(record.source, { record, rootDir, registry }) as {
+    default: { register: (value: string) => void };
+  };
+  const instance = expectDefined(getPluginInstance(record), "captured web plugin instance");
+  return {
+    registry,
+    record,
+    instance,
+    entry,
+    publish() {
+      adoptProcessPluginCache(cache);
+      stageActivePluginRegistry(registry, pluginId, "gateway-bindable");
+    },
+  };
+}
 
-    const writeRuntime = (marker: string) => {
-      fs.writeFileSync(dependencyPath, `module.exports = ${JSON.stringify(marker)};\n`, "utf8");
-      fs.writeFileSync(
-        modulePath,
-        `module.exports = { monitorWebChannel: () => ${JSON.stringify(marker)} + ":" + require("./dependency.js") };\n`,
-        "utf8",
+it("forwards library monitor calls lazily with exact arguments and runtime receiver", async () => {
+  const initialized = path.join(root, "initialized");
+  writeFiles(root, {
+    "package.json": '{"type":"commonjs"}',
+    "light-runtime-api.js": "module.exports = {};",
+    "runtime-api.js": `require("node:fs").writeFileSync(${JSON.stringify(initialized)}, "loaded");
+      const runtime = {
+        async monitorWebChannel(...args) {
+          return Reflect.apply(args[1], this, args);
+        }
+      };
+      module.exports = runtime;`,
+  });
+  coldOwner(root, "library-owner", path.join(root, "index.js"));
+  const library = await import("../../library.js");
+  expect(fs.existsSync(initialized)).toBe(false);
+  const result = { marker: "complete" };
+  const monitor = vi.fn(async (..._args: unknown[]) => result);
+  const signal = new AbortController().signal;
+  const args = [true, monitor, false, vi.fn(), { log: vi.fn() }, signal, { accountId: "work" }];
+  await expect(library.monitorWebChannel(...args)).resolves.toBe(result);
+  expect(fs.readFileSync(initialized, "utf8")).toBe("loaded");
+  expect(monitor).toHaveBeenCalledOnce();
+  expect(monitor.mock.contexts[0]).toBe(
+    loadFacadeModuleAtLocationSync({
+      location: {
+        modulePath: path.join(root, "runtime-api.js"),
+        boundaryRoot: root,
+        pluginId: "library-owner",
+      },
+    }),
+  );
+  const [receivedArgs] = monitor.mock.calls;
+  expect(receivedArgs).toHaveLength(args.length);
+  for (const [index, arg] of args.entries()) {
+    expect(receivedArgs?.[index]).toBe(arg);
+  }
+  const monitorError = new Error("monitor failed");
+  monitor.mockRejectedValueOnce(monitorError);
+  await expect(library.monitorWebChannel(...args)).rejects.toBe(monitorError);
+});
+
+it("shares registration state, retains captured lazy modules, and follows the next instance", async () => {
+  const first = prepare("one");
+  first.entry.default.register("registered-one");
+  first.publish();
+  // Public entries and their lazy dependency have not executed when their live files disappear.
+  for (const file of ["runtime-api.ts", "light-runtime-api.ts", "lazy.ts"]) {
+    fs.rmSync(path.join(root, file));
+  }
+  const retainedMonitor = monitorWebChannel;
+  await expect(retainedMonitor()).resolves.toEqual(["registered-one", "lazy-one"]);
+  writeSource(root, "two");
+  await expect(retainedMonitor()).resolves.toEqual(["registered-one", "lazy-one"]);
+  await first.instance.dispose();
+  const second = prepare();
+  second.entry.default.register("registered-two");
+  second.publish();
+  await expect(retainedMonitor("next")).resolves.toEqual(["registered-two", "lazy-two", "next"]);
+  await expect(
+    withPluginRuntimeGatewayRequestScope(
+      { pluginRegistry: first.registry, isWebchatConnect: () => false },
+      () => retainedMonitor("stale"),
+    ),
+  ).rejects.toThrow(
+    "web channel plugin runtime is unavailable: missing plugin that provides light-runtime-api and runtime-api",
+  );
+  expect(resolvePluginMetadataSnapshot).not.toHaveBeenCalled();
+});
+
+it("loads the selected bundled web artifact inside a Gateway request", async () => {
+  const sourceRoot = path.join(root, "source");
+  const builtRoot = path.join(root, "built");
+  fs.mkdirSync(sourceRoot);
+  fs.mkdirSync(builtRoot);
+  writeFiles(builtRoot, {
+    "package.json": '{"type":"module"}',
+    "index.js": "export default {};",
+    "light-runtime-api.js": "export {};",
+    "runtime-api.js": 'export const monitorWebChannel = async () => "built";',
+  });
+  const registry = createEmptyPluginRegistry();
+  const record = createPluginRecord({
+    id: "bundled-web",
+    rootDir: sourceRoot,
+    source: path.join(sourceRoot, "index.ts"),
+    origin: "bundled",
+  });
+  records.push(record);
+  registry.plugins.push(record);
+  const selected = { source: path.join(builtRoot, "index.js"), rootDir: builtRoot };
+  bindPluginRuntimeArtifactSelection(record, {
+    runtimeEntry: selected,
+  }).runtimeRegistrationComplete = true;
+  const instance = new PluginInstance(record.id, { record, registry });
+  const cache = createPluginCache();
+  withPluginCache(cache, () =>
+    bindPluginInstanceModuleLoader({ instance, origin: "bundled", ...selected }),
+  );
+  adoptProcessPluginCache(cache);
+  await expect(
+    withPluginRuntimeGatewayRequestScope(
+      { pluginRegistry: registry, isWebchatConnect: () => false },
+      () => monitorWebChannel(),
+    ),
+  ).resolves.toBe("built");
+});
+
+it.each(["disabled", "uninstalled"] as const)(
+  "does not cold-load a %s package that remains on disk",
+  async (state) => {
+    const active = prepare("active");
+    active.publish();
+    await expect(monitorWebChannel()).resolves.toEqual(["active", "lazy-active"]);
+    const registry = createEmptyPluginRegistry();
+    if (state === "disabled") {
+      registry.plugins.push(
+        createPluginRecord({ ...active.record, enabled: false, status: "disabled" }),
       );
-    };
-    writeRuntime("retired");
+    }
+    stageActivePluginRegistry(registry, state, "gateway-bindable");
+    await active.instance.dispose();
+    writeSource(root, "must-not-load");
+    coldOwner(root, active.record.id, active.record.source);
+    await expect(monitorWebChannel()).rejects.toThrow(/runtime is unavailable/);
+    expect(resolvePluginMetadataSnapshot).not.toHaveBeenCalled();
+  },
+);
 
-    vi.doMock("./runtime-plugin-boundary.js", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("./runtime-plugin-boundary.js")>()),
-      resolvePluginRuntimeRecordByEntryBaseNames: () => ({
-        origin: "global",
-        rootDir: pluginRoot,
-        source: path.join(pluginRoot, "index.js"),
-      }),
-      resolvePluginRuntimeModulePath: () => modulePath,
-    }));
+it("rejects ambiguous runtime owners instead of choosing one", async () => {
+  const secondRoot = fs.realpathSync(temp.make("openclaw-web-runtime-second-"));
+  const first = prepare("first", "first-owner");
+  const second = prepare("second", "second-owner", secondRoot);
+  second.registry.plugins.unshift(first.record);
+  second.publish();
+  await expect(monitorWebChannel()).rejects.toThrow(/ambiguous.*first-owner, second-owner/);
+  expect(resolvePluginMetadataSnapshot).not.toHaveBeenCalled();
+});
 
-    const runtime = await import("./runtime-web-channel-plugin.js");
-    const { clearPluginMetadataLifecycleCaches } = await import("../plugin-metadata-lifecycle.js");
-    await expect(runtime.monitorWebChannel()).resolves.toBe("retired:retired");
-    writeRuntime("replacement");
-    await expect(runtime.monitorWebChannel()).resolves.toBe("retired:retired");
+it.each([
+  { location: "entry", preparedConfig: true },
+  { location: "root", preparedConfig: true },
+  { location: "root", preparedConfig: false },
+] as const)(
+  "loads a cold TypeScript embedding from $location with entry sidecar precedence (prepared config: $preparedConfig)",
+  async ({ location, preparedConfig }) => {
+    if (!preparedConfig) {
+      clearRuntimeConfigSnapshot();
+    }
+    const entryDirectory = path.join(root, "entry");
+    fs.mkdirSync(entryDirectory);
+    writeSource(root, "cold", location === "entry" ? entryDirectory : root);
+    if (location === "entry") {
+      writeFiles(root, {
+        "runtime-api.js": 'export const monitorWebChannel = async () => "wrong root";',
+      });
+    }
+    coldOwner(root, "cold-owner", path.join(entryDirectory, "index.ts"));
+    await expect(monitorWebChannel("argument")).resolves.toEqual(["cold", "lazy-cold", "argument"]);
+  },
+);
 
-    clearPluginMetadataLifecycleCaches();
-
-    await expect(runtime.monitorWebChannel()).resolves.toBe("replacement:replacement");
-    await expect(runtime.monitorWebChannel()).resolves.toBe("replacement:replacement");
-  });
-
-  it("reports heavy runtime load failures as promise rejections", async () => {
-    const loadError = new Error("runtime unavailable");
-    const loadPluginBoundaryModule = vi.fn(() => {
-      throw loadError;
-    });
-    vi.doMock("./runtime-plugin-boundary.js", () => ({
-      loadPluginBoundaryModule,
-      resolvePluginRuntimeModulePath: () => "/tmp/runtime-api.js",
-      resolvePluginRuntimeRecordByEntryBaseNames: () => ({
-        origin: "bundled",
-        source: "test",
-      }),
-    }));
-    const runtime = await import("./runtime-web-channel-plugin.js");
-
-    expect(loadPluginBoundaryModule).not.toHaveBeenCalled();
-    await expect(runtime.monitorWebChannel()).rejects.toBe(loadError);
-  });
+it("reports cold module initialization failures as promise rejections", async () => {
+  writeSource(root, "failure");
+  writeFiles(root, { "runtime-api.ts": 'throw new Error("web runtime initialization failed");' });
+  coldOwner(root, "failure");
+  await expect(monitorWebChannel()).rejects.toThrow("web runtime initialization failed");
 });

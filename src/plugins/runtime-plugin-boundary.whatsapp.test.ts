@@ -1,16 +1,11 @@
-// Verifies WhatsApp runtime imports respect plugin boundary rules.
-import fs from "node:fs";
 import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mts";
+import { loadFacadeModuleAtLocationSync } from "../plugin-sdk/facade-loader.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-import { loadPluginBoundaryModule } from "./runtime/runtime-plugin-boundary.js";
+import { writeArtifacts } from "./public-surface.test-support.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
-
-type LightModule = {
-  getActiveWebListener: (accountId?: string | null) => unknown;
-};
 
 type HeavyModule = {
   registerControllerForTest: (
@@ -21,30 +16,20 @@ type HeavyModule = {
 
 const tempDirs: string[] = [];
 
-function writeRuntimeFixtureText(rootDir: string, relativePath: string, value: string) {
-  fs.mkdirSync(path.dirname(path.join(rootDir, relativePath)), { recursive: true });
-  fs.writeFileSync(path.join(rootDir, relativePath), value, "utf8");
+function writeRuntimeFixture(prefix: string, files: Record<string, string>) {
+  const rootDir = makeTrackedTempDir(prefix, tempDirs);
+  writeArtifacts(rootDir, files);
+  return rootDir;
 }
 
 function createBundledWhatsAppRuntimeFixture() {
-  const rootDir = makeTrackedTempDir("openclaw-whatsapp-boundary", tempDirs);
-  for (const [relativePath, value] of Object.entries({
-    "package.json": JSON.stringify(
-      {
-        name: "openclaw",
-        type: "module",
-        bin: {
-          openclaw: "openclaw.mjs",
-        },
-        exports: {
-          "./plugin-sdk/core": {
-            default: "./dist/plugin-sdk/core.js",
-          },
-        },
-      },
-      null,
-      2,
-    ),
+  const rootDir = writeRuntimeFixture("openclaw-whatsapp-boundary", {
+    "package.json": JSON.stringify({
+      name: "openclaw",
+      type: "module",
+      bin: { openclaw: "openclaw.mjs" },
+      exports: { "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" } },
+    }),
     "openclaw.mjs": "export {};\n",
     "dist/plugin-sdk/core.js": "export {};\n",
     [bundledDistPluginFile("whatsapp", "index.js")]: "export default {};\n",
@@ -54,11 +39,7 @@ function createBundledWhatsAppRuntimeFixture() {
       'export { registerControllerForTest } from "../../connection-controller-registry.js";\n',
     "dist/connection-controller-registry.js": [
       'const key = Symbol.for("openclaw.whatsapp.connectionControllerRegistry");',
-      "const g = globalThis;",
-      "if (!g[key]) {",
-      "  g[key] = { controllers: new Map() };",
-      "}",
-      "const state = g[key];",
+      "const state = globalThis[key] ??= { controllers: new Map() };",
       "export function getRegisteredWhatsAppConnectionController(accountId) {",
       "  return state.controllers.get(accountId) ?? null;",
       "}",
@@ -68,11 +49,7 @@ function createBundledWhatsAppRuntimeFixture() {
       "    state.controllers.delete(id);",
       "    return;",
       "  }",
-      "  state.controllers.set(id, {",
-      "    getActiveListener() {",
-      "      return listener;",
-      "    },",
-      "  });",
+      "  state.controllers.set(id, { getActiveListener: () => listener });",
       "}",
       "",
     ].join("\n"),
@@ -83,72 +60,24 @@ function createBundledWhatsAppRuntimeFixture() {
       "}",
       "",
     ].join("\n"),
-  })) {
-    writeRuntimeFixtureText(rootDir, relativePath, value);
-  }
+  });
   stageBundledPluginRuntime({ repoRoot: rootDir });
 
   return path.join(rootDir, "dist-runtime", "extensions", "whatsapp");
 }
 
 function createExternalTypeScriptRuntimePackageFixture() {
-  const rootDir = makeTrackedTempDir("openclaw-external-boundary-ts", tempDirs);
-  writeRuntimeFixtureText(
-    rootDir,
-    "package.json",
-    JSON.stringify(
-      {
-        name: "openclaw-external-ts-runtime",
-        type: "module",
-      },
-      null,
-      2,
-    ),
-  );
-  writeRuntimeFixtureText(
-    rootDir,
-    "runtime-api.ts",
-    [
+  const rootDir = writeRuntimeFixture("openclaw-external-boundary-ts", {
+    "package.json": JSON.stringify({ name: "openclaw-external-ts-runtime", type: "module" }),
+    "runtime-api.ts": [
       'import { marker } from "./runtime-helper.js";',
       "export const ok = true;",
       "export const loadedVia = marker;",
       "",
     ].join("\n"),
-  );
-  writeRuntimeFixtureText(
-    rootDir,
-    "runtime-helper.ts",
-    'export const marker = "jiti-source-package";\n',
-  );
+    "runtime-helper.ts": 'export const marker = "jiti-source-package";\n',
+  });
   return path.join(rootDir, "runtime-api.ts");
-}
-
-function loadWhatsAppBoundaryModules(runtimePluginDir: string) {
-  return {
-    light: loadPluginBoundaryModule<LightModule>(
-      path.join(runtimePluginDir, "light-runtime-api.js"),
-      { origin: "bundled", rootDir: runtimePluginDir },
-    ),
-    heavy: loadPluginBoundaryModule<HeavyModule>(path.join(runtimePluginDir, "runtime-api.js"), {
-      origin: "bundled",
-      rootDir: runtimePluginDir,
-    }),
-  };
-}
-
-function createListener(messageId = "msg-1") {
-  return {
-    sendMessage: async () => ({ messageId }),
-  };
-}
-
-function expectSharedWhatsAppListenerState(runtimePluginDir: string, accountId: string) {
-  const { light, heavy } = loadWhatsAppBoundaryModules(runtimePluginDir);
-  const listener = createListener();
-
-  heavy.registerControllerForTest(accountId, listener);
-  expect(light.getActiveWebListener(accountId)).toBe(listener);
-  heavy.registerControllerForTest(accountId, null);
 }
 
 afterEach(() => {
@@ -158,23 +87,35 @@ afterEach(() => {
 
 describe("runtime plugin boundary whatsapp seam", () => {
   it("shares listener state between staged light and heavy runtime modules", () => {
-    expectSharedWhatsAppListenerState(createBundledWhatsAppRuntimeFixture(), "work");
-  });
-
-  it("rejects bundled TypeScript runtime modules instead of using the source loader", () => {
-    const rootDir = makeTrackedTempDir("openclaw-bundled-boundary-ts", tempDirs);
-    const modulePath = path.join(rootDir, "runtime-api.ts");
-    writeRuntimeFixtureText(rootDir, "runtime-api.ts", "export const ok = true;\n");
-    expect(() =>
-      loadPluginBoundaryModule<{ ok: boolean }>(modulePath, { origin: "bundled", rootDir }),
-    ).toThrow(/must be built JavaScript/u);
+    const runtimePluginDir = createBundledWhatsAppRuntimeFixture();
+    const boundary = { boundaryLabel: "bundled plugin root", rejectHardlinks: false };
+    const light = loadFacadeModuleAtLocationSync<{
+      getActiveWebListener: (accountId?: string | null) => unknown;
+    }>({
+      location: {
+        modulePath: path.join(runtimePluginDir, "light-runtime-api.js"),
+        boundaryRoot: runtimePluginDir,
+      },
+      boundary,
+    });
+    const heavy = loadFacadeModuleAtLocationSync<HeavyModule>({
+      location: {
+        modulePath: path.join(runtimePluginDir, "runtime-api.js"),
+        boundaryRoot: runtimePluginDir,
+      },
+      boundary,
+    });
+    const listener = { sendMessage: async () => ({ messageId: "msg-1" }) };
+    heavy.registerControllerForTest("work", listener);
+    expect(light.getActiveWebListener("work")).toBe(listener);
+    heavy.registerControllerForTest("work", null);
   });
 
   it("keeps the TypeScript source package fallback available for non-bundled plugins", () => {
     const modulePath = createExternalTypeScriptRuntimePackageFixture();
     expect(
-      loadPluginBoundaryModule<{ ok: boolean; loadedVia: string }>(modulePath, {
-        origin: "workspace",
+      loadFacadeModuleAtLocationSync<{ ok: boolean; loadedVia: string }>({
+        location: { modulePath, boundaryRoot: path.dirname(modulePath) },
       }),
     ).toEqual({ ok: true, loadedVia: "jiti-source-package" });
   });

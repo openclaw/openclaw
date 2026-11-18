@@ -3,7 +3,10 @@ import {
   isDeliveryRecoveryOwnedRetry,
   isRetryableDeliveryNotSentError,
 } from "../../infra/delivery-recovery.shared.js";
+import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatch-outcome.types.js";
 import type { ReplyDispatchSettledCounts } from "./reply-dispatcher.types.js";
+
+export type { ReplyDispatchDeliveryOutcome } from "./reply-dispatch-outcome.types.js";
 
 const REPLY_DISPATCH_DELIVERY_ERROR_CODE = "REPLY_DISPATCH_DELIVERY_ERROR";
 
@@ -15,8 +18,7 @@ export const REPLY_DISPATCH_OUTCOME_COUNTS = {
   "failed-before-deliver": "failedBeforeSend",
   "recovery-owned": "failedBeforeSend",
   "failed-deliver": "failedAfterSend",
-} as const satisfies Record<string, keyof ReplyDispatchSettledCounts>;
-export type ReplyDispatchDeliveryOutcome = keyof typeof REPLY_DISPATCH_OUTCOME_COUNTS;
+} as const satisfies Record<ReplyDispatchDeliveryOutcome, keyof ReplyDispatchSettledCounts>;
 
 export class ReplyDispatchDeliveryError extends Error {
   readonly code = REPLY_DISPATCH_DELIVERY_ERROR_CODE;
@@ -108,8 +110,5 @@ export function resolveRoutedReplyDeliveryOutcome(result: {
   if (!result.ok) {
     return resolveReplyDispatchErrorOutcome(result.cause);
   }
-  return resolveReplyDispatchDeliveryOutcome({
-    visibleReplySent: result.delivered,
-    suppression: { reason: result.reason },
-  });
+  return result.reason === "channel_transform" ? "channel-transform" : "delivered-not-visible";
 }

@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.core.test.shard.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "../../.artifacts/tsgo-cache/core-test-commands-doctor.tsbuildinfo"
+  },
+  "include": [
+    "../../src/commands/doctor*.test.ts",
+    "../../src/commands/doctor*.test.tsx",
+    "../../src/commands/doctor/**/*.test.ts",
+    "../../src/commands/doctor/**/*.test.tsx",
+    "../../src/commands/oauth-tls-preflight.doctor*.test.ts",
+    "../../src/commands/oauth-tls-preflight.doctor*.test.tsx"
+  ]
+}

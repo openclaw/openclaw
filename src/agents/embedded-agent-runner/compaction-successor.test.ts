@@ -1,16 +1,20 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { resolveSessionArtifactDirectory } from "../../config/sessions/paths.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { HookRunner } from "../../plugins/hooks.js";
+import { readAttachedSessionEndTranscriptSourceForTest } from "../../plugins/session-end-transcript.test-support.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import type {
@@ -51,6 +55,8 @@ async function withAcceptanceFixture(
   await withOpenClawTestState(
     { label: "compaction-successor", scenario: "minimal" },
     async (state) => {
+      const config = {};
+      setRuntimeConfigSnapshot(config, config);
       const {
         appendTranscriptMessage,
         applySessionEntryLifecycleMutation,
@@ -131,7 +137,7 @@ async function withAcceptanceFixture(
             activeWriterRunId: entry.activeWriterRunId,
           },
           assertActive,
-          config: {},
+          config,
           result: {
             ok: true,
             compacted: true,
@@ -200,8 +206,10 @@ async function withAcceptanceFixture(
           writeLegacyArtifact: async () => {
             // Named tagged-upgrade artifact contract: session_end may identify a
             // still-existing legacy export, while live state remains canonical SQLite.
-            const artifact = path.join(state.agentDir(), `${target.sessionId}.jsonl`);
+            const artifactDir = resolveSessionArtifactDirectory(target.storePath);
+            const artifact = path.join(artifactDir, `${target.sessionId}.jsonl`);
             const events = await loadTranscriptEvents(target);
+            await fs.mkdir(artifactDir, { recursive: true });
             await fs.writeFile(
               artifact,
               `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
@@ -250,17 +258,20 @@ describe("acceptCompactionSuccessor", () => {
     "owns MCP predecessor cleanup after %s",
     async (kind) => {
       await withAcceptanceFixture({}, async (fixture) => {
-        const { getOrCreateSessionMcpRuntime } =
+        const { getOrCreateSessionMcpRuntime, getSessionMcpRuntimeTestManager, unopenedMcpConfig } =
           await import("../agent-bundle-mcp-manager.test-support.js");
-        const { getSessionMcpRuntimeManagerForTesting } =
+        const { setSessionMcpRuntimeScheduler } =
           await import("../agent-bundle-mcp-manager-api.js");
-        const manager = getSessionMcpRuntimeManagerForTesting();
+        const scheduler = createTestGatewayScheduler();
+        onTestFinished(() => scheduler.stop());
+        await setSessionMcpRuntimeScheduler(scheduler);
+        const manager = getSessionMcpRuntimeTestManager();
         const create = (sessionId: string) =>
           getOrCreateSessionMcpRuntime({
             sessionId,
             sessionKey: fixture.target.sessionKey,
             workspaceDir: path.dirname(fixture.target.storePath),
-            cfg: { mcp: { servers: {} } },
+            cfg: unopenedMcpConfig,
             manifestRegistry: { plugins: [] },
           });
         try {
@@ -406,6 +417,21 @@ describe("acceptCompactionSuccessor", () => {
     });
   });
 
+  it("does not recreate a removed predecessor store during successor validation", async () => {
+    await withAcceptanceFixture({}, async (fixture) => {
+      const { closeOpenClawAgentDatabaseByPathAsync } =
+        await import("../../state/openclaw-agent-db.js");
+      await closeOpenClawAgentDatabaseByPathAsync(fixture.target.storePath);
+      await fs.rm(fixture.target.storePath);
+
+      await expect(fixture.accept({ result: { ok: true, compacted: true } })).rejects.toThrow(
+        "session writer claim changed",
+      );
+      await expect(fs.access(fixture.target.storePath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(fixture.facts).toEqual([]);
+    });
+  });
+
   it("preserves the caller error and predecessor when cancellation precedes commit", async () => {
     await withAcceptanceFixture({}, async (fixture) => {
       const before = fixture.loadEntry();
@@ -489,6 +515,17 @@ describe("accepted successor lifecycle notifications", () => {
           sessionKey: fixture.target.sessionKey,
           agentId: "main",
         });
+        const source = readAttachedSessionEndTranscriptSourceForTest(endContext);
+        expect(source.available).toBe(true);
+        if (source.available) {
+          await expect(
+            source.readTail({ maxMessages: 10, maxBytes: 64_000 }),
+          ).resolves.toMatchObject({
+            messages: [expect.objectContaining({ content: "Preserved predecessor history" })],
+            totalMessages: 1,
+            truncated: false,
+          });
+        }
         expect(startContext).toEqual({
           sessionId: fixture.successorId,
           sessionKey: fixture.target.sessionKey,

@@ -69,7 +69,6 @@ internal class WearSettingsStore internal constructor(
 
 @Immutable
 internal data class WearColors(
-  val canvas: Color,
   val surface: Color,
   val surfaceRaised: Color,
   val surfacePressed: Color,
@@ -85,14 +84,16 @@ internal data class WearColors(
   val success: Color,
   val warning: Color,
   val danger: Color,
-)
+) {
+  // Wear app backgrounds stay black; appearance changes only the surfaces above them.
+  val canvas: Color = Color.Black
+}
 
 // Keep the companion surfaces aligned with the canonical Phone ClawTheme.
 // Voice blue comes from the Phone MobileUiTokens and is intentionally not the
 // general control or panel color.
 private val DarkWearColors =
   WearColors(
-    canvas = Color(0xFF030303),
     surface = Color(0xFF0A0A0A),
     surfaceRaised = Color(0xFF111111),
     surfacePressed = Color(0xFF1A1A1A),
@@ -112,7 +113,6 @@ private val DarkWearColors =
 
 private val LightWearColors =
   WearColors(
-    canvas = Color(0xFFFAFBFC),
     surface = Color(0xFFFFFEFB),
     surfaceRaised = Color(0xFFFFFFFF),
     surfacePressed = Color(0xFFE9EDF3),
@@ -139,6 +139,9 @@ internal fun wearColorsFor(themeMode: WearThemeMode): WearColors =
 private val LocalWearColors = staticCompositionLocalOf { DarkWearColors }
 
 internal object OpenClawWearTheme {
+  // Bare-canvas content must not inherit dark text from the light panel palette.
+  val canvasColors: WearColors = DarkWearColors
+
   val colors: WearColors
     @Composable
     @ReadOnlyComposable
@@ -165,7 +168,7 @@ internal fun OpenClawWearTheme(
       outline = colors.borderStrong,
       outlineVariant = colors.border,
       background = colors.canvas,
-      onBackground = colors.text,
+      onBackground = OpenClawWearTheme.canvasColors.text,
       error = colors.danger,
       onError = colors.primaryText,
     )

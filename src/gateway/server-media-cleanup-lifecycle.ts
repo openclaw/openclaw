@@ -1,4 +1,5 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { settlesWithin } from "../shared/settle-within.js";
 
 export type MediaCleanupStopResult = "drained" | "timed-out";
 export const MEDIA_CLEANUP_STOP_TIMEOUT_MS = 5_000;
@@ -30,19 +31,7 @@ export async function waitForMediaCleanupDrains(params: {
   if (drains.length === 0) {
     return "drained";
   }
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const timedOut = new Promise<true>((resolve) => {
-    timeout = setTimeout(() => resolve(true), params.timeoutMs);
-    timeout.unref?.();
-  });
-  const result = await Promise.race([
-    Promise.allSettled(drains).then(() => false as const),
-    timedOut,
-  ]);
-  if (timeout) {
-    clearTimeout(timeout);
-  }
-  if (result) {
+  if (!(await settlesWithin(Promise.allSettled(drains), params.timeoutMs))) {
     params.onTimeout?.();
     return "timed-out";
   }

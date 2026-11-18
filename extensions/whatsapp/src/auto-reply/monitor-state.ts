@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements monitor state behavior.
 import {
   channelReadyPatch,
   channelStoppedPatch,
@@ -15,13 +14,6 @@ const LIFECYCLE_BY_HEALTH_STATE = {
   "logged-out": "blocked",
   stopped: "blocked", // Retry exhaustion is terminal; manual stops bypass this mapping.
 } satisfies Record<WebChannelHealthState, NonNullable<WebChannelStatus["lifecycle"]>>;
-
-function cloneStatus(status: WebChannelStatus): WebChannelStatus {
-  return {
-    ...status,
-    lastDisconnect: status.lastDisconnect ? { ...status.lastDisconnect } : null,
-  };
-}
 
 function isTerminalHealthState(healthState: WebChannelHealthState | undefined): boolean {
   return healthState === "conflict" || healthState === "logged-out" || healthState === "stopped";
@@ -46,12 +38,11 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
   };
 
   const emit = () => {
-    statusSink?.(cloneStatus(status));
+    statusSink?.({ ...status });
   };
 
   return {
     emit,
-    snapshot: () => status,
     noteConnected(at = Date.now()) {
       Object.assign(status, channelReadyPatch({ lastConnectedAt: at, lastEventAt: at }));
       Object.assign(status, createTransportActivityStatusPatch(at));
@@ -74,11 +65,12 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
       }
       emit();
     },
-    noteTransportActivity(at = Date.now()) {
-      if (status.lastTransportActivityAt === at) {
+    noteTransportActivity(at: number, authAgeMs: number | null) {
+      if (status.lastTransportActivityAt === at && status.authAgeMs === authAgeMs) {
         return;
       }
       Object.assign(status, createTransportActivityStatusPatch(at));
+      status.authAgeMs = authAgeMs;
       emit();
     },
     noteBusy(busy: boolean, at = Date.now()) {

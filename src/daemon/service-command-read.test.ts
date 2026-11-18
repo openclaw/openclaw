@@ -1,35 +1,45 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
+import { inspect } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import * as currentService from "./launchd-current-service.js";
+import { restartLaunchAgent } from "./launchd-lifecycle.js";
 import {
   buildLaunchAgentPlist,
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
   quoteLaunchAgentEnvironmentValue,
 } from "./launchd-plist.js";
+import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
 import { readLaunchAgentProgramArguments } from "./launchd-runtime.js";
 import {
-  resolveLaunchAgentEnvFilePath,
+  resolveLaunchAgentEnvironmentReadOptions,
   resolveLaunchAgentEnvWrapperPath,
   resolveLaunchAgentPlistPath,
 } from "./launchd-service-files.js";
+import * as ownership from "./launchd-system.js";
 import {
   buildTaskScript,
   readScheduledTaskCommand,
   resolveStartupEntryPaths,
   resolveTaskScriptPath,
 } from "./schtasks-layout.js";
-import type {
-  GatewayServiceCommandConfig,
-  GatewayServiceEnv,
-  GatewayServiceReadOptions,
-} from "./service-types.js";
+import {
+  sanitizeServiceInspectionError,
+  ServiceInspectionError,
+  type ServiceInspectionDiagnostic,
+} from "./service-inspection-error.js";
+import type { GatewayServiceEnv, GatewayServiceReadOptions } from "./service-types.js";
+import { readGatewayServiceState, resolveGatewayService } from "./service.js";
 
 const native = vi.hoisted(() => ({
   launchctl: vi.fn(),
   scheduler: vi.fn(),
   plutil: vi.fn(),
-  plistRecords: new Map<string, unknown>(),
+  plists: new Set<string>(),
 }));
 vi.mock("./exec-file.js", () => ({ execFileUtf8: native.launchctl }));
 vi.mock("../process/exec.js", async (importOriginal) => ({
@@ -44,6 +54,13 @@ vi.mock("node:child_process", async (importOriginal) => ({
 const label = "ai.openclaw.gateway";
 const programArguments = ["node", "gateway.js"];
 const environment = { HOME: "/service-home", OPENCLAW_STATE_DIR: "/service-state" };
+const launchResult = (stdout = "", code = 0, termination = "exit", stderr = "") => ({
+  code,
+  termination,
+  stdout,
+  stderr,
+});
+const missingJob = launchResult("", 113, "exit", "Could not find service");
 const renderPlist = (args: string[]) => {
   const contents = buildLaunchAgentPlist({
     label,
@@ -52,31 +69,22 @@ const renderPlist = (args: string[]) => {
     stderrPath: "/service-stderr.log",
     environment,
   });
-  native.plistRecords.set(contents, { ProgramArguments: args, EnvironmentVariables: environment });
+  native.plists.add(contents);
   return contents;
 };
-const readers: Array<{
-  name: string;
-  read: (
-    env: GatewayServiceEnv,
-    options?: GatewayServiceReadOptions,
-  ) => Promise<GatewayServiceCommandConfig | null>;
-  resolvePath: (env: GatewayServiceEnv) => string;
-  render: (args: string[]) => string;
-}> = [
-  {
-    name: "LaunchAgent",
-    read: readLaunchAgentProgramArguments,
-    resolvePath: resolveLaunchAgentPlistPath,
-    render: renderPlist,
-  },
-  {
-    name: "Scheduled Task",
-    read: readScheduledTaskCommand,
-    resolvePath: resolveTaskScriptPath,
-    render: (args) => buildTaskScript({ programArguments: args, environment }),
-  },
-];
+const renderTask = (args: string[]) => buildTaskScript({ programArguments: args, environment });
+const readers = [
+  ["LaunchAgent", readLaunchAgentProgramArguments, resolveLaunchAgentPlistPath, renderPlist],
+  ["Scheduled Task", readScheduledTaskCommand, resolveTaskScriptPath, renderTask],
+] as const;
+const nativeError = (code: string, errno?: number) => ({
+  error: Object.assign(new Error("native-secret-canary"), { code, errno }),
+});
+const nativeFailure = (status: number, stdout: string) => ({
+  status,
+  stdout,
+  stderr: "native-secret-canary",
+});
 
 describe("native service command inspection", () => {
   let root: string;
@@ -85,23 +93,19 @@ describe("native service command inspection", () => {
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-command-"));
     env = { HOME: root, USERPROFILE: root, OPENCLAW_LAUNCHD_LABEL: label };
-    native.launchctl.mockReset().mockResolvedValue({
-      code: 113,
-      termination: "exit",
-      stdout: "",
-      stderr: "Could not find service",
-    });
+    native.launchctl.mockReset().mockResolvedValue(missingJob);
     native.scheduler.mockReset().mockReturnValue({ status: 1, stdout: "-2147024894" });
-    native.plistRecords.clear();
-    native.plutil.mockReset().mockImplementation(async (_command, _args, options) => {
+    native.plists.clear();
+    native.plutil.mockReset().mockImplementation(async (_command, args, options) => {
       const captured = Buffer.from(options.input).toString("utf8");
-      if (!native.plistRecords.has(captured)) {
+      if (!native.plists.has(captured)) {
         throw new Error("native-plist-inspection-secret-canary");
       }
-      return { stdout: JSON.stringify(native.plistRecords.get(captured)), stderr: "" };
+      return decodeLaunchAgentPlistFixture(options.input, args[1]);
     });
   });
   afterEach(async () => {
+    vi.restoreAllMocks();
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -109,103 +113,342 @@ describe("native service command inspection", () => {
     await fs.mkdir(path.dirname(filename), { recursive: true });
     await fs.writeFile(filename, contents);
   }
+  const unreadable = (name: string) => `Effective ${name} service command could not be inspected.`;
+  const strictTask = (options: GatewayServiceReadOptions = {}) =>
+    readScheduledTaskCommand(env, { requireEffective: true, ...options });
+  const strictPlist = (options: GatewayServiceReadOptions = {}) =>
+    readLaunchAgentProgramArguments(env, { requireEffective: true, ...options });
 
-  describe.each(readers)("$name", ({ name, read, resolvePath, render }) => {
-    it("does not infer absence from a dangling definition link", async () => {
-      const filename = resolvePath(env);
-      await fs.mkdir(path.dirname(filename), { recursive: true });
-      await fs.symlink(path.join(root, "absent-definition"), filename, "junction");
-      await expect(read(env)).resolves.toBeNull();
-      await expect(read(env, { requireEffective: true })).rejects.toThrow(
-        `Effective ${name} service command could not be inspected.`,
+  it.each(["absent", "dangling", "empty"])(
+    "reinstall permits only absent plists while launchd retains a job (%s)",
+    async (condition) => {
+      const plist = resolveLaunchAgentPlistPath(env);
+      native.launchctl.mockImplementation(async (_command: string, args: string[]) =>
+        args[1]?.startsWith("system/")
+          ? missingJob
+          : launchResult(`${args[1]} = {\n\tstate = waiting\n}`),
       );
+      if (condition === "dangling") {
+        await fs.mkdir(path.dirname(plist), { recursive: true });
+        await fs.symlink(path.join(root, "absent-definition"), plist);
+      } else if (condition === "empty") {
+        await writeFile(plist, renderPlist([]));
+      }
+      if (condition === "absent") {
+        await expect(strictPlist()).rejects.toThrow();
+      }
+      const command = strictPlist({ allowMissingDefinition: true });
+      if (condition === "absent") {
+        await expect(command).resolves.toBeNull();
+      } else {
+        await expect(command).rejects.toThrow(unreadable("LaunchAgent"));
+      }
+    },
+  );
+
+  it("preserves nested native cleanup while proving a missing plist is absent", async () => {
+    const failure = new AggregateError(
+      [new CommandProcessCleanupError()],
+      "native inspection failed",
+    );
+    native.launchctl.mockImplementation(async (_command: string, args: string[]) => {
+      if (args.some((arg) => arg.startsWith("gui/"))) {
+        throw failure;
+      }
+      return missingJob;
     });
 
-    it.each(["registered", "unavailable"])(
-      "does not infer absence from a missing file when native inspection is %s",
+    await expect(strictPlist()).rejects.toBe(failure);
+  });
+
+  it("stops restart when the plist reader cannot confirm native cleanup", async () => {
+    const failure = new CommandProcessCleanupError();
+    await writeFile(resolveLaunchAgentPlistPath(env), renderPlist(programArguments));
+    native.plutil.mockRejectedValue(failure);
+    vi.spyOn(currentService, "isCurrentProcessInsideLaunchdService").mockResolvedValue(false);
+    vi.spyOn(ownership, "assertNoSystemLaunchDaemonOwnership").mockResolvedValue();
+    const stdout = new PassThrough();
+    const onMutation = vi.fn();
+
+    await expect(
+      restartLaunchAgent({ env, stdout, onMutation, preserveDefinition: true }),
+    ).rejects.toBe(failure);
+    expect(native.launchctl).not.toHaveBeenCalled();
+    expect(onMutation).not.toHaveBeenCalled();
+    expect(stdout.read()).toBeNull();
+  });
+
+  describe.each(readers)("%s", (name, read, resolvePath, render) => {
+    it.each(["dangling", "directory", "empty", "registered", "unavailable"])(
+      "does not treat %s definitions as absent",
       async (condition) => {
-        native.launchctl.mockResolvedValue(
-          condition === "registered"
-            ? { code: 0, termination: "exit", stdout: "state = waiting", stderr: "" }
+        const filename = resolvePath(env);
+        if (condition === "directory") {
+          await expect(read(env, { requireEffective: true })).resolves.toBeNull();
+          await fs.mkdir(filename, { recursive: true });
+        } else if (condition === "empty") {
+          await writeFile(filename, render([]));
+        } else if (condition === "dangling") {
+          await fs.mkdir(path.dirname(filename), { recursive: true });
+          await fs.symlink(path.join(root, "absent-definition"), filename, "junction");
+        } else {
+          native.launchctl.mockImplementation(async (_command: string, args: string[]) => {
+            if (args[1]?.startsWith("system/")) {
+              return missingJob;
+            }
+            return condition === "registered"
+              ? launchResult(`${args[1]} = {\n\tstate = waiting\n}`)
+              : launchResult("", 1, "error", "native-inspection-secret-canary");
+          });
+          native.scheduler.mockReturnValue(
+            condition === "registered"
+              ? { status: 0, stdout: JSON.stringify({ state: 3 }) }
+              : { status: 2, stdout: "native-inspection-secret-canary" },
+          );
+        }
+        if (condition !== "empty") {
+          await expect(read(env)).resolves.toBeNull();
+        }
+        await expect(read(env, { requireEffective: true })).rejects.toThrow(unreadable(name));
+      },
+    );
+  });
+
+  describe("Windows aggregate Scheduler timeout transport", () => {
+    async function windowsFixture(
+      present: boolean,
+      onRead: () => void,
+      content = buildTaskScript({ programArguments }),
+    ) {
+      mockProcessPlatform("win32");
+      const windowsEnv = {
+        ...env,
+        APPDATA: `C:\\openclaw-test\\${path.basename(root)}\\AppData`,
+        OPENCLAW_TASK_SCRIPT: `C:\\openclaw-test\\${path.basename(root)}\\gateway.cmd`,
+      };
+      const scriptPath = resolveTaskScriptPath(windowsEnv);
+      const backingScriptPath = path.join(root, "gateway.cmd");
+      if (present) {
+        await writeFile(backingScriptPath, content);
+      }
+      const inspectedPath = present ? scriptPath : resolveStartupEntryPaths(windowsEnv)[0];
+      const readFile = fs.readFile;
+      vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+        if (args[0] === inspectedPath) {
+          onRead();
+        }
+        return readFile(args[0] === scriptPath ? backingScriptPath : args[0], args[1]);
+      });
+      vi.spyOn(await import("../process/exec.js"), "runCommandWithTimeout").mockRejectedValue(
+        new Error("Unexpected legacy Scheduler registration query"),
+      );
+      const observe = (timeoutMs?: number) =>
+        readGatewayServiceState(resolveGatewayService(), {
+          env: windowsEnv,
+          requireEffective: true,
+          requireLoadedCommand: true,
+          ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        });
+      return { scriptPath, observe, windowsEnv };
+    }
+    const registeredTask = (scriptPath: string, state: number) => ({
+      status: 0,
+      stdout: JSON.stringify({
+        taskPath: "\\OpenClaw Gateway",
+        state,
+        enabled: true,
+        actions: [{ type: 0, path: scriptPath, arguments: "", workingDirectory: "" }],
+      }),
+      stderr: "",
+    });
+    it.each([
+      ['set "TOKEN=%launcher-secret-canary%"', 4, "invalid environment assignment"],
+      ['node "%launcher-secret-canary%"', 4, "dynamic command"],
+      ["node gateway.js & echo launcher-secret-canary", 4, "ambiguous command"],
+      ['cd /d "C:\\launcher-secret-canary" extra', 4, "ambiguous working directory"],
+      ["node gateway.js\r\necho launcher-secret-canary", 5, "multiple commands"],
+    ] as const)("preserves safe physical-line diagnostics for %s", async (body, line, reason) => {
+      const content = `@echo off\r\n\r\nrem fixture header\r\n${body}\r\n`;
+      const { scriptPath, observe, windowsEnv } = await windowsFixture(
+        true,
+        () => undefined,
+        content,
+      );
+      native.scheduler.mockReturnValue(registeredTask(scriptPath, 3));
+      const detail = `Launcher line ${line}: ${reason}.`;
+      const state = await readGatewayServiceState(resolveGatewayService(), { env: windowsEnv });
+      expect(state).toMatchObject({
+        command: null,
+        runtime: {
+          status: "unknown",
+          inspectionFailure: {
+            code: "service-runtime-inspection-failed",
+            detail: expect.stringContaining(detail),
+          },
+        },
+      });
+      const error = await observe().catch((caughtError: unknown) => caughtError);
+      expect(sanitizeServiceInspectionError(error).message).toContain(detail);
+      expect(state.runtime?.inspectionFailure?.detail).toContain("Review the launcher");
+      expect(inspect({ state, error })).not.toContain("launcher-secret-canary");
+      expect(await fs.readFile(path.join(root, "gateway.cmd"), "utf8")).toBe(content);
+    });
+    it.each([
+      ["parallel", "absent", false, false],
+      ["parallel", "running", true, false],
+      ["delegated serial", "absent", true, false],
+      ["delegated serial", "ready", false, false],
+      ["parallel", "ready", true, true],
+    ] as const)(
+      "%s preserves %s state (explicit=%s, expired=%s)",
+      async (placement, condition, explicit, expired) => {
+        let now = 0;
+        let firstRead = true;
+        vi.spyOn(performance, "now").mockImplementation(() => now);
+        const { scriptPath, observe } = await windowsFixture(condition !== "absent", () => {
+          if (firstRead) {
+            firstRead = false;
+            now += expired ? 1_000 : 100.25;
+          }
+        });
+        const schedulerAllowances: Array<{ timeout: number | undefined; remaining: number }> = [];
+        native.scheduler.mockImplementation(
+          (_command: string, args: string[], options?: { timeout?: number }) => {
+            const timeout = options?.timeout;
+            // Match Node 24.21.0 validateTimeout, not an accept-any-number probe mock.
+            if (timeout != null && !(Number.isInteger(timeout) && timeout >= 0)) {
+              throw Object.assign(new RangeError("timeout must be an unsigned integer"), {
+                code: "ERR_OUT_OF_RANGE",
+              });
+            }
+            expect(args).toContain("-EncodedCommand");
+            schedulerAllowances.push({ timeout, remaining: 1_000 - now });
+            now += expired ? 0 : 100.25;
+            return condition === "absent"
+              ? { status: 1, stdout: "-2147024894", stderr: "" }
+              : registeredTask(scriptPath, condition === "running" ? 4 : 3);
+          },
+        );
+        const readState = () => observe(explicit ? 1_000 : undefined);
+        const { withGatewayServiceUpdateAuthority } = await import("./service-update-authority.js");
+        const result =
+          placement === "delegated serial"
+            ? withGatewayServiceUpdateAuthority(undefined, readState, {
+                updateOwned: false,
+                nativeCommand: async () => {
+                  throw new Error("Unexpected delegated command");
+                },
+              })
+            : readState();
+        if (expired) {
+          await expect(result).rejects.toMatchObject({
+            reason: "windows-task-inspection-failed",
+            cause: { kind: "timeout", timeoutMs: 0 },
+          });
+          expect(native.scheduler).toHaveBeenCalledOnce();
+          return;
+        }
+        const state = await result;
+
+        const absent = condition === "absent";
+        expect(state).toMatchObject({
+          command: absent ? null : { programArguments },
+          installed: !absent,
+          running: false,
+          loadState: { status: absent ? "not-loaded" : "loaded" },
+          runtime: absent
+            ? { status: "stopped", missingUnit: true }
             : {
-                code: 1,
-                termination: "error",
-                stdout: "",
-                stderr: "native-inspection-secret-canary",
+                status: "unknown",
+                state: condition === "running" ? "Running" : "Ready",
               },
-        );
-        native.scheduler.mockReturnValue(
-          condition === "registered"
-            ? { status: 0, stdout: JSON.stringify({ state: 3 }) }
-            : { status: 2, stdout: "native-inspection-secret-canary" },
-        );
-        await expect(read(env)).resolves.toBeNull();
-        await expect(read(env, { requireEffective: true })).rejects.toThrow(
-          `Effective ${name} service command could not be inspected.`,
+        });
+        if (!absent) {
+          expect(state.runtime?.missingUnit).not.toBe(true);
+          expect(state.runtime?.inspectionFailure).toBeUndefined();
+        }
+        expect(schedulerAllowances.map(({ timeout }) => timeout)).toEqual(
+          schedulerAllowances.map(({ remaining }) => (explicit ? Math.floor(remaining) : 60_000)),
         );
       },
     );
 
-    it("keeps missing definitions distinct from failed inspection", async () => {
-      await expect(read(env, { requireEffective: true })).resolves.toBeNull();
-      await fs.mkdir(resolvePath(env), { recursive: true });
-      await expect(read(env)).resolves.toBeNull();
-      await expect(read(env, { requireEffective: true })).rejects.toThrow(
-        `Effective ${name} service command could not be inspected.`,
-      );
-    });
+    it("rejects late Scheduler absence", async () => {
+      let now = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      native.scheduler.mockImplementation(() => {
+        now = 1_000;
+        return { status: 1, stdout: "-2147024894", stderr: "" };
+      });
 
-    it("rejects an existing definition without an effective command in strict mode", async () => {
-      await writeFile(resolvePath(env), render([]));
-      await expect(read(env, { requireEffective: true })).rejects.toThrow(
-        `Effective ${name} service command could not be inspected.`,
-      );
-    });
-
-    it("preserves readable recorded paths in both inspection modes", async () => {
-      await writeFile(resolvePath(env), render(programArguments));
-      for (const requireEffective of [false, true]) {
-        await expect(read(env, { requireEffective })).resolves.toMatchObject({
-          programArguments,
-          environment,
-        });
-      }
+      await expect(strictTask({ timeoutMs: 1_000 })).rejects.toThrow(unreadable("Scheduled Task"));
+      expect(native.scheduler).toHaveBeenCalledOnce();
     });
   });
 
-  it("does not infer Windows service absence while a Startup launcher remains", async () => {
+  it("does not treat a Startup launcher as absent", async () => {
     for (const pathname of resolveStartupEntryPaths(env)) {
       await writeFile(pathname, "@echo off\n");
     }
-    await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow();
+    await expect(strictTask()).rejects.toThrow();
   });
 
   it.each([
-    "set MALFORMED",
-    "set =invalid",
-    'set "OPENCLAW_STATE_DIR=%USERPROFILE%\\.openclaw"',
-    'set "OPENCLAW_STATE_DIR=%~dp0state"',
-    'set "OPENCLAW_STATE_DIR=!USERPROFILE!\\.openclaw"',
-    'set "OPENCLAW_STATE_DIR=C:\\literal^^caret"',
-    "set OPENCLAW_STATE_DIR=C:\\first & echo second",
-    "set /a HOME=1",
-    "set /p HOME=prompt",
-  ])("rejects an unresolved Windows assignment in strict mode: %s", async (line) => {
-    await writeFile(
-      resolveTaskScriptPath(env),
-      `@echo off\nset HOME=/partial-home\n${line}\nnode gateway.js\n`,
-    );
-    await expect(readScheduledTaskCommand(env)).resolves.toMatchObject({
-      environment: { HOME: "/partial-home" },
-    });
-    await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
-      "Effective Scheduled Task service command could not be inspected.",
-    );
-  });
+    [nativeError("ETIMEDOUT"), { kind: "timeout", timeoutMs: 731 }, "timed out after 731 ms"],
+    [nativeError("EACCES", -13), { kind: "spawn", errno: -13 }, "errno -13"],
+    [nativeError("EACCES", -13), { kind: "spawn", errno: -13 }, "errno -13", true],
+    [
+      nativeFailure(1, "-2147024891"),
+      { kind: "native", exitCode: 1, hresult: -2147024891 },
+      "HRESULT 0x80070005",
+    ],
+    [
+      nativeFailure(2, "-2147024894"),
+      { kind: "native", exitCode: 2, hresult: -2147024894 },
+      "HRESULT 0x80070002",
+    ],
+    [
+      nativeFailure(1, "-2147024894 native-secret-canary"),
+      { kind: "native", exitCode: 1 },
+      "Task Scheduler check failed (exit 1)",
+    ],
+    [
+      { status: 0, stdout: "native-secret-canary" },
+      { kind: "invalid-response" },
+      "Task Scheduler check returned an invalid response",
+    ],
+  ] satisfies Array<[object, ServiceInspectionDiagnostic, string, boolean?]>)(
+    "preserves safe Scheduler diagnostics: %j",
+    async (response, diagnostic, reported, missingStartupHome?: boolean) => {
+      vi.spyOn(performance, "now").mockReturnValue(0);
+      native.scheduler.mockReturnValue(response);
+      const inspectionEnv = missingStartupHome
+        ? { OPENCLAW_TASK_SCRIPT: resolveTaskScriptPath(env) }
+        : env;
+      const error = await readScheduledTaskCommand(inspectionEnv, {
+        requireEffective: true,
+        timeoutMs: 731,
+      }).catch((caughtError: unknown) => caughtError);
+      expect(error).toBeInstanceOf(ServiceInspectionError);
+      expect(error).toMatchObject({ reason: "windows-task-inspection-failed" });
+      const sanitized = sanitizeServiceInspectionError(error);
+      expect(sanitized.message).toContain("openclaw gateway status --deep");
+      expect(sanitized.message).toContain(reported);
+      expect(sanitized.cause).toEqual(diagnostic);
+      expect(inspect(sanitized)).not.toContain("native-secret-canary");
+    },
+  );
 
-  it("preserves literal Windows assignments without borrowing the caller's environment", async () => {
-    await writeFile(
-      resolveTaskScriptPath(env),
+  const assignments: Array<[string[], Record<string, string>?]> = [
+    ...[
+      "set MALFORMED",
+      'set "OPENCLAW_STATE_DIR=%USERPROFILE%\\.openclaw"',
+      'set "OPENCLAW_STATE_DIR=!USERPROFILE!\\.openclaw"',
+      'set "OPENCLAW_STATE_DIR=C:\\literal^^caret"',
+      "set OPENCLAW_STATE_DIR=C:\\first & echo second",
+      "set /a HOME=1",
+    ].map((line): [string[]] => [["@echo off", "set HOME=/partial-home", line, "node gateway.js"]]),
+    [
       [
         "@echo off",
         "set HOME=/literal-home",
@@ -216,11 +459,8 @@ describe("native service command inspection", () => {
         "set UNQUOTED=  literal spaces  ",
         "set PERCENT=%%USERPROFILE%%",
         "node gateway.js",
-      ].join("\r\n"),
-    );
-    await expect(readScheduledTaskCommand(env, { requireEffective: true })).resolves.toMatchObject({
-      programArguments,
-      environment: {
+      ],
+      {
         HOME: "/effective-home",
         OPENCLAW_STATE_DIR: "C:\\literal%USERPROFILE% & (state)",
         NODE_OPTIONS: "",
@@ -228,131 +468,102 @@ describe("native service command inspection", () => {
         UNQUOTED: "  literal spaces  ",
         PERCENT: "%USERPROFILE%",
       },
-    });
-  });
-
-  it("rejects a malformed existing plist only in strict mode", async () => {
-    await writeFile(resolveLaunchAgentPlistPath(env), "<plist><dict/></plist>");
-    await expect(readLaunchAgentProgramArguments(env)).resolves.toBeNull();
-    await expect(
-      readLaunchAgentProgramArguments(env, { requireEffective: true }),
-    ).rejects.toThrow();
-  });
-
-  it("rejects a truncated plist even when its command and environment are readable", async () => {
-    const truncated = renderPlist(programArguments).replace(/\s*<\/dict>\s*<\/plist>\s*$/, "");
-    await writeFile(resolveLaunchAgentPlistPath(env), truncated);
-    await expect(readLaunchAgentProgramArguments(env)).resolves.toBeNull();
-    await expect(readLaunchAgentProgramArguments(env, { requireEffective: true })).rejects.toThrow(
-      "Effective LaunchAgent service command could not be inspected.",
-    );
-  });
+    ],
+  ];
+  it.each(assignments)(
+    "reads Windows environment literally: %j",
+    async (lines, expectedEnvironment) => {
+      await writeFile(resolveTaskScriptPath(env), lines.join("\r\n"));
+      if (expectedEnvironment) {
+        await expect(strictTask()).resolves.toMatchObject({
+          programArguments,
+          environment: expectedEnvironment,
+        });
+      } else {
+        await expect(readScheduledTaskCommand(env)).resolves.toMatchObject({
+          environment: { HOME: "/partial-home" },
+        });
+        await expect(strictTask()).rejects.toThrow(unreadable("Scheduled Task"));
+      }
+    },
+  );
 
   it.each([
+    { content: "truncated" },
     { decoded: [] },
     { decoded: { ProgramArguments: "node gateway.js" } },
     { decoded: { ProgramArguments: ["node", 42] } },
     { decoded: { ProgramArguments: programArguments, WorkingDirectory: 42 } },
     { decoded: { ProgramArguments: programArguments, EnvironmentVariables: { HOME: 42 } } },
-  ])("rejects unsupported native plist field types: $decoded", async ({ decoded }) => {
-    await writeFile(resolveLaunchAgentPlistPath(env), renderPlist(programArguments));
-    native.plutil.mockResolvedValue({ stdout: JSON.stringify(decoded), stderr: "" });
-    await expect(readLaunchAgentProgramArguments(env, { requireEffective: true })).rejects.toThrow(
-      "Effective LaunchAgent service command could not be inspected.",
+  ])("rejects malformed plists: %j", async ({ decoded, content }) => {
+    await writeFile(
+      resolveLaunchAgentPlistPath(env),
+      content === "truncated"
+        ? renderPlist(programArguments).replace(/\s*<\/dict>\s*<\/plist>\s*$/, "")
+        : renderPlist(programArguments),
     );
-  });
-
-  it("preserves the native command without trimming or dropping arguments", async () => {
-    const recordedArguments = ["node", "  spaced argument  ", ""];
-    const contents = renderPlist(recordedArguments);
-    await writeFile(resolveLaunchAgentPlistPath(env), contents);
-    for (const requireEffective of [false, true]) {
-      await expect(
-        readLaunchAgentProgramArguments(env, { requireEffective, timeoutMs: 750 }),
-      ).resolves.toMatchObject({ programArguments: recordedArguments });
+    if (content) {
+      await expect(readLaunchAgentProgramArguments(env)).resolves.toBeNull();
+    } else {
+      native.plutil.mockImplementation(async (_command, args, options) =>
+        args[1] === "json"
+          ? {
+              stdout: JSON.stringify(
+                Array.isArray(decoded) ? decoded : { Label: label, ...decoded },
+              ),
+              stderr: "",
+            }
+          : decodeLaunchAgentPlistFixture(options.input, args[1]),
+      );
     }
-    expect(native.plutil).toHaveBeenCalledWith(
-      "/usr/bin/plutil",
-      ["-convert", "json", "-o", "-", "--", "-"],
-      expect.objectContaining({ input: Buffer.from(contents), timeoutMs: 750, logOutput: false }),
-    );
+    await expect(strictPlist()).rejects.toThrow(unreadable("LaunchAgent"));
   });
-
-  it.each(["missing", "unreadable"])(
-    "keeps %s generated environment recovery out of strict inspection",
-    async (failure) => {
-      const expectedEnvFile = resolveLaunchAgentEnvFilePath(env, label);
-      const recordedEnvFile = path.join(root, "other", "service-env", `${label}.env`);
-      const recordedWrapper = path.join(root, "other", "service-env", `${label}-env-wrapper.sh`);
-      await writeFile(expectedEnvFile, "export OPENCLAW_STATE_DIR='/recovered-state'\n");
-      if (failure === "unreadable") {
-        await fs.mkdir(recordedEnvFile, { recursive: true });
-      }
-      await writeFile(
-        resolveLaunchAgentPlistPath(env),
-        renderPlist([
-          LAUNCH_AGENT_ENV_WRAPPER_SHELL,
-          recordedWrapper,
-          recordedEnvFile,
-          ...programArguments,
-        ]),
-      );
-      await expect(readLaunchAgentProgramArguments(env)).resolves.toMatchObject({
-        programArguments,
-        environment: { OPENCLAW_STATE_DIR: "/recovered-state" },
-      });
-      await expect(
-        readLaunchAgentProgramArguments(env, { requireEffective: true }),
-      ).rejects.toThrow();
-    },
-  );
-
-  it.each(["o'brien\\cash$", "first line\r\n  second line\nthird 'quoted' \\cash$"])(
-    "reads the recorded generated literal in strict mode: %j",
-    async (literal) => {
-      const envFile = resolveLaunchAgentEnvFilePath(env, label);
-      await writeFile(
-        envFile,
-        `export OPENCLAW_STATE_DIR='/recorded-state'\nexport NODE_OPTIONS=''\nexport QUOTE=${quoteLaunchAgentEnvironmentValue(literal)}\n`,
-      );
-      await writeFile(
-        resolveLaunchAgentPlistPath(env),
-        renderPlist([
-          LAUNCH_AGENT_ENV_WRAPPER_SHELL,
-          resolveLaunchAgentEnvWrapperPath(env, label),
-          envFile,
-          ...programArguments,
-        ]),
-      );
-      await expect(
-        readLaunchAgentProgramArguments(env, { requireEffective: true }),
-      ).resolves.toMatchObject({
-        programArguments,
-        environment: { OPENCLAW_STATE_DIR: "/recorded-state", NODE_OPTIONS: "", QUOTE: literal },
-      });
-    },
-  );
 
   it.each([
+    "missing",
+    "unreadable",
+    "literal",
     "echo unsupported-command",
     "export OPENCLAW_STATE_DIR='unterminated",
     "export OPENCLAW_STATE_DIR=$(printf unsupported)",
-    "export OPENCLAW_STATE_DIR='/partial'; echo unsupported-command",
-  ])("rejects unsupported generated environment syntax: %s", async (line) => {
-    const envFile = resolveLaunchAgentEnvFilePath(env, label);
-    await writeFile(envFile, `export HOME='/partial-home'\n${line}\n`);
+  ])("inspects generated environment: %s", async (scenario) => {
+    const recovering = scenario === "missing" || scenario === "unreadable";
+    const expectedEnvFile = resolveLaunchAgentEnvironmentReadOptions(
+      env,
+      label,
+    ).expectedEnvironmentFilePath;
+    const other = path.join(root, "other", "service-env", label);
+    const envFile = recovering ? `${other}.env` : expectedEnvFile;
+    const wrapper = recovering
+      ? `${other}-env-wrapper.sh`
+      : resolveLaunchAgentEnvWrapperPath(env, label);
+    const literal = "first line\r\n  second line\nthird 'quoted' \\cash$";
+    await writeFile(
+      expectedEnvFile,
+      recovering
+        ? "export OPENCLAW_STATE_DIR='/recovered-state'\n"
+        : scenario === "literal"
+          ? `export OPENCLAW_STATE_DIR='/recorded-state'\nexport NODE_OPTIONS=''\nexport QUOTE=${quoteLaunchAgentEnvironmentValue(literal)}\n`
+          : `export HOME='/partial-home'\n${scenario}\n`,
+    );
+    if (scenario === "unreadable") {
+      await fs.mkdir(envFile, { recursive: true });
+    }
     await writeFile(
       resolveLaunchAgentPlistPath(env),
-      renderPlist([
-        LAUNCH_AGENT_ENV_WRAPPER_SHELL,
-        resolveLaunchAgentEnvWrapperPath(env, label),
-        envFile,
-        ...programArguments,
-      ]),
+      renderPlist([LAUNCH_AGENT_ENV_WRAPPER_SHELL, wrapper, envFile, ...programArguments]),
     );
-    await expect(readLaunchAgentProgramArguments(env)).resolves.toMatchObject({ programArguments });
-    await expect(readLaunchAgentProgramArguments(env, { requireEffective: true })).rejects.toThrow(
-      "Effective LaunchAgent service command could not be inspected.",
-    );
+    const command = scenario === "literal" ? strictPlist() : readLaunchAgentProgramArguments(env);
+    await expect(command).resolves.toMatchObject({ programArguments });
+    if (recovering || scenario === "literal") {
+      await expect(command).resolves.toMatchObject({
+        environment: recovering
+          ? { OPENCLAW_STATE_DIR: "/recovered-state" }
+          : { OPENCLAW_STATE_DIR: "/recorded-state", NODE_OPTIONS: "", QUOTE: literal },
+      });
+    }
+    if (scenario !== "literal") {
+      await expect(strictPlist()).rejects.toThrow(unreadable("LaunchAgent"));
+    }
   });
 });

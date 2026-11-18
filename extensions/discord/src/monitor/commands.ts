@@ -1,4 +1,3 @@
-// Discord plugin module implements commands behavior.
 import type { DiscordSlashCommandConfig } from "openclaw/plugin-sdk/config-contracts";
 
 export function resolveDiscordSlashCommandConfig(

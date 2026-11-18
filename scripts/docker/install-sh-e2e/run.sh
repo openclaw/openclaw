@@ -178,101 +178,25 @@ time_phase "Preinstall previous" preinstall_previous_version
 time_phase "Run official installer one-liner" run_official_installer
 time_phase "Verify installed version" verify_installed_version
 
-set_image_model() {
+set_profile_model() {
   local profile="$1"
-  shift
+  local command="$2"
+  local label="$3"
+  shift 3
   local candidate
   for candidate in "$@"; do
-    if openclaw --profile "$profile" models set-image "$candidate" >/dev/null 2>&1; then
+    if openclaw --profile "$profile" models "$command" "$candidate" >/dev/null 2>&1; then
       echo "$candidate"
       return 0
     fi
   done
-  echo "ERROR: could not set an image model (tried: $*)" >&2
-  return 1
-}
-
-set_agent_model() {
-  local profile="$1"
-  local candidate
-  shift
-  for candidate in "$@"; do
-    if openclaw --profile "$profile" models set "$candidate" >/dev/null 2>&1; then
-      echo "$candidate"
-      return 0
-    fi
-  done
-  echo "ERROR: could not set agent model (tried: $*)" >&2
+  echo "ERROR: could not set $label model (tried: $*)" >&2
   return 1
 }
 
 write_png_lr_rg() {
-  local out="$1"
-  node - <<'NODE' "$out"
-const fs = require("node:fs");
-const zlib = require("node:zlib");
-
-const out = process.argv[2];
-const width = 96;
-const height = 64;
-
-const crcTable = (() => {
-  const table = new Uint32Array(256);
-  for (let i = 0; i < 256; i++) {
-    let c = i;
-    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
-    table[i] = c >>> 0;
-  }
-  return table;
-})();
-function crc32(buf) {
-  let c = 0xffffffff;
-  for (let i = 0; i < buf.length; i++) c = crcTable[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
-}
-function chunk(type, data) {
-  const typeBuf = Buffer.from(type, "ascii");
-  const len = Buffer.alloc(4);
-  len.writeUInt32BE(data.length, 0);
-  const crcBuf = Buffer.alloc(4);
-  crcBuf.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])), 0);
-  return Buffer.concat([len, typeBuf, data, crcBuf]);
-}
-
-const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-const ihdr = Buffer.alloc(13);
-ihdr.writeUInt32BE(width, 0);
-ihdr.writeUInt32BE(height, 4);
-ihdr[8] = 8; // bit depth
-ihdr[9] = 2; // color type: truecolor
-ihdr[10] = 0; // compression
-ihdr[11] = 0; // filter
-ihdr[12] = 0; // interlace
-
-const rows = [];
-for (let y = 0; y < height; y++) {
-  const row = Buffer.alloc(1 + width * 3);
-  row[0] = 0; // filter: none
-  for (let x = 0; x < width; x++) {
-    const i = 1 + x * 3;
-    const left = x < width / 2;
-    row[i + 0] = left ? 255 : 0;
-    row[i + 1] = left ? 0 : 255;
-    row[i + 2] = 0;
-  }
-  rows.push(row);
-}
-const raw = Buffer.concat(rows);
-const idat = zlib.deflateSync(raw, { level: 9 });
-
-const png = Buffer.concat([
-  sig,
-  chunk("IHDR", ihdr),
-  chunk("IDAT", idat),
-  chunk("IEND", Buffer.alloc(0)),
-]);
-fs.writeFileSync(out, png);
-NODE
+  # Fixed 96x64 RGB fixture: red left half, green right half.
+  printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAGAAAABACAIAAABqVuVZAAAAZ0lEQVR42u3QMQ0AAAjAsPk3DRJ4OZpUQZt6pUGQIEGCBAkSJAhBggQJEiRIkCAECRIkSJAgQYIEKRAkSJAgQYIECUKQIEGCBAkSJAhBggQJEiRIkCAUCBIkSJAgQYIEIUiQIEGCDgvaFelaCWjD3QAAAABJRU5ErkJggg==' | base64 -d >"$1"
 }
 
 run_agent_turn() {
@@ -419,14 +343,9 @@ run_agent_turn_logged_or_skip_profile() {
 }
 
 run_agent_turn_bg() {
-  local label="$1"
-  local profile="$2"
-  local session_id="$3"
-  local prompt="$4"
-  local out_json="$5"
   (
     set -euo pipefail
-    run_agent_turn_logged "$label" "$profile" "$session_id" "$prompt" "$out_json"
+    run_agent_turn_logged "$@"
   ) &
   RUN_AGENT_TURN_BG_PID="$!"
 }
@@ -599,7 +518,6 @@ const required = process.argv.slice(3).map((spec) => spec.split("|").filter(Bool
 
 const seen = new Set();
 const head = [];
-let scannedBytes = 0;
 let truncated = false;
 let skippedOversizedLines = 0;
 
@@ -671,6 +589,10 @@ function walk(node, depth, state) {
 }
 
 function processLine(lineBuffer) {
+  if (lineBuffer.length > maxLineBytes) {
+    skippedOversizedLines += 1;
+    return;
+  }
   const line = lineBuffer.toString("utf8").trim();
   if (!line) return;
   if (head.length < 5) head.push(line.slice(0, maxLineBytes));
@@ -682,98 +604,48 @@ function processLine(lineBuffer) {
   }
 }
 
-async function scan() {
-  const stream = fs.createReadStream(jsonl, { highWaterMark: 64 * 1024 });
-  let lineParts = [];
-  let lineBytes = 0;
-  let skippingLine = false;
-
-  function resetLine() {
-    lineParts = [];
-    lineBytes = 0;
-    skippingLine = false;
+try {
+  // These completed fixture transcripts are bounded artifacts, not live streams.
+  const fd = fs.openSync(jsonl, "r");
+  let bytes;
+  try {
+    const size = fs.fstatSync(fd).size;
+    truncated = size > maxBytes;
+    bytes = Buffer.alloc(Math.min(size, maxBytes));
+    const length = fs.readSync(fd, bytes, 0, bytes.length, 0);
+    bytes = bytes.subarray(0, length);
+  } finally {
+    fs.closeSync(fd);
   }
-
-  function appendLineChunk(chunk) {
-    if (skippingLine) return;
-    if (lineBytes + chunk.length > maxLineBytes) {
-      skippedOversizedLines += 1;
-      lineParts = [];
-      lineBytes = 0;
-      skippingLine = true;
-      return;
-    }
-    lineParts.push(chunk);
-    lineBytes += chunk.length;
+  let offset = 0;
+  while (offset < bytes.length) {
+    const newline = bytes.indexOf(10, offset);
+    if (newline === -1 && truncated) break;
+    const end = newline === -1 ? bytes.length : newline;
+    processLine(bytes.subarray(offset, end));
+    if (missingTools().length === 0) break;
+    offset = end + 1;
   }
-
-  function finishLine() {
-    if (!skippingLine && lineBytes > 0) {
-      processLine(Buffer.concat(lineParts, lineBytes));
+  const missing = missingTools();
+  if (missing.length > 0) {
+    console.error(`Missing tools in transcript: ${missing.join(", ")}`);
+    console.error(`Seen tools: ${[...seen].sort().join(", ")}`);
+    if (truncated) {
+      console.error(`Transcript scan stopped after ${maxBytes} bytes`);
     }
-    resetLine();
-  }
-
-  for await (const rawChunk of stream) {
-    let chunk = rawChunk;
-    let stopAfterChunk = false;
-    if (scannedBytes + rawChunk.length > maxBytes) {
-      const remaining = Math.max(0, maxBytes - scannedBytes);
-      chunk = rawChunk.subarray(0, remaining);
-      truncated = true;
-      stopAfterChunk = true;
+    if (skippedOversizedLines > 0) {
+      console.error(`Skipped ${skippedOversizedLines} oversized transcript line(s)`);
     }
-    scannedBytes += chunk.length;
-    let offset = 0;
-    while (offset < chunk.length) {
-      const newline = chunk.indexOf(10, offset);
-      const end = newline === -1 ? chunk.length : newline;
-      if (end > offset) {
-        appendLineChunk(chunk.subarray(offset, end));
-      }
-      if (newline === -1) {
-        break;
-      }
-      finishLine();
-      if (missingTools().length === 0) {
-        stream.destroy();
-        return;
-      }
-      offset = newline + 1;
-    }
-    if (stopAfterChunk) {
-      stream.destroy();
-      break;
-    }
-  }
-  if (!truncated && lineBytes > 0) {
-    finishLine();
-  }
-}
-
-scan()
-  .then(() => {
-    const missing = missingTools();
-    if (missing.length > 0) {
-      console.error(`Missing tools in transcript: ${missing.join(", ")}`);
-      console.error(`Seen tools: ${[...seen].sort().join(", ")}`);
-      if (truncated) {
-        console.error(`Transcript scan stopped after ${maxBytes} bytes`);
-      }
-      if (skippedOversizedLines > 0) {
-        console.error(`Skipped ${skippedOversizedLines} oversized transcript line(s)`);
-      }
-      console.error("Transcript head:");
-      console.error(head.join("\n"));
-      process.exit(1);
-    }
-  })
-  .catch((error) => {
-    console.error(
-      `Could not scan transcript ${jsonl}: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    console.error("Transcript head:");
+    console.error(head.join("\n"));
     process.exit(1);
-  });
+  }
+} catch (error) {
+  console.error(
+    `Could not scan transcript ${jsonl}: ${error instanceof Error ? error.message : String(error)}`,
+  );
+  process.exit(1);
+}
 NODE
   if [[ -n "$export_workspace" ]]; then
     rm -rf "$export_workspace"
@@ -795,56 +667,24 @@ run_profile() {
   CURRENT_AGENT_MODEL_PROVIDER="$agent_model_provider"
 
   phase_mark_start "Onboard ($profile)"
-	  if [[ "$agent_model_provider" == "openai" ]]; then
-	    openclaw --profile "$profile" onboard \
-	      --non-interactive \
-	      --accept-risk \
-	      --flow quickstart \
-	      --auth-choice openai-api-key \
-	      --openai-api-key "$OPENAI_API_KEY" \
-	      --gateway-port "$port" \
-	      --gateway-bind loopback \
-      --gateway-auth token \
-      --workspace "$workspace" \
-      --skip-health
-	  elif [[ -n "$ANTHROPIC_API_KEY" ]]; then
-	    openclaw --profile "$profile" onboard \
-	      --non-interactive \
-	      --accept-risk \
-	      --flow quickstart \
-	      --auth-choice apiKey \
-	      --anthropic-api-key "$ANTHROPIC_API_KEY" \
-	      --gateway-port "$port" \
-      --gateway-bind loopback \
-      --gateway-auth token \
-      --workspace "$workspace" \
-      --skip-health
-	  elif [[ -n "$ANTHROPIC_API_TOKEN" ]]; then
-	    openclaw --profile "$profile" onboard \
-	      --non-interactive \
-	      --accept-risk \
-	      --flow quickstart \
-	      --auth-choice token \
-	      --token-provider anthropic \
-	      --token "$ANTHROPIC_API_TOKEN" \
-	      --gateway-port "$port" \
-      --gateway-bind loopback \
-      --gateway-auth token \
-      --workspace "$workspace" \
-      --skip-health
-	  else
-	    openclaw --profile "$profile" onboard \
-	      --non-interactive \
-	      --accept-risk \
-	      --flow quickstart \
-	      --auth-choice apiKey \
-	      --anthropic-api-key "$ANTHROPIC_API_KEY" \
-	      --gateway-port "$port" \
-	      --gateway-bind loopback \
-      --gateway-auth token \
-      --workspace "$workspace" \
-      --skip-health
+  local auth_args=()
+  if [[ "$agent_model_provider" == "openai" ]]; then
+    auth_args=(--auth-choice openai-api-key --openai-api-key "$OPENAI_API_KEY")
+  elif [[ -z "$ANTHROPIC_API_KEY" && -n "$ANTHROPIC_API_TOKEN" ]]; then
+    auth_args=(--auth-choice token --token-provider anthropic --token "$ANTHROPIC_API_TOKEN")
+  else
+    auth_args=(--auth-choice apiKey --anthropic-api-key "$ANTHROPIC_API_KEY")
   fi
+  openclaw --profile "$profile" onboard \
+    --non-interactive \
+    --accept-risk \
+    --flow quickstart \
+    "${auth_args[@]}" \
+    --gateway-port "$port" \
+    --gateway-bind loopback \
+    --gateway-auth token \
+    --workspace "$workspace" \
+    --skip-health
   phase_mark_passed "Onboard ($profile)"
 
   phase_mark_start "Verify workspace identity files ($profile)"
@@ -862,18 +702,18 @@ run_profile() {
   local agent_model
   local image_model
   if [[ "$agent_model_provider" == "openai" ]]; then
-    agent_model="$(set_agent_model "$profile" \
+    agent_model="$(set_profile_model "$profile" set agent \
       "$OPENAI_AGENT_MODEL" \
       "openai/gpt-5.5" \
       "openai/gpt-5.4-mini")"
     openclaw --profile "$profile" config set models.providers.openai "{\"baseUrl\":\"https://api.openai.com/v1\",\"models\":[],\"timeoutSeconds\":${OPENAI_PROVIDER_TIMEOUT_SECONDS},\"agentRuntime\":{\"id\":\"openclaw\"}}" --strict-json >/dev/null
-    image_model="$(set_image_model "$profile" \
+    image_model="$(set_profile_model "$profile" set-image "an image" \
       "openai/gpt-5.4-image-2")"
   else
-    agent_model="$(set_agent_model "$profile" \
+    agent_model="$(set_profile_model "$profile" set agent \
       "anthropic/claude-opus-4-6" \
       "claude-opus-4-6")"
-    image_model="$(set_image_model "$profile" \
+    image_model="$(set_profile_model "$profile" set-image "an image" \
       "anthropic/claude-opus-4-6" \
       "claude-opus-4-6")"
   fi

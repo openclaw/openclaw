@@ -1,6 +1,10 @@
 import { Type } from "typebox";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { jsonResult } from "../agents/tools/common.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveMcpLoopbackScopedTools } from "./mcp-http.runtime.js";
 
@@ -35,11 +39,14 @@ describe("MCP loopback OAuth tools", () => {
           : [],
     );
 
+    const cfg: OpenClawConfig = {
+      auth: { order: { xai: ["xai:oauth"] } },
+      plugins: { allow: ["xai"] },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    onTestFinished(clearRuntimeConfigSnapshot);
     const result = await resolveMcpLoopbackScopedTools({
-      cfg: {
-        auth: { order: { xai: ["xai:oauth"] } },
-        plugins: { allow: ["xai"] },
-      } as OpenClawConfig,
+      cfg,
       context: {
         sessionKey: "agent:main:main",
         agentId: "main",

@@ -42,26 +42,16 @@ function dynamicModelScope(
       : "unscoped";
 }
 
-export function createGithubCopilotDynamicModelHooks(params: {
-  discoveryEnabled(config?: OpenClawConfig): boolean;
-}) {
+export function createGithubCopilotDynamicModelHooks() {
   const preparedDynamicModels = new WeakMap<
     object,
     Map<string, ReadonlyMap<string, ProviderRuntimeModel>>
   >();
 
-  async function resolveCatalogAuth(ctx: GithubCopilotCatalogContext) {
-    if (!params.discoveryEnabled(ctx.config)) {
-      return null;
-    }
-    const auth = await resolveFirstGithubToken(ctx);
-    return auth.githubToken ? auth : null;
-  }
-
   async function loadCatalog(
     ctx: GithubCopilotCatalogContext,
     auth: Awaited<ReturnType<typeof resolveFirstGithubToken>>,
-    headers: ReturnType<typeof buildCopilotRuntimeHeaders>,
+    headers: Record<string, string>,
   ) {
     const { resolveCopilotRuntimeAuth } = await import("./register.runtime.js");
     const { apiKey: copilotApiToken, baseUrl } = await resolveCopilotRuntimeAuth({
@@ -92,8 +82,8 @@ export function createGithubCopilotDynamicModelHooks(params: {
   }
 
   async function runCatalog(ctx: ProviderCatalogContext): Promise<ProviderCatalogResult> {
-    const auth = await resolveCatalogAuth(ctx);
-    if (!auth) {
+    const auth = await resolveFirstGithubToken(ctx);
+    if (!auth.githubToken) {
       return null;
     }
     const headers = buildCopilotRuntimeHeaders({ config: ctx.config });
@@ -120,10 +110,10 @@ export function createGithubCopilotDynamicModelHooks(params: {
       profileId: ctx.authProfileId,
       authProfileMode: ctx.authProfileMode,
     };
-    const auth = await resolveCatalogAuth(catalogContext);
+    const auth = await resolveFirstGithubToken(catalogContext);
     // Request preparation can fall back to forward-compatible metadata without
     // claiming that live catalog discovery succeeded.
-    const catalog = auth
+    const catalog = auth.githubToken
       ? await loadCatalog(
           catalogContext,
           auth,
@@ -161,7 +151,6 @@ export function createGithubCopilotDynamicModelHooks(params: {
     prepareDynamicModel,
     resolveDynamicModel,
     runCatalog,
-    preferRuntimeResolvedModel: ({ config }: { config?: OpenClawConfig }) =>
-      params.discoveryEnabled(config),
+    preferRuntimeResolvedModel: () => true,
   };
 }

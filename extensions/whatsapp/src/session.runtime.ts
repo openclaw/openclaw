@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements session behavior.
 import { DEFAULT_CONNECTION_CONFIG } from "baileys";
 
 export function createBaileysSignalRepository(

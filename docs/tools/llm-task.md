@@ -81,7 +81,7 @@ legacy `config.allowedModels` value into `llm.allowedCompletionModels` without w
 | --------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `prompt`        | string | Required. Task instruction for the LLM.                                                                                                       |
 | `input`         | any    | Optional payload; serialized to JSON and appended to the prompt.                                                                              |
-| `schema`        | object | Optional JSON Schema the parsed output must validate against.                                                                                 |
+| `schema`        | object | Optional JSON Schema that constrains supported runtimes and validates the parsed output.                                                      |
 | `provider`      | string | Overrides `defaultProvider` / the agent's default provider.                                                                                   |
 | `model`         | string | Overrides `defaultModel`; accepts bare model ids, aliases, or a `provider/model` ref (a duplicate provider prefix is stripped automatically). |
 | `thinking`      | string | Reasoning level (e.g. `low`, `medium`); must be one supported by the resolved model.                                                          |
@@ -98,13 +98,29 @@ and `details.model` naming what actually ran.
 Each call starts a fresh prompt-only inference operation. It does not reuse the
 calling agent's transcript or native runtime session, run agent lifecycle hooks,
 or deliver model output to a channel. OpenClaw uses the selected provider,
-model, auth profile, and runtime exactly once; it does not fall back to another
-route when that owner cannot provide a literal zero-tool call.
+model, auth profile, and runtime without falling back to another
+route when that owner cannot provide isolated completion.
+A native-schema rejection may cause one prompt-constrained retry on that same
+route before local validation.
+
+Agents API runs restricted sessions by default, without an executor or supplied
+tools, but its service may retain built-in helpers. It cannot guarantee literal
+zero-tool inference. Use another runtime when your workflow requires that
+guarantee; rejecting tool-bearing output cannot undo native helper effects.
 
 A selected agent harness must implement isolated completion. Otherwise the call
 fails before inference with a `does not support isolated completion` error.
-This fail-closed behavior prevents a JSON task from silently becoming a normal
+Rejecting the call prevents a JSON task from silently becoming a normal
 tool-capable agent turn.
+
+When the selected harness supports native structured output, OpenClaw forwards
+the schema by reference when its JSON encoding fits within 1 KiB. Callers must
+not mutate it after handoff. Larger or non-serializable schemas are not
+forwarded natively. If Codex explicitly rejects the
+schema dialect, OpenClaw retries the isolated turn once with a user-level schema
+constraint. `llm-task` always validates the parsed result, and the
+retry remains a fresh zero-tool turn rather than a normal tool-capable agent
+turn.
 
 CLI runtimes must provide the equivalent isolated preparation guarantee. The
 bundled Claude and Gemini CLI runtimes do; a different CLI runtime that has not
@@ -161,9 +177,9 @@ openclaw.invoke --tool llm-task --action json --args-json '{
 
 - **JSON-only**: the model is instructed to return only a JSON value, no code
   fences, no commentary.
-- **No tools**: the selected runtime must expose a literal empty model-callable
-  tool surface. OpenClaw rejects tool-shaped results instead of treating them as
-  task output.
+- **No supplied tools**: runtimes enforce a literal empty model-callable tool
+  surface except for the documented Agents API native-helper limitation.
+  OpenClaw rejects tool-shaped results instead of treating them as task output.
 - **Isolated**: the run has no agent transcript, session reuse, lifecycle hooks,
   channel delivery, or provider fallback.
 - Treat output as untrusted unless you validate it with `schema`.

@@ -19,3 +19,32 @@ describe("discordSecurityAdapter.resolveDmPolicy", () => {
     expect(policy?.classifyEntryAuthentication?.("alice")).toBe("mutable");
   });
 });
+
+describe("discordSecurityAdapter.collectWarnings", () => {
+  it("records an intentional open groupPolicy as a non-blocking posture advisory", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "test-token",
+          groupPolicy: "open",
+        },
+      },
+    } as OpenClawConfig;
+    const account = resolveDiscordAccount({ cfg, accountId: "default" });
+
+    expect(
+      discordSecurityAdapter.collectWarnings?.({
+        cfg,
+        account,
+      }),
+    ).toEqual([
+      {
+        checkId: "channels.discord.groups.open",
+        severity: "warn",
+        title: "Discord security warning",
+        detail:
+          'Discord guilds: groupPolicy="open" with no guild/channel allowlist; any channel can trigger (mention-gated). Set channels.discord.groupPolicy="allowlist" and configure channels.discord.guilds.<id>.channels.',
+      },
+    ]);
+  });
+});

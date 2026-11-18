@@ -1,0 +1,159 @@
+.session-menu > .oc-menu {
+  min-width: 220px;
+  max-width: 264px;
+}
+
+.session-menu__panel {
+  min-width: 220px;
+  max-width: min(264px, calc(100dvw - 16px));
+}
+
+.session-menu__panel .oc-menu-item--submenu > .oc-menu-item__label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Contributed dropdown rows share the menu typography without renderer-specific classes. */
+:is(.session-menu .oc-menu-item, .session-menu__item, .sidebar-session-sort-menu__item) {
+  font: inherit;
+  font-size: calc(13px * var(--control-ui-text-scale));
+}
+
+.session-menu__item,
+.sidebar-session-sort-menu__item {
+  --oc-menu-item-padding-inline: 8px;
+
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: var(--menu-item-height);
+  padding: 5px 8px;
+  border: none;
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+:where(.session-menu__item) + :where(.session-menu__item) {
+  margin-block-start: var(--menu-item-gap);
+}
+
+.row.session-menu__label {
+  gap: 6px;
+}
+
+.session-menu__status {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  max-width: min(300px, calc(100vw - 48px));
+  padding: 8px;
+  color: var(--text);
+  font-size: calc(13px * var(--control-ui-text-scale));
+}
+
+.session-menu__status .session-menu__text {
+  white-space: normal;
+}
+
+/* Canonical Menu rows own their states; keep these rules for plain session rows
+   without changing their specificity or depending on stylesheet load order. */
+.session-menu__item:where(:not(.oc-menu-item)):hover:not(:disabled):not([aria-disabled="true"]),
+.session-menu__item:where(:not(.oc-menu-item))[aria-expanded="true"],
+.session-menu__item:where(:not(.oc-menu-item)):focus-visible,
+.sidebar-session-sort-menu__item:where(:not(.oc-menu-item)):hover,
+.sidebar-session-sort-menu__item:where(:not(.oc-menu-item)):focus-visible {
+  background: var(--bg-hover);
+}
+
+/* Plain choice rows follow the menu's own hover and selected fills. */
+.session-menu__item:where(:not(.oc-menu-item))[aria-pressed]:is(:hover, :focus-visible):not(
+    :disabled
+  ):not([aria-disabled="true"]) {
+  background: var(--menu-hover);
+}
+
+.session-menu__item:where(:not(.oc-menu-item))[aria-pressed="true"] {
+  background: var(--menu-selected);
+}
+
+.session-menu__item:where(:not(.oc-menu-item))[aria-pressed="true"]:is(:hover, :focus-visible):not(
+    :disabled
+  ):not([aria-disabled="true"]) {
+  background: var(--surface-selected-hover);
+}
+
+.session-menu__item:where(:not(.oc-menu-item)):disabled,
+.session-menu__item:where(:not(.oc-menu-item))[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.session-menu__item--destructive,
+.session-menu__item--destructive .session-menu__icon {
+  color: var(--danger);
+}
+
+.session-menu__icon,
+.session-menu__avatar,
+.session-menu__check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+.session-menu__check {
+  color: var(--accent);
+}
+
+.session-menu__icon {
+  color: var(--muted);
+}
+
+/* Identity choices need room for recognizable faces, not action-sized glyphs. */
+.session-menu__avatar,
+.session-menu__avatar .viewer-avatar {
+  width: 24px;
+  height: 24px;
+  font-size: 10px;
+}
+
+/* Icon templates only carry paths; without an explicit stroke rule the SVGs
+   render as solid black fills (invisible-blob chips in dark mode). */
+.session-menu__icon svg,
+.session-menu__check svg {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.75px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.new-session-page__trigger-chevron svg,
+.new-session-page__target-icon svg,
+.new-session-page__browser-nav svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.session-menu__item[data-new-tab-action]:not(:disabled, [aria-disabled="true"]) {
+  cursor: pointer;
+}
+
+.chat-controls__speed-option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

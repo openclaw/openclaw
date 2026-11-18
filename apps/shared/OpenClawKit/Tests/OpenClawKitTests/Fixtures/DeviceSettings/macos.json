@@ -7,7 +7,8 @@
       "selectedId": "paper",
       "available": [{"id": "paper", "name": "Original"}, {"id": "origami", "name": "Origami"}]
     },
-    "launchAtLoginAvailable": false, "quickChatEnabled": true, "quickChatShortcut": null, "debugPaneEnabled": false
+    "launchAtLoginAvailable": false, "keepGatewayRunning": false, "keepGatewayRunningAvailable": true,
+    "quickChatEnabled": true, "quickChatShortcut": null, "debugPaneEnabled": false
   },
   "capabilities": {
     "canvasEnabled": true, "cameraEnabled": false, "computerControlEnabled": true,
@@ -26,7 +27,7 @@
       {"id": "notifications", "status": "granted"}, {"id": "accessibility", "status": "denied"},
       {"id": "screenRecording", "status": "notDetermined"}, {"id": "microphone", "status": "unavailable"},
       {"id": "camera", "status": "granted"}, {"id": "speechRecognition", "status": "denied"},
-      {"id": "location", "status": "notDetermined"}, {"id": "automation", "status": "unavailable"}
+      {"id": "location", "status": "notDetermined"}
     ],
     "location": {"mode": "whileUsing", "precise": true}
   },

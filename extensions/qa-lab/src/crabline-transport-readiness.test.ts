@@ -1,33 +1,9 @@
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { createQaBusState } from "./bus-state.js";
-import { createQaCrablineTransportAdapter } from "./crabline-transport.js";
-
-async function withTelegramCrablineTransport(
-  run: (transport: Awaited<ReturnType<typeof createQaCrablineTransportAdapter>>) => Promise<void>,
-) {
-  await withTempDir("qa-crabline-transport-", async (outputDir) => {
-    const transport = await createQaCrablineTransportAdapter({
-      outputDir,
-      selection: {
-        capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-        channel: "telegram",
-        channelDriver: "crabline",
-        providerReadinessArtifactPath: "crabline-provider-readiness.json",
-      },
-      state: createQaBusState(),
-    });
-    try {
-      await run(transport);
-    } finally {
-      await transport.cleanup?.();
-    }
-  });
-}
+import { withTransport } from "./crabline-transport.test-support.js";
 
 describe("Crabline transport readiness", () => {
   it("waits for the selected account to finish its channel readiness lifecycle", async () => {
-    await withTelegramCrablineTransport(async (transport) => {
+    await withTransport("telegram", async (transport) => {
       const statuses = [
         { accountId: "other", connected: true, lifecycle: "ready", running: true },
         {
@@ -64,7 +40,7 @@ describe("Crabline transport readiness", () => {
   });
 
   it("rejects a ready channel account belonging to another Crabline identity", async () => {
-    await withTelegramCrablineTransport(async (transport) => {
+    await withTransport("telegram", async (transport) => {
       const call = vi.fn().mockResolvedValue({
         channelAccounts: {
           telegram: [{ accountId: "other", connected: true, lifecycle: "ready", running: true }],

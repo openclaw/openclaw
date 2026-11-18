@@ -1,0 +1,696 @@
+import type { Dirent } from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { hasErrnoCode, isMissingPathError } from "../../infra/errors.js";
+import { root as fsRoot } from "../../infra/fs-safe.js";
+import { requestGitWorkerEffect } from "../../infra/git-worker-context.js";
+import {
+  createStagedInputPathMatcher,
+  stagedInputPathDirectory,
+} from "../../media/staged-inputs.js";
+import { WorktreePreservationError } from "./errors.js";
+import {
+  checkoutPathFromGitBytes,
+  containsGitMarker,
+  gitPathKey,
+  parseGitIndexPaths,
+  parseGitTreePaths,
+  rawPathExists,
+  rawPathStat,
+  splitNullBuffer,
+  type GitIndexPath,
+  type GitTreePath,
+} from "./git-path-inventory.js";
+import type { GitWorktreeOperations } from "./git-worktree-operations.js";
+import { commandError, requireGit, requireGitBuffer, requireGitPath, runGit } from "./git.js";
+import { snapshotProvisionedFiles } from "./provisioned-snapshot.js";
+import {
+  captureExactState,
+  exactSnapshotPrefix,
+  writeExactStateCommit,
+} from "./snapshot-exact-state.js";
+
+type SnapshotIndexEnvironment = NodeJS.ProcessEnv & { GIT_INDEX_FILE: string };
+
+type SnapshotInput = GitWorktreeOperations["worktree.snapshot"]["input"];
+type SnapshotInventory = {
+  head: string;
+  headPaths?: GitTreePath[];
+  paths: Map<string, Buffer>;
+  changed: Set<string>;
+};
+
+const assertCurrent = () =>
+  requestGitWorkerEffect<"worktree.assert-current">({ type: "worktree.assert-current", input: {} });
+
+async function listCollapsedOtherPaths(checkoutPath: string, ignored: boolean): Promise<Buffer[]> {
+  // --directory collapses whole untracked/ignored trees to one entry each, so the
+  // Git output stays bounded by top-level entries instead of every dependency file.
+  return splitNullBuffer(
+    await requireGitBuffer(checkoutPath, [
+      "ls-files",
+      "-z",
+      "--others",
+      ...(ignored ? ["--ignored"] : []),
+      "--exclude-standard",
+      "--directory",
+    ]),
+  );
+}
+
+async function walkCollapsedPaths(
+  checkoutPath: string,
+  entries: readonly Buffer[],
+  options: { visitFile?: (entry: Buffer) => Promise<void>; skip?: ReadonlySet<string> },
+): Promise<boolean> {
+  const visitDirectory = async (relative: Buffer): Promise<boolean> => {
+    if (
+      await rawPathExists(
+        checkoutPathFromGitBytes(checkoutPath, Buffer.concat([relative, Buffer.from("/.git")])),
+      )
+    ) {
+      return true;
+    }
+    const directoryPath = checkoutPathFromGitBytes(checkoutPath, relative);
+    const decoded = relative.toString("utf8");
+    let directoryEntries: Dirent[] | undefined;
+    if (!decoded.includes("\uFFFD")) {
+      try {
+        // Node's DT_UNKNOWN fallback needs a string parent for string names.
+        directoryEntries = await fs.readdir(path.join(checkoutPath, decoded), {
+          withFileTypes: true,
+        });
+      } catch (error) {
+        // A lossy DT_UNKNOWN name can fail Node's internal stat before readdir
+        // returns. Retry with raw bytes; a missing directory still fails there.
+        if (!isMissingPathError(error) && !hasErrnoCode(error, "ENAMETOOLONG")) {
+          throw error;
+        }
+      }
+    }
+    // One lossy name invalidates the entire decoded listing, including siblings.
+    if (directoryEntries?.some((entry) => entry.name.includes("\uFFFD"))) {
+      directoryEntries = undefined;
+    }
+    const names =
+      directoryEntries?.map((entry) => Buffer.from(entry.name)) ??
+      (await fs.readdir(directoryPath, { encoding: "buffer" }));
+    for (let offset = 0; offset < names.length; offset += 64) {
+      const children = names
+        .slice(offset, offset + 64)
+        .map((name, index) => {
+          const entry = directoryEntries?.[offset + index];
+          return {
+            path: Buffer.concat([relative, Buffer.from("/"), name]),
+            directory: entry?.isDirectory()
+              ? true
+              : entry && (entry.isFile() || entry.isSymbolicLink())
+                ? false
+                : undefined,
+          };
+        })
+        .filter((child) => !options.skip?.has(gitPathKey(child.path)));
+      // Join every read before recursing or retaining a nested repository.
+      const stats = children.some((child) => child.directory === undefined)
+        ? await Promise.allSettled(
+            children.map(
+              async (child) =>
+                child.directory ??
+                (
+                  await rawPathStat(checkoutPathFromGitBytes(checkoutPath, child.path))
+                )?.isDirectory() ??
+                false,
+            ),
+          )
+        : undefined;
+      for (const [index, child] of children.entries()) {
+        const result = stats?.[index];
+        if (result?.status === "rejected") {
+          throw result.reason;
+        }
+        if (result ? result.value : child.directory) {
+          if (await visitDirectory(child.path)) {
+            return true;
+          }
+        } else {
+          // Never follow symlinks; only ordinary Git-style leaf paths enter the snapshot.
+          await options.visitFile?.(child.path);
+        }
+      }
+    }
+    return false;
+  };
+  for (const entry of entries) {
+    if (entry.at(-1) === 47) {
+      if (await visitDirectory(entry.subarray(0, -1))) {
+        return true;
+      }
+    } else {
+      await options.visitFile?.(entry);
+    }
+  }
+  return false;
+}
+
+/** Index entries whose flags make Git skip its worktree comparison for that path. */
+function unstattedIndexPaths(index: readonly GitIndexPath[]): Buffer[] {
+  return index
+    .filter((entry) => entry.assumeUnchanged || entry.skipWorktree)
+    .map((entry) => entry.path);
+}
+
+/**
+ * Inspect untracked and ignored paths without buffering every filename through Git.
+ * Resolves true when a nested repository marker is found; ignored paths nested in
+ * untracked trees stay out of the untracked visit so ignore semantics are preserved.
+ * `unstattedIndexPaths` carries the index entries Git will not compare against the
+ * filesystem, whose replacements only a direct stat can discover.
+ */
+async function inspectOtherPaths(
+  checkoutPath: string,
+  options: {
+    deletedOrUnmergedPaths: readonly Buffer[];
+    unstattedIndexPaths?: readonly Buffer[];
+    untracked?: (entry: Buffer) => Promise<void>;
+    ignored?: (entry: Buffer) => Promise<void>;
+  },
+): Promise<boolean> {
+  const untracked = await listCollapsedOtherPaths(checkoutPath, false);
+  // Git omits a directory that replaced an indexed file from the collapsed listing
+  // because the index still holds that path. Git reports such entries as deleted
+  // or, for a conflict, unmerged; it deliberately skips assume-unchanged and
+  // skip-worktree entries, so those are stat-checked directly. Every candidate set stays
+  // small: worktree deletions and conflicts, plus only manually flagged paths.
+  const candidates = new Map<string, Buffer>();
+  for (const entry of [...options.deletedOrUnmergedPaths, ...(options.unstattedIndexPaths ?? [])]) {
+    candidates.set(gitPathKey(entry), entry);
+  }
+  const replaced = [...candidates.values()];
+  for (let offset = 0; offset < replaced.length; offset += 64) {
+    const batch = replaced.slice(offset, offset + 64);
+    const stats = await Promise.allSettled(
+      batch.map((entry) => rawPathStat(checkoutPathFromGitBytes(checkoutPath, entry))),
+    );
+    for (const [index, result] of stats.entries()) {
+      if (result.status === "rejected") {
+        throw result.reason;
+      } else if (result.value?.isDirectory()) {
+        untracked.push(Buffer.concat([batch[index]!, Buffer.from("/")]));
+      }
+    }
+  }
+  const ignored = await listCollapsedOtherPaths(checkoutPath, true);
+  if (await containsGitMarker(checkoutPath, [...untracked, ...ignored])) {
+    return true;
+  }
+  const ignoredKeys = new Set(
+    ignored.map((entry) => gitPathKey(entry.at(-1) === 47 ? entry.subarray(0, -1) : entry)),
+  );
+  return (
+    (await walkCollapsedPaths(checkoutPath, untracked, {
+      visitFile: options.untracked,
+      skip: ignoredKeys,
+    })) || (await walkCollapsedPaths(checkoutPath, ignored, { visitFile: options.ignored }))
+  );
+}
+
+async function collectSnapshotInventory(input: SnapshotInput): Promise<SnapshotInventory> {
+  const head = await requireGit(input.checkoutPath, ["rev-parse", "--verify", "HEAD^{commit}"]);
+  const index = parseGitIndexPaths(
+    await requireGitBuffer(input.checkoutPath, ["ls-files", "--stage", "-v", "-z"]),
+  );
+  const provisioned = new Set(
+    input.provisionedPaths.map((entry) => gitPathKey(Buffer.from(entry))),
+  );
+  const paths = new Map<string, Buffer>();
+  const add = (entry: Buffer) => {
+    const key = gitPathKey(entry);
+    if (!provisioned.has(key)) {
+      paths.set(key, entry);
+    }
+  };
+  // One read-only status supplies both snapshot changes and directory-replacement candidates.
+  const status = splitNullBuffer(
+    await requireGitBuffer(input.checkoutPath, [
+      "-c",
+      "core.ignoreStat=false",
+      "-c",
+      "core.trustctime=true",
+      "-c",
+      "core.checkStat=default",
+      ...(process.platform === "win32" ? [] : ["-c", "core.filemode=true"]),
+      "--no-optional-locks",
+      "status",
+      "--porcelain=v1",
+      "-z",
+      "--untracked-files=no",
+      "--no-renames",
+    ]),
+  );
+  const isStagedInput = createStagedInputPathMatcher(await fsRoot(input.checkoutPath));
+  let untracked = 0;
+  const otherNested = await inspectOtherPaths(input.checkoutPath, {
+    deletedOrUnmergedPaths: status
+      .filter((entry) => {
+        const state = entry.toString("ascii", 0, 2);
+        // DD and AA are the two unmerged states without a U status letter.
+        return state[1] === "D" || state.includes("U") || state === "AA";
+      })
+      .map((entry) => entry.subarray(3)),
+    unstattedIndexPaths: unstattedIndexPaths(index),
+    untracked: async (entry) => {
+      untracked++;
+      add(entry);
+    },
+    ignored: async (entry) => {
+      const relativePath = entry.toString("utf8");
+      if (stagedInputPathDirectory(relativePath) && (await isStagedInput(relativePath))) {
+        add(entry);
+      }
+    },
+  });
+  if (
+    otherNested ||
+    (await containsGitMarker(
+      input.checkoutPath,
+      index.map((entry) => entry.path),
+    ))
+  ) {
+    throw new WorktreePreservationError(
+      "nested-repository",
+      "nested git repositories cannot be snapshotted losslessly",
+    );
+  }
+  await requestGitWorkerEffect({
+    type: "worktree.snapshot-inventory",
+    input: { tracked: index.length, untracked },
+  });
+  // Status uses Git's cached index once. Hidden flags and gitlinks require the
+  // full capture path; ignored provisioned bytes retain their separate owner.
+  if (
+    !input.exactState &&
+    status.length === 0 &&
+    untracked === 0 &&
+    paths.size === 0 &&
+    index.every((entry) => !entry.assumeUnchanged && !entry.skipWorktree && entry.mode !== "160000")
+  ) {
+    if (input.provisionedPaths.length > 0) {
+      assertNoProvisionedTreePaths(index, input.provisionedPaths);
+    }
+    return { head, paths, changed: new Set() };
+  }
+  const headPaths = parseGitTreePaths(
+    await requireGitBuffer(input.checkoutPath, ["ls-tree", "-r", "-z", head]),
+  );
+  const sparseConfig = await runGit(input.checkoutPath, [
+    "config",
+    "--bool",
+    "core.sparseCheckout",
+  ]);
+  if (sparseConfig.code !== 0 && sparseConfig.code !== 1) {
+    throw commandError("git config --bool core.sparseCheckout", sparseConfig);
+  }
+  const sparse = sparseConfig.code === 0 && sparseConfig.stdout.trim() === "true";
+  const sourcePaths = new Set<string>();
+  const sparseCandidates: Buffer[] = [];
+  const headKeys = new Set(headPaths.map((entry) => gitPathKey(entry.path)));
+  for (const entry of index) {
+    sourcePaths.add(gitPathKey(entry.path));
+    // A directory replacing an indexed path is no blob. HEAD paths still delete
+    // cleanly against the snapshot index, but a conflicted path carries no stage 0
+    // for Git to drop by name; its untracked children arrive through the listing.
+    if (
+      !headKeys.has(gitPathKey(entry.path)) &&
+      (await rawPathStat(checkoutPathFromGitBytes(input.checkoutPath, entry.path)))?.isDirectory()
+    ) {
+      continue;
+    }
+    if (
+      !entry.skipWorktree ||
+      (await rawPathExists(checkoutPathFromGitBytes(input.checkoutPath, entry.path))) ||
+      !sparse
+    ) {
+      add(entry.path);
+    } else {
+      sparseCandidates.push(entry.path);
+    }
+  }
+  if (sparseCandidates.length > 0) {
+    const included = await requireGitBuffer(
+      input.checkoutPath,
+      ["sparse-checkout", "check-rules", "-z"],
+      {
+        input: Buffer.concat(sparseCandidates.flatMap((entry) => [entry, Buffer.from([0])])),
+      },
+    );
+    for (const entry of splitNullBuffer(included)) {
+      add(entry);
+    }
+  }
+  // Index omissions are staged deletions; every remaining indexed path was already selected.
+  for (const entry of headPaths) {
+    if (!sourcePaths.has(gitPathKey(entry.path))) {
+      add(entry.path);
+    }
+  }
+  const changed = new Set(status.map((entry) => gitPathKey(entry.subarray(3))));
+  for (const entry of unstattedIndexPaths(index)) {
+    if (paths.has(gitPathKey(entry))) {
+      changed.add(gitPathKey(entry));
+    }
+  }
+  return { head, headPaths, paths, changed };
+}
+
+// A dirty snapshot starts from HEAD and hashes only the selected working paths.
+// Sparse and split-index policy belongs to the live checkout, not this private index.
+const snapshotIndexArgs = [
+  "-c",
+  "submodule.recurse=false",
+  "-c",
+  "core.splitIndex=false",
+  "-c",
+  "core.sparseCheckout=false",
+  "-c",
+  "index.sparse=false",
+  "-c",
+  "core.ignoreStat=false",
+  "-c",
+  "core.trustctime=true",
+  "-c",
+  "core.checkStat=default",
+  ...(process.platform === "win32" ? [] : ["-c", "core.filemode=true"]),
+];
+
+async function prepareSnapshotIndex(
+  input: SnapshotInput,
+  inventory: SnapshotInventory & { headPaths: GitTreePath[] },
+  indexEnv: SnapshotIndexEnvironment,
+  temporaryDirectory: string,
+): Promise<{ paths: Buffer[]; changed: boolean }> {
+  const metadataBytes = [
+    ...inventory.headPaths.map((entry) => entry.path),
+    ...inventory.paths.values(),
+  ].reduce((total, entry) => total + 512 + 2 * entry.length, 0);
+  const tracked = new Set(inventory.headPaths.map((entry) => gitPathKey(entry.path)));
+  const unique = new Map(
+    [...inventory.paths].filter(([key]) => inventory.changed.has(key) || !tracked.has(key)),
+  );
+  for (const value of input.provisionedPaths) {
+    unique.set(gitPathKey(Buffer.from(value)), Buffer.from(value));
+  }
+  const provisioned = new Set(
+    input.provisionedPaths.map((value) => gitPathKey(Buffer.from(value))),
+  );
+  let gitBytes = 0;
+  let provisionedBytes = 0;
+  const candidates = [...unique];
+  const missing = new Set<string>();
+  // Large deletion sets need bounded filesystem batches, as cleanup inspection does.
+  // Join every read before reporting the first error or releasing snapshot custody.
+  for (let offset = 0; offset < candidates.length; offset += 64) {
+    const batch = candidates.slice(offset, offset + 64);
+    const stats = await Promise.allSettled(
+      batch.map(([, value]) => rawPathStat(checkoutPathFromGitBytes(input.checkoutPath, value))),
+    );
+    for (const [index, result] of stats.entries()) {
+      const key = batch[index]![0];
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
+      if (result.value) {
+        if (provisioned.has(key)) {
+          provisionedBytes += result.value.size;
+        } else {
+          gitBytes += result.value.size;
+        }
+      } else if (tracked.has(key)) {
+        missing.add(key);
+      }
+    }
+  }
+  const common = await requireGitPath(input.repoRoot, ["rev-parse", "--git-common-dir"]);
+  await requestGitWorkerEffect<"worktree.snapshot-capacity">({
+    type: "worktree.snapshot-capacity",
+    input: {
+      demands: [
+        { path: path.resolve(input.repoRoot, common), bytes: 2 * gitBytes + metadataBytes },
+        { path: temporaryDirectory, bytes: 2 * metadataBytes },
+      ],
+      stateBytes: 2 * provisionedBytes,
+      purpose: "worktree safety snapshot",
+    },
+  });
+  const paths = candidates.filter(([key]) => !provisioned.has(key)).map(([, entry]) => entry);
+  // Remove missing descendants first, then update tracked entries in place to
+  // preserve executable/symlink modes on filesystems that cannot represent them.
+  const rank = (entry: Buffer) =>
+    missing.has(gitPathKey(entry)) ? 0 : tracked.has(gitPathKey(entry)) ? 1 : 2;
+  paths.sort(
+    (left, right) =>
+      rank(left) - rank(right) || (rank(left) === 0 ? Buffer.compare(right, left) : 0),
+  );
+  if (paths.length > 0) {
+    await requireGit(
+      input.checkoutPath,
+      [...snapshotIndexArgs, "read-tree", "--reset", inventory.head],
+      {
+        env: indexEnv,
+      },
+    );
+  }
+  return { paths, changed: paths.length > 0 };
+}
+
+function assertNoProvisionedTreePaths(
+  tree: readonly (GitTreePath | GitIndexPath)[],
+  provisionedPaths: readonly string[],
+) {
+  const provisioned = new Set(provisionedPaths.map((entry) => gitPathKey(Buffer.from(entry))));
+  for (const entry of tree) {
+    if (entry.mode === "160000") {
+      throw new WorktreePreservationError(
+        "nested-repository",
+        "nested git repositories cannot be snapshotted losslessly",
+      );
+    }
+    for (let end = entry.path.length; end >= 0; end = entry.path.lastIndexOf(47, end - 1)) {
+      const prefix = entry.path.subarray(0, end);
+      if (provisioned.has(gitPathKey(prefix))) {
+        throw new Error(`provisioned path entered Git snapshot: ${prefix.toString("utf8")}`);
+      }
+      if (end === 0) {
+        break;
+      }
+    }
+  }
+}
+
+export async function snapshotWorktree(
+  input: SnapshotInput,
+): Promise<GitWorktreeOperations["worktree.snapshot"]["output"]> {
+  await assertCurrent();
+  const temporaryDirectory = await requestGitWorkerEffect<"git.temporary-directory">({
+    type: "git.temporary-directory",
+    input: {},
+  });
+
+  const filemodeArgs = process.platform === "win32" ? [] : ["-c", "core.filemode=true"];
+  const env: SnapshotIndexEnvironment = {
+    GIT_INDEX_FILE: path.join(temporaryDirectory, "index"),
+    GIT_AUTHOR_NAME: "OpenClaw",
+    GIT_AUTHOR_EMAIL: "openclaw@localhost",
+    GIT_COMMITTER_NAME: "OpenClaw",
+    GIT_COMMITTER_EMAIL: "openclaw@localhost",
+  };
+  const inventory = await collectSnapshotInventory(input);
+  await assertCurrent();
+  const clean = inventory.headPaths === undefined;
+  const snapshotRef = input.exactState
+    ? `${exactSnapshotPrefix}${input.worktreeId}`
+    : `refs/openclaw/snapshots/${clean ? "clean-v1/" : ""}${input.worktreeId}`;
+  const prepared =
+    input.exactState || (clean && input.provisionedPaths.length === 0)
+      ? undefined
+      : await prepareSnapshotIndex(
+          input,
+          { ...inventory, headPaths: inventory.headPaths ?? [] },
+          env,
+          temporaryDirectory,
+        );
+  const exact = input.exactState
+    ? await captureExactState({
+        checkoutPath: input.checkoutPath,
+        ...input.exactState,
+        paths: inventory.paths.values(),
+        provisionedPaths: input.provisionedPaths,
+        write: true,
+        temporaryDirectory,
+      })
+    : undefined;
+  const provisionedState = await snapshotProvisionedFiles(
+    input.checkoutPath,
+    input.provisionedPaths,
+    exact
+      ? {
+          algorithm: exact.metadata.head.length === 64 ? "sha256" : "sha1",
+          files: exact.metadata.files
+            .filter((entry) => entry.provisioned)
+            .map((entry) => ({
+              path: Buffer.from(entry.path, "hex").toString("utf8"),
+              mode: entry.kind === "missing" ? null : entry.mode,
+              size: entry.size,
+              blob: entry.blob,
+            })),
+        }
+      : undefined,
+  );
+  await assertCurrent();
+  if (prepared?.changed) {
+    await requireGit(
+      input.checkoutPath,
+      [...snapshotIndexArgs, "update-index", "--add", "--remove", "-z", "--stdin"],
+      {
+        env,
+        input: Buffer.concat(prepared.paths.flatMap((entry) => [entry, Buffer.from([0])])),
+      },
+    );
+    await assertCurrent();
+  }
+  if (exact) {
+    await requireGit(input.checkoutPath, [...snapshotIndexArgs, "read-tree", "--empty"], { env });
+    await requireGit(
+      input.checkoutPath,
+      [...snapshotIndexArgs, "update-index", "-z", "--index-info"],
+      {
+        env,
+        input: Buffer.concat(exact.treeEntries),
+      },
+    );
+  }
+  const assertHeadCurrent = async () => {
+    const current = await requireGit(input.checkoutPath, [
+      "rev-parse",
+      "--verify",
+      "HEAD^{commit}",
+    ]);
+    if (current !== inventory.head) {
+      throw new Error("Worktree HEAD changed while preparing its snapshot; retry cleanup.");
+    }
+    await assertCurrent();
+  };
+  let commit = inventory.head;
+  if (!clean) {
+    const unchanged = prepared?.changed === false;
+    const tree = unchanged
+      ? await requireGit(input.checkoutPath, ["rev-parse", `${inventory.head}^{tree}`])
+      : await requireGit(input.checkoutPath, [...snapshotIndexArgs, "write-tree"], { env });
+    const treePaths = unchanged
+      ? (inventory.headPaths ?? [])
+      : parseGitTreePaths(
+          await requireGitBuffer(input.checkoutPath, ["ls-tree", "-r", "-z", tree]),
+        );
+    assertNoProvisionedTreePaths(treePaths, input.provisionedPaths);
+    // Cached trees can bypass write-tree's object checks even in a dirty snapshot.
+    // Verify before publication; buffer replies because the complete batch is already supplied.
+    const objects = await requireGitBuffer(
+      input.checkoutPath,
+      ["cat-file", "--buffer", "--batch-check=%(objectname) %(objecttype)"],
+      {
+        input: Buffer.from(
+          [
+            ...new Set(
+              treePaths.filter((entry) => entry.mode !== "160000").map((entry) => entry.oid),
+            ),
+          ]
+            .map((oid) => `${oid}\n`)
+            .join(""),
+        ),
+      },
+    );
+    const missingObject = /^([a-f0-9]{40,64}) missing$/mu.exec(objects.toString("ascii"));
+    if (missingObject) {
+      throw new Error(
+        `Worktree snapshot has missing blob ${missingObject[1]}; repair the repository before retrying cleanup. Checkout preserved.`,
+      );
+    }
+    await assertHeadCurrent();
+    const exactCommit = exact ? await writeExactStateCommit(input.checkoutPath, exact) : undefined;
+    if (exact) {
+      await verifyExactStateSnapshot({ ...input, expectedDigest: exact.digest });
+    }
+    commit = await requireGit(
+      input.checkoutPath,
+      [
+        ...filemodeArgs,
+        "commit-tree",
+        tree,
+        "-p",
+        inventory.head,
+        ...(exactCommit ? ["-p", exactCommit] : []),
+        "-m",
+        `OpenClaw worktree snapshot: ${input.reason}`,
+      ],
+      { env },
+    );
+  }
+  await assertHeadCurrent();
+  // Verify this checkout's HEAD inside publication, after shared-ref admission.
+  // A commit made while the queue waits must preserve the checkout for retry.
+  await requireGit(input.checkoutPath, ["update-ref", "--stdin", "-z"], {
+    input: Buffer.from(
+      `start\0verify HEAD\0${inventory.head}\0${input.exactState ? `verify refs/heads/${input.exactState.branch}\0${input.exactState.expected.branchHead}\0` : ""}update ${snapshotRef}\0${commit}\0\0${input.exactState ? "" : `delete refs/openclaw/snapshots/${clean ? "" : "clean-v1/"}${input.worktreeId}\0\0`}prepare\0commit\0`,
+    ),
+  });
+  return { snapshotRef, provisionedState, ...(exact ? { exactStateDigest: exact.digest } : {}) };
+}
+
+export async function verifyExactStateSnapshot(
+  input: GitWorktreeOperations["worktree.snapshot-verify-exact"]["input"],
+): Promise<boolean> {
+  if (!input.exactState) {
+    throw new Error("Exact-state verification requires captured authority");
+  }
+  await assertCurrent();
+  const inventory = await collectSnapshotInventory(input);
+  const captured = await captureExactState({
+    checkoutPath: input.checkoutPath,
+    ...input.exactState,
+    paths: inventory.paths.values(),
+    provisionedPaths: input.provisionedPaths,
+    write: false,
+  });
+  await assertCurrent();
+  if (captured.digest !== input.expectedDigest) {
+    throw new Error(
+      "Worktree contents or metadata changed after exact-state capture; checkout preserved",
+    );
+  }
+  return true;
+}
+
+export async function inspectNestedRepository(checkoutPath: string): Promise<boolean> {
+  const index = parseGitIndexPaths(
+    await requireGitBuffer(checkoutPath, ["ls-files", "--stage", "-v", "-z"]),
+  );
+  if (index.some((entry) => entry.mode === "160000")) {
+    return true;
+  }
+  return (
+    (await containsGitMarker(
+      checkoutPath,
+      index.map((entry) => entry.path),
+    )) ||
+    (await inspectOtherPaths(checkoutPath, {
+      deletedOrUnmergedPaths: splitNullBuffer(
+        await requireGitBuffer(checkoutPath, [
+          "diff-files",
+          "-z",
+          "--name-only",
+          "--diff-filter=DU",
+        ]),
+      ),
+      unstattedIndexPaths: unstattedIndexPaths(index),
+    }))
+  );
+}

@@ -46,12 +46,10 @@ function normalizePackagePath(value: unknown): string {
   return normalized;
 }
 
-function parseNpmVersion(stdout: string): string {
-  const version = stdout.trim();
+function parseNpmVersion(value: unknown, source: string): string {
+  const version = typeof value === "string" ? value.trim() : "";
   if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(version)) {
-    throw new Error(
-      `npm --version returned invalid output: ${JSON.stringify(version.slice(0, 80))}`,
-    );
+    throw new Error(`${source} returned invalid version: ${JSON.stringify(version.slice(0, 80))}`);
   }
   return version;
 }
@@ -115,21 +113,21 @@ function describeSpawnFailure(
   result: ReturnType<typeof spawnSync>,
   timeoutMs: number,
 ): string {
-  const error = result.error as NodeJS.ErrnoException | undefined;
-  const knownFailure = error?.code
-    ? (
-        {
-          ENOBUFS: "exceeded its output limit",
-          ENOENT: "executable was not found",
-          ETIMEDOUT: `timed out after ${timeoutMs}ms`,
-        } as Record<string, string>
-      )[error.code]
-    : undefined;
-  if (knownFailure) {
-    return `${label} ${knownFailure}`;
+  // Output-limit and timeout errors can also carry the signal used to stop the child.
+  switch ((result.error as NodeJS.ErrnoException | undefined)?.code) {
+    case "ENOBUFS":
+      return `${label} exceeded its output limit`;
+    case "ENOENT":
+      return `${label} executable was not found`;
+    case "ETIMEDOUT":
+      return `${label} timed out after ${timeoutMs}ms`;
+    default: {
+      const stderr = typeof result.stderr === "string" ? result.stderr.trim().slice(0, 2_000) : "";
+      const reason = result.signal ? `signal ${result.signal}` : `status ${String(result.status)}`;
+      const detail = stderr ? `: ${stderr}` : "";
+      return `${label} failed${result.signal || !stderr ? ` with ${reason}` : ""}${detail}`;
+    }
   }
-  const stderr = typeof result.stderr === "string" ? result.stderr.trim().slice(0, 2_000) : "";
-  return `${label} failed${stderr ? `: ${stderr}` : ` with status ${String(result.status)}`}`;
 }
 
 function withoutPackageScripts<T>(packageRoot: string, run: () => T): T {
@@ -174,12 +172,18 @@ export function collectNpmPackInventory(packageRoot: string, options: NpmPackInv
 
   const npmEnv = controlledNpmEnvironment(options.sourceEnv ?? process.env, sandbox);
   const spawnOptions = { cwd: sandbox.cwd, encoding: "utf8" as const, windowsHide: true };
-  const runNpm = (label: string, args: string[], timeout: number, maxBuffer: number): string => {
-    const npm = resolveNpmRunner({
+  const resolveNpm = (args: string[]) =>
+    resolveNpmRunner({
       env: npmEnv,
       npmArgs: [`--prefix=${sandbox.cwd}`, ...args],
       ...options.runnerParams,
     });
+  const runNpm = (
+    label: string,
+    npm: ReturnType<typeof resolveNpmRunner>,
+    timeout: number,
+    maxBuffer: number,
+  ): string => {
     const result = spawnSync(npm.command, npm.args, {
       ...spawnOptions,
       env: npm.env ?? npmEnv,
@@ -195,13 +199,21 @@ export function collectNpmPackInventory(packageRoot: string, options: NpmPackInv
   };
   const startedAt = Date.now();
   try {
+    const versionRunner = resolveNpm(["--version"]);
+    // npm reports this manifest's version; avoid booting its CLI just for diagnostics.
+    const manifest: unknown = versionRunner.packageJsonPath
+      ? JSON.parse(fs.readFileSync(versionRunner.packageJsonPath, "utf8"))
+      : undefined;
     const npmVersion = parseNpmVersion(
-      runNpm("npm --version", ["--version"], NPM_VERSION_TIMEOUT_MS, 64 * 1024),
+      versionRunner.packageJsonPath
+        ? isRecord(manifest) && manifest.version
+        : runNpm("npm --version", versionRunner, NPM_VERSION_TIMEOUT_MS, 64 * 1024),
+      versionRunner.packageJsonPath ? "npm package.json" : "npm --version",
     );
     const packOutput = withoutPackageScripts(packageRoot, () =>
       runNpm(
         "npm pack inventory",
-        [
+        resolveNpm([
           "pack",
           packageRoot,
           "--dry-run",
@@ -215,7 +227,7 @@ export function collectNpmPackInventory(packageRoot: string, options: NpmPackInv
           "--update-notifier=false",
           "--color=false",
           "--loglevel=error",
-        ],
+        ]),
         options.timeoutMs,
         64 * 1024 * 1024,
       ),

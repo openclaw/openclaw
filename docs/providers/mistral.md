@@ -31,8 +31,11 @@ media understanding (Voxtral batch transcription), realtime STT for Voice Call
   <Step title="Install the plugin">
     ```bash
     openclaw plugins install @openclaw/mistral-provider
-    openclaw gateway restart
     ```
+
+    Installation applies to a running Gateway automatically; otherwise it takes effect
+    on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
+
   </Step>
   <Step title="Get your API key">
     Create an API key in the [Mistral Console](https://console.mistral.ai/).
@@ -116,13 +119,17 @@ The media transcription path uses `/v1/audio/transcriptions`. The default audio 
 
 The `mistral` plugin registers Voxtral Realtime as a Voice Call streaming STT provider.
 
-| Setting      | Config path                                                            | Default                                 |
-| ------------ | ---------------------------------------------------------------------- | --------------------------------------- |
-| API key      | `plugins.entries.voice-call.config.streaming.providers.mistral.apiKey` | Falls back to `MISTRAL_API_KEY`         |
-| Model        | `...mistral.model`                                                     | `voxtral-mini-transcribe-realtime-2602` |
-| Encoding     | `...mistral.encoding`                                                  | `pcm_mulaw`                             |
-| Sample rate  | `...mistral.sampleRate`                                                | `8000`                                  |
-| Target delay | `...mistral.targetStreamingDelayMs`                                    | `800`                                   |
+| Setting      | Config path                                                            | Default                                                              |
+| ------------ | ---------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| API key      | `plugins.entries.voice-call.config.streaming.providers.mistral.apiKey` | Falls back to `MISTRAL_API_KEY`, then a saved `mistral` auth profile |
+| Model        | `...mistral.model`                                                     | `voxtral-mini-transcribe-realtime-2602`                              |
+| Encoding     | `...mistral.encoding`                                                  | `pcm_mulaw`                                                          |
+| Sample rate  | `...mistral.sampleRate`                                                | `8000`                                                               |
+| Target delay | `...mistral.targetStreamingDelayMs`                                    | `800`                                                                |
+
+The saved auth profile is used only when Mistral is the named provider, for example
+`streaming.provider: "mistral"`. Automatic selection counts only the config and
+environment keys.
 
 ```json5
 {
@@ -157,7 +164,7 @@ OpenClaw defaults Mistral realtime STT to `pcm_mulaw` at 8 kHz so Voice Call can
   <Accordion title="Adjustable reasoning">
     `mistral/mistral-small-latest`, `mistral/mistral-small-2603`, and `mistral/mistral-medium-3-5` support [adjustable reasoning](https://docs.mistral.ai/studio-api/conversations/reasoning) on the Chat Completions API via `reasoning_effort` (`none` minimizes extra thinking in the output; `high` surfaces full thinking traces before the final answer).
 
-    OpenClaw maps the session **thinking** level to Mistral's API:
+    Thinking defaults to **off**. OpenClaw accepts these session thinking levels and maps them to Mistral's API:
 
     | OpenClaw thinking level                                              | Mistral `reasoning_effort` |
     | ----------------------------------------------------------------------- | --------------------------- |
@@ -165,7 +172,7 @@ OpenClaw defaults Mistral realtime STT to `pcm_mulaw` at 8 kHz so Voice Call can
     | **low** / **medium** / **high** / **xhigh** / **adaptive** / **max** | `high`                       |
 
     <Warning>
-    Avoid combining Medium 3.5 reasoning mode with `temperature: 0`; the Mistral HTTP API has been reported to reject `reasoning_effort="high"` plus `temperature: 0` with a 400 response. Leave temperature unset, or turn thinking off/minimal so OpenClaw sends `reasoning_effort: "none"` before you set a low temperature.
+    Avoid combining Medium 3.5 reasoning mode with `temperature: 0`. The Mistral HTTP API has been reported to reject `reasoning_effort="high"` plus `temperature: 0` with a 400 response. Leave temperature unset, or turn thinking off/minimal so OpenClaw sends `reasoning_effort: "none"` before you set a low temperature.
     </Warning>
 
     Example model-scoped config for Medium 3.5 reasoning:
@@ -186,7 +193,7 @@ OpenClaw defaults Mistral realtime STT to `pcm_mulaw` at 8 kHz so Voice Call can
     ```
 
     <Note>
-    Other Mistral catalog models do not use this parameter. Mistral's native Magistral models are deprecated; use adjustable reasoning on Mistral Small 4 or Mistral Medium 3.5 for current API models.
+    Other Mistral catalog models do not use this parameter. Mistral's native Magistral models are deprecated. Use adjustable reasoning on Mistral Small 4 or Mistral Medium 3.5 for current API models.
     </Note>
 
   </Accordion>

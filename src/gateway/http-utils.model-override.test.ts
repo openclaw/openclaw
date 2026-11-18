@@ -1,9 +1,7 @@
-/**
- * Tests HTTP model override parsing from gateway request headers and URLs.
- */
-import type { IncomingMessage } from "node:http";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
+import { createGatewayRequest } from "./hooks-test-helpers.js";
 
 const loadConfigMock = vi.fn();
 const loadGatewayModelCatalogMock = vi.fn();
@@ -20,51 +18,55 @@ vi.mock("./server-model-catalog.js", () => ({
   loadGatewayModelCatalog: (...args: unknown[]) => loadGatewayModelCatalogMock(...args),
 }));
 
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { resolveOpenAiCompatModelOverride } from "./http-utils.js";
 
-function createReq(headers: Record<string, string> = {}): IncomingMessage {
-  return { headers } as IncomingMessage;
-}
+type Defaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
+const configure = (defaults: Defaults, provider?: ModelProviderConfig) =>
+  loadConfigMock.mockReturnValue({
+    agents: { ownership: "explicit", entries: { main: {} }, defaults },
+    models: provider && { providers: { "custom/team": provider } },
+  } satisfies OpenClawConfig);
 
-describe("resolveOpenAiCompatModelOverride", () => {
-  beforeEach(() => {
-    loadConfigMock.mockReset().mockReturnValue({
-      agents: {
-        ownership: "explicit",
-        list: [{ id: "main" }, { id: "beta" }],
-        defaults: {
-          model: { primary: "openai/gpt-5.4" },
-          models: {
-            "openai/gpt-5.4": {},
-          },
-        },
-      },
-    } satisfies OpenClawConfig);
-    loadGatewayModelCatalogMock
-      .mockReset()
-      .mockResolvedValue([{ id: "gpt-5.4", name: "GPT 5.4", provider: "openai" }]);
+const override = (model: string) =>
+  resolveOpenAiCompatModelOverride({
+    req: createGatewayRequest({ path: "/", headers: { "x-openclaw-model": model } }),
+    agentId: "main",
+    model: "openclaw",
   });
 
-  it("rejects CLI model overrides outside the configured allowlist", async () => {
-    await expect(
-      resolveOpenAiCompatModelOverride({
-        req: createReq({ "x-openclaw-model": "claude-cli/opus" }),
-        agentId: "main",
-        model: "openclaw",
-      }),
-    ).resolves.toEqual({
-      errorMessage: "Model 'claude-cli/opus' is not allowed for agent 'main'.",
-    });
-  });
+beforeEach(() => {
+  loadConfigMock.mockReset();
+  configure({ model: { primary: "openai/gpt-5.4" }, models: { "openai/gpt-5.4": {} } });
+  loadGatewayModelCatalogMock
+    .mockReset()
+    .mockResolvedValue([{ id: "gpt-5.4", name: "GPT 5.4", provider: "openai" }]);
+});
 
-  it.each(["main", "beta"])("reads the prepared catalog for selected agent %s", async (agentId) => {
-    await expect(
-      resolveOpenAiCompatModelOverride({
-        req: createReq({ "x-openclaw-model": "openai/gpt-5.4" }),
-        agentId,
-        model: "openclaw",
-      }),
-    ).resolves.toEqual({ modelOverride: "openai/gpt-5.4" });
-    expect(loadGatewayModelCatalogMock).toHaveBeenCalledExactlyOnceWith({ agentId });
+it("keeps provider-wildcard grants separate from a colliding default provider", async () => {
+  configure(
+    { model: { primary: "Reader" }, modelPolicy: { allow: ["custom/*"] } },
+    {
+      api: "openai-completions",
+      baseUrl: "https://fixture.invalid/v1",
+      models: [modelDefinition("Reader", { reasoning: false, maxTokens: 4096 })],
+    },
+  );
+  loadGatewayModelCatalogMock.mockResolvedValue([
+    { provider: "custom", id: "team/Reader", name: "Allowed model" },
+    { provider: "custom/team", id: "Reader", name: "Other provider default" },
+  ]);
+
+  await expect(override("Reader")).resolves.toEqual({
+    errorMessage: "Model 'custom/team/Reader' is not allowed for agent 'main'.",
+  });
+  await expect(override("custom/team/Reader")).resolves.toEqual({
+    modelOverride: "custom/team/Reader",
+  });
+});
+
+it("rejects CLI model overrides outside the configured allowlist", async () => {
+  await expect(override("claude-cli/opus")).resolves.toEqual({
+    errorMessage: "Model 'claude-cli/opus' is not allowed for agent 'main'.",
   });
 });

@@ -2,11 +2,19 @@ import {
   AgentHarnessPreflightError,
   formatErrorMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-
 export class CodexThreadStartRequestError extends Error {
   constructor(cause: unknown) {
     super(`thread/start: ${formatErrorMessage(cause)}`, { cause });
     this.name = "CodexThreadStartRequestError";
+  }
+}
+
+export class CodexThreadClientReplacementError extends AgentHarnessPreflightError {
+  constructor() {
+    super(
+      "Codex did not confirm unloading its previous configuration after a settled failure; a fresh client is required.",
+    );
+    this.name = "CodexThreadClientReplacementError";
   }
 }
 

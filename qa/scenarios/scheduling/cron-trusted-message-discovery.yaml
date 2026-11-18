@@ -1,0 +1,138 @@
+title: Trusted cron message discovery outside agent bindings
+
+scenario:
+  id: cron-trusted-message-discovery
+  surface: cron
+  coverage:
+    primary:
+      - automation.isolated-cron-execution
+    secondary:
+      - automation.cron-rpcs
+      - channels.native-threads
+  gatewayConfigPatch:
+    bindings:
+      - agentId: qa
+        match:
+          channel: telegram
+    tools:
+      codeMode: false
+      toolSearch: false
+  objective: Verify an operator-created isolated cron job retains message actions for configured channels outside its agent's interactive bindings.
+  successCriteria:
+    - The operator creates a job with trusted scheduled policy and only the message tool.
+    - The job creates a QA thread even though qa-channel is outside the agent's bindings.
+    - The job sends its exact marker into the created thread and completes successfully.
+  regressionRefs:
+    - openclaw/openclaw#168875
+  docsRefs:
+    - docs/automation/cron-jobs.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - src/gateway/server-methods/cron.ts
+    - src/cron/isolated-agent/run-executor.ts
+    - src/agents/tools/message-tool-discovery.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Replaces interactive bindings and forces an operator-created scheduled message run.
+    channel: qa-channel
+    retryCount: 0
+    timeoutMs: 300000
+    summary: Create a trusted job through cron.add, force its isolated run, and require a new thread plus exact message delivery on configured qa-channel outside the agent's Telegram binding. Telegram remains unconfigured and performs no network I/O.
+    config:
+      requiredProviderMode: live-frontier
+      conversationId: qa-cron-trusted-message
+      threadName: Scheduled delivery
+      expectedMarker: CRON_TRUSTED_MESSAGE_OK
+
+flow:
+  steps:
+    - name: creates a trusted scheduled job outside the agent's channel binding
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: trusted scheduled message proof requires a live provider
+        - assert:
+            expr: "env.cfg.bindings?.length === 1 && env.cfg.bindings[0].agentId === 'qa' && env.cfg.bindings[0].match.channel === 'telegram' && !env.cfg.channels?.telegram"
+            message: qa-channel must be configured outside the agent's only interactive binding
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 120000]
+        - call: waitForQaChannelReady
+          args: [{ ref: env }, 120000]
+        - resetTransport: true
+        - call: env.gateway.call
+          saveAs: added
+          args:
+            - cron.add
+            - agentId: qa
+              name:
+                expr: "`qa-cron-trusted-message-${randomUUID()}`"
+              enabled: true
+              deleteAfterRun: false
+              schedule:
+                kind: at
+                at:
+                  expr: "new Date(Date.now() + 10 * 60 * 1000).toISOString()"
+              sessionTarget: isolated
+              wakeMode: now
+              payload:
+                kind: agentTurn
+                toolsAllow: [message]
+                message:
+                  expr: >-
+                    `Create a thread using message with action="thread-create", channel="qa-channel", target="channel:${config.conversationId}", and threadName=${JSON.stringify(config.threadName)}. After creation succeeds, use message with action="send", channel="qa-channel", target="channel:${config.conversationId}", threadId equal to the returned threadId, and message="${config.expectedMarker}". Do not send to the top-level channel. Then reply briefly.`
+              delivery:
+                mode: none
+            - timeoutMs: 30000
+        - assert:
+            expr: "Boolean(added.id) && added.scheduledToolPolicy?.mode === 'trusted' && added.payload?.toolsAllow?.length === 1 && added.payload.toolsAllow[0] === 'message'"
+            message:
+              expr: "`operator-created job did not retain trusted message authority: ${JSON.stringify(added)}`"
+        - set: jobId
+          value:
+            expr: added.id
+        - set: runStartedAt
+          value:
+            expr: Date.now()
+        - call: env.gateway.call
+          saveAs: runResponse
+          args:
+            - cron.run
+            - id: { ref: jobId }
+              mode: force
+            - timeoutMs: 30000
+        - assert:
+            expr: "runResponse?.ok === true && runResponse?.ran !== false"
+            message:
+              expr: "`expected one queued cron run, got ${JSON.stringify(runResponse)}`"
+
+    - name: retains the out-of-binding thread action and delivers the scheduled message
+      actions:
+        - call: waitForCronRunCompletion
+          saveAs: completedRun
+          args:
+            - callGateway:
+                expr: env.gateway.call.bind(env.gateway)
+              jobId: { ref: jobId }
+              afterTs: { ref: runStartedAt }
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 180000)
+        - assert:
+            expr: "completedRun?.status === 'ok'"
+            message:
+              expr: "`scheduled message run failed: ${JSON.stringify(completedRun)}`"
+        - set: threads
+          value:
+            expr: "state.getSnapshot().threads.filter((thread) => thread.conversationId === config.conversationId && thread.title === config.threadName)"
+        - assert:
+            expr: threads.length === 1
+            message:
+              expr: "`scheduled thread-create did not succeed on the unbound channel: ${JSON.stringify(threads)}`"
+        - set: messages
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === config.conversationId && message.text.trim() === config.expectedMarker)"
+        - assert:
+            expr: "messages.length === 1 && messages[0].threadId === threads[0].id"
+            message:
+              expr: "`expected one scheduled message in the created thread: ${JSON.stringify(messages)}`"
+      detailsExpr: "`job=${jobId} status=${completedRun.status} thread=${threads[0].id} message=${messages[0].id}`"

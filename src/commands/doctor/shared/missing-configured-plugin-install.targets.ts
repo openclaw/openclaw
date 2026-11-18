@@ -1,8 +1,15 @@
+import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../../../infra/clawhub-spec.js";
-import { parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
-import { expectedIntegrityForUpdate } from "../../../infra/package-update-utils.js";
+import {
+  parseRegistryNpmSpec,
+  resolveOpenClawReleaseCohortVersion,
+} from "../../../infra/npm-registry-spec.js";
+import {
+  expectedIntegrityForUpdate,
+  isPackageVersionDowngrade,
+} from "../../../infra/package-update-utils.js";
 import type { UpdateChannel } from "../../../infra/update-channels.js";
 import {
   normalizePluginsConfig,
@@ -19,7 +26,12 @@ import {
   resolveOfficialExternalPluginInstall,
 } from "../../../plugins/official-external-plugin-catalog.js";
 import { isPayloadMissing } from "../../../plugins/payload-verification.js";
+import {
+  detectPluginVersionDrift,
+  resolveOfficialPluginCohortNpmSpecs,
+} from "../../../plugins/plugin-version-drift.js";
 import { resolveNpmUpdateTarget } from "../../../plugins/update-source.js";
+import { resolveCompatibilityHostVersion } from "../../../version.js";
 import {
   collectDownloadableInstallCandidates,
   resolveConfiguredPluginInstallContext,
@@ -31,9 +43,87 @@ import {
   collectConfiguredPluginIds,
 } from "./missing-configured-plugin-install.ids.js";
 import { isTrustedOfficialInstallRecordForCandidate } from "./missing-configured-plugin-install.records.js";
+import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";
 
 export type InstallCandidateRepairReason = "stale-version-bound-runtime";
 type InstallContext = Awaited<ReturnType<typeof resolveConfiguredPluginInstallContext>>;
+
+export function resolveConfiguredPluginRepairVersions(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  context: Pick<
+    InstallContext,
+    | "records"
+    | "updateChannel"
+    | "operatorManagedPluginIds"
+    | "bundledPluginsById"
+    | "officialReplacementPluginIds"
+  >;
+  repairVersionDrift?: boolean;
+  onWarning: (message: string, pluginId: string) => void;
+}) {
+  const { env } = params;
+  const {
+    records,
+    updateChannel,
+    operatorManagedPluginIds,
+    bundledPluginsById,
+    officialReplacementPluginIds,
+  } = params.context;
+  const coreVersion = resolveCompatibilityHostVersion(env);
+  const cohortSpecs = resolveOfficialPluginCohortNpmSpecs({
+    gatewayVersion: coreVersion,
+    installRecords: records,
+    config: params.cfg,
+  });
+  // A missing payload cannot supply currentVersion to the updater's downgrade guard.
+  const newerRecordedPluginIds = new Set(
+    updateChannel === "stable" || updateChannel === "beta"
+      ? Object.keys(cohortSpecs).filter((pluginId) => {
+          const version = records[pluginId]?.resolvedVersion ?? records[pluginId]?.version;
+          return (
+            version &&
+            isPackageVersionDowngrade(
+              resolveOpenClawReleaseCohortVersion(version),
+              resolveOpenClawReleaseCohortVersion(coreVersion),
+            )
+          );
+        })
+      : [],
+  );
+  const driftedPluginIds = new Set(
+    params.repairVersionDrift && !shouldDeferConfiguredPluginInstallRepair(env)
+      ? detectPluginVersionDrift({
+          gatewayVersion: coreVersion,
+          installRecords: records,
+          config: params.cfg,
+        }).drifts.flatMap(({ pluginId }) => {
+          const record = records[pluginId];
+          if (
+            !record ||
+            !cohortSpecs[pluginId] ||
+            operatorManagedPluginIds.has(pluginId) ||
+            bundledPluginsById.has(pluginId) ||
+            officialReplacementPluginIds.has(pluginId)
+          ) {
+            return [];
+          }
+          // Package-id migrations also change authored policy; the plugin command owns that write.
+          if (
+            resolveTrustedSourceLinkedOfficialNpmInstall({ pluginId, record })?.replacementPluginId
+          ) {
+            params.onWarning(
+              `Plugin "${pluginId}" needs a package-id migration. Run ${formatCliCommand(`openclaw plugins update ${cohortSpecs[pluginId]}`, env)}.`,
+              pluginId,
+            );
+            return [];
+          }
+          return [pluginId];
+        })
+      : [],
+  );
+  return { coreVersion, cohortSpecs, newerRecordedPluginIds, driftedPluginIds };
+}
 
 export function resolveRecordedInstallCandidate(params: {
   candidate: DownloadableInstallCandidate;
@@ -60,6 +150,9 @@ export function resolveRecordedInstallCandidate(params: {
   }
   const recordedSource =
     record?.source === "npm" || record?.source === "clawhub" ? record.source : undefined;
+  const parseSpec = recordedSource === "npm" ? parseRegistryNpmSpec : parseClawHubPluginSpec;
+  const candidateSpec =
+    recordedSource === "npm" ? params.candidate.npmSpec : params.candidate.clawhubSpec;
   const staleRuntimeRepair = params.repairReason === "stale-version-bound-runtime";
   const declaredSource = recordedSource
     ? resolvePluginInstallSources(params.candidate, recordedSource)[0]
@@ -81,12 +174,7 @@ export function resolveRecordedInstallCandidate(params: {
           : expectedIntegrityForUpdate(record.spec, record.integrity),
         trustedSourceLinkedOfficialInstall:
           params.candidate.trustedSourceLinkedOfficialInstall &&
-          (!record.spec ||
-            (recordedSource === "npm"
-              ? parseRegistryNpmSpec(record.spec)?.name ===
-                parseRegistryNpmSpec(params.candidate.npmSpec ?? "")?.name
-              : parseClawHubPluginSpec(record.spec)?.name ===
-                parseClawHubPluginSpec(params.candidate.clawhubSpec ?? "")?.name)),
+          (!record.spec || parseSpec(record.spec)?.name === parseSpec(candidateSpec ?? "")?.name),
       }
     : params.candidate;
 }
@@ -190,6 +278,7 @@ export async function collectConfiguredNpmPluginTargets(params: {
   for (const pluginId of pluginIds) {
     const record = context.records[pluginId];
     if (
+      context.operatorManagedPluginIds.has(pluginId) ||
       context.bundledPluginsById.has(pluginId) ||
       (record && (record.source !== "npm" || record.artifactKind || record.sourcePath)) ||
       !resolveEffectiveEnableState({

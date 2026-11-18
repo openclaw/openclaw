@@ -48,7 +48,7 @@ Light mode uses a warm paper palette: ivory backgrounds, warm gray borders (`#e8
 | `--accent-glow`   | `rgba(255,92,92,0.2)` | Focus rings, glow effects                      | Not as background                        |
 | `--primary`       | `#d13c3c`             | Filled primary buttons (white text, ~4.8:1 AA) | Not interchangeable with `--accent`      |
 
-For connections bound to an authenticated Gateway profile, the profile's `ui.accent` preference overrides the gateway-wide `ui.prefs.accent` setting, which overrides `ui.seamColor`, which overrides the active theme's default accent. Connections without an authenticated profile retain the existing gateway-wide precedence. Every override updates the accent, primary, and focus token families together; `--accent-foreground` and `--primary-foreground` automatically switch between dark and white ink according to the accent's relative luminance. Clearing a profile preference restores the gateway-wide accent, configured seam color, or theme defaults without changing anyone else's appearance.
+For connections bound to an authenticated Gateway profile, the profile's `ui.accent` preference overrides the gateway-wide `ui.prefs.accent` setting, which overrides `ui.seamColor`, which overrides the active theme's default accent. Connections without an authenticated profile retain the existing gateway-wide precedence. Every override updates the accent, primary, and focus token families together; `--accent-foreground` and `--primary-foreground` automatically switch between dark and white ink according to the accent's relative luminance. Clearing a profile preference restores the gateway-wide accent, configured `ui.seamColor`, or theme defaults without changing anyone else's appearance.
 
 ## Accent 2 (Teal)
 
@@ -68,7 +68,7 @@ For connections bound to an authenticated Gateway profile, the profile's `ui.acc
 | `--info`        | `#60a5fa`  | `#1d4ed8`   | ~7.5:1 ✅               | Informational, token meter mid                 |
 | `--destructive` | `#d32f2f`  | `#dc2626`   | ~3.8:1 (fill only)      | Destructive button fills (with `#fafafa` text) |
 
-Each `--x` has `-muted` (0.75 alpha) and `-subtle` (0.08 alpha) rgba siblings that must stay in sync with the base hex — the base doubles as label text on its own subtle tint, and re-tinting one without the other silently drops the pair below AA. Bases stay literal hex because `widget-theme.ts` publishes them to MCP app guest documents where `color-mix()` would not resolve. See the audit comments in `base.css` for the per-theme measurements.
+Where defined, `-muted` (0.75 alpha) and `-subtle` (0.08 alpha) rgba siblings must stay in sync with the base hex — the base doubles as label text on its own subtle tint, and re-tinting one without the other silently drops the pair below AA. Bases stay literal hex because `widget-theme.ts` publishes them to MCP app guest documents where `color-mix()` would not resolve. See the audit comments in `base.css` for the per-theme measurements.
 
 The dark `--destructive` value is the claw-family override (`:root[data-theme="dark"]`); the shared `:root` fallback is `#ef4444`.
 

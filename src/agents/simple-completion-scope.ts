@@ -1,7 +1,10 @@
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 
-type SimpleCompletionModelResolver = typeof resolveModelAsync;
+/** Shipped SDK resolver callbacks do not supply core-owned logical reference facts. */
+export type SimpleCompletionModelResolver = (
+  ...args: Parameters<typeof resolveModelAsync>
+) => Promise<Omit<Awaited<ReturnType<typeof resolveModelAsync>>, "logicalRef">>;
 
 export type PreparedSimpleCompletionResolverContext = Readonly<{
   modelResolver: SimpleCompletionModelResolver;
@@ -15,8 +18,12 @@ export function createPreparedSimpleCompletionResolverContext(params: {
   workspaceDir: string;
   modelResolver?: SimpleCompletionModelResolver;
   agentRuntimeId?: string;
+  selectedModelStores?: boolean;
 }): PreparedSimpleCompletionResolverContext {
-  const stores = params.preparedModelRuntime.createStores();
+  // Custom SDK resolvers retain their mutable catalog; core resolves the normalized row first.
+  const stores = params.selectedModelStores
+    ? undefined
+    : params.preparedModelRuntime.createStores();
   const modelResolver = params.modelResolver ?? resolveModelAsync;
   return {
     preparedModelRuntime: params.preparedModelRuntime,
@@ -24,8 +31,8 @@ export function createPreparedSimpleCompletionResolverContext(params: {
     modelResolver: (provider, modelId, agentDir, cfg, options) =>
       modelResolver(provider, modelId, agentDir, cfg, {
         ...options,
-        authStorage: stores.authStorage,
-        modelRegistry: stores.modelRegistry,
+        ...stores,
+        selectedModelStores: params.selectedModelStores,
         preparedModelRuntime: params.preparedModelRuntime,
         workspaceDir: params.workspaceDir,
         ...(params.agentRuntimeId ? { agentRuntimeId: params.agentRuntimeId } : {}),

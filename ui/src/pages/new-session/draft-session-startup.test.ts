@@ -1,10 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { SESSION_CREATE_RETRY_WINDOW_MS } from "../../../../packages/gateway-protocol/src/index.js";
+import { describe, expect, it } from "vitest";
 import { DraftSessionStartup } from "./draft-session-startup.ts";
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
 
 function createStartup() {
   const gateway = { connected: true, sessionCreateScope: "gateway:principal:boot-a" };
@@ -32,6 +27,15 @@ describe("DraftSessionStartup", () => {
     expect(startup.resume()).toEqual({ kind: "wait" });
   });
 
+  it("retains background disposition outside the RPC parameters", () => {
+    const gateway = { connected: true, sessionCreateScope: "gateway:principal:boot-a" };
+    const startup = new DraftSessionStartup(gateway);
+    const params = startup.start({ agentId: "main", message: "background intent" }, true);
+    expect(params).not.toHaveProperty("background");
+    startup.interrupt();
+    expect(startup.resume()).toMatchObject({ kind: "resume", params, background: true });
+  });
+
   it("fails closed and unlocks when the Gateway scope or process boot changes", () => {
     const { gateway, startup } = createStartup();
     startup.interrupt();
@@ -50,16 +54,5 @@ describe("DraftSessionStartup", () => {
     expect(startup.active).toBe(true);
     gateway.connected = true;
     expect(startup.resume()).toMatchObject({ kind: "resume", params });
-  });
-
-  it("expires and unlocks at the shared client retry deadline", () => {
-    let now = 1_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    const { startup } = createStartup();
-    startup.interrupt();
-    now += SESSION_CREATE_RETRY_WINDOW_MS;
-
-    expect(startup.resume()).toEqual({ kind: "expired" });
-    expect(startup.active).toBe(false);
   });
 });

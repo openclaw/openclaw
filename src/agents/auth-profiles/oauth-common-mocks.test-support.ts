@@ -24,7 +24,6 @@ export function getOAuthProviderRuntimeMocks() {
 vi.mock("../cli-credentials.js", () => ({
   readCodexCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
-  resetCliCredentialCachesForTest: () => undefined,
 }));
 
 vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
@@ -46,7 +45,8 @@ vi.mock("./doctor.js", () => ({
   formatAuthDoctorHint: async () => undefined,
 }));
 
-vi.mock("./external-cli-sync.js", () => ({
+vi.mock("./external-cli-sync.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./external-cli-sync.js")>()),
   areOAuthCredentialsEquivalent: (a: unknown, b: unknown) => a === b,
   hasUsableOAuthCredential: (credential: OAuthCredential | undefined, now = Date.now()) =>
     credential?.type === "oauth" &&
@@ -59,7 +59,6 @@ vi.mock("./external-cli-sync.js", () => ({
     params.credential.authFlow === "external-cli",
   readExternalCliBootstrapCredential: () => null,
   resolveExternalCliAuthProfiles: () => [],
-  shouldBootstrapFromExternalCliCredential: () => false,
 }));
 
 afterAll(() => {

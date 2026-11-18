@@ -1,18 +1,8 @@
-// Covers package.json metadata readers.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { readPackageManagerSpec, readPackageName, readPackageVersion } from "./package-json.js";
-
-async function expectPackageMeta(params: {
-  root: string;
-  expectedVersion: string | null;
-  expectedName: string | null;
-}): Promise<void> {
-  await expect(readPackageVersion(params.root)).resolves.toBe(params.expectedVersion);
-  await expect(readPackageName(params.root)).resolves.toBe(params.expectedName);
-}
 
 describe("package-json helpers", () => {
   it("reads package version and trims package name", async () => {
@@ -26,66 +16,34 @@ describe("package-json helpers", () => {
         }),
         "utf8",
       );
-
-      await expectPackageMeta({
-        root,
-        expectedVersion: "1.2.3",
-        expectedName: "@openclaw/demo",
-      });
+      await expect(readPackageVersion(root)).resolves.toBe("1.2.3");
+      await expect(readPackageName(root)).resolves.toBe("@openclaw/demo");
       await expect(readPackageManagerSpec(root)).resolves.toBe("pnpm@12.0.0");
     });
   });
 
   it.each([
-    {
-      name: "missing package.json",
-      writePackageJson: async (_root: string) => {},
-      expectedVersion: null,
-      expectedName: null,
-    },
-    {
-      name: "invalid JSON",
-      writePackageJson: async (root: string) => {
-        await fs.writeFile(path.join(root, "package.json"), "{", "utf8");
-      },
-      expectedVersion: null,
-      expectedName: null,
-    },
+    { name: "missing package.json", content: undefined, expectedVersion: null, expectedName: null },
+    { name: "invalid JSON", content: "{", expectedVersion: null, expectedName: null },
     {
       name: "invalid typed fields",
-      writePackageJson: async (root: string) => {
-        await fs.writeFile(
-          path.join(root, "package.json"),
-          JSON.stringify({ version: 123, name: "   " }),
-          "utf8",
-        );
-      },
+      content: JSON.stringify({ version: 123, name: "   " }),
       expectedVersion: null,
       expectedName: null,
     },
     {
       name: "blank version strings",
-      writePackageJson: async (root: string) => {
-        await fs.writeFile(
-          path.join(root, "package.json"),
-          JSON.stringify({ version: "   ", name: "@openclaw/demo" }),
-          "utf8",
-        );
-      },
+      content: JSON.stringify({ version: "   ", name: "@openclaw/demo" }),
       expectedVersion: null,
       expectedName: "@openclaw/demo",
     },
-  ])(
-    "returns normalized nulls for $name",
-    async ({ writePackageJson, expectedVersion, expectedName }) => {
-      await withTestDir({ prefix: "openclaw-package-json-" }, async (root) => {
-        await writePackageJson(root);
-        await expectPackageMeta({
-          root,
-          expectedVersion,
-          expectedName,
-        });
-      });
-    },
-  );
+  ])("returns normalized nulls for $name", async ({ content, expectedVersion, expectedName }) => {
+    await withTestDir({ prefix: "openclaw-package-json-" }, async (root) => {
+      if (content !== undefined) {
+        await fs.writeFile(path.join(root, "package.json"), content, "utf8");
+      }
+      await expect(readPackageVersion(root)).resolves.toBe(expectedVersion);
+      await expect(readPackageName(root)).resolves.toBe(expectedName);
+    });
+  });
 });

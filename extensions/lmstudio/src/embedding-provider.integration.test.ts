@@ -1,229 +1,174 @@
-import { once } from "node:events";
-import { createServer, type IncomingHttpHeaders } from "node:http";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { IncomingHttpHeaders, RequestListener, ServerResponse } from "node:http";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { withServer } from "openclaw/plugin-sdk/test-env";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createModelProviderConfig } from "../../test-support/model-provider-config.test-support.js";
 import { createLmstudioEmbeddingProvider } from "./embedding-provider.js";
 
-afterEach(() => {
-  vi.unstubAllEnvs();
+const MODEL = "embedding-model";
+const serverModel = { key: MODEL, type: "embedding", max_context_length: 2048 };
+const requireRecord = createRequireRecord("record", "expected-label-object");
+const instance = (id: string, context_length: number) => ({ id, config: { context_length } });
+
+beforeEach(() => {
+  vi.stubEnv("NO_PROXY", "127.0.0.1");
+  vi.stubEnv("no_proxy", "127.0.0.1");
 });
+afterEach(() => vi.unstubAllEnvs());
+function json(response: ServerResponse, body: unknown, status = 200) {
+  response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
+}
+function createProvider(
+  providerConfig: ModelProviderConfig,
+  options: Omit<Partial<Parameters<typeof createLmstudioEmbeddingProvider>[0]>, "config"> = {},
+) {
+  return createLmstudioEmbeddingProvider({
+    provider: "lmstudio",
+    model: MODEL,
+    fallback: "none",
+    config: createModelProviderConfig({ lmstudio: providerConfig }),
+    ...options,
+  });
+}
 
-describe("LM Studio embedding request headers", () => {
-  it.each([
-    {
-      name: "preserves resolved remote literals while resolving provider-owned headers",
-      providerQuery: "",
-      remoteQuery: "",
-      providerOwnsDestination: true,
-    },
-    {
-      name: "preserves query-distinct destinations without inheriting provider credentials",
-      providerQuery: "?tenant=provider",
-      remoteQuery: "?tenant=remote",
-      providerOwnsDestination: false,
-    },
-  ])("$name", async ({ providerQuery, remoteQuery, providerOwnsDestination }) => {
-    vi.stubEnv("NO_PROXY", "127.0.0.1");
-    vi.stubEnv("no_proxy", "127.0.0.1");
-    vi.stubEnv("OPENCLAW_TEST_LMSTUDIO_LITERAL", "ambient-bait");
-    vi.stubEnv("OPENCLAW_TEST_LMSTUDIO_PROVIDER", "resolved-provider-value");
+it.each([
+  ["", ""],
+  ["?tenant=provider", "?tenant=remote"],
+])("isolates provider credentials by destination (%s / %s)", async (providerQuery, remoteQuery) => {
+  vi.stubEnv("OPENCLAW_TEST_LMSTUDIO_LITERAL", "ambient-bait");
+  vi.stubEnv("OPENCLAW_TEST_LMSTUDIO_PROVIDER", "resolved-provider-value");
+  const acquireLocalService = vi.fn(async () => ({ release: vi.fn() }));
 
-    const observedRequests: Array<{ url?: string; headers: IncomingHttpHeaders }> = [];
-    const server = createServer((request, response) => {
-      request.resume();
-      request.once("end", () => {
-        observedRequests.push({ url: request.url, headers: request.headers });
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ data: [{ index: 0, embedding: [0.25, 0.5, 0.75] }] }));
-      });
+  const observedRequests: Array<{ url?: string; headers: IncomingHttpHeaders }> = [];
+  const handler: RequestListener = (request, response) => {
+    request.resume();
+    request.once("end", () => {
+      observedRequests.push({ url: request.url, headers: request.headers });
+      json(response, { data: [{ index: 0, embedding: [0.25, 0.5, 0.75] }] });
     });
+  };
 
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("LM Studio embedding fixture did not expose a TCP address");
-      }
-      const baseUrl = `http://127.0.0.1:${address.port}/v1`;
-      const { provider } = await createLmstudioEmbeddingProvider({
-        config: {
-          models: {
-            providers: {
-              lmstudio: {
-                baseUrl: `${baseUrl}${providerQuery}`,
-                params: { preload: false },
-                headers: {
-                  "X-Provider-Only": "${OPENCLAW_TEST_LMSTUDIO_PROVIDER}",
-                  "X-Shared": "provider-value",
-                },
-                models: [],
-              },
-            },
-          },
+  await withServer(handler, async (origin) => {
+    const { provider } = await createProvider(
+      {
+        baseUrl: `${origin}/v1${providerQuery}`,
+        apiKey: "provider-host-key",
+        localService: { command: process.execPath },
+        params: { preload: false },
+        headers: {
+          "X-Provider-Only": "${OPENCLAW_TEST_LMSTUDIO_PROVIDER}",
+          "X-Shared": "provider-value",
         },
-        provider: "lmstudio",
-        model: "fixture-embedding-model",
-        fallback: "none",
+        models: [],
+      },
+      {
+        acquireLocalService,
         remote: {
-          baseUrl: `${baseUrl}${remoteQuery}`,
-          apiKey: "synthetic-memory-key",
+          baseUrl: `${origin}/v1${remoteQuery}`,
+          apiKey: remoteQuery ? undefined : "synthetic-memory-key",
           headers: {
             "X-Already-Resolved": "  ${OPENCLAW_TEST_LMSTUDIO_LITERAL}  ",
             "X-Shared": "  remote-value  ",
             "X-Empty": "   ",
           },
         },
-      });
+      },
+    );
 
-      await expect(provider.embed("hello", { inputType: "query" })).resolves.toEqual([
-        0.25, 0.5, 0.75,
-      ]);
-      expect(observedRequests).toMatchObject([
-        {
-          url: `/v1/embeddings${remoteQuery}`,
-          headers: {
-            "x-already-resolved": "${OPENCLAW_TEST_LMSTUDIO_LITERAL}",
-            "x-shared": "remote-value",
-            ...(providerOwnsDestination ? { "x-provider-only": "resolved-provider-value" } : {}),
-            authorization: "Bearer synthetic-memory-key",
-          },
-        },
-      ]);
-      expect(observedRequests[0]?.headers).not.toHaveProperty("x-empty");
-      if (!providerOwnsDestination) {
-        expect(observedRequests[0]?.headers).not.toHaveProperty("x-provider-only");
-      }
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+    const result = provider.embed("hello", { inputType: "query" });
+    await expect(result).resolves.toEqual([0.25, 0.5, 0.75]);
+    expect(acquireLocalService).not.toHaveBeenCalled();
+    expect(observedRequests).toHaveLength(1);
+    expect(observedRequests[0]?.url).toBe(`/v1/embeddings${remoteQuery}`);
+    const headers = observedRequests[0]?.headers;
+    expect(headers).toMatchObject({
+      "x-already-resolved": "${OPENCLAW_TEST_LMSTUDIO_LITERAL}",
+      "x-shared": "remote-value",
+    });
+    expect(headers).not.toHaveProperty("x-empty");
+    if (!remoteQuery) {
+      expect(headers).toHaveProperty("authorization", "Bearer synthetic-memory-key");
+      expect(headers).toHaveProperty("x-provider-only", "${OPENCLAW_TEST_LMSTUDIO_PROVIDER}");
+    } else {
+      expect(headers).not.toHaveProperty("authorization");
+      expect(headers).not.toHaveProperty("x-provider-only");
     }
   });
 });
 
-it.each(["single", "documents", "queries", "cancelled"] as const)(
+it.each(["documents", "queries", "cancelled"] as const)(
   "routes %s embeddings to sufficient-context instances across eviction while holding the service lease",
   async (kind) => {
-    vi.stubEnv("NO_PROXY", "127.0.0.1");
-    vi.stubEnv("no_proxy", "127.0.0.1");
     let holdLoad = false;
-    let signalLoadStarted: () => void = () => {};
-    const loadStarted = new Promise<void>((resolve) => {
-      signalLoadStarted = resolve;
-    });
+    const loadStarted = createDeferred<void>();
     let loaded = true;
     let instanceNumber = 2;
     let leases = 0;
     const requests: string[] = [];
-    const server = createServer((request, response) => {
+    const handler: RequestListener = (request, response) => {
       let text = "";
-      request.on("data", (chunk: unknown) => {
-        if (!Buffer.isBuffer(chunk)) {
-          throw new Error("Expected request bytes");
-        }
-        text += chunk.toString("utf8");
+      request.setEncoding("utf8").on("data", (chunk: string) => {
+        text += chunk;
       });
       request.once("end", () => {
         requests.push(request.url ?? "");
         expect(leases).toBeGreaterThan(0);
-        response.setHeader("content-type", "application/json");
         if (request.url === "/api/v1/models") {
-          response.end(
-            JSON.stringify({
-              models: [
-                {
-                  key: "embedding-model",
-                  type: "embedding",
-                  max_context_length: 2048,
-                  loaded_instances: loaded
-                    ? [
-                        { id: "embedding-model", config: { context_length: 1024 } },
-                        {
-                          id: `embedding-model:${instanceNumber}`,
-                          config: { context_length: 2048 },
-                        },
-                      ]
-                    : [],
-                },
-              ],
-            }),
-          );
+          const loaded_instances = loaded
+            ? [instance(MODEL, 1024), instance(`${MODEL}:${instanceNumber}`, 2048)]
+            : [];
+          json(response, { models: [{ ...serverModel, loaded_instances }] });
         } else if (request.url === "/api/v1/models/load") {
           if (holdLoad) {
-            signalLoadStarted();
+            loadStarted.resolve();
             return;
           }
           loaded = true;
           instanceNumber++;
-          response.end(
-            JSON.stringify({ status: "loaded", instance_id: `embedding-model:${instanceNumber}` }),
-          );
+          json(response, { status: "loaded", instance_id: `${MODEL}:${instanceNumber}` });
         } else if (request.url === "/v1/embeddings" && loaded) {
-          const body: unknown = JSON.parse(text);
-          if (
-            !body ||
-            typeof body !== "object" ||
-            !("model" in body) ||
-            !("input" in body) ||
-            !Array.isArray(body.input)
-          ) {
+          const body = requireRecord(JSON.parse(text), "embedding request");
+          if (!("model" in body) || !Array.isArray(body.input)) {
             throw new Error("Invalid embedding request");
           }
-          const embedding = body.model === `embedding-model:${instanceNumber}` ? [1, 0] : [0, 1];
-          response.end(
-            JSON.stringify({ data: body.input.map((_, index) => ({ index, embedding })) }),
-          );
+          const embedding = body.model === `${MODEL}:${instanceNumber}` ? [1, 0] : [0, 1];
+          json(response, { data: body.input.map((_, index) => ({ index, embedding })) });
         } else {
-          response.statusCode = 400;
-          response.end(JSON.stringify({ error: "No models loaded" }));
+          json(response, { error: "No models loaded" }, 400);
         }
       });
-    });
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing fixture address");
-      }
-      const { provider, client } = await createLmstudioEmbeddingProvider({
-        provider: "lmstudio",
-        model: "embedding-model",
-        fallback: "none",
-        remote: { apiKey: "lmstudio-local" },
-        config: {
-          models: {
-            providers: {
-              lmstudio: {
-                baseUrl: `http://127.0.0.1:${address.port}/v1`,
-                apiKey: "lmstudio-local",
-                localService: { command: "/usr/bin/lms" },
-                models: [
-                  {
-                    id: "embedding-model",
-                    name: "Embedding model",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    maxTokens: 0,
-                    contextTokens: 2048,
-                  },
-                ],
-              },
+    };
+    await withServer(handler, async (origin) => {
+      const { provider, client } = await createProvider(
+        {
+          baseUrl: `${origin}/v1`,
+          localService: { command: "/usr/bin/lms" },
+          models: [
+            {
+              id: MODEL,
+              name: "Embedding model",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              maxTokens: 0,
+              contextTokens: 2048,
             },
+          ],
+        },
+        {
+          remote: { apiKey: "lmstudio-local" },
+          acquireLocalService: async () => {
+            leases++;
+            return {
+              release: () => {
+                leases--;
+              },
+            };
           },
         },
-        acquireLocalService: async () => {
-          leases++;
-          return {
-            release: () => {
-              leases--;
-            },
-          };
-        },
-      });
+      );
       expect(leases).toBe(0);
       await expect(provider.embed("first")).resolves.toEqual([1, 0]);
       expect(requests).not.toContain("/api/v1/models/load");
@@ -233,7 +178,7 @@ it.each(["single", "documents", "queries", "cancelled"] as const)(
         holdLoad = true;
         const activeController = new AbortController();
         const active = provider.embed("active", { signal: activeController.signal });
-        await loadStarted;
+        await loadStarted.promise;
         const queuedController = new AbortController();
         const queued = provider.embed("queued", { signal: queuedController.signal });
         await vi.waitFor(() => expect(leases).toBe(2));
@@ -247,25 +192,17 @@ it.each(["single", "documents", "queries", "cancelled"] as const)(
         await expect(active).rejects.toThrow("cancelled active load");
         await expect(recovered).resolves.toEqual([1, 0]);
         expect(requests.filter((url) => url === "/v1/embeddings")).toHaveLength(1);
-      } else if (kind === "single") {
-        await expect(provider.embed("second")).resolves.toEqual([1, 0]);
       } else {
-        await expect(
-          provider.embedBatch(["second", "third"], {
-            inputType: kind === "queries" ? "query" : "document",
-          }),
-        ).resolves.toEqual([
+        const inputType = kind === "queries" ? "query" : "document";
+        await expect(provider.embedBatch(["second", "third"], { inputType })).resolves.toEqual([
           [1, 0],
           [1, 0],
         ]);
       }
-      expect(requests.indexOf("/api/v1/models/load")).toBeGreaterThanOrEqual(0);
-      expect(requests.indexOf("/api/v1/models/load")).toBeLessThan(
-        requests.indexOf("/v1/embeddings"),
-      );
-      expect(leases).toBe(0);
-      expect(provider.model).toBe("embedding-model");
-      expect(client.model).toBe("embedding-model");
+      const loadIndex = requests.indexOf("/api/v1/models/load");
+      expect(loadIndex).toBeGreaterThanOrEqual(0);
+      expect(loadIndex).toBeLessThan(requests.indexOf("/v1/embeddings"));
+      expect([leases, provider.model, client.model]).toEqual([0, MODEL, MODEL]);
       requests.length = 0;
       await expect(provider.embedBatch([])).resolves.toEqual([]);
       expect(requests).toEqual([]);
@@ -275,11 +212,6 @@ it.each(["single", "documents", "queries", "cancelled"] as const)(
       );
       expect(requests).toEqual([]);
       expect(leases).toBe(0);
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
+    });
   },
 );

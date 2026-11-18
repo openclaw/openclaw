@@ -3,6 +3,15 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 
 export const DEFAULT_MAIN_KEY = "main";
 
+// ASCII case folding preserves the token grammar; the suffix must survive trimming.
+const INCOGNITO_SESSION_RE =
+  /^\s*agent:[^:]+:(?:dashboard|subagent|internal-session-effects):incognito-[^:]*[^\s:]\s*$/i;
+
+/** Classifies process-only agent session keys without consulting runtime registry state. */
+export function isIncognitoSessionKey(sessionKey: string | undefined | null): boolean {
+  return Boolean(sessionKey && INCOGNITO_SESSION_RE.test(sessionKey));
+}
+
 export type ParsedAgentSessionKey = {
   agentId: string;
   rest: string;
@@ -10,7 +19,7 @@ export type ParsedAgentSessionKey = {
 
 /** Split the ownership head without changing opaque tail bytes or empty tail segments. */
 export function parseAgentSessionKeyParts(sessionKey: string): ParsedAgentSessionKey | null {
-  if (sessionKey.slice(0, 6).toLowerCase() !== "agent:") {
+  if (!sessionKey.startsWith("agent:") && sessionKey.slice(0, 6).toLowerCase() !== "agent:") {
     return null;
   }
   const agentIdEnd = sessionKey.indexOf(":", 6);

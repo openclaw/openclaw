@@ -16,6 +16,7 @@ final class CronSourceFixture: @unchecked Sendable {
 
     let endpoint = LockIsolated(CronSourceFixture.endpoint(revision: 1))
     let requests = LockIsolated<[Request]>([])
+    let requestRecorded = AsyncTestSignal()
     let catalogTotal = LockIsolated(1)
     let gateway: GatewayConnection
 
@@ -25,6 +26,7 @@ final class CronSourceFixture: @unchecked Sendable {
     {
         let endpoint = self.endpoint
         let requests = self.requests
+        let requestRecorded = self.requestRecorded
         let catalogTotal = self.catalogTotal
         let session = GatewayTestWebSocketSession(taskFactory: {
             let owner = endpoint.value.revision == 1 ? "A" : "B"
@@ -44,6 +46,7 @@ final class CronSourceFixture: @unchecked Sendable {
                     total: catalogTotal.value,
                     socket: socket)
                 requests.withValue { $0.append(request) }
+                requestRecorded.notify()
                 if requestMethod != method { Self.respond(request) }
             })
         })
@@ -58,6 +61,16 @@ final class CronSourceFixture: @unchecked Sendable {
 
     func adoptB() {
         self.endpoint.setValue(Self.endpoint(revision: 2))
+    }
+
+    func firstRequest(
+        _ method: String,
+        sourceLocation: SourceLocation = #_sourceLocation) async throws -> Request
+    {
+        try await self.requestRecorded.wait("\(method) request", sourceLocation: sourceLocation) {
+            self.requests.value.contains { $0.method == method }
+        }
+        return try #require(self.requests.value.first { $0.method == method }, sourceLocation: sourceLocation)
     }
 
     static func configuration(revision: UInt64) -> [String: Any] {
@@ -117,7 +130,7 @@ final class CronSourceFixture: @unchecked Sendable {
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct CronGatewayOwnershipTests {
     @Test(arguments: ["active replacement", "inactive replacement", "inactive same route"])
@@ -141,9 +154,11 @@ struct CronGatewayOwnershipTests {
             do {
                 let inactive = scenario.hasPrefix("inactive")
                 let replacePrimary = scenario != "inactive same route"
+                await control?.refreshEndpoint(reason: "test setup")
+                await store.refreshJobs()
                 store.start()
-                try await self
-                    .waitUntil { store.summary.jobs.count == 1 && control?.state == .connected }
+                try #require(store.summary.jobs.count == 1)
+                try #require(control?.state == .connected)
                 #expect(store.summary.jobs.first?.name == "Gateway A")
                 #expect(store.summary.total == 1)
                 let requestCount = fixture.requests.value.count
@@ -183,8 +198,7 @@ struct CronGatewayOwnershipTests {
         let store = CronJobsStore(gateway: fixture.gateway)
         let refresh = Task { await store.refreshJobs() }
         do {
-            try await self.waitUntil { fixture.requests.value.contains { $0.method == "cron.list" } }
-            let held = try #require(fixture.requests.value.first { $0.method == "cron.list" })
+            let held = try await fixture.firstRequest("cron.list")
             fixture.adoptB()
             CronSourceFixture.respond(held)
             await refresh.value
@@ -217,20 +231,12 @@ struct CronGatewayOwnershipTests {
             #expect(GatewayDiscoveryPreferences.deviceAuthGatewayID(root: root) != nil)
             let expected = MacChatTranscriptCache.gatewayID(
                 mode: transport == "local" ? .local : .remote,
-                localStateDir: OpenClawConfigFile.stateDirURL(),
+                localStateDir: OpenClawPaths.stateDirURL,
                 remoteTransport: transport == "direct" ? .direct : .ssh,
                 directURL: URL(string: "ws://127.0.0.1:49301"),
                 sshTarget: "user@gateway.test",
                 sshRemotePort: 49311)
             #expect(MacChatTranscriptCache.gatewayID(root: root) == expected)
         }
-    }
-
-    private func waitUntil(_ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(2)
-        while !condition(), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(2))
-        }
-        try #require(condition())
     }
 }

@@ -1,6 +1,7 @@
 // Zalo tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { ZaloConfigSchema } from "./config-schema.js";
+import type { ZaloConfig } from "./types.js";
 
 describe("ZaloConfigSchema SecretInput", () => {
   it("accepts SecretRef botToken and webhookSecret at top-level", () => {
@@ -13,9 +14,11 @@ describe("ZaloConfigSchema SecretInput", () => {
   });
 
   it("accepts SecretRef botToken and webhookSecret on account", () => {
-    const result = ZaloConfigSchema.safeParse({
+    const input = {
+      defaultAccount: "work",
       accounts: {
         work: {
+          markdown: { tables: "off" },
           botToken: { source: "env", provider: "default", id: "ZALO_WORK_BOT_TOKEN" },
           webhookUrl: "https://example.com/zalo/work",
           webhookSecret: {
@@ -25,7 +28,8 @@ describe("ZaloConfigSchema SecretInput", () => {
           },
         },
       },
-    });
+    } satisfies ZaloConfig;
+    const result = ZaloConfigSchema.safeParse(input);
     expect(result.success).toBe(true);
   });
 });

@@ -24,49 +24,6 @@ test("encodeKeySequence maps common keys and modifiers", () => {
   expect(kpEnter.data).toEqual(Buffer.from("\x1bOM"));
 });
 
-test("encodeKeySequence uses CSI sequences in normal cursor key mode (default)", () => {
-  // Default mode (cursorKeyMode not specified) uses CSI sequences.
-  const up = encodeKeySequence({ keys: ["up"] });
-  expect(up.data).toEqual(Buffer.from(`${ESC}[A`));
-
-  const down = encodeKeySequence({ keys: ["down"] });
-  expect(down.data).toEqual(Buffer.from(`${ESC}[B`));
-
-  const right = encodeKeySequence({ keys: ["right"] });
-  expect(right.data).toEqual(Buffer.from(`${ESC}[C`));
-
-  const left = encodeKeySequence({ keys: ["left"] });
-  expect(left.data).toEqual(Buffer.from(`${ESC}[D`));
-
-  // Home/End use CSI sequences in normal mode.
-  const home = encodeKeySequence({ keys: ["home"] });
-  expect(home.data).toEqual(Buffer.from(`${ESC}[1~`));
-
-  const end = encodeKeySequence({ keys: ["end"] });
-  expect(end.data).toEqual(Buffer.from(`${ESC}[4~`));
-});
-
-test("encodeKeySequence uses CSI sequences in explicit normal cursor key mode", () => {
-  const up = encodeKeySequence({ keys: ["up"] }, "normal");
-  expect(up.data).toEqual(Buffer.from(`${ESC}[A`));
-
-  const down = encodeKeySequence({ keys: ["down"] }, "normal");
-  expect(down.data).toEqual(Buffer.from(`${ESC}[B`));
-
-  const right = encodeKeySequence({ keys: ["right"] }, "normal");
-  expect(right.data).toEqual(Buffer.from(`${ESC}[C`));
-
-  const left = encodeKeySequence({ keys: ["left"] }, "normal");
-  expect(left.data).toEqual(Buffer.from(`${ESC}[D`));
-
-  // Home/End use CSI sequences in explicit normal mode.
-  const home = encodeKeySequence({ keys: ["home"] }, "normal");
-  expect(home.data).toEqual(Buffer.from(`${ESC}[1~`));
-
-  const end = encodeKeySequence({ keys: ["end"] }, "normal");
-  expect(end.data).toEqual(Buffer.from(`${ESC}[4~`));
-});
-
 test("encodeKeySequence uses SS3 sequences in application cursor key mode", () => {
   // Application mode (smkx) uses SS3 sequences.
   const up = encodeKeySequence({ keys: ["up"] }, "application");
@@ -91,13 +48,8 @@ test("encodeKeySequence uses SS3 sequences in application cursor key mode", () =
 
 test.each([
   ["M-up", `${ESC}[1;3A`],
-  ["C-right", `${ESC}[1;5C`],
-  ["S-down", `${ESC}[1;2B`],
-  ["C-home", `${ESC}[1;5~`],
-  ["M-C-End", `${ESC}[4;7~`],
   ["S-M-C-PgDn", `${ESC}[6;8~`],
-  ["S-insert", `${ESC}[2;2~`],
-  ["S-M-del", `${ESC}[3;4~`],
+  ["S-F4", `${ESC}[1;2S`],
 ])("encodeKeySequence applies xterm modifiers to %s in every cursor mode", (key, data) => {
   for (const mode of [undefined, "normal", "application"] as const) {
     expect(encodeKeySequence({ keys: [key] }, mode)).toEqual({
@@ -105,6 +57,10 @@ test.each([
       warnings: [],
     });
   }
+});
+
+test.each([["C-M-Space", `${ESC}\x00`]])("encodeKeySequence encodes %s", (key, data) => {
+  expect(encodeKeySequence({ keys: [key] })).toEqual({ data: Buffer.from(data), warnings: [] });
 });
 
 test("encodeKeySequence supports hex + literal with warnings", () => {

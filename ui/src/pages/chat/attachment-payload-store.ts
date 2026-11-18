@@ -1,25 +1,25 @@
+import { estimateBase64DecodedBytes, isValidBase64 } from "@openclaw/media-core/base64";
+import { base64ToBytes } from "../../lib/bytes-base64.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import {
+  payloads,
+  releaseChatAttachmentPayload,
+  releaseChatAttachmentPayloads,
+  releaseVideoPoster,
+  revokeObjectUrl,
+  type AttachmentPayload,
+} from "./attachment-payload-lifecycle.ts";
 
-type AttachmentPayload = {
-  blob?: Blob;
-  dataUrl?: string;
-  previewUrl?: string;
-};
-
-const payloads = new Map<string, AttachmentPayload>();
+export {
+  releaseChatAttachmentPayload,
+  releaseChatAttachmentPayloads,
+} from "./attachment-payload-lifecycle.ts";
 
 function createObjectUrl(blob: Blob): string | undefined {
   if (typeof URL === "undefined" || typeof URL.createObjectURL !== "function") {
     return undefined;
   }
   return URL.createObjectURL(blob);
-}
-
-function revokeObjectUrl(url: string | undefined): void {
-  if (!url || typeof URL === "undefined" || typeof URL.revokeObjectURL !== "function") {
-    return;
-  }
-  URL.revokeObjectURL(url);
 }
 
 export function registerChatAttachmentPayload(params: {
@@ -39,6 +39,50 @@ export function getChatAttachmentDataUrl(attachment: ChatAttachment): string | n
   return attachment.dataUrl ?? payloads.get(attachment.id)?.dataUrl ?? null;
 }
 
+export function getChatAttachmentVideoPosterUrl(
+  attachment: ChatAttachment,
+): Promise<string | null> | null {
+  const payload = payloads.get(attachment.id);
+  if (payload?.videoPoster) {
+    return payload.videoPoster.promise;
+  }
+  // Use retained Files; never reconstruct a data URL just for a poster.
+  if (!(payload?.blob instanceof File) || payload.blob.size > 512 * 1024 * 1024) {
+    return null;
+  }
+  const file = payload.blob;
+  const src = createObjectUrl(file);
+  if (!src) {
+    return null;
+  }
+  const controller = new AbortController();
+  const poster: NonNullable<AttachmentPayload["videoPoster"]> = {
+    controller,
+    promise: import("../../lib/media/video-poster.ts")
+      .then(
+        ({ requestVideoPoster }) =>
+          requestVideoPoster({
+            key: file,
+            src,
+            width: 54,
+            height: 54,
+            signal: controller.signal,
+          }),
+        () => null,
+      )
+      .then((blob) => {
+        if (!blob || payloads.get(attachment.id)?.videoPoster !== poster) {
+          return null;
+        }
+        poster.url = createObjectUrl(blob);
+        return poster.url ?? null;
+      })
+      .finally(() => revokeObjectUrl(src)),
+  };
+  payload.videoPoster = poster;
+  return poster.promise;
+}
+
 function blobFromDataUrl(dataUrl: string): Blob | null {
   const match = /^data:([^,]*),(.*)$/s.exec(dataUrl);
   if (!match) {
@@ -47,14 +91,10 @@ function blobFromDataUrl(dataUrl: string): Blob | null {
   const metadata = match[1] ?? "";
   const payload = match[2] ?? "";
   try {
-    if (metadata.toLowerCase().includes(";base64")) {
-      const binary = atob(payload.replace(/\s+/gu, ""));
-      const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-      return new Blob([bytes], { type: metadata.split(";", 1)[0] });
-    }
-    return new Blob([decodeURIComponent(payload.replace(/\+/gu, "%20"))], {
-      type: metadata.split(";", 1)[0],
-    });
+    const content = metadata.toLowerCase().includes(";base64")
+      ? base64ToBytes(payload.replace(/\s+/gu, ""))
+      : decodeURIComponent(payload.replace(/\+/gu, "%20"));
+    return new Blob([content], { type: metadata.split(";", 1)[0] });
   } catch {
     return null;
   }
@@ -102,21 +142,6 @@ export function cloneChatAttachmentsForIndependentOwner(
   });
 }
 
-export function releaseChatAttachmentPayload(id: string): void {
-  const payload = payloads.get(id);
-  if (!payload) {
-    return;
-  }
-  revokeObjectUrl(payload.previewUrl);
-  payloads.delete(id);
-}
-
-export function releaseChatAttachmentPayloads(attachments: readonly ChatAttachment[] = []): void {
-  for (const attachment of attachments) {
-    releaseChatAttachmentPayload(attachment.id);
-  }
-}
-
 /**
  * Releases displaced attachments except ids still referenced by a retained
  * owner (live composer, surviving fallbacks). Attachments are backups of
@@ -139,8 +164,8 @@ export function generateAttachmentId(): string {
 // size-bounded inline images come back; a corrupt transcript entry is skipped,
 // never fatal. 5 MiB decoded matches the gateway media cap (MEDIA_MAX_BYTES).
 const RESTORED_IMAGE_MIME = /^image\/[\w.+-]+$/u;
-const BASE64_PAYLOAD = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
-const RESTORED_ATTACHMENT_MAX_BASE64_CHARS = Math.ceil((5 * 1024 * 1024) / 3) * 4;
+const RESTORED_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
+const RESTORED_ATTACHMENT_MAX_BASE64_CHARS = Math.ceil(RESTORED_ATTACHMENT_MAX_BYTES / 3) * 4;
 
 export function replaceChatAttachmentsFromEditor(
   current: readonly ChatAttachment[],
@@ -149,9 +174,9 @@ export function replaceChatAttachmentsFromEditor(
   releaseChatAttachmentPayloads(current);
   return restored.flatMap(({ mimeType, data }) =>
     RESTORED_IMAGE_MIME.test(mimeType) &&
-    data.length > 0 &&
     data.length <= RESTORED_ATTACHMENT_MAX_BASE64_CHARS &&
-    BASE64_PAYLOAD.test(data)
+    isValidBase64(data) &&
+    estimateBase64DecodedBytes(data) <= RESTORED_ATTACHMENT_MAX_BYTES
       ? [
           {
             id: generateAttachmentId(),
@@ -163,20 +188,17 @@ export function replaceChatAttachmentsFromEditor(
   );
 }
 
-function discardChatAttachmentDataUrl(id: string): void {
-  const payload = payloads.get(id);
-  if (!payload) {
-    return;
-  }
-  if (payload.previewUrl) {
-    payloads.set(id, { previewUrl: payload.previewUrl });
-    return;
-  }
-  payloads.delete(id);
-}
-
 export function discardChatAttachmentDataUrls(attachments: readonly ChatAttachment[] = []): void {
-  for (const attachment of attachments) {
-    discardChatAttachmentDataUrl(attachment.id);
+  for (const { id } of attachments) {
+    const payload = payloads.get(id);
+    if (!payload) {
+      continue;
+    }
+    releaseVideoPoster(payload);
+    if (payload.previewUrl) {
+      payloads.set(id, { previewUrl: payload.previewUrl });
+    } else {
+      payloads.delete(id);
+    }
   }
 }

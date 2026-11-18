@@ -28,18 +28,20 @@ read_when:
 | `cohere/command-a-03-2025`           | hidden     | text        | 256,000 | 8,000      | Previous generation; replaced by Command A+   |
 | `cohere/command-a-reasoning-08-2025` | hidden     | text        | 256,000 | 32,000     | Previous generation; replaced by Command A+   |
 | `cohere/command-a-vision-07-2025`    | hidden     | text, image | 128,000 | 8,000      | Previous generation; replaced by Command A+   |
-| `cohere/north-mini-code-1-0`         | visible    | text, image | 256,000 | 64,000     | Agentic coding; reasoning; free limits        |
+| `cohere/north-mini-code-1-0`         | visible    | text        | 256,000 | 64,000     | Agentic coding; reasoning; free limits        |
 
 Reasoning-capable Cohere models support two Compatibility API reasoning modes. OpenClaw maps **off** to `none` and every enabled thinking level to `high`. Command A Vision does not support tool use, so OpenClaw keeps agent tools disabled for that model.
 
 ## Get started
 
-1. Install the official plugin and restart the Gateway:
+1. Install the official plugin:
 
 ```bash
 openclaw plugins install @openclaw/cohere-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 2. Create a Cohere API key.
 3. Run onboarding:

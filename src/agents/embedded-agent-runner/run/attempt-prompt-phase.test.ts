@@ -1,10 +1,22 @@
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Context, Model, SimpleStreamOptions } from "../../../llm/types.js";
+import { createSolidPngBuffer } from "../../../../test/helpers/image-fixtures.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import type { Context, ImageContent, Model, SimpleStreamOptions } from "../../../llm/types.js";
+import type { PluginHookBeforeAgentRunEvent } from "../../../plugins/hook-types.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
-import type { StreamFn } from "../../runtime/index.js";
+import {
+  prepareSystemAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
+} from "../../admitted-run-context.js";
+import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -13,315 +25,45 @@ import {
   streamMocks,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
-import {
-  estimateCompactionHistoryTokens,
-  type CompactionRequestBudget,
-} from "../../sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../../sessions/compaction/preparation.types.js";
+import { estimateCompactionHistoryTokens } from "../../sessions/context-token-pressure.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
 import {
-  createPromptCacheRequestObserver,
-  type PromptCacheRequestObservation,
-} from "../prompt-cache-request-observer.js";
-import {
-  getEmbeddedSessionPromptState,
+  createToolResultPromptProjectionState,
+  retainEmbeddedSessionPromptState,
   clearEmbeddedSessionPromptStates,
+  prepareSessionSystemPrompt,
+  persistSessionSystemPrompt,
 } from "../session-prompt-state.js";
+import { runEmbeddedAttemptPromptPhase } from "./attempt-prompt-phase.js";
+import type {
+  PromptPreflightCall,
+  PromptSubmissionCall,
+} from "./attempt-prompt-phase.test-support.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
-const mocks = vi.hoisted(() => ({
-  applyPromptToolsAllow: vi.fn(),
-  beforeAgentRun: vi.fn(),
-  handlePromptError: vi.fn(),
-  handleMidTurnPrecheck: vi.fn(),
-  observePrompt: vi.fn(),
-  prepareGooglePromptCache: vi.fn(),
-  preparePromptAssembly: vi.fn(),
-  preparePromptContext: vi.fn(),
-  preparePromptExecution: vi.fn(),
-  preparePromptPreflight: vi.fn(),
-  releasePendingSteering: vi.fn(),
-  removeTrailingPrecheckError: vi.fn(),
-  resolveApiKey: vi.fn(),
-  submitPrompt: vi.fn(),
-  debug: vi.fn(),
-  warn: vi.fn(),
-}));
+// Register the shared module mocks before importing any runtime dependency.
+const { createFixture, mocks } = await vi.hoisted(
+  async () => await import("./attempt-prompt-phase.test-support.js"),
+);
 
-vi.mock("../../subagents/registry/subagent-registry.js", () => ({
-  releasePendingAgentSteeringItems: mocks.releasePendingSteering,
-  ackPendingAgentSteeringItems: vi.fn(),
-}));
-vi.mock("../google-prompt-cache.js", () => ({
-  prepareGooglePromptCacheStreamFn: mocks.prepareGooglePromptCache,
-}));
-vi.mock("../logger.js", () => ({
-  log: { debug: mocks.debug, warn: mocks.warn },
-}));
-vi.mock("../stream-resolution.js", () => ({
-  resolveEmbeddedAgentApiKey() {
-    return mocks.resolveApiKey();
-  },
-}));
-vi.mock("./attempt-before-agent-run.js", () => ({
-  runEmbeddedAttemptBeforeAgentRun: mocks.beforeAgentRun,
-}));
-vi.mock("./attempt-prompt-build.js", () => ({
-  prepareEmbeddedAttemptPromptAssembly: mocks.preparePromptAssembly,
-  prepareEmbeddedAttemptPromptContext: mocks.preparePromptContext,
-}));
-vi.mock("./attempt-prompt-submit.js", () => ({
-  handleEmbeddedAttemptPromptError: mocks.handlePromptError,
-  submitEmbeddedAttemptPrompt: mocks.submitPrompt,
-}));
-vi.mock("./prompt-image-preparation.js", () => ({
-  prepareEmbeddedAttemptPromptExecution: mocks.preparePromptExecution,
-}));
-vi.mock("./attempt-prompt-preflight.js", () => ({
-  handleEmbeddedAttemptMidTurnPrecheck: mocks.handleMidTurnPrecheck,
-  prepareEmbeddedAttemptPromptPreflight: mocks.preparePromptPreflight,
-}));
-vi.mock("./attempt-prompt-support.js", () => ({
-  applyPromptBuildToolsAllow: mocks.applyPromptToolsAllow,
-  observeEmbeddedAttemptPrompt: mocks.observePrompt,
-}));
-vi.mock("./attempt-transcript-helpers.js", () => ({
-  removeTrailingMidTurnPrecheckAssistantError: mocks.removeTrailingPrecheckError,
-}));
-
-import {
-  projectAgentRunAttemptTerminal,
-  type AgentRunAttemptTerminal,
-} from "../../agent-run-terminal-outcome.js";
-import { abortable } from "./abortable.js";
-import {
-  runEmbeddedAttemptPromptPhase,
-  type EmbeddedAttemptPromptState,
-} from "./attempt-prompt-phase.js";
-import type { prepareEmbeddedAttemptPromptPreflight } from "./attempt-prompt-preflight.js";
-import type { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
-
-type PromptPhaseInput = Parameters<typeof runEmbeddedAttemptPromptPhase>[0];
-type AssemblyCall = {
-  applyPromptBuildToolsAllow: (toolsAllow: string[] | undefined) => string[];
-  setLeasedSteering: (lease: { leaseId: string; runIds: string[] }) => void;
-};
-type PromptPreflightCall = Parameters<typeof prepareEmbeddedAttemptPromptPreflight>[0];
-type PromptSubmissionCall = Parameters<typeof submitEmbeddedAttemptPrompt>[0];
 type PromptErrorCall = {
   error: unknown;
   markYieldAborted: () => void;
-  releaseLeasedSteering: (error?: unknown) => void;
   yieldAbortSettled: Promise<void> | null;
   yieldDetected: boolean;
   yieldMessage: string | null;
 };
 
-function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 } = {}) {
-  const order: string[] = [];
-  const promptState: EmbeddedAttemptPromptState = {
-    contextBudgetStatus: undefined,
-    preflightRecovery: undefined,
-    yieldAborted: false,
-  };
-  const executionState: PromptPhaseInput["state"] = {
-    beforeAgentRunBlockedBy: undefined,
-    terminal: { kind: "ok" },
-    trajectoryEndRecorded: false,
-  };
-  const yieldState = {
-    yieldAbortSettled: null as Promise<void> | null,
-    yieldDetected: false,
-    yieldMessage: null as string | null,
-  };
-  const activeSession = {
-    messages: [],
-    agent: {
-      state: { messages: [] },
-      streamFn: vi.fn(),
-    },
-  };
-  const sessionManager = {
-    getHeader: () => ({ version: 3 }),
-    appendCustomEntry: vi.fn(),
-    getEntries: vi.fn(() => []),
-  };
-  const sessionRuntimeState = { systemPromptText: "system", prePromptMessageCount: 1 };
-  const stopAcceptingSteerMessages = vi.fn(() => {
-    order.push("stop-steering");
-  });
-
-  mocks.preparePromptAssembly.mockImplementation(async (input: AssemblyCall) => {
-    order.push("assembly");
-    const lease = { leaseId: "lease-1", runIds: ["run-1"] };
-    input.applyPromptBuildToolsAllow(undefined);
-    input.setLeasedSteering(lease);
-    return {
-      hookCtx: {},
-      leasedSteering: lease,
-      transcriptLeafId: "leaf-1",
-    };
-  });
-  mocks.preparePromptContext.mockImplementation(() => {
-    order.push("context");
-    return {
-      aggregatePressureEngaged: false,
-      contextTokenBudget: 32_000,
-      currentUserTimestampOverride: { timestamp: 123, text: "hello" },
-      effectivePrompt: "hello",
-      hookMessagesForCurrentPrompt: [],
-      llmBoundaryPromptForPrecheck: pendingPrompt,
-      prePromptMessageCount: 2,
-      promptForModel: "hello",
-      promptForSession: "hello",
-      promptSubmission: { prompt: "hello", runtimeOnly: false },
-      promptToolResultAggregateMaxChars: 2_000,
-      promptToolResultMaxChars: 1_000,
-      runtimeContextMessageForCurrentTurn: { role: "custom", content: "runtime" },
-      systemPromptForHook: "system",
-    };
-  });
-  mocks.beforeAgentRun.mockImplementation(async () => {
-    order.push("before-agent-run");
-    return undefined;
-  });
-  mocks.resolveApiKey.mockResolvedValue("test-key");
-  mocks.prepareGooglePromptCache.mockImplementation(async () => {
-    order.push("google-cache");
-    return undefined;
-  });
-  mocks.preparePromptExecution.mockImplementation(async () => {
-    order.push("images");
-    return {
-      images: Array.from({ length: pendingImageCount }, () => ({
-        type: "image",
-        data: "aW1hZ2U=",
-        mimeType: "image/png",
-      })),
-      imageFactIndexes: [null],
-      detectedRefs: [],
-      failedMediaCount: 0,
-      loadedCount: 1,
-      skippedCount: 0,
-    };
-  });
-  mocks.observePrompt.mockImplementation(() => {
-    order.push("observe");
-    return { skipPromptSubmission: false };
-  });
-  mocks.preparePromptPreflight.mockImplementation(async (preflightInput: PromptPreflightCall) => {
-    order.push("preflight");
-    return preflightInput.state;
-  });
-  mocks.submitPrompt.mockImplementation(async (submissionInput: PromptSubmissionCall) => {
-    order.push("submit");
-    submissionInput.onFinalPromptText("hello");
-    submissionInput.onSteeringAcknowledged();
-  });
-  mocks.handlePromptError.mockResolvedValue({});
-  const input = {
-    attempt: {
-      model: { id: "model-1", provider: "test" },
-      modelId: "model-1",
-      provider: "test",
-      runId: "run-1",
-      sessionId: "session-1",
-    },
-    isRawModelRun: false,
-    runAbortController: new AbortController(),
-    state: executionState,
-    sessionLock: {
-      withOwnedTranscriptWrite: async <T>(operation: () => Promise<T> | T) => await operation(),
-    },
-    setup: {
-      effectiveFsWorkspaceOnly: false,
-      effectiveWorkspace: "/tmp/workspace",
-      sandbox: null,
-      sessionAgentId: "main",
-    },
-    diagnostics: { diagnosticTrace: {}, runTrace: {} },
-    prepared: {
-      sessionRuntime: {
-        agentSession: {
-          activeSession,
-          hookRunner: null,
-          setActiveSessionSystemPrompt: vi.fn(),
-          settingsManager: { getCompactionReserveTokens: () => 77 },
-        },
-        boundary: {
-          includeBoundaryTimestamp: false,
-          setCurrentUserTimestampOverride: vi.fn(),
-        },
-        cacheTrace: null,
-        contextGuards: { takePendingMidTurnPrecheckRequest: () => undefined },
-        preparedUserTurnMessage: {
-          role: "user",
-          content: "hello",
-          timestamp: 100,
-          __openclaw: { senderName: "Alice" },
-        },
-        sessionManager,
-        sessionPromptState: {},
-        state: sessionRuntimeState,
-        toolResultPromptProjectionState: {},
-        trajectoryRecorder: null,
-        transcriptPolicy: { appendOnlyRuntimeContext: true },
-        transport: {
-          effectiveAgentTransport: "sse",
-          effectiveExtraParams: {},
-          streamStrategy: "default",
-          compactionReplayEnabled: false,
-        },
-      },
-      systemPrompt: { runtimeInfo: { model: "model-1" } },
-      toolCatalog: {
-        toolSearch: { compacted: false },
-        toolSearchRunPlan: { capabilityToolNames: new Set(["read"]) },
-      },
-      promptToolPolicy: {
-        current: {
-          activeToolNames: ["read"],
-          effectiveTools: [{ name: "read" }],
-          uncompactedEffectiveTools: [{ name: "read" }],
-          tools: [{ name: "read" }],
-        },
-        apply(toolsAllow: string[] | undefined) {
-          Object.assign(this.current, mocks.applyPromptToolsAllow({ toolsAllow }));
-          return this.current;
-        },
-        refresh: vi.fn(),
-      },
-    },
-    preparedStreamRuntime: {
-      cache: {},
-      history: {
-        contextEngineAssemblySucceeded: false,
-        contextEnginePromptAuthority: "assembled",
-      },
-      promptActiveSession: vi.fn(),
-      stream: { stopAcceptingSteerMessages },
-    },
-    lifecycle: { readYieldState: () => yieldState },
-  } as unknown as PromptPhaseInput;
-
-  return {
-    input,
-    order,
-    promptState,
-    sessionRuntimeState,
-    readState: () => ({
-      ...promptState,
-      ...projectAgentRunAttemptTerminal(executionState.terminal),
-    }),
-    yieldState,
-  };
-}
-
 beforeEach(() => {
-  vi.clearAllMocks();
+  for (const mock of Object.values(mocks)) {
+    mock.mockReset();
+  }
   mocks.applyPromptToolsAllow.mockReturnValue({
     activeToolNames: ["read"],
+    callableToolNames: ["read"],
     effectiveTools: [{ name: "read" }],
     uncompactedEffectiveTools: [{ name: "read" }],
     tools: [{ name: "read" }],
@@ -334,59 +76,288 @@ afterEach(() => {
 });
 
 registerAgentSessionLoopTestLifecycle();
+const imageDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
-  clearEmbeddedSessionPromptStates(["phase-context-replay"]);
+  clearEmbeddedSessionPromptStates([
+    "phase-context-replay",
+    "phase-system-update",
+    "phase-finalization",
+    "phase-server-threshold",
+  ]);
 });
 
 describe("runEmbeddedAttemptPromptPhase", () => {
-  it("observes canonical request prefixes before managed cache consumption and skips compaction", async () => {
-    const fixture = createFixture();
-    const session = fixture.input.prepared.sessionRuntime.agentSession.activeSession;
-    const observations = vi.fn<(observation: PromptCacheRequestObservation) => void>();
-    const observer = createPromptCacheRequestObserver(
-      { sessionId: "prompt-phase-cache-observer", streamStrategy: "test" },
-      observations,
-    );
-    fixture.input.preparedStreamRuntime.cache.onModelRequest = observer.onModelRequest;
-    let compacting = false;
-    Object.defineProperty(session, "isCompacting", { get: () => compacting });
-    mocks.prepareGooglePromptCache.mockImplementation(
-      async ({ streamFn }: { streamFn: StreamFn }): Promise<StreamFn> =>
-        (model, context, options) =>
-          streamFn(model, { ...context, systemPrompt: undefined, tools: undefined }, options),
-    );
-    mocks.submitPrompt.mockImplementation(async () => {
-      const tool = { name: "read", description: "Read text", parameters: Type.Object({}) };
-      for (const [index, cacheRead] of [10_000, 0, 10_000].entries()) {
-        await session.agent.streamFn(testModel, {
-          systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}turn ${index}`,
-          messages: [],
-          tools: [{ ...tool, description: index === 2 ? "Read workspace text" : tool.description }],
-        });
-        observer.onModelUsage({ input: 10_000 - cacheRead, cacheRead, cacheWrite: 0 });
-        if (index === 0) {
-          compacting = true;
-          await session.agent.streamFn(testModel, {
-            systemPrompt: "Summarize",
-            messages: [],
-            tools: [],
-          });
-          compacting = false;
+  it.each([false, true])(
+    "gates prepared prompt-path images before inference (block: %s)",
+    async (block) => {
+      const workspace = imageDirs.make("openclaw-image-gate-");
+      const imagePath = path.join(workspace, "picture.png");
+      const bytes = createSolidPngBuffer(2, 2, { r: 17, g: 33, b: 49 });
+      await fs.writeFile(imagePath, bytes);
+      const image: ImageContent = {
+        type: "image",
+        data: bytes.toString("base64"),
+        mimeType: "image/png",
+      };
+      const fixture = createFixture();
+      const model: Model = { ...testModel, input: ["text", "image"] };
+      const { session, settingsManager, sessionManager } = await createTestSession({ model });
+      const runtime = fixture.input.prepared.sessionRuntime;
+      runtime.agentSession.activeSession = session;
+      runtime.agentSession.settingsManager = settingsManager;
+      runtime.sessionManager = sessionManager;
+      runtime.toolResultPromptProjectionState = createToolResultPromptProjectionState();
+      fixture.input.setup.effectiveWorkspace = workspace;
+      fixture.input.setup.effectiveFsWorkspaceOnly = true;
+      Object.assign(fixture.input.attempt, { model, workspaceDir: workspace });
+      fixture.input.preparedStreamRuntime.promptActiveSession = (prompt, options) =>
+        session.prompt(prompt, options);
+      const context = expectDefined(mocks.preparePromptContext.getMockImplementation(), "context");
+      mocks.preparePromptContext.mockImplementation(() => ({
+        ...context(),
+        promptForModel: "Inspect ./picture.png",
+        promptForSession: "Inspect ./picture.png",
+        runtimeContextMessageForCurrentTurn: undefined,
+        promptSubmission: { prompt: "Inspect ./picture.png", runtimeOnly: false },
+      }));
+      const preparation = await vi.importActual<typeof import("./prompt-image-preparation.js")>(
+        "./prompt-image-preparation.js",
+      );
+      mocks.preparePromptExecution.mockImplementation(
+        preparation.prepareEmbeddedAttemptPromptExecution,
+      );
+      const submission = await vi.importActual<typeof import("./attempt-prompt-submit.js")>(
+        "./attempt-prompt-submit.js",
+      );
+      mocks.submitPrompt.mockImplementation(submission.submitEmbeddedAttemptPrompt);
+      let inspected: ImageContent[] | undefined;
+      mocks.beforeAgentRun.mockImplementation(async (event: PluginHookBeforeAgentRunEvent) => {
+        inspected = structuredClone(event.images);
+        if (event.images?.length && block) {
+          return { outcome: "block", reason: "Image policy", message: "Image blocked." };
         }
+        // Approval binds prepared bytes, even if the source disappears or a hook edits its copy.
+        await fs.unlink(imagePath);
+        if (event.images?.[0]) {
+          Object.assign(event.images[0], { data: "modified by hook" });
+        }
+        return { outcome: "pass" };
+      });
+      let submittedImages: unknown[] = [];
+      streamMocks.streamSimple.mockImplementation((requestModel: Model, request: Context) => {
+        submittedImages = request.messages.flatMap((message) =>
+          Array.isArray(message.content)
+            ? message.content.filter((part) => part.type === "image")
+            : [],
+        );
+        return createAssistantResultStream(createAssistant(requestModel, "Done."));
+      });
+
+      mocks.handlePromptError.mockImplementation(async ({ error }: { error: unknown }) => {
+        throw error;
+      });
+      await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+
+      expect(inspected).toEqual([image]);
+      expect(streamMocks.streamSimple).toHaveBeenCalledTimes(block ? 0 : 1);
+      expect(submittedImages).toEqual(block ? [] : [image]);
+      if (block) {
+        expect(fixture.input.state.beforeAgentRunBlockedBy).toBe("policy");
+        expect(JSON.stringify(sessionManager.buildSessionContext().messages)).not.toContain(
+          image.data,
+        );
+      }
+    },
+  );
+
+  it("submits an unchanged turn without a registered policy gate", async () => {
+    const fixture = createFixture();
+    const manager = guardSessionManager(SessionManager.inMemory());
+    fixture.input.prepared.sessionRuntime.sessionManager = manager;
+    fixture.input.prepared.sessionRuntime.agentSession.hookRunner = null;
+    const write = vi.spyOn(fixture.input.sessionLock, "withOwnedTranscriptWrite");
+
+    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+
+    expect(fixture.readState().promptError).toBeNull();
+    expect(mocks.submitPrompt).toHaveBeenCalledTimes(1);
+    expect(write).not.toHaveBeenCalled();
+    expect(manager.buildSessionContext().messages).toEqual([]);
+  });
+
+  it.each([
+    { name: "direct", enabled: true, supportsStore: true, proxy: false, clientCompacts: false },
+    { name: "disabled", enabled: false, supportsStore: true, proxy: false, clientCompacts: true },
+    { name: "no store", enabled: true, supportsStore: false, proxy: false, clientCompacts: true },
+    { name: "proxy", enabled: true, supportsStore: true, proxy: true, clientCompacts: true },
+  ])("preserves Responses threshold ownership ($name)", async (test) => {
+    const fixture = createFixture({ pendingImageCount: 0 });
+    const model = {
+      ...testModel,
+      provider: "openai",
+      baseUrl: test.proxy ? "https://example.test/v1" : "https://api.openai.com/v1",
+      contextWindow: 1_000_000,
+      compat: { supportsStore: test.supportsStore },
+    };
+    const { session, settingsManager, sessionManager } = await createTestSession({
+      model,
+      settingsManager: SettingsManager.inMemory({
+        compaction: { enabled: true, reserveTokens: 20_000 },
+        retry: { enabled: false },
+      }),
+    });
+    let clientCompactions = 0;
+    session.subscribe((event) => {
+      if (event.type === "compaction_start") {
+        clientCompactions += 1;
       }
     });
+    const runtime = fixture.input.prepared.sessionRuntime;
+    runtime.agentSession.activeSession = session;
+    runtime.agentSession.settingsManager = settingsManager;
+    runtime.sessionManager = sessionManager;
+    using promptStateLease = retainEmbeddedSessionPromptState("phase-server-threshold");
+    runtime.sessionPromptState = promptStateLease.state;
+    runtime.toolResultPromptProjectionState = promptStateLease.state.toolResults;
+    runtime.state.systemPromptText = session.systemPrompt;
+    runtime.transport.compactionReplayEnabled = true;
+    runtime.transport.effectiveExtraParams = {
+      responsesServerCompaction: test.enabled,
+      responsesCompactThreshold: 900_000,
+    };
+    Object.assign(fixture.input.attempt, {
+      model,
+      provider: model.provider,
+      modelId: model.id,
+      config: {},
+      sessionId: "phase-server-threshold",
+    });
+    fixture.input.preparedStreamRuntime.promptActiveSession = (prompt, options) =>
+      session.prompt(prompt, options);
+    const context = expectDefined(mocks.preparePromptContext.getMockImplementation(), "context");
+    mocks.preparePromptContext.mockImplementation(() => ({
+      ...context(),
+      contextTokenBudget: model.contextWindow,
+      runtimeContextMessageForCurrentTurn: buildRuntimeContextCustomMessage("Runtime facts"),
+      systemPromptForHook: session.systemPrompt,
+    }));
+    const { submitEmbeddedAttemptPrompt } = await vi.importActual<
+      typeof import("./attempt-prompt-submit.js")
+    >("./attempt-prompt-submit.js");
+    mocks.submitPrompt.mockImplementation(submitEmbeddedAttemptPrompt);
+    streamMocks.streamSimple.mockImplementation((requestModel: Model) =>
+      createAssistantResultStream(createAssistant(requestModel, "Done.", "stop", 800_000)),
+    );
+
     await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
-    expect(fixture.readState().promptError).toBeNull();
-    expect(observations.mock.calls.map(([observation]) => observation)).toMatchObject([
-      { requestIndex: 1, broke: false, cacheRead: 10_000, changes: null },
-      { requestIndex: 2, broke: true, cacheRead: 0, changes: null },
-      {
-        requestIndex: 3,
-        broke: false,
-        cacheRead: 10_000,
-        changes: [{ code: "tools", detail: "tool set changed with same count" }],
-      },
-    ]);
+
+    expect(mocks.handlePromptError.mock.calls.map(([input]) => input.error)).toEqual([]);
+    expect(session.messages.filter((message) => message.role === "assistant")).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ stopReason: "error" })]),
+    );
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    expect(clientCompactions > 0).toBe(test.clientCompacts);
+  });
+
+  it("reuses the attempt during context assembly", async () => {
+    const fixture = createFixture();
+    const attemptFragments = [{ kind: "runtime-instruction" as const, text: "Turn instruction" }];
+    fixture.input.attempt.runtimeContextFragments = attemptFragments;
+    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+
+    const [contextInput] = mocks.preparePromptContext.mock.calls[0]!;
+    expect(contextInput.attempt).toBe(fixture.input.attempt);
+    expect(fixture.input.attempt.runtimeContextFragments).toBe(attemptFragments);
+    expect(mocks.submitPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes cloned prompt context to a policy without mutating a passing turn", async () => {
+    const fixture = createFixture();
+    const { activeSession } = fixture.input.prepared.sessionRuntime.agentSession;
+    activeSession.agent.state.messages = [
+      { role: "user", content: [{ type: "text", text: "original prompt" }], timestamp: 1 },
+    ];
+    Object.assign(fixture.input.attempt, {
+      agentAccountId: "account-1",
+      senderId: "sender-1",
+      senderIsOwner: true,
+    });
+    const context = expectDefined(mocks.preparePromptContext.getMockImplementation(), "context");
+    mocks.preparePromptContext.mockReturnValue({
+      ...context(),
+      hookMessagesForCurrentPrompt: activeSession.messages,
+      promptForModel: "[media attached: /tmp/a.png (image/png)]\ninspect this",
+      systemPromptForHook: "system prompt",
+    });
+    mocks.beforeAgentRun.mockImplementation(async (event: PluginHookBeforeAgentRunEvent) => {
+      const first = event.messages[0];
+      if (!isRecord(first) || first.role !== "user") {
+        throw new Error("expected the fixture user message");
+      }
+      first.content = "mutated by hook";
+      return { outcome: "pass" as const };
+    });
+    const write = vi.spyOn(fixture.input.sessionLock, "withOwnedTranscriptWrite");
+
+    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+
+    expect(mocks.beforeAgentRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "[media attached: /tmp/a.png (image/png)]\ninspect this",
+        systemPrompt: "system prompt",
+        channelId: undefined,
+        accountId: "account-1",
+        senderId: "sender-1",
+        senderIsOwner: true,
+      }),
+      expect.objectContaining({ runId: "run-1", agentId: "main", sessionId: "session-1" }),
+    );
+    expect(activeSession.messages[0]).toMatchObject({
+      content: [{ type: "text", text: "original prompt" }],
+    });
+    expect(write).not.toHaveBeenCalled();
+    expect(mocks.submitPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])("persists a safe blocked turn (policy throws: %s)", async (throws) => {
+    const fixture = createFixture();
+    const manager = guardSessionManager(SessionManager.inMemory());
+    fixture.input.prepared.sessionRuntime.sessionManager = manager;
+    if (throws) {
+      mocks.beforeAgentRun.mockRejectedValue(new Error("policy unavailable"));
+    } else {
+      mocks.beforeAgentRun.mockResolvedValue({
+        outcome: "block",
+        reason: "unsafe input",
+        message: "Request blocked.",
+      });
+    }
+    const write = vi.spyOn(fixture.input.sessionLock, "withOwnedTranscriptWrite");
+    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+    if (!throws) {
+      await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+    }
+    const blockedBy = throws ? "before_agent_run" : "policy";
+    const message = throws
+      ? "Your message could not be sent: blocked by before_agent_run"
+      : "Your message could not be sent: Request blocked. (blocked by policy)";
+    expect(fixture.input.state.beforeAgentRunBlockedBy).toBe(blockedBy);
+    expect(fixture.readState().promptError).toBeInstanceOf(Error);
+    expect(fixture.readState().promptError).toHaveProperty("message", message);
+    expect(mocks.beforeAgentRun).toHaveBeenCalledTimes(throws ? 1 : 2);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(mocks.submitPrompt).not.toHaveBeenCalled();
+    const messages = manager.buildSessionContext().messages;
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: message }],
+      idempotencyKey: "hook-block:before_agent_run:user:run-1",
+      __openclaw: { beforeAgentRunBlocked: { blockedBy, blockedAt: expect.any(Number) } },
+    });
+    expect(fixture.input.prepared.sessionRuntime.agentSession.activeSession.messages).toEqual(
+      messages,
+    );
   });
 
   it.each([
@@ -403,6 +374,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
         content: "hello",
         timestamp: 1,
         idempotencyKey: "current:user",
+        __openclaw: { modelPromptProjection: { version: 1, text: "hello" } },
       };
       const oldCarrier = buildRuntimeContextCustomMessage("Previously recorded context");
       const nextCarrier = buildRuntimeContextCustomMessage(
@@ -505,7 +477,8 @@ describe("runEmbeddedAttemptPromptPhase", () => {
         userTurnTranscriptRecorder: recorder,
       };
       fixture.input.attempt.sessionId = "phase-context-replay";
-      const sessionPromptState = getEmbeddedSessionPromptState(fixture.input.attempt.sessionId);
+      using promptStateLease = retainEmbeddedSessionPromptState(fixture.input.attempt.sessionId);
+      const sessionPromptState = promptStateLease.state;
       sessionRuntime.sessionPromptState = sessionPromptState;
       sessionRuntime.toolResultPromptProjectionState = sessionPromptState.toolResults;
       sessionRuntime.transcriptPolicy.appendOnlyRuntimeContext = appendOnlyRuntimeContext;
@@ -617,27 +590,6 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       pendingImageCount: 1,
       expectedKey: "current:user",
     },
-    {
-      persisted: true,
-      skip: true,
-      pendingPrompt: "",
-      pendingImageCount: 1,
-      expectedKey: undefined,
-    },
-    {
-      persisted: false,
-      skip: false,
-      pendingPrompt: "",
-      pendingImageCount: 1,
-      expectedKey: undefined,
-    },
-    {
-      persisted: true,
-      skip: false,
-      pendingPrompt: "hello",
-      pendingImageCount: 0,
-      expectedKey: "current:user",
-    },
   ])(
     "captures pending text/images and exact ingress identity (persisted=$persisted, skip=$skip, images=$pendingImageCount)",
     async ({ persisted, skip, pendingPrompt, pendingImageCount, expectedKey }) => {
@@ -683,13 +635,12 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       });
       mocks.submitPrompt.mockImplementation(async (submission: PromptSubmissionCall) => {
         expect(submission.compactionRequestBudget).toBe(budgets[0]);
-        const model = fixture.input.attempt.model;
         const context = {
           systemPrompt: "Current foreground context. ".repeat(200),
           messages: [],
           tools: [{ ...tool, description: "Complete schema guidance. ".repeat(100) }],
         };
-        await activeSession.agent.streamFn(model, context);
+        submission.prepareRequestTokenPressure!(context);
         expect(budgets).toHaveLength(2);
         expect(budgets[1]).toMatchObject({
           contextWindow: 32_000,
@@ -699,95 +650,116 @@ describe("runEmbeddedAttemptPromptPhase", () => {
         expect(budgets[1]?.fixedTokens).toBeGreaterThan(budgets[0]?.fixedTokens ?? 0);
         expect(budgets[1]?.pendingUserIdempotencyKey).toBeUndefined();
         compacting = true;
-        await activeSession.agent.streamFn(
-          { ...model, contextWindow: 200_000 },
-          { systemPrompt: "Separate summarizer", messages: [], tools: [] },
-        );
+        submission.prepareRequestTokenPressure!({
+          systemPrompt: "Separate summarizer",
+          messages: [],
+          tools: [],
+        });
         expect(budgets).toHaveLength(2);
         compacting = false;
       });
 
       await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
 
+      expect(mocks.handlePromptError.mock.calls.map(([input]) => input.error)).toEqual([]);
       expect(fixture.readState().promptError).toBeNull();
     },
   );
 
-  it("runs prompt work in phase order and publishes prompt outputs", async () => {
+  it("withholds prompt hooks and submission after its owner retires during context lookup", async () => {
     const fixture = createFixture();
-
-    await expect(
-      runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState),
-    ).resolves.toEqual({
-      promptStartedAt: expect.any(Number),
-      transcriptLeafId: "leaf-1",
-    });
-
-    expect(fixture.order).toEqual([
-      "assembly",
-      "context",
-      "before-agent-run",
-      "google-cache",
-      "images",
-      "observe",
-      "preflight",
-      "submit",
-      "stop-steering",
-    ]);
-    expect(fixture.sessionRuntimeState.prePromptMessageCount).toBe(2);
-    expect(fixture.promptState.finalPromptText).toBe("hello");
-    expect(mocks.preparePromptContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        appendOnlyRuntimeContext: true,
-        preparedUserTurnMessage: expect.objectContaining({
-          content: "hello",
-          timestamp: 100,
-          __openclaw: { senderName: "Alice" },
+    const admission = prepareSystemAgentRunAdmission({}, "prompt-owner", "main", "prompt-session");
+    try {
+      const admitted = await admission.admit("embedded");
+      const prepareAssembly = expectDefined(
+        mocks.preparePromptAssembly.getMockImplementation(),
+        "prompt assembly fixture",
+      );
+      mocks.preparePromptAssembly.mockImplementationOnce(async (...args) => ({
+        ...(await prepareAssembly(...args)),
+        assertHostActive: resolveAdmittedRunActiveAssertion(admitted),
+      }));
+      const prepareContext = expectDefined(
+        mocks.preparePromptContext.getMockImplementation(),
+        "prompt context fixture",
+      );
+      const context = prepareContext();
+      const lookup = createDeferred<typeof context>();
+      const entered = createDeferred();
+      mocks.preparePromptContext.mockImplementationOnce(() => {
+        entered.resolve();
+        return lookup.promise;
+      });
+      const pending = runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+      await entered.promise;
+      admission.close();
+      lookup.resolve(context);
+      await pending;
+      expect(mocks.beforeAgentRun).not.toHaveBeenCalled();
+      expect(mocks.submitPrompt).not.toHaveBeenCalled();
+      expect(mocks.handlePromptError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.objectContaining({ message: "admitted run authority is no longer active" }),
         }),
-      }),
-    );
-    expect(mocks.preparePromptPreflight).toHaveBeenCalledWith(
-      expect.objectContaining({ appendOnlyRuntimeContext: true }),
-    );
-    expect(mocks.preparePromptExecution).toHaveBeenCalledWith(
-      expect.objectContaining({
-        prompt: "hello",
-        skipPromptSubmission: false,
-      }),
-    );
-    expect(mocks.observePrompt).toHaveBeenCalledWith(
-      expect.objectContaining({
-        imageCount: 1,
-        reserveTokens: 77,
-        transcriptLeafId: "leaf-1",
-      }),
-    );
-    expect(mocks.submitPrompt).toHaveBeenCalledWith(
-      expect.objectContaining({
-        images: [expect.objectContaining({ type: "image" })],
-        appendOnlyRuntimeContext: true,
-        leasedSteering: { leaseId: "lease-1", runIds: ["run-1"] },
-        modelPrompt: "hello",
-        runtimeContextMessage: expect.objectContaining({ content: "runtime" }),
-        transcriptLeafId: "leaf-1",
-        transcriptPrompt: "hello",
-      }),
-    );
-    expect(mocks.releasePendingSteering).not.toHaveBeenCalled();
+      );
+    } finally {
+      admission.close();
+    }
   });
 
-  it("skips before_agent_run for settled-turn finalization", async () => {
+  it("keeps ordinary prompt state and ambient hooks out of settled-turn finalization", async () => {
     const fixture = createFixture();
     fixture.input.attempt.operation = "settled-tool-finalization";
+    const sessionManager = SessionManager.inMemory();
+    using promptStateLease = retainEmbeddedSessionPromptState("phase-finalization");
+    const state = promptStateLease.state;
+    const project = (systemPrompt: string) =>
+      prepareSessionSystemPrompt({
+        state,
+        routeKey: "anthropic/claude-opus-5/anthropic-messages",
+        systemPrompt,
+        entries: sessionManager.getBranch(),
+      });
+    project("## Tools\nread, write").commit();
+    await persistSessionSystemPrompt(state, (customType, data) =>
+      sessionManager.appendCustomEntryAsync(customType, data),
+    );
+    project("## Tools\nread").commit();
+    const before = structuredClone({
+      series: state.systemPrompt,
+      pending: state.pendingSystemPrompt,
+    });
+    const runtime = fixture.input.prepared.sessionRuntime;
+    runtime.sessionManager = sessionManager;
+    runtime.sessionPromptState = state;
+    runtime.toolResultPromptProjectionState = state.toolResults;
+    runtime.transcriptPolicy.inHistorySystemUpdates = true;
+    const submit = expectDefined(
+      mocks.submitPrompt.getMockImplementation(),
+      "prompt submission fixture",
+    );
+    mocks.submitPrompt.mockImplementation(async (input: PromptSubmissionCall) => {
+      await input.persistToolResultProjections();
+      return submit(input);
+    });
 
     await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
 
+    expect(fixture.readState().promptError).toBeNull();
     expect(mocks.beforeAgentRun).not.toHaveBeenCalled();
+    expect({ series: state.systemPrompt, pending: state.pendingSystemPrompt }).toEqual(before);
+    expect(
+      sessionManager
+        .getBranch()
+        .filter(
+          (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
+        ),
+    ).toHaveLength(1);
     expect(fixture.order).toEqual([
       "assembly",
       "context",
-      "google-cache",
       "images",
+      "google-cache",
       "observe",
       "preflight",
       "submit",
@@ -811,25 +783,6 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     expect(fixture.readState().promptError).toBe(failure);
     expect(fixture.readState().promptErrorSource).toBe("precheck");
     expect(mocks.submitPrompt).not.toHaveBeenCalled();
-    expect(mocks.releasePendingSteering).toHaveBeenCalledWith(
-      expect.objectContaining({ error: failure.message, leaseId: "lease-1" }),
-    );
-  });
-
-  it("admits the provider prompt when aggregate projection pressure is only heuristic", async () => {
-    const fixture = createFixture();
-    const preparePromptContext = mocks.preparePromptContext.getMockImplementation();
-    mocks.preparePromptContext.mockImplementation(() => ({
-      ...(preparePromptContext?.() as Record<string, unknown>),
-      aggregatePressureEngaged: true,
-    }));
-
-    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
-
-    expect(mocks.preparePromptExecution).toHaveBeenCalledWith(
-      expect.objectContaining({ skipPromptSubmission: false }),
-    );
-    expect(mocks.submitPrompt).toHaveBeenCalledOnce();
   });
 
   it("reads yield state after submission fails and publishes abort state before recovery", async () => {
@@ -848,7 +801,6 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       expect(input.yieldDetected).toBe(true);
       expect(input.yieldAbortSettled).toBe(yieldAbortSettled);
       expect(input.yieldMessage).toBe("yield context");
-      input.releaseLeasedSteering(input.error);
       input.markYieldAborted();
       expect(fixture.readState()).toMatchObject({ aborted: false, cleanupYieldAborted: true });
       return {};
@@ -863,9 +815,6 @@ describe("runEmbeddedAttemptPromptPhase", () => {
 
     expect(fixture.order.slice(-3)).toEqual(["submit", "prompt-error", "stop-steering"]);
     expect(fixture.promptState.yieldAborted).toBe(true);
-    expect(mocks.releasePendingSteering).toHaveBeenCalledWith(
-      expect.objectContaining({ leaseId: "lease-1", runIds: ["run-1"] }),
-    );
   });
 
   it.each([
@@ -894,17 +843,13 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     const fixture = createFixture();
     fixture.input.state.terminal = { kind: "timeout", phase: "prompt", source: "run_budget" };
     fixture.input.runAbortController.abort(new Error("request timed out"));
-    const timeoutAbort = await abortable(
-      fixture.input.runAbortController.signal,
-      Promise.resolve(),
-    ).catch((error: unknown) => error);
-    mocks.submitPrompt.mockRejectedValueOnce(timeoutAbort);
-    mocks.handlePromptError.mockResolvedValueOnce({
-      promptFailure: { error: timeoutAbort, source: "prompt" },
-    });
+    mocks.handlePromptError.mockImplementationOnce(async (input: PromptErrorCall) => ({
+      promptFailure: { error: input.error, source: "prompt" },
+    }));
 
     await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
 
+    expect(mocks.submitPrompt).not.toHaveBeenCalled();
     expect(fixture.readState().promptError).toBeNull();
     expect(fixture.readState().promptErrorSource).toBeNull();
   });
@@ -927,77 +872,32 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     expect(fixture.readState().promptErrorSource).toBe("prompt");
   });
 
-  it("releases steering when preflight skips provider submission", async () => {
+  it("records a prompt assembly failure before context preparation", async () => {
     const fixture = createFixture();
-    const promptError = new Error("preflight rejected");
-    mocks.preparePromptExecution.mockResolvedValueOnce({
-      images: [],
-      imageFactIndexes: [],
-      detectedRefs: [],
-      failedMediaCount: 1,
-      loadedCount: 0,
-      skippedCount: 1,
-    });
-    mocks.observePrompt.mockImplementationOnce(() => {
-      fixture.order.push("observe");
-      return { skipPromptSubmission: true };
-    });
-    mocks.preparePromptPreflight.mockImplementationOnce(
-      async (preflightInput: PromptPreflightCall) => {
-        fixture.order.push("preflight");
-        return {
-          ...preflightInput.state,
-          promptError,
-          promptErrorSource: "precheck",
-        };
-      },
+    const invalidationError = new Error("prompt preparation failed");
+    const prepareAssembly = expectDefined(
+      mocks.preparePromptAssembly.getMockImplementation(),
+      "prompt assembly fixture",
     );
-
-    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
-
-    expect(fixture.readState().promptError).toBe(promptError);
-    expect(mocks.releasePendingSteering).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error: "preflight rejected",
-        leaseId: "lease-1",
-        runIds: ["run-1"],
-      }),
-    );
-    expect(mocks.submitPrompt).not.toHaveBeenCalled();
-  });
-
-  it("publishes preflight state before a submission failure", async () => {
-    const fixture = createFixture();
-    const promptError = new Error("admission warning");
-    const submitError = new Error("provider failed");
-    mocks.preparePromptPreflight.mockImplementationOnce(
-      async (preflightInput: PromptPreflightCall) => {
-        fixture.order.push("preflight");
-        return {
-          ...preflightInput.state,
-          promptError,
-          promptErrorSource: "precheck",
-        };
-      },
-    );
-    mocks.submitPrompt.mockImplementationOnce(async () => {
-      fixture.order.push("submit");
-      expect(fixture.readState().promptError).toBe(promptError);
-      throw submitError;
+    mocks.preparePromptAssembly.mockImplementationOnce(async (...args) => {
+      await prepareAssembly(...args);
+      throw invalidationError;
     });
-    mocks.handlePromptError.mockImplementationOnce(async (errorInput: PromptErrorCall) => {
+    mocks.handlePromptError.mockImplementationOnce(async (input: PromptErrorCall) => {
       fixture.order.push("prompt-error");
-      expect(errorInput.error).toBe(submitError);
-      return {};
+      return { promptFailure: { error: input.error, source: "prompt" } };
     });
 
-    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+    await expect(
+      runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState),
+    ).resolves.toEqual({
+      promptStartedAt: expect.any(Number),
+      transcriptLeafId: null,
+    });
 
-    expect(fixture.order.slice(-4)).toEqual([
-      "preflight",
-      "submit",
-      "prompt-error",
-      "stop-steering",
-    ]);
+    expect(fixture.readState().promptError).toBe(invalidationError);
+    expect(mocks.preparePromptContext).not.toHaveBeenCalled();
+    expect(mocks.submitPrompt).not.toHaveBeenCalled();
+    expect(fixture.order).toEqual(["assembly", "prompt-error", "stop-steering"]);
   });
 });

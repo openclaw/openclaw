@@ -4,7 +4,12 @@ import { createSingleChannelExtensionVitestConfig } from "./vitest.extension-con
 export function createExtensionSignalVitestConfig(
   env: Record<string, string | undefined> = process.env,
 ) {
-  return createSingleChannelExtensionVitestConfig("signal", env);
+  const config = createSingleChannelExtensionVitestConfig("signal", env);
+  config.test = {
+    ...config.test,
+    setupFiles: [...(config.test?.setupFiles ?? []), "test/setup.signal.ts"],
+  };
+  return config;
 }
 
 export default createExtensionSignalVitestConfig();

@@ -15,15 +15,15 @@ struct GatewayTrustPromptAlert: ViewModifier {
                     // race with the trust button and make accept no-op.
                 }),
             presenting: self.gatewayController.pendingTrustPrompt)
-        { _ in
+        { prompt in
             Button(role: .cancel) {
-                self.gatewayController.declinePendingTrustPrompt()
+                self.gatewayController.declinePendingTrustPrompt(prompt)
             } label: {
                 Text("Cancel")
                     .font(OpenClawType.subheadSemiBold)
             }
             Button {
-                Task { await self.gatewayController.acceptPendingTrustPrompt() }
+                Task { await self.gatewayController.acceptPendingTrustPrompt(prompt) }
             } label: {
                 Text("Trust and connect")
                     .font(OpenClawType.subheadSemiBold)

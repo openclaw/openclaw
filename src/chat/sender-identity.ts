@@ -1,8 +1,5 @@
-import { Value } from "typebox/value";
-import {
-  SessionParticipantIdentitySchema,
-  type SessionParticipantIdentity,
-} from "../../packages/gateway-protocol/src/schema/session-participant.js";
+import { isSessionParticipantIdentity } from "../../packages/gateway-protocol/src/compiled/sender-identity.js";
+import type { SessionParticipantIdentity } from "../../packages/gateway-protocol/src/schema/session-participant.js";
 
 export type TranscriptSenderIdentity = Extract<
   SessionParticipantIdentity,
@@ -14,7 +11,7 @@ export function readTranscriptSenderIdentity(value: unknown): TranscriptSenderId
   if (
     typeof value !== "object" ||
     value === null ||
-    !Value.Check(SessionParticipantIdentitySchema, value) ||
+    !isSessionParticipantIdentity(value) ||
     (value.type !== "profile" && value.type !== "remote" && value.type !== "observation") ||
     Object.values(value).some((part) => part !== null && (!part.trim() || part.length > 512))
   ) {

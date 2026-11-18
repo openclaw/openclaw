@@ -3,7 +3,7 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 import { LLAMA_CPP_PROVIDER_ID } from "./defaults.js";
 
 export const MANAGED_LLAMA_CPP_CONFIG_REQUIRED_MESSAGE =
-  "Local embeddings need the managed llama.cpp server config. Run `openclaw configure`, choose llama.cpp once, then retry `openclaw memory status --deep`.";
+  "Local embeddings need the managed llama.cpp server config (llama-server). The in-process node-llama-cpp runtime was removed; semantic memory recall is degraded until setup. Run `openclaw configure`, choose llama.cpp once, then retry `openclaw memory status --deep`.";
 
 export function resolveManagedLlamaCppProviderConfig(config: OpenClawConfig): ModelProviderConfig {
   const provider = config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];

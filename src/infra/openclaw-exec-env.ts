@@ -1,25 +1,42 @@
-/** Process env key that marks child commands as launched by the OpenClaw CLI. */
+import type { SystemRunExecutionContext } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
+
 export const OPENCLAW_CLI_ENV_VAR = "OPENCLAW_CLI";
 
-/** Stable marker value used for OpenClaw-launched subprocess detection. */
-const OPENCLAW_CLI_ENV_VALUE = "1";
+/** Child-shell routing hint; it does not authenticate or authorize a Gateway caller. */
+export const SUBAGENT_EXEC_ENV_VAR = "OPENCLAW_SUBAGENT_EXEC";
 
-/** Returns a cloned env object with the OpenClaw CLI marker set. */
-export function markOpenClawExecEnv<T extends Record<string, string | undefined>>(
-  /** Source environment to clone before adding the subprocess marker. */
-  env: T,
-): T {
+const CLI_ENV_VALUE = "1";
+
+export function markOpenClawExecEnv<T extends Record<string, string | undefined>>(env: T): T {
   return {
     ...env,
-    [OPENCLAW_CLI_ENV_VAR]: OPENCLAW_CLI_ENV_VALUE,
+    [OPENCLAW_CLI_ENV_VAR]: CLI_ENV_VALUE,
   };
 }
 
-/** Mutates an existing process env object so current-process children inherit the marker. */
 export function ensureOpenClawExecMarkerOnProcess(
-  /** Process env object to mutate; defaults to the current process environment. */
   env: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  env[OPENCLAW_CLI_ENV_VAR] = OPENCLAW_CLI_ENV_VALUE;
+  env[OPENCLAW_CLI_ENV_VAR] = CLI_ENV_VALUE;
   return env;
+}
+
+export function buildExecRoutingEnv(
+  context?: SystemRunExecutionContext,
+): Record<string, string> | undefined {
+  const { senderId, chatId, subagent } = context ?? {};
+  if (!senderId && !chatId && !subagent) {
+    return undefined;
+  }
+  return {
+    ...(senderId || chatId
+      ? {
+          OPENCLAW_CHANNEL_CONTEXT: JSON.stringify({
+            ...(senderId ? { sender: { id: senderId } } : {}),
+            ...(chatId ? { chat: { id: chatId } } : {}),
+          }),
+        }
+      : {}),
+    ...(subagent ? { [SUBAGENT_EXEC_ENV_VAR]: "1" } : {}),
+  };
 }

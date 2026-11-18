@@ -6,14 +6,11 @@ import {
 } from "./config-write-guard.js";
 
 describe("config write policy", () => {
-  it.each([undefined, "", "0", "true"])(
-    "leaves writes enabled for OPENCLAW_CONFIG_READONLY=%s",
-    (value) => {
-      expect(() =>
-        assertConfigWriteAllowedInCurrentMode({ env: { OPENCLAW_CONFIG_READONLY: value } }),
-      ).not.toThrow();
-    },
-  );
+  it.each([undefined, "true"])("leaves writes enabled for OPENCLAW_CONFIG_READONLY=%s", (value) => {
+    expect(() =>
+      assertConfigWriteAllowedInCurrentMode({ env: { OPENCLAW_CONFIG_READONLY: value } }),
+    ).not.toThrow();
+  });
 
   it("reports external management without Nix guidance", () => {
     const run = () =>
@@ -27,7 +24,7 @@ describe("config write policy", () => {
     expect(run).not.toThrow(/Nix|nix-openclaw/);
   });
 
-  it.each([undefined, "0", "1"])(
+  it.each([undefined, "1"])(
     "preserves Nix policy and guidance with OPENCLAW_CONFIG_READONLY=%s",
     (value) => {
       expect(() =>

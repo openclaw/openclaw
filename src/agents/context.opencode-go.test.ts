@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveContextTokens } from "../auto-reply/reply/model-selection-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { refreshContextWindowCache, resetContextWindowCacheForTest } from "./context.js";
+import { refreshContextWindowCache } from "./context.js";
+import { resetContextWindowCacheForTest } from "./context.test-support.js";
 
 describe("OpenCode Go context metadata", () => {
   let contextWindowTokens: number | undefined;

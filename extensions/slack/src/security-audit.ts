@@ -1,4 +1,3 @@
-// Slack plugin module implements security audit behavior.
 import { coerceNativeSetting, normalizeAllowFromList } from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
@@ -6,6 +5,7 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/native-command-config-runtime";
+import type { OpenClawPluginSecurityAuditCollector } from "openclaw/plugin-sdk/plugin-entry";
 import type { ResolvedSlackAccount } from "./accounts.js";
 
 export async function collectSlackSecurityAuditFindings(params: {
@@ -13,13 +13,7 @@ export async function collectSlackSecurityAuditFindings(params: {
   accountId?: string | null;
   account: ResolvedSlackAccount;
 }) {
-  const findings: Array<{
-    checkId: string;
-    severity: "info" | "warn" | "critical";
-    title: string;
-    detail: string;
-    remediation?: string;
-  }> = [];
+  const findings: Awaited<ReturnType<OpenClawPluginSecurityAuditCollector>> = [];
   const slackCfg = params.account.config ?? {};
   const accountId = params.accountId?.trim() || params.account.accountId || "default";
   const slashCommandConfigured =

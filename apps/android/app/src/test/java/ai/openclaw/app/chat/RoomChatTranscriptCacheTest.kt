@@ -1,6 +1,9 @@
 package ai.openclaw.app.chat
 
-import ai.openclaw.app.ui.chat.latestChatMessageUsage
+import ai.openclaw.app.ui.chat.ChatTimelineItem
+import ai.openclaw.app.ui.chat.buildTimeline
+import ai.openclaw.app.ui.chat.prepareChatHistory
+import ai.openclaw.app.ui.chat.splitChatAttachmentMessage
 import androidx.room3.Room
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -38,6 +41,42 @@ class RoomChatTranscriptCacheTest {
         }.asCoroutineDispatcher(),
       ).build()
   private val store = RoomChatTranscriptCache(database = database)
+
+  @Test
+  fun completedWorkKeepsExplicitAnswersAndUnresolvedErrorsAfterOfflineReload() =
+    runTest {
+      val controller =
+        createChatController { method, _ ->
+          if (method == "chat.history") {
+            """{"messages":[
+            {"role":"user","content":"Check the draft","timestamp":1000},
+            {"role":"assistant","content":"Checking","phase":"commentary","timestamp":2000},
+            {"role":"assistant","content":[{"type":"text","text":"Draft is ready","textSignature":"{\"v\":1,\"phase\":\"final_answer\"}"}],"timestamp":3000},
+            {"role":"assistant","content":"Finishing notes","phase":"commentary","timestamp":4000},
+            {"role":"assistant","content":"The follow-up failed","stopReason":"error","timestamp":5000}
+          ]}"""
+          } else {
+            emptyChatGatewayResponse(method)
+          }
+        }
+      controller.load("agent:main:dashboard:test")
+      advanceUntilIdle()
+      val live = controller.messages.value
+      saveTranscript(live)
+      for (history in listOf(live, loadTranscript())) {
+        val timeline =
+          prepareChatHistory(history, "agent:main:dashboard:test", "agent:main:main").buildTimeline(0, emptyList(), null)
+        assertEquals(
+          listOf("The follow-up failed", "Draft is ready", "Check the draft"),
+          timeline.items.filterIsInstance<ChatTimelineItem.Message>().map {
+            it.message.content
+              .first()
+              .text
+          },
+        )
+        assertEquals(1, timeline.items.filterIsInstance<ChatTimelineItem.WorkedSummary>().size)
+      }
+    }
 
   @After
   fun tearDown() {
@@ -133,11 +172,14 @@ class RoomChatTranscriptCacheTest {
       controller.load("main")
       advanceUntilIdle()
       assertEquals(2, controller.messages.value.size)
-      assertTrue(
+      assertEquals(
+        "read",
         controller.messages.value
           .last()
           .content
-          .isEmpty(),
+          .single()
+          .toolActivity
+          ?.name,
       )
       assertEquals(
         "entry-2",
@@ -145,14 +187,33 @@ class RoomChatTranscriptCacheTest {
           .last()
           .entryId,
       )
-      assertEquals(null, latestChatMessageUsage(controller.messages.value))
+      assertEquals(
+        null,
+        controller.messages.value
+          .last()
+          .usage,
+      )
 
       val offline = createChatController(transcriptCache = store, cacheScope = { ChatCacheScope("gateway-a", 2) }) { _, _ -> error("offline") }
       offline.load("main")
       advanceUntilIdle()
       assertTrue(offline.messagesFromCache.value)
-      assertEquals(null, latestChatMessageUsage(offline.messages.value))
+      assertEquals(
+        null,
+        offline.messages.value
+          .last()
+          .usage,
+      )
       assertEquals(2, offline.messages.value.size)
+      assertEquals(
+        "read",
+        offline.messages.value
+          .last()
+          .content
+          .single()
+          .toolActivity
+          ?.name,
+      )
     }
 
   @Test
@@ -321,6 +382,18 @@ class RoomChatTranscriptCacheTest {
     }
 
   @Test
+  fun canonicalInboundPhotoSurvivesOfflineTranscriptReopen() =
+    runTest {
+      val source = "media://inbound/photo---af3c4068.jpg"
+      val photo = ChatMessageContent(type = "image", mimeType = "image/jpeg", fileName = "photo.jpg", url = source)
+      saveTranscript(messages = listOf(message("See attached.", role = "user", timestampMs = 10, extraParts = listOf(photo))))
+
+      val content = loadTranscript().single().content
+      assertEquals(listOf(ChatMessageContent(type = "text", text = "See attached."), photo), content)
+      assertEquals(source, content.last().imageLoadKey())
+    }
+
+  @Test
   fun transcriptRoundTripKeepsManagedAudioVideoAndDocumentMetadata() =
     runTest {
       val audio =
@@ -403,6 +476,62 @@ class RoomChatTranscriptCacheTest {
     }
 
   @Test
+  fun transcribedVoiceNoteKeepsItsTranscriptQuoteAfterOfflineReopen() =
+    runTest {
+      // Fails on 5f35c4ed: the cache dropped `transcribed`, so a cold offline open showed the raw echo.
+      val voice =
+        ChatMessageContent(
+          type = "audio",
+          mimeType = "audio/mp4",
+          fileName = "voice-note-b9526ed8-69ef-44d1-ad36-0123456789ab.m4a",
+          artifactId = "artifact_managed_media_66666666-6666-4666-8666-666666666666",
+          durationMs = 5_000,
+          transcribed = true,
+        )
+      val untranscribedVoice = voice.copy(artifactId = "artifact_managed_media_77777777-7777-4777-8777-777777777777", transcribed = false)
+      val echo = ChatMessageContent(type = "text", text = "See attached.\n\uD83D\uDCDD \"hello\"")
+      saveTranscript(
+        messages =
+          listOf(
+            ChatMessage(id = "transcribed", role = "user", content = listOf(echo, voice), timestampMs = 10),
+            ChatMessage(id = "authored", role = "user", content = listOf(echo, untranscribedVoice), timestampMs = 11),
+          ),
+      )
+
+      val loaded = loadTranscript()
+
+      assertEquals(listOf(true, false), loaded.map { message -> message.content.single { it.type == "audio" }.transcribed })
+      val reopened = splitChatAttachmentMessage(loaded[0].content)
+      assertEquals(listOf(voice), reopened.content)
+      assertEquals("hello", reopened.transcript)
+      assertEquals(null, splitChatAttachmentMessage(loaded[1].content).transcript)
+    }
+
+  @Test
+  fun cachedAudioWithoutTheTranscribedKeyLoadsAsUntranscribed() =
+    runTest {
+      database.dao().insertMessages(
+        listOf(
+          CachedMessageEntity(
+            gatewayId = "gateway-a",
+            agentId = "main",
+            sessionKey = "main",
+            rowOrder = 0,
+            role = "user",
+            textPartsJson = """{"content":[{"type":"audio","mimeType":"audio/mp4","durationMs":5000}]}""",
+            timestampMs = 10L,
+            idempotencyKey = null,
+          ),
+        ),
+      )
+
+      val audio = loadTranscript().single().content.single()
+
+      assertEquals(5_000L, audio.durationMs)
+      assertEquals(false, audio.transcribed)
+    }
+
+  @Test
   fun transcriptRoundTripKeepsSystemNoticeMetadataIncludingMarkerOnlyRows() =
     runTest {
       val provenance =
@@ -453,6 +582,8 @@ class RoomChatTranscriptCacheTest {
               model = "gpt-5.2",
               usage = usage,
               cost = cost,
+              runId = "run-1",
+              steerTargetRunId = "run-parent",
             ),
             message("Delivery copy").copy(
               role = "assistant",
@@ -477,12 +608,14 @@ class RoomChatTranscriptCacheTest {
       assertEquals("gpt-5.2", loaded[0].model)
       assertEquals(usage, loaded[0].usage)
       assertEquals(cost, loaded[0].cost)
+      assertEquals("run-1", loaded[0].runId)
+      assertEquals("run-parent", loaded[0].steerTargetRunId)
       assertEquals(ChatDeliveryMirror(kind = "channel-final"), loaded[1].deliveryMirror)
+      assertEquals(ChatMessageUsage(input = 0, output = 0), loaded[1].usage)
       assertTrue(loaded[2].content.isEmpty())
       assertEquals(ChatMessageUsage(input = 7_500, output = 450), loaded[2].usage)
       assertEquals(ChatMessageCost(total = 0.031), loaded[2].cost)
       assertTrue(loaded[3].isSyntheticDisplay)
-      assertEquals(ChatMessageUsage(input = 7_500, output = 450), latestChatMessageUsage(loaded))
     }
 
   @Test
@@ -547,13 +680,25 @@ class RoomChatTranscriptCacheTest {
     }
 
   @Test
-  fun transcriptRoundTripDropsInternalRoleRows() =
+  fun transcriptRoundTripKeepsBoundedToolRowsAndDropsInternalRoles() =
     runTest {
       saveTranscript(
         messages =
           listOf(
             message("hello", role = "user"),
-            message("private tool output", role = "toolResult"),
+            ChatMessage(
+              id = "tool-result",
+              role = "toolresult",
+              content =
+                listOf(
+                  ChatMessageContent(
+                    type = "toolResult",
+                    toolActivity = ChatToolActivity("call-1", "read", null, "bounded output", false),
+                  ),
+                ),
+              timestampMs = 2,
+            ),
+            message("private reasoning", role = "internal"),
             message("visible plugin notice", role = "custom"),
             message("reply", role = "assistant"),
           ),
@@ -561,8 +706,15 @@ class RoomChatTranscriptCacheTest {
 
       val loaded = loadTranscript()
 
-      assertEquals(listOf("hello", "visible plugin notice", "reply"), loaded.map { it.content.single().text })
-      assertEquals(listOf("user", "custom", "assistant"), loaded.map { it.role })
+      assertEquals(listOf("user", "toolresult", "custom", "assistant"), loaded.map { it.role })
+      assertEquals(
+        "bounded output",
+        loaded[1]
+          .content
+          .single()
+          .toolActivity
+          ?.result,
+      )
     }
 
   @Test

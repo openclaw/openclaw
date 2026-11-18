@@ -52,13 +52,13 @@ Send `/elevated` with no argument to see the current level.
   <Step title="Set the level">
     Send a directive-only message to set the session default:
 
-    ```
+    ```text
     /elevated full
     ```
 
     Or use it inline (applies to that message only):
 
-    ```
+    ```text
     /elevated on run the deployment script
     ```
 
@@ -124,5 +124,11 @@ Allowlist entry formats:
   </Card>
   <Card title="Sandbox vs Tool Policy vs Elevated" href="/gateway/sandbox-vs-tool-policy-vs-elevated" icon="scale-balanced">
     How the three gates compose during a tool call.
+  </Card>
+  <Card title="Multi-agent sandbox and tools" href="/tools/multi-agent-sandbox-tools" icon="shield">
+    Per-agent sandbox and tool limits.
+  </Card>
+  <Card title="Thinking levels" href="/tools/thinking" icon="brain">
+    The reasoning budget an elevated run uses.
   </Card>
 </CardGroup>

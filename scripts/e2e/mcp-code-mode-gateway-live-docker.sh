@@ -21,11 +21,7 @@ PROFILE_FILE="${OPENCLAW_MCP_CODE_MODE_LIVE_PROFILE_FILE:-${OPENCLAW_TESTBOX_PRO
 
 CLIENT_LOG="$(mktemp -t openclaw-mcp-code-mode-live-log.XXXXXX)"
 
-cleanup() {
-  docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  rm -f "$CLIENT_LOG"
-}
-trap cleanup EXIT
+trap 'docker_e2e_cleanup_container_run "$CONTAINER_NAME" "$CLIENT_LOG"' EXIT
 
 if [ ! -f "$PROFILE_FILE" ] && [ -f "$HOME/.profile" ]; then
   PROFILE_FILE="$HOME/.profile"

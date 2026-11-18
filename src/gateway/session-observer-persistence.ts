@@ -6,7 +6,6 @@ const PERSIST_INTERVAL_MS = 60_000;
 type PersistDigest = NonNullable<SessionObserverDeps["persistDigest"]>;
 
 export function createSessionObserverDigestPersister(params: {
-  now: () => number;
   persistDigest: PersistDigest;
   stillCurrent: (runId: string, sessionKey: string, agentId: string) => () => boolean;
   onMissingEntry: (state: SessionObserverState) => void;
@@ -22,38 +21,31 @@ export function createSessionObserverDigestPersister(params: {
     const lastPersistedAt =
       kind === "preamble" ? preamblePersistedAt.get(state) : state.lastPersistedAt;
     const due =
-      lastPersistedAt === undefined || params.now() - lastPersistedAt >= PERSIST_INTERVAL_MS;
+      lastPersistedAt === undefined || Date.now() - lastPersistedAt >= PERSIST_INTERVAL_MS;
     if (!final && !due) {
       return;
     }
-    // Live broadcasts are immediate; terminal persistence gets one bounded retry.
-    const attempts = final ? 2 : 1;
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      try {
-        const accepted = await params.persistDigest({
-          sessionKey: state.sessionKey,
-          sessionId: state.sessionId,
-          agentId: state.agentId,
-          digest,
-          stillCurrent: params.stillCurrent(state.runId, state.sessionKey, state.agentId),
-        });
-        if (accepted === null) {
-          params.onMissingEntry(state);
-          return;
-        }
-        if (accepted) {
-          if (kind === "preamble") {
-            preamblePersistedAt.set(state, params.now());
-          } else {
-            state.lastPersistedAt = params.now();
-          }
-        }
-        return;
-      } catch (error) {
-        if (attempt + 1 === attempts) {
-          params.onError(state, error);
+    // The writer owns outcome reconciliation; a failed reply never authorizes replay.
+    try {
+      const accepted = await params.persistDigest({
+        ...(state.reader ? { reader: state.reader } : {}),
+        sessionKey: state.sessionKey,
+        sessionId: state.sessionId,
+        agentId: state.agentId,
+        digest,
+        stillCurrent: params.stillCurrent(state.runId, state.sessionKey, state.agentId),
+      });
+      if (accepted === null) {
+        params.onMissingEntry(state);
+      } else if (accepted) {
+        if (kind === "preamble") {
+          preamblePersistedAt.set(state, Date.now());
+        } else {
+          state.lastPersistedAt = Date.now();
         }
       }
+    } catch (error) {
+      params.onError(state, error);
     }
   };
 }

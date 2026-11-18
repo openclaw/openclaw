@@ -1,0 +1,142 @@
+{
+ "authStatus": {
+  "providers": [
+   {"provider": "brave", "authProvider": "brave", "displayName": "brave", "status": "static", "profiles": [], "apiKey": {"source": "env", "envVar": "BRAVE_API_KEY"}},
+   {"provider": "github-copilot", "authProvider": "github-copilot", "displayName": "Copilot", "status": "static", "profiles": [{"profileId": "github-copilot:github", "type": "token", "status": "static", "source": "inherited", "lastUsedAt": 1788620136720, "logoutSupported": true}], "usage": {"providerId": "github-copilot", "windows": [{"label": "Premium", "usedPercent": 100}, {"label": "Chat", "usedPercent": 0}], "plan": "individual_pro"}},
+   {"provider": "ollama", "authProvider": "ollama", "displayName": "ollama", "status": "static", "profiles": [], "apiKey": {"source": "env", "envVar": "OLLAMA_API_KEY"}},
+   {"provider": "ollama-cloud", "authProvider": "ollama-cloud", "displayName": "ollama-cloud", "status": "static", "profiles": [], "apiKey": {"source": "env", "envVar": "OLLAMA_API_KEY"}},
+   {"provider": "openai", "authProvider": "openai", "displayName": "openai", "status": "static", "profiles": [{"profileId": "openai:default", "type": "api_key", "status": "static", "source": "inherited", "lastUsedAt": 1788694700378, "logoutSupported": true}], "apiKey": {"source": "env", "envVar": "OPENAI_API_KEY"}},
+   {"provider": "xai", "authProvider": "xai", "displayName": "xAI", "status": "ok", "expiry": {"at": 1792132514149, "remainingMs": 21355234, "label": "6h"}, "profiles": [{"profileId": "xai:operator@example.test", "type": "oauth", "status": "ok", "source": "inherited", "expiry": {"at": 1792132514149, "remainingMs": 21355234, "label": "6h"}, "email": "operator@example.test", "lastUsedAt": 1788622408820, "logoutSupported": true}], "usage": {"providerId": "xai", "windows": [], "summary": "Included usage omitted", "plan": "SuperGrok", "billing": [{"type": "balance", "label": "Prepaid balance", "amount": 0, "unit": "USD"}]}}
+  ]
+ },
+ "modelsList": {
+  "models": [
+   {"provider": "openai", "id": "openai-model-1", "name": "openai model 1", "available": true, "contextWindow": 1050000, "reasoning": true},
+   {"provider": "openai", "id": "openai-model-2", "name": "openai model 2", "available": true, "contextWindow": 1050000, "reasoning": true},
+   {"provider": "openai", "id": "openai-model-3", "name": "openai model 3", "available": true, "contextWindow": 1050000, "reasoning": true},
+   {"provider": "anthropic", "id": "anthropic-model-1", "name": "anthropic model 1", "available": true, "contextWindow": 1000000, "reasoning": true},
+   {"provider": "anthropic", "id": "anthropic-model-2", "name": "anthropic model 2", "available": true, "contextWindow": 1000000, "reasoning": true},
+   {"provider": "anthropic", "id": "anthropic-model-3", "name": "anthropic model 3", "available": true, "contextWindow": 1000000, "reasoning": true},
+   {"provider": "github-copilot", "id": "github-copilot-model-1", "name": "github-copilot model 1", "available": true, "contextWindow": 328000, "reasoning": true},
+   {"provider": "github-copilot", "id": "github-copilot-model-2", "name": "github-copilot model 2", "available": true, "contextWindow": 328000, "reasoning": true}
+  ]
+ },
+ "usageStatus": {
+  "providers": [
+   {"provider": "github-copilot", "displayName": "Copilot", "windows": [{"label": "Premium", "usedPercent": 100}, {"label": "Chat", "usedPercent": 0}], "plan": "individual_pro"},
+   {"provider": "xai", "displayName": "SuperGrok", "windows": [], "billing": [{"type": "balance", "label": "Prepaid balance", "amount": 0, "unit": "USD"}], "plan": "SuperGrok", "summary": "Included usage omitted"}
+  ]
+ },
+ "sessionsUsage": {
+  "aggregates": {
+   "byProvider": [
+    {"provider": "openai", "count": 44711, "totals": {"input": 63910517, "output": 8323080, "cacheRead": 2528813508, "cacheWrite": 280368551, "totalTokens": 2881415656, "totalCost": 5696.5745992000075, "missingCostEntries": 44, "usageReport": {"state": "unavailable"}}},
+    {"provider": "xai", "count": 922, "totals": {"input": 7808452, "output": 589318, "cacheRead": 86837504, "cacheWrite": 0, "totalTokens": 95235274, "totalCost": 62.571563999999995, "missingCostEntries": 0}},
+    {"provider": "***", "count": 772, "totals": {"input": 3389196, "output": 335337, "cacheRead": 119742758, "cacheWrite": 4007172, "totalTokens": 127474463, "totalCost": 0, "missingCostEntries": 771}},
+    {"provider": "claude-cli", "count": 126, "totals": {"input": 270, "output": 17997, "cacheRead": 15303025, "cacheWrite": 3219862, "totalTokens": 18541154, "totalCost": 0, "missingCostEntries": 114}},
+    {"provider": "ollama-cloud", "count": 1, "totals": {"input": 28094, "output": 29, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 28123, "totalCost": 0, "missingCostEntries": 1}},
+    {"provider": "openclaw", "count": 335, "totals": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 0, "totalCost": 0, "missingCostEntries": 0}},
+    {"provider": "meta", "count": 6, "totals": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 0, "totalCost": 0, "missingCostEntries": 0}},
+    {"provider": "acp-opencode", "count": 14, "totals": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 0, "totalCost": 0, "missingCostEntries": 0}}
+   ],
+   "byModel": [
+    {"provider": "openai", "model": "gpt-6-astra", "count": 26304, "totals": {"input": 10697952, "output": 4140225, "cacheRead": 752915850, "cacheWrite": 177611199, "totalTokens": 945365226, "totalCost": 5044.202914500009, "missingCostEntries": 15, "usageReport": {"state": "unavailable"}}},
+    {"provider": "openai", "model": "gpt-6.1-sol", "count": 12984, "totals": {"input": 17691583, "output": 3130234, "cacheRead": 1428954319, "cacheWrite": 69008315, "totalTokens": 1518784451, "totalCost": 381.9121942000001, "missingCostEntries": 29, "usageReport": {"state": "unavailable"}}},
+    {"provider": "openai", "model": "gpt-6-sol", "count": 4927, "totals": {"input": 35255737, "output": 983025, "cacheRead": 260486955, "cacheWrite": 32919729, "totalTokens": 329645446, "totalCost": 218.63401849999985, "missingCostEntries": 0}},
+    {"provider": "xai", "model": "grok-4.6", "count": 922, "totals": {"input": 7808452, "output": 589318, "cacheRead": 86837504, "cacheWrite": 0, "totalTokens": 95235274, "totalCost": 62.571563999999995, "missingCostEntries": 0}},
+    {"provider": "openai", "model": "gpt-5.6-sol", "count": 496, "totals": {"input": 265245, "output": 69596, "cacheRead": 86456384, "cacheWrite": 829308, "totalTokens": 87620533, "totalCost": 51.82547199999999, "missingCostEntries": 0}},
+    {"provider": "***", "model": "claude-opus-5.5", "count": 772, "totals": {"input": 3389196, "output": 335337, "cacheRead": 119742758, "cacheWrite": 4007172, "totalTokens": 127474463, "totalCost": 0, "missingCostEntries": 771}},
+    {"provider": "claude-cli", "model": "claude-opus-5-5", "count": 113, "totals": {"input": 228, "output": 17947, "cacheRead": 14777066, "cacheWrite": 3044410, "totalTokens": 17839651, "totalCost": 0, "missingCostEntries": 113}},
+    {"provider": "claude-cli", "model": "claude-haiku-4-5", "count": 12, "totals": {"input": 39, "output": 41, "cacheRead": 525959, "cacheWrite": 118586, "totalTokens": 644625, "totalCost": 0, "missingCostEntries": 0}},
+    {"provider": "claude-cli", "model": "claude-sonnet-4-6", "count": 1, "totals": {"input": 3, "output": 9, "cacheRead": 0, "cacheWrite": 56866, "totalTokens": 56878, "totalCost": 0, "missingCostEntries": 1}},
+    {"provider": "ollama-cloud", "model": "minimax-m2.7", "count": 1, "totals": {"input": 28094, "output": 29, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 28123, "totalCost": 0, "missingCostEntries": 1}}
+   ],
+   "modelDaily": [
+    {"date": "2026-09-17", "provider": "openai", "model": "gpt-6-astra", "tokens": 23524459, "cost": 79.58676949999997, "count": 767},
+    {"date": "2026-09-17", "provider": "xai", "model": "grok-4.6", "tokens": 35562313, "cost": 20.63411, "count": 283},
+    {"date": "2026-09-17", "provider": "openai", "model": "gpt-5.6-sol", "tokens": 233443, "cost": 0.5815115, "count": 6},
+    {"date": "2026-09-18", "provider": "openai", "model": "gpt-6-astra", "tokens": 29833295, "cost": 105.84196650000001, "count": 1265},
+    {"date": "2026-09-18", "provider": "xai", "model": "grok-4.6", "tokens": 9300469, "cost": 6.9452940000000005, "count": 79},
+    {"date": "2026-09-18", "provider": "openai", "model": "gpt-5.6-sol", "tokens": 151942, "cost": 0.5191377500000001, "count": 4},
+    {"date": "2026-09-19", "provider": "openai", "model": "gpt-6-astra", "tokens": 7591389, "cost": 43.551032, "count": 298},
+    {"date": "2026-09-19", "provider": "xai", "model": "grok-4.6", "tokens": 3671136, "cost": 2.544596, "count": 38},
+    {"date": "2026-09-19", "provider": "openai", "model": "gpt-5.6-sol", "tokens": 76500, "cost": 0.26254449999999996, "count": 2},
+    {"date": "2026-09-19", "provider": "claude-cli", "model": "claude-sonnet-4-6", "tokens": 56878, "cost": 0, "count": 1},
+    {"date": "2026-09-19", "provider": "claude-cli", "model": "claude-haiku-4-5", "tokens": 644625, "cost": 0, "count": 12},
+    {"date": "2026-09-20", "provider": "openai", "model": "gpt-6-astra", "tokens": 9703425, "cost": 50.120107000000004, "count": 260},
+    {"date": "2026-09-20", "provider": "xai", "model": "grok-4.6", "tokens": 2307693, "cost": 1.72467, "count": 30},
+    {"date": "2026-09-20", "provider": "openai", "model": "gpt-5.6-sol", "tokens": 78932, "cost": 0.2716165, "count": 2},
+    {"date": "2026-09-21", "provider": "openai", "model": "gpt-6-astra", "tokens": 17172415, "cost": 94.94683550000002, "count": 817},
+    {"date": "2026-09-21", "provider": "xai", "model": "grok-4.6", "tokens": 22701632, "cost": 15.01646, "count": 137},
+    {"date": "2026-09-21", "provider": "openai", "model": "gpt-5.6-sol", "tokens": 82090, "cost": 0.28319225000000003, "count": 4},
+    {"date": "2026-09-22", "provider": "openai", "model": "gpt-6-astra", "tokens": 5898965, "cost": 41.88787200000001, "count": 362},
+    {"date": "2026-09-22", "provider": "xai", "model": "grok-4.6", "tokens": 11148395, "cost": 7.659874, "count": 165},
+    {"date": "2026-09-22", "provider": "openai", "model": "gpt-5.6-sol", "tokens": 123252, "cost": 0.5157247500000001, "count": 6},
+    {"date": "2026-09-23", "provider": "openai", "model": "gpt-6-astra", "tokens": 15438936, "cost": 44.477633499999996, "count": 273},
+    {"date": "2026-09-23", "provider": "openai", "model": "gpt-6-sol", "tokens": 32604249, "cost": 20.936950999999997, "count": 502},
+    {"date": "2026-09-23", "provider": "xai", "model": "grok-4.6", "tokens": 1023368, "cost": 1.243572, "count": 20},
+    {"date": "2026-09-24", "provider": "openai", "model": "gpt-6-sol", "tokens": 147866930, "cost": 108.56047349999999, "count": 1604},
+    {"date": "2026-09-24", "provider": "openai", "model": "gpt-6-astra", "tokens": 19339507, "cost": 72.61109350000001, "count": 720},
+    {"date": "2026-09-24", "provider": "xai", "model": "grok-4.6", "tokens": 1817626, "cost": 1.4420880000000003, "count": 33},
+    {"date": "2026-09-25", "provider": "openai", "model": "gpt-6-sol", "tokens": 29006664, "cost": 19.085361000000002, "count": 684},
+    {"date": "2026-09-25", "provider": "openai", "model": "gpt-6-astra", "tokens": 1276948, "cost": 3.206966, "count": 18},
+    {"date": "2026-09-25", "provider": "xai", "model": "grok-4.6", "tokens": 1397253, "cost": 1.0948820000000001, "count": 30},
+    {"date": "2026-09-26", "provider": "openai", "model": "gpt-6-sol", "tokens": 51445100, "cost": 30.0847689, "count": 1002},
+    {"date": "2026-09-26", "provider": "xai", "model": "grok-4.6", "tokens": 1273056, "cost": 0.9571120000000001, "count": 23},
+    {"date": "2026-09-27", "provider": "openai", "model": "gpt-6-astra", "tokens": 34543841, "cost": 111.60585950000001, "count": 391},
+    {"date": "2026-09-27", "provider": "openai", "model": "gpt-6-sol", "tokens": 63911816, "cost": 37.026336100000016, "count": 982},
+    {"date": "2026-09-27", "provider": "xai", "model": "grok-4.6", "tokens": 3809511, "cost": 2.481546, "count": 59},
+    {"date": "2026-09-28", "provider": "openai", "model": "gpt-6-astra", "tokens": 87892517, "cost": 542.1283950000001, "count": 2540},
+    {"date": "2026-09-28", "provider": "openai", "model": "gpt-6-sol", "tokens": 4810687, "cost": 2.940128, "count": 153},
+    {"date": "2026-09-28", "provider": "xai", "model": "grok-4.6", "tokens": 1222822, "cost": 0.82736, "count": 25},
+    {"date": "2026-09-29", "provider": "openai", "model": "gpt-6-astra", "tokens": 30556161, "cost": 331.47636650000015, "count": 944},
+    {"date": "2026-09-30", "provider": "openai", "model": "gpt-6-astra", "tokens": 8710638, "cost": 53.05727900000003, "count": 757},
+    {"date": "2026-10-01", "provider": "openai", "model": "gpt-6-astra", "tokens": 36742359, "cost": 182.29682400000002, "count": 1119},
+    {"date": "2026-10-02", "provider": "openai", "model": "gpt-6-astra", "tokens": 28823612, "cost": 174.95296300000004, "count": 916},
+    {"date": "2026-10-03", "provider": "openai", "model": "gpt-6-astra", "tokens": 25226746, "cost": 181.07273350000003, "count": 911},
+    {"date": "2026-10-04", "provider": "openai", "model": "gpt-6-astra", "tokens": 65884526, "cost": 346.125559, "count": 1483},
+    {"date": "2026-10-05", "provider": "openai", "model": "gpt-6-astra", "tokens": 33343434, "cost": 209.78809450000006, "count": 935},
+    {"date": "2026-10-06", "provider": "openai", "model": "gpt-6-astra", "tokens": 88906429, "cost": 603.1501725, "count": 1632},
+    {"date": "2026-10-06", "provider": "***", "model": "claude-opus-5.5", "tokens": 11280485, "cost": 0, "count": 83},
+    {"date": "2026-10-07", "provider": "openai", "model": "gpt-6-astra", "tokens": 6432537, "cost": 36.7003615, "count": 924},
+    {"date": "2026-10-07", "provider": "claude-cli", "model": "claude-opus-5-5", "tokens": 207017, "cost": 0, "count": 2},
+    {"date": "2026-10-07", "provider": "***", "model": "claude-opus-5.5", "tokens": 1880227, "cost": 0, "count": 12},
+    {"date": "2026-10-08", "provider": "openai", "model": "gpt-6-astra", "tokens": 16302079, "cost": 71.4450185, "count": 1059},
+    {"date": "2026-10-09", "provider": "openai", "model": "gpt-6-astra", "tokens": 13155270, "cost": 68.88677549999997, "count": 929},
+    {"date": "2026-10-09", "provider": "ollama-cloud", "model": "minimax-m2.7", "tokens": 28123, "cost": 0, "count": 1},
+    {"date": "2026-10-10", "provider": "openai", "model": "gpt-6-astra", "tokens": 11357430, "cost": 66.362117, "count": 919},
+    {"date": "2026-10-10", "provider": "claude-cli", "model": "claude-opus-5-5", "tokens": 99284, "cost": 0, "count": 1},
+    {"date": "2026-10-11", "provider": "openai", "model": "gpt-6-astra", "tokens": 44241215, "cost": 191.493703, "count": 1108},
+    {"date": "2026-10-11", "provider": "openai", "model": "gpt-6.1-sol", "tokens": 2097137, "cost": 0.9221055000000001, "count": 68},
+    {"date": "2026-10-12", "provider": "openai", "model": "gpt-6-astra", "tokens": 63180459, "cost": 321.496513, "count": 1494},
+    {"date": "2026-10-12", "provider": "openai", "model": "gpt-6.1-sol", "tokens": 517793945, "cost": 148.77137980000006, "count": 4299},
+    {"date": "2026-10-12", "provider": "***", "model": "claude-opus-5.5", "tokens": 99347395, "cost": 0, "count": 590},
+    {"date": "2026-10-13", "provider": "openai", "model": "gpt-6-astra", "tokens": 20305748, "cost": 99.88648250000003, "count": 1078},
+    {"date": "2026-10-13", "provider": "openai", "model": "gpt-5.6-sol", "tokens": 86874374, "cost": 49.391744749999994, "count": 472},
+    {"date": "2026-10-13", "provider": "openai", "model": "gpt-6.1-sol", "tokens": 26575311, "cost": 5.743210999999999, "count": 288},
+    {"date": "2026-10-13", "provider": "claude-cli", "model": "claude-opus-5-5", "tokens": 12094727, "cost": 0, "count": 50},
+    {"date": "2026-10-13", "provider": "***", "model": "claude-opus-5.5", "tokens": 14966356, "cost": 0, "count": 87},
+    {"date": "2026-10-14", "provider": "openai", "model": "gpt-6-astra", "tokens": 41019747, "cost": 247.13221100000004, "count": 1107, "usageReport": {"state": "unavailable"}},
+    {"date": "2026-10-14", "provider": "openai", "model": "gpt-6.1-sol", "tokens": 421554869, "cost": 101.94060350000001, "count": 3611, "usageReport": {"state": "unavailable"}},
+    {"date": "2026-10-14", "provider": "claude-cli", "model": "claude-opus-5-5", "tokens": 2470804, "cost": 0, "count": 14},
+    {"date": "2026-10-15", "provider": "openai", "model": "gpt-6-astra", "tokens": 157005485, "cost": 645.126227, "count": 1100, "usageReport": {"state": "unavailable"}},
+    {"date": "2026-10-15", "provider": "openai", "model": "gpt-6.1-sol", "tokens": 480569254, "cost": 108.48259409999999, "count": 4056, "usageReport": {"state": "unavailable"}},
+    {"date": "2026-10-15", "provider": "claude-cli", "model": "claude-opus-5-5", "tokens": 1419488, "cost": 0, "count": 36},
+    {"date": "2026-10-16", "provider": "openai", "model": "gpt-6-astra", "tokens": 1955654, "cost": 23.788983499999997, "count": 178},
+    {"date": "2026-10-16", "provider": "openai", "model": "gpt-6.1-sol", "tokens": 70193935, "cost": 16.0523003, "count": 662, "usageReport": {"state": "unavailable"}},
+    {"date": "2026-10-16", "provider": "claude-cli", "model": "claude-opus-5-5", "tokens": 1548331, "cost": 0, "count": 10}
+   ]
+  },
+  "totals": {
+   "input": 75136529,
+   "output": 9265761,
+   "cacheRead": 2750696795,
+   "cacheWrite": 287595585,
+   "totalTokens": 3122694670,
+   "totalCost": 5759.146163200007,
+   "missingCostEntries": 930,
+   "usageReport": {"state": "unavailable"}
+  }
+ },
+ "lastDate": "2026-10-16"
+}

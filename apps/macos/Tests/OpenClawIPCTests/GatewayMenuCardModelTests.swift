@@ -33,7 +33,7 @@ struct GatewayMenuCardModelTests {
                 buildId: buildId,
                 endpointLabel: endpoint,
                 transportLabel: transport)
-            #expect(model.secondaryLine(now: Self.now) == expected)
+            #expect(model.secondaryLine() == expected)
         }
     }
 

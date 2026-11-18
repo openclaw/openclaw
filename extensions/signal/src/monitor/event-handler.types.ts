@@ -1,6 +1,4 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
-import type { StatusReactionTiming } from "openclaw/plugin-sdk/channel-feedback";
-// Signal type declarations define plugin contracts.
 import type {
   DmPolicy,
   GroupPolicy,
@@ -10,9 +8,8 @@ import type {
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { SignalSender } from "../identity.js";
 
-export type SignalEnvelope = {
+type SignalEnvelope = {
   sourceNumber?: string | null;
   sourceUuid?: string | null;
   sourceName?: string | null;
@@ -45,6 +42,7 @@ export type SignalDataMessage = {
   } | null;
   quote?: {
     text?: string | null;
+    mentions?: Array<SignalMention> | null;
     author?: string | null;
     authorUuid?: string | null;
   } | null;
@@ -63,17 +61,11 @@ export type SignalReactionMessage = {
   } | null;
 };
 
-export type SignalAttachment = {
+type SignalAttachment = {
   id?: string | null;
   contentType?: string | null;
   filename?: string | null;
   size?: number | null;
-};
-
-export type SignalReactionTarget = {
-  kind: "phone" | "uuid";
-  id: string;
-  display: string;
 };
 
 export type SignalReceivePayload = {
@@ -94,7 +86,6 @@ export type SignalNativeReplyContext = {
 export type SignalEventHandlerDeps = {
   runtime: RuntimeEnv;
   channelRuntime?: PluginRuntime["channel"];
-  statusReactionTiming?: Required<StatusReactionTiming>;
   abortSignal?: AbortSignal;
   runTrackedTask?: (task: () => Promise<void>) => void;
   cfg: OpenClawConfig;
@@ -138,23 +129,4 @@ export type SignalEventHandlerDeps = {
     replyContext?: SignalNativeReplyContext;
     chatType?: "direct" | "group";
   }) => Promise<void>;
-  resolveSignalReactionTargets: (reaction: SignalReactionMessage) => SignalReactionTarget[];
-  isSignalReactionMessage: (
-    reaction: SignalReactionMessage | null | undefined,
-  ) => reaction is SignalReactionMessage;
-  shouldEmitSignalReactionNotification: (params: {
-    mode?: SignalReactionNotificationMode;
-    account?: string | null;
-    accountUuid?: string | null;
-    targets?: SignalReactionTarget[];
-    sender?: SignalSender | null;
-    allowlist?: string[];
-  }) => boolean;
-  buildSignalReactionSystemEventText: (params: {
-    emojiLabel: string;
-    actorLabel: string;
-    messageId: string;
-    targetLabel?: string;
-    groupLabel?: string;
-  }) => string;
 };

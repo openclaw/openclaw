@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements channel outbound behavior.
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
@@ -6,75 +5,34 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
-import { createWhatsAppOutboundBase } from "./outbound-base.js";
+import { whatsappOutboundBase } from "./outbound-base.js";
 import { normalizeWhatsAppPayloadTextPreservingIndentation } from "./outbound-media-contract.js";
-import { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
-import { getWhatsAppRuntime } from "./runtime.js";
-import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
 
 const loadWhatsAppApprovalReactionsModule = createLazyRuntimeModule(
   () => import("./approval-reactions.js"),
 );
-const loadWhatsAppQuestionReactionsModule = createLazyRuntimeModule(
-  () => import("./question-reactions.js"),
-);
-
-function normalizeWhatsAppChannelPayloadText(text: string | undefined): string {
-  return normalizeWhatsAppPayloadTextPreservingIndentation(text);
-}
-
-function normalizeWhatsAppChannelSendText(text: string | undefined): string {
-  const normalized = normalizeWhatsAppChannelPayloadText(text);
-  return normalized.trim() ? normalized : "";
-}
-
-async function prepareWhatsAppApprovalPayloadForDelivery(
-  params: Parameters<NonNullable<ChannelOutboundAdapter["renderPresentation"]>>[0],
-) {
-  const questionPayload = questionGatewayRuntime.prepareReactionPayloadForDelivery({
-    payload: params.payload,
-    presentation: params.presentation,
-  });
-  if (questionPayload) {
-    return questionPayload;
-  }
-  return (await loadWhatsAppApprovalReactionsModule()).prepareWhatsAppApprovalPayloadForDelivery({
-    payload: params.payload,
-    presentation: params.presentation,
-  });
-}
-
-async function registerDeliveredWhatsAppApprovalPayload(
-  params: Parameters<NonNullable<ChannelOutboundAdapter["afterDeliverPayload"]>>[0],
-): Promise<void> {
-  (
-    await loadWhatsAppQuestionReactionsModule()
-  ).registerWhatsAppQuestionReactionTargetForDeliveredPayload(params);
-  (
-    await loadWhatsAppApprovalReactionsModule()
-  ).registerWhatsAppApprovalReactionTargetForDeliveredPayload(params);
-}
 
 export const whatsappChannelOutbound = {
-  ...createWhatsAppOutboundBase({
-    sendMessageWhatsApp: async (to, text, options) =>
-      await sendMessageWhatsApp(to, text, {
-        ...options,
-        preserveLeadingWhitespace: true,
-      }),
-    sendPollWhatsApp,
-    shouldLogVerbose: () => getWhatsAppRuntime().logging.shouldLogVerbose(),
-    resolveTarget: ({ to, allowFrom, mode }) =>
-      resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
-    normalizeText: normalizeWhatsAppChannelSendText,
-  }),
+  ...whatsappOutboundBase,
   sendTextOnlyErrorPayloads: true,
-  renderPresentation: prepareWhatsAppApprovalPayloadForDelivery,
-  afterDeliverPayload: registerDeliveredWhatsAppApprovalPayload,
+  renderPresentation: async (
+    params: Parameters<NonNullable<ChannelOutboundAdapter["renderPresentation"]>>[0],
+  ) => {
+    return (await loadWhatsAppApprovalReactionsModule()).prepareWhatsAppApprovalPayloadForDelivery({
+      payload: params.payload,
+      presentation: params.presentation,
+    });
+  },
+  afterDeliverPayload: async (
+    params: Parameters<NonNullable<ChannelOutboundAdapter["afterDeliverPayload"]>>[0],
+  ): Promise<void> => {
+    await (
+      await loadWhatsAppApprovalReactionsModule()
+    ).registerWhatsAppApprovalReactionTargetForDeliveredPayload(params);
+  },
   normalizePayload: ({ payload }: { payload: { text?: string } }) => ({
     ...payload,
-    text: normalizeWhatsAppChannelPayloadText(payload.text),
+    text: normalizeWhatsAppPayloadTextPreservingIndentation(payload.text),
   }),
 };
 

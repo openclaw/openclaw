@@ -8,7 +8,10 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
+import { openUrlPrivately } from "../infra/browser-handoff.js";
 import type { SystemPresence } from "../infra/system-presence.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { sleep } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -22,7 +25,6 @@ import {
 import {
   detectBrowserOpenSupport,
   formatControlUiSshHint,
-  openUrl,
   resolveAdvertisedControlUiLinks,
 } from "./onboard-helpers.js";
 
@@ -43,83 +45,6 @@ type BrowserHatchTarget = {
   password?: string;
 };
 
-type DashboardPresenceProbeResult =
-  | { reachable: true; clientKeys: string[] }
-  | { reachable: false; reason?: string };
-
-type DashboardWaitResult =
-  | { connected: true }
-  | { connected: false; reason: "gateway-unreachable" | "timeout" };
-
-export type BrowserHatchHandoffResult =
-  | { handedOff: true }
-  | {
-      handedOff: false;
-      reason: "gateway-unreachable" | "target-unavailable" | "timeout";
-    };
-
-type BrowserHatchHandoffDeps = {
-  env?: NodeJS.ProcessEnv;
-  platform?: NodeJS.Platform;
-  openBrowser?: (url: string) => Promise<boolean>;
-  resolveTarget?: (config: OpenClawConfig, env: NodeJS.ProcessEnv) => Promise<BrowserHatchTarget>;
-  probePresence?: (
-    target: BrowserHatchTarget,
-    timeoutMs: number,
-  ) => Promise<DashboardPresenceProbeResult>;
-  waitForDocument?: typeof waitForControlUiDocument;
-  issueBrowserHandoff?: typeof issueControlUiBrowserHandoff;
-  verifyLoopbackAlias?: typeof hasVerifiedControlUiLoopbackAlias;
-  pollForClient?: (params: {
-    target: BrowserHatchTarget;
-    baselineClientKeys: ReadonlySet<string>;
-    timeoutMs: number;
-    probe: (target: BrowserHatchTarget, timeoutMs: number) => Promise<DashboardPresenceProbeResult>;
-    now?: () => number;
-    sleep?: (ms: number) => Promise<void>;
-  }) => Promise<DashboardWaitResult>;
-  now?: () => number;
-  sleep?: (ms: number) => Promise<void>;
-};
-
-async function resolveBrowserHatchTarget(
-  config: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-): Promise<BrowserHatchTarget> {
-  const shared = await resolveControlUiHandoffTarget({ config, env });
-  const credentials = await resolveGatewayCredentialsWithSecretInputs({
-    config,
-    env,
-    modeOverride: "local",
-  });
-  const authMode =
-    !config.gateway?.auth?.mode && credentials.password ? "password" : shared.authMode;
-  const token = authMode === "token" ? credentials.token : undefined;
-  const setupAuthValue = authMode === "password" ? credentials.password : undefined;
-  const target: BrowserHatchTarget = {
-    config,
-    links: shared.links,
-    documentUrl: shared.documentUrl,
-    port: shared.port,
-    ...(shared.loopbackAliasHost ? { loopbackAliasHost: shared.loopbackAliasHost } : {}),
-    ...(shared.tlsConfig ? { tlsConfig: shared.tlsConfig } : {}),
-    ...(shared.bind === "loopback" || shared.tlsConfig?.enabled !== true
-      ? {
-          sshHint: formatControlUiSshHint({
-            port: shared.port,
-            ...(shared.basePath ? { basePath: shared.basePath } : {}),
-            tlsEnabled: shared.tlsConfig?.enabled === true,
-          }),
-        }
-      : {}),
-    ...(token ? { token } : {}),
-  };
-  if (setupAuthValue) {
-    target["password"] = setupAuthValue;
-  }
-  return target;
-}
-
 function isConnectedControlUi(entry: SystemPresence): boolean {
   return (
     entry.host === GATEWAY_CLIENT_IDS.CONTROL_UI &&
@@ -128,30 +53,10 @@ function isConnectedControlUi(entry: SystemPresence): boolean {
   );
 }
 
-function retargetBrowserHandoffUrl(
-  browserUrl: string,
-  links: ControlUiHandoffTarget["links"],
-): string {
-  const issued = new URL(browserUrl);
-  const visible = new URL(links.httpUrl);
-  const fragment = new URLSearchParams(issued.hash.slice(1));
-  fragment.set("gatewayUrl", links.wsUrl);
-  visible.hash = fragment.toString();
-  return visible.toString();
-}
-
-export function resolveConnectedControlUiPresenceKeys(
-  entries: readonly SystemPresence[],
-): string[] {
-  return entries
-    .filter(isConnectedControlUi)
-    .map((entry) => [entry.deviceId, entry.instanceId, entry.host, entry.mode].join("\0"));
-}
-
 async function probeDashboardPresence(
   target: BrowserHatchTarget,
   timeoutMs: number,
-): Promise<DashboardPresenceProbeResult> {
+): Promise<string[] | null> {
   try {
     // Read presence over the same trusted local CLI path every `openclaw`
     // command uses. A raw shared-auth call with a (possibly SecretRef-managed)
@@ -161,8 +66,6 @@ async function probeDashboardPresence(
       config: target.config,
       method: "system-presence",
       timeoutMs,
-      // Connect as a CLI-mode loopback client (what every `openclaw` command
-      // does) so the gateway grants operator.read via trusted local auth.
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       mode: GATEWAY_CLIENT_MODES.CLI,
       // Present the shared secret when one is configured (token-auth gateways
@@ -173,116 +76,137 @@ async function probeDashboardPresence(
       expectFinal: false,
       ignoreEnvUrlOverride: true,
     });
-    return {
-      reachable: true,
-      clientKeys: resolveConnectedControlUiPresenceKeys(presence ?? []),
-    };
-  } catch (error) {
-    return {
-      reachable: false,
-      reason: error instanceof Error ? error.message : String(error),
-    };
+    return (presence ?? [])
+      .filter(isConnectedControlUi)
+      .map((entry) => [entry.deviceId, entry.instanceId, entry.host, entry.mode].join("\0"));
+  } catch {
+    return null;
   }
 }
 
-async function waitForDashboardClient(params: {
-  target: BrowserHatchTarget;
-  baselineClientKeys: ReadonlySet<string>;
-  timeoutMs: number;
-  probe: (target: BrowserHatchTarget, timeoutMs: number) => Promise<DashboardPresenceProbeResult>;
-  now?: () => number;
-  sleep?: (ms: number) => Promise<void>;
-}): Promise<DashboardWaitResult> {
-  const now = params.now ?? Date.now;
-  const sleepFor = params.sleep ?? sleep;
-  const deadline = now() + params.timeoutMs;
-  while (true) {
-    const beforeProbeMs = deadline - now();
-    if (beforeProbeMs <= 0) {
-      return { connected: false, reason: "timeout" };
-    }
-    const result = await params.probe(
-      params.target,
-      Math.min(HANDOFF_PROBE_TIMEOUT_MS, beforeProbeMs),
-    );
-    if (!result.reachable) {
-      return { connected: false, reason: "gateway-unreachable" };
-    }
-    if (result.clientKeys.some((key) => !params.baselineClientKeys.has(key))) {
-      return { connected: true };
-    }
-    const remainingMs = deadline - now();
-    if (remainingMs <= 0) {
-      return { connected: false, reason: "timeout" };
-    }
-    await sleepFor(Math.min(HANDOFF_POLL_INTERVAL_MS, remainingMs));
+export async function resolveOnboardingDashboardTarget(
+  dashboardUrl: string,
+  config: OpenClawConfig,
+  agentId?: string,
+): Promise<{ url: URL; setupOnly: boolean }> {
+  const url = new URL(dashboardUrl);
+  const [{ resolveConfiguredSetupModelForAgent }, { resolveSystemAgentOnboardingTarget }] =
+    await Promise.all([import("../agents/utility-model.js"), import("./onboard-agent-target.js")]);
+  const setupOnly =
+    resolveConfiguredSetupModelForAgent({
+      cfg: config,
+      agentId: agentId ?? resolveSystemAgentOnboardingTarget(config).agentId,
+    })?.modelTarget === "utility";
+  if (setupOnly) {
+    url.pathname = `${url.pathname.replace(/\/$/, "")}/custodian`;
+    url.searchParams.set("onboarding", "1");
+  } else if (agentId) {
+    url.searchParams.set("session", `agent:${agentId}:main`);
   }
+  return { url, setupOnly };
 }
 
 /** Opens or prints the dashboard and waits for its Control UI client connection. */
-export async function runBrowserHatchHandoff(
-  params: {
-    config: OpenClawConfig;
-    prompter: WizardPrompter;
-    suppressTokenOutput?: boolean;
-  },
-  deps: BrowserHatchHandoffDeps = {},
-): Promise<BrowserHatchHandoffResult> {
-  const env = deps.env ?? process.env;
+export async function runBrowserHatchHandoff(params: {
+  config: OpenClawConfig;
+  prompter: WizardPrompter;
+  suppressTokenOutput?: boolean;
+  agentId?: string;
+}): Promise<boolean> {
+  const env = process.env;
   if (params.suppressTokenOutput === true || params.config.gateway?.controlUi?.enabled === false) {
-    return { handedOff: false, reason: "target-unavailable" };
+    return false;
   }
-  const browserSupport = await detectBrowserOpenSupport(deps);
+  const browserSupport = await detectBrowserOpenSupport();
   const canOpenBrowser = browserSupport.ok;
   let target: BrowserHatchTarget;
   try {
-    target = await (deps.resolveTarget ?? resolveBrowserHatchTarget)(params.config, env);
+    const config = params.config;
+    const shared = await resolveControlUiHandoffTarget({ config, env });
+    const credentials = await resolveGatewayCredentialsWithSecretInputs({
+      config,
+      env,
+      modeOverride: "local",
+    });
+    const authMode =
+      !config.gateway?.auth?.mode && credentials.password ? "password" : shared.authMode;
+    const token = authMode === "token" ? credentials.token : undefined;
+    const setupAuthValue = authMode === "password" ? credentials.password : undefined;
+    target = {
+      config,
+      links: shared.links,
+      documentUrl: shared.documentUrl,
+      port: shared.port,
+      ...(shared.loopbackAliasHost ? { loopbackAliasHost: shared.loopbackAliasHost } : {}),
+      ...(shared.tlsConfig ? { tlsConfig: shared.tlsConfig } : {}),
+      ...(shared.bind === "loopback" || shared.tlsConfig?.enabled !== true
+        ? {
+            sshHint: formatControlUiSshHint({
+              port: shared.port,
+              ...(shared.basePath ? { basePath: shared.basePath } : {}),
+              tlsEnabled: shared.tlsConfig?.enabled === true,
+            }),
+          }
+        : {}),
+      ...(token ? { token } : {}),
+    };
+    if (setupAuthValue) {
+      target["password"] = setupAuthValue;
+    }
   } catch {
-    return { handedOff: false, reason: "target-unavailable" };
+    return false;
   }
 
-  if (!(await (deps.verifyLoopbackAlias ?? hasVerifiedControlUiLoopbackAlias)(target))) {
-    return { handedOff: false, reason: "target-unavailable" };
+  if (!(await hasVerifiedControlUiLoopbackAlias(target))) {
+    return false;
   }
 
   let progress: ReturnType<WizardPrompter["progress"]> | undefined;
   try {
-    const document = await (deps.waitForDocument ?? waitForControlUiDocument)({
+    const document = await waitForControlUiDocument({
       url: target.documentUrl,
       tlsConfig: target.tlsConfig,
+      signal: getAsyncWorkSignal(),
       onPending: () => {
         progress = params.prompter.progress(t("wizard.guided.controlUiPreparing"));
       },
     });
     if (!document.ready) {
-      return { handedOff: false, reason: "target-unavailable" };
+      return false;
     }
   } catch {
-    return { handedOff: false, reason: "target-unavailable" };
+    return false;
   } finally {
     progress?.stop();
+    getAsyncWorkSignal()?.throwIfAborted();
   }
 
-  const probePresence = deps.probePresence ?? probeDashboardPresence;
-  const baseline = await probePresence(target, HANDOFF_PROBE_TIMEOUT_MS);
-  if (!baseline.reachable) {
-    return { handedOff: false, reason: "gateway-unreachable" };
+  const baseline = await probeDashboardPresence(target, HANDOFF_PROBE_TIMEOUT_MS);
+  if (!baseline) {
+    return false;
   }
 
   let browserUrl: string;
   try {
-    const browserHandoff = await (deps.issueBrowserHandoff ?? issueControlUiBrowserHandoff)(
-      target.links,
+    const browserHandoff = await issueControlUiBrowserHandoff(target.links);
+    const { url } = await resolveOnboardingDashboardTarget(
+      browserHandoff.browserUrl,
+      params.config,
+      params.agentId,
     );
-    browserUrl = browserHandoff.browserUrl;
+    browserUrl = url.toString();
   } catch {
-    return { handedOff: false, reason: "target-unavailable" };
+    return false;
   }
 
   let opened = false;
   if (canOpenBrowser) {
     try {
-      opened = await (deps.openBrowser ?? openUrl)(browserUrl);
+      // The handoff URL carries the one-time pairing credential in its
+      // fragment. Open it through a private file handoff so the credential
+      // never appears in a browser-opener process argument, where another
+      // OS user could read it from /proc on default procfs hosts.
+      opened = await openUrlPrivately(browserUrl);
     } catch {
       opened = false;
     }
@@ -328,27 +252,46 @@ export async function runBrowserHatchHandoff(
           tlsEnabled: target.tlsConfig?.enabled === true,
         })
       : target.links;
-    const visibleUrl = retargetBrowserHandoffUrl(browserUrl, visibleLinks);
+    const issued = new URL(browserUrl);
+    const visible = new URL(visibleLinks.httpUrl);
+    const fragment = new URLSearchParams(issued.hash.slice(1));
+    fragment.set("gatewayUrl", visibleLinks.wsUrl);
+    visible.pathname = issued.pathname;
+    visible.search = issued.search;
+    visible.hash = fragment.toString();
+    const visibleUrl = visible.toString();
     await params.prompter.note(
       `${t("wizard.guided.browserHandoffCopy", { url: visibleUrl })}${sshHint}`,
       t("wizard.guided.browserHandoffTitle"),
     );
   }
 
-  const wait = await (deps.pollForClient ?? waitForDashboardClient)({
-    target,
-    baselineClientKeys: new Set(baseline.clientKeys),
-    timeoutMs: opened ? GUI_HANDOFF_TIMEOUT_MS : HEADLESS_HANDOFF_TIMEOUT_MS,
-    probe: probePresence,
-    ...(deps.now ? { now: deps.now } : {}),
-    ...(deps.sleep ? { sleep: deps.sleep } : {}),
-  });
-  if (!wait.connected) {
-    return { handedOff: false, reason: wait.reason };
+  const baselineClientKeys = new Set(baseline);
+  const deadline = monotonicNow() + (opened ? GUI_HANDOFF_TIMEOUT_MS : HEADLESS_HANDOFF_TIMEOUT_MS);
+  while (true) {
+    const beforeProbeMs = deadline - monotonicNow();
+    if (beforeProbeMs <= 0) {
+      return false;
+    }
+    const result = await probeDashboardPresence(
+      target,
+      Math.min(HANDOFF_PROBE_TIMEOUT_MS, beforeProbeMs),
+    );
+    if (!result) {
+      return false;
+    }
+    if (result.some((key) => !baselineClientKeys.has(key))) {
+      break;
+    }
+    const remainingMs = deadline - monotonicNow();
+    if (remainingMs <= 0) {
+      return false;
+    }
+    await sleep(Math.min(HANDOFF_POLL_INTERVAL_MS, remainingMs));
   }
   await params.prompter.note(
     t("wizard.guided.browserHandoffContinuing"),
     t("wizard.guided.browserHandoffTitle"),
   );
-  return { handedOff: true };
+  return true;
 }

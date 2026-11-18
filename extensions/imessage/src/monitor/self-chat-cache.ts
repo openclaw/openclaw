@@ -1,6 +1,4 @@
-// Imessage plugin module implements self chat cache behavior.
-import { createHash } from "node:crypto";
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { sha256Hex as digestText } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { formatIMessageChatTarget } from "../targets.js";
 
 type SelfChatCacheKeyParts = {
@@ -14,18 +12,6 @@ type SelfChatLookup = SelfChatCacheKeyParts & {
   text?: string;
   createdAt?: number;
   allowCreatedAtSkew?: boolean;
-};
-
-type SelfChatCacheEntry = {
-  id: number;
-  createdAt: number;
-  createdAtSkewToleranceMs: number;
-  rememberedAt: number;
-};
-
-export type SelfChatCache = {
-  remember: (lookup: SelfChatLookup) => void;
-  has: (lookup: SelfChatLookup) => boolean;
 };
 
 const SELF_CHAT_TTL_MS = 10_000;
@@ -45,10 +31,6 @@ function isUsableTimestamp(createdAt: number | undefined): createdAt is number {
   return typeof createdAt === "number" && Number.isFinite(createdAt);
 }
 
-function digestText(text: string): string {
-  return createHash("sha256").update(text).digest("hex");
-}
-
 function buildScope(parts: SelfChatCacheKeyParts): string {
   if (!parts.isGroup) {
     return `${parts.accountId}:imessage:${parts.sender}`;
@@ -57,13 +39,14 @@ function buildScope(parts: SelfChatCacheKeyParts): string {
   return `${parts.accountId}:${chatTarget}:imessage:${parts.sender}`;
 }
 
-class DefaultSelfChatCache implements SelfChatCache {
-  private cache = new Map<string, Map<number, SelfChatCacheEntry>>();
-  private insertionOrder: Array<{ key: string; id: number }> = [];
-  private insertionOrderOffset = 0;
-  private entryCount = 0;
+export class SelfChatCache {
+  private entries: {
+    key: string;
+    createdAt: number;
+    createdAtSkewToleranceMs: number;
+    rememberedAt: number;
+  }[] = [];
   private lastCleanupAt = 0;
-  private nextEntryId = 1;
 
   private buildBucketKey(lookup: SelfChatLookup): string | null {
     const text = normalizeText(lookup.text);
@@ -78,18 +61,12 @@ class DefaultSelfChatCache implements SelfChatCache {
     if (!key || !isUsableTimestamp(lookup.createdAt)) {
       return;
     }
-    const entries = this.cache.get(key) ?? new Map<number, SelfChatCacheEntry>();
-    const entry = {
-      id: this.nextEntryId,
+    this.entries.push({
+      key,
       createdAt: lookup.createdAt,
       createdAtSkewToleranceMs: lookup.allowCreatedAtSkew ? SELF_CHAT_CREATED_AT_TOLERANCE_MS : 0,
       rememberedAt: Date.now(),
-    };
-    this.nextEntryId += 1;
-    entries.set(entry.id, entry);
-    this.cache.set(key, entries);
-    this.insertionOrder.push({ key, id: entry.id });
-    this.entryCount += 1;
+    });
     this.maybeCleanup();
   }
 
@@ -99,15 +76,12 @@ class DefaultSelfChatCache implements SelfChatCache {
     if (!key || !isUsableTimestamp(lookup.createdAt)) {
       return false;
     }
-    const entries = this.cache.get(key);
-    if (!entries) {
-      return false;
-    }
     const now = Date.now();
     const createdAt = lookup.createdAt;
-    return [...entries.values()].some((entry) => {
+    return this.entries.some((entry) => {
       const createdAtDelta = Math.abs(entry.createdAt - createdAt);
       return (
+        entry.key === key &&
         now - entry.rememberedAt <= SELF_CHAT_TTL_MS &&
         (createdAtDelta === 0 || createdAtDelta < entry.createdAtSkewToleranceMs)
       );
@@ -120,55 +94,8 @@ class DefaultSelfChatCache implements SelfChatCache {
       return;
     }
     this.lastCleanupAt = now;
-    for (const [key, entries] of this.cache.entries()) {
-      for (const [id, entry] of entries.entries()) {
-        if (now - entry.rememberedAt > SELF_CHAT_TTL_MS) {
-          entries.delete(id);
-          this.entryCount -= 1;
-        }
-      }
-      if (entries.size === 0) {
-        this.cache.delete(key);
-      }
-    }
-    while (
-      this.entryCount > MAX_SELF_CHAT_CACHE_ENTRIES &&
-      this.insertionOrderOffset < this.insertionOrder.length
-    ) {
-      const oldest = expectDefined(
-        this.insertionOrder[this.insertionOrderOffset],
-        "oldest iMessage self-chat cache entry",
-      );
-      this.insertionOrderOffset += 1;
-      const entries = this.cache.get(oldest.key);
-      if (!entries) {
-        continue;
-      }
-      if (!entries.delete(oldest.id)) {
-        continue;
-      }
-      this.entryCount -= 1;
-      if (entries.size === 0) {
-        this.cache.delete(oldest.key);
-      }
-    }
-    this.compactInsertionOrder();
+    this.entries = this.entries
+      .filter((entry) => now - entry.rememberedAt <= SELF_CHAT_TTL_MS)
+      .slice(-MAX_SELF_CHAT_CACHE_ENTRIES);
   }
-
-  private compactInsertionOrder(): void {
-    if (
-      this.insertionOrderOffset <= 1_024 &&
-      this.insertionOrder.length <= this.entryCount + 1_024
-    ) {
-      return;
-    }
-    this.insertionOrder = this.insertionOrder
-      .slice(this.insertionOrderOffset)
-      .filter((entry) => this.cache.get(entry.key)?.has(entry.id));
-    this.insertionOrderOffset = 0;
-  }
-}
-
-export function createSelfChatCache(): SelfChatCache {
-  return new DefaultSelfChatCache();
 }
