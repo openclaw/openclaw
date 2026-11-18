@@ -564,6 +564,45 @@ it.each([
   }
 });
 
+it.each([
+  ["proxy startup", "startApiProxy"],
+  ["stale-update drain", "proxyDrainUpdates"],
+  ["userbot startup", "userbotStart"],
+] as const)("attributes a setup timeout to %s", async (stage, mockName) => {
+  const timeout = new DOMException("The operation was aborted due to timeout", "TimeoutError");
+  mocks[mockName].mockRejectedValueOnce(timeout);
+
+  const caught = await createAdapter().then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+
+  expect(caught).toBeInstanceOf(Error);
+  expect(caught).toMatchObject({
+    message: `Telegram QA setup failed during ${stage}: The operation was aborted due to timeout`,
+    cause: timeout,
+  });
+  expect(mocks.leaseRelease).toHaveBeenCalledOnce();
+  if (stage !== "userbot startup") {
+    expect(mocks.userbotStart).not.toHaveBeenCalled();
+  }
+});
+
+it("keeps the setup stage and cause when cleanup also fails", async () => {
+  const setupError = new Error("authorization failed");
+  const cleanupError = new Error("proxy close failed");
+  mocks.userbotStart.mockRejectedValueOnce(setupError);
+  mocks.proxyClose.mockRejectedValueOnce(cleanupError);
+
+  await expect(createAdapter()).rejects.toMatchObject({
+    name: "AggregateError",
+    message: "Telegram userbot setup failed during userbot startup and cleanup failed",
+    cause: setupError,
+    errors: [cleanupError],
+  });
+  expectOnce(mocks.heartbeatStop, mocks.leaseRelease);
+});
+
 it("retains a quarantined lease after stopping the userbot and proxy", async () => {
   mocks.shouldRetainQaGatewayCredentialLease.mockResolvedValueOnce(true);
   const adapter = await createAdapter();
