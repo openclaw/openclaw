@@ -14,6 +14,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import {
   beginSessionEffect,
   captureSessionTarget,
@@ -114,7 +115,7 @@ it.each([
     if (timing === "before") {
       params.context.chatRunState.getOrCreate(clientRunId).abortMarker = {
         ...createChatAbortMarker(200),
-        pendingInputCancellation: { sessionId: "mention-session", endCause: "user-stop" },
+        pendingInputCancellation: { chat: chatRef(params.session), endCause: "user-stop" },
       };
     }
     if (state) {

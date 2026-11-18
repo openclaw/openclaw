@@ -22,6 +22,7 @@ import {
   getGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { chatRef } from "../sessions/chat-ref.js";
 import {
   captureSessionTarget,
   type SessionTarget,
@@ -426,9 +427,10 @@ export function abortChatRunById(
     projectSessionTerminalObservedAt: active.adapter.projectSessionTerminalObservedAt,
   };
   const abortMarker = createChatAbortMarker();
-  if (params.pendingInputEndCause && identity.sessionId) {
+  const target = active.input.target;
+  if (params.pendingInputEndCause && target?.agentId) {
     abortMarker.pendingInputCancellation = {
-      sessionId: identity.sessionId,
+      chat: chatRef({ agentId: target.agentId, storePath: target.storeScope, sessionKey }),
       endCause: params.pendingInputEndCause,
     };
   }

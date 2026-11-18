@@ -180,7 +180,7 @@ export function respondChatSendRetry(
       ? (comparison.endCause ?? "unknown (legacy cancellation)")
       : comparison?.source === "transcript"
         ? undefined
-        : chatAbortPendingInputEndCause(abortMarker, session.entry?.sessionId);
+        : chatAbortPendingInputEndCause(abortMarker, session);
   if (endCause) {
     respond(
       false,

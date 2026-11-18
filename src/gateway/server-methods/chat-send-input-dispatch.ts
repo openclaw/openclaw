@@ -333,7 +333,7 @@ export async function handleChatSendWithStorage(
           reason === "delete",
           disposition,
           inputAcceptance?.effectAccepted === true || queuedInputAdmission !== undefined,
-          chatAbortPendingInputEndCause(abortMarker, admittedSessionId),
+          chatAbortPendingInputEndCause(abortMarker, session),
         );
         if (pending && reason) {
           context.logGateway.info(`chat pending input aborted: ${reason} (${disposition})`, {

@@ -1,5 +1,6 @@
 import type { AgentPlanStep } from "../channels/streaming.js";
 import type { AgentEventPayload, AgentAssistantSourceReceipt } from "../infra/agent-events.js";
+import type { ChatRef } from "../sessions/chat-ref.js";
 import type { ChatCanvasBlock } from "./chat-display-projection.canvas.js";
 import {
   createLiveAssistantTextProjection,
@@ -36,7 +37,7 @@ export type ChatRunEntry = ChatRunRegistration & {
 export type ChatAbortMarker = {
   abortedAtMs: number;
   sequence: number;
-  pendingInputCancellation?: { sessionId: string; endCause: "user-stop" };
+  pendingInputCancellation?: { chat: ChatRef; endCause: "user-stop" };
 };
 
 let chatRunOrderingSequence = 0;
@@ -54,10 +55,17 @@ export function chatAbortMarkerTimestampMs(marker: ChatAbortMarker): number {
 /** Read the admitted cancellation for this input's session while its receipt settles. */
 export function chatAbortPendingInputEndCause(
   marker: ChatAbortMarker | undefined,
-  sessionId: string | undefined,
+  chat: Pick<ChatRef, "agentId" | "storePath" | "sessionKey">,
 ): "user-stop" | undefined {
   const cancellation = marker?.pendingInputCancellation;
-  return cancellation && cancellation.sessionId === sessionId ? cancellation.endCause : undefined;
+  if (
+    cancellation?.chat.agentId === chat.agentId &&
+    cancellation.chat.storePath === chat.storePath &&
+    cancellation.chat.sessionKey === chat.sessionKey
+  ) {
+    return cancellation.endCause;
+  }
+  return undefined;
 }
 
 /**
