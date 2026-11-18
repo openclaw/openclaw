@@ -46,6 +46,8 @@ describe("prompt hook immutable payload isolation", () => {
         deferredToolNames: ["mcp_notes_lookup"],
       });
     }
+    expect(() => toolsAllow.push("exec")).not.toThrow();
+    expect(() => deferredToolNames.push("mcp_notes_delete")).not.toThrow();
   });
 
   it.each(["before_prompt_build", "agent_turn_prepare"] as const)(

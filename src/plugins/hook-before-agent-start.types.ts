@@ -56,7 +56,8 @@ export type PluginHookBeforePromptBuildEvent = {
    */
   readonly toolsAllow?: readonly string[];
   /**
-   * Allowed tools registered behind Tool Search, excluding directly visible tools.
+   * Allowed deferred tool names, or exact catalog IDs where a name is ambiguous.
+   * Excludes directly visible tools; keep exact IDs intact in prompt hints.
    * Pre-hook snapshot, not authorization; later hook restrictions may remove tools.
    * Frozen; [] means none, omission means the runtime does not report this view.
    */

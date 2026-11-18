@@ -5,6 +5,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as decisionDiagnostics from "../../../decisions/diagnostics.js";
 import type {
   PluginHookBeforePromptBuildEvent,
@@ -21,7 +22,10 @@ import {
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
-import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
+import { createMcpStubTool, createStubTool } from "../../test-helpers/agent-tool-stubs.js";
+import { resolveToolSearchConfig } from "../../tool-search-config.js";
+import { ToolSearchRuntime } from "../../tool-search-runtime.js";
+import type { AnyAgentTool } from "../../tools/common.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-build.js";
 import { createPromptBuildToolPolicy } from "./attempt-prompt-support.js";
 import { applyEmbeddedAttemptToolsAllow } from "./attempt-tool-construction-plan.js";
@@ -46,6 +50,7 @@ async function assembleWithCapturedHookCtx({
   requiresToolAuthority,
   toolSearch,
   narrowToolsAllow,
+  tools: toolOverrides,
   ...promptPolicy
 }: {
   attempt?: Partial<EmbeddedRunAttemptParams>;
@@ -55,6 +60,7 @@ async function assembleWithCapturedHookCtx({
   requiresToolAuthority?: true;
   toolSearch?: boolean;
   narrowToolsAllow?: string[];
+  tools?: AnyAgentTool[];
 } = {}) {
   const runId = "provenance-hook-test";
   const config = attemptOverrides.config ?? {};
@@ -64,7 +70,16 @@ async function assembleWithCapturedHookCtx({
       ? undefined
       : createAgentHarnessToolSurfaceRuntimeCore({
           config: {
-            tools: { codeMode: false, toolSearch: { enabled: toolSearch, mode: "tools" } },
+            ...config,
+            tools: {
+              ...config.tools,
+              codeMode: false,
+              toolSearch: {
+                ...resolveToolSearchConfig(config),
+                enabled: toolSearch,
+                mode: "tools",
+              },
+            },
           },
           modelToolsEnabled: true,
         });
@@ -84,7 +99,7 @@ async function assembleWithCapturedHookCtx({
     });
   }
   const tools = applyEmbeddedAttemptToolsAllow(
-    [createStubTool("read"), remote, deniedRemote],
+    toolOverrides ?? [createStubTool("read"), remote, deniedRemote],
     attemptOverrides.toolsAllow,
   );
   const compactedTools = toolSurface?.compactTools(tools).tools;
@@ -186,10 +201,50 @@ async function assembleWithCapturedHookCtx({
     events,
     catalogNames: toolSurface?.toolSearchCatalogRef?.current?.entries.map((entry) => entry.name),
     activeToolNames: session.getActiveToolNames(),
+    toolSearchCatalogRef: toolSurface?.toolSearchCatalogRef,
   };
 }
 
 describe("prompt-build tool scope", () => {
+  it.each(["direct", "deferred"] as const)(
+    "reports callable exact IDs for %s name collisions",
+    async (collision) => {
+      const remote = createMcpStubTool("notes", "lookup");
+      const native = createStubTool("notes__lookup");
+      vi.spyOn(remote, "execute").mockResolvedValue({ content: [], details: {} });
+      vi.spyOn(native, "execute").mockResolvedValue({ content: [], details: {} });
+      const config: OpenClawConfig = {
+        tools: {
+          toolSearch: {
+            enabled: true,
+            mode: "tools",
+            ...(collision === "direct" ? { include: [{ source: "mcp" as const }] } : {}),
+          },
+        },
+      };
+      const { events, toolSearchCatalogRef } = await assembleWithCapturedHookCtx({
+        attempt: { config, toolsAllow: ["notes__lookup"] },
+        tools: [native, remote],
+        toolSearch: true,
+      });
+      const identifiers = events[0]?.deferredToolNames;
+      expect(identifiers).toEqual([
+        "mcp:notes:notes__lookup",
+        ...(collision === "deferred" ? ["openclaw:core:notes__lookup"] : []),
+      ]);
+      const runtime = new ToolSearchRuntime(
+        { catalogRef: toolSearchCatalogRef },
+        resolveToolSearchConfig(config),
+      );
+      await expect(runtime.call("notes__lookup", {})).rejects.toThrow("Ambiguous tool name");
+      for (const id of identifiers ?? []) {
+        await runtime.call(id, {});
+      }
+      expect(remote.execute).toHaveBeenCalledOnce();
+      expect(native.execute).toHaveBeenCalledTimes(collision === "deferred" ? 1 : 0);
+    },
+  );
+
   it.each([
     { allow: undefined, toolSearch: false, deferred: [] },
     {

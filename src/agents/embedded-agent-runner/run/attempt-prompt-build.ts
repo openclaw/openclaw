@@ -157,6 +157,12 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   const executionAllowed = attempt.toolExecutionAllow
     ? createToolExecutionMatcher(attempt.toolExecutionAllow)
     : undefined;
+  const catalogEntries = input.toolSearchCatalogRef?.current?.entries ?? [];
+  const catalogNameCounts = new Map<string, number>();
+  // Name lookup includes directly visible and execution-gated catalog entries.
+  for (const { name } of catalogEntries) {
+    catalogNameCounts.set(name, (catalogNameCounts.get(name) ?? 0) + 1);
+  }
   // A reload continuation's prompt is synthetic; prompt hooks see the user's request.
   const promptEvent = {
     prompt: attempt.pluginRuntimeRefreshUserPrompt ?? effectivePrompt,
@@ -164,14 +170,18 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     ...(attempt.toolsAllow !== undefined ? { toolsAllow: [...attempt.toolsAllow] } : {}),
     deferredToolNames: [
       ...new Set(
-        (input.toolSearchCatalogRef?.current?.entries ?? [])
+        catalogEntries
           .filter(
             (entry) =>
               !entry.directVisible &&
               isAgentToolExecutionAvailable(entry.tool) &&
               (!executionAllowed || executionAllowed(entry.name)),
           )
-          .map((entry) => entry.name),
+          .map((entry) =>
+            !entry.requiresExactId && catalogNameCounts.get(entry.name) === 1
+              ? entry.name
+              : entry.id,
+          ),
       ),
     ],
   };

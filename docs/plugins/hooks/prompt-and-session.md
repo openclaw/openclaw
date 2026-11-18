@@ -121,12 +121,18 @@ event fields for tool-specific prompt hints:
   the run has no allowlist; `[]` preserves an explicit empty allowlist. It is
   not the effective tool list: entries can include policy patterns or names
   that did not resolve to a registered tool.
-- `deferredToolNames`: names from the attempt's registered Tool Search catalog
+- `deferredToolNames`: callable identifiers from the attempt's registered Tool Search catalog
   that are allowed for execution but not directly visible. This includes MCP
   tools deferred in `tools` mode, not schemas, descriptions, or tool objects.
+  Unique names are returned as names. When a name is ambiguous because it occurs
+  more than once in the catalog or an entry requires an exact ID, the entry's
+  full catalog ID is returned instead. Keep those IDs intact in prompt hints.
   Directly visible catalog entries and execution-gated tools are excluded.
   `[]` means no applicable deferred tools, including when Tool Search is off
   or only Code Mode is active.
+
+A literal intersection with `toolsAllow` works only for unambiguous, exact-name
+entries, not catalog IDs, allowlist patterns, or groups.
 
 Both arrays are detached from run state and frozen. All handlers in priority
 order see the same pre-hook snapshot: an earlier handler's returned
