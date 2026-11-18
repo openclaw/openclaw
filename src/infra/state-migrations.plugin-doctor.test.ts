@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { hostname } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contract-registry.js";
@@ -378,10 +379,12 @@ it("waits out a lifecycle lease that a stopped pre-2026.11.5 Gateway left behind
   const repair = repairPluginState(params).finally(() => {
     settled = true;
   });
-  for (let step = 0; step < 20 && !settled; step += 1) {
+  for (let step = 0; step < 20; step += 1) {
+    if (settled) {
+      break;
+    }
     vi.advanceTimersByTime(1_000);
-    await new Promise((resolve) => setImmediate(resolve));
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 50));
+    await delay(50);
   }
   expect(settled).toBe(false);
   // End the abandoned term from another process; a synchronous write here would
