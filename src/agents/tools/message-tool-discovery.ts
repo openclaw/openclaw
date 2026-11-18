@@ -20,6 +20,7 @@ import {
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import { listRouteBindings } from "../../config/bindings.js";
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { WEBCHAT_PROMPT_REACTIONS_CAPABILITY } from "../../config/sessions/client-capabilities.js";
 import { readExactSessionDeliveryContext } from "../../config/sessions/delivery-info.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -91,12 +92,13 @@ type MessageToolSessionOptions = MessageToolCurrentContextOptions & {
 function readMessageToolSessionBinding(options?: MessageToolSessionOptions) {
   const sessionKey = options?.agentSessionKey;
   const agentId = options?.agentId ?? parseAgentSessionKey(sessionKey)?.agentId;
-  if (!sessionKey || !agentId || !options?.config) {
+  const config = options?.config ?? getRuntimeConfigSnapshot();
+  if (!sessionKey || !agentId || !config) {
     return undefined;
   }
   const scope = {
     agentId,
-    storePath: resolveSessionStorePathCore(options.config.session?.store, { agentId }),
+    storePath: resolveSessionStorePathCore(config.session?.store, { agentId }),
     sessionKey,
     projection: "list" as const,
   };

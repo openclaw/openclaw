@@ -9,6 +9,7 @@ import { setActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plug
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { createOpenClawTools, createOpenClawToolsAsync } from "./openclaw-tools.js";
+import { createMessageTool, createMessageToolAsync } from "./tools/message-tool-execution.js";
 
 const sessionKey = "agent:main:route-less";
 const config: OpenClawConfig = {
@@ -19,6 +20,33 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
   resetPluginRuntimeStateForTest();
 });
+
+it.each([
+  ["synchronous", createMessageTool],
+  ["asynchronous", createMessageToolAsync],
+] as const)(
+  "constructs %s tools before runtime configuration is prepared",
+  async (_mode, factory) => {
+    clearRuntimeConfigSnapshot();
+    let available: boolean | undefined;
+    const tool = await factory({
+      onAvailability: (value) => {
+        available = value;
+      },
+    });
+    expect(tool.name).toBe("message");
+    expect(available).toBe(true);
+    // Unknown discovery does not prepare config or grant an invocation authority.
+    await expect(
+      tool.execute("unprepared-send", {
+        action: "send",
+        channel: "signal",
+        target: "+15550000001",
+        message: "Must not send",
+      }),
+    ).rejects.toThrow("Runtime config is not prepared");
+  },
+);
 
 it("omits unsupported routes without turning presentation into a child or cron denial", () => {
   setRuntimeConfigSnapshot(config);

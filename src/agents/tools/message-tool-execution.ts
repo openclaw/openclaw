@@ -9,6 +9,7 @@ import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gat
 import { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import * as messageActionTurnCapability from "../../gateway/message-action-turn-capability.js";
@@ -155,27 +156,30 @@ function* createMessageToolSteps(
     getConfig: () => options?.config ?? getRuntimeConfig(),
     admitScheduledInvocation: options?.admitScheduledInvocation,
   });
-  // Discovery snapshots current routes; omitted execution config must stay live per invocation.
-  const messageToolDiscoveryParams: MessageToolDiscoveryParams = {
-    cfg: options?.config ?? getRuntimeConfig(),
-    currentChatType: definitionContext.currentChatType,
-    currentChannelProvider: definitionContext.currentChannelProvider,
-    currentChannelId: definitionContext.currentChannelId,
-    currentThreadTs: definitionContext.currentThreadTs,
-    supportsPromptReactions,
-    currentAccountId:
-      definitionContext.accountId ??
-      (options?.agentSessionKey ? undefined : options?.agentAccountId),
-    isScheduledRun: isCronSessionKey(options?.agentSessionKey),
-    scheduledAccountScope: resolveMessageToolScheduledAccountScope(
-      options?.scheduledToolPolicy,
-      sessionEntry,
-    ),
-    sessionKey: options?.agentSessionKey,
-    sessionId: options?.sessionId,
-    agentId: resolvedAgentId,
-    preparedMessageToolCatalog,
-  };
+  // Cold SDK construction has no route evidence yet; execution keeps its live reader.
+  const discoveryConfig = options?.config ?? getRuntimeConfigSnapshot();
+  const messageToolDiscoveryParams: MessageToolDiscoveryParams | undefined = discoveryConfig
+    ? {
+        cfg: discoveryConfig,
+        currentChatType: definitionContext.currentChatType,
+        currentChannelProvider: definitionContext.currentChannelProvider,
+        currentChannelId: definitionContext.currentChannelId,
+        currentThreadTs: definitionContext.currentThreadTs,
+        supportsPromptReactions,
+        currentAccountId:
+          definitionContext.accountId ??
+          (options?.agentSessionKey ? undefined : options?.agentAccountId),
+        isScheduledRun: isCronSessionKey(options?.agentSessionKey),
+        scheduledAccountScope: resolveMessageToolScheduledAccountScope(
+          options?.scheduledToolPolicy,
+          sessionEntry,
+        ),
+        sessionKey: options?.agentSessionKey,
+        sessionId: options?.sessionId,
+        agentId: resolvedAgentId,
+        preparedMessageToolCatalog,
+      }
+    : undefined;
   // Model-supplied channel text is untrusted until routing resolves it. Early
   // denials retain only the host-prepared source provider.
   const decisionChannel = resolveTrustedDecisionChannel(
@@ -191,7 +195,7 @@ function* createMessageToolSteps(
     : undefined;
   // Schema and prompt must use the same snapshot; repeated discovery can drift
   // across plugin hooks while needlessly loading channel action metadata twice.
-  const discovered = yield messageToolDiscoveryParams;
+  const discovered = messageToolDiscoveryParams ? yield messageToolDiscoveryParams : undefined;
   options?.onAvailability?.(discovered?.available ?? true);
   const actions = discovered?.actions;
   // A source-bound completion keeps the session's message definition so its
