@@ -15,7 +15,6 @@ import {
 } from "./attempt-timeouts.js";
 import {
   applyCodexAppServerAuthProfile,
-  bridgeCodexAppServerStartOptions,
   resolveCodexAppServerPreparedAuthProfileSnapshot,
 } from "./auth-bridge.js";
 import {
@@ -324,7 +323,7 @@ async function resolveCodexAppServerClientStartContext(
   });
   // Preserve ordinary profile environment policy; only explicitly prepared
   // handoffs clear all inherited auth variables before spawning.
-  const startOptions = await bridgeCodexAppServerStartOptions({
+  const startOptions = await codexStartup.prepareClientStartOptions({
     startOptions: managedStartOptions,
     agentId: options?.agentId,
     agentDir,

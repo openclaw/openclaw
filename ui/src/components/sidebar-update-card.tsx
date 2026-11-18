@@ -30,6 +30,7 @@ import {
   isUpdateActionable,
 } from "../app/update-schedule-projection.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
+import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { createInterval } from "../lib/reactive/timers.ts";
@@ -42,6 +43,8 @@ import { UpdateGitRevisions } from "./solid/update-git-revisions.tsx";
 import "./tooltip.ts";
 
 registerEnglishCatalog(registerSidebarAttentionEnglish);
+// Update titles and finishing-campaign copy.
+registerEnglishCatalog(registerUpdateActionsEnglish);
 
 export type SidebarUpdateCardProps = {
   compact: boolean;
@@ -342,9 +345,12 @@ export function SidebarUpdateCard(
       severity: statusBanner?.tone === "danger" ? ("error" as const) : ("warning" as const),
       title: blocked
         ? t("updates.sidebar.blockedTitle")
-        : busy
-          ? t("updates.sidebar.updating")
-          : t("updates.sidebar.availableTitle"),
+        : // A targetless campaign finishes an earlier update; see formatUpdateCampaignLabel.
+          campaign && !props.updateSchedule?.target
+          ? t("updates.sidebar.finishingTitle")
+          : busy
+            ? t("updates.sidebar.updating")
+            : t("updates.sidebar.availableTitle"),
     };
   }
 
@@ -435,6 +441,8 @@ export function SidebarUpdateCard(
 
   function RefreshCard() {
     const problem = () => (refreshInFlight() ? undefined : refreshProblem());
+    const title = () => t("connection.workspace.reload.title");
+    // Progress and problems replace the title; the pill keeps one line.
     const detail = () =>
       refreshInFlight()
         ? t("common.refreshing")
@@ -442,7 +450,7 @@ export function SidebarUpdateCard(
           ? t("updates.refreshUnreachable")
           : problem() === "blocked"
             ? t("updates.refreshBlocked")
-            : t("chat.sidebar.serverUpdatedRefresh");
+            : undefined;
     return (
       <div class="refresh-notice" role="status" aria-live="polite">
         {renderStatus()}
@@ -453,20 +461,26 @@ export function SidebarUpdateCard(
             { "refresh-notice__surface--warn": problem() === "unreachable" },
           ]}
           data-problem={problem() ?? undefined}
-          aria-label={`${t("chat.sidebar.serverUpdatedTitle")}: ${detail()}`}
+          aria-label={`${title()}: ${detail() ?? t("connection.workspace.reload.description")}`}
           type="button"
           disabled={refreshInFlight()}
           aria-busy={refreshInFlight() ? "true" : "false"}
           onClick={() => void refreshControlUi()}
         >
-          {/* Phones replace the title with a following detail. */}
-          <Show when={refreshInFlight() || problem()}>
-            <span class="sidebar-update-card__subtitle refresh-notice__detail">{detail()}</span>
-          </Show>
-          <span class="sidebar-update-card__title">{t("chat.sidebar.serverUpdatedTitle")}</span>
+          <span class="refresh-notice__icon" aria-hidden="true">
+            <Show
+              when={!refreshInFlight()}
+              fallback={<span class="btn__spinner refresh-notice__spinner" />}
+            >
+              <Icon name={problem() === "unreachable" ? "alertTriangle" : "refresh"} />
+            </Show>
+          </span>
+          <span class="refresh-notice__label">{detail() ?? title()}</span>
           <Show when={!refreshInFlight()}>
-            <span class="sidebar-update-card__hold refresh-notice__action" aria-hidden="true">
-              {problem() === "unreachable" ? t("common.retry") : t("common.refresh")}
+            <span class="refresh-notice__action" aria-hidden="true">
+              {problem() === "unreachable"
+                ? t("common.retry")
+                : t("connection.workspace.reloadAction")}
             </span>
           </Show>
         </button>

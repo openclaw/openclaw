@@ -26,6 +26,7 @@ import {
 import { withLegacyWorkerResourceReceipts } from "../../state/openclaw-state-db-schema-v37-resource-receipts.js";
 import { withLegacyRepositoryDiskAuthority } from "../../state/openclaw-state-db-schema-v38-repository-disk.js";
 import { withLegacyWorkerRetention } from "../../state/openclaw-state-db-schema-v39-worker-retention.js";
+import { withLegacyWorkspaceBootstrapDeferred } from "../../state/openclaw-state-db-schema-v40-lazy-additions.js";
 import { withLegacyWorkerProvisionSource } from "../../state/openclaw-state-db-schema-v40-worker-provision-source.js";
 import { listOpenClawStateFeatureSchemas } from "../../state/openclaw-state-feature-schema.js";
 import { RETAINED_STATE_TABLES } from "../../state/openclaw-state-schema-compatibility.js";
@@ -66,6 +67,13 @@ function legacyTemplateCatalogValue(value: unknown): unknown {
 export async function loadStatePortDescriptor(
   sourceVersion = OPENCLAW_STATE_SCHEMA_VERSION,
 ): Promise<PortDescriptor> {
+  return createStatePortDescriptor(sourceVersion);
+}
+
+function createStatePortDescriptor(
+  sourceVersion: number,
+  hasBootstrapDeferred = sourceVersion >= 39,
+): PortDescriptor {
   if (sourceVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
     const backup = stateEngineSchema.postgresMigrations?.find(
       (step) => step.version === sourceVersion + 1,
@@ -103,6 +111,10 @@ export async function loadStatePortDescriptor(
     ...(source?.expectedCatalog ?? []),
   ].filter(
     (fact) =>
+      (hasBootstrapDeferred ||
+        fact.table !== "workspace_setup_state" ||
+        !isColumn(fact) ||
+        fact.value.name !== "bootstrap_deferred") &&
       (!legacyProvisionSource ||
         fact.table !== "worker_environments" ||
         !isColumn(fact) ||
@@ -154,7 +166,10 @@ export async function loadStatePortDescriptor(
     (fact): fact is typeof fact & { value: string[] } => fact.kind === "primaryKey",
   );
   const sourceSql = (sql: string, schemaSql = sql) => {
-    const provision = legacyProvisionSource ? withLegacyWorkerProvisionSource(sql) : sql;
+    const bootstrap = hasBootstrapDeferred ? sql : withLegacyWorkspaceBootstrapDeferred(sql);
+    const provision = legacyProvisionSource
+      ? withLegacyWorkerProvisionSource(bootstrap)
+      : bootstrap;
     const retention = legacyRetention ? withLegacyWorkerRetention(provision) : provision;
     const disk = legacyRepositoryDisk ? withLegacyRepositoryDiskAuthority(retention) : retention;
     const receipts = legacyResourceReceipts ? withLegacyWorkerResourceReceipts(disk) : disk;
@@ -283,28 +298,41 @@ export async function loadStatePortDescriptor(
   if (sourceVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
     return descriptor;
   }
-  if (sourceVersion >= 27) {
-    return { ...descriptor, inspectSqliteSource: undefined, migrateSqliteSource: undefined };
+  const predecessor = {
+    ...descriptor,
+    inspectSqliteSource: undefined,
+    migrateSqliteSource: undefined,
+  };
+  // Both v39 layouts must survive an exact backup and restore before Doctor upgrades them.
+  if (sourceVersion === 39 && hasBootstrapDeferred) {
+    return {
+      ...predecessor,
+      selectSourceLayout: (hasColumn) =>
+        hasColumn("workspace_setup_state", "bootstrap_deferred")
+          ? predecessor
+          : createStatePortDescriptor(sourceVersion, false),
+    };
   }
-  const historicalSqlite = withLegacyStateWriteIndexes(descriptor.sqlite);
+  if (sourceVersion >= 27) {
+    return predecessor;
+  }
+  const historicalSqlite = withLegacyStateWriteIndexes(predecessor.sqlite);
   const legacyIndexes = statePostgresRuntime.preWriteIndexesV27Sql;
   return {
-    ...descriptor,
+    ...predecessor,
     sqlite: sourceVersion < 26 ? withLegacyStateHeadLayout(historicalSqlite) : historicalSqlite,
     postData:
-      descriptor.postData.replace(
+      predecessor.postData.replace(
         /CREATE INDEX "idx_state_leases_owner"[^;]+;/u,
         legacyIndexes.state_leases,
       ) +
       legacyIndexes.skill_usage +
       legacyIndexes.acp_replay_events,
-    expectedCatalog: descriptor.expectedCatalog.map((fact) =>
+    expectedCatalog: predecessor.expectedCatalog.map((fact) =>
       fact.kind === "indexes" &&
       (fact.table === "skill_usage" || fact.table === "acp_replay_events")
         ? { table: fact.table, kind: fact.kind, value: Number(fact.value) + 1 }
         : fact,
     ),
-    inspectSqliteSource: undefined,
-    migrateSqliteSource: undefined,
   };
 }

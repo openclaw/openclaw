@@ -744,7 +744,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     const initial = this.initialRange.pending && this.#rowKeys.length > 0;
     if (initial || this.offsetState.scrollCommand?.target === "message") {
       const yieldToBrowser =
-        initial && !this.offsetState.pendingScrollOffset && this.#rowKeys.length > 1;
+        initial && !this.offsetState.pendingScrollOffset && this.layout.canYieldInitialPlacement;
       this.renderer.queueAfterCommit(this.#completeLayout, yieldToBrowser);
     }
   }
