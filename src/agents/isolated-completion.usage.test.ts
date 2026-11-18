@@ -9,6 +9,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { runHostPreparedIsolatedCompletion } from "./host-prepared-isolated-completion.js";
 import type { IsolatedCompletionPurpose } from "./isolated-completion-purpose.js";
 import * as fixtures from "./isolated-completion.test-support.js";
+import * as modelsConfigState from "./models-config-state.js";
 const mocks = fixtures.isolatedCompletionMocks;
 const completePrepared = vi.hoisted(() => vi.fn());
 // mock-isolation: Supply returned provider messages; keep the host result and authority fences real.
@@ -46,18 +47,30 @@ const registerCompletion = (
   >[0]["runIsolatedCompletionV2"],
 ) => fixtures.registerIsolatedHarness({ runIsolatedCompletionV2 });
 
-async function collectCliUsage(purpose: IsolatedCompletionPurpose) {
+async function collectCliUsage(purpose: IsolatedCompletionPurpose, costUsd?: number) {
   mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
   mocks.runCliAgent.mockResolvedValue({
     payloads: [{ text: "done" }],
-    meta: { agentMeta: { usage: cliUsage } },
+    meta: {
+      agentMeta: {
+        usage: {
+          ...cliUsage,
+          ...(costUsd === undefined
+            ? {}
+            : { cost: { total: costUsd, totalOrigin: "provider-billed" } }),
+        },
+      },
+    },
   });
   await runCompletion({ purpose });
   return events;
 }
 
-it("reports completed CLI usage", async () => {
-  expect(await collectCliUsage("session-activity-summary")).toMatchObject([
+it.each([0.0042, 0])("reports completed CLI usage with billed cost %s", async (costUsd) => {
+  using pricing = vi
+    .spyOn(modelsConfigState, "captureModelsJsonCostSource")
+    .mockRejectedValue(new Error("Recorded billing must not prepare fallback pricing"));
+  expect(await collectCliUsage("session-activity-summary", costUsd)).toMatchObject([
     {
       agentId: "main",
       provider: "openai",
@@ -65,8 +78,10 @@ it("reports completed CLI usage", async () => {
       purpose: "session-activity-summary",
       runtimeKind: "cli",
       usage: { input: 10, output: 462, cacheWrite: 4111, total: 4583 },
+      costUsd,
     },
   ]);
+  expect(pricing).not.toHaveBeenCalled();
 });
 
 it.each([false, true])(

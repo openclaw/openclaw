@@ -1,7 +1,11 @@
 // Defines the per-model provider compatibility schema fragment and its
 // OpenRouter/Vercel AI Gateway routing sub-schemas.
 import { z } from "zod";
-import type { OpenRouterRouting, VercelGatewayRouting } from "../llm/types.js";
+import type {
+  OpenAICompletionsCompat,
+  OpenRouterRouting,
+  VercelGatewayRouting,
+} from "../llm/types.js";
 import { MODEL_THINKING_FORMATS } from "./model-config-vocabulary.js";
 
 const RoutingPercentileCutoffsSchema = z.strictObject({
@@ -172,3 +176,10 @@ export const ModelCompatSchema = z
     supportsLongCacheRetention: z.boolean().optional(),
   })
   .optional();
+
+/** Provider/model compatibility switches consumed by request builders and tool schema adapters. */
+export type ModelCompatConfig = Omit<
+  NonNullable<z.input<typeof ModelCompatSchema>>,
+  "openRouterRouting" | "vercelGatewayRouting"
+> &
+  Pick<OpenAICompletionsCompat, "openRouterRouting" | "vercelGatewayRouting">;

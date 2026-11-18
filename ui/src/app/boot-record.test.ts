@@ -121,7 +121,7 @@ describe("Control UI boot record", () => {
     },
   );
 
-  it("preserves boot write deadlines across row updates and catalog changes", async () => {
+  it("preserves boot write deadlines across row and Gateway updates and catalog changes", async () => {
     const { gateway, current, scope } = createConnection();
     gateway.connect();
     const client = current();
@@ -164,6 +164,8 @@ describe("Control UI boot record", () => {
 
     await sessions.refresh({ agentId: "main", force: true });
     await vi.advanceTimersByTimeAsync(400);
+    // Navigation publishes Gateway state without changing the boot catalog.
+    gateway.setSessionKey("agent:main:other");
     await sessions.refresh({ agentId: "main", force: true });
     await vi.advanceTimersByTimeAsync(100);
     expect(readBootRecord(scope, () => "")?.groups).toEqual(groups);

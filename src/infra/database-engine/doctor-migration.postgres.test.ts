@@ -52,6 +52,7 @@ import { getPostgresPhysicalFacts } from "./physical-facts.js";
 import type { PortDescriptor } from "./port-descriptor.js";
 import { postgresCatalogQuery, readPostgresCatalog } from "./postgres-catalog.js";
 import { resolveDatabaseFamilyEngines } from "./registry.js";
+import { assertRepositoryDiskMigration } from "./repository-disk-migration.test-support.js";
 import { statePortProvider } from "./state-port.js";
 
 // Keep the actual read contracts in-process so all consumers see the
@@ -408,6 +409,22 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
           { relation: null },
         ]);
       }
+    },
+  );
+
+  it.each([true, false])(
+    "migrates v37 repository authority without activating absent storage: %s",
+    async (present) => {
+      await assertRepositoryDiskMigration({
+        present,
+        client,
+        connection: connection!,
+        namespace,
+        pathname,
+        prepareSource,
+        runDoctor,
+      });
+      expect(admit(stateEngineSchema)?.version).toBe(target);
     },
   );
 

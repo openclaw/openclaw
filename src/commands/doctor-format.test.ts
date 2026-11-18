@@ -12,18 +12,20 @@ it.each([
     { status: "unknown", missingGuiSession: true },
     ["logged-in macOS GUI session", "openclaw --profile work gateway restart"],
   ],
-] as const)("renders %s recovery for the selected profile", (platform, runtime, expected) => {
-  const hints = buildGatewayRuntimeHints(runtime, {
-    platform,
-    env: { OPENCLAW_PROFILE: "work" },
-  }).join("\n");
+] as const)("renders %s recovery for the selected profile", async (platform, runtime, expected) => {
+  const hints = (
+    await buildGatewayRuntimeHints(runtime, {
+      platform,
+      env: { OPENCLAW_PROFILE: "work" },
+    })
+  ).join("\n");
   for (const text of expected) {
     expect(hints).toContain(text);
   }
   expect(hints).not.toContain("likely exited immediately");
 });
 
-it.each(["user", "system"] as const)("inspects the %s systemd cgroup", (scope) => {
+it.each(["user", "system"] as const)("inspects the %s systemd cgroup", async (scope) => {
   const systemd = {
     scope,
     unit: "openclaw-gateway.service",
@@ -31,9 +33,8 @@ it.each(["user", "system"] as const)("inspects the %s systemd cgroup", (scope) =
     tasksCurrent: 807,
     memoryCurrent: 11_918_534_246,
   };
-  const hints = buildGatewayRuntimeHints(
-    { status: "running", systemd },
-    { platform: "linux", env: {} },
+  const hints = (
+    await buildGatewayRuntimeHints({ status: "running", systemd }, { platform: "linux", env: {} })
   ).join("\n");
   expect(hints).toContain("cgroup hygiene: KillMode=process, tasks=807, memory=11.1GiB");
   expect(hints).toContain(`systemctl --${scope} show openclaw-gateway.service`);
@@ -79,8 +80,8 @@ it.each([
     ["systemd stopped restarting", "openclaw gateway restart"],
     "likely exited immediately",
   ],
-] as const)("renders Linux recovery for %j", (runtime, env, expected, excluded) => {
-  const hints = buildGatewayRuntimeHints(runtime, { platform: "linux", env }).join("\n");
+] as const)("renders Linux recovery for %j", async (runtime, env, expected, excluded) => {
+  const hints = (await buildGatewayRuntimeHints(runtime, { platform: "linux", env })).join("\n");
   for (const text of expected) {
     expect(hints).toContain(text);
   }

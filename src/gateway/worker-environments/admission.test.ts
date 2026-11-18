@@ -107,3 +107,40 @@ it("rejects expiry, unavailable state, and the previous gateway build", () => {
   environment.destroyRequestedAtMs = null;
   reject("bundle-mismatch", { expectedBuild: STALE_RECEIPT });
 });
+
+it("refuses expired and unfinished retained windows even when credential expiry is waived", () => {
+  const { environment, admit, params } = fixture();
+  const policy = { version: 1 as const, ownerBinding: "session", computeWindowSeconds: 60 };
+  environment.retention = {
+    policy,
+    runtimeReady: true,
+    operation: null,
+    observation: {
+      claimRevision: "revision",
+      state: "running",
+      computeExpiresAtMs: 1001,
+    },
+  };
+  expect(admit({ allowExpiredCredential: true })).toMatchObject({ ok: true });
+  environment.retention.runtimeReady = false;
+  expect(admit({ allowExpiredCredential: true })).toEqual({
+    ok: false,
+    reason: "environment-unavailable",
+  });
+  environment.retention.runtimeReady = true;
+  params.nowMs = 1001;
+  expect(admit({ allowExpiredCredential: true })).toEqual({
+    ok: false,
+    reason: "environment-unavailable",
+  });
+  params.nowMs = 1000;
+  environment.retention.operation = {
+    id: "pending-pause",
+    action: "pause",
+    expectedClaimRevision: "revision",
+  };
+  expect(admit({ allowExpiredCredential: true })).toEqual({
+    ok: false,
+    reason: "environment-unavailable",
+  });
+});

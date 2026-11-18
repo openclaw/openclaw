@@ -102,7 +102,7 @@ suite.define(() => {
         });
         await gateway.rejectDeferred("connect", {
           code: "UNAVAILABLE",
-          message: "protocol mismatch: Control UI updated; reload this page to continue",
+          message: "protocol mismatch: OpenClaw updated; reload this page to continue",
           details: {
             code: "PROTOCOL_MISMATCH",
             gatewayBuildId: "pending-input-replacement-build",
@@ -110,9 +110,9 @@ suite.define(() => {
           },
           retryable: false,
         });
-        const refresh = page.getByRole("button", { name: /Server updated/u });
+        const refresh = page.getByRole("button", { name: /OpenClaw was updated/u });
         const blocked = page.getByText(
-          "A pending message is only saved in this tab. Keep this tab open until it is sent, or copy it before discarding it and reloading.",
+          "This pending message is only saved in this tab. Keep it open until the message is sent, or copy it before discarding and reloading.",
           { exact: true },
         );
         const outcome = await Promise.race([

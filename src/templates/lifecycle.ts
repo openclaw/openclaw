@@ -1,20 +1,17 @@
 import { lstat, realpath } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveStateDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { parseRequestedClawHubSkillRef } from "../skills/lifecycle/clawhub-store.js";
 import { resolveUserPath } from "../utils.js";
 import { templateAgentCopyNumber, selectNextTemplateAgentId } from "./add-agent-id.js";
 import { templateOwnedAgentConfig } from "./agent-config-ownership.js";
-import {
-  templateAddCapabilityChange,
-  templateAgentCapabilityChange,
-  findTemplateExtensionPackageCollisions,
-  planTemplateExtensions,
-} from "./application-plan.js";
+import { templateAddCapabilityChange, templateAgentCapabilityChange } from "./application-plan.js";
+import { planBundledTemplateDependency } from "./bundled-dependency-plan.js";
+import { templateDependencyInventory } from "./dependency-inventory.js";
 import { digestTemplateBytes, digestTemplateValue } from "./digest.js";
 import { digestTemplateMcpServer } from "./mcp.js";
 import { planTemplatePortableAutomation } from "./portable-automation.js";
@@ -27,31 +24,19 @@ import {
   TEMPLATE_BOOTSTRAP_FILE_NAMES,
   TEMPLATE_OUTPUT_STABILITY,
   type TemplateAddPlan,
+  type TemplateAddPlanContext,
   type TemplateAddPlanAction,
   type TemplateAddCapabilityChange,
   type TemplateDiagnostic,
   type TemplateManifest,
   type TemplateLocalPrerequisite,
-  type TemplateOpenClawProfile,
-  type TemplatePackagePreflight,
   type TemplatePackagePreflightResult,
   type TemplateSourceIdentity,
   type TemplateWorkspaceSourceSnapshot,
+  type TemplateBundledSourceSnapshot,
 } from "./types.js";
 
 const AGENT_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
-
-export type TemplateAddPlanContext = {
-  config?: OpenClawConfig;
-  agentId?: string;
-  workspace?: string;
-  existingAgentIds?: Iterable<string>;
-  existingWorkspacePaths?: Iterable<string>;
-  existingMcpServerNames?: Iterable<string>;
-  existingMcpServers?: Record<string, Record<string, unknown>>;
-  packagePreflight?: TemplatePackagePreflight;
-  sourceReferenceRoot?: string;
-};
 
 function sourceReferencePath(root: string, path: string): string {
   return `${root.replace(/\/+$/u, "")}/${path.replaceAll("\\", "/")}`;
@@ -77,18 +62,20 @@ export async function buildTemplateAddPlan(params: {
   manifest: TemplateManifest;
   templateMarkdownBody?: Buffer;
   packageBootstrap?: TemplateWorkspaceSourceSnapshot;
-  openClawProfile?: TemplateOpenClawProfile;
+  bundledSources?: TemplateBundledSourceSnapshot[];
   source: TemplateSourceIdentity;
   diagnostics?: TemplateDiagnostic[];
   context?: TemplateAddPlanContext;
 }): Promise<TemplateAddPlan> {
   const context = params.context ?? {};
-  const finalId = context.agentId
-    ? context.agentId
-    : selectNextTemplateAgentId(params.manifest.agent.id, context.existingAgentIds ?? []);
+  const finalId =
+    context.agentId ??
+    selectNextTemplateAgentId(params.manifest.agent.id, context.existingAgentIds ?? []);
   const copyNumber = templateAgentCopyNumber(params.manifest.agent.id, finalId);
+  const copyNameBase = params.manifest.agent.name ?? params.manifest.agent.identity?.name;
+  // Default beside the other agents' workspaces, so --profile and OPENCLAW_STATE_DIR are honored.
   const workspace = canonicalWorkspacePath(
-    context.workspace ?? resolve(resolveRequiredHomeDir(), ".openclaw", `workspace-${finalId}`),
+    context.workspace ?? resolve(resolveStateDir(), `workspace-${finalId}`),
   );
   const packageRoot = await realpath(params.source.packageRoot).catch(
     () => params.source.packageRoot,
@@ -124,16 +111,36 @@ export async function buildTemplateAddPlan(params: {
   }
   const existingAgentIds = new Set(context.existingAgentIds ?? []);
   const agentBlocked = existingAgentIds.has(finalId);
-  const openClawAgentSettings = params.openClawProfile?.agent ?? {};
-  const { heartbeat: _heartbeat, ...agentSettings } = openClawAgentSettings;
+  const openClawAgentSettings = params.manifest.agent;
+  const { heartbeat: _heartbeat, model: preferredModel, ...agentSettings } = openClawAgentSettings;
   const persistedOpenClawAgentSettings = materializeTemplateToolProfile(agentSettings);
-  const agentConfig: TemplateAddPlan["agent"]["config"] = templateOwnedAgentConfig({
-    ...params.manifest.agent,
-    ...persistedOpenClawAgentSettings,
-    ...(copyNumber > 1 ? { name: `${params.manifest.agent.name} ${copyNumber}` } : {}),
-    id: finalId,
-    workspace,
-  });
+  // The preference becomes the new agent's ordinary model only when this host offers it.
+  // Otherwise the entry carries no model and inherits the host default, as before.
+  const appliedModel = preferredModel
+    ? await context.resolvePreferredModel?.(preferredModel, finalId)
+    : undefined;
+  const modelDiagnostics: TemplateDiagnostic[] =
+    preferredModel && !appliedModel
+      ? [
+          {
+            level: "warning",
+            code: "preferred_model_unavailable",
+            phase: "plan",
+            path: "$.agent.model",
+            message: `Preferred model ${JSON.stringify(preferredModel)} is not available on this host; the agent uses the default model.`,
+          },
+        ]
+      : [];
+  const agentConfig: TemplateAddPlan["agent"]["config"] = {
+    ...templateOwnedAgentConfig({
+      ...agentSettings,
+      ...persistedOpenClawAgentSettings,
+      ...(copyNumber > 1 && copyNameBase ? { name: `${copyNameBase} ${copyNumber}` } : {}),
+      id: finalId,
+      workspace,
+    }),
+    ...(appliedModel ? { model: appliedModel } : {}),
+  };
   if (agentBlocked) {
     blockers.push(
       blocker(
@@ -165,7 +172,12 @@ export async function buildTemplateAddPlan(params: {
   const workspaceExistsOnDisk = await lstat(workspace)
     .then(() => true)
     .catch(() => false);
-  const workspaceBlocked = configuredWorkspaceConflict || workspaceExistsOnDisk;
+  const admittedWorkspace =
+    context.admittedWorkspace === undefined
+      ? undefined
+      : canonicalWorkspacePath(context.admittedWorkspace);
+  const workspaceBlocked =
+    configuredWorkspaceConflict || (workspaceExistsOnDisk && admittedWorkspace !== workspace);
   const workspaceCollisionMessage = configuredWorkspaceConflict
     ? `Workspace ${JSON.stringify(workspace)} overlaps an existing agent workspace.`
     : `Workspace ${JSON.stringify(workspace)} already exists.`;
@@ -405,9 +417,51 @@ export async function buildTemplateAddPlan(params: {
     }
   }
 
-  for (const [index, pkg] of params.manifest.packages.entries()) {
+  const referencedSkillTargets = new Set(
+    templateDependencyInventory(params.manifest).flatMap((dependency) =>
+      dependency.kind === "skill" && dependency.source === "clawhub"
+        ? [parseRequestedClawHubSkillRef(dependency.ref).slug.toLowerCase()]
+        : [],
+    ),
+  );
+  const bundledSkillNames = new Set<string>();
+  const bundledSkillTargets = new Set<string>();
+  const bundledPluginTargets = new Map<string, string>();
+  for (const pkg of templateDependencyInventory(params.manifest)) {
+    const collection = pkg.kind === "skill" ? "skills" : "plugins";
+    const index = params.manifest[collection].findIndex((entry) =>
+      pkg.source === "bundled"
+        ? "path" in entry && entry.path === pkg.path
+        : "ref" in entry && entry.ref === pkg.ref,
+    );
+    const declarationPath = `$.${collection}[${index}]`;
+    if (pkg.source === "bundled") {
+      const planned = await planBundledTemplateDependency({
+        dependency: pkg,
+        manifest: params.manifest,
+        declarationPath,
+        packageRoot,
+        workspace,
+        snapshot: params.bundledSources?.find(
+          (bundledSource) => bundledSource.kind === pkg.kind && bundledSource.path === pkg.path,
+        )?.snapshot,
+        config: context.config,
+        packagePreflight: context.packagePreflight,
+        skillNames: bundledSkillNames,
+        skillTargets: bundledSkillTargets,
+        referencedSkillTargets,
+        pluginTargets: bundledPluginTargets,
+      });
+      actions.push(planned.action);
+      capabilityChanges.push(planned.capabilityChange);
+      if (planned.diagnostic) {
+        blockers.push(planned.diagnostic);
+      }
+      readinessRequirements.push(...planned.requirements);
+      continue;
+    }
     const preflight: TemplatePackagePreflightResult = context.packagePreflight
-      ? await context.packagePreflight(pkg, workspace)
+      ? await context.packagePreflight(pkg, workspace, { packageRoot })
       : {
           ok: false,
           code: "package_install_unavailable",
@@ -416,20 +470,27 @@ export async function buildTemplateAddPlan(params: {
     const diagnostic = !preflight.ok
       ? blocker(
           preflight.code ?? "package_install_unavailable",
-          `$.packages[${index}]`,
+          declarationPath,
           preflight.message ?? "Package preflight failed.",
         )
       : pkg.kind === "plugin" &&
-          (!preflight.declaredCapabilities ||
+          (!preflight.integrity ||
+            !preflight.installId ||
+            !preflight.detectedFormat ||
+            !preflight.adapterIdentity ||
+            !preflight.declaredCapabilities ||
             !preflight.capabilityGrants ||
             !preflight.capabilityGrantsByPluginId)
         ? blocker(
             "plugin_capability_provenance_incomplete",
-            `$.packages[${index}]`,
+            declarationPath,
             `Plugin ${JSON.stringify(pkg.ref)} did not resolve its declared capability surface.`,
           )
         : undefined;
     if (diagnostic) {
+      if (!preflight.ok && preflight.allowlistPluginId) {
+        diagnostic.allowlistPluginId = preflight.allowlistPluginId;
+      }
       blockers.push(diagnostic);
     }
     if (preflight.ok && preflight.requirements) {
@@ -445,6 +506,21 @@ export async function buildTemplateAddPlan(params: {
         ...pkg,
         ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
         ...(preflight.installId ? { installId: preflight.installId } : {}),
+        ...(pkg.kind === "plugin" &&
+        preflight.installId &&
+        preflight.detectedFormat &&
+        preflight.adapterIdentity
+          ? {
+              extension: {
+                id: preflight.installId,
+                format: preflight.detectedFormat,
+                detectedFormat: preflight.detectedFormat,
+                mapped: preflight.mapped ?? [],
+                unavailable: preflight.unavailable ?? [],
+                adapterIdentity: preflight.adapterIdentity,
+              },
+            }
+          : {}),
         ...(preflight.declaredCapabilities
           ? { declaredCapabilities: preflight.declaredCapabilities }
           : {}),
@@ -475,7 +551,7 @@ export async function buildTemplateAddPlan(params: {
       templateAddCapabilityChange({
         kind: "package",
         id: `${pkg.kind}:${pkg.ref}`,
-        path: `packages.${pkg.kind}.${pkg.ref}`,
+        path: `${pkg.kind === "skill" ? "skills" : "plugins"}.${pkg.ref}`,
         action: preflight.ok && preflight.action === "reuse" ? "reuse" : "install",
         reason:
           preflight.ok && preflight.action === "reuse"
@@ -500,28 +576,6 @@ export async function buildTemplateAddPlan(params: {
       }),
     );
   }
-
-  const extensionPlan = await planTemplateExtensions({
-    extensions: params.openClawProfile?.extensions ?? [],
-    workspace,
-    packagePreflight: context.packagePreflight,
-  });
-  const extensions = extensionPlan.extensions;
-  const extensionCollisions = findTemplateExtensionPackageCollisions({
-    packages: params.manifest.packages,
-    extensions: params.openClawProfile?.extensions ?? [],
-  });
-  const collisionIndexes = new Set(extensionCollisions.map(({ index }) => index));
-  blockers.push(...extensionCollisions.map(({ diagnostic }) => diagnostic));
-  for (const [index, action] of extensionPlan.actions.entries()) {
-    if (collisionIndexes.has(index)) {
-      continue;
-    }
-    actions.push(action);
-  }
-  capabilityChanges.push(...extensionPlan.capabilityChanges);
-  readinessRequirements.push(...extensionPlan.requirements);
-  blockers.push(...extensionPlan.blockers);
 
   const existingMcpServerNames = new Set(context.existingMcpServerNames ?? []);
   for (const [name, server] of Object.entries(params.manifest.mcpServers)) {
@@ -589,8 +643,10 @@ export async function buildTemplateAddPlan(params: {
     agentId: finalId,
   });
 
-  // Strict v1 validation permits only deterministic main or isolated targets.
-  for (const job of params.manifest.cronJobs) {
+  // Keep the declared execution session independent from delivery. Templates can only
+  // announce to the last channel, which the scheduler rejects on multi-channel hosts,
+  // so channel delivery remains an owner choice after Add.
+  for (const { delivery: _ignoredDelivery, ...job } of params.manifest.automations) {
     actions.push({
       kind: "cronJob",
       id: job.id,
@@ -600,9 +656,6 @@ export async function buildTemplateAddPlan(params: {
         ...job,
         agentId: finalId,
         expectedState: "absent",
-        ...(job.delivery?.channel === "last"
-          ? { deliveryResolution: "local-channel-state:last" }
-          : {}),
       },
       blocked: false,
     });
@@ -610,7 +663,7 @@ export async function buildTemplateAddPlan(params: {
       templateAddCapabilityChange({
         kind: "cronJob",
         id: job.id,
-        path: `cronJobs.${job.id}`,
+        path: `automations.${job.id}`,
         action: "schedule",
         reason: "The Template declares recurring scheduled work.",
         effect: { ...job, agentId: finalId },
@@ -630,7 +683,6 @@ export async function buildTemplateAddPlan(params: {
     actions,
     capabilityChanges,
     blockers,
-    extensions,
   });
 
   return {
@@ -668,8 +720,7 @@ export async function buildTemplateAddPlan(params: {
       ready: readinessRequirements.length === 0,
       requirements: readinessRequirements,
     },
-    extensions,
     blockers,
-    diagnostics: params.diagnostics ?? [],
+    diagnostics: [...(params.diagnostics ?? []), ...modelDiagnostics],
   };
 }

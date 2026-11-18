@@ -171,7 +171,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     accountId: replyRoute.accountId,
     inboundAudio: state.inboundAudio,
   };
-  const deferFinalTtsText = shouldDeferFinalTtsText(captionedFinalTtsContext);
+  const deferFinalTtsText = await shouldDeferFinalTtsText(captionedFinalTtsContext);
   let commandReplyIndex = 0;
   const commandBlockMirror = (payload: ReplyPayload) => {
     const metadata = getReplyPayloadMetadata(payload);
@@ -208,7 +208,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       payload,
     );
   };
-  const cleanDeferredFinalDirectives = shouldCleanTtsDirectiveText(captionedFinalTtsContext);
+  const cleanDeferredFinalDirectives = await shouldCleanTtsDirectiveText(captionedFinalTtsContext);
   type BlockDelivery = { outcome: ReplyDispatchDeliveryOutcome; pending?: boolean };
   const blockDeliveryOutcomes = new Map<string, Array<Promise<BlockDelivery>>>();
   const recordBlockOutcome = (payload: ReplyPayload, outcome: Promise<BlockDelivery>) => {

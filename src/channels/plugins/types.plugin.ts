@@ -44,7 +44,7 @@ type ChannelGatewayMethodDescriptor = {
 };
 
 /** Provider-owned proof of account control. Tokens never leave the provider adapter. */
-export type ChannelIdentityLinkAdapter = {
+type ChannelIdentityLinkAdapter = {
   prepare: (
     cfg: OpenClawConfig,
     accountId: string,

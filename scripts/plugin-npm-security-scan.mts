@@ -29,6 +29,7 @@ const REVIEWED_CRITICAL_FINDING_LIMITS = new Map<string, number>([
   ["dist:@openclaw/codex:dangerous-exec:dist/client-<hash>.js", 1],
   ["dist:@openclaw/codex:dangerous-exec:dist/dynamic-tools-<hash>.js", 2],
   ["dist:@openclaw/codex:dangerous-exec:dist/session-catalog-<hash>.js", 1],
+  ["dist:@openclaw/codex:dangerous-exec:dist/stdio.worker.js", 1],
   ["dist:@openclaw/codex:dangerous-exec:dist/transport-stdio-<hash>.js", 1],
   ["source:@openclaw/codex:dangerous-exec:src/app-server/managed-launcher-failure.ts", 1],
   ["source:@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/http.ts", 1],
@@ -81,7 +82,7 @@ const REVIEWED_CRITICAL_FINDING_CONTENT_SHA256 = new Map<string, string>([
   ],
   [
     "setup:@openclaw/openshell-sandbox:dangerous-exec:dist/.setup/worker-cli-<hash>.mjs",
-    "799a34cf8a82fed6725a5ac5322242becb394804b1ba6ea62d189aa8a1fa5f02",
+    "c5050d4065ef0365ffd611b558809a848994584f1f11c08854fe7ae3cf7072d7",
   ],
 ]);
 
@@ -256,6 +257,13 @@ function dependencyFindingPath(file: string): string | undefined {
   const marker = "node_modules/";
   const index = file.lastIndexOf(marker);
   return index === -1 ? undefined : file.slice(index);
+}
+
+/** Packages whose own files carry reviewed critical findings. */
+export function reviewedCriticalFindingPackageNames(): Set<string> {
+  return new Set(
+    [...REVIEWED_CRITICAL_FINDING_LIMITS.keys()].flatMap((key) => key.split(":").slice(1, 2)),
+  );
 }
 
 export function scanPluginNpmArtifactSecurity(params: {

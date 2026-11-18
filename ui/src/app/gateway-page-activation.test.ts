@@ -28,6 +28,7 @@ function setup(phase: ApplicationGatewayPhase, stale = true, hidden = false) {
     client: {
       needsWakeReconnect: stale,
       needsReachabilityReconnect: false,
+      checkInboundSilence: () => {},
       gatewayUrl: "ws://localhost",
     },
   };
@@ -119,6 +120,14 @@ function setupRecovery() {
   const makeClient = () =>
     new GatewayBrowserClient({
       url: `ws://${window.location.host}`,
+      onConnecting: () => {
+        snapshot.reconnectAt = undefined;
+        notify();
+      },
+      onReconnectScheduled: (delayMs) => {
+        snapshot.reconnectAt = Date.now() + delayMs;
+        notify();
+      },
       onClose: (info) => {
         snapshot.lastErrorCode = info.busy ? "GATEWAY_BUSY" : null;
         notify();
@@ -128,6 +137,7 @@ function setupRecovery() {
     client: GatewayBrowserClient;
     phase: ApplicationGatewayPhase;
     lastErrorCode: string | null;
+    reconnectAt?: number;
     restartPending?: boolean;
     suspensionPhase?: "draining" | "accepting";
   } = { client: makeClient(), phase: "reconnecting", lastErrorCode: null };
@@ -160,21 +170,122 @@ function setupRecovery() {
   return { snapshot, connect, fetchProbe, visibility, notify, dispose };
 }
 
-it("replaces a blackholed opening on fresh reachability evidence without an online event", async () => {
-  const { connect, fetchProbe, snapshot, notify } = setupRecovery();
-  fetchProbe.mockRejectedValue(new TypeError("offline"));
-  await vi.advanceTimersByTimeAsync(10_000);
+async function connectRecovery() {
+  // Without crypto.subtle the plan skips device identity and sends connect at once.
+  let requestId = 0;
+  vi.stubGlobal("crypto", { randomUUID: () => `wake-${++requestId}` });
+  const recovery = setupRecovery();
+  const socket = wsInstances[0]!;
+  socket.emitOpen();
+  socket.emitConnectChallenge({ nonce: "wake-challenge", ts: Date.now() });
+  await vi.advanceTimersByTimeAsync(0);
+  const request = JSON.parse(socket.sent.at(-1)!);
+  expect(request.method).toBe("connect");
+  socket.emitMessage({
+    type: "res",
+    id: request.id,
+    ok: true,
+    payload: {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: [] },
+      policy: { tickIntervalMs: 30_000 },
+    },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  recovery.snapshot.phase = "connected";
+  recovery.notify();
+  return { ...recovery, socket };
+}
+const healthProbes = (socket: MockWebSocket) =>
+  socket.sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.method === "health");
+
+it.each(["visibility", "focus"])(
+  "probes a recently active open socket on %s and retires it within 10 s if silent",
+  async (trigger) => {
+    const { socket, visibility } = await connectRecovery();
+    if (trigger === "visibility") {
+      visibility.mockReturnValue("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+    }
+    // Return between the watchdog's once-a-second checks.
+    await vi.advanceTimersByTimeAsync(1_500);
+    visibility.mockReturnValue("visible");
+    if (trigger === "visibility") {
+      document.dispatchEvent(new Event("visibilitychange"));
+    }
+    window.dispatchEvent(new FocusEvent("focus"));
+    await vi.advanceTimersByTimeAsync(0);
+    const probes = healthProbes(socket);
+    expect(probes).toHaveLength(1);
+    expect(probes[0].params).toEqual({ probe: false });
+    await vi.advanceTimersByTimeAsync(5_000);
+    // Switching back again keeps the running probe and its deadline.
+    window.dispatchEvent(new FocusEvent("focus"));
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(healthProbes(socket)).toHaveLength(1);
+    expect(socket.lastClose).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(socket.lastClose).toEqual({ code: 4000, reason: "inbound silence probe timeout" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(wsInstances).toHaveLength(2);
+  },
+);
+
+it("keeps a healthy socket when its wake probe answers", async () => {
+  const { socket, visibility, connect } = await connectRecovery();
+  visibility.mockReturnValue("hidden");
+  document.dispatchEvent(new Event("visibilitychange"));
+  await vi.advanceTimersByTimeAsync(1_000);
+  visibility.mockReturnValue("visible");
+  document.dispatchEvent(new Event("visibilitychange"));
+  window.dispatchEvent(new FocusEvent("focus"));
+  // A local Gateway can send a frame, take the probe, and answer within one millisecond.
+  socket.emitMessage({ type: "event", event: "tick", seq: 1, payload: {} });
+  await vi.advanceTimersByTimeAsync(0);
+  const [probe] = healthProbes(socket);
+  expect(probe).toBeDefined();
+  socket.emitMessage({ type: "res", id: probe.id, ok: true, payload: {} });
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(socket.lastClose).toBeNull();
   expect(connect).not.toHaveBeenCalled();
-  fetchProbe.mockResolvedValue(Response.json({ ok: true, status: "live" }));
-  await vi.advanceTimersByTimeAsync(2_500);
-  expect(connect).toHaveBeenCalledOnce();
-  expect(wsInstances).toHaveLength(2);
-  expect(wsInstances[0]?.lastClose).not.toBeNull();
-  snapshot.phase = "connected";
-  notify();
-  await vi.advanceTimersByTimeAsync(20_000);
-  expect(connect).toHaveBeenCalledOnce();
+  expect(wsInstances).toHaveLength(1);
 });
+
+it("replaces a socket silent past the tick window at once instead of probing it", async () => {
+  const { socket, visibility, connect } = await connectRecovery();
+  visibility.mockReturnValue("hidden");
+  document.dispatchEvent(new Event("visibilitychange"));
+  await vi.advanceTimersByTimeAsync(60_000);
+  visibility.mockReturnValue("visible");
+  document.dispatchEvent(new Event("visibilitychange"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(connect).toHaveBeenCalledOnce();
+  expect(healthProbes(socket)).toEqual([]);
+});
+
+it.each([false, true])(
+  "replaces a blackholed opening without an online event (HTTP initially live: %s)",
+  async (initiallyLive) => {
+    const { connect, fetchProbe, snapshot, notify } = setupRecovery();
+    if (initiallyLive) {
+      await vi.advanceTimersByTimeAsync(9_000);
+    } else {
+      fetchProbe.mockRejectedValue(new TypeError("offline"));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(connect).not.toHaveBeenCalled();
+      fetchProbe.mockResolvedValue(Response.json({ ok: true, status: "live" }));
+      await vi.advanceTimersByTimeAsync(2_500);
+    }
+    expect(connect).toHaveBeenCalledOnce();
+    expect(wsInstances).toHaveLength(2);
+    expect(wsInstances[0]?.lastClose).not.toBeNull();
+    snapshot.phase = "connected";
+    notify();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(connect).toHaveBeenCalledOnce();
+  },
+);
 
 it("cuts short transport backoff after a successful fresh probe", async () => {
   const { connect, fetchProbe } = setupRecovery();
@@ -188,6 +299,33 @@ it("cuts short transport backoff after a successful fresh probe", async () => {
   fetchProbe.mockResolvedValue(Response.json({ ok: true, status: "live" }));
   await vi.advanceTimersByTimeAsync(2_500);
   expect(connect).toHaveBeenCalledOnce();
+});
+
+it("preserves connect backoff while HTTP health remains live", async () => {
+  vi.stubGlobal("crypto", { randomUUID: () => "synthetic-connect" });
+  const { connect, fetchProbe } = setupRecovery();
+  for (const delay of [880, 1_496, 2_544]) {
+    const socket = wsInstances.at(-1)!;
+    socket.emitOpen();
+    socket.emitConnectChallenge({ nonce: "synthetic-challenge", ts: Date.now() });
+    await vi.advanceTimersByTimeAsync(0);
+    const request = JSON.parse(socket.sent.at(-1)!);
+    expect(request.method).toBe("connect");
+    socket.emitMessage({
+      type: "res",
+      id: request.id,
+      ok: false,
+      error: { code: "UNAVAILABLE", message: "temporarily unavailable", retryable: true },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const attempts = wsInstances.length;
+    await vi.advanceTimersByTimeAsync(delay - 1);
+    expect(wsInstances).toHaveLength(attempts);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(wsInstances).toHaveLength(attempts + 1);
+  }
+  expect(fetchProbe).toHaveBeenCalled();
+  expect(connect).not.toHaveBeenCalled();
 });
 
 it("finds a restored link within one second during a short outage", async () => {
@@ -212,6 +350,19 @@ it("backs off failed health checks without ordinary notifications restarting the
   }
   expect(fetchProbe).toHaveBeenCalledTimes(20);
   expect(connect).not.toHaveBeenCalled();
+});
+
+it("recovers at once when an app switch returns focus to a still-visible window", async () => {
+  const { snapshot, connect, fetchProbe } = setupRecovery();
+  snapshot.client.stop();
+  fetchProbe.mockRejectedValue(new TypeError("offline"));
+  // Sustained failures back the health check off to one per 4–5 seconds.
+  await vi.advanceTimersByTimeAsync(30_000);
+  fetchProbe.mockResolvedValue(Response.json({ ok: true, status: "live" }));
+  window.dispatchEvent(new FocusEvent("focus"));
+  await vi.advanceTimersByTimeAsync(50);
+  expect(connect).toHaveBeenCalledOnce();
+  expect(refreshControlUiServiceWorker).not.toHaveBeenCalled();
 });
 
 it("retries an inferred busy upgrade once when its health check straddles link restoration", async () => {

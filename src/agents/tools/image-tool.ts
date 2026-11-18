@@ -248,7 +248,6 @@ export function createImageTool(options?: {
   agentId?: string;
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   sandbox?: MediaToolSandbox;

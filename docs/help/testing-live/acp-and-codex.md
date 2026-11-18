@@ -140,8 +140,6 @@ Docker notes:
   does not clamp the override back to its normal catalog window. The ordinary
   reduced-threshold stress above keeps the stricter automatic-compaction and
   hidden-marker retention assertions.
-- Optional loop-relay opt-out check:
-  `OPENCLAW_LIVE_CODEX_HARNESS_DISABLE_LOOP_RELAY=1`
 - The requested thinking preference may map to the nearest effort advertised
   by Codex for that model. For example, Luna maps `minimal` to `low`.
 - Known Codex catalog models derive that exact native effort automatically.

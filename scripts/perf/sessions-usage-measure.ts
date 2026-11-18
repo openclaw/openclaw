@@ -69,7 +69,7 @@ if (values["reset-usage"]) {
   const { prepareSessionCostUsageRefreshLock } =
     await import("../../src/infra/session-cost-usage-cache.sqlite.js");
   const database = openOpenClawAgentDatabase({ agentId: "main" });
-  const lock = prepareSessionCostUsageRefreshLock("main", database.path);
+  const lock = await prepareSessionCostUsageRefreshLock("main", database.path);
   let removed = 0;
   try {
     assert(await lock.acquire(), "fixture usage refresh is still active");

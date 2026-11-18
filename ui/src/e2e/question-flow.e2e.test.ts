@@ -250,6 +250,76 @@ suite.define(() => {
     context = undefined;
   });
 
+  it.each(["own", "child"] as const)(
+    "supersedes a pending %s question only after a new prompt sends",
+    async (source) => {
+      const childKey = "agent:main:dashboard:superseded-question";
+      const { gateway, page } = await openQuestionPage(undefined, false, [
+        { key: childKey, kind: "direct", parentSessionKey: questionSessionKey, updatedAt: 1 },
+      ]);
+      const request = {
+        ...questionRecord("superseded-manual-step", {
+          questionId: "required_action",
+          header: "Manual step",
+          question: "The browser needs a manual step. Complete it before continuing.",
+          options: [{ label: "Ready to recheck" }, { label: "Stop this task" }],
+          isOther: false,
+        }),
+        sessionKey: source === "child" ? childKey : questionSessionKey,
+      };
+      await gateway.emitGatewayEvent("question.requested", {
+        ...questionRecord("unrelated-question"),
+        sessionKey: "agent:main:unrelated",
+      });
+      const panel = await showQuestion(page, gateway, request);
+      const composer = page.locator(composerSelector);
+      await composer.fill("   ");
+      await composer.press("Enter");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+      await composer.fill("Use the supported browser workflow instead.");
+      await gateway.deferNext("chat.send");
+      await button(page, "Send message").click();
+      const sent = await gateway.waitForRequest("chat.send");
+      expect(sent.params).toMatchObject({
+        sessionKey: questionSessionKey,
+        message: "Use the supported browser workflow instead.",
+      });
+      expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+      await panel.waitFor();
+      const next = questionRecord("replacement-question", {
+        question: "Which replacement workflow should I use?",
+      });
+      await gateway.emitGatewayEvent("question.requested", next);
+      await gateway.setMethodResponse("question.resolve", { status: "cancelled" });
+      await gateway.resolveDeferred("chat.send", { status: "started", runId: "replacement-run" });
+      await expectResolution(gateway, { id: request.id, cancel: true });
+      await expectCount(panel, 0);
+      await panelFor(page, next.questions[0]!.question).waitFor();
+      expect(await gateway.getRequests("question.resolve")).toHaveLength(1);
+      if (source === "own") {
+        await page.locator(".chat-question-summary").filter({ hasText: "Skipped" }).waitFor();
+      }
+    },
+  );
+
+  it("retains the question when a new prompt fails to send", async () => {
+    const { gateway, page } = await openQuestionPage();
+    const panel = await showQuestion(page, gateway, questionRecord("failed-send-question"));
+    await gateway.setMethodResponse("chat.send", {
+      __mockError: { code: "INVALID_REQUEST", message: "Synthetic prompt rejection" },
+    });
+    await page.locator(composerSelector).fill("Use a different approach.");
+    await button(page, "Send message").click();
+    await gateway.waitForRequest("chat.send");
+    await page
+      .locator('.chat-send-status[data-send-state="failed"]')
+      .getByText("Not sent", { exact: true })
+      .waitFor();
+    await panel.waitFor();
+    expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+  });
+
   it("reveals sidebar attention on touch without navigating or closing the drawer", async () => {
     const { gateway, page } = await openQuestionPage({ width: 390, height: 844 }, true);
     const request = questionRecord("sidebar-touch-question", { isOther: false });
@@ -352,7 +422,7 @@ suite.define(() => {
         await expectCount(panel.locator(".chat-question-panel__source"), 0);
         await expectCount(
           page.getByRole("region", { name: "Chat", exact: true }).locator(composerSelector),
-          0,
+          1,
         );
       }
 
@@ -517,12 +587,13 @@ suite.define(() => {
   );
 
   defineQuestionFooterTests({
+    artifactDir: () => suite.artifactDir,
     openQuestionPage,
     questionRecord,
     questionSessionKey,
   });
 
-  it("restores the composer without a resolution event and retains later pending-question drafts", async () => {
+  it("keeps the composer through resolution and retains later pending-question drafts", async () => {
     const { gateway, page } = await openQuestionPage();
     const composer = page.locator(composerSelector);
     await composer.fill("Keep this release note draft");
@@ -536,8 +607,8 @@ suite.define(() => {
     await expectCount(page.locator(".chat-thread openclaw-chat-question-panel"), 0);
     await expectCount(panel.getByText("1/1", { exact: true }), 1);
     await expectCount(panel.getByPlaceholder("Type your own answer here"), 1);
-    await expectCount(page.locator(".agent-chat__input"), 0);
-    await expectCount(page.locator(".agent-chat__composer-footer"), 0);
+    await expectCount(page.locator(".agent-chat__input"), 1);
+    await expectCount(page.locator(".agent-chat__composer-footer"), 1);
     await expectFocused(panel.locator(".chat-question-panel"));
 
     await expect
@@ -569,7 +640,7 @@ suite.define(() => {
     await expect.poll(() => composer.inputValue()).toBe("Keep this release note draft");
     await expectFocused(composer);
     await page.locator(".chat-question-panel__collapsed-button").click();
-    await expectCount(page.locator(".agent-chat__input"), 0);
+    await expectCount(page.locator(".agent-chat__input"), 1);
     await expectFocused(panel.locator(".chat-question-panel"));
 
     const answers = { answers: { deploy_target: ["Staging (Recommended)"] } };
@@ -745,6 +816,46 @@ suite.define(() => {
     expect(await document.textContent()).not.toContain(fakeSecret);
     expect(await document.textContent()).not.toContain("stored");
     expect(new URL(page.url()).pathname).toBe(`/operator/ask/${request.id}`);
+  });
+
+  it("keeps a long /ask document on one scroller with reachable answers at phone width", async () => {
+    const page = await newPage({ height: 844, width: 390 }, true);
+    const request = questionRecord("question-long-document", {
+      multiSelect: true,
+      isOther: true,
+      options: Array.from({ length: 14 }, (_value, index) => ({
+        label: `Rollout option ${index + 1}`,
+        description: "Drains the writers, applies the migration and waits for the health check.",
+      })),
+    });
+    await installMockGateway(page, {
+      featureMethods: ["question.get", "question.resolve"],
+      methodResponses: { "question.get": { question: request } },
+    });
+    await page.goto(new URL(`ask/${request.id}`, suite.server.baseUrl).toString());
+    const document = page.locator("openclaw-question-page");
+    const panel = document.locator(".chat-question-panel");
+    await panel.waitFor();
+
+    const layout = await panel.evaluate((element) => {
+      const scroller = element.closest<HTMLElement>(".approval-page")!;
+      const box = (selector: string) => element.querySelector(selector)!.getBoundingClientRect();
+      return {
+        panelOverflow: element.scrollHeight - element.clientHeight,
+        pageOverflow: scroller.scrollHeight - scroller.clientHeight,
+        documentOverflow: element.ownerDocument.documentElement.scrollWidth - window.innerWidth,
+        advanceHeight: box(".chat-question-panel__advance").height,
+      };
+    });
+    expect(layout.panelOverflow).toBeLessThanOrEqual(0);
+    expect(layout.pageOverflow).toBeGreaterThan(0);
+    expect(layout.documentOverflow).toBeLessThanOrEqual(0);
+    expect(layout.advanceHeight).toBeGreaterThanOrEqual(44);
+
+    await panel.getByRole("checkbox").first().tap();
+    const submit = button(panel, "Submit");
+    await submit.scrollIntoViewIfNeeded();
+    expect(await submit.isEnabled()).toBe(true);
   });
 
   it.each([

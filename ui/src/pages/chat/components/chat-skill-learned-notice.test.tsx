@@ -10,7 +10,6 @@ import { createContext } from "../../skill-workshop/skill-workshop-page.test-sup
 import { ChatSkillLearnedNotice } from "./chat-skill-learned-notice.tsx";
 
 const notice: SkillWorkshopChangeNotice = {
-  kind: "skill-workshop-change",
   agentId: "main",
   runId: "skill-workshop-review:r1",
   skills: [

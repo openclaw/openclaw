@@ -24,7 +24,11 @@ import {
   type ProviderAuth,
   type SnapshotInfo,
 } from "./common.ts";
-import { runWindowsBackgroundPowerShell, WindowsGuest } from "./guest-transports.ts";
+import {
+  runWindowsBackgroundPowerShell,
+  windowsBackgroundPowerShellTimeoutMs,
+  WindowsGuest,
+} from "./guest-transports.ts";
 import { startHostServer } from "./host-server.ts";
 import { runWindowsHostCommand } from "./macos-exec.ts";
 import { ensureVmRunning } from "./parallels-vm.ts";
@@ -37,6 +41,7 @@ import {
   psSingleQuote,
   windowsAgentTurnConfigPatchScript,
   windowsAgentTurnScript,
+  windowsFreshShellVersionScript,
   windowsOpenClawResolver,
   windowsPackageInstallScript,
   windowsScopedEnvFunction,
@@ -311,11 +316,11 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
     await this.phases.phase("upgrade.gateway-stop-before-update", 420, () =>
       this.gatewayAction("stop"),
     );
-    await this.phases.phase("upgrade.update-dev", this.updateTimeoutSeconds, () =>
+    await this.phases.phase("upgrade.update-dev", this.updatePhaseTimeoutMs / 1000, () =>
       this.runDevChannelUpdate(),
     );
-    this.status.upgradeVersion = await this.extractLastVersion("upgrade.update-dev");
     await this.phases.phase("upgrade.verify-dev-channel", 120, () => this.verifyDevChannelUpdate());
+    this.status.upgradeVersion = await this.extractLastVersion("upgrade.verify-dev-channel");
     await this.phases.phase("upgrade.gateway-stop", 420, () => this.gatewayAction("stop"));
     await this.runGatewaySmoke("upgrade");
   }
@@ -473,7 +478,7 @@ Invoke-OpenClaw --version
   }
 
   private verifyVersionContains(needle: string): void {
-    const version = this.guestPowerShell("Invoke-OpenClaw --version", { readOnly: true });
+    const version = this.guestPowerShell(windowsFreshShellVersionScript, { readOnly: true });
     if (!version.includes(needle)) {
       throw new Error(`version mismatch: expected substring ${needle}`);
     }
@@ -511,6 +516,7 @@ ${this.windowsPluginIsolationScript()}`,
     label: string,
     script: string,
     timeoutMs: number,
+    commandTimeoutMs?: number,
   ): Promise<void> {
     await runWindowsBackgroundPowerShell({
       append: (chunk) =>
@@ -520,6 +526,7 @@ ${this.windowsPluginIsolationScript()}`,
         this.waitForGuestReady(120);
       },
       label,
+      commandTimeoutMs,
       env: this.guestEnv,
       onLaunchRetry: warn,
       script: `${windowsOpenClawResolver}\n${script}`,
@@ -555,13 +562,19 @@ Invoke-WithScopedEnv @{ OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1'${d
   $script:OpenClawUpdateExit = $LASTEXITCODE
 }
 if ($script:OpenClawUpdateExit -ne 0) { throw "openclaw update failed with exit code $script:OpenClawUpdateExit" }
-Invoke-OpenClaw --version
-Invoke-OpenClaw update status --json`,
-      this.updateTimeoutSeconds * 1000,
+`,
+      this.updatePhaseTimeoutMs,
+      // Leave the script's environment/config preparation outside the CLI deadline.
+      this.updateTimeoutSeconds * 1000 + 60_000,
     );
   }
 
+  private get updatePhaseTimeoutMs(): number {
+    return windowsBackgroundPowerShellTimeoutMs(this.updateTimeoutSeconds * 1000);
+  }
+
   private verifyDevChannelUpdate(): void {
+    this.guestPowerShell(windowsFreshShellVersionScript, { readOnly: true });
     const status = this.guestPowerShell(
       `${windowsPortableGitPathScript}
 Invoke-OpenClaw update status --json`,

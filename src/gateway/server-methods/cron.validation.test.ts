@@ -1448,7 +1448,7 @@ describe("cron method validation", () => {
     expectCronReply(ownerList.respond, expect.objectContaining({ total: 1 }));
   });
 
-  it("preserves only current-job self-management for a capped scheduled run", async () => {
+  it("preserves only current-job self-management across delivery accounts", async () => {
     const ownerSessionKey = "agent:ops:discord:work:group:creator";
     const accountJob = createCronJob({
       agentId: "ops",
@@ -1464,7 +1464,7 @@ describe("cron method validation", () => {
     const context = createCronContext([accountJob, siblingJob]);
     const runClient = callerClient(
       "ops",
-      "work",
+      "delivery-account",
       `agent:ops:cron:${accountJob.id}:run:run-1`,
       accountJob.id,
     );

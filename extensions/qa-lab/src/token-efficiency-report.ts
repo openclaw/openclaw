@@ -5,8 +5,8 @@ import {
 import type { QaParitySuiteSummary } from "./agentic-parity-report.js";
 import { pushQaReportListSection } from "./report.js";
 import type { RuntimeId } from "./runtime-id.js";
-import type { RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
 import { normalizeRuntimePair, resolveRuntimeParityUsagePolicy } from "./runtime-parity.js";
+import type { RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.types.js";
 
 type ProcessedTokenEvidence = "measured" | "derived" | "unavailable";
 

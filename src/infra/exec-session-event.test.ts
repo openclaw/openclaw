@@ -311,6 +311,8 @@ it.for(completionRoutingCases)(
           });
           if (testCase.reply === "chain") {
             await waitForExecScope(scope.sessionKey);
+            // A completion that arrived during the first turn starts after a short settle.
+            await vi.waitFor(() => expect(receipts).toHaveLength(2), { timeout: 10_000 });
             const second = expectDefined(receipts[1], "chained ordinary completion");
             await expect(second.accepted).resolves.toEqual({ ok: true });
             await expect(second.settled).resolves.toMatchObject({

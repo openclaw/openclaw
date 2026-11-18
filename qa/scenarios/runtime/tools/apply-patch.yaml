@@ -4,6 +4,8 @@ scenario:
   id: runtime-tool-apply-patch
   gatewayConfigPatch:
     tools:
+      fs:
+        workspaceOnly: true
       exec:
         applyPatch:
           workspaceOnly: true

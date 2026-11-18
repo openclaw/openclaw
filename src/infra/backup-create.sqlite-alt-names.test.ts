@@ -11,9 +11,11 @@ import {
   createColdPluginFixture,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createBackupArchive } from "./backup-create.js";
-import { listArchiveEntries } from "./backup-create.test-support.js";
+import {
+  listArchiveEntries,
+  withIsolatedBackupState as withOpenClawTestState,
+} from "./backup-create.test-support.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
 // Regression home for alternative SQLite filename discovery (#148796): these

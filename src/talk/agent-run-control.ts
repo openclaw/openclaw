@@ -111,6 +111,7 @@ type RealtimeVoiceAgentControlDeps = {
       isInboundUserMessage?: boolean;
       taskSuggestionDeliveryMode?: undefined;
       toolAuthorityOverlay?: ReplyToolAuthorityOverlay;
+      inputRequesterDeviceId?: string;
       userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
     },
   ) => Promise<RealtimeVoiceAgentQueueOutcome>;
@@ -150,6 +151,14 @@ export async function controlRealtimeVoiceAgentRun(
     /** Optional Gateway Stop override; otherwise cancel the captured exact run owner. */
     cancelRun?: (runId: string) => Promise<boolean>;
   },
+  providedDeps?: RealtimeVoiceAgentControlDeps,
+): Promise<RealtimeVoiceAgentControlResult> {
+  return await controlTalkAgentRun(params, providedDeps);
+}
+
+/** Gateway Talk reads caller policy through the worker-backed session reader. */
+export async function controlTalkAgentRun(
+  params: Parameters<typeof controlRealtimeVoiceAgentRun>[0],
   providedDeps?: RealtimeVoiceAgentControlDeps,
 ): Promise<RealtimeVoiceAgentControlResult> {
   const sessionKey = params.sessionKey.trim();
@@ -325,6 +334,8 @@ export async function controlRealtimeVoiceAgentRun(
     debounceMs: 0,
     isInboundUserMessage: true,
     toolAuthorityOverlay,
+    // The prepared caller authority carries the paired device that spoke this input.
+    inputRequesterDeviceId: toolAuthorityOverlay?.approvalReviewerDeviceId,
     // Talk cannot present task suggestions, so spoken user input must not inherit
     // a capable TUI run's model-facing task tools.
     taskSuggestionDeliveryMode: undefined,
@@ -339,6 +350,7 @@ export async function controlRealtimeVoiceAgentRun(
     }
     params.assertCurrent?.();
     options.toolAuthorityOverlay = overlay;
+    options.inputRequesterDeviceId = overlay?.approvalReviewerDeviceId;
   };
   const canInject = () => {
     params.assertCurrent?.();
@@ -356,11 +368,13 @@ export async function controlRealtimeVoiceAgentRun(
       },
       compatAssertCurrent: () => {
         params.assertCurrent?.();
-        // Async policy belongs to this admission; live caller and owner checks stay synchronous.
+        // An asynchronous reader cannot repeat its read here; check the overlay it
+        // prepared for this admission while assertCurrent rechecks live operator authority.
         const overlay = params.getToolAuthorityOverlayAsync
           ? options.toolAuthorityOverlay
           : params.getToolAuthorityOverlay?.();
         options.toolAuthorityOverlay = overlay;
+        options.inputRequesterDeviceId = overlay?.approvalReviewerDeviceId;
         if (overlay && legacyOwner && !legacyOwner.matchesCaller(overlay)) {
           throw new Error("The original Talk caller authority no longer matches");
         }

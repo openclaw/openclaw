@@ -1,12 +1,13 @@
 // Source-owner measurement: real subscriptions, replayed native event callbacks.
 // node --expose-gc --import ./scripts/tsx.mjs scripts/perf/owned-directory-events-measure.ts
 //   --state-dir <new-directory> [--owner <frozen-owner.ts>] [--allocations] [--event change|rename]
-// macOS selects the in-process native adapter during subscription setup only;
-// this measures owner delivery, not macOS helper-process transport or filesystem throughput.
+// The synthetic host adapter measures owner delivery, not subprocess transport or filesystem throughput.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
+import { registerHooks } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import {
   constants,
@@ -17,7 +18,7 @@ import {
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -30,6 +31,9 @@ const { values } = parseArgs({
     output: { type: "string" },
     allocations: { type: "boolean", default: false },
     event: { type: "string", default: "change" },
+    missing: { type: "boolean", default: false },
+    "watch-dir": { type: "string" },
+    "batch-delay-ms": { type: "string", default: "1" },
   },
 });
 assert.ok(values["state-dir"], "--state-dir must name a new synthetic directory");
@@ -43,20 +47,49 @@ const event = values.event;
 const integer = (name: "operations" | "start-at", min: number) =>
   parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min, fallback: min });
 const operations = integer("operations", 1);
+const batchDelayMs = parseStrictIntegerOption({
+  raw: values["batch-delay-ms"],
+  label: "--batch-delay-ms",
+  min: 0,
+  fallback: 1,
+});
+// Replay the owner boundary, independent of the subprocess transport used in production.
+const hooks = registerHooks({
+  load(url, context, nextLoad) {
+    if (url.endsWith("/directory-watch-host.ts") || url.endsWith("/directory-watch-host.js")) {
+      return {
+        format: "module",
+        shortCircuit: true,
+        source: `
+        import fs from "node:fs";
+        import { EventEmitter } from "node:events";
+        export function watchDirectory(directory, listener, recursive) {
+          try {
+            if (recursive) fs.accessSync(directory);
+            return fs.watch(directory, { persistent: false, recursive }, listener);
+          } catch (error) {
+            const watch = Object.assign(new EventEmitter(), { close() {} });
+            queueMicrotask(() => watch.emit("error", error, true));
+            return watch;
+          }
+        }
+      `,
+      };
+    }
+    return nextLoad(url, context);
+  },
+});
 const startAt = integer("start-at", 0);
 const stateDir = path.resolve(values["state-dir"]);
 fs.mkdirSync(stateDir);
-const root = path.join(stateDir, "agents", "main", "agent");
+const root = values["watch-dir"]
+  ? path.resolve(values["watch-dir"])
+  : path.join(stateDir, "agents", "main", "agent");
 fs.mkdirSync(root, { recursive: true });
 const profilePath = path.join(stateDir, "allocation.heapprofile");
-const marker = (phase: string) =>
-  fs.writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-  );
-marker("identify-start");
+writeGatewayGcTraceMarker("identify-start", profilePath);
 global.gc();
-marker("identify-stop");
+writeGatewayGcTraceMarker("identify-stop", profilePath);
 const { observeOwnedDirectory }: typeof import("../../src/infra/owned-directory-observation.js") =
   await import(
     values.owner
@@ -106,7 +139,9 @@ try {
       { reconcileIntervalMs: 3_600_000 },
     ),
   );
+  await nextTurn();
 } finally {
+  hooks.deregister();
   Object.defineProperty(process, "platform", platform);
   native.watch = originalWatch;
 }
@@ -116,18 +151,21 @@ const run = () => {
   for (let index = 0; index < 64; index++) {
     callback(event, "auth-profiles.json");
   }
-  callback(event, "missing");
+  callback("change", "missing");
 };
 // Measure the common direct-root case separately from the missing-directory filter.
 // Close the missing subscriber after proving that shared callbacks scoped it correctly.
 run();
 assert.equal(directNotifications, 65);
 assert.equal(descendantNotifications, 1);
-subscriptions.pop()!.close();
+if (!values.missing) {
+  subscriptions.pop()!.close();
+}
 for (let warmup = 0; warmup < 100; warmup++) {
   run();
 }
 directNotifications = 0;
+descendantNotifications = 0;
 
 function distribution(samples: number[]) {
   const sorted = samples.toSorted((a, b) => a - b);
@@ -194,19 +232,24 @@ try {
     await delay(startAt - Date.now());
   }
   const latency: number[] = [];
+  const hostLoad = os.loadavg();
   const cpu = process.cpuUsage();
   loop.reset();
-  marker("heap-start");
+  writeGatewayGcTraceMarker("heap-start", profilePath);
   measuredStart = performance.now();
   for (let operation = 0; operation < operations; operation++) {
     const started = performance.now();
     run();
     latency.push(performance.now() - started);
-    await delay(1);
+    if (batchDelayMs) {
+      await delay(batchDelayMs);
+    } else {
+      await nextTurn();
+    }
   }
   measuredEnd = performance.now();
   const usedCpu = process.cpuUsage(cpu);
-  marker("heap-stop");
+  writeGatewayGcTraceMarker("heap-stop", profilePath);
   loop.disable();
   await nextTurn();
   recordGc(observer.takeRecords());
@@ -218,6 +261,7 @@ try {
     sampledAllocation = allocation(profile);
   }
   assert.equal(directNotifications, operations * 65);
+  assert.equal(descendantNotifications, values.missing ? operations : 0);
   const gc = (kind?: number) =>
     distribution(
       collections
@@ -230,6 +274,9 @@ try {
     node: process.version,
     operations,
     event,
+    missing: values.missing,
+    hostLoad,
+    batchDelayMs,
     events: directNotifications,
     allocation: sampledAllocation,
     batchLatency: distribution(latency),

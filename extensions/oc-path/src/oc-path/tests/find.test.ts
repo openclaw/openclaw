@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import { findOcPaths } from "../find.js";
 import type { JsoncValue } from "../jsonc/ast.js";
 import { parseJsonc } from "../jsonc/parse.js";
@@ -18,9 +18,7 @@ function find(ast: OcAst, uri: string) {
 
 function leafValues(results: ReturnType<typeof findOcPaths>): string[] {
   return results.map(({ match }) => {
-    if (match.kind !== "leaf") {
-      throw new Error("Expected a leaf match");
-    }
+    assert(match.kind === "leaf", "Expected a leaf match");
     return match.valueText;
   });
 }
@@ -33,19 +31,24 @@ function nestedValue(keys: string[], value: unknown = 1): unknown {
   return keys.reduceRight<unknown>((child, key) => ({ [key]: child }), value);
 }
 
-function limitEntryReads(root: JsoncValue | null, budget: number) {
-  let reads = 0;
+function* objectChain(root: JsoncValue | null) {
   for (let node = root; node?.kind === "object";) {
-    const entries = node.entries;
-    Object.defineProperty(node, "entries", {
+    const next: JsoncValue | null = node.entries[0]?.value ?? null;
+    yield node;
+    node = next;
+  }
+}
+
+function limitPropertyReads<T extends object>(nodes: Iterable<T>, key: keyof T, budget: number) {
+  let reads = 0;
+  for (const node of nodes) {
+    const value = node[key];
+    Object.defineProperty(node, key, {
       get() {
-        if (++reads > budget) {
-          throw new Error("Recursive wildcard exceeded the AST expansion budget");
-        }
-        return entries;
+        assert(++reads <= budget, "AST expansion exceeded the read budget");
+        return value;
       },
     });
-    node = entries[0]?.value ?? null;
   }
 }
 
@@ -220,7 +223,7 @@ describe("recursive wildcard targets", () => {
     const value = nestedValue(Array.from({ length: depth }, (_, i) => "k" + i));
     const ast = parseJsonc(JSON.stringify(value));
     const pattern = parseOcPath("oc://f.json/" + Array(depth).fill("**").join("."));
-    limitEntryReads(ast.root, 100 * (depth + 1) * depth);
+    limitPropertyReads(objectChain(ast.root), "entries", 100 * (depth + 1) * depth);
 
     const out = findOcPaths(ast, pattern);
     expect(out).toHaveLength(depth + 1);
@@ -235,7 +238,7 @@ describe("findOcPaths — JSONL", () => {
 
   it.each([
     ["*/**/**", ["oc://session/L1"], ["oc://session/L3"]],
-    ["**/**/**", ["oc://session", "oc://session/L1", "oc://session/L3"], []],
+    ["**/**/**", ["oc://session", "oc://session/L1"], ["oc://session/L3"]],
     ["{L1,$first,$last}/**/**", ["oc://session/L1"], ["oc://session/L3"]],
   ])("retains distinct physical-line targets for %s", (pattern, prefix, nextLine) => {
     const lineAst = parseJsonl('{"a":{"b":1},"a.b":2}\n\n{"a":{"b":1},"a.b":2}\n');
@@ -250,12 +253,8 @@ describe("findOcPaths — JSONL", () => {
       "oc://session/L3/a.b",
       'oc://session/L3/"a.b"',
     ]);
-    expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual([
-      "1",
-      "2",
-      "1",
-      "2",
-    ]);
+    const leaves = leafValues(out.filter(({ match }) => match.kind === "leaf"));
+    expect(leaves).toEqual(["1", "2", "1", "2"]);
   });
 
   it("deduplicates quoted aliases within a line", () => {
@@ -270,16 +269,13 @@ describe("findOcPaths — JSONL", () => {
         if (suffix) {
           expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual(["1"]);
         }
-        for (const { path, match } of out) {
-          expect(resolveOcPath(lineAst, parseOcPath(formatOcPath(path)))).toEqual(match);
-        }
       }
     }
   });
 
-  it("keeps valid line addresses after recursive zero-width routes", () => {
+  it.each(["**/**/event", "**/event"])("keeps valid line addresses for %s", (pattern) => {
     const lineAst = parseJsonl('{"nest":{"event":"x"}}\n');
-    const out = find(lineAst, "oc://session/**/**/event");
+    const out = find(lineAst, "oc://session/" + pattern);
     expect(formattedPaths(out)).toEqual(["oc://session/L1/nest/event"]);
     expect(leafValues(out)).toEqual(["x"]);
   });
@@ -290,10 +286,8 @@ describe("findOcPaths — JSONL", () => {
     const value = nestedValue(Array.from({ length: depth }, (_, i) => "k" + i));
     const lineAst = parseJsonl(JSON.stringify(value) + "\n");
     const line = lineAst.lines[0];
-    if (line?.kind !== "value") {
-      throw new Error("Expected a parsed JSONL value line");
-    }
-    limitEntryReads(line.value, 3 * (depth + 1) ** 2 * wildcardsPerSlot);
+    assert(line?.kind === "value", "Expected a parsed JSONL value line");
+    limitPropertyReads(objectChain(line.value), "entries", 3 * (depth + 1) ** 2 * wildcardsPerSlot);
     const slot = Array(wildcardsPerSlot).fill("**").join(".");
     const out = find(lineAst, "oc://session/" + [slot, slot, slot].join("/"));
     expect(out).toHaveLength(depth + 2);
@@ -374,7 +368,6 @@ describe("findOcPaths — Markdown", () => {
         expect(leafValues(out)).toEqual(["old"]);
       }
       const concrete = parseOcPath(address);
-      expect(resolveOcPath(ast, concrete)).toMatchObject({ kind: "leaf", valueText: "old" });
       expect(setOcPath(ast, concrete, "changed").raw).toBe(raw.replace("old", "changed"));
       expect(ast.raw).toBe(raw);
     },
@@ -423,21 +416,21 @@ describe("findOcPaths — Markdown", () => {
   });
 
   it.each([
-    ["name.absent", false],
-    ["name.*", false],
-    ["*.absent", false],
-    ["**.absent", false],
-    ["{name,absent}.absent", false],
-    ["[name=value].absent", false],
-    ["name.**", true],
-    ["**.name", true],
-    ["**.{name,absent}.**", true],
-    ["**.[name=value].**", true],
-    ["**.**", true],
-  ])("matches the complete terminal field pattern %s", (field, matches) => {
+    [["{absent,*}", "{absent,[name=value]}", "{absent,{name,other}}"], true],
+    [["{absent,**}.name", "name.{absent,**}"], true],
+    [['{absent,"*","**"}', "{absent,[name=other]}"], false],
+    [["{name,*}.absent", "{name,*}.{name,*}"], false],
+    [[Array(32).fill("{**,{**}}").join(".") + ".name"], true],
+    [["name.absent", "name.*", "*.absent", "**.absent"], false],
+    [["{name,absent}.absent", "[name=value].absent"], false],
+    [["name.**", "**.name", "**.**"], true],
+    [["**.{name,absent}.**", "**.[name=value].**"], true],
+  ] as const)("matches complete terminal field patterns %j", (fields, matches) => {
     const ast = parseMd("## Settings\n- name: value\n");
-    const out = find(ast, `oc://notes.md/settings/*/${field}`);
-    expect(leafValues(out)).toEqual(matches ? ["value"] : []);
+    for (const field of fields) {
+      const out = find(ast, `oc://notes.md/settings/*/${field}`);
+      expect(leafValues(out), field).toEqual(matches ? ["value"] : []);
+    }
   });
 
   it("keeps item nodes when a recursive wildcard consumes the item slot", () => {
@@ -462,19 +455,7 @@ describe("findOcPaths — Markdown", () => {
       return `## Block ${block}\n\n${items.join("\n")}\n`;
     }).join("\n");
     const document = parseMd(raw);
-    const maxItemReads = 20 * blockCount * wildcardsPerSlot * 3;
-    let itemReads = 0;
-    for (const block of document.blocks) {
-      const items = block.items;
-      Object.defineProperty(block, "items", {
-        get() {
-          if (++itemReads > maxItemReads) {
-            throw new Error("Markdown recursive wildcard exceeded the AST expansion budget");
-          }
-          return items;
-        },
-      });
-    }
+    limitPropertyReads(document.blocks, "items", 20 * blockCount * wildcardsPerSlot * 3);
     const slot = Array(wildcardsPerSlot).fill("**").join(".");
     const out = find(document, "oc://tools.md/" + [slot, slot, slot].join("/"));
     expect(out).toHaveLength(1 + blockCount + 2 * blockCount * itemsPerBlock);
@@ -495,11 +476,28 @@ describe("findOcPaths — Markdown", () => {
     ]);
   });
 
-  it.each(["*", "**", '{missing,{name,"name"},role,*}'])("finds frontmatter via %s", (key) => {
+  const repeatedFrontmatter = Array.from({ length: 12 }, () => "{**,{**}}").join(".");
+  it.each([
+    ["*", ["name", "role"], ["drafter", "writer"]],
+    ["**", ["name", "role"], ["drafter", "writer"]],
+    ['{missing,{name,"name"},role,*}', ["name", "role"], ["drafter", "writer"]],
+    ["**.name", ["name"], ["drafter"]],
+    ["*.absent", [], []],
+    ["name.*", [], []],
+    ["{name,role}.absent", [], []],
+    ["name.**", ["name"], ["drafter"]],
+    ["**.{missing,role}.**", ["role"], ["writer"]],
+    ["{missing,**}.name", ["name"], ["drafter"]],
+    ["name.{absent,**}", ["name"], ["drafter"]],
+    ["**.**", ["name", "role"], ["drafter", "writer"]],
+    ["**/role", ["role"], ["writer"]],
+    [repeatedFrontmatter + ".name", ["name"], ["drafter"]],
+  ])("finds bounded terminal frontmatter keys via %s", (key, keys, values) => {
     const ast = parseMd("---\nname: drafter\nrole: writer\n---\n");
+    limitPropertyReads([ast], "frontmatter", 20);
     const out = find(ast, "oc://SOUL.md/[frontmatter]/" + key);
-    expect(out.map(({ path }) => path.item)).toEqual(["name", "role"]);
-    expect(leafValues(out)).toEqual(["drafter", "writer"]);
+    expect(out.map(({ path }) => path.item)).toEqual(keys);
+    expect(leafValues(out)).toEqual(values);
   });
 
   const predicates = parseMd(

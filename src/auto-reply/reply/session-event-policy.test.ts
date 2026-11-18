@@ -1,11 +1,192 @@
-import { expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
+import {
+  createConfigResolutionFacts,
+  setConfigResolutionFacts,
+} from "../../config/resolution-facts.js";
 import { captureRuntimeConfigWithSource } from "../../config/runtime-config-capture-state.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import { captureScheduledSessionEventConfigPolicy } from "./session-event-policy.js";
+import {
+  captureSessionEventConfigRelevance,
+  captureSessionEventConfigPolicy,
+} from "./session-event-policy.js";
+import { getSessionEventRuntimeConfig } from "./session-event-target.js";
+
+afterEach(() => clearRuntimeConfigSnapshot());
+
+it.each([
+  ["audit logging", { logging: { audit: { executionIdentity: true } } }, true],
+  ["log level", { logging: { level: "debug" } }, true],
+  ["diagnostics", { diagnostics: { enabled: true } }, true],
+  ["UI preferences", { ui: { prefs: { themeMode: "dark" } } }, true],
+  ["cold storage", { session: { maintenance: { coldStorage: { enabled: true } } } }, true],
+  ["telemetry", { telemetry: { enabled: true } }, true],
+  ["update checks", { update: { checkOnStart: false } }, true],
+  ["session send policy", { session: { sendPolicy: { default: "deny" } } }, false],
+  ["session sharing", { session: { sharing: { readOnly: true } } }, false],
+  ["tools", { tools: { deny: ["exec"] } }, false],
+  ["channel", { channels: { telegram: { enabled: false } } }, false],
+  ["model", { agents: { defaults: { model: "openai/changed" } } }, false],
+  ["auth", { auth: { profiles: { selected: { provider: "openai", mode: "oauth" } } } }, false],
+] satisfies Array<[string, OpenClawConfig, boolean]>)(
+  "rechecks only event authority after a %s publication",
+  (_change, patch, retained) => {
+    for (const publishBeforeCapture of [false, true]) {
+      const before: OpenClawConfig = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(before);
+      const after = { ...before, ...patch };
+      if (publishBeforeCapture) {
+        setRuntimeConfigSnapshot(after);
+      }
+      // Admission may still hold the previous publication when it captures policy.
+      const policy = captureSessionEventConfigPolicy(before, "main", makeCronJob({}));
+      policy.selectModel({ provider: "openai", model: "model" });
+      if (!publishBeforeCapture) {
+        setRuntimeConfigSnapshot(after);
+      }
+      const check = () => policy.assertCurrent(getSessionEventRuntimeConfig(), ["telegram"]);
+      if (retained) {
+        expect(check).not.toThrow();
+        expect(policy.changed).toBe(false);
+      } else {
+        expect(check).toThrow("Session event configuration changed");
+        expect(policy.changed).toBe(true);
+      }
+    }
+  },
+);
+
+it.each([
+  ["logging.file", true],
+  ["diagnostics.otel.headers.Authorization", true],
+  ["ui.seamColor", true],
+  ["session.maintenance.pruneAfter", true],
+  ["session.store", false],
+] as const)("scopes authored values and resolution facts at %s", (path, retained) => {
+  const before: OpenClawConfig = {};
+  const after: OpenClawConfig = {};
+  setConfigResolutionFacts(before, createConfigResolutionFacts([]));
+  setConfigResolutionFacts(
+    after,
+    createConfigResolutionFacts(
+      [{ varName: "SYNTHETIC_SETTING", configPath: path }],
+      new Map([[path, "SYNTHETIC_SETTING"]]),
+    ),
+  );
+  const policy = captureSessionEventConfigRelevance(
+    captureRuntimeConfigWithSource(before, before),
+    "main",
+    makeCronJob({}),
+  );
+  expect(policy(captureRuntimeConfigWithSource(before, after), [])).toBe(retained);
+  expect(policy(captureRuntimeConfigWithSource(after, before), [])).toBe(retained);
+});
+
+it.each([
+  ["another agent's entry", { other: {} }, undefined, true],
+  ["its own agent's tools", { main: { tools: { deny: ["exec"] } } }, undefined, false],
+  ["its own agent's avatar", { main: { identity: { avatar: "avatar.png" } } }, undefined, true],
+  ["another agent's secret reference", {}, "other.tts.providers.voice.apiKey", true],
+  ["its own agent's secret reference", {}, "main.tts.providers.voice.apiKey", false],
+  ["its own agent's identity reference", {}, "main.identity.avatar", true],
+] satisfies Array<
+  [string, NonNullable<OpenClawConfig["agents"]>["entries"], string | undefined, boolean]
+>)("keeps session events across a publication of %s", (_change, entries, factPath, retained) => {
+  const before: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
+  const after = {
+    agents: { ...before.agents, entries: { ...before.agents?.entries, ...entries } },
+  };
+  const path = `agents.entries.${factPath}`;
+  setConfigResolutionFacts(before, createConfigResolutionFacts([]));
+  setConfigResolutionFacts(
+    after,
+    createConfigResolutionFacts(
+      factPath ? [{ varName: "SYNTHETIC_KEY", configPath: path }] : [],
+      new Map(factPath ? [[path, "SYNTHETIC_KEY"]] : []),
+    ),
+  );
+  for (const job of [makeCronJob({}), undefined]) {
+    setRuntimeConfigSnapshot(before);
+    const policy = captureSessionEventConfigPolicy(getSessionEventRuntimeConfig(), "main", job);
+    setRuntimeConfigSnapshot(after);
+    const check = () => policy.assertCurrent(getSessionEventRuntimeConfig(), ["telegram"]);
+    if (retained) {
+      expect(check).not.toThrow();
+    } else {
+      expect(check).toThrow("Session event configuration changed");
+    }
+  }
+});
+
+it.each([
+  ["openclaw", false, true],
+  ["openclaw", true, false],
+  ["codex", false, false],
+  [undefined, undefined, false],
+] as const)(
+  "delegates MCP authority only to its owning runtime: %s/%s",
+  (agentRuntime, cliExecution, retained) => {
+    const config = (command: string): OpenClawConfig => ({
+      mcp: { servers: { sentry: { command } } },
+    });
+    const before = config("before");
+    const after = config("after");
+    setConfigResolutionFacts(before, createConfigResolutionFacts([]));
+    setConfigResolutionFacts(
+      after,
+      createConfigResolutionFacts(
+        [],
+        new Map([["mcp.servers.sentry.env.TOKEN", "SYNTHETIC_MCP_TOKEN"]]),
+      ),
+    );
+    const check = captureSessionEventConfigRelevance(
+      captureRuntimeConfigWithSource(before, config("${BEFORE_COMMAND}")),
+      "main",
+      makeCronJob({}),
+      { provider: "openai", model: "model", agentRuntime, cliExecution },
+    );
+    expect(check(captureRuntimeConfigWithSource(after, config("${AFTER_COMMAND}")), [])).toBe(
+      retained,
+    );
+  },
+);
+
+it.each([
+  ["enablement", { advisor: { enabled: true } }],
+  ["settings", { advisor: { enabled: true, config: { everyMinutes: 5 } } }],
+  ["secret reference", { advisor: { enabled: true, config: { token: "${ADVISOR_TOKEN}" } } }],
+] as const)("leaves plugin %s changes to the plugin reload owner", (_scenario, entries) => {
+  const before: OpenClawConfig = { plugins: { entries: { advisor: { enabled: false } } } };
+  const after: OpenClawConfig = { plugins: { entries } };
+  setConfigResolutionFacts(before, createConfigResolutionFacts([]));
+  setConfigResolutionFacts(
+    after,
+    createConfigResolutionFacts(
+      [{ varName: "ADVISOR_TOKEN", configPath: "plugins.entries.advisor.config.token" }],
+      new Map([["plugins.entries.advisor.config.token", "ADVISOR_TOKEN"]]),
+    ),
+  );
+  // Scheduled and unscheduled session events share this relevance check.
+  for (const job of [makeCronJob({}), undefined]) {
+    const check = captureSessionEventConfigRelevance(
+      captureRuntimeConfigWithSource(before, before),
+      "main",
+      job,
+    );
+    expect(check(captureRuntimeConfigWithSource(after, after), [])).toBe(true);
+    // Policy outside the plugin owner still revokes the occurrence.
+    expect(
+      check(captureRuntimeConfigWithSource({ ...after, tools: { deny: ["exec"] } }, after), []),
+    ).toBe(false);
+  }
+});
 
 it.each([
   ["profile binding", false],
@@ -83,7 +264,7 @@ it.each([
   withPluginMetadataSnapshotScope(
     metadata,
     () => {
-      const check = captureScheduledSessionEventConfigPolicy(captured, "main", makeCronJob({}), {
+      const check = captureSessionEventConfigRelevance(captured, "main", makeCronJob({}), {
         provider: scenario === "auth source expression" ? "upstream" : "route",
         model: "model",
       });

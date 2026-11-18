@@ -1,4 +1,3 @@
-import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildManifestModelProviderConfig,
   readManifestProviderDefaultModelRef,
@@ -6,7 +5,7 @@ import {
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createProviderConnectionPresetAppliers } from "openclaw/plugin-sdk/provider-onboard";
-import { createPayloadPatchStreamWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import {
   asOptionalObjectRecord,
   asOptionalRecord,
@@ -47,20 +46,7 @@ const { applyConfig } = createProviderConnectionPresetAppliers<[]>({
   }),
 });
 
-function wrapCohereProviderStream(ctx: ProviderWrapStreamFnContext) {
-  return createPayloadPatchStreamWrapper(ctx.streamFn, ({ payload }) => {
-    // Cohere's Compatibility API uses developer, not system, for instructions.
-    if (Array.isArray(payload.messages)) {
-      payload.messages = payload.messages.map((message) => {
-        const record = asOptionalObjectRecord(message);
-        return record?.role === "system" ? { ...record, role: "developer" } : message;
-      });
-    }
-
-    // Cohere lets tool-capable models choose a tool when tool_choice is omitted.
-    delete payload.tool_choice;
-  });
-}
+const cohereStreamHooks = buildProviderStreamFamilyHooks("cohere-compatibility");
 
 export default defineSingleProviderPluginEntry({
   id: "cohere",
@@ -93,8 +79,8 @@ export default defineSingleProviderPluginEntry({
         },
       },
     },
-    wrapStreamFn: wrapCohereProviderStream,
-    wrapSimpleCompletionStreamFn: wrapCohereProviderStream,
+    wrapStreamFn: cohereStreamHooks.wrapStreamFn,
+    wrapSimpleCompletionStreamFn: cohereStreamHooks.wrapStreamFn,
     isModernModelRef: ({ modelId }) => COHERE_MODERN_MODEL_IDS.has(modelId.trim().toLowerCase()),
   },
 });

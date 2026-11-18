@@ -1,2 +1,0 @@
-# Verify the existing rejected-first-message quota case actually rejects session-storage writes.
-14

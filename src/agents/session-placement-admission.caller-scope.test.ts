@@ -17,7 +17,6 @@ import {
   setupWorkerTurnLauncherTest,
   turn,
   unusedEnvironments,
-  type WorkerTurnLauncherOptions,
 } from "../gateway/worker-environments/worker-turn-launcher.test-support.js";
 import {
   prepareSystemAgentRunAdmission,
@@ -63,16 +62,9 @@ const childClaim = (runId: string) => ({
   agentId: "main",
   runId,
 });
-function installWorkerProvider(
-  environments = unusedEnvironments(),
-  resolveWorkspace?: WorkerTurnLauncherOptions["resolveWorkspace"],
-) {
+function installWorkerProvider(environments = unusedEnvironments()) {
   uninstall = installSessionPlacementAdmissionProvider(
-    createWorkerSessionTurnPlacementProvider({
-      placements,
-      environments,
-      ...(resolveWorkspace ? { resolveWorkspace } : {}),
-    }),
+    createWorkerSessionTurnPlacementProvider({ placements, environments }),
   );
 }
 function expectChildReleased() {
@@ -149,16 +141,15 @@ describe("independent placement caller scope", () => {
     "registers a worker proxy without consuming authority from a %s",
     async (scenario) => {
       await seedActivePlacement();
-      const input = turn(scenario === "reused run id" ? "parent-run" : "child-worker-run");
       const reachedWorkerExecution = new Error("test worker execution reached");
-      const resolveWorkspace = vi.fn(async () => {
-        expect(resolveActiveEmbeddedRunOwner(SESSION_ID)?.runId).toBe(input.runId);
-        throw reachedWorkerExecution;
-      });
-      installWorkerProvider(
-        { ...unusedEnvironments(), get: attachedEnvironment },
-        resolveWorkspace,
-      );
+      const input = {
+        ...turn(scenario === "reused run id" ? "parent-run" : "child-worker-run"),
+        onExecutionStarted: () => {
+          expect(resolveActiveEmbeddedRunOwner(SESSION_ID)?.runId).toBe(input.runId);
+          throw reachedWorkerExecution;
+        },
+      };
+      installWorkerProvider({ ...unusedEnvironments(), get: attachedEnvironment });
       try {
         let queued: Promise<void> | undefined;
         const { promise: ready, resolve: release } = createDeferred();

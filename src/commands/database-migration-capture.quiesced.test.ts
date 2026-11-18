@@ -3,13 +3,16 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
+import { withUserPathBaseDirectory } from "../infra/home-dir.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { verifyBackupArchive } from "./backup-verify.js";
 import { createDatabaseMigrationCapture } from "./database-migration-capture.js";
 
 // mock-isolation: enter foreign-owner capture without discovering or acquiring host Gateway locks.
@@ -76,9 +79,12 @@ describe("externally quiesced exact capture", () => {
     "keeps the active %s source family unchanged",
     async (mode) => {
       await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+        const workspace = state.path("relative-workspace");
+        await fs.mkdir(workspace);
+        await fs.writeFile(path.join(workspace, "witness.txt"), "caller workspace contents");
         await state.writeConfig({
           plugins: { enabled: false },
-          agents: { entries: { main: { workspace: state.workspaceDir } } },
+          agents: { entries: { main: { workspace: "./relative-workspace" } } },
         });
         const source = openOpenClawStateDatabase({ env: state.env });
         source.db.exec(
@@ -108,12 +114,29 @@ describe("externally quiesced exact capture", () => {
           expect(
             before.find((entry) => entry.suffix === (mode === "WAL" ? "-wal" : "-journal")),
           ).not.toHaveProperty("missing");
-          const capture = await createDatabaseMigrationCapture({
-            externallyQuiesced: true,
-            requestId: "synthetic-request",
-            suspensionId: "synthetic-suspension",
-            output: state.path("capsule"),
+          const capture = await withUserPathBaseDirectory(state.path(""), () =>
+            createDatabaseMigrationCapture({
+              externallyQuiesced: true,
+              requestId: "synthetic-request",
+              suspensionId: "synthetic-suspension",
+              output: state.path("capsule"),
+            }),
+          );
+          let workspaceContents = "";
+          await tar.t({
+            file: path.join(capture.directory, "filesystem.tar.gz"),
+            onReadEntry(entry) {
+              if (entry.path.endsWith("/relative-workspace/witness.txt")) {
+                entry.on("data", (chunk) => {
+                  workspaceContents += chunk.toString();
+                });
+              }
+            },
           });
+          expect(workspaceContents).toBe("caller workspace contents");
+          await expect(
+            verifyBackupArchive(path.join(capture.directory, "filesystem.tar.gz")),
+          ).resolves.toMatchObject({ sqliteInventoryVerified: true });
           expect(capture).toMatchObject({
             ok: true,
             quiescence: {

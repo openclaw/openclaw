@@ -2,7 +2,9 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import * as managedChildProcess from "../../scripts/lib/managed-child-process.mts";
 import {
+  main,
   resolveAndroidSdkEnv,
   run,
   shouldSkipLinuxArmAndroidGradle,
@@ -12,6 +14,41 @@ import {
 const posixIt = process.platform === "win32" ? it.skip : it;
 
 describe("run-android-gradle", () => {
+  it.each(["win32", "linux", "darwin"])(
+    "launches Gradle and the post command on %s",
+    async (platform) => {
+      const launch = vi.spyOn(managedChildProcess, "runManagedCommand").mockResolvedValue(0);
+      vi.stubGlobal("process", { ...process, platform, arch: "x64" });
+      vi.stubEnv("SystemRoot", "C:\\Windows");
+      try {
+        expect(await main([":app:assemblePlayDebug", "--", "adb", "devices"])).toBe(0);
+        const invocations = launch.mock.calls.map(([options]) =>
+          managedChildProcess.createManagedCommandInvocation(options),
+        );
+        expect(invocations).toEqual([
+          platform === "win32"
+            ? {
+                command: "C:\\Windows\\System32\\cmd.exe",
+                args: ["/d", "/s", "/c", "gradlew.bat :app:assemblePlayDebug"],
+                shell: false,
+                windowsVerbatimArguments: true,
+              }
+            : {
+                command: "./gradlew",
+                args: [":app:assemblePlayDebug"],
+                shell: false,
+                windowsVerbatimArguments: undefined,
+              },
+          { command: "adb", args: ["devices"], shell: false, windowsVerbatimArguments: undefined },
+        ]);
+      } finally {
+        launch.mockRestore();
+        vi.unstubAllGlobals();
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
   it("splits Gradle args from an optional post command", () => {
     expect(splitAndroidGradleArgs([":test", "--", "adb", "shell"])).toEqual({
       gradleArgs: [":test"],

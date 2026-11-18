@@ -29,8 +29,8 @@ it.each([
   { before: ["first", "second"], after: ["first"], reused: false },
   { before: ["first"], after: ["second"], reused: false },
 ])(
-  "compares ordered execution allowlists without serialization: $before -> $after",
-  ({ before, after, reused }) => {
+  "separates execution lifetime from empty metadata reuse: $before -> $after",
+  ({ before, after, reused: sameRun }) => {
     const catalogRef = createToolSearchCatalogRef();
     const tools = [pluginTool(TOOL_SEARCH_RAW_TOOL_NAME, "Search")];
     const apply = (toolExecutionAllow?: readonly string[]) =>
@@ -45,8 +45,8 @@ it.each([
     const previous = catalogRef.current;
     using stringify = vi.spyOn(normalization, "stableStringify");
     const result = apply(after);
-    expect(result.catalogReused).toBe(reused);
-    expect(catalogRef.current === previous).toBe(reused);
+    expect(result.catalogReused).toBe(true);
+    expect(catalogRef.current === previous).toBe(sameRun);
     expect(stringify).not.toHaveBeenCalled();
   },
 );

@@ -208,11 +208,10 @@ it("does not settle payload preparation under a pending connected recovery owner
 it("hydrates queued attachment bytes after offline reload before a new hello", async () => {
   const host = hostFor();
   const original = await prepare(host, "offline-blob");
-  const reloaded = {
-    ...host,
+  const reloaded = Object.assign(makeChatHost(), host, {
     connected: false,
     client: new GatewayBrowserClient({ url: gatewayUrl, offlineRecoveryScope: "principal-a" }),
-  };
+  });
   await expectBytes(reloaded, original);
   reloaded.client.retireOfflineRecoveryScope();
   await expectUnavailable(reloaded, original, "unavailable");

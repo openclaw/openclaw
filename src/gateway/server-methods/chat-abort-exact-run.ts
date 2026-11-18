@@ -1,4 +1,3 @@
-import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
@@ -13,8 +12,8 @@ import {
   stopSession,
   type SessionStopHookContext,
 } from "../../sessions/session-controller.stop.js";
-import { stopSkillExperienceReview } from "../../skills/workshop/experience-review-default.js";
-import { abortChatRunById, type ChatAbortOps } from "../chat-abort.js";
+import { notifySessionRunStopped } from "../../sessions/session-run-stopped.js";
+import { abortChatRunById, createChatAbortSignalReason, type ChatAbortOps } from "../chat-abort.js";
 import { abortControlledSubagents } from "./chat-abort-descendants.js";
 
 type ExactClientRunStopResult = {
@@ -48,6 +47,7 @@ export async function stopExactClientRun(params: {
   cfg: OpenClawConfig;
   runId: string;
   active: RpcSourceRef;
+  userInitiated?: boolean;
   lifecycleRevision?: string;
   assertCurrent?: () => void;
   hookContext: Omit<SessionStopHookContext, "sessionKey" | "sessionId">;
@@ -56,11 +56,11 @@ export async function stopExactClientRun(params: {
   /** Runs after the chat abort is prepared, before it commits. */
   onAbortPrepared?: () => (() => void) | void;
   /**
-   * Explicit authorized chat Stop: cancel this session's Workshop review and suppress the
-   * stopped run right before its cancellation commits. Absent for non-chat callers such as
-   * realtime talk, which keep their own Stop contract.
+   * Explicit authorized chat Stop: announce the stopped run right before its cancellation
+   * commits. Absent for non-chat callers such as realtime talk, which keep their own Stop
+   * contract.
    */
-  experienceReview?: { agentId?: string; sessionKey: string };
+  stoppedSession?: { agentId?: string; sessionKey: string };
   /** Records only this captured run's committed cancellation. */
   onAborted?: () => void;
 }): Promise<ExactClientRunStopResult> {
@@ -88,7 +88,7 @@ export async function stopExactClientRun(params: {
       source: "client-run",
       capture,
       assertCurrent,
-      reason: createAgentRunDirectAbortError(),
+      reason: createChatAbortSignalReason("rpc", params.userInitiated),
       hookContext: { ...params.hookContext, sessionKey, sessionId },
       afterParent: params.afterParent,
       continueChildStop: () => result.aborted,
@@ -106,11 +106,14 @@ export async function stopExactClientRun(params: {
           assertCurrent,
           stopReason: "rpc",
           onAbortPrepared: () => {
-            // The run is about to commit cancellation, so its own completion must not re-arm a
-            // review. Review bookkeeping is best-effort and never fails Stop.
-            const review = params.experienceReview;
-            if (review) {
-              stopSkillExperienceReview({ sessions: [review], runIds: [runId] });
+            // Announce before the run commits cancellation, so consumers act before its own
+            // completion arrives. The notification never fails Stop.
+            if (params.stoppedSession) {
+              notifySessionRunStopped({
+                source: "client-run",
+                sessions: [params.stoppedSession],
+                runIds: [runId],
+              });
             }
             return params.onAbortPrepared?.();
           },

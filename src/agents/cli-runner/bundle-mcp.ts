@@ -441,7 +441,7 @@ export async function prepareCliBundleMcpConfig(params: {
     });
   const resolvedBearerConfig = await resolveBearerConfig(mergedConfig);
 
-  const preparedDataDirs = prepareOwnedBundleMcpDataDirs({
+  const preparedDataDirs = await prepareOwnedBundleMcpDataDirs({
     config: applyMcpServerOverrides(resolvedBearerConfig.config, params.toolOverrides?.mcpServers),
     prepareDataDirsByServer,
   });

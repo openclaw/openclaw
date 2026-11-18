@@ -1,3 +1,5 @@
+import { createMutationTargetLookup } from "./tooltip-mutations.ts";
+
 type Registration = { notify: () => void; active: boolean };
 const documents = new WeakMap<Document, ReturnType<typeof createInlineObserver>>();
 
@@ -34,25 +36,7 @@ function createInlineObserver(document: Document) {
     if (changes.length === 0) {
       return;
     }
-    const nearest = new Map<Node, Node | null>();
-    const trail: Node[] = [];
-    const findTarget = (start: Node | null): Node | null => {
-      let node = start;
-      trail.length = 0;
-      while (node && !targets.has(node)) {
-        const cached = nearest.get(node);
-        if (cached !== undefined) {
-          node = cached;
-          break;
-        }
-        trail.push(node);
-        node = node.parentNode;
-      }
-      for (const skipped of trail) {
-        nearest.set(skipped, node);
-      }
-      return node;
-    };
+    const findTarget = createMutationTargetLookup(targets);
     const pending = new Set<Registration>();
     for (const record of changes) {
       for (let node = findTarget(record.target); node; node = findTarget(node.parentNode)) {

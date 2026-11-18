@@ -32,6 +32,7 @@ export const pluginArrays = [
   "memoryCorpusSupplements",
   "memoryPromptPreparations",
   "memoryPromptSupplements",
+  "learnContributions",
   "widgetPresenters",
   "mcpServerConnectionResolvers",
   "cliRegistrars",

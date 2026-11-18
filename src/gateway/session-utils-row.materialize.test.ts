@@ -1,14 +1,19 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { prepareRunningBackgroundProcessCount } from "../agents/bash-process-observation.js";
+import { addSession, deleteSession } from "../agents/bash-process-registry.js";
+import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
+import { projectPreparedSessionRunState } from "./session-row-prepared-read.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import {
   buildGatewaySessionRow,
@@ -47,6 +52,35 @@ function rowParams(
 }
 
 const read = (...args: Parameters<typeof rowParams>) => readSessionRowInputs(rowParams(...args));
+
+test.each([
+  ["main", "agent:main:main", undefined],
+  ["main", "global", "global"],
+  ["agent:main:main", "global", "global"],
+] as const)("preserves process scope aliases for %s under %s (%s)", (key, canonical, scope) => {
+  const records = [canonical, key, BASE_ENTRY.sessionId].map((scopeKey, i) => {
+    const record = createProcessSessionFixture({ id: `scope-${i}`, backgrounded: true });
+    Object.assign(record, { scopeKey, agentId: "main" });
+    addSession(record);
+    return record;
+  });
+  try {
+    const { inputs, presentation } = read(BASE_ENTRY, { key, cfg: { ...cfg, session: { scope } } });
+    const materialized = materializeSessionRow(inputs);
+    const row = presentSessionRow(materialized, presentation);
+    expect(row.backgroundProcessCount).toBe(3);
+    expect(
+      presentSessionRow(materialized, {
+        ...presentation,
+        backgroundProcessCount: prepareRunningBackgroundProcessCount()(
+          materialized.source.backgroundProcessScope,
+        ),
+      }),
+    ).toStrictEqual(row);
+  } finally {
+    records.forEach((record) => deleteSession(record.id));
+  }
+});
 
 beforeEach(() => {
   setRuntimeConfigSnapshot(cfg);
@@ -118,6 +152,15 @@ test("materializes without a clock and presents equivalent indexed and fallback 
         now,
         subagentRuns: buildSubagentRunReadIndexFromRuns({ ...runInputs, now }),
       });
+      const prepared = presentSessionRow(materialized, {
+        ...presentation,
+        now,
+        preparedRunState: projectPreparedSessionRunState(key, materialized.source, now, {
+          ...rowContext,
+          subagentRuns: rowContext.subagentRuns.atTime(now),
+        }),
+      });
+      expect(JSON.stringify(prepared)).toBe(JSON.stringify(row));
       expect(indexed).toStrictEqual(row);
       expect(JSON.stringify(indexed)).toBe(JSON.stringify(row));
       expect(structuredClone(row)).toMatchObject({
@@ -210,7 +253,7 @@ test.each([50, 150])(
       goal,
       totalTokens,
       totalTokensFresh: true,
-      totalTokensVersion: 1,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     });
     const materialized = materializeSessionRow(inputs);
     for (const now of TIMES) {

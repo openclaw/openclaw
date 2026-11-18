@@ -19,6 +19,7 @@ import {
 } from "../process/exec-result.js";
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { createPendingPromiseTracker } from "../shared/pending-promises.js";
 import type { DiffReadTiming } from "./diff-read-timing.js";
 import { withContentGitSlot } from "./git-content-budget.js";
 import { startGitOperationTiming } from "./git-operation-timing.js";
@@ -33,6 +34,7 @@ import type {
 import { GIT_WORKER_HOST_BATCH_LIMIT } from "./git-worker-contract.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { createWorkerMutationAuthority } from "./worker-mutation-authority.js";
 import {
   WorkerTaskError,
   createOwnedWorkerTaskPool,
@@ -60,6 +62,10 @@ const WORKER_PHASE_TIMEOUT_MS = 30 * 60_000;
 const log = createSubsystemLogger("git/worker");
 const operationDiagnostics = channel("openclaw.git.operation");
 const SPAWN_OPERATIONS = {
+  "github.profile-token": "github.identity",
+  "github.profile-stage": "github.identity",
+  "github.profile-refresh": "github.identity",
+  "checkout.bootstrap-workspace": "repository.identities",
   "repository.identities": "repository.identities",
   "repository.branches": "repository.branches",
   "checkout.revision": "checkout.revision",
@@ -91,6 +97,8 @@ const SPAWN_OPERATIONS = {
   "workspace.manifest.equal": "workspace.manifest",
   "workspace.manifest.snapshot": "workspace.manifest",
   "workspace.manifest.document": "workspace.manifest",
+  "workspace.manifest.initial": "workspace.manifest",
+  "workspace.manifest.template": "workspace.manifest",
   "workspace.manifest.reference": "workspace.manifest",
   "workspace.manifest.parse": "workspace.manifest",
   "workspace.manifest.paths": "workspace.manifest",
@@ -98,20 +106,20 @@ const SPAWN_OPERATIONS = {
   "workspace.manifest.overlay": "workspace.manifest",
   "workspace.manifest.pair": "workspace.manifest",
   "workspace.manifest.staged": "workspace.manifest",
-  "workspace.manifest.entries": "workspace.manifest",
+  "workspace.manifest.result": "workspace.manifest",
   "workspace.manifest.file": "workspace.manifest",
   "workspace.manifest.nodes": "workspace.manifest",
   "workspace.manifest.stage-input": "workspace.manifest",
   "workspace.manifest.tree-input": "workspace.manifest",
   "workspace.manifest.remote-capture": "workspace.manifest",
   "workspace.reconcile.preflight": "workspace.manifest",
+  "workspace.reconcile.patch": "workspace.manifest",
+  "workspace.reconcile.diff": "workspace.manifest",
+  "workspace.reconcile.ownership": "workspace.manifest",
+  "workspace.reconcile.apply": "workspace.manifest",
+  "workspace.reconcile.recover": "workspace.manifest",
+  "workspace.reconcile.temporary": "workspace.manifest",
 } satisfies Record<keyof GitWorkerOperations, GitProcessOperation>;
-
-function trackPending<T>(pending: Set<Promise<T>>, operation: Promise<T>): void {
-  pending.add(operation);
-  const settled = () => pending.delete(operation);
-  void operation.then(settled, settled);
-}
 
 function runtime(): GitWorkerRuntime {
   return resolveGlobalSingleton<GitWorkerRuntime>(
@@ -148,7 +156,9 @@ function poolFor(
         command.type === "worktree.eviction-repositories" ||
         command.type === "worktree.eviction-purge"
       ? "worktreeMaintenance"
-      : command.type.startsWith("worktree.")
+      : command.type.startsWith("worktree.") ||
+          command.type === "github.profile-stage" ||
+          command.type === "github.profile-refresh"
         ? "worktrees"
         : command.type.startsWith("workspace.")
           ? "workspace"
@@ -191,12 +201,17 @@ export type GitWorkerOperationOptions = {
   transferList?: (command: GitWorkerCommand) => readonly Transferable[];
   signal?: AbortSignal;
   assertCurrent?: () => void;
+  onNotification?: () => boolean;
   /** Host-owned Git policy; the broker still owns authority and process settlement. */
   git?: {
     text: typeof runGitBytes;
     buffered: typeof runGitBuffered;
   };
   onInventoryChunk?: (bytes: Uint8Array, context: { signal: AbortSignal }) => Promise<void>;
+  readWorkspaceManifest?: (
+    knownTreeRoot: string | undefined,
+    context: { signal: AbortSignal },
+  ) => Promise<Uint8Array<ArrayBuffer>>;
   onEffect?: (
     effect: GitWorktreeEffect,
     context: { signal: AbortSignal },
@@ -222,10 +237,13 @@ export async function runGitWorkerOperation<Command extends GitWorkerCommand>(
   const admitted = transferList
     ? structuredClone(command, { transfer: [...new Set(transferList)] })
     : structuredClone(command);
-  const baseEnv = { ...process.env };
+  const filesystemOnly =
+    admitted.type.startsWith("github.profile-") || admitted.type === "checkout.bootstrap-workspace";
+  const baseEnv = filesystemOnly ? {} : { ...process.env };
   // Pooled workers do not inherit later environment changes. Git discovery
   // overrides must disable direct metadata reads for this admission too.
   admitted.filesystemRefs =
+    !filesystemOnly &&
     options.git === undefined &&
     !Object.entries(baseEnv).some(
       ([key, value]) =>
@@ -250,9 +268,10 @@ export async function runGitWorkerOperation<Command extends GitWorkerCommand>(
     ...options,
     git: options.git ? { text: options.git.text, buffered: options.git.buffered } : undefined,
   });
-  trackPending(state.pending, operation);
   // SAFETY: Private typed workers bind the operation discriminant to this result contract.
-  return operation as Promise<GitWorkerOperations[Command["type"]]["output"]>;
+  return createPendingPromiseTracker(state.pending)(operation) as Promise<
+    GitWorkerOperations[Command["type"]]["output"]
+  >;
 }
 
 async function executeOperation(
@@ -448,6 +467,14 @@ async function executeOperation(
         }
         options.assertCurrent?.();
         await options.onInventoryChunk(effect.input.bytes, { signal });
+      } else if (effect.type === "workspace.manifest.read") {
+        if (!options.readWorkspaceManifest) {
+          throw new Error("Workspace manifest has no active read owner");
+        }
+        options.assertCurrent?.();
+        const bytes = await options.readWorkspaceManifest(effect.input.knownTreeRoot, { signal });
+        result = bytes;
+        transferList.push(bytes.buffer);
       } else {
         if (!options.onEffect) {
           throw new Error("Git read operation requested a lifecycle effect");
@@ -476,6 +503,11 @@ async function executeOperation(
       };
     }
   };
+  const authority =
+    command.type === "github.profile-refresh"
+      ? createWorkerMutationAuthority(() => options.assertCurrent?.(), options.signal)
+      : undefined;
+  command.mutationAuthority = authority?.buffer;
   try {
     const enqueuedAt = measure ? performance.now() : 0;
     const input = measure
@@ -493,6 +525,7 @@ async function executeOperation(
       transferList: options.transferList,
       signal: options.signal,
       timeoutMs: WORKER_PHASE_TIMEOUT_MS,
+      onNotification: authority?.onNotification ?? options.onNotification,
       // Host exchanges retain the command's own deadline and process-tree cleanup.
       onRequest: (value, context) => {
         if (firstHostRequest) {
@@ -516,11 +549,11 @@ async function executeOperation(
           transferList: [...new Set(replies.flatMap((response) => response.transferList ?? []))],
           timeoutMs: WORKER_PHASE_TIMEOUT_MS,
         }));
-        trackPending(hostWork, pending);
-        return pending;
+        return createPendingPromiseTracker(hostWork)(pending);
       },
     });
     timing?.markPhase();
+    authority?.throwIfRefused();
     if (!reply.ok) {
       if (reply.error.origin !== undefined && hostErrors.has(reply.error.origin)) {
         throw hostErrors.get(reply.error.origin);
@@ -534,7 +567,11 @@ async function executeOperation(
     }
     outcome = "returned";
     return reply.value;
+  } catch (error) {
+    authority?.throwIfRefused();
+    throw error;
   } finally {
+    authority?.dispose();
     let cleanupSucceeded = false;
     try {
       // A cancellation may terminate the worker before its host callback completes.

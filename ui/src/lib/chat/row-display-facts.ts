@@ -37,6 +37,12 @@ const linkSchema = json.object({
   ),
 });
 export const chatRowDisplaySchema = json.object({
+  recoveredMessage: json.optional(
+    json.object({
+      source: json.text,
+      message: json.unknown,
+    }),
+  ),
   links: json.optional(boundedRecord(linkSchema, 8, 4096)),
   images: json.optional(
     boundedRecord(
@@ -97,6 +103,9 @@ export function chatImageDisplayKey(
     : JSON.stringify([image.artifactId ?? null, image.url ?? null, rendition]);
 }
 
+/** Row display facts cover only this many newest rows. */
+export const CHAT_ROW_DISPLAY_WINDOW = 80;
+
 /** Display facts cannot outlive the transcript window they describe. */
 export function projectChatRowDisplay(
   snapshot: RowDisplaySnapshot & { messages: unknown[] },
@@ -106,7 +115,9 @@ export function projectChatRowDisplay(
     return undefined;
   }
   const rows: NonNullable<RowDisplaySnapshot["rowDisplay"]> = {};
-  for (const message of snapshot.messages.slice(Math.max(start, snapshot.messages.length - 80))) {
+  for (const message of snapshot.messages.slice(
+    Math.max(start, snapshot.messages.length - CHAT_ROW_DISPLAY_WINDOW),
+  )) {
     const id = readChatThreadMessageIdentity(message)?.id;
     if (id && snapshot.rowDisplay[id] && removePairingQrContent(message) === message) {
       rows[id] = snapshot.rowDisplay[id]!;

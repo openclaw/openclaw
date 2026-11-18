@@ -42,6 +42,7 @@ export function createGatewayUpdateLifecycle(
   const { signal } = scheduled;
   let initialization: Promise<StartupInstallStatus> | undefined;
   let stopping: Promise<void> | undefined;
+  const schedules = new Map<string, object>();
 
   const run = <T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> =>
     scope.track(async () => {
@@ -77,8 +78,10 @@ export function createGatewayUpdateLifecycle(
     return initialization;
   };
   const schedule = (id: string, work: () => Promise<number>) => {
+    const current = {};
+    schedules.set(id, current);
     const arm = (delayMs: number) => {
-      if (signal.aborted) {
+      if (signal.aborted || schedules.get(id) !== current) {
         return;
       }
       scheduled.schedule({

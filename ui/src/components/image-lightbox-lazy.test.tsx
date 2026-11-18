@@ -3,7 +3,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
-import { ImageLightbox } from "./image-lightbox.tsx";
+import { ImageLightboxItemView } from "./image-lightbox.tsx";
 
 const loading = vi.hoisted(() => {
   const { promise, resolve: release } = Promise.withResolvers<void>();
@@ -18,8 +18,12 @@ it("loads only when opened, reads current media, and leaves a retired host empty
   const restoreDialog = installDialogPolyfill();
   onTestFinished(restoreDialog);
   onTestFinished(loading.release);
-  const current = mountSolid(() => <ImageLightbox src="before.png" imageTitle="Before" />);
-  const retired = mountSolid(() => <ImageLightbox src="retired.png" />);
+  const current = mountSolid(() => (
+    <ImageLightboxItemView item={{ src: "before.png", title: "Before" }} onClose={() => {}} />
+  ));
+  const retired = mountSolid(() => (
+    <ImageLightboxItemView item={{ src: "retired.png", title: "" }} onClose={() => {}} />
+  ));
   const host = current.container.querySelector("openclaw-image-lightbox")!;
   const removed = retired.container.querySelector("openclaw-image-lightbox")!;
   expect(host.querySelector("openclaw-modal-dialog")).toBeNull();

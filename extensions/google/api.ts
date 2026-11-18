@@ -1,4 +1,11 @@
 export { parseGeminiAuth } from "./gemini-auth.js";
+export {
+  executeGoogleResearch,
+  GoogleResearchError,
+  type GoogleResearchContext,
+  type GoogleResearchHandle,
+  type GoogleResearchSnapshot,
+} from "./research.js";
 export { applyGoogleGeminiModelDefault, GOOGLE_GEMINI_DEFAULT_MODEL } from "./onboard.js";
 export { normalizeAntigravityModelId, normalizeGoogleModelId } from "./model-id.js";
 export {

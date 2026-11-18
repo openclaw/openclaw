@@ -116,6 +116,11 @@ authoritative failure, or explicit Stop. Startup, app-server control requests,
 approvals, dynamic tools, and cancellation retain their independent deadlines.
 `/btw` side questions retain their separate ten-minute completion budget.
 
+When native ownership ends, OpenClaw gives the run its normal six-minute semantic
+stall window to finish instead of counting the native wait as inactivity. A run
+that remains stuck is still stopped. Explicit execution deadlines and the separate
+local-settlement budget below remain in effect.
+
 On receipt of the exact native terminal event, OpenClaw starts an absolute
 two-minute local-settlement budget before asynchronous transcript and media
 projection. Later notifications do not reset it. Presentation callbacks start

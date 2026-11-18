@@ -1,6 +1,7 @@
 import type { ResolvedGatewayAuth } from "./auth-resolve.js";
 import type { GatewayAuthResult } from "./auth.js";
 import type { GatewayWsBrowserOrigin } from "./server/client-identity-types.js";
+import type { GatewayDelegation } from "./trusted-proxy-delegation.js";
 
 export type GatewayAuthPolicy = Readonly<{
   /** Transport admission policy; changes require a fresh handshake. */
@@ -13,6 +14,7 @@ export type GatewayAuthPolicy = Readonly<{
   authModeOverride?: ResolvedGatewayAuth["mode"];
   /** Only operator WebSocket admission consumes identity grants. */
   verifiedIdentity?: string;
+  delegation?: GatewayDelegation;
   /** Handshake-attested origin facts remain authoritative after transport retirement. */
   browserOrigin?: Readonly<GatewayWsBrowserOrigin>;
 }>;

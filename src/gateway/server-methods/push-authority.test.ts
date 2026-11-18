@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { WebPushMutationGuard } from "../../infra/push-web-store.records.js";
 import {
@@ -13,6 +13,8 @@ import {
   getCanonicalUserPreferences,
   setCanonicalUserPreferences,
 } from "../../state/user-preferences.js";
+import { setDeviceTokenBindingOwner } from "../openclaw-id/device-token-binding.js";
+import { setOpenClawIdTunnelPrincipalLookup } from "../openclaw-id/tunnel-principal.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { pushHandlers } from "./push.js";
 import { holdPushStorage, pushClient, pushSubscription } from "./push.test-support.js";
@@ -165,6 +167,47 @@ beforeEach(() => {
 });
 
 describe("Web Push request authority across asynchronous storage", () => {
+  afterEach(() => {
+    setDeviceTokenBindingOwner(undefined);
+    setOpenClawIdTunnelPrincipalLookup(undefined);
+  });
+
+  it.each(["bound", "unbound", "changed before commit"] as const)(
+    "registers ID subscriptions only with a durable matching device binding: %s",
+    async (binding) => {
+      const invocation = createInvocation("push.web.subscribe");
+      const peerKey = `iroh:${"a".repeat(64)}`;
+      const principal = { kind: "owner", peerKey } as const;
+      invocation.client.internal = { openclawIdPrincipal: principal };
+      setOpenClawIdTunnelPrincipalLookup(() => principal);
+      let boundPeer = binding === "unbound" ? undefined : peerKey;
+      setDeviceTokenBindingOwner({
+        lookup: () => boundPeer,
+        record: async () => {},
+        forget: async () => {},
+        reportMismatch: vi.fn(),
+      });
+      const persisted = vi.fn();
+      vi.mocked(registerWebPushSubscription).mockImplementation(async (params) => {
+        if (binding === "changed before commit") {
+          boundPeer = undefined;
+        }
+        params.guard?.assertCurrent();
+        persisted();
+        return subscription();
+      });
+      const error = await invocation.invoke().catch((failure: unknown) => failure);
+      if (binding === "bound") {
+        expect(error).toBeUndefined();
+        expect(persisted).toHaveBeenCalledOnce();
+        expect(invocation.respond.mock.calls[0]?.[0]).toBe(true);
+      } else {
+        expect(persisted).not.toHaveBeenCalled();
+        expect(error !== undefined || invocation.respond.mock.calls[0]?.[0] === false).toBe(true);
+      }
+    },
+  );
+
   it.each(["unchanged", "profile changed", "request revoked", "rejected"] as const)(
     "waits for preference reads and checks authority: %s",
     async (change) => {

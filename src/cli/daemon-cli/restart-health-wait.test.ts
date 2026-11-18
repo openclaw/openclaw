@@ -9,7 +9,6 @@ import { resolveLaunchAgentPlistPath } from "../../daemon/launchd-service-files.
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import {
   inspectPortUsage,
-  createStartupMigrationActivityProbe,
   makeGatewayService,
   monotonicClock,
   callGateway,
@@ -297,7 +296,7 @@ describe("restart health", () => {
       waitForRunningGateway({
         attempts: 1,
         delayMs: 60_000,
-        isStartupMigrationActive: createStartupMigrationActivityProbe(() => true),
+        isStartupMigrationActive: () => true,
         signal: controller.signal,
       }),
     ).rejects.toBe(aborted);

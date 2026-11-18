@@ -68,10 +68,10 @@ export function createPreparedVitestCliFixture(
         redirect = local("prepared-compiler.mjs");
         fs.writeFileSync(
           redirect,
-          `import {registerHooks} from "node:module";
+          `import nodeModule from "node:module";
 const copied = ${JSON.stringify(pathToFileURL(local(compilerPath)).href)};
 const original = ${JSON.stringify(pathToFileURL(path.join(repoRoot, compilerPath)).href)};
-registerHooks({resolve(specifier, context, nextResolve) {
+nodeModule.registerHooks({resolve(specifier, context, nextResolve) {
   const resolved = nextResolve(specifier, context);
   return resolved.url === copied ? {...resolved, url: original} : resolved;
 }});

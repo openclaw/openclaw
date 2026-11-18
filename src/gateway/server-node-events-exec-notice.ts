@@ -103,6 +103,7 @@ export async function handleNodeExecEvent(
   const authorization = typeof auth === "object" ? auth : undefined;
   const release = authorization?.release;
   if (
+    authorization?.resultDelivered ||
     cfg.tools?.exec?.notifyOnExit === false ||
     obj.suppressNotifyOnExit === true ||
     event === "exec.denied"

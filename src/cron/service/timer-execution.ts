@@ -285,18 +285,6 @@ export async function executeJobCore(
       if (abortSignal?.aborted) {
         return resolveAbortError();
       }
-      if (evaluation.kind === "busy") {
-        state.deps.log.debug({ jobId: job.id }, "cron: trigger evaluation deferred while busy");
-        return {
-          status: "skipped",
-          summary: "Automation deferred while condition evaluations are busy",
-          admissionDeferred: true,
-          admissionDeferredReason: "busy",
-          executionStarted: false,
-          delivered: false,
-          deliveryAttempted: false,
-        };
-      }
       if (evaluation.kind === "error") {
         return {
           status: "error",
@@ -313,6 +301,39 @@ export async function executeJobCore(
       };
       if (!evaluation.fire) {
         return { status: "ok", triggerEval };
+      }
+      // The wait for a run slot pauses the run's time budget, like a lane wait.
+      const runSlot = await options?.onConditionFired?.({
+        signal: abortSignal,
+        onWait: (waiting) => options.onLaneWait?.({ waiting }),
+      });
+      if (abortSignal?.aborted) {
+        return resolveAbortError();
+      }
+      if (runSlot === "stopped") {
+        return {
+          status: "error",
+          error: "Automation stopped while waiting for a run slot",
+          errorClassification: { kind: "aborted" },
+        };
+      }
+      if (
+        runSlot === "taken-after-wait" &&
+        !isCronWithinActiveHours(
+          job.activeHours,
+          state.deps.nowMs(),
+          state.deps.resolveUserTimezone?.(),
+        )
+      ) {
+        // The window closed during the wait; the check already spent this occurrence.
+        return {
+          status: "skipped",
+          summary: "Outside this automation's active hours",
+          executionStarted: false,
+          delivered: false,
+          deliveryAttempted: false,
+          triggerEval,
+        };
       }
       if (evaluation.message !== undefined) {
         effectiveJob = { ...job, payload: appendCronPayloadText(job.payload, evaluation.message) };
@@ -344,6 +365,7 @@ export async function executeJobCore(
         effectiveJob,
         occurrence,
         abortSignal,
+        assertCurrent,
         options,
       );
       return triggerEval ? { ...result, triggerEval } : result;
@@ -360,6 +382,7 @@ export async function executeJobCore(
         effectiveJob,
         occurrence,
         abortSignal,
+        assertCurrent,
         options,
         sessionPreparation,
       );
@@ -386,6 +409,7 @@ async function executeMainSessionCronJob(
   job: CronStoredJob,
   occurrence: ScheduledOccurrence,
   abortSignal: AbortSignal | undefined,
+  assertCurrent: () => void,
   options?: ExecuteJobCoreOptions,
   sessionPreparation?: CronSessionRunPreparation,
 ): Promise<CronJobExecutionResult> {
@@ -407,13 +431,6 @@ async function executeMainSessionCronJob(
       error: "Session event execution is unavailable; restart the Gateway and retry",
     };
   }
-  const assertCurrent = () => {
-    abortSignal?.throwIfAborted();
-    options?.deliveryAttemptFence?.assertCurrent();
-    if (!isCronActiveJobMarkerCurrent(options?.activeJobMarker)) {
-      throw new Error("Gateway restarting.");
-    }
-  };
   const deliveryContext = await resolveMainSessionCronDeliveryContext(state, job);
   assertCurrent();
   await options?.assertRunCurrent?.();
@@ -561,6 +578,7 @@ async function executeDetachedCronJob(
     delivery: res.delivery,
     sessionId: res.sessionId,
     sessionKey: res.sessionKey,
+    agentTerminal: res.agentTerminal,
     diagnostics: res.diagnostics,
     failureNotificationDetail: res.failureNotificationDetail,
     model: res.model,

@@ -105,6 +105,10 @@ export const STATE_SCHEMA_MIGRATION_READ_TABLES: Record<StateMigrationKind, read
   ],
   "template-names-v36": [...TEMPLATE_STATE_TABLE_RENAMES.flat(), "agent_provenance"],
   "worker-resource-receipts-v37": ["worker_environments"],
+  "repository-disk-authority-v38": [
+    "session_repository_workspaces",
+    "worker_workspace_pending_results",
+  ],
   "operator-approvals-system-agent": ["operator_approvals"],
   "session-watch-cursor-provenance-v4": ["session_watch_cursors"],
   // STRICT migration can rebuild every ordinary table in the canonical schema.
@@ -502,6 +506,9 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   }
   if (userVersion < 37) {
     migrations.push({ kind: "worker-resource-receipts-v37", path: pathname });
+  }
+  if (userVersion < 38) {
+    migrations.push({ kind: "repository-disk-authority-v38", path: pathname });
   }
   if (!hasCanonicalAuditEventsSchema(db)) {
     migrations.push({ kind: "audit-events-v2", path: pathname });

@@ -208,6 +208,7 @@ async function writeSystemdUnit(
     description,
     definitionTransaction,
     warn,
+    beforeRecovery,
   }: Omit<GatewayServiceInstallArgs, "stdout">,
   load?: (beforeAction?: (action: string) => void) => Promise<void>,
 ): Promise<{ unitPath: string; backedUp: boolean }> {
@@ -284,7 +285,21 @@ async function writeSystemdUnit(
                         await run(["enable", "--runtime", unit]);
                       }
                     }
-                    if (restartAttempted) {
+                    if (restartAttempted && beforeRecovery) {
+                      // The hook runs only once the replacement has stopped, before the
+                      // previous unit starts; a failing hook never skips the restart.
+                      await run(["stop", unit]);
+                      const hook = await beforeRecovery().then(
+                        () => undefined,
+                        (error: unknown) => ({ error }),
+                      );
+                      if (running) {
+                        await run(["start", unit]);
+                      }
+                      if (hook) {
+                        throw hook.error;
+                      }
+                    } else if (restartAttempted) {
                       await run([running ? "restart" : "stop", unit]);
                     }
                   },

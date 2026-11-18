@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
+import { forceFullGc } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import renderShape from "../benchmarks/render-shape.json" with { type: "json" };
 import {
@@ -204,7 +204,7 @@ it("bounds retained entries while reserving every family and releasing cleared g
   );
   const admitted = rendered.split("\n").filter((line) => line.includes('{index="'));
   const count = (name: string) => admitted.filter((line) => line.startsWith(`${name}{`)).length;
-  expect(admitted).toHaveLength(16384);
+  expect(admitted).toHaveLength(16576);
   for (const name of families) {
     const size = count(name);
     expect(size).toBeGreaterThanOrEqual(PROMETHEUS_FAMILY_RESERVES[name]);
@@ -224,7 +224,7 @@ it("bounds retained entries while reserving every family and releasing cleared g
   const rebuilt = store.render().toString();
   expect(rebuilt).not.toContain(`${competing}{index="late"}`);
   expect(samples(rebuilt, `${late}{`)).toHaveLength(32);
-  expect(rebuilt.split("\n").filter((line) => line.includes('{index="'))).toHaveLength(16384);
+  expect(rebuilt.split("\n").filter((line) => line.includes('{index="'))).toHaveLength(16576);
   store.reset();
   expect(store.render().toString()).toBe("");
   for (let index = 0; index < 128; index++) {
@@ -276,7 +276,7 @@ it("does not retain unrelated pool slabs between scrapes while series stay live"
   }
   const control = new WeakRef({});
   await nextTurn();
-  queryObjects(WeakRef);
+  forceFullGc();
   expect(control.deref()).toBeUndefined();
   expect(references.filter((reference) => reference.deref() !== undefined)).toHaveLength(0);
   expectLines(store.render().toString(), `${depth}{index="31"} 31`);

@@ -71,6 +71,7 @@ export async function setSessionPublicShare(
       : {}),
   });
   showToast({
+    severity: "success",
     message: t(
       enabled ? "chat.sessionSharing.publicEnabled" : "chat.sessionSharing.publicDisabled",
     ),

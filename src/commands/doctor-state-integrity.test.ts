@@ -290,6 +290,34 @@ describe("doctor state integrity", () => {
     },
   );
 
+  it.each([
+    { code: "EACCES", shouldWarn: true },
+    { code: "ENOENT", shouldWarn: false },
+  ] as const)(
+    "$shouldWarn a warning when the agents dir cannot be scanned ($code)",
+    async ({ code, shouldWarn }) => {
+      const agentsRoot = path.join(stateDir, "agents");
+      const readdir = fs.readdirSync;
+      vi.spyOn(fs, "readdirSync").mockImplementation((target, options) => {
+        if (path.resolve(String(target)) === path.resolve(agentsRoot)) {
+          const message = code === "EACCES" ? "permission denied" : "no such file or directory";
+          throw Object.assign(new Error(`${code}: ${message}, scandir '${agentsRoot}'`), { code });
+        }
+        // oxlint-disable-next-line openclaw-boundaries/no-recursive-readdir -- Transparent access-denial spy; preserve the Doctor caller options.
+        return readdir(target, options);
+      });
+      const text = await runStateIntegrityText({});
+      if (shouldWarn) {
+        expect(text).toContain("Could not scan");
+        expect(text).toContain("for orphan agent directories: EACCES: permission denied");
+        expect(text).toContain(`scandir '$OPENCLAW_HOME${path.sep}.openclaw${path.sep}agents'`);
+        expect(text).not.toContain(agentsRoot);
+      } else {
+        expect(text).not.toContain("orphan agent directories");
+      }
+    },
+  );
+
   it.each(["profile", "state-dir"])(
     "does not inspect another profile's state with a %s override",
     async (selector) => {

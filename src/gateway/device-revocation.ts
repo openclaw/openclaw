@@ -256,6 +256,14 @@ export function readGatewayDeviceRevocationGuard(
   return guard ? captures.get(guard)?.isRevocationCurrent : undefined;
 }
 
+/** New starts check committed source policy, never the fallback transport callback. */
+export function readGatewayDeviceCommittedSourceAuthority(
+  guard: (() => unknown) | undefined,
+): CurrentCaller | undefined {
+  const capture = guard ? captures.get(guard) : undefined;
+  return capture?.hasSourceAuthority ? capture.isSourceCurrent : undefined;
+}
+
 /** Original committed source authority, excluding tentative transport and later request lifetimes. */
 export function readGatewayDeviceSourceAuthority(
   guard: (() => unknown) | undefined,

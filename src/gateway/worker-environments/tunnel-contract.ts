@@ -252,6 +252,11 @@ type WorkerTurnLaunchRequest = {
 };
 
 export type WorkerWorkspaceTunnelHandle = {
+  integratePublication?: (
+    input: import("../repository-publication-integration.js").RepositoryPublicationIntegrationInput,
+  ) => ReturnType<
+    import("../repository-publication-integration.js").PrepareRepositoryPublicationIntegration
+  >;
   environmentId: string;
   ownerEpoch: number;
   launchTurn?: never;
@@ -263,7 +268,10 @@ export type WorkerWorkspaceTunnelHandle = {
     isAuthorized: () => boolean;
     signal: AbortSignal;
   }): Promise<void>;
-  quiesceWorkspace(remoteWorkspaceDir: string): Promise<WorkerWorkspaceQuiescence>;
+  quiesceWorkspace(
+    remoteWorkspaceDir: string,
+    authorize?: () => void,
+  ): Promise<WorkerWorkspaceQuiescence>;
   syncWorkspace(request: WorkerWorkspaceSyncRequest): Promise<WorkerWorkspaceSyncResult>;
   reconcileWorkspace(
     request: WorkerWorkspaceReconcileRequest,
@@ -280,6 +288,8 @@ export type WorkerTurnTunnelHandle = Omit<
   measureLaunchTurn(plan: WorkerLaunchPlan, claim: WorkerSessionTurnClaim): number;
   /** Placement tool implementations available in the destination's installed supervisor. */
   readLaunchToolNames(): Promise<readonly string[]>;
+  /** The currently paired node has approved MCP execution on its local worker transport. */
+  supportsLocalMcp?(): Promise<boolean>;
   launchTurn(request: WorkerTurnLaunchRequest): Promise<WorkerTurnProcessResult>;
 };
 

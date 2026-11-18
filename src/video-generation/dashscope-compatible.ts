@@ -24,9 +24,9 @@ import {
   DASHSCOPE_WAN_VIDEO_SIZE_BY_GEOMETRY,
 } from "./dashscope-wan-models.js";
 import { normalizeVideoGenerationDuration } from "./duration-support.js";
+import type { VideoGenerationRequest } from "./provider-types.js";
 import type {
   GeneratedVideoAsset,
-  VideoGenerationRequest,
   VideoGenerationResult,
   VideoGenerationSourceAsset,
 } from "./types.js";

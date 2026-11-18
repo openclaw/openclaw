@@ -91,6 +91,7 @@ function completeInvocations(rows) {
       // evidence. An unaccounted stream must not hide an additional failure.
       if (
         text === "" ||
+        /^\[test\] inner parallelism [1-9]\d*$/u.test(text) ||
         /^\[test\] preflight test\/vitest\/vitest\.[\w.-]+\.ts$/u.test(text) ||
         /^\[test\] running \d+ (?:Vitest shards|exact-target plans) with parallelism \d+(?: and joined exclusive barriers)?$/u.test(
           text,

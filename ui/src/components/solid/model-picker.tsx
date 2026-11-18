@@ -1,14 +1,18 @@
 import { createMemo, For, Show } from "solid-js";
+import { liveValue } from "../../lib/reactive/live-value.ts";
+import {
+  ModelProviderIcon,
+  useProviderDisplayLabel,
+} from "../../lib/reactive/provider-presentation.tsx";
 import { modelPickerOptions, type ModelPickerParams } from "../model-picker-options.ts";
-import { providerDisplayLabel } from "../provider-icon-data.ts";
 import { Picker, type PickerParams } from "../select-picker.ts";
-import { ProviderBrandIcon } from "./provider-icon.tsx";
 
 export type { ModelPickerOption, ModelPickerParams } from "../model-picker-options.ts";
 
 type ModelSelectOption = ReturnType<typeof modelPickerOptions>["options"][number];
 
 export function ModelPicker(props: ModelPickerParams & { windowed?: boolean }) {
+  const providerDisplayLabel = useProviderDisplayLabel();
   const options = createMemo(() => props.options);
   const selectedValue = createMemo(() => props.value);
   const customLabel = createMemo(() => props.custom?.label);
@@ -28,7 +32,7 @@ export function ModelPicker(props: ModelPickerParams & { windowed?: boolean }) {
     }
   };
   const providerIcon = (provider: string) => (
-    <ProviderBrandIcon provider={provider} class="model-picker__provider-icon" />
+    <ModelProviderIcon provider={provider} class="model-picker__provider-icon" />
   );
   const renderWindowSizer = (visible: readonly ModelSelectOption[]) => {
     const groups = new Map<
@@ -91,6 +95,8 @@ export function ModelPicker(props: ModelPickerParams & { windowed?: boolean }) {
     title: props.title,
     placement: props.placement,
     searchable: true,
+    // The model picker's phone form belongs to its own overhaul.
+    phoneSheet: false,
     windowed: props.windowed ? renderWindowSizer : undefined,
     searchPlaceholder: props.searchPlaceholder,
     groupBy: props.groupByProvider
@@ -128,14 +134,13 @@ export function ModelPicker(props: ModelPickerParams & { windowed?: boolean }) {
       <Picker params={pickerParams()} />
       {props.custom ? (
         <input
-          ref={(input) => (customInput = input)}
+          ref={[(input) => (customInput = input), liveValue(selectedValue)]}
           id={props.custom.id}
           class="settings-input model-picker__custom"
           aria-label={props.custom.label}
           aria-invalid={props.custom.invalid ? "true" : "false"}
           aria-describedby={props.custom.describedBy}
           placeholder={props.custom.placeholder ?? ""}
-          value={props.value}
           hidden={choices().selectedIndex >= 0}
           disabled={props.disabled}
           onInput={commitCustom}

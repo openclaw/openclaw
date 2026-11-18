@@ -4,18 +4,12 @@ import {
 } from "../config/plugin-install-record-map.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { throwSettledAggregate } from "../infra/error-graph-internal.js";
-import { hashJson } from "./installed-plugin-index-hash.js";
-import { normalizeInstallRecordMap } from "./installed-plugin-index-install-records.js";
 import type { PluginManifestRecord } from "./manifest-registry.types.js";
 import {
   preparePluginSourceSnapshot,
   type PreparedPluginSourceSnapshot,
 } from "./plugin-generation-worker.js";
-import { collectPluginSourceSnapshots } from "./plugin-source-snapshot-artifact.js";
-import {
-  isManagedPluginSnapshotSource,
-  pluginSourceSnapshotOptionsDigest,
-} from "./plugin-source-snapshot-options.js";
+import { isManagedPluginSnapshotSource } from "./plugin-source-snapshot-options.js";
 import type { PluginSourceSnapshotPublication } from "./plugin-source-snapshot.types.js";
 
 /** The install lease owns all tentative artifacts until config/index settlement. */
@@ -62,49 +56,14 @@ export async function preparePluginInstallSourceSnapshots(params: {
       if (prepared.size) {
         params.installRecord.sourceSnapshotDigests = digests;
       }
-      const installRecord = normalizeInstallRecordMap(
-        Object.fromEntries([[params.installOwner, params.installRecord]]),
-      )[params.installOwner]!;
-      const installRecordHash = hashJson(installRecord);
-      const buildResolutionDigest = pluginSourceSnapshotOptionsDigest();
-      for (const manifest of params.manifests) {
-        const capture = prepared.get(manifest.id);
-        if (!capture) {
-          continue;
-        }
-        await params.assertCurrent();
-        const descriptor = await capture.publish({
-          installRecordHash,
-          contentDigest: capture.contentDigest,
-          dependencyClosureDigest: capture.dependencyClosureDigest,
-          buildResolutionDigest,
-          packageIntegrity: installRecord.integrity ?? installRecord.npmIntegrity,
-        });
-        // The lease must own cleanup before any post-publication authority check can fail.
-        sourceSnapshots.push({
-          pluginId: manifest.id,
-          installOwner: params.installOwner,
-          rootDir: manifest.rootDir,
-          descriptor,
-        });
-        await params.assertCurrent();
-      }
+      // Record the install-time closure for qualified lazy publication. Eager publication
+      // stays suspended until a startup reader can use the persisted artifact.
     }
     return { sourceSnapshots, [Symbol.asyncDispose]: dispose };
   } catch (error) {
     const failures = [error];
     try {
       await dispose();
-    } catch (cleanupError) {
-      failures.push(cleanupError);
-    }
-    try {
-      await collectPluginSourceSnapshots({
-        stateDir: params.stateDir,
-        retiredSnapshots: sourceSnapshots.map((entry) => entry.descriptor),
-        retainedPaths: new Set(),
-        assertCurrent: params.assertCleanupOwned,
-      });
     } catch (cleanupError) {
       failures.push(cleanupError);
     }

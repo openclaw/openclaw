@@ -31,6 +31,7 @@ import {
 } from "./session-transcript-rewrite-effects.js";
 import { canonicalizeTranscriptEventMedia } from "./transcript-event-media.js";
 import {
+  clearSessionTranscriptActiveFacts,
   createTranscriptPayloadUpdater,
   prepareTranscriptPayload,
   transcriptEventJsonSql,
@@ -122,6 +123,9 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
         const result = rewrite(row);
         if (result.numAffectedRows !== 1n) {
           throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
+        }
+        if (!options.legacyTextStorage) {
+          clearSessionTranscriptActiveFacts(database.db, resolved.sessionId, row.seq);
         }
       }
       rewriteSessionActorContextStats(database, resolved, rewrites, projectionUnchanged);

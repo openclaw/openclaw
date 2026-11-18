@@ -12,6 +12,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import {
   createAccountScopedBindingAdapterV2,
   registerSessionBindingAdapterV2,
+  resolveThreadBindingTargetKind,
   warnPluginSdkDeprecation,
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import { getTelegramRuntime } from "./runtime.js";
@@ -42,6 +43,7 @@ import {
   type TelegramThreadBindingRecord,
 } from "./thread-bindings-store.js";
 import { resolveTelegramToken } from "./token.js";
+import { buildTelegramConversationId } from "./topic-conversation.js";
 
 const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_THREAD_BINDING_MAX_AGE_MS = 0;
@@ -305,12 +307,34 @@ async function initializeThreadBindingManager(
           return null;
         }
         const targetSessionKey = prepared.targetSessionKey.trim();
-        const targetKind = prepared.targetKind;
         if (!targetSessionKey) {
           return null;
         }
         const placement = prepared.placement === "child" ? "child" : "current";
         const metadata = { ...prepared.metadata };
+        const existingBinding =
+          placement === "current"
+            ? manager.getByConversationId(prepared.conversation.conversationId)
+            : undefined;
+        const previous =
+          existingBinding?.targetSessionKey === targetSessionKey &&
+          (existingBinding.targetKind === "subagent") === (prepared.targetKind === "subagent")
+            ? existingBinding
+            : undefined;
+        const targetKind = await resolveThreadBindingTargetKind({
+          cfg: params.cfg,
+          targetSessionKey,
+          targetKind: prepared.targetKind,
+          metadata: { ...previous?.metadata, ...metadata },
+          agentId: normalizeOptionalString(metadata.agentId) ?? previous?.agentId,
+          channel: "Telegram",
+          assertCurrent: () => {
+            assertManagerCurrent();
+            assertCurrent?.();
+          },
+        });
+        assertManagerCurrent();
+        assertCurrent?.();
         let conversationId: string | undefined;
         let nativeTopicCreated = false;
 
@@ -346,7 +370,10 @@ async function initializeThreadBindingManager(
               accountId,
               ...(assertCurrent ? { assertPlatformSendAuthorized: assertCurrent } : {}),
             });
-            conversationId = `${result.chatId}:topic:${result.topicId}`;
+            conversationId = buildTelegramConversationId({
+              chatId: result.chatId,
+              thread: { scope: "forum", id: result.topicId },
+            });
             nativeTopicCreated = true;
           } catch (err) {
             logVerbose(

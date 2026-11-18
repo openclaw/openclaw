@@ -6,6 +6,7 @@ import {
   isLegacySecretRefWithoutProvider,
   type SecretRef,
 } from "../config/types.secrets.js";
+import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { secretRefKey } from "./ref-contract.js";
 import type { SecretRefResolveCache } from "./resolve-types.js";
@@ -188,7 +189,11 @@ export function collectCanonicalSecretInputAssignment(params: {
     ref,
     path: params.path,
     expected: params.expected,
-    ownerKind: params.owner?.ownerKind ?? "unknown",
+    // Legacy unowned inputs may remain cold in private validation. Normal
+    // activation still requires a declared runtime owner before isolation.
+    ownerKind:
+      params.owner?.ownerKind ??
+      (resolveUpdateRehearsalRoot(params.context.env) ? "capability" : "unknown"),
     ownerId: params.owner?.ownerId ?? params.path,
     requiredForGateway: params.owner?.requiredForGateway ?? false,
     disposition: params.owner?.disposition ?? "isolate",

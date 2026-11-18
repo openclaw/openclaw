@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { WebSearchStatusResult } from "../../../../packages/gateway-protocol/src/schema/web-search.ts";
 import type { RuntimeConfigState } from "../../lib/config/config-state-model.ts";
 
 export function readConfigValue(config: unknown, path: readonly (string | number)[]): unknown {
@@ -33,4 +34,28 @@ export function isSearchConfigSettled(state: Readonly<RuntimeConfigState>): bool
     !state.configRecoveryError &&
     (state.configAutoSaveStatus === "idle" || state.configAutoSaveStatus === "saved")
   );
+}
+
+type SearchProvider = WebSearchStatusResult["providers"][number];
+
+export function isProviderReady(provider: SearchProvider): boolean {
+  return provider.available && provider.configured;
+}
+
+/** Opens the provider the operator named, or the one in use that still needs setup. */
+export function providerToOpen(status: WebSearchStatusResult): string {
+  const preferred = status.providers.find(
+    (provider) => provider.id === (status.provider ?? status.route.provider),
+  );
+  return preferred && (status.provider || !isProviderReady(preferred)) ? preferred.id : "";
+}
+
+export function routeStatusKind(status: WebSearchStatusResult): "ok" | "warn" | "muted" {
+  const { kind, provider: routed } = status.route;
+  const provider = status.providers.find((entry) => entry.id === routed);
+  // A managed route whose provider still needs setup is not a working route yet.
+  if (kind === "unavailable" || (kind === "managed" && provider && !isProviderReady(provider))) {
+    return "warn";
+  }
+  return kind === "disabled" || kind === "external" ? "muted" : "ok";
 }

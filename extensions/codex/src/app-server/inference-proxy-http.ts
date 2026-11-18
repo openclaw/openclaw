@@ -1,8 +1,11 @@
-import type { IncomingHttpHeaders } from "node:http";
-import type { Duplex } from "node:stream";
+import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
+import { Writable, type Duplex } from "node:stream";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { rejectWebSocketUpgrade } from "openclaw/plugin-sdk/websocket-runtime";
 import { transportFailureReason } from "./inference-transport.js";
+
+export const REQUEST_TIMEOUT_MS = 30_000;
 
 export type CodexInferenceTransportStage =
   | "request"
@@ -66,4 +69,78 @@ export function relayHeaders(input: IncomingHttpHeaders): Record<string, string>
     }
   }
   return output;
+}
+
+export function isCodexCatalogRequest(
+  request: IncomingMessage,
+  path: string,
+  query: URLSearchParams,
+): boolean {
+  return (
+    request.method === "GET" &&
+    path === "/models" &&
+    [...query.keys()].every((key) => key === "client_version") &&
+    query.getAll("client_version").length <= 1 &&
+    !request.headers["transfer-encoding"] &&
+    (!request.headers["content-length"] || request.headers["content-length"] === "0")
+  );
+}
+
+export function rejectUnsupportedHttpOperation(response: ServerResponse): void {
+  // Native retries transport failures; unsupported operations cannot be fixed by retrying.
+  response.writeHead(400, { "content-type": "application/json" }).end(
+    JSON.stringify({
+      error: {
+        type: "invalid_request_error",
+        code: "unsupported_relay_operation",
+        message: "This operation is not supported by the Codex inference relay.",
+      },
+    }),
+  );
+}
+
+/** Discovery retains native account headers and owns its guarded response through streaming. */
+export async function relayCodexCatalogRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  target: URL,
+  policy: Parameters<typeof fetchWithSsrFGuard>[0]["policy"],
+  requestSignal: AbortSignal,
+  assertCurrent: () => void,
+): Promise<void> {
+  const signal = AbortSignal.any([requestSignal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]);
+  const guarded = await fetchWithSsrFGuard({
+    url: target.toString(),
+    init: { method: "GET", headers: relayHeaders(request.headers), signal },
+    signal,
+    beforeRequest: assertCurrent,
+    requireHttps: true,
+    maxRedirects: 0,
+    capture: false,
+    mode: "trusted_env_proxy",
+    policy,
+    auditContext: "codex-parent-local-catalog",
+  });
+  try {
+    assertCurrent();
+    await relayHttpResponse(guarded.response, response, signal);
+  } finally {
+    await guarded.release().catch(() => undefined);
+  }
+}
+
+export async function relayHttpResponse(
+  upstream: Response,
+  response: ServerResponse,
+  signal: AbortSignal,
+): Promise<void> {
+  // Fetch decodes content encodings; never forward stale encoding/length headers.
+  const headers = Object.fromEntries(upstream.headers);
+  delete headers["content-encoding"];
+  response.writeHead(upstream.status, relayHeaders(headers));
+  if (upstream.body) {
+    await upstream.body.pipeTo(Writable.toWeb(response), { signal });
+  } else {
+    response.end();
+  }
 }

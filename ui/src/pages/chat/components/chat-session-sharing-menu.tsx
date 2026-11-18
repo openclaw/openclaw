@@ -62,17 +62,17 @@ export function useChatSessionSharingMenu(
     return "";
   });
   const matches = () => {
-    const terms = query().trim().toLocaleLowerCase().split(/\s+/u);
+    const terms = query().trim().toLocaleLowerCase().normalize("NFC").split(/\s+/u);
     return people().filter(({ identity }) =>
       terms.every((term) =>
-        [identity.label, identity.id, identity.type].join(" ").toLocaleLowerCase().includes(term),
+        [identity.label, identity.id, identity.type]
+          .join(" ")
+          .toLocaleLowerCase()
+          .normalize("NFC")
+          .includes(term),
       ),
     );
   };
-  const [searching, setSearching] = createSignal(() => {
-    scope();
-    return false;
-  });
   const searchEntry = createMemo(
     (): MenuEntry => ({
       kind: "content",
@@ -80,13 +80,10 @@ export function useChatSessionSharingMenu(
       content: (
         <div class="people-menu__search" onClick={(event) => event.stopPropagation()}>
           <HeaderSearch
-            title={t("chat.sessionSharing.permissions")}
             label={t("sessionsView.searchPeople")}
             query={query()}
-            open={searching()}
             controlRef={() => controls?.ref()}
             inputProps={{ "data-search": "", "data-form-control": "" }}
-            onOpenChange={setSearching}
             onQueryChange={setQuery}
           />
         </div>
@@ -234,18 +231,17 @@ export function useChatSessionSharingMenu(
         });
       }
       if (showPermissions()) {
+        entries.push({
+          kind: "content",
+          id: "members-title",
+          content: (
+            <div class="chat-pane__sharing-title chat-pane__sharing-members-title">
+              {t("chat.sessionSharing.permissions")}
+            </div>
+          ),
+        });
         if (identities().length > 0) {
           entries.push(searchEntry());
-        } else {
-          entries.push({
-            kind: "content",
-            id: "members-title",
-            content: (
-              <div class="chat-pane__sharing-title chat-pane__sharing-members-title">
-                {t("chat.sessionSharing.permissions")}
-              </div>
-            ),
-          });
         }
       }
       return entries;

@@ -22,6 +22,7 @@ export async function syncSessionRepositoryWorkspace(params: {
   generation: number;
   gitAuthor?: { name?: string; email?: string };
   runSetupScript?: boolean;
+  setupDisabled?: boolean;
   readNativeCredential?: GitHubCredentialReader;
   retainCredentialCleanup?: (revoke: () => Promise<void>) => void;
   preparedRepository?: PreparedRepositoryWorkspace;
@@ -30,6 +31,11 @@ export async function syncSessionRepositoryWorkspace(params: {
 }) {
   const store = getSessionRepositoryWorkspaceStore();
   let repository = params.repository;
+  if (repository.diskAuthority) {
+    throw new Error(
+      "Repository disk is already authoritative; resume the original resource instead of restoring a mirror",
+    );
+  }
   const prepared = params.preparedRepository;
   if (prepared && repository.baseCommit && prepared.baseCommit !== repository.baseCommit) {
     throw new Error("Prepared repository does not match the pinned session commit");
@@ -45,6 +51,7 @@ export async function syncSessionRepositoryWorkspace(params: {
     !prepared &&
     !repository.checkpointRef &&
     repository.runSetupScript &&
+    !params.setupDisabled &&
     params.runSetupScript !== true
   ) {
     throw new Error(
@@ -72,6 +79,7 @@ export async function syncSessionRepositoryWorkspace(params: {
       !prepared &&
       !repository.checkpointRef &&
       repository.runSetupScript &&
+      !params.setupDisabled &&
       params.runSetupScript === true,
     ...(github?.token ? { gitToken: github.token } : {}),
   };

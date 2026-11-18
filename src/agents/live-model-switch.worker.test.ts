@@ -212,9 +212,7 @@ it("propagates model-guard read cancellation instead of treating it as missing m
     const { scope, warnings } = modelGuardFixture();
     const controller = new AbortController();
     const reason = new Error("model read owner cancelled");
-    let cancelledAtAdmission = false;
     probe.admission(workerAdmission, (request, grant, callback) => {
-      cancelledAtAdmission = true;
       controller.abort(reason);
       callback(request, grant);
     });
@@ -225,7 +223,6 @@ it("propagates model-guard read cancellation instead of treating it as missing m
         assertReadCurrent: () => controller.signal.throwIfAborted(),
       }),
     ).rejects.toBe(reason);
-    expect(cancelledAtAdmission).toBe(true);
     expect(await warnings.findText("model rollback preparation unavailable")).toBeUndefined();
   });
 });

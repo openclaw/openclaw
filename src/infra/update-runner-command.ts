@@ -97,6 +97,7 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
       cwd,
       timeoutMs,
       env,
+      ...(opts.signal ? { signal: opts.signal } : {}),
       ...(opts.input !== undefined ? { input: opts.input } : {}),
     });
   } catch (error) {
@@ -186,6 +187,7 @@ export function normalizeFallbackFailureReason(
     case "package-stage":
     case "package-verify":
     case "package-swap":
+    case "package-update":
       return "global-install-failed";
     case "openclaw doctor":
       return "doctor-failed";

@@ -11,14 +11,16 @@ import {
   resolveTargetPrefixedChannel,
   stripOutboundTargetKindPrefix,
   stripTargetProviderPrefix,
-  stripTargetTopicSuffix,
 } from "../infra/outbound/channel-target-prefix.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import { normalizeConversationTargetRef } from "../infra/outbound/session-binding-normalization.js";
 import type { SessionBindingPlacement } from "../infra/outbound/session-binding.types.js";
+import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { loadOptionalBundledChannelPublicArtifact } from "./plugins/optional-public-artifact.js";
 import { getLoadedChannelPluginForRead } from "./plugins/registry-loaded.js";
+import { getChannelPlugin } from "./plugins/registry.js";
+import { resolveBaseConversationId } from "./plugins/session-conversation.js";
 import type { ChannelCommandConversationContext } from "./plugins/types.adapters.js";
 import type { ChannelMessagingAdapter } from "./plugins/types.core.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "./plugins/types.plugin.js";
@@ -129,22 +131,17 @@ function resolveConversationScope(
 }
 
 function resolveFallbackConversationTargetId(params: {
+  channel: string;
+  plugin?: ChannelPlugin;
   rawTarget: string;
-  allowNumericTopicShorthand?: boolean;
-  preserveExplicitTopicSuffix?: boolean;
+  preserveScope?: boolean;
 }): string | undefined {
   const target = params.rawTarget;
   const withoutKind = stripOutboundTargetKindPrefix(target);
-  const withoutTopic =
-    params.preserveExplicitTopicSuffix && /:topic:/iu.test(withoutKind)
-      ? withoutKind
-      : stripTargetTopicSuffix(withoutKind, {
-          allowNumericShorthand: params.allowNumericTopicShorthand ?? false,
-        });
-  return (
-    resolveConversationIdFromTargets([withoutTopic]) ??
-    (withoutTopic !== target ? withoutTopic : undefined)
-  );
+  const base = params.preserveScope
+    ? withoutKind
+    : resolveBaseConversationId(params.channel, withoutKind, params.plugin);
+  return resolveConversationIdFromTargets([base]) ?? (base !== target ? base : undefined);
 }
 
 function resolveChannelTargetId(params: {
@@ -175,8 +172,9 @@ function resolveChannelTargetId(params: {
   if (!prefixedChannel || prefixedChannel !== params.channel) {
     const explicitConversationId = resolveFallbackConversationTargetId({
       rawTarget: target,
-      allowNumericTopicShorthand: messaging?.numericTopicShorthand === true,
-      preserveExplicitTopicSuffix: params.preserveExplicitTopicSuffix,
+      channel: params.channel,
+      plugin: params.plugin,
+      preserveScope: params.preserveExplicitTopicSuffix,
     });
     if (explicitConversationId) {
       return explicitConversationId;
@@ -188,8 +186,9 @@ function resolveChannelTargetId(params: {
     const withoutProvider = stripTargetProviderPrefix(normalizedTarget, params.channel);
     const conversationId = resolveFallbackConversationTargetId({
       rawTarget: withoutProvider,
-      allowNumericTopicShorthand: messaging?.numericTopicShorthand === true,
-      preserveExplicitTopicSuffix: params.preserveExplicitTopicSuffix,
+      channel: params.channel,
+      plugin: params.plugin,
+      preserveScope: params.preserveExplicitTopicSuffix,
     });
     return conversationId || withoutProvider || normalizedTarget;
   }
@@ -367,4 +366,51 @@ export function resolveInboundConversationResolution(
     conversationId: genericConversationId,
     parentConversationId: threadId != null ? parentConversationId : undefined,
   });
+}
+
+/**
+ * A route to compare. `transport` marks a route that is sent as given: its explicit
+ * threadId overrides any thread encoded in `to`, as the channel's send path does.
+ * Inbound origins leave it unset, so a thread encoded in `to` wins.
+ */
+type DeliveryRoute = { to: string; threadId?: string | number | null; transport?: boolean };
+
+/** Same conversation per the channel's own resolver; undefined when it cannot tell. */
+export function deliveryRoutesShareConversation(params: {
+  channel: string;
+  left: DeliveryRoute;
+  right: DeliveryRoute;
+}): boolean | undefined {
+  const channel = resolveChannelId(params.channel);
+  // Bundled fallback keeps matching before the channel registers (#93107).
+  const resolve = channel ? getChannelPlugin(channel)?.messaging?.resolveInboundConversation : null;
+  if (!channel || !resolve) {
+    return undefined;
+  }
+  const conversationOf = (to: string, threadId?: string | number) =>
+    resolve({ to, conversationId: to, threadId, isGroup: true });
+  const resolveRoute = (route: DeliveryRoute) => {
+    // Provider-owned normalization (handle casing, link forms) before identity.
+    const to = normalizeTargetForProvider(channel, route.to) ?? route.to.trim();
+    const threadId = route.threadId ?? undefined;
+    if (!route.transport || threadId === undefined) {
+      return conversationOf(to, threadId);
+    }
+    const base = conversationOf(to);
+    // A send whose target already encodes a thread and also carries an explicit one:
+    // which wins is send-path precedence the channel owns (Telegram keeps a Direct
+    // Messages topic but lets the explicit thread replace a forum topic). Core cannot
+    // tell, so it reports "unknown" and callers keep their conservative comparison.
+    if (base?.parentConversationId && base.conversationId !== base.parentConversationId) {
+      return undefined;
+    }
+    return conversationOf(base?.conversationId ?? to, threadId);
+  };
+  const [left, right] = [params.left, params.right].map(resolveRoute);
+  const same = (a?: string, b?: string) =>
+    normalizeOptionalString(a) === normalizeOptionalString(b);
+  return left?.conversationId && right?.conversationId
+    ? same(left.conversationId, right.conversationId) &&
+        same(left.parentConversationId, right.parentConversationId)
+    : undefined;
 }

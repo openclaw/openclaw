@@ -29,6 +29,12 @@ export function BrowserDocumentContent(props: { value: BrowserDocumentViewProps 
         const snapshot = () => gateway.read().snapshot;
         const connected = () => snapshot().phase === "connected";
         const tab = createMemo(() => readBrowserTabTarget(value.target.tab));
+        // Session tab lists include only tracked or referenced tabs; a tool result
+        // may name an untracked tab, such as a reused startup tab.
+        const referencedTabs = createMemo(() => {
+          const current = tab();
+          return current ? [current] : [];
+        });
         const available = () => Boolean(tab() && isBrowserPanelAvailable(snapshot()));
         return (
           <>
@@ -40,6 +46,7 @@ export function BrowserDocumentContent(props: { value: BrowserDocumentViewProps 
               remoteAvailable={available()}
               presented={true}
               sessionKey={value.target.sessionKey}
+              sessionTabs={referencedTabs()}
               fixedTab={tab() ?? undefined}
               resourceBasePath={value.context.resourceBasePath}
               authToken={resolveControlUiAuthToken({

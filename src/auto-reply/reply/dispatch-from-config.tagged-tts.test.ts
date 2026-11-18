@@ -112,7 +112,7 @@ it.each([
 it.each([true, false])(
   "does not replay all-mode block speech (directive parsing: %s)",
   async (enabled) => {
-    vi.spyOn(ttsConfig, "shouldCleanTtsDirectiveText").mockReturnValue(enabled);
+    vi.spyOn(ttsConfig, "shouldCleanTtsDirectiveText").mockResolvedValue(enabled);
     await dispatchReplyFromConfig({
       ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
       cfg: { tts: { auto: "always", mode: "all", modelOverrides: { enabled } } },

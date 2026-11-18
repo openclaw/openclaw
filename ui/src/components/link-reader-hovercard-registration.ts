@@ -5,6 +5,7 @@ import {
   remainingHovercardOpenDelay,
   type HovercardBootstrapTrigger,
 } from "./lazy-hovercard-registration.ts";
+import { linkPreviewModifiers } from "./link-reader-hovercard-modifiers.ts";
 import type { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
 import {
   LINK_READER_HOVERCARD_OPEN_DELAY_MS,
@@ -48,7 +49,10 @@ export function ownsHoverPreview(anchor: HTMLAnchorElement): boolean {
 }
 
 async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigger): Promise<void> {
-  if (trigger === "pointer" && event instanceof PointerEvent && event.pointerType === "touch") {
+  if (
+    linkPreviewModifiers.suppressed ||
+    (trigger === "pointer" && event instanceof PointerEvent && event.pointerType === "touch")
+  ) {
     return;
   }
   const anchor = anchorFromNavigationEvent(event);
@@ -81,6 +85,7 @@ async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigge
   await provider?.updateComplete;
   const current = hoverTargetForAnchor(anchor);
   if (
+    linkPreviewModifiers.suppressed ||
     !provider ||
     !current ||
     !anchor.isConnected ||

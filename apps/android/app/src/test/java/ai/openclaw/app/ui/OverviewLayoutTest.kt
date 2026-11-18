@@ -27,6 +27,7 @@ import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasAnySibling
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasScrollToIndexAction
@@ -232,6 +233,19 @@ class OverviewLayoutTest {
     paints.forEach { (expected, actual) ->
       assertEquals("Chat must paint the shared primary color, not another gray panel", expected, actual)
     }
+  }
+
+  @Test
+  fun newChatIsAvailableBesideChatAndOpensTheConversationScreen() {
+    composeRule.setContent { ShellScreen(model) }
+    composeRule.waitUntil { model.chatSessions.value.isNotEmpty() }
+    capture("new-chat-entry")
+    composeRule
+      .onNode(hasText("New chat") and hasAnySibling(hasText("Chat")))
+      .assertIsDisplayed()
+      .assertHasClickAction()
+      .performClick()
+    composeRule.onNodeWithContentDescription("Chat actions").assertIsDisplayed()
   }
 
   @Test

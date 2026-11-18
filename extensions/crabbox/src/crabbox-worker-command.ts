@@ -1,6 +1,9 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { redactSensitiveText, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
-import type { WorkerResourceReceipt } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  WorkerResourceReceipt,
+  WorkerRetentionPolicy,
+} from "openclaw/plugin-sdk/plugin-entry";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { escapeRegExp, sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { runCrabboxProcess } from "./crabbox-process.js";
@@ -19,6 +22,7 @@ export type LeaseCommandContext = {
   id: string;
   provider: string;
   resourceReceipt?: WorkerResourceReceipt;
+  retention?: WorkerRetentionPolicy;
   assertCurrent?: () => void;
 };
 
@@ -57,6 +61,7 @@ export async function runCrabboxCommand(params: {
   signal?: AbortSignal;
   timeoutMs: number;
   assertCurrent?: () => void;
+  killGraceMs?: number;
 }): Promise<SpawnResult> {
   params.signal?.throwIfAborted();
   params.assertCurrent?.();
@@ -66,6 +71,7 @@ export async function runCrabboxCommand(params: {
       timeoutMs: params.timeoutMs,
       maxOutputBytes: MAX_OUTPUT_BYTES,
       killProcessTree: true,
+      ...(params.killGraceMs === undefined ? {} : { killGraceMs: params.killGraceMs }),
       ...(params.env === undefined ? {} : { env: params.env }),
       ...(params.input === undefined ? {} : { input: params.input }),
       ...(params.signal ? { signal: params.signal } : {}),
@@ -185,14 +191,13 @@ export async function runCrabboxCommandWithCoordinatorRetry(
   let coordinatorDetail: string | undefined;
   for (let attempt = 1; ; attempt += 1) {
     const result = await runCrabboxCommand({ ...params, timeoutMs });
-    // Fixed-claim resolution precedes script execution; profile setup is safe to repeat.
+    // This exact native conflict precedes execution of the fixed-lease command.
     const transient =
       isCoordinatorTransportFailure(result) ||
-      (params.action === "profile setup" &&
-        result.termination === "exit" &&
+      (result.termination === "exit" &&
         result.code === 4 &&
         result.stdout.trim() === "" &&
-        /^lease_id_conflict:[^\r\n]*$/u.test(result.stderr.trim()));
+        result.stderr.trim() === "lease_id_conflict: fixed claim changed during resolution; retry");
     if (transient) {
       coordinatorDetail = crabboxCommandDetail(result);
     }
@@ -293,11 +298,15 @@ export async function stopCrabboxLease(params: {
   provider: string;
   warn: (message: string) => void;
   resourceReceipt?: WorkerResourceReceipt;
+  retention?: WorkerRetentionPolicy;
   assertCurrent?: () => void;
   onCleanupAccepted?: () => void;
   signal?: AbortSignal;
 }): Promise<void> {
   const deadline = performance.now() + CRABBOX_STOP_TIMEOUT_MS;
+  if (params.retention && !params.resourceReceipt) {
+    throw new Error("Crabbox retained teardown requires the original resource receipt");
+  }
   const stop = async (wait: boolean): Promise<"released" | "accepted" | "blocking"> => {
     const timeoutMs = deadline - performance.now();
     if (timeoutMs <= 0) {

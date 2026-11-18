@@ -17,6 +17,7 @@ import {
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionEntry as SessionStoreEntry } from "../../config/sessions/types.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -549,12 +550,12 @@ describe("truncateOversizedToolResultsInMessages", () => {
     ["live", "o", true, 100, 500, 100, 3],
     ["partial", "p", true, 100, 300, 100, 3],
     ["escaped", "C:\\s", true, 100, 300, 100, 3],
-    ["deleted", "deleted-output.log", false, 100, 100, 100, 3],
+    ["deleted", "d", true, 100, 500, 100, 3],
     ["private", "private-output.log", false, 100, 100, 100, 3],
     ["compact", "realistic", false, 2_000, 5_000, 1, 3],
     ["suffix", "suffix", false, 5_000, 8_000, 9_000, 2],
   ] as const)(
-    "preserves only recoverable, disclosed %s spill pointers",
+    "preserves disclosed %s spill pointers without synchronous filesystem calls",
     async (kind, name, short, chars, perResult, budget, count) => {
       const dir = await (short ? createShortTmpDir() : createTmpDir());
       const spillPath =
@@ -583,15 +584,17 @@ describe("truncateOversizedToolResultsInMessages", () => {
           toolResult((index === 0 ? "b" : "c").repeat(chars), `spill_${index + 1}`),
         ),
       ];
+      using measured = observeMainThreadFs();
       const result = truncate(messages, 128_000, perResult, budget);
+      expect(measured.stacks()).toEqual([]);
       const text = toolText(result.messages[0] ?? toolResult(""));
-      expect(text.includes(spillPath)).toBe(kind !== "deleted" && kind !== "private");
-      if (kind === "live" || kind === "escaped") {
+      expect(text.includes(spillPath)).toBe(kind !== "private");
+      if (kind === "live" || kind === "escaped" || kind === "deleted") {
         expect(text).toContain("read");
       } else if (kind === "partial") {
         expect(text).toContain("partial");
         expect(text).not.toContain("full output preserved");
-      } else if (kind === "deleted" || kind === "private") {
+      } else if (kind === "private") {
         expect(text).toContain("[tool result elided");
       } else if (kind === "compact") {
         expect(text).toBe(`[read ${spillPath}]`);

@@ -1,11 +1,12 @@
 // Owner-authorized detection and Doctor-only replacement for invalid device identity rows.
 import path from "node:path";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
+import { runClientCredentialOperationForDoctor } from "./client-credential-store.js";
+import { storedDeviceIdentityToRow } from "./device-identity-material.js";
 import {
   DeviceIdentityStorageError,
   generateStoredDeviceIdentity,
   readStoredDeviceIdentityReadOnly,
-  repairInvalidStoredDeviceIdentity,
 } from "./device-identity-store.js";
 import { formatErrorMessage } from "./errors.js";
 import { pathMayExistSync } from "./path-existence.js";
@@ -78,15 +79,18 @@ export function hasLegacyDeviceIdentityPath(detected: LegacyDeviceIdentitySource
 }
 
 /** Generate a replacement only after the caller acquires Doctor's exclusive state lock. */
-export function repairInvalidCanonicalIdentity(
+export async function repairInvalidCanonicalIdentity(
   env: NodeJS.ProcessEnv,
   identityKey: LegacyDeviceIdentitySource["identityKey"],
-): MigrationMessages {
+): Promise<MigrationMessages> {
   try {
-    const result = repairInvalidStoredDeviceIdentity(generateStoredDeviceIdentity(), {
-      env,
-      identityKey,
+    const result = await runClientCredentialOperationForDoctor(env, {
+      kind: "identity.repair",
+      identity: storedDeviceIdentityToRow(identityKey, generateStoredDeviceIdentity()),
     });
+    if (result.kind !== "identityRepair") {
+      throw new Error("Client credential owner returned an unexpected repair result.");
+    }
     if (!result.repaired) {
       return { changes: [], warnings: [] };
     }

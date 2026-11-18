@@ -7,14 +7,16 @@ import type {
 } from "../../../config/sessions/types.js";
 import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import type { MessagePresentation } from "../../../interactive/payload.js";
 import type { AssistantMessage, Model } from "../../../llm/types.js";
 import type { CommandQueueTaskDeadline } from "../../../process/command-queue.types.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import type { AgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { PreparedAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
-import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.types.js";
+import type { AgentTerminalSnapshot } from "../../agent-terminal-snapshot.js";
 import type { AuthProfileStore } from "../../auth-profiles/types.js";
+import type { ContextPressure } from "../../context-pressure.js";
 import type { ContextWindowInfo } from "../../context-window-guard.js";
 import type { DelegationCapability } from "../../delegation-capability.js";
 import type {
@@ -34,6 +36,7 @@ import type { SandboxContext } from "../../sandbox/types.js";
 import type { AuthStorage, ModelRegistry } from "../../sessions/index.js";
 import type { ToolEffectReceipt } from "../../tool-effect-receipt.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
+import type { ToolOutcomeObserver } from "../../tool-outcome-observation.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { EmbeddedRunReplayMetadata, EmbeddedRunReplayState } from "../replay-state.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
@@ -52,6 +55,7 @@ export type StreamRunState = {
 };
 
 export type EmbeddedAttemptExecutionState = {
+  agentTerminal?: AgentTerminalSnapshot;
   beforeAgentRunBlockedBy: string | undefined;
   deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
   terminal: AgentRunAttemptTerminal;
@@ -106,6 +110,8 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 };
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  /** Resume an admitted turn's history without re-admitting its original input after steering. */
+  replayCurrentTranscript?: true;
   /** Set only by prompt admission after validating an already-delivered input. */
   inputAlreadyDelivered?: true;
   /** Transport hooks follow the current endpoint without changing admitted request policy. */
@@ -299,6 +305,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
 };
 
 export type EmbeddedRunAttemptResult = {
+  /** Captured by the current attempt's agent_end owner; never carried across retries. */
+  agentTerminal?: AgentTerminalSnapshot;
   /** Exact historical input acknowledged without another model turn. */
   inputAlreadyDelivered?: true;
   cyberAccessProgram?: "standard" | "daybreak_blue" | "daybreak_red";
@@ -314,6 +322,8 @@ export type EmbeddedRunAttemptResult = {
   contextEngineTerminalAnchor?: import("../../../config/sessions/transcript-entry-anchor.js").TranscriptEntryAnchor;
   preflightRecovery?: {
     route: Exclude<PreemptiveCompactionRoute, "fits">;
+    /** Only "overflow" may fail the turn; "maintenance" always continues it. */
+    pressure: ContextPressure;
     source?: "mid-turn";
     estimatedPromptTokens?: number;
     promptBudgetBeforeReserve?: number;
@@ -393,6 +403,8 @@ export type EmbeddedRunAttemptResult = {
     | { readonly source: "harness"; readonly data: unknown }
     | { readonly source: "unavailable" };
   beforeAgentFinalizeRevisionReason?: string;
+  /** Presentation accepted for this attempt's ordinary final, never evidence of completion. */
+  finalPresentation?: MessagePresentation;
   assistantTexts: string[];
   /** A registered tool was requested as structured text without a native call. */
   textToolCallAttempt?: boolean;

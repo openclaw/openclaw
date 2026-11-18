@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../runtime.js";
 import { registerChannelsCli } from "./channels-cli.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 
 const requireValidConfigForWrite = vi.hoisted(() => vi.fn(async () => null));
 
@@ -40,12 +41,9 @@ describe.each(["add", "remove", "login", "logout"])("channels %s account selecti
   });
 
   it.each(["", "   "])("rejects an explicit blank before loading config", async (account) => {
-    await runChannelMutation(verb, account);
-
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("--account must not be blank"),
-    );
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    const run = runChannelMutation(verb, account);
+    await expect(run).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(run).rejects.toThrow("--account must not be blank");
     expect(requireValidConfigForWrite).not.toHaveBeenCalled();
   });
 

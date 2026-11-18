@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { PluginCommandNativeCandidate } from "openclaw/plugin-sdk/plugin-command-runtime";
+import {
+  pluginCommandResultContinuesAgent,
+  type PluginCommandNativeCandidate,
+} from "openclaw/plugin-sdk/plugin-command-runtime";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import {
   formatSqliteSessionFileMarker,
@@ -9,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
+import type { TelegramPluginCommandContinuation } from "./bot-handlers.types.js";
 import {
   prepareTelegramCommandDispatch,
   resolveTelegramNativeCommandThreadContext,
@@ -80,6 +84,10 @@ export async function executeTelegramPluginCommand(
   params: TelegramCommandExecutorParams & {
     commandName: string;
     candidate: PluginCommandNativeCandidate;
+    /** Runs this command message as a native command turn carrying the continued dispatch. */
+    continueAgentTurn: (
+      turn: Omit<Parameters<TelegramPluginCommandContinuation>[0], "ctx">,
+    ) => Promise<void>;
   },
 ): Promise<void> {
   const commandBody = `/${params.commandName}${params.rawText ? ` ${params.rawText}` : ""}`;
@@ -168,6 +176,16 @@ export async function executeTelegramPluginCommand(
     accountId: dispatch.accountId,
     messageThreadId: dispatch.threadSpec.id,
   });
+  if (pluginCommandResultContinuesAgent(result)) {
+    // The reply pipeline applies the result (reply text, rewrite) and runs the agent turn.
+    await cleanupProgressPlaceholder();
+    await params.continueAgentTurn({
+      threadSpec: dispatch.threadSpec,
+      storeAllowFrom: dispatch.storeAllowFrom,
+      pluginCommandDispatch,
+    });
+    return;
+  }
   const suppressReply =
     shouldSuppressLocalTelegramExecApprovalPrompt({
       cfg: dispatch.runtimeCfg,

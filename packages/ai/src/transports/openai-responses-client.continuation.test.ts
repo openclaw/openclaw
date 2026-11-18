@@ -11,6 +11,12 @@ import { createSessionsYieldTool } from "../../../../src/agents/tools/sessions-y
 import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-accessor.js";
 import { createDiagnosticTraceContext } from "../../../../src/infra/diagnostic-trace-context.js";
 import {
+  createCodexNativeWebSearchWrapper,
+  createOpenAIFastModeWrapper,
+  createOpenAIResponsesContextManagementWrapper,
+  createOpenAITextVerbosityWrapper,
+} from "../../../../src/llm/providers/stream-wrappers/openai.js";
+import {
   freezeJsonSnapshot,
   isDeeplyFrozenPlainData,
 } from "../../../../src/shared/immutable-data.js";
@@ -214,14 +220,25 @@ describe("native OpenAI Responses SSE continuation", () => {
     vi.useRealTimers();
   });
 
-  it("retains prefix ownership through diagnostic observers while isolating mutating hooks", async () => {
+  it("retains prefix ownership through provider policies and observers while isolating mutating hooks", async () => {
     configureAiTransportHost({
       ...getAiTransportHost(),
       immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
     });
     const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
       wrapStreamFnWithProviderPromptState({
-        streamFn: createOpenAIResponsesTransportStreamFn(),
+        streamFn: createCodexNativeWebSearchWrapper(
+          createOpenAITextVerbosityWrapper(
+            createOpenAIFastModeWrapper(
+              createOpenAIResponsesContextManagementWrapper(
+                createOpenAIResponsesTransportStreamFn(),
+                { responsesServerCompaction: false },
+              ),
+            ),
+            "low",
+          ),
+          { codeModeToolSurfaceEnabled: true, nativeWebSearchAllowedByToolPolicy: false },
+        ),
         state: {},
         effectiveContextTokenBudget: 200_000,
       }),
@@ -244,7 +261,11 @@ describe("native OpenAI Responses SSE continuation", () => {
         reasoningEffort: "low",
         onPayload,
       } satisfies OpenAIResponsesOptions;
-      const stream = await wrapped(astra, { messages }, options);
+      const stream = await wrapped(
+        astra,
+        { messages, tools: [functionTool("exec"), functionTool("wait")] },
+        options,
+      );
       for await (const event of stream) {
         void event;
       }
@@ -846,11 +867,37 @@ describe("native OpenAI Responses SSE continuation", () => {
       { onPayload: stateful },
     );
 
-    expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
-    expect(JSON.stringify(sseState.requests[1]?.input)).toContain('"compaction"');
+    expect(sseState.requests).toHaveLength(4);
+    expect(sseState.requests[1]).toMatchObject({
+      store: false,
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "first question" }] },
+        { role: "assistant", content: [{ type: "output_text", text: "first answer" }] },
+        { role: "user", content: [{ type: "input_text", text: "second question" }] },
+        { type: "compaction", encrypted_content: "opaque" },
+      ],
+    });
+    expect(sseState.requests[1]).not.toHaveProperty("previous_response_id");
     expect(sseState.requests[2]).not.toHaveProperty("previous_response_id");
+    expect(sseState.requests[2]).toMatchObject({
+      store: false,
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "first question" }] },
+        { role: "assistant", content: [{ type: "output_text", text: "first answer" }] },
+        { role: "user", content: [{ type: "input_text", text: "second question" }] },
+      ],
+    });
     expect(JSON.stringify(sseState.requests[2]?.input)).not.toContain('"compaction"');
-    expect(sseState.requests[3]).toMatchObject({ previous_response_id: "resp_2" });
+    // The unstored recovery cannot advance the stored prefix past the first response.
+    expect(sseState.requests[3]).toMatchObject({
+      store: true,
+      previous_response_id: "resp_1",
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "second question" }] },
+        { role: "assistant", content: [{ type: "output_text", text: "second answer" }] },
+        { role: "user", content: [{ type: "input_text", text: "third question" }] },
+      ],
+    });
   });
 
   it.each([

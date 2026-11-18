@@ -76,8 +76,11 @@ export async function resolveBoundAcpSessionForCommandReset(params: {
   ctx: MsgContext;
   bindingContext?: ReturnType<typeof resolveSessionConversationBindingContext>;
 }): Promise<string | undefined> {
+  // null is the caller's decision (system events skip binding reads); only re-derive when omitted.
   const bindingContext =
-    params.bindingContext ?? resolveSessionConversationBindingContext(params.cfg, params.ctx);
+    params.bindingContext === undefined
+      ? resolveSessionConversationBindingContext(params.cfg, params.ctx)
+      : params.bindingContext;
   return await resolveEffectiveResetTargetSessionKey({
     cfg: params.cfg,
     ...bindingContext,

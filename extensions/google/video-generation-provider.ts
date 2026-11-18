@@ -33,7 +33,7 @@ import {
 import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
 import { createGoogleGenAI, type GoogleGenAIClient } from "./google-genai-runtime.js";
 import { stripGoogleProviderPrefix } from "./model-id.js";
-import { resolveGoogleGenerativeAiApiOrigin } from "./provider-policy.js";
+import { resolveGoogleGenerativeAiSdkHttpOptions } from "./src/google-api-base-url.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 const POLL_INTERVAL_MS = 10_000;
@@ -42,8 +42,29 @@ const GOOGLE_VIDEO_OPERATION_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE =
   "Google video generation response missing generated videos";
 
+function exceedsGoogleVideoByteLimit(base64: string, maxBytes: number): boolean {
+  if (estimateBase64DecodedBytes(base64) <= maxBytes) {
+    return false;
+  }
+  // ProtoJSON permits whitespace and omitted padding. Count without allocating
+  // before canonicalization; the existing validator still rejects malformed data.
+  let dataLength = 0;
+  for (let index = 0; index < base64.length; index += 1) {
+    const code = base64.charCodeAt(index);
+    if (code <= 0x20 || code === 0x3d) {
+      continue;
+    }
+    dataLength += 1;
+    if (Math.floor((dataLength * 3) / 4) > maxBytes) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function resolveGoogleVideoRestBaseUrl(configuredBaseUrl?: string): string {
-  return `${configuredBaseUrl ?? "https://generativelanguage.googleapis.com"}/v1beta`;
+  const { baseUrl, apiVersion } = resolveGoogleGenerativeAiSdkHttpOptions(configuredBaseUrl);
+  return `${baseUrl ?? "https://generativelanguage.googleapis.com"}${apiVersion ? `/${apiVersion}` : ""}`;
 }
 
 function parseVideoSize(size: string | undefined): { width: number; height: number } | undefined {
@@ -205,9 +226,8 @@ export const googleVideoGenerationProvider: VideoGenerationProvider = {
     const apiKey = await resolveGoogleGenerationApiKey(req);
 
     const configuredUrl = normalizeOptionalString(req.cfg?.models?.providers?.google?.baseUrl);
-    const configuredBaseUrl = configuredUrl
-      ? resolveGoogleGenerativeAiApiOrigin(configuredUrl)
-      : undefined;
+    const httpOptions = resolveGoogleGenerativeAiSdkHttpOptions(configuredUrl);
+    const configuredBaseUrl = httpOptions.baseUrl;
     const restBaseUrl = resolveGoogleVideoRestBaseUrl(configuredBaseUrl);
     const authHeaders = {
       ...parseGeminiAuth(apiKey).headers,
@@ -247,7 +267,7 @@ export const googleVideoGenerationProvider: VideoGenerationProvider = {
     const client = createGoogleGenAI({
       apiKey,
       httpOptions: {
-        ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),
+        ...httpOptions,
         timeout: resolveProviderOperationTimeoutMs({
           deadline,
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
@@ -370,7 +390,7 @@ export const googleVideoGenerationProvider: VideoGenerationProvider = {
           | { videoBytes?: string; uri?: string; mimeType?: string }
           | undefined;
         if (inline?.videoBytes) {
-          if (estimateBase64DecodedBytes(inline.videoBytes) > maxVideoBytes) {
+          if (exceedsGoogleVideoByteLimit(inline.videoBytes, maxVideoBytes)) {
             throw new Error(`Google generated video download exceeds ${maxVideoBytes} bytes`);
           }
           const canonicalVideo = canonicalizeGoogleProviderBase64(inline.videoBytes);

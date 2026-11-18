@@ -213,52 +213,63 @@ suite.define(() => {
       await readCount().toBe(1);
       await expect.poll(() => action.textContent()).toContain("+248");
       expect(await action.textContent()).toContain("−61");
-      expect((await reads())[0]?.params).toMatchObject({
-        scope: "uncommitted",
-        summaryOnly: true,
-      });
+      const summaryMatch = { scope: "uncommitted", summaryOnly: true };
+      const initialParams = (await reads())[0]?.params;
+      expect(initialParams).toMatchObject(summaryMatch);
+      // SAFETY: the assertion above verifies the recorded request params object.
+      const patchParams = { ...(initialParams as Record<string, unknown>) };
+      delete patchParams.summaryOnly;
       expect(await page.locator(".session-diff").count()).toBe(0);
 
       await closeChatDetails(page);
       await pauseVirtualClock(page);
       await page.clock.fastForward(60_000);
-      await gateway.deferNext("sessions.diff", { scope: "uncommitted", summaryOnly: true });
+      await gateway.deferNext("sessions.diff", summaryMatch);
       await page.clock.resume();
       await openChatDetails(page);
       await readCount().toBe(2);
-      await gateway.rejectDeferred("sessions.diff", {
-        code: "UNAVAILABLE",
-        message: "Checkout unavailable",
-      });
+      await gateway.rejectDeferred(
+        "sessions.diff",
+        { code: "UNAVAILABLE", message: "Checkout unavailable" },
+        { match: summaryMatch },
+      );
       expect(await action.textContent()).toContain("+248");
       expect(await action.textContent()).toContain("−61");
 
       await closeChatDetails(page);
       await pauseVirtualClock(page);
       await page.clock.fastForward(60_000);
-      const recovered = { ...result(12480, 1030), truncated: true };
-      await gateway.deferNext("sessions.diff", { scope: "uncommitted", summaryOnly: true });
+      await gateway.deferNext("sessions.diff", summaryMatch);
       await page.clock.resume();
       await openChatDetails(page);
       await readCount().toBe(3);
-      // Review needs patches, so a pending totals read cannot satisfy it.
-      await gateway.deferNext("sessions.diff", { scope: "uncommitted" });
+      await gateway.deferNext("sessions.diff", patchParams, { exactParams: true });
       await action.click();
       const review = page.locator(".session-diff");
       await readCount().toBe(4);
       expect((await reads())[3]?.params).not.toHaveProperty("summaryOnly");
       await expect.poll(() => review.getAttribute("aria-busy")).toBe("true");
-      await gateway.resolveDeferred("sessions.diff", recovered, { match: { summaryOnly: true } });
-      expect(await review.getAttribute("aria-busy")).toBe("true");
+
+      // The older summary cannot complete Review or replace its retained counts.
+      await gateway.resolveDeferred("sessions.diff", result(310, 72), { match: summaryMatch });
+      await expect.poll(() => review.getAttribute("aria-busy")).toBe("true");
       expect(await action.textContent()).toContain("+248");
-      await gateway.resolveDeferred("sessions.diff", {
-        ...recovered,
-        files: recovered.files.map((file) =>
-          Object.assign({}, file, {
-            patch: "@@ -1 +1 @@\n-old navigation\n+recovered navigation\n",
-          }),
-        ),
-      });
+      expect(await action.textContent()).toContain("−61");
+      expect(await review.textContent()).not.toContain("recovered navigation");
+
+      const recovered = { ...result(12480, 1030), truncated: true };
+      await gateway.resolveDeferred(
+        "sessions.diff",
+        {
+          ...recovered,
+          files: recovered.files.map((file) =>
+            Object.assign({}, file, {
+              patch: "@@ -1 +1 @@\n-old navigation\n+recovered navigation\n",
+            }),
+          ),
+        },
+        { match: patchParams, exactParams: true },
+      );
       await expect.poll(() => review.getAttribute("aria-busy")).toBe("false");
       await expect.poll(() => action.textContent()).toContain("+12,480");
       expect(await action.textContent()).toContain("−1,030");
@@ -272,11 +283,16 @@ suite.define(() => {
       ).toBe("Uncommitted");
       expect(await review.locator(".session-diff__filename").allTextContents()).toEqual(["app.ts"]);
       await review.locator(".session-diff__file-toggle").click();
+      await expect.poll(() => review.textContent()).toContain("recovered navigation");
       await expect
         .poll(() => review.locator(".chat-diff__row--add").textContent())
         .toContain("recovered navigation");
       expect(await reads()).toHaveLength(4);
+      expect(await gateway.getRequests("sessions.diff", summaryMatch)).toHaveLength(3);
       expect(await gateway.getRequests("sessions.diff", { summaryOnly: true })).toHaveLength(3);
+      expect(
+        await gateway.getRequests("sessions.diff", patchParams, { exactParams: true }),
+      ).toHaveLength(1);
       expect(await gateway.getRequests("sessions.diff", { scope: "all" })).toHaveLength(0);
       for (const method of [
         "sessions.files.list",
