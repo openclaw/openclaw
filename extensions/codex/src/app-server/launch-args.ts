@@ -84,6 +84,18 @@ export function buildCodexLoginStatusArgs(args: readonly string[]): string[] {
   return [...prefix, ...configArgs, "login", "status"];
 }
 
+/**
+ * Asks the launched Codex for its version through the same launcher prefix (for
+ * example `npx --no-install @openai/codex`). Undefined when the args do not name
+ * the app-server subcommand, so the launched program cannot be identified.
+ */
+export function buildCodexVersionArgs(args: readonly string[]): string[] | undefined {
+  const subcommandIndex = readCodexArgs(args).findLast(({ name }) => name === "app-server")?.index;
+  return subcommandIndex === undefined
+    ? undefined
+    : [...args.slice(0, subcommandIndex), "--version"];
+}
+
 export function readCodexAppServerConfigOptions(args: readonly string[]) {
   return readCodexArgs(args).filter(
     ({ name }) => name === "-c" || name === "--config" || name === "-p" || name === "--profile",

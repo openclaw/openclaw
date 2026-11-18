@@ -355,7 +355,16 @@ export async function runCodexVersionCommand(
   env: NodeJS.ProcessEnv = process.env,
   timeoutMs: number = CODEX_VERSION_TIMEOUT_MS,
 ): Promise<string> {
-  const result = await runUtf8CommandWithTimeout([nativeCommand, "--version"], {
+  return runCodexVersionInvocation([nativeCommand, "--version"], env, timeoutMs);
+}
+
+/** Runs a full version invocation (command and argv) with the same bounds. */
+export async function runCodexVersionInvocation(
+  argv: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+  timeoutMs: number = CODEX_VERSION_TIMEOUT_MS,
+): Promise<string> {
+  const result = await runUtf8CommandWithTimeout([...argv], {
     baseEnv: env,
     timeoutMs,
     maxOutputBytes: CODEX_VERSION_MAX_OUTPUT_BYTES,
