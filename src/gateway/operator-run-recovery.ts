@@ -23,6 +23,7 @@ import type { GatewayAuthPolicy } from "./auth-policy.types.js";
 import {
   captureGatewayDeviceRevocation,
   onGatewayDeviceSourceRevoked,
+  retainGatewayDeviceSourceRevocation,
 } from "./device-revocation.js";
 import {
   GatewayOperatorAccessDeniedError,
@@ -69,6 +70,7 @@ async function restoreGatewayOperatorSnapshot(params: {
   context: GatewayRequestContext;
   assertCurrent: () => void;
   subscribeToClaim?: (revoke: () => void) => () => void;
+  deviceSource?: object;
   prepareSource: () => Promise<PreparedOperatorRecoverySource | undefined>;
 }): Promise<RestoredGatewayOperatorAuthority | undefined> {
   const { context, assertCurrent } = params;
@@ -119,6 +121,12 @@ async function restoreGatewayOperatorSnapshot(params: {
   };
   const release = releaseHold();
   try {
+    // Tokenless proxy snapshots intentionally have no credential identity. A live
+    // continuation still belongs to its original device revocation owner.
+    const deviceSource = retainGatewayDeviceSourceRevocation(params.deviceSource);
+    if (deviceSource) {
+      subscriptions.push(deviceSource.release, deviceSource.subscribe(revoke));
+    }
     const prepared = await params.prepareSource();
     assertLifetime();
     assertCurrent();
@@ -161,6 +169,7 @@ async function restoreGatewayOperatorSnapshot(params: {
       const publication = runtimeConfigPublication.current?.revision;
       if (
         !device.isCurrent() ||
+        deviceSource?.isCurrent() === false ||
         (snapshot.sharedGeneration !== undefined &&
           context.sharedGatewaySessionGenerationState !== generationOwner)
       ) {
@@ -383,6 +392,7 @@ export async function restoreGatewayOperatorSource(params: {
 /** A queued native launch reuses its original authenticated source, never profile attribution. */
 export async function restoreGatewayQueuedOperatorRecovery(params: {
   source: unknown;
+  deviceSource?: object;
   context: GatewayRequestContext;
   assertCurrent: () => void;
 }): Promise<Pick<RestoredGatewayOperatorAuthority, "authority" | "controlUiAdmin" | "release">> {
@@ -393,6 +403,7 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
   }
   if (source.kind === "gateway") {
     const restored = await restoreGatewayOperatorSnapshot({
+      deviceSource: params.deviceSource,
       context: params.context,
       assertCurrent: params.assertCurrent,
       prepareSource: async () => ({
@@ -491,6 +502,7 @@ export async function captureGatewayOperatorContinuation(
   const releaseInherited = inherited.retain?.();
   const restored = await restoreGatewayQueuedOperatorRecovery({
     source: facts,
+    deviceSource: inherited.source,
     context,
     assertCurrent: () => {},
   }).catch((error: unknown) => {

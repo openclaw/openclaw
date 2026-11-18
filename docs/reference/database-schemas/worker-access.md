@@ -5777,8 +5777,11 @@ cleanup cannot queue behind history searches that need the same database writer
 for index status. Exact-store FIFO admission, captured physical identity, live
 authority checks, and lexical reader custody remain unchanged. The additional
 worker starts on demand and participates in database close, idle retirement, and
-critical-memory-pressure cleanup. Read-only projection and maintenance callers
-retain their selected lanes. No schema, stored data, or update behavior changes.
+critical-memory-pressure cleanup. Cold requests with host callbacks retain their
+selected lane: candidate authorization and index readiness can themselves need
+the discovery worker. They retain the same schema admission, source checks, and
+settlement custody. Read-only projection and maintenance callers retain their
+selected lanes. No schema, stored data, or update behavior changes.
 
 Durable trajectory preparation reads the exact target mapping through the session
 reader and constructs its sink while retaining the writer FIFO and native mutation

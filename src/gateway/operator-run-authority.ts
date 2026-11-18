@@ -26,6 +26,7 @@ import type { UserChannelAuthorizationReference } from "../state/user-profiles.t
 import { isBrowserOperatorUiClient } from "../utils/message-channel.js";
 import { createChannelOperatorRevocation } from "./channel-operator-revocation.js";
 import {
+  bindGatewayDeviceRevocation,
   onGatewayDeviceSourceRevoked,
   readGatewayDeviceSourceAuthority,
   readGatewayDeviceSourceIdentity,
@@ -60,6 +61,7 @@ type OperatorSource = {
   membership: string | undefined;
   token: object;
   references: number;
+  releaseDevice?: () => void;
 };
 
 // Comparison records live only while captured work retains their original authority.
@@ -104,7 +106,14 @@ function retainOperatorSource(
             entry.owners.every((owner, index) => owner === owners[index]),
         );
   if (!source) {
-    source = { owners, membership, token: Object.freeze({}), references: 0 };
+    source = {
+      owners,
+      membership,
+      token: bindGatewayDeviceRevocation(Object.freeze({}), callerGuard),
+      references: 0,
+      // The comparable source can outlive any one of its request captures.
+      releaseDevice: retainGatewayDeviceRevocation(callerGuard),
+    };
     sources.add(source);
   }
   const retained = source;
@@ -115,6 +124,7 @@ function retainOperatorSource(
     release: () => {
       if (--retained.references === 0) {
         bucket.delete(retained);
+        retained.releaseDevice?.();
       }
     },
   };

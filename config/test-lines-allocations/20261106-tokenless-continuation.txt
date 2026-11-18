@@ -1,0 +1,2 @@
+# Preserve the original device-revocation owner across tokenless continuation restoration.
+38

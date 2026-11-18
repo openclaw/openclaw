@@ -1,0 +1,2 @@
+# Cold search authorization must dispatch its exact-row read without waiting behind the search.
+44

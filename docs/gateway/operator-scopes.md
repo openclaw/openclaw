@@ -164,6 +164,9 @@ grant launch permission.
 RPCs, events, and background tools use the same scope rules. A continuation with
 `operator.write` can read its GitHub identity and session state without another
 interactive message. Session access and execution-lifetime checks still apply.
+In-process continuations also retain their original device-revocation checks,
+including tokenless trusted-proxy callers. Revoking that device stops a retained
+send before replay; the continuation does not acquire an unrelated device token.
 
 `question.*` also accepts `operator.sessions.write` for ordinary questions
 bound to the caller's own admitted run and owned session. The Gateway records

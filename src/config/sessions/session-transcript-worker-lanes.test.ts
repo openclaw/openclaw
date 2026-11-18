@@ -297,6 +297,50 @@ it("keeps cold reads progressing while history searches await the same writer", 
   }
 });
 
+it("keeps cold candidate authorization independent of the searching worker", async () => {
+  observed.preparedDatabase = false;
+  observed.serializePools = true;
+  const request = input();
+  const queued = createDeferredCore<boolean>();
+  const release = createDeferredCore<boolean[]>();
+  let reading: Promise<boolean> | undefined;
+  observed.run.mockImplementation(async (work, options) => {
+    assert(isRecord(work));
+    if (work.kind !== "transcript-search") {
+      return absent;
+    }
+    assert(options.onRequest);
+    await options.onRequest([request.scope.sessionKey], {
+      signal: new AbortController().signal,
+      yieldSignal: new AbortController().signal,
+    });
+    return { ok: true, value: { kind: "transcript-search", result: { hits: [] } } };
+  });
+  const searching = withSessionHistoryWorkerDatabase(
+    request.database,
+    (owner) =>
+      owner.searchTranscripts(
+        { agentId: "main", query: "needle" },
+        async () => false,
+        () => {
+          observed.queued.mockImplementation((busy) => queued.resolve(busy));
+          reading = request.read(projectionLane);
+          return Promise.race([reading.then((present) => [present]), release.promise]);
+        },
+      ),
+    transcriptSearchLane,
+  );
+  try {
+    // A cold exact-row read must dispatch while its search awaits authorization.
+    expect(await queued.promise).toBe(false);
+    await expect(searching).resolves.toEqual({ hits: [] });
+    await expect(reading).resolves.toBe(false);
+  } finally {
+    release.resolve([false]);
+    await Promise.allSettled([searching, reading]);
+  }
+});
+
 it("hands admitted read deadlines to the worker pool", async () => {
   observed.preparedDatabase = false;
   const request = input();

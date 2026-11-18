@@ -63,7 +63,7 @@ type CapturedRevocation = {
 };
 
 const owners = new WeakMap<object, RevocationOwner>();
-const captures = new WeakMap<() => unknown, CapturedRevocation>();
+const captures = new WeakMap<object, CapturedRevocation>();
 const sourceIdentities = new WeakMap<object, Set<SourceIdentity>>();
 
 function sameReconnectSource(
@@ -238,7 +238,7 @@ export function captureGatewayDeviceRevocation(
 }
 
 /** Carry the original capture through a composed commit guard without changing its contract. */
-export function bindGatewayDeviceRevocation<T extends () => unknown>(
+export function bindGatewayDeviceRevocation<T extends object>(
   guard: T,
   isCurrent: (() => unknown) | undefined,
 ): T {
@@ -247,6 +247,24 @@ export function bindGatewayDeviceRevocation<T extends () => unknown>(
     captures.set(guard, capture);
   }
   return guard;
+}
+
+/** Retain only device revocation for detached work, not its completed request or transport. */
+export function retainGatewayDeviceSourceRevocation(source: object | undefined) {
+  const capture = source ? captures.get(source) : undefined;
+  if (!capture) {
+    return undefined;
+  }
+  if (!capture.isRevocationCurrent() || capture.state.references === 0) {
+    throw new Error("Gateway device source is no longer active.");
+  }
+  capture.state.references += 1;
+  return {
+    isCurrent: capture.isRevocationCurrent,
+    subscribe: (listener: () => void) =>
+      registerListener((capture.state.listeners ??= new Set()), listener),
+    release: releaseHold(capture),
+  };
 }
 
 /** Read only owner-held revocation/lifetime facts, without invoking the caller authority callback. */

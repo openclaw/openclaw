@@ -201,7 +201,9 @@ export function retainSessionHistoryWorkerDatabase(
           !(options.readIdentity
             ? hasSqliteDatabaseSchemaAdmissionForIdentity(options.readIdentity)
             : hasSqliteDatabaseSchemaAdmissionForPath(readOptions.path));
-        const requestLane = cold ? targetDiscoveryLane : requestedLane;
+        // Host callbacks can await cold exact-row reads or writer target discovery.
+        // Keep those requests off the discovery lane they need in order to settle.
+        const requestLane = cold && !onRequest ? targetDiscoveryLane : requestedLane;
         if (requestLane !== requestedLane) {
           clearDatabaseWorkerIdleRetirement(requestLane);
           requestLane.pending++;

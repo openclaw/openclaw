@@ -65,6 +65,7 @@ import {
 } from "./operator-run-recovery-source.codec.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import {
+  captureGatewayOperatorContinuation,
   restoreGatewayOperatorSource,
   restoreGatewayQueuedOperatorRecovery,
 } from "./operator-run-recovery.js";
@@ -651,6 +652,43 @@ describe("scheduled authenticated operator source", () => {
       },
       { tokenlessDevice: true },
     ));
+  it("keeps tokenless device revocation on a detached continuation", () =>
+    withRecovery(
+      async (fixture) => {
+        const caller = acceptedCaller(fixture);
+        const source = expectDefined(await caller.capture(), "accepted tokenless source");
+        try {
+          const continuation = expectDefined(
+            await captureGatewayOperatorContinuation({
+              client: {
+                ...fixture.client,
+                internal: { ...fixture.client.internal, operatorRunAuthority: source.authority },
+              },
+              context: fixture.context,
+            }),
+            "detached tokenless continuation",
+          );
+          try {
+            expect(continuation.authority.recoverySnapshot?.device).toBeUndefined();
+            expectCurrent(continuation.authority);
+            retireDeviceTokenClients(
+              fixture.context,
+              "recovery-device",
+              ["operator"],
+              "device-token-revoked",
+            );
+            expectRevoked(continuation.authority);
+          } finally {
+            continuation.release();
+          }
+        } finally {
+          source.release();
+          caller.release();
+        }
+      },
+      { tokenlessDevice: true },
+    ));
+
   it.each(["before capture", "after admission", "after restoration"] as const)(
     "revokes the original device authority on Gateway retirement %s",
     (timing) =>
