@@ -13,6 +13,7 @@ const manifestMocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(async () => ({ manifestRegistry: { plugins: [] } })),
 }));
 
+// mock-isolation: manifest discovery is stubbed so each case controls the plugin origins it sees.
 vi.mock("./runtime-manifest.runtime.js", () => ({
   listPluginOriginsFromMetadataSnapshot: manifestMocks.listPluginOriginsFromMetadataSnapshot,
   resolveConfigWidePluginMetadataSnapshotAsync: manifestMocks.loadPluginMetadataSnapshot,

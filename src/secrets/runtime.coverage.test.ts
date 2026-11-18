@@ -6,6 +6,7 @@ import { getPath, setPathCreateStrict } from "./path-utils.js";
 import { resolveSecretRefValues } from "./resolve.js";
 
 const contracts = vi.hoisted(() => new Map<string, object>());
+// mock-isolation: no installed-plugin records, so host install state cannot change web-provider risk.
 vi.mock("../plugins/installed-plugin-index-records.js", () => ({
   loadInstalledPluginIndexInstallRecords: () => ({}),
 }));
