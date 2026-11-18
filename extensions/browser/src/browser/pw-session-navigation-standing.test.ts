@@ -2,7 +2,8 @@ import { expect, it, vi } from "vitest";
 import { createStandingNavigationPolicy } from "./pw-session-navigation-standing.js";
 
 const { warn } = vi.hoisted(() => ({ warn: vi.fn() }));
-vi.mock("openclaw/plugin-sdk/logging-core", () => ({
+vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/logging-core")>()),
   createSubsystemLogger: () => ({ child: () => ({ warn }) }),
 }));
 

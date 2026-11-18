@@ -44,7 +44,7 @@ vi.mock("./database-engine/admission-scope.js", async (importOriginal) => {
   return { ...actual, installDatabaseProcessRole: vi.fn(actual.installDatabaseProcessRole) };
 });
 
-// The worker must retain its database scope through finalization and terminal reads.
+// mock-isolation: Observe database scope through finalization without opening a real engine.
 vi.mock("../cli/update-cli/update-command-database-engine.js", () => ({
   withUpdateDatabaseEngine: async (_env: NodeJS.ProcessEnv, run: () => Promise<unknown>) => {
     fixture.engineActive = true;

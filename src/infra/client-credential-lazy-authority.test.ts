@@ -14,6 +14,7 @@ vi.mock("./client-credential-ipc.js", () => {
   }
   return { requestClientCredentialsFromApp: boundary.request };
 });
+// mock-isolation: Revoke at module evaluation without acquiring a real state database.
 vi.mock("./gateway-state-owner.js", () => {
   if (boundary.revokeOn === "offline") {
     boundary.current = false;

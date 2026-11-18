@@ -4,12 +4,15 @@ import { expect, it, vi } from "vitest";
 vi.mock("./gateway-state-owner.js", () => {
   throw new Error("eager local credential authority");
 });
+// mock-isolation: Evaluating the worker pool is the cold-import regression this test rejects.
 vi.mock("./worker-task-pool.js", () => {
   throw new Error("eager credential worker pool");
 });
+// mock-isolation: Evaluating app IPC is the cold-import regression this test rejects.
 vi.mock("./client-credential-ipc.js", () => {
   throw new Error("eager credential IPC");
 });
+// mock-isolation: Evaluating the synchronous store is the cold-import regression this test rejects.
 vi.mock("./client-credential-store.js", () => {
   throw new Error("eager synchronous credential store");
 });
