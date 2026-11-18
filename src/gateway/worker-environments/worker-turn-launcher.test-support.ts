@@ -614,7 +614,7 @@ export function turn(runId = "run-worker-turn", executionIdentity = false) {
   };
 }
 
-export function registerWorkerMcpTestTools() {
+export function registerWorkerMcpTestTools(options?: { localActionHasAction?: boolean }) {
   for (const [nodeId, names] of [
     ["local-node", ["local_search", "local_action", "local_denied"]],
     ["other-node", ["remote_search"]],
@@ -627,7 +627,10 @@ export function registerWorkerMcpTestTools() {
         description: name,
         parameters: {
           type: "object",
-          properties: name === "local_action" ? { action: { type: "string" } } : {},
+          properties:
+            name === "local_action" && options?.localActionHasAction !== false
+              ? { action: { type: "string" } }
+              : {},
         },
         command: "mcp.tools.call.v1",
         mcp: { server: "workspace", tool: name },

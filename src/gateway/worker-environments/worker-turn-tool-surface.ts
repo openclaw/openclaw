@@ -16,6 +16,7 @@ import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-context-binding.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import type { WorkerToolAuthority } from "../../worker/launch-descriptor.js";
+import { canInvokeNodeMcpToolLocally } from "../node-command-policy.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { assertWorkerTurnInputAdmitted } from "./placement-turn-claim-events.js";
@@ -54,10 +55,19 @@ export function retainWorkerTurnTools(
       execute: (...args) => options.runPrepared(() => tool.execute(...args)),
     });
     const mcp = getPluginToolMeta(tool)?.mcp;
+    const nodeId = mcp?.node?.id;
     if (
       canPlace &&
       mcp?.operation === "tool" &&
-      mcp.node?.id === options.localMcpNodeId &&
+      nodeId &&
+      nodeId === options.localMcpNodeId &&
+      options.runPrepared(() =>
+        canInvokeNodeMcpToolLocally({
+          nodeId,
+          server: mcp.serverName,
+          tool: mcp.toolName,
+        }),
+      ) &&
       isGatewayToolAllowedWithoutAction(tool.name, options.config)
     ) {
       bindAgentToolExecutionLocation(retained, { kind: "placement" });
@@ -86,6 +96,17 @@ type WorkerLaunchToolSetup = Pick<
 
 export async function prepareWorkerLaunchTools(params: WorkerLaunchToolSetup) {
   const { surface, runtimeIdentity } = params;
+  const localMcpTools = surface.tools.flatMap(({ execution, plugin }) => {
+    const mcp = plugin?.mcp;
+    return execution === "placement" && mcp?.node
+      ? [{ nodeId: mcp.node.id, server: mcp.serverName, tool: mcp.toolName }]
+      : [];
+  });
+  const assertLocalMcpAuthorityCurrent = () => {
+    if (localMcpTools.some((subject) => !canInvokeNodeMcpToolLocally(subject))) {
+      throw new Error("Worker MCP policy changed while preparing its launch");
+    }
+  };
   const allowedToolNames = surface.tools.map((tool) => tool.definition.name);
   await params.placements.authorizeWorkerTurnTools(
     runtimeIdentity.workerTurnClaim,
@@ -98,7 +119,17 @@ export async function prepareWorkerLaunchTools(params: WorkerLaunchToolSetup) {
       assertCurrent: params.assertActive,
     });
   }
-  return { allowedToolNames, issueLaunchAuthority: () => issueWorkerLaunchToolAuthority(params) };
+  return {
+    allowedToolNames,
+    bindAuthority: (assertCurrent: () => void) => () => {
+      assertCurrent();
+      assertLocalMcpAuthorityCurrent();
+    },
+    issueAuthority: () => {
+      assertLocalMcpAuthorityCurrent();
+      return issueWorkerLaunchToolAuthority(params);
+    },
+  };
 }
 
 /** Issue grants only after turn input and replay admission have passed. */

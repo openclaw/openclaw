@@ -288,6 +288,16 @@ export type OpenClawPluginNodeInvokePolicyResult =
 export type OpenClawPluginNodeInvokePolicy = {
   commands: string[];
   /**
+   * Admit an exact MCP tool to same-node execution without running handle.
+   * Only an explicit true permits local execution; otherwise the Gateway handles it.
+   */
+  allowLocalMcpTool?: (ctx: {
+    nodeId: string;
+    server: string;
+    tool: string;
+    pluginConfig?: Record<string, unknown>;
+  }) => boolean;
+  /**
    * Platforms where these node-handled commands should be allowlisted by default.
    * Omit for commands that require explicit `gateway.nodes.commands.allow`.
    */

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   WORKER_LOCAL_MCP_PROTOCOL_FEATURE,
@@ -38,6 +38,8 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-context-binding.js";
 import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -77,6 +79,26 @@ import {
 } from "./worker-turn-launcher.test-support.js";
 
 afterAll(closeStateDatabaseForTest);
+
+function installWorkerMcpTestPolicy(allowSearch = true) {
+  const registry = createEmptyPluginRegistry();
+  registry.nodeInvokePolicies.push({
+    pluginId: "managed-mcp",
+    source: "test",
+    pluginConfig: { allowSearch },
+    policy: {
+      commands: ["mcp.tools.call.v1"],
+      allowLocalMcpTool: ({ server, tool, pluginConfig }) => {
+        if (pluginConfig?.allowSearch && server === "workspace" && tool === "local_search") {
+          return true;
+        }
+        throw new Error("tool needs Gateway admission");
+      },
+      handle: (ctx) => ctx.invokeNode(),
+    },
+  });
+  setActivePluginRegistry(registry);
+}
 
 function unusedTunnel<T extends Partial<WorkerTunnelHandle>>(overrides: T) {
   return createWorkerTurnTunnel({
@@ -431,6 +453,7 @@ describe("worker turn execution", () => {
   it.each([
     "local",
     "local-without-questions",
+    "policy",
     "legacy",
     "v1-worker",
     "completion-handoff",
@@ -438,14 +461,18 @@ describe("worker turn execution", () => {
     "grants only the admitted same-node MCP tool to a capable placement (%s)",
     async (scenario) => {
       const supported = scenario !== "legacy";
-      const local = scenario === "local" || scenario === "local-without-questions";
+      const local = ["local", "local-without-questions", "policy"].includes(scenario);
       await seedActivePlacement();
       const environment = attachedEnvironment();
       environment.nodeDeviceId = "local-node";
       environment.bootstrapReceipt!.protocolFeatures.push(
         scenario === "v1-worker" ? "worker-local-mcp-v1" : WORKER_LOCAL_MCP_PROTOCOL_FEATURE,
       );
-      registerWorkerMcpTestTools();
+      registerWorkerMcpTestTools({ localActionHasAction: scenario !== "policy" });
+      if (scenario === "policy") {
+        onTestFinished(resetPluginRuntimeStateForTest);
+        installWorkerMcpTestPolicy();
+      }
       const authorize = vi.spyOn(placements, "authorizeWorkerTurnTools");
       const node = createNodeSession({ nodeId: "local-node" });
       const nodeRegistry = new NodeRegistry();
@@ -468,17 +495,24 @@ describe("worker turn execution", () => {
         );
       const register = vi.spyOn(nodeRegistry.mcpElicitation, "register");
       const userInput = mockWorkerMcpQuestionAnswer(input);
-      const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
-        const grant = plan.assignment.toolAuthority.mcpTools?.[0];
-        if (grant && scenario === "local") {
-          await expect(ask(grant.id)).resolves.toEqual({ action: "accept" });
-          vi.spyOn(placements, "isWorkerTurnToolAuthorized").mockReturnValueOnce(false);
-          await expect(ask(grant.id)).rejects.toThrow("lost its turn authority");
-        } else if (grant) {
-          await expect(ask(grant.id)).rejects.toThrow("grant is unavailable");
-        }
-        throw new WorkerRunnerCapacityError();
-      });
+      const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(
+        async ({ plan, assertCurrent }) => {
+          const grant = plan.assignment.toolAuthority.mcpTools?.[0];
+          if (grant && scenario === "local") {
+            await expect(ask(grant.id)).resolves.toEqual({ action: "accept" });
+            vi.spyOn(placements, "isWorkerTurnToolAuthorized").mockReturnValueOnce(false);
+            await expect(ask(grant.id)).rejects.toThrow("lost its turn authority");
+          } else if (grant) {
+            await expect(ask(grant.id)).rejects.toThrow("grant is unavailable");
+          }
+          if (scenario === "policy") {
+            expect(() => assertCurrent?.()).not.toThrow();
+            installWorkerMcpTestPolicy(false);
+            expect(() => assertCurrent?.()).toThrow("Worker MCP policy changed");
+          }
+          throw new WorkerRunnerCapacityError();
+        },
+      );
       const provider = turnProvider({
         get: () => environment,
         acquireTurnCredential: async () => credential(),
@@ -525,12 +559,12 @@ describe("worker turn execution", () => {
             toolsAllow: ["local_search", "local_action", "remote_search"],
             config: {
               ...input.config,
-              mcp: { apps: { enabled: scenario !== "local-without-questions" } },
+              mcp: { apps: { enabled: !["local-without-questions", "policy"].includes(scenario) } },
               tools: {
                 profile: "full",
                 gatewayPolicy: {
                   allow: ["local_search", "local_action", "remote_search"],
-                  actions: { local_action: ["read"] },
+                  ...(scenario !== "policy" && { actions: { local_action: ["read"] } }),
                 },
               },
               session: { store: sessionTarget.storePath },

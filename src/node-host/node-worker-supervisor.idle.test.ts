@@ -168,17 +168,18 @@ describe("node worker idle retention", () => {
     await owner.complete(second.launchId);
   });
 
-  it("revokes in-flight MCP calls on policy change without ending the worker turn", async () => {
+  it("revokes future MCP calls while an admitted call settles after a policy change", async () => {
     const policy = new NodeWorkerMcpPolicy();
     expect(policy.signal.aborted).toBe(true);
     policy.setAllowed(true);
-    const aborted = createDeferred();
+    const release = createDeferred();
+    const settled = createDeferred<unknown>();
     const call = vi.fn<NodeWorkerMcpSession["callMcpTool"]>().mockResolvedValue({ content: [] });
     call.mockImplementationOnce(async ({ signal }) => {
       assert(signal);
-      signal.addEventListener("abort", () => aborted.resolve(), { once: true });
-      await aborted.promise;
-      throw new Error("cancelled");
+      await release.promise;
+      expect(signal.aborted).toBe(false);
+      return { content: [] };
     });
     const session = () => ({
       callMcpTool: call,
@@ -190,6 +191,11 @@ describe("node worker idle retention", () => {
     const handles = [{ id: "allowed", server: "fixture", tool: "lookup" }];
     first.descriptor.assignment.toolAuthority.mcpTools = handles;
     const owner = await f.launch(first);
+    mocks.send.mockImplementation(async (_adapter, frame) => {
+      if (frame.type === "mcp-result" && frame.requestId === "in-flight") {
+        settled.resolve(frame);
+      }
+    });
     const request = {
       type: "mcp-call",
       turnId: first.launchId,
@@ -200,7 +206,6 @@ describe("node worker idle retention", () => {
     await owner.emit(request);
     expect(call).toHaveBeenCalledOnce();
     policy.setAllowed(false);
-    await aborted.promise;
     await owner.emit({ ...request, requestId: "while-denied" });
     policy.setAllowed(true);
     await owner.emit({ ...request, requestId: "after-allow" });
@@ -209,6 +214,11 @@ describe("node worker idle retention", () => {
       owner.adapter,
       expect.objectContaining({ requestId: "after-allow", error: expect.any(String) }),
     );
+    release.resolve();
+    await expect(settled.promise).resolves.toMatchObject({
+      requestId: "in-flight",
+      result: { content: [] },
+    });
     await owner.complete(first.launchId, "idle");
 
     const fresh = input("fresh-turn");

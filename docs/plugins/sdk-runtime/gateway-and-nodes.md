@@ -537,6 +537,12 @@ applicable policy also requires fresh publication admission.
     dispatch through the supplied `invokeNode` callback, which revalidates the
     current connection and pairing before forwarding the command.
 
+    A policy for `mcp.tools.call.v1` can provide
+    `allowLocalMcpTool({ nodeId, server, tool, pluginConfig })`. Returning
+    `true` admits that exact tool to same-node execution without calling the
+    Gateway handler. Other results, errors, and policies without this callback
+    retain Gateway dispatch.
+
     `allow-always` remains one policy decision unless the node-invoke policy explicitly declares `standingApproval: { kind: "placement", scope: "<capability>" }`. That opt-in permits later launches only for a high-risk command on the same current managed placement, node pairing, environment owner, workspace, and semantic capability scope, for at most 30 days and never across Gateway restart. Use a stable, content-free scope for a capability whose approval deliberately covers later argument changes. Do not opt in when the approved target or other request arguments must remain exact.
 
     A node command may declare `prepare(context)` for asynchronous native startup.
