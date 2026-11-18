@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import {
+  createEffect,
   createMemo,
   createSignal,
   Errored,
@@ -10,6 +11,7 @@ import {
   Show,
 } from "solid-js";
 import type { PluginsSkillsReadParams } from "../../../../packages/gateway-protocol/src/schema/plugin-skills.ts";
+import { normalizeToolPolicyName } from "../../../../src/agents/tool-policy-shared.js";
 import {
   pathForPluginCatalogEntry,
   pathForPluginSettings,
@@ -25,16 +27,19 @@ import {
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { WizardLogin } from "../../components/wizard-login-controller.tsx";
 import { configSecretFields } from "../../lib/config/config-secret-fields.ts";
-import { currentConfigRead } from "../../lib/config/config-state-model.ts";
+import {
+  currentConfigRead,
+  resolveEditableSnapshotConfig,
+} from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderPluginCatalogResults as PluginCatalogResults } from "./catalog-results.tsx";
-import "./custom-elements.ts";
 import {
   PluginArtTile,
   renderPluginConsentDialog as PluginConsentDialog,
 } from "./consent-dialog.tsx";
+import "./custom-elements.ts";
 import { pluginDetailLocation, type InstalledPluginDetailTab } from "./detail-tabs.ts";
 import {
   pluginRowKey,
@@ -48,6 +53,7 @@ import { renderPluginSettingsInventory as PluginSettingsInventory } from "./sett
 import {
   pluginAdvancedSchema,
   pluginConfigSchema,
+  pluginToolBlockEntries,
   pluginHostControlsSchema,
 } from "./settings-model.ts";
 import { PluginRetryError } from "./settings-retry-error.tsx";
@@ -264,6 +270,20 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
       () => components()?.skillDetails ?? components()?.skills.map((name) => ({ name })) ?? [],
     );
     const settings = () => page().state.installedDetailTab === "configuration";
+    const manageToolBlocks = () =>
+      page().surface === "settings" &&
+      !settings() &&
+      page().context.runtimeConfig.canPatch === true &&
+      page().accessBlockedReason() === null &&
+      Boolean(page().state.detail?.inspection) &&
+      Boolean(
+        (page().state.detail?.tools ?? page().state.detail?.inspection?.declared.tools)?.length,
+      );
+    createEffect(manageToolBlocks, (manage) => {
+      if (manage) {
+        void page().context.runtimeConfig.ensureLoaded();
+      }
+    });
     const settingsLocation = () =>
       page().surface === "discovery"
         ? pluginSettingsLocation(detailProps.pluginId)
@@ -297,6 +317,35 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
           catalogIconUrls={page().state.catalogIconUrls}
           catalogIconLoading={page().icons.catalog.isLoading}
           resolveCredential={page().settings.resolveCredential}
+          toolBlocks={
+            manageToolBlocks()
+              ? {
+                  entries: pluginToolBlockEntries(
+                    resolveEditableSnapshotConfig(configState().configSnapshot),
+                  ),
+                  saving: configState().configAutoSaveStatus === "saving",
+                  set: (name, blocked) => {
+                    void page().context.runtimeConfig.patchFromSnapshot((snapshot) => {
+                      const entries = pluginToolBlockEntries(snapshot);
+                      if (!entries) {
+                        return { error: t("pluginsPage.toolBlockUnavailable") };
+                      }
+                      const remaining = entries.filter(
+                        (entry) => normalizeToolPolicyName(entry) !== name,
+                      );
+                      return {
+                        options: {
+                          raw: { tools: { deny: blocked ? [...remaining, name] : remaining } },
+                          note: `tools: ${blocked ? "block" : "unblock"} ${name}`,
+                          replacePaths: blocked ? undefined : ["tools.deny"],
+                          canDispatch: manageToolBlocks,
+                        },
+                      };
+                    });
+                  },
+                }
+              : undefined
+          }
           tools={page().state.detail?.tools}
           onOpenTool={(name) =>
             page().skillPreview.openTool(

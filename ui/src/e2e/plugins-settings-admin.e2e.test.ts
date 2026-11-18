@@ -22,6 +22,7 @@ import {
   config,
   configMocks,
   pluginResponses,
+  pluginMethods,
 } from "./plugins-settings-admin.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -38,17 +39,6 @@ beforeEach(() => {
     proofDir = createControlUiE2eArtifactDir("plugin-settings-admin");
   }
 });
-
-const pluginMethods = [
-  "config.get",
-  "config.patch",
-  "config.schema",
-  "config.set",
-  "plugins.inspect",
-  "plugins.list",
-  "plugins.setEnabled",
-  "plugins.uninstall",
-];
 
 async function openWorkboard(page: Parameters<typeof waitForControlUiRoute>[0], baseUrl: string) {
   const response = await page.goto(`${baseUrl}settings/plugins`);
@@ -917,6 +907,8 @@ suite.define(() => {
       expect(
         await page.getByRole("button", { name: "Save configuration", exact: true }).count(),
       ).toBe(0);
+      await page.getByText("workboard_list", { exact: true }).waitFor();
+      expect(await page.getByRole("switch", { name: "Allow workboard_list" }).count()).toBe(0);
       const toggle = page.getByRole("button", { name: "Disable Workboard", exact: true });
       await page
         .locator(".plugin-catalog-detail__actions")
