@@ -495,9 +495,9 @@ export function CloudWorkersPage() {
       const options = current?.summary?.machines ?? [];
       let os = view.draft.target;
       if (current && !os && !current.configured.target) {
-        const systems = current.summary?.operatingSystems;
-        os = systems?.find((system) => system.default)?.id ?? "";
-        if (!systems?.length) {
+        const advertisedSystems = current.summary?.operatingSystems;
+        os = advertisedSystems?.find((system) => system.default)?.id ?? "";
+        if (!advertisedSystems?.length) {
           // The Gateway omits a singleton OS list; use its machine tags only if they agree.
           const single = options.find((machine) => machine.os)?.os;
           if (single && options.every((machine) => !machine.os || machine.os === single)) {

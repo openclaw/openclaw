@@ -232,12 +232,22 @@ it("offers Linux machine classes when the applied target is unset and the catalo
     await waitForSolid(() =>
       expect(profileRow(page, "worker").textContent).toContain("Advertised"),
     );
-    click(profileRow(page, "worker"), "Edit");
-    expect(osSelect(page)).toBeNull();
-    const picker = expectDefined(
-      page.querySelector<HTMLButtonElement>("#cloud-worker-machine-class"),
-      "device class picker for applied default OS",
+    const edit = await waitForSolid(() =>
+      expectDefined(
+        profileRow(page, "worker").querySelector<HTMLButtonElement>(
+          'button[aria-label="Edit: worker"]:enabled',
+        ),
+        "enabled Edit action",
+      ),
     );
+    edit.click();
+    const picker = await waitForSolid(() =>
+      expectDefined(
+        page.querySelector<HTMLButtonElement>("#cloud-worker-machine-class"),
+        "device class picker for applied default OS",
+      ),
+    );
+    expect(osSelect(page)).toBeNull();
     picker.click();
     await waitForSolid(() =>
       expect(page.querySelector('[role="option"][data-value="large"]')).not.toBeNull(),
