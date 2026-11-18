@@ -96,12 +96,7 @@ it.each([true, false])(
       currentChannelProvider: scheduled ? "signal" : undefined,
       preparedMessageToolCatalog: catalog(channels),
     });
-    expect(tool.parameters).toHaveProperty("properties.action.enum", [
-      "broadcast",
-      "poll",
-      "react",
-      "send",
-    ]);
+    expect(tool.parameters).toHaveProperty("properties.action.enum", ["broadcast", "poll", "send"]);
     for (const property of ["pollQuestion", "pollOption", "pollMulti"]) {
       expect(tool.parameters).toHaveProperty(`properties.${property}`);
     }

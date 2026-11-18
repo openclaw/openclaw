@@ -848,7 +848,7 @@ const uiWebkitOwners = [
   "ui/src/components/{session-hovercard*,solid/session-hovercard*}.{ts,tsx,css}",
   "ui/src/components/solid/{menu*.{ts,tsx},overlay.css}",
   "ui/src/app/app-shell-chrome.ts",
-  "ui/src/pages/{cron/view-jobs-filter,plugins/settings-editor,plugins/settings-view}.{ts,tsx,css}",
+  "ui/src/pages/plugins/{settings-editor,settings-view}.{ts,tsx,css}",
   "ui/src/pages/chat/chat-composer*.{ts,tsx}",
   "ui/src/pages/chat/components/chat-{composer*,picker-overlay*,model-picker*,effort-picker*}.{ts,tsx}",
   "ui/src/pages/chat/{chat-pane-header,components/chat-pane-header*}.{ts,tsx}",
@@ -1526,11 +1526,24 @@ const nodeTestShards = targetNodeTestShards
       !shard.requiresDist && splitRuntimeJobs
         ? testRuntimePolicy.ciTestShardRuntimes(shard, testRuntimeMode)
         : null;
-    // Node-hosted packaging proof also launches a pinned Bun child.
+    // Node-hosted packaging, retained-import, and native filesystem proofs launch pinned Bun children.
     const needsBunChild =
       !shard.requiresDist &&
-      shardRequiresTests(shard, ["test/scripts/bun-standalone-codegen.test.ts"], (plan) =>
-        plan.configs?.includes(goToolingConfig),
+      shardRequiresTests(
+        shard,
+        [
+          "test/scripts/bun-standalone-codegen.test.ts",
+          "src/infra/update-retained-runtime-imports.process.test.ts",
+          "src/agents/worktrees/filesystem-native.test.ts",
+        ],
+        (plan) =>
+          plan.configs?.some((config) =>
+            [
+              goToolingConfig,
+              "test/vitest/vitest.infra.config.ts",
+              "test/vitest/vitest.agents-support.config.ts",
+            ].includes(config),
+          ),
       );
     const minTotalMemoryBytes = Math.max(
       0,
@@ -2243,7 +2256,7 @@ if (hybridHostedEligible) {
     "check-docs": count(manifest.run_check_docs),
     "postgres-conformance": count(
       manifest.run_postgres_conformance,
-      workflowEventName === "pull_request" ? 4 : 3,
+      workflowEventName === "pull_request" ? 5 : 4,
     ),
     "skills-python": count(manifest.run_skills_python_job),
     "checks-windows": count(

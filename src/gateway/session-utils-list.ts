@@ -110,7 +110,7 @@ export function selectSessionEntries(
         misses++;
         part = filterSessionEntries({
           ...params,
-          entries: () => Array.from(partition.entries.values()),
+          entries: () => partition.entries.values(),
         });
         part.entries = sortAndLimitSessionEntries(part.entries, pageEnd, params.opts.sortBy);
         part.ownerEntries = sortAndLimitSessionEntries(
@@ -148,7 +148,9 @@ export function selectSessionEntries(
   }
   const { ownerEntries, entries: filtered, ...facets } = filteredResult;
   const sharedEntries = incremental
-    ? filtered.slice(offset)
+    ? offset === 0
+      ? filtered
+      : filtered.slice(offset)
     : params.entriesSorted
       ? filtered
       : sortAndLimitSessionEntries(filtered, pageEnd, params.opts.sortBy).slice(offset);

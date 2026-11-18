@@ -1,18 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { detectMime } from "@openclaw/media-core/mime";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { Static, TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { resolveRootPath } from "../infra/boundary-path.js";
 import { toErrorObject } from "../infra/errors.js";
 import { findExistingAncestor, root as fsRoot, FsSafeError } from "../infra/fs-safe.js";
-import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
-import {
-  classifyMediaReferenceSource,
-  normalizeMediaReferenceSource,
-  resolveMediaReferenceSandboxPath,
-} from "../media/media-reference.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { clampNumber } from "../utils.js";
 import {
@@ -27,6 +20,11 @@ import {
   normalizeFileToolPathParamsFromKeys,
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
+import {
+  createFsAccessError,
+  createSandboxMutationOperations,
+  createSandboxReadOperations,
+} from "./agent-tools.read.operations.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import {
   type ApplyPatchContainmentSource,
@@ -48,7 +46,6 @@ import {
 } from "./path-policy.js";
 import type { AgentTool, AgentToolResult } from "./runtime/index.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
-import { resolveSandboxFileMutationQueueKey } from "./sandbox/file-mutation-identity.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import {
   createEditTool,
@@ -590,6 +587,22 @@ type SandboxToolParams = {
   modelHasVision?: boolean;
 };
 
+function withSandboxToolAbortSignal<TDetails>(
+  tool: AnyAgentTool<TDetails>,
+  runSignal?: AbortSignal,
+): AnyAgentTool<TDetails> {
+  return {
+    ...tool,
+    execute: (id, args, signal, onUpdate) =>
+      tool.execute(
+        id,
+        args,
+        runSignal && signal ? AbortSignal.any([runSignal, signal]) : (signal ?? runSignal),
+        onUpdate,
+      ),
+  };
+}
+
 /** Preserve the sandbox namespace before session tools use host path resolution. */
 export function wrapSandboxFileToolPath(
   tool: AnyAgentTool,
@@ -633,12 +646,15 @@ export function createSandboxedReadTool(params: SandboxToolParams) {
       modelHasVision: params.modelHasVision,
     }),
   );
-  return createOpenClawReadTool(base, {
-    modelContextWindowTokens: params.modelContextWindowTokens,
-    imageSanitization: params.imageSanitization,
-    cwd: params.root,
-    bridge: params.bridge,
-  });
+  return withSandboxToolAbortSignal(
+    createOpenClawReadTool(base, {
+      modelContextWindowTokens: params.modelContextWindowTokens,
+      imageSanitization: params.imageSanitization,
+      cwd: params.root,
+      bridge: params.bridge,
+    }),
+    params.abortSignal,
+  );
 }
 
 export function createSandboxedWriteTool(params: SandboxToolParams) {
@@ -647,9 +663,9 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
       operations: createSandboxMutationOperations(params),
     }),
   );
-  return wrapToolParamValidation(
-    wrapSandboxFileToolPath(base, params),
-    REQUIRED_PARAM_GROUPS.write,
+  return withSandboxToolAbortSignal(
+    wrapToolParamValidation(wrapSandboxFileToolPath(base, params), REQUIRED_PARAM_GROUPS.write),
+    params.abortSignal,
   );
 }
 
@@ -659,7 +675,10 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
       operations: createSandboxMutationOperations(params),
     }),
   );
-  return wrapToolParamValidation(wrapSandboxFileToolPath(base, params), REQUIRED_PARAM_GROUPS.edit);
+  return withSandboxToolAbortSignal(
+    wrapToolParamValidation(wrapSandboxFileToolPath(base, params), REQUIRED_PARAM_GROUPS.edit),
+    params.abortSignal,
+  );
 }
 
 type HostWorkspaceMutationOptions = {
@@ -869,79 +888,6 @@ export function wrapReadToolWithSkillContent(
   };
 }
 
-function createSandboxReadOperations(params: SandboxToolParams) {
-  return {
-    resolveQueueKey: (absolutePath: string, signal?: AbortSignal) =>
-      resolveSandboxFileQueueKey(params, absolutePath, signal),
-    resolvePath: (filePath: string) => {
-      const normalizedMediaSource = normalizeMediaReferenceSource(filePath);
-      if (classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl) {
-        return resolveMediaReferenceSandboxPath(normalizedMediaSource, "media/inbound").resolved;
-      }
-      return resolveContainerPathCandidate(filePath);
-    },
-    decodeText: ({ buffer, absolutePath }: { buffer: Buffer; absolutePath: string }) =>
-      params.bridge.resolvePath({ filePath: absolutePath, cwd: params.root }).hostPath
-        ? decodeWindowsTextFileBuffer({ buffer })
-        : decodeWindowsTextFileBuffer({ buffer, platform: "linux" }),
-    readFile: (absolutePath: string) =>
-      params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
-    access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
-    detectImageMimeType: async (absolutePath: string, buffer: Buffer) => {
-      const mime = await detectMime({ buffer, filePath: absolutePath });
-      return mime?.startsWith("image/") ? mime : undefined;
-    },
-  } as const;
-}
-
-function createSandboxMutationOperations(params: SandboxToolParams) {
-  return withMemoryWriteProvenance(
-    {
-      resolveQueueKey: (absolutePath: string, signal?: AbortSignal) =>
-        resolveSandboxFileQueueKey(params, absolutePath, signal),
-      writeFile: async (absolutePath: string, content: string) => {
-        await params.bridge.writeFile({
-          filePath: absolutePath,
-          cwd: params.root,
-          data: content,
-          mkdir: true,
-          signal: params.abortSignal,
-        });
-      },
-      readFile: (absolutePath: string) =>
-        params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
-      statFile: (absolutePath: string) =>
-        params.bridge.stat({ filePath: absolutePath, cwd: params.root }),
-      access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
-    } as const,
-    params.memoryWriteProvenance,
-  );
-}
-
-async function resolveSandboxFileQueueKey(
-  params: SandboxToolParams,
-  absolutePath: string,
-  signal?: AbortSignal,
-) {
-  return await resolveSandboxFileMutationQueueKey({
-    bridge: params.bridge,
-    root: params.root,
-    filePath: absolutePath,
-    cwd: params.root,
-    signal,
-  });
-}
-
-async function assertSandboxFileExists(params: SandboxToolParams, absolutePath: string) {
-  const stat = await params.bridge.stat({ filePath: absolutePath, cwd: params.root });
-  if (!stat) {
-    throw createFsAccessError("ENOENT", absolutePath);
-  }
-  if (stat.type === "directory") {
-    throw createFsAccessError("EISDIR", absolutePath);
-  }
-}
-
 function resolveHostPath(filePath: string): string {
   return path.resolve(expandOsHomePrefix(filePath));
 }
@@ -1106,9 +1052,4 @@ function createHostMutationOperations(
   );
 }
 
-function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoException {
-  const error = new Error(`Sandbox FS error (${code}): ${filePath}`) as NodeJS.ErrnoException;
-  error.code = code;
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

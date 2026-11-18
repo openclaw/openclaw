@@ -500,12 +500,12 @@ describe("sidebar people workload", () => {
       sidebar,
       'openclaw-select-picker:has(#sidebar-people-status) [data-value="running"]',
     );
-    expect(sidebar.querySelector('[role="dialog"]')).toBeNull();
+    expect(sidebar.querySelector('[role="dialog"]:not(#sidebar-pages-menu)')).toBeNull();
     expect(names(sidebar)).toEqual(["ada", "bea"]);
     await open();
     await click(sidebar, "#sidebar-people-sort");
     await click(sidebar, 'openclaw-select-picker:has(#sidebar-people-sort) [data-value="running"]');
-    expect(sidebar.querySelector('[role="dialog"]')).toBeNull();
+    expect(sidebar.querySelector('[role="dialog"]:not(#sidebar-pages-menu)')).toBeNull();
     expect(names(sidebar)).toEqual(["bea", "ada"]);
     provider.setContext({ ...context, basePath: "/control" });
     await settle(sidebar);
@@ -513,7 +513,7 @@ describe("sidebar people workload", () => {
     await open();
     expect(dom.text("#sidebar-people-status")).toContain("Running");
     await click(sidebar, "#sidebar-people-reset");
-    expect(sidebar.querySelector('[role="dialog"]')).toBeNull();
+    expect(sidebar.querySelector('[role="dialog"]:not(#sidebar-pages-menu)')).toBeNull();
     expect(names(sidebar)).toEqual(["ada", "cy", "bea"]);
     await open();
     expect(sidebar.querySelector("#sidebar-people-reset")).toBeNull();

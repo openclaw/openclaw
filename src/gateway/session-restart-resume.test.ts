@@ -11,7 +11,11 @@ import { subagentRuns } from "../agents/subagents/registry/subagent-registry-mem
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  loadExactSessionEntry,
+  loadTranscriptEvents,
+} from "../config/sessions/session-accessor.js";
 import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -23,6 +27,7 @@ import {
 import * as pendingInputWithdrawal from "../config/sessions/session-pending-input-withdrawal.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -111,9 +116,7 @@ it.for(["prepared", "managed", "crash", "slow-crash", "failed"] as const)(
       replaceSessionEntrySync(target, { sessionId: "prepared", updatedAt: 110 });
       replaceSessionEntrySync(target, {
         ...loadExactSessionEntry(target)!.entry,
-        ...(crash
-          ? { lifecycleRunId: "predecessor", startedAt: 110 }
-          : { resumeAfterRestart: { queuedInputIds: [] } }),
+        ...(crash ? { lifecycleRunId: "predecessor", startedAt: 110 } : { resumeAfterRestart: {} }),
       });
       const database = openOpenClawAgentDatabase({ agentId: "main" });
       const open = createDeferredCore();
@@ -196,9 +199,7 @@ it.for(["prepared", "managed", "crash", "slow-crash", "failed"] as const)(
           try {
             await withinTest(opened.promise, test.signal);
             expect(await readSessionEntryReadOnlyInWorker(target)).toMatchObject(
-              crash
-                ? { lifecycleRunId: "predecessor" }
-                : { resumeAfterRestart: { queuedInputIds: [] } },
+              crash ? { lifecycleRunId: "predecessor" } : { resumeAfterRestart: {} },
             );
             expect(admission.observation.isAgentInputRecoveryPending("main")).toBe(false);
             if (mode === "prepared") {
@@ -306,7 +307,7 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
         ["live", {}, false],
         ...(mode === "markers"
           ? [
-              ["marked", { resumeAfterRestart: { queuedInputIds: [] } }, true] as [
+              ["marked", { resumeAfterRestart: {} }, true] as [
                 string,
                 Partial<InternalSessionEntry>,
                 boolean,
@@ -477,9 +478,7 @@ it("marks the active execution when an older message wait remains in the same se
     const claim = claimAgentRunContext(runId, target, { trackOwner: true, ownsContext: true });
     try {
       await persistRunningSessionsForRestart({ cfg: {} });
-      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
-        queuedInputIds: [],
-      });
+      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({});
     } finally {
       releaseAgentRunContext(runId, claim);
       subagentRuns.delete(oldRunId);
@@ -512,7 +511,7 @@ it.each(["restart", "user", "completed"] as const)(
         }
         await persistRunningSessionsForRestart({ cfg: {} });
         expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual(
-          ending === "restart" ? { queuedInputIds: [] } : undefined,
+          ending === "restart" ? {} : undefined,
         );
       } finally {
         release();
@@ -521,7 +520,7 @@ it.each(["restart", "user", "completed"] as const)(
     }),
 );
 
-it("marks completed reply settlement only when accepted inputs remain queued", () =>
+it("keeps completed reply roots unmarked while accepted inputs remain durable", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
     const target = {
@@ -555,17 +554,11 @@ it("marks completed reply settlement only when accepted inputs remain queued", (
       });
       assert(queued, "Queued fixture input was not admitted");
       await persistRunningSessionsForRestart({ cfg: {} });
-      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
-        queuedInputIds: [queued.inputId],
-        queuedInputSources: {
-          [queued.inputId]: {
-            runId: "queued-behind-completed-reply",
-            source: { kind: "unavailable" },
-          },
-        },
-      });
+      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeUndefined();
+      const captured = await captureSessionQueuedInputsForRestart(target);
+      expect(captured.queuedInputIds).toEqual([queued.inputId]);
     } finally {
-      queued?.finish("interrupted");
+      queued?.finish("interrupted", "failed");
       await queued?.settled?.();
       releaseExecution();
       await operation.ownerSettlement;
@@ -633,9 +626,7 @@ it("marks ordinary conversations without inheriting cron or external execution o
           sessionKey,
         })?.entry;
         expect(entry).toBeDefined();
-        expect(entry?.resumeAfterRestart, sessionKey).toEqual(
-          resumable ? { queuedInputIds: [] } : undefined,
-        );
+        expect(entry?.resumeAfterRestart, sessionKey).toEqual(resumable ? {} : undefined);
       }
     } finally {
       for (const [runId, claim] of claims) {
@@ -649,7 +640,7 @@ it("marks ordinary conversations without inheriting cron or external execution o
     }
   }));
 
-it("settles source-less queued sends even when the recorded owner cannot resume", () =>
+it("records a visible refusal for consumed and queued inputs when their owner cannot resume", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg: OpenClawConfig = {
       gateway: {
@@ -686,14 +677,24 @@ it("settles source-less queued sends even when the recorded owner cannot resume"
       assertCurrent() {},
     });
     assert(receipt, "Queued fixture input was not admitted");
+    const consumed = await stageSessionPendingInput(target, {
+      runId: "consumed-before-revocation",
+      message: { ...receipt.message, idempotencyKey: "consumed-before-revocation:user" },
+      assertCurrent() {},
+    });
+    assert(consumed, "Consumed fixture input was not admitted");
     const claim = claimAgentRunContext("revoked-owner-work", target, {
       trackOwner: true,
       ownsContext: true,
     });
     try {
       await persistRunningSessionsForRestart({ cfg });
-      receipt.finish("interrupted");
+      await consumed.runAsync!(() =>
+        appendTranscriptMessage(target, { message: consumed.message }),
+      );
+      receipt.finish("interrupted", "failed");
       await receipt.settled?.();
+      rotateAgentEventLifecycleGeneration();
       setUserProfileRole(profile.id, "reader");
       const warn = vi.fn();
       await resumeMarkedSessions({
@@ -705,11 +706,25 @@ it("settles source-less queued sends even when the recorded owner cannot resume"
       expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeUndefined();
       expect(await readSessionPendingInput(target, receipt.inputId)).toMatchObject({
         state: "cancelled",
+        endCause: "restart-unrecoverable",
         message: { content: "Accepted before restart" },
       });
+      expect(await readSessionPendingInput(target, consumed.inputId)).toBeUndefined();
+      expect(await loadTranscriptEvents(target)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "custom_message",
+            customType: "run-failed-before-reply",
+            display: true,
+            content: expect.stringContaining("this run could not resume"),
+          }),
+        ]),
+      );
     } finally {
-      receipt?.finish("interrupted");
+      receipt?.finish("interrupted", "failed");
       await receipt?.settled?.();
+      consumed.finish("interrupted", "failed");
+      await consumed.settled?.();
       releaseAgentRunContext("revoked-owner-work", claim);
     }
   }));
@@ -751,16 +766,16 @@ it("fails a captured browser-copilot send instead of running without its live bi
     try {
       const captured = await captureSessionQueuedInputsForRestart(target);
       captured.preserve();
-      receipt.finish("interrupted");
+      receipt.finish("interrupted", "failed");
       await receipt.settled?.();
       await continueSessionQueuedInputs(context, target, {
         signal: new AbortController().signal,
-        queuedInputIds: [receipt.inputId],
         assertCurrent() {},
       });
       expect(send.mock.calls.length).toBe(0);
       expect(await readSessionPendingInput(target, receipt.inputId)).toMatchObject({
         state: "cancelled",
+        endCause: "restart-unrecoverable",
         message: { content: "Inspect the selected tab" },
       });
       expect(context.logGateway.warn).toHaveBeenCalledWith(
@@ -768,7 +783,7 @@ it("fails a captured browser-copilot send instead of running without its live bi
       );
     } finally {
       send.mockRestore();
-      receipt.finish("cancelled");
+      receipt.finish("cancelled", "failed");
       await receipt.settled?.();
     }
   }));
@@ -821,7 +836,7 @@ it("resumes recent interrupted legacy cycles once and settles crash inputs", () 
     const [crashed, live] = receipts;
     const dispatch = vi.spyOn(gatewayDispatch, "dispatchGatewayRequestInProcess");
     try {
-      crashed!.finish("interrupted");
+      crashed!.finish("interrupted", "failed");
       await crashed!.settled?.();
       database.db
         .prepare(
@@ -837,7 +852,12 @@ it("resumes recent interrupted legacy cycles once and settles crash inputs", () 
         });
         expect(discover).toHaveBeenCalledTimes(boot + 1);
         expect((await listSessionPendingInputs(target)).items).toMatchObject([
-          { runId: "crashed", state: "cancelled", message: { content: "crashed" } },
+          {
+            runId: "crashed",
+            state: "cancelled",
+            endCause: "restart-unrecoverable",
+            message: { content: "crashed" },
+          },
           { runId: "live", state: "queued" },
         ]);
       }
@@ -857,7 +877,7 @@ it("resumes recent interrupted legacy cycles once and settles crash inputs", () 
       resume.mockRestore();
       discover.mockRestore();
       dispatch.mockRestore();
-      live!.finish("cancelled");
+      live!.finish("cancelled", "failed");
       await live!.settled?.();
     }
   }));

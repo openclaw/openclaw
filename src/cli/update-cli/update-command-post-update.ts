@@ -450,15 +450,14 @@ async function finishSettledUpdate(
       const completeMaintenance = () =>
         completePostUpdateMaintenance(params, resultWithPostUpdate, assertCurrent, {
           root: postUpdateRoot,
-          sentinel: sentinelOptions,
-          activationVerified,
         });
       // A current core may converge plugins online, parking before fresh Doctor.
-      // A replaced core keeps convergence in its original stopped interval.
+      // A replaced core keeps convergence in its original stopped interval; a switched
+      // Git release converges after it verified, never stranding plugins on a failed trial.
       const deferPluginConvergence =
         shouldRestart &&
         params.preManagedServiceStop?.serviceMutationAllowed !== false &&
-        params.coreAlreadyCurrent === true &&
+        (params.coreAlreadyCurrent === true || params.gitRelease === true) &&
         params.preManagedServiceStop?.serviceUpdateVerdict?.kind === "owned";
       const runsPostActivationInspections =
         shouldRestart &&
@@ -685,12 +684,7 @@ async function finishSettledUpdate(
           }),
         );
       }
-      const maintenanceFailure = await completeMaintenance();
-      if (maintenanceFailure) {
-        const reported = await reportResult(maintenanceFailure.result, false, undefined, false);
-        throw createFailure(reported, maintenanceFailure.detail, undefined, 1);
-      }
-
+      await completeMaintenance();
       return resultWithPostUpdate;
     } catch (error) {
       if (
@@ -701,11 +695,7 @@ async function finishSettledUpdate(
           cause: error,
         });
       }
-      if (
-        (error instanceof UpdateCommandFailure &&
-          (!activationVerified || error.result.reason !== "wrapper-retirement-failed")) ||
-        hasCommandProcessCleanupError(error)
-      ) {
+      if (error instanceof UpdateCommandFailure || hasCommandProcessCleanupError(error)) {
         // Unsettled commands may still change files. Keep intent/material for fenced reconciliation.
         throw error;
       }

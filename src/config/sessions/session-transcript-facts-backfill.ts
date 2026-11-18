@@ -11,6 +11,8 @@ import type {
   TranscriptActiveFactsBackfillOperations,
   TranscriptActiveFactsBackfillSession,
 } from "./session-transcript-active-facts-backfill.worker.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 // Admitted execution includes reply pickup, so startup or main-thread contention can
 // inflate one charge to seconds; 20x of that would park the pass for minutes.
@@ -106,29 +108,16 @@ export function createSessionTranscriptFactsBackfill(params: {
     }
     try {
       assertCurrent();
-      client ??= openOpenClawAgentSqliteWorkerStoreV2<TranscriptActiveFactsBackfillOperations>(
-        params.database,
-        { version: 2, assertCurrent },
-        {
-          moduleUrl: resolveRuntimeWorkerUrl(
-            runtimeProcessEntrypoints.sessionTranscriptActiveFactsBackfill,
-          ),
-          input: undefined,
-          readCustody: params.readCustody,
-          priority: "background",
-          observeWriteExecution: (elapsedMs) => {
-            writeExecutionMs = elapsedMs;
-            intervalWriteMs += elapsedMs;
-            intervalMaxWriteMs = Math.max(intervalMaxWriteMs, elapsedMs);
-          },
-        },
-      );
-      const store = await client;
       if (!sessions) {
-        const discovery = await store.execute(
-          { type: "discover", input: undefined },
-          assertCurrent,
-          { signal: params.signal },
+        const started = performance.now();
+        const discovery = await withSessionHistoryWorkerDatabase(
+          { ...params.database, readCustody: params.readCustody },
+          (reader) =>
+            reader.discoverTranscriptFacts(
+              { env: params.database.env ?? process.env },
+              params.signal,
+            ),
+          sessionStoreLane,
         );
         if (!discovery.supported) {
           params.log.info(
@@ -146,7 +135,7 @@ export function createSessionTranscriptFactsBackfill(params: {
         }
         return {
           complete: sessions.length === 0,
-          delayMs: yieldAfter(writeExecutionMs),
+          delayMs: yieldAfter(performance.now() - started),
         };
       }
       const session = sessions[sessionIndex];
@@ -155,10 +144,18 @@ export function createSessionTranscriptFactsBackfill(params: {
         return { complete: true, delayMs: 250 };
       }
       if (probeNext) {
-        const probe = await store.execute(
-          { type: "probe", input: { sessionId: session.sessionId, afterPosition } },
-          assertCurrent,
-          { signal: params.signal },
+        const started = performance.now();
+        const probe = await withSessionHistoryWorkerDatabase(
+          { ...params.database, readCustody: params.readCustody },
+          (reader) =>
+            reader.probeTranscriptFacts(
+              {
+                env: params.database.env ?? process.env,
+                cursor: { sessionId: session.sessionId, afterPosition },
+              },
+              params.signal,
+            ),
+          sessionStoreLane,
         );
         afterPosition = probe.afterPosition;
         if (!probe.uncovered) {
@@ -177,11 +174,29 @@ export function createSessionTranscriptFactsBackfill(params: {
           }
           return {
             complete,
-            delayMs: yieldAfter(Math.max(probe.elapsedMs, writeExecutionMs), PROBE_MIN_YIELD_MS),
+            delayMs: yieldAfter(performance.now() - started, PROBE_MIN_YIELD_MS),
           };
         }
         probeNext = false;
       }
+      client ??= openOpenClawAgentSqliteWorkerStoreV2<TranscriptActiveFactsBackfillOperations>(
+        params.database,
+        { version: 2, assertCurrent },
+        {
+          moduleUrl: resolveRuntimeWorkerUrl(
+            runtimeProcessEntrypoints.sessionTranscriptActiveFactsBackfill,
+          ),
+          input: undefined,
+          readCustody: params.readCustody,
+          priority: "background",
+          observeWriteExecution: (elapsedMs) => {
+            writeExecutionMs = elapsedMs;
+            intervalWriteMs += elapsedMs;
+            intervalMaxWriteMs = Math.max(intervalMaxWriteMs, elapsedMs);
+          },
+        },
+      );
+      const store = await client;
       const batch = await store.execute(
         { type: "batch", input: { sessionId: session.sessionId, afterPosition } },
         assertCurrent,

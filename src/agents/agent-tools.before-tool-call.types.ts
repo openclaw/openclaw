@@ -20,6 +20,8 @@ export type HookContext = {
   /** Host-owned workspace attribution barrier, captured for this exact run. */
   awaitSessionDiffBaseline?: () => Promise<void>;
   watchdogAttempt?: SessionControllerWatchdogAttempt;
+  /** The execution owner's live deadline, excluding lane cleanup grace. */
+  getRunAbortDeadlineAtMs?: () => number | undefined;
   agentId?: string;
   config?: OpenClawConfig;
   /** Selected tool registration owner; independent of the hook requesting approval. */

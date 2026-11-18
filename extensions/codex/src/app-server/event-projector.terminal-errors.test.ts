@@ -164,6 +164,19 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     },
   );
 
+  it.each(["modelNotFound", "policyCapacityUnavailable", "inferenceHookDenied"])(
+    "surfaces %s from both error notifications and failed terminal snapshots",
+    async (codexErrorInfo) => {
+      for (const completed of [false, true]) {
+        const projector = await createProjector();
+        const message = "The requested model could not run.";
+        await fail(projector, { message, codexErrorInfo }, completed);
+        expectTerminal(fixture.result(projector), message, "prompt");
+        expect(projector.getCompletedTurnStatus()).toBe(completed ? "failed" : undefined);
+      }
+    },
+  );
+
   const denialBody = {
     error: "middleware_denied",
     reason_code: "request_credential_denied",
@@ -537,7 +550,7 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       );
       const terminal = readAttemptTerminal(fixture.result(projector));
       const { message } = expectUsageLimitPromptError(terminal.promptError);
-      expect(message).toContain("You've reached your Codex subscription usage limit.");
+      expect(message).toContain("Codex reported a usage or quota limit.");
       expect(message).toContain(
         recent ? "Next reset in" : "Codex says to try again at May 11th, 2026 9:00 AM.",
       );
