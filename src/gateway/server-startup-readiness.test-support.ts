@@ -11,8 +11,8 @@ import type { GatewayStartupModuleMocks } from "./server-startup-module-mocks.te
 import type { startGatewayPostAttachRuntime } from "./server-startup-post-attach.js";
 import { logGatewayReady } from "./server-startup-readiness.js";
 import type { GatewayStartupTrace } from "./server-startup-trace.js";
-import type { PreparedReadinessChecker } from "./server/readiness.js";
 import { createPreparedReadinessFixture } from "./server/readiness.test-support.js";
+import type { PreparedReadinessChecker } from "./server/readiness.types.js";
 
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntime>[0];
 

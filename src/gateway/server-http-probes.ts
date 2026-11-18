@@ -11,7 +11,7 @@ import type {
   PreparedReadinessChecker,
   StartupChecker,
   StartupResult,
-} from "./server/readiness.js";
+} from "./server/readiness.types.js";
 
 function startupProbeBody(result: StartupResult, includeDetails: boolean): string {
   if (!includeDetails) {

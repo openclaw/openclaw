@@ -56,7 +56,7 @@ import {
   createPreauthConnectionBudget,
   type PreauthConnectionBudget,
 } from "./server/preauth-connection-budget.js";
-import type { PreparedReadinessChecker, StartupChecker } from "./server/readiness.js";
+import type { PreparedReadinessChecker, StartupChecker } from "./server/readiness.types.js";
 import { GATEWAY_PER_MESSAGE_DEFLATE } from "./server/ws-compression.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { ArtifactTransferHttpCallback } from "./worker-environments/artifact-transfer-http.js";

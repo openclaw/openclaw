@@ -14,7 +14,7 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { HooksRequestHandler } from "./server/hooks-request-handler.js";
 import type { PluginHttpRequestHandler } from "./server/plugins-http.js";
 import type { PluginRoutePathContext } from "./server/plugins-http/path-context.js";
-import type { PreparedReadinessChecker, StartupChecker } from "./server/readiness.js";
+import type { PreparedReadinessChecker, StartupChecker } from "./server/readiness.types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { ArtifactTransferHttpCallback } from "./worker-environments/artifact-transfer-http.js";
 import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http.js";

@@ -1,5 +1,5 @@
 import type { GatewayStartupTrace } from "./server-startup-trace.js";
-import type { PreparedReadinessChecker } from "./server/readiness.js";
+import type { PreparedReadinessChecker } from "./server/readiness.types.js";
 
 type GatewayReadinessLog = {
   log: { info: (message: string) => void };

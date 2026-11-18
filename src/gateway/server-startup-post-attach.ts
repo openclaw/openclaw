@@ -35,7 +35,7 @@ import { startGatewaySidecars } from "./server-startup-sidecars.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 import { scheduleTranscriptsSidecar } from "./server-startup-transcripts.js";
 import { createDeferredGatewayUpdateCheck } from "./server-startup-update-check.js";
-import type { PreparedReadinessChecker } from "./server/readiness.js";
+import type { PreparedReadinessChecker } from "./server/readiness.types.js";
 import { beginMacOSSystemCaWarmupOnce } from "./system-ca-warmup.js";
 type Awaitable<T> = T | Promise<T>;
 

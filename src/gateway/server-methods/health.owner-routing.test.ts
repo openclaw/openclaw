@@ -73,7 +73,7 @@ function healthSnapshot(stateDir: string, overrides: Partial<HealthSummary> = {}
 function createHealthReader(
   snapshot: HealthSummary,
   getEventLoopHealth?: () => HealthSummary["eventLoop"],
-  getReadiness?: import("../server/readiness.js").ReadinessChecker,
+  getReadiness?: import("../server/readiness.types.js").ReadinessChecker,
 ) {
   const context = {
     getHealthCache: () => snapshot,

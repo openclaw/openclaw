@@ -1,4 +1,4 @@
-import type { PreparedReadinessChecker, ReadinessChecker } from "./readiness.js";
+import type { PreparedReadinessChecker, ReadinessChecker } from "./readiness.types.js";
 
 export function createPreparedReadinessFixture(
   read: ReadinessChecker = () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 0 }),

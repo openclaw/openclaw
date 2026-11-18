@@ -15,30 +15,12 @@ import {
 import type { ChannelManager } from "../server-channels.js";
 import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
-
-type ReadinessResult = {
-  ready: boolean;
-  coreReady: boolean;
-  failing: string[];
-  suppressed?: string[];
-  uptimeMs: number;
-  eventLoop?: GatewayEventLoopHealth;
-  pluginReload?: GatewayPluginReloadStatus;
-  agentDatabases?: readonly AgentDatabaseAdmissionRefusal[];
-  stateDatabase?: { reason: string };
-};
-
-export type ReadinessChecker = (childRuntime?: ChildRuntimeViability) => ReadinessResult;
-export type PreparedReadinessChecker = ReadinessChecker & {
-  prepare: () => Promise<{ publish: () => ReadinessResult }>;
-};
-
-export type StartupResult =
-  | { ok: true; status: "started"; uptimeMs: number }
-  | { ok: false; status: "starting"; uptimeMs: number; pendingReason: string }
-  | { ok: false; status: "draining"; uptimeMs: number };
-
-export type StartupChecker = () => StartupResult;
+import type {
+  PreparedReadinessChecker,
+  ReadinessResult,
+  StartupChecker,
+  StartupResult,
+} from "./readiness.types.js";
 
 type GatewayStartupStateDeps = {
   startedAt: number;
