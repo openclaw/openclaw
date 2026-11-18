@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { PORTAL_LINK_GUIDANCE } from "./portal-link-guidance.js";
 
 /** Tool eligibility and results own surface support; do not infer it from channel names. */
 export function buildUiPresentationPrompt(params: {
@@ -28,7 +29,7 @@ export function buildUiPresentationPrompt(params: {
     dashboardToolName &&
       `\`${dashboardToolName}\`: layout/plugin widgets, not HTML authoring; never for opening a browser side panel. For a saved widget, use action="focus_tab" with its tabId.${showWidgetToolName ? "" : " Custom authoring is unavailable this turn, not unsupported by dashboards."}`,
     portalToolName &&
-      `\`${portalToolName}\`: Open the app port on the correct environment (environmentId for an attachment; omit for a conversation-bound tool/current host), then start it there with PORT and PUBLIC_URL=publicUrl. Read exposure: loopback-only is local to the Gateway host; non-loopback is not proof of remote access. Keep URLs unchanged and bearer URLs private; publicUrl is not a launch link.${screenToolName ? ` Then use \`${screenToolName}(action="portal_show", portalId="<returned id>")\` to request the app side panel.` : " No screen tool is exposed this turn; do not claim to open a side panel. Direct the viewer to Control UI → Portals instead."} Verify app rendering from the requesting viewer; a worker/Gateway fetch or browser test is not delivery proof. Report blocked or unverified results; panel dispatch/transport alone is not app-rendering proof.`,
+      `\`${portalToolName}\`: Open the app port on the correct environment (environmentId for an attachment; omit for a conversation-bound tool/current host), then start it there with PORT and PUBLIC_URL=publicUrl. Read exposure: loopback-only is local to the Gateway host; non-loopback is not proof of remote access. ${PORTAL_LINK_GUIDANCE}${screenToolName ? ` For an in-UI preview, use \`${screenToolName}(action="portal_show", portalId="<returned id>")\` to request the app side panel.` : " No screen tool is exposed this turn; do not claim to open a side panel. For an in-UI preview, direct the viewer to Control UI → Portals."} Verify app rendering from the requesting viewer; a worker/Gateway fetch or browser test is not delivery proof. Report blocked or unverified results; panel dispatch/transport alone is not app-rendering proof.`,
     (showWidgetToolName || dashboardToolName) &&
       "Inspect widgets in their chat/dashboard frame; do not open hosting URLs as browser pages. Verify the delivered interaction or say unverified.",
   ].filter(Boolean);

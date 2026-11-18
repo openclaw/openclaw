@@ -1,0 +1,2 @@
+13
+# Guard private portal launch-link guidance in generated prompts and host/worker tool results.

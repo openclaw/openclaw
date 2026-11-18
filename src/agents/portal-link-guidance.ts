@@ -1,0 +1,3 @@
+// Keep portal URL handoff semantics consistent across prompts, tools, and results.
+export const PORTAL_LINK_GUIDANCE =
+  "Keep returned URLs unchanged; publicUrl is token-free app configuration, not an authenticated launch link. When the user requests a private app link, share the returned url unchanged with the authorized recipient in that private conversation. It is a bearer link: anyone holding it can access the app while the portal is active; close the portal to withdraw it. Never automatically post bearer links to group/public chats or include them in logs, screenshots, or PUBLIC_URL. Do not offer a loopback-only route as a remote/mobile link; explain the missing private ingress instead.";
