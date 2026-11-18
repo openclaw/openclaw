@@ -73,10 +73,14 @@ describe("gateway shared auth rotation", () => {
     );
   });
 
-  async function startGateway(token: GatewayAuthConfig["token"] = OLD_TOKEN) {
+  async function startGateway(
+    token: GatewayAuthConfig["token"] = OLD_TOKEN,
+    readerEnabled = false,
+  ) {
     await state.writeConfig({
       gateway: {
         mode: "local",
+        sessionControl: { publicationReadEnabled: readerEnabled },
         bind: "loopback",
         auth: { mode: "token", token },
         controlUi: { enabled: false, allowedOrigins: [`http://127.0.0.1:${port}`] },
@@ -269,7 +273,7 @@ describe("gateway shared auth rotation", () => {
   );
 
   it("revokes established publication readers when their shared-auth issuer rotates", async () => {
-    await startGateway();
+    await startGateway(OLD_TOKEN, true);
     const reader = await openDeviceTokenClient({
       issuerGeneration: requiredSharedGeneration(),
       scopes: [PUBLICATION_READ_SCOPE],
