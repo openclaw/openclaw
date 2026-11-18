@@ -840,8 +840,17 @@ describe("memory.search gateway method", () => {
           undefined,
         );
         if (!repaired) {
-          expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("stale");
-          expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("warning");
+          const payload = respond.mock.calls[0]?.[1];
+          // Resident watchers can still have pending work after the format repair.
+          if (
+            payload?.warning ===
+            "Memory index has pending updates. Results use the last published index."
+          ) {
+            expect(payload).toHaveProperty("stale", true);
+          } else {
+            expect(payload).not.toHaveProperty("stale");
+            expect(payload).not.toHaveProperty("warning");
+          }
         }
       };
       getActiveMemorySearchManagerCore.mockImplementation((params) =>
