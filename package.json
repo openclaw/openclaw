@@ -2238,7 +2238,7 @@
     "test:docker:plugins": "bash scripts/e2e/plugins-docker.sh",
     "test:docker:published-driver-lifecycle": "node scripts/e2e/published-driver-lifecycle-docker.mjs",
     "test:docker:published-driver-linked-root": "env OPENCLAW_PUBLISHED_DRIVER_LINKED_ROOT=1 bash scripts/e2e/published-driver-update-docker.sh",
-    "test:docker:published-driver-plugin-publication": "env OPENCLAW_PUBLISHED_DRIVER_PLUGIN_PUBLICATION=1 bash scripts/e2e/published-driver-update-docker.sh '' '' 2026.11.5",
+    "test:docker:published-driver-plugin-publication": "env OPENCLAW_PUBLISHED_DRIVER_PLUGIN_PUBLICATION=1 bash scripts/e2e/published-driver-update-docker.sh '' .artifacts/published-driver-plugin-publication 2026.11.5",
     "test:docker:published-driver-release-adoption": "env OPENCLAW_PUBLISHED_DRIVER_OWNED_PREFIX=1 OPENCLAW_PUBLISHED_DRIVER_FOLLOW_UP=switch bash scripts/e2e/published-driver-update-docker.sh",
     "test:docker:published-driver-release-in-place": "env OPENCLAW_PUBLISHED_DRIVER_LINKED_ROOT=1 OPENCLAW_PUBLISHED_DRIVER_FOLLOW_UP=in-place bash scripts/e2e/published-driver-update-docker.sh '' '' 2026.10.9",
     "test:docker:published-driver-release-launcher": "env OPENCLAW_PUBLISHED_DRIVER_OWNED_PREFIX=1 OPENCLAW_PUBLISHED_DRIVER_FOLLOW_UP=launcher bash scripts/e2e/published-driver-update-docker.sh",

@@ -3,7 +3,10 @@
 // not write openclaw.json (a link to a read-only file, as a provisioned config is). Plugin
 // convergence changes no config, so the update must still succeed. With
 // OPENCLAW_PUBLISHED_DRIVER_PLUGIN_FAULT=corrupt-plugin, one plugin's target tarball is corrupt
-// instead and the update must succeed with a warning for that plugin. Fixture data only.
+// instead and the update must succeed with a warning for that plugin. With refused-channel-change,
+// the first update also requests another channel against the read-only config: that real config
+// write must still be refused, and the report must name a Gateway stop that works unattended.
+// Fixture data only.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -18,7 +21,11 @@ import { packFirstHopUpdateFixture } from "../update-first-hop-package-fixtures.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const [candidateArg, artifactsArg, driverVersion] = process.argv.slice(2);
 const fault = process.env.OPENCLAW_PUBLISHED_DRIVER_PLUGIN_FAULT || "symlinked-config";
-assert(["symlinked-config", "corrupt-plugin"].includes(fault), "Unknown plugin publication fault");
+assert(
+  ["symlinked-config", "corrupt-plugin", "refused-channel-change"].includes(fault),
+  "Unknown plugin publication fault",
+);
+const readOnlyConfig = fault !== "corrupt-plugin";
 assert(candidateArg && artifactsArg && driverVersion, "Expected candidate, artifacts and driver");
 assert.equal(process.platform, "linux", "The managed-service fixture requires Linux");
 assert(fs.existsSync("/.dockerenv"), "Run through the bare Docker E2E runner");
@@ -175,6 +182,9 @@ const registryEnv = (url, redirectCore = false) => ({
   NODE_OPTIONS: `--import=${path.join(root, "scripts/e2e/lib/upgrade-survivor/plugin-registry-redirect.mjs")}`,
 });
 
+// Synchronous fixture fetches stay inside the caller's cell deadline.
+const remainingMs = () => Math.max(1_000, cellDeadline - 60_000 - Date.now());
+
 function npmPack(spec, destination) {
   fs.mkdirSync(destination, { recursive: true });
   const [packed] = JSON.parse(
@@ -189,20 +199,24 @@ function npmPack(spec, destination) {
         "--ignore-scripts",
         "--json",
       ],
-      { encoding: "utf8", env: { ...process.env, ...env } },
+      { encoding: "utf8", env: { ...process.env, ...env }, timeout: remainingMs() },
     ),
   );
   return path.join(destination, packed.filename);
 }
 
 function futurePlugin(sourceTgz, output) {
-  execFileSync(process.execPath, [
-    path.join(root, "scripts/e2e/lib/update-first-hop-package-fixtures.mjs"),
-    "future-plugin-tarball",
-    sourceTgz,
-    output,
-    "0",
-  ]);
+  execFileSync(
+    process.execPath,
+    [
+      path.join(root, "scripts/e2e/lib/update-first-hop-package-fixtures.mjs"),
+      "future-plugin-tarball",
+      sourceTgz,
+      output,
+      "0",
+    ],
+    { timeout: remainingMs() },
+  );
   return output;
 }
 
@@ -223,8 +237,10 @@ async function observe(label, port, token, commandEnv) {
   };
   await run(`${label}-update-status`, "openclaw", ["update", "status", "--json"], commandEnv);
   facts.updateStatus = parseJsonOutput(`${label}-update-status`);
+  // The probe writes its result only on success; never read one left by an earlier run.
   const readyz = path.join(artifacts, `${label}-readyz.json`);
-  await run(
+  fs.rmSync(readyz, { force: true });
+  const readyzExit = await run(
     `${label}-readyz`,
     process.execPath,
     [
@@ -244,7 +260,7 @@ async function observe(label, port, token, commandEnv) {
     ],
     commandEnv,
   );
-  facts.readyz = readJson(readyz).status;
+  facts.readyz = readyzExit === 0 ? readJson(readyz).status : `probe exit ${readyzExit}`;
   await run(
     `${label}-probe`,
     "openclaw",
@@ -380,7 +396,7 @@ try {
   registries.push(firstRegistry);
   const updateEnv = registryEnv(firstRegistry.url);
   const configBefore = fs.readFileSync(configPath, "utf8");
-  if (fault === "symlinked-config") {
+  if (readOnlyConfig) {
     // A provisioned config: the update can read it, but cannot replace it.
     fs.mkdirSync(managedConfigDir);
     const managed = path.join(managedConfigDir, "openclaw.json");
@@ -392,7 +408,14 @@ try {
   const firstExit = await run(
     "first-update",
     "openclaw",
-    ["update", "--yes", "--json", "--tag", core],
+    [
+      "update",
+      "--yes",
+      "--json",
+      "--tag",
+      core,
+      ...(fault === "refused-channel-change" ? ["--channel", "beta"] : []),
+    ],
     updateEnv,
     30 * 60_000,
   );
@@ -400,6 +423,18 @@ try {
   writeJson("first-update-result", { exitCode: firstExit, result: first });
   // Observe before asserting, so a failed update still records what it left serving.
   const afterFirst = await observe("after-first", port, token, updateEnv);
+  if (fault === "refused-channel-change") {
+    // A real config change is still refused; the installed Gateway keeps serving the update.
+    assert.notEqual(firstExit, 0, "The refused channel write fails the update");
+    assert.equal(first?.run?.status, "failed");
+    assert.equal(fs.readFileSync(configPath, "utf8"), configBefore);
+    assert.equal(afterFirst.servingVersion, target);
+    assert.equal(afterFirst.readyz, 200);
+    const nextAction = first?.run?.origin?.nextAction ?? "";
+    assert.match(nextAction, /`openclaw gateway stop --force` for the managed service/);
+    log("refused channel change cell passed");
+    throw Object.assign(new Error("done"), { done: true });
+  }
   assert.equal(firstExit, 0, "The first update succeeds");
   assert.equal(first?.run?.status, "succeeded");
   if (fault === "corrupt-plugin") {
@@ -417,7 +452,7 @@ try {
   registries.pop();
 
   // The fault is gone and no newer release exists: the next update is clean.
-  if (fault === "symlinked-config") {
+  if (readOnlyConfig) {
     fs.chmodSync(managedConfigDir, 0o755);
     fs.rmSync(configPath);
     fs.renameSync(path.join(managedConfigDir, "openclaw.json"), configPath);
@@ -440,8 +475,10 @@ try {
   assert(["skipped", "succeeded"].includes(retried?.run?.status), "The next update is clean");
   log("plugin publication cell passed");
 } catch (error) {
-  failure = error;
-  log(`cell failure: ${error?.stack ?? error}`);
+  if (!error?.done) {
+    failure = error;
+    log(`cell failure: ${error?.stack ?? error}`);
+  }
 } finally {
   for (const registry of registries) {
     await registry.stop();
