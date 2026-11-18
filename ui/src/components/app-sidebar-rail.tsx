@@ -16,6 +16,7 @@ import {
   titleForRoute,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
@@ -183,7 +184,25 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
   // Saved order is kept; the rail shows native sections first, then everything else.
   const sectionPins = createMemo(() => pins().filter(isRailSectionPin));
   const otherPins = createMemo(() => pins().filter((entry) => !isRailSectionPin(entry)));
-  // The agent avatar above is the Sessions item; "more" below the sections opens a page menu.
+  // The agent avatar above only switches agents; Sessions below it opens the session list, and
+  // "more" below the sections opens a page menu. A page that brings its own sidebar list, like
+  // Systems, is not the Sessions list.
+  const sessionsPressed = () =>
+    host.navigationVisible &&
+    !host.onExitSettings &&
+    !host.navigationCollapsed &&
+    host.navigationView === "sessions" &&
+    !host.contextualSidebar;
+  // Focus returns to the open view's button, and shell chrome anchors to it.
+  const registerView = (view: "sessions" | "online") =>
+    elementRef((element: HTMLButtonElement) => {
+      host.navigationViewElements.set(view, element);
+      return () => {
+        if (host.navigationViewElements.get(view) === element) {
+          host.navigationViewElements.delete(view);
+        }
+      };
+    });
   const peoplePressed = () =>
     host.navigationVisible &&
     !host.onExitSettings &&
@@ -255,18 +274,47 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
     >
       {renderSidebarAgentCard(host)}
       <div class="sidebar-rail__views">
+        <openclaw-tooltip prop:content={titleForRoute("sessions")}>
+          <button
+            ref={registerView("sessions")}
+            type="button"
+            class="sidebar-rail__button"
+            data-navigation-view="sessions"
+            aria-label={titleForRoute("sessions")}
+            aria-pressed={sessionsPressed() ? "true" : "false"}
+            onClick={() => {
+              // Already showing its list, Sessions stays put rather than leaving the page.
+              if (sessionsPressed()) {
+                return;
+              }
+              host.navigationView = "sessions";
+              if (host.onExitSettings) {
+                host.onExitSettings();
+              } else if (!isMobileNavLayout() && sidebarCollapsedByChoice(host)) {
+                host.onToggleSidebar?.();
+              }
+              // Off a session page, Sessions returns to the session last open, in its preferred
+              // face; the mobile drawer closes on navigation, so there it only opens the list.
+              if (
+                !host.onExitSettings &&
+                !isMobileNavLayout() &&
+                !isSessionRouteId(host.activeRouteId)
+              ) {
+                if (host.sessionKey) {
+                  host.selectSession(host.sessionKey);
+                } else {
+                  host.onNavigate?.("chat");
+                }
+              }
+              host.invalidate();
+            }}
+          >
+            <Icon name="sessions" filled={sessionsPressed()} />
+          </button>
+        </openclaw-tooltip>
         <openclaw-tooltip prop:content={t("presence.peopleTitle")}>
           <button
-            ref={[
-              elementRef((element: HTMLButtonElement) => {
-                host.navigationViewElements.set("online", element);
-                return () => {
-                  if (host.navigationViewElements.get("online") === element) {
-                    host.navigationViewElements.delete("online");
-                  }
-                };
-              }),
-            ]}
+            ref={registerView("online")}
             type="button"
             class="sidebar-rail__button"
             data-navigation-view="online"

@@ -4,6 +4,16 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 import discoveryProvider from "./provider-discovery.js";
 import { resolveModelRoutes } from "./provider-policy-api.js";
 
+// mock-isolation: these tests count model-list requests; the npm Codex version read is
+// covered by openai-codex-discovery.test.ts.
+vi.mock("./codex-client-version.js", async (importOriginal) => {
+  const { BUNDLED_CODEX_VERSION } = await import("./test-support/codex-version.test-support.js");
+  return {
+    ...(await importOriginal<typeof import("./codex-client-version.js")>()),
+    resolveOpenAICodexClientVersion: async () => BUNDLED_CODEX_VERSION,
+  };
+});
+
 type CatalogOptions = { apiKey?: string; baseUrl?: string; profileId?: string };
 async function runCatalog(response: Response | undefined, options: CatalogOptions = {}) {
   const { apiKey = "sk-openai", baseUrl, profileId } = options;

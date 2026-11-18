@@ -219,44 +219,47 @@ function ToolMessageFallback(props: ToolMessageProps) {
           fallback={<div class="chat-tool-msg-body">{props.renderContents()}</div>}
         >
           {(card) => (
-            <div class="chat-tool-msg-body chat-tool-msg-body--inspected-image">
-              <MessageImages
-                images={props.state().images}
-                options={props.state().imageRenderOptions}
-              />
-              <Show
-                when={props.state().toolRenderOptions.onOpenSidebar}
-                fallback={
-                  <details class="chat-tool-wrapper-details">
-                    <summary>{t("chat.toolCards.openDetailsTooltip")}</summary>
-                    <ExpandedToolCardContent
-                      card={card()}
-                      options={props.state().toolRenderOptions}
-                    />
-                  </details>
-                }
-              >
-                <button
-                  class="chat-tool-card__action-btn"
-                  type="button"
-                  title={t("chat.toolCards.openDetailsTooltip")}
-                  aria-label={t("chat.toolCards.openDetails")}
-                  onClick={() =>
-                    props.state().toolRenderOptions.onOpenSidebar?.({
-                      kind: "tool-output",
-                      card: card(),
-                      sessionKey: props.options.sessionKey,
-                      agentId: props.options.agentId,
-                    })
-                  }
-                >
-                  <span class="chat-tool-card__action-icon">
-                    <Icon name="panelRightOpen" />
+            <>
+              <div class="row chat-inspection">
+                <MessageImages
+                  images={props.state().images}
+                  options={props.state().imageRenderOptions}
+                  previewBounds={{ width: 200, height: 140 }}
+                />
+                <Show when={props.state().toolRenderOptions.onOpenSidebar}>
+                  <span class="chat-tool-card__actions">
+                    <button
+                      class="chat-tool-card__action-btn"
+                      type="button"
+                      title={t("chat.toolCards.openDetailsTooltip")}
+                      aria-label={t("chat.toolCards.openDetails")}
+                      onClick={() =>
+                        props.state().toolRenderOptions.onOpenSidebar?.({
+                          kind: "tool-output",
+                          card: card(),
+                          sessionKey: props.options.sessionKey,
+                          agentId: props.options.agentId,
+                        })
+                      }
+                    >
+                      <span class="chat-tool-card__action-icon">
+                        <Icon name="panelRightOpen" />
+                      </span>
+                    </button>
                   </span>
-                </button>
+                </Show>
+              </div>
+              <Show when={!props.state().toolRenderOptions.onOpenSidebar}>
+                <details class="chat-tool-wrapper-details">
+                  <summary>{t("chat.toolCards.openDetailsTooltip")}</summary>
+                  <ExpandedToolCardContent
+                    card={card()}
+                    options={props.state().toolRenderOptions}
+                  />
+                </details>
               </Show>
               <OmittedMedia items={props.state().omittedMedia} />
-            </div>
+            </>
           )}
         </Show>
       </Show>

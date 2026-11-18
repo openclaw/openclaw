@@ -270,7 +270,6 @@
 }
 
 .chat-message-images {
-  flex-wrap: nowrap;
   align-items: flex-start;
 }
 

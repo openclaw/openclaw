@@ -52,6 +52,48 @@ function emitSettlement(f: Fixture, cfg: OpenClawConfig = {}) {
   );
 }
 
+it("shares maintenance across a reconnect wave without overtaking a queued dismissal", () =>
+  withMentionInbox(async (f) => {
+    await f.post();
+    const [original] = await f.items();
+    const snapshot = vi.spyOn(mentionWorker, "readMentionSnapshot");
+    const wave = () =>
+      Promise.all(
+        Array.from({ length: 30 }, (_, index) =>
+          f.call("mentions.list", {}, { ...f.bobClient, connId: `reconnect-${index}` }),
+        ),
+      );
+    const first = wave();
+    const dismissal = f.call("mentions.dismiss", { ids: [original!.id] });
+    const second = wave();
+    for (const result of await first) {
+      expect(result).toMatchObject({ ok: true, payload: { items: [{ id: original!.id }] } });
+    }
+    expect(await dismissal).toMatchObject({ ok: true, payload: { items: [] } });
+    for (const result of await second) {
+      expect(result).toMatchObject({ ok: true, payload: { items: [] } });
+    }
+    // One synchronization per wave, plus dismissal maintenance and mutation synchronization.
+    expect(snapshot).toHaveBeenCalledTimes(4);
+  }));
+
+it("settles every reader after shared maintenance fails and retries the next wave", () =>
+  withMentionInbox(async (f) => {
+    await f.post();
+    const snapshot = vi
+      .spyOn(mentionWorker, "readMentionSnapshot")
+      .mockRejectedValueOnce(new Error("Synthetic snapshot failure"));
+    const results = await Promise.all(
+      f.clients.map((client) => f.call("mentions.list", {}, client)),
+    );
+    for (const result of results) {
+      expectMentionError(result, "UNAVAILABLE");
+    }
+    expect(snapshot).toHaveBeenCalledTimes(1);
+    expect(await f.items()).toHaveLength(1);
+    expect(snapshot).toHaveBeenCalledTimes(2);
+  }));
+
 it("reads unchanged inboxes without preparing another recipient's unavailable target", () =>
   withMentionInbox(async (f) => {
     await f.post();
@@ -67,17 +109,23 @@ it("reads unchanged inboxes without preparing another recipient's unavailable ta
       .spyOn(sessionSharing, "resolveSessionSharingTargetAsync")
       .mockRejectedValue(new Error("Unrelated session target is unavailable"));
 
-    expect(await f.call("mentions.list", {}, f.carolClient)).toMatchObject({
+    const [carol, alice, bob] = await Promise.all(
+      [f.carolClient, f.aliceClient, f.bobClient].map((client) =>
+        f.call("mentions.list", {}, client),
+      ),
+    );
+    expect(carol).toMatchObject({
       ok: true,
       payload: { items: [{ sessionKey: carolSessionKey, messageId: "message-carol-source" }] },
     });
-    expect(await f.call("mentions.list", {}, f.aliceClient)).toMatchObject({
+    expect(alice).toMatchObject({
       ok: true,
       payload: { items: [] },
     });
-    expect(resolve).not.toHaveBeenCalled();
-    expectMentionError(await f.call("mentions.list", {}, f.bobClient), "UNAVAILABLE");
-    expect(resolve).toHaveBeenCalled();
+    expectMentionError(bob, "UNAVAILABLE");
+    expect(resolve).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ sessionKey: SESSION_KEY }),
+    );
   }));
 
 it("recovers background views when a session is replaced during cold target preparation", () =>

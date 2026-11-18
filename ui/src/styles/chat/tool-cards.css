@@ -579,33 +579,11 @@
   background: transparent;
 }
 
-.chat-tool-msg-body--inspected-image {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
+.row.chat-inspection {
   width: fit-content;
+  align-items: start;
   gap: 8px;
-  overflow: visible;
-  max-height: none;
-  border: 0;
-  border-radius: 0;
-}
-
-.chat-tool-msg-body--inspected-image > .chat-message-images {
-  flex-wrap: wrap;
-  width: auto;
-  min-width: 0;
-  margin: 0;
-}
-
-.chat-tool-msg-body--inspected-image > .chat-tool-wrapper-details {
-  flex-basis: 100%;
-  min-width: 0;
-  max-width: 100%;
-}
-
-.chat-tool-msg-body--inspected-image .chat-image-frame:not(.chat-image-frame--compact) {
-  width: min(var(--chat-image-width), 200px, calc(140px * var(--chat-image-ratio)));
+  margin-top: 8px;
 }
 
 .chat-activity-group__body .chat-tool-msg-collapse.is-open {

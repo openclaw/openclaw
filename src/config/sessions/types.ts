@@ -710,6 +710,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   publicShare?: { id: string; sessionId: string; createdAt: number };
   /** Run that owns the current non-terminal Gateway lifecycle projection. */
   lifecycleRunId?: string;
+  /** Restart resume scope the latest run started under; see session-restart-resume-scope. */
+  lifecycleRestartScope?: string;
   /** Exact run that produced the latest terminal Gateway lifecycle projection. */
   lastRunId?: string;
   /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */

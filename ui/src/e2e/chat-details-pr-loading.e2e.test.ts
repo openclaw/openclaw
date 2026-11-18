@@ -106,106 +106,25 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "chat");
         const details = await openChatDetails(page);
         await module.request;
-        const loading = details.locator("openclaw-panel-loading-skeleton");
-        await loading.waitFor();
-        await nextPaint(page);
-        const shimmer = await loading
-          .locator(".skeleton")
-          .first()
-          .evaluate((element) => {
-            const style = getComputedStyle(element, "::after");
-            return {
-              opacity: Number(style.opacity),
-              seconds: Number.parseFloat(style.animationDuration),
-              name: style.animationName,
-            };
-          });
-        if (artifacts) {
-          await capture(page, details, loading, "loading", artifacts);
-        }
-        expect(shimmer.opacity).toBeLessThanOrEqual(0.3);
-        if (reducedMotion === "reduce") {
-          expect(shimmer.name).toBe("none");
-        } else {
-          expect(shimmer.seconds).toBeGreaterThanOrEqual(3);
-        }
-        // Sample content handoff after the surface's independent entrance motion.
+        const loading = details.getByRole("status", { name: "Loading…", exact: true });
+        await loading.waitFor({ state: "attached" });
+        expect(await loading.getAttribute("aria-busy")).toBe("true");
+        // The accessible loading state must not take up the future panel's space.
         await expect.poll(() => details.evaluate((panel) => panel.getAnimations().length)).toBe(0);
         const before = (await details.boundingBox())!;
-        const pauseHandoff = cpuRate === 1 && reducedMotion === "no-preference";
-        const firstContentFrame = await details.evaluateHandle((panel, pause) => {
-          const handoff: {
-            animation?: Animation;
-            body?: HTMLElement;
-            beforeClose?: AnimationPlayState;
-          } = {};
-          return {
-            handoff,
-            frame: new Promise<number>((resolve, reject) => {
-              const pending = panel.querySelector("openclaw-panel-loading-skeleton")!;
-              const observer = new MutationObserver(() => {
-                if (!pending.isConnected) {
-                  observer.disconnect();
-                  requestAnimationFrame(() => {
-                    const height = panel.getBoundingClientRect().height;
-                    if (pause) {
-                      handoff.body =
-                        panel.querySelector<HTMLElement>(".chat-details-desktop-body") ?? undefined;
-                      handoff.animation = handoff.body?.getAnimations()[0];
-                      handoff.animation?.pause();
-                      handoff.beforeClose = handoff.animation?.playState;
-                      const toggle = [
-                        ...panel.ownerDocument.querySelectorAll<HTMLButtonElement>(
-                          "button.chat-details-toggle",
-                        ),
-                      ].find((button) => button.checkVisibility());
-                      if (!toggle) {
-                        reject(new Error("Missing native Details toggle"));
-                        return;
-                      }
-                      // Close before a later frame can retarget the captured animation.
-                      toggle.click();
-                    }
-                    resolve(height);
-                  });
-                }
-              });
-              observer.observe(panel, { childList: true, subtree: true });
-            }),
-          };
-        }, pauseHandoff);
+        expect(before.height).toBe(48);
+        expect(await details.evaluate((panel) => getComputedStyle(panel).boxShadow)).not.toBe(
+          "none",
+        );
+
         module.release();
-        const firstHeight = await firstContentFrame.evaluate((probe) => probe.frame);
-        if (pauseHandoff) {
-          expect(await firstContentFrame.evaluate((probe) => probe.handoff.beforeClose)).toBe(
-            "paused",
-          );
-          await details.waitFor({ state: "hidden" });
-          expect(
-            await firstContentFrame.evaluate((probe) => probe.handoff.animation?.playState),
-          ).toBe("idle");
-          expect(
-            await firstContentFrame.evaluate((probe) => ({
-              animations: probe.handoff.body?.getAnimations().length,
-              height: probe.handoff.body?.style.height,
-            })),
-          ).toEqual({ animations: 0, height: "" });
-          await openChatDetails(page);
-        }
-        await firstContentFrame.dispose();
+        await loading.waitFor({ state: "hidden" });
         await details.locator(".chat-environment__branch").waitFor();
         await expect
           .poll(() => details.evaluate((panel) => panel.getAnimations({ subtree: true }).length))
           .toBe(0);
         const after = (await details.boundingBox())!;
-        expect(before.height).toBeGreaterThan(after.height);
-        if (reducedMotion === "reduce") {
-          expect(firstHeight).toBe(after.height);
-        } else {
-          expect(Math.abs(firstHeight - before.height)).toBeLessThan(
-            (before.height - after.height) / 2,
-          );
-        }
+        expect(after.height).toBeGreaterThan(before.height);
         if (artifacts) {
           await capture(
             page,
@@ -216,7 +135,7 @@ suite.define(() => {
           );
           await writeFile(
             path.join(artifacts, "measurements.json"),
-            JSON.stringify({ cpuRate, reducedMotion, before, firstHeight, after }, null, 2),
+            JSON.stringify({ cpuRate, reducedMotion, before, after }, null, 2),
           );
         }
         expect(after.x).toBe(before.x);
@@ -411,7 +330,10 @@ suite.define(() => {
         await transcript.waitFor();
         await openChatDetails(page);
         await module.request;
-        await page.locator(".chat-details[data-desktop] openclaw-panel-loading-skeleton").waitFor();
+        await page
+          .locator(".chat-details[data-desktop]")
+          .getByRole("status", { name: "Loading…", exact: true })
+          .waitFor({ state: "attached" });
         await nextPaint(page);
         expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
         await gateway.resolveDeferred("connect");

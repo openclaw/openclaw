@@ -5,41 +5,21 @@ import { subscribeDocumentVisibility } from "../../../lib/reactive/platform.ts";
 
 export type MicrophoneMeterStatus = "listening" | "connecting" | "thinking";
 type MotionSource = { read(): boolean; subscribe(notify: (value: boolean) => void): () => void };
-const BAR_GAINS = [0.38, 0.62, 0.84, 1, 0.84, 0.62, 0.38];
-const BLEED = 8;
 const FRAME_INTERVAL = 1_000 / 30;
-
-// Chat boot and listening meters do not need the animation easing samples.
-let easeTable: number[] | undefined;
-const ease = (value: number) => {
-  const table = (easeTable ??= Array.from({ length: 257 }, (_, index) => {
-    const x = index / 256;
-    let low = 0;
-    let high = 1;
-    for (let step = 0; step < 18; step += 1) {
-      const t = (low + high) / 2;
-      const point = 3 * (1 - t) ** 2 * t * 0.42 + 3 * (1 - t) * t ** 2 * 0.58 + t ** 3;
-      if (point < x) {
-        low = t;
-      } else {
-        high = t;
-      }
-    }
-    const t = (low + high) / 2;
-    return 3 * (1 - t) * t ** 2 + t ** 3;
-  }));
-  const position = Math.min(256, Math.max(0, value * 256));
-  const left = Math.floor(position);
-  // Position is clamped to the 257 samples constructed above.
-  const start = table[left]!;
-  return start + (table[Math.min(256, left + 1)]! - start) * (position - left);
-};
+// Listening is a timeline: every step the newest level enters on the right and
+// older levels slide left, so the strip shows recent speech across its width.
+const STEP_MS = 60;
+// Levels arrive about every 100 ms; easing between them keeps neighbors related.
+const LEVEL_EASE_MS = 90;
+const THINKING_RAMP_MS = 400;
+// Bar geometry matches the resting dots drawn by .agent-chat__voice-activity in CSS.
+const BAR_WIDTH = 2;
+const BAR_PITCH = 4;
 
 /** One status/source lifetime; this owner never touches audio capture or playback. */
 export function createMicrophoneMeter(
   host: HTMLElement,
   canvas: HTMLCanvasElement,
-  bars: readonly HTMLElement[],
   status: MicrophoneMeterStatus,
   reducedMotion: MotionSource,
 ) {
@@ -49,23 +29,21 @@ export function createMicrophoneMeter(
   if (!context) {
     return { setLevel: (_level: number) => {}, dispose: () => {} };
   }
-  const sprite = document.createElement("canvas");
-  const paint = sprite.getContext("2d");
-  if (!paint) {
-    return { setLevel: (_level: number) => {}, dispose: () => {} };
-  }
   const statusAt = performance.now();
-  const animated = status !== "listening";
   const thinking = status === "thinking";
+  // Newest level last; one slot beyond the visible bars slides in from the right edge.
+  let history: number[] = [];
   let level: number | undefined;
-  let transitionAt = statusAt - 90;
-  let fromLevel = 0;
+  let eased = 0;
+  let peak = 0;
+  let steppedAt = statusAt;
+  // The loop stops in silence; the next sound must not count that pause as missed steps.
+  let idle = false;
   let ratio = 1;
   let width = 0;
   let height = 0;
-  let spriteWidth = 19;
-  let spriteHeight = 34;
-  let geometry: { x: number; centerY: number; gain: number; index: number }[] = [];
+  let firstX = 0;
+  let color = "";
   let frame = 0;
   let lastDrawAt = -Infinity;
   let visible = document.visibilityState !== "hidden";
@@ -81,94 +59,109 @@ export function createMicrophoneMeter(
     frame = 0;
   };
   const schedule = () => {
-    if (!frame && geometry.length && presenting()) {
+    if (!frame && width && presenting()) {
       frame = window.requestAnimationFrame(draw);
     }
   };
-  // Each listening scale is affine in level, so one interpolation serves all bars.
-  const sampleLevel = (now: number) =>
-    fromLevel + ((level ?? 0) - fromLevel) * Math.min(1, (now - transitionAt) / 90);
+  // Thinking: two slow waves drift across the strip, strongest in the middle.
+  const thinkingValue = (now: number, index: number) => {
+    const time = (now - statusAt) / 1_000;
+    const position = (index / Math.max(1, history.length - 2)) * 2 - 1;
+    const wave =
+      0.22 * Math.sin(time * 2.4 - position * 3.2) + 0.14 * Math.sin(time * 1.3 + position * 2.1);
+    const ramp = Math.min(1, (now - statusAt) / THINKING_RAMP_MS);
+    return Math.max(0, (0.3 + wave) * (1 - Math.abs(position) * 0.45) * ramp);
+  };
+  function advance(now: number, elapsed: number) {
+    const target = level ?? 0;
+    eased += (target - eased) * Math.min(1, elapsed / LEVEL_EASE_MS);
+    if (Math.abs(target - eased) < 0.005) {
+      eased = target;
+    }
+    // Catch up after paused frames without replaying every missed step.
+    const steps = Math.min(history.length, Math.floor((now - steppedAt) / STEP_MS));
+    if (steps <= 0) {
+      return;
+    }
+    steppedAt = steps === history.length ? now : steppedAt + steps * STEP_MS;
+    for (let count = 0; count < steps; count += 1) {
+      history.shift();
+      // A short syllable between steps still reaches the timeline.
+      history.push(count === 0 ? Math.max(eased, peak) : eased);
+    }
+    peak = 0;
+  }
   function draw(now: number) {
     frame = 0;
     if (!presenting()) {
       return;
     }
+    if (idle) {
+      idle = false;
+      steppedAt = now;
+      lastDrawAt = now - FRAME_INTERVAL;
+    }
     if (now - lastDrawAt < FRAME_INTERVAL - 1) {
       schedule();
       return;
     }
+    const elapsed = Number.isFinite(lastDrawAt) ? now - lastDrawAt : STEP_MS;
     lastDrawAt = now;
-    const currentLevel = animated ? 0 : sampleLevel(now);
+    if (!thinking) {
+      advance(now, elapsed);
+    }
+    // A silent timeline holds still; the next sound starts a fresh step.
+    const quiet = !thinking && eased === 0 && peak === 0 && history.every((value) => value === 0);
+    if (quiet) {
+      steppedAt = now;
+    }
+    const minHeight = BAR_WIDTH;
+    const maxHeight = Math.max(minHeight, height - 2);
+    // Sub-pixel slide between steps; thinking stays in place.
+    const offset = thinking ? 0 : Math.min(1, (now - steppedAt) / STEP_MS) * BAR_PITCH;
     context!.setTransform(ratio, 0, 0, ratio, 0, 0);
     context!.clearRect(0, 0, width, height);
-    for (const bar of geometry) {
-      let scale = 0.18 + currentLevel * bar.gain * 0.82;
-      let opacity = 0.9;
-      if (animated) {
-        const duration = thinking ? 900 : 1_050;
-        const peak = thinking ? 0.45 : 0.5;
-        const phase = ((now - statusAt + bar.index * 70) % duration) / duration;
-        const amount = phase <= peak ? ease(phase / peak) : 1 - ease((phase - peak) / (1 - peak));
-        scale = thinking ? 0.24 + amount * 0.68 : 0.2 + amount * 0.38;
-        opacity = thinking ? 0.4 + amount * 0.6 : 0.42 + amount * 0.48;
+    context!.fillStyle = color;
+    for (let index = 0; index < history.length; index += 1) {
+      const value = thinking ? thinkingValue(now, index) : history[index]!;
+      const x = firstX + index * BAR_PITCH - offset;
+      if (x + BAR_WIDTH < 0 || x > width) {
+        continue;
       }
-      const imageHeight = spriteHeight * scale;
-      context!.globalAlpha = opacity;
-      context!.drawImage(
-        sprite,
-        0,
-        0,
-        spriteWidth * ratio,
-        spriteHeight * ratio,
-        bar.x,
-        bar.centerY - imageHeight / 2,
-        spriteWidth,
-        imageHeight,
-      );
+      // Levels are loudness-compressed; the curve keeps ordinary speech below full height.
+      const barHeight = minHeight + (maxHeight - minHeight) * Math.min(1, value) ** 1.8;
+      context!.beginPath();
+      context!.roundRect(x, (height - barHeight) / 2, BAR_WIDTH, barHeight, BAR_WIDTH / 2);
+      context!.fill();
     }
     if (!painted) {
       painted = true;
       canvas.dataset.ready = "";
     }
-    if (animated || now - transitionAt < 90) {
+    // Silence settles into a still row of dots; the host's CSS mask fades both ends.
+    if (thinking || !quiet || (level ?? 0) > 0) {
       schedule();
+    } else {
+      idle = true;
     }
   }
   const refresh = () => {
-    // Resizing clears the bitmap; keep the static bars until its next paint.
+    // Resizing clears the bitmap; keep the CSS dots until its next paint.
     painted = false;
     delete canvas.dataset.ready;
     ratio = Math.max(1, window.devicePixelRatio || 1);
-    width = host.offsetWidth + BLEED * 2;
-    height = host.offsetHeight + BLEED * 2;
-    // MicrophoneActivity supplies its fixed seven layout spans in order.
-    const firstBar = bars[0]!;
-    const barWidth = firstBar.offsetWidth;
-    const barHeight = firstBar.offsetHeight;
-    spriteWidth = barWidth + BLEED * 2;
-    spriteHeight = barHeight + BLEED * 2;
-    geometry = bars.map((bar, index) => ({
-      x: bar.offsetLeft,
-      centerY: bar.offsetTop + bar.offsetHeight / 2 + BLEED,
-      gain: BAR_GAINS[index]!,
-      index,
-    }));
+    width = host.offsetWidth;
+    height = host.offsetHeight;
+    // The timeline fills whatever width the composer gives it, centered like the CSS dots.
+    const count = Math.max(1, Math.floor((width - BAR_WIDTH) / BAR_PITCH) + 1);
+    firstX = (width - (count - 1) * BAR_PITCH - BAR_WIDTH) / 2;
+    // Keep the newest levels when the width changes; new slots on the left start silent.
+    history = [...Array.from({ length: count + 1 }, () => 0), ...history].slice(-(count + 1));
     canvas.width = Math.ceil(width * ratio);
     canvas.height = Math.ceil(height * ratio);
     canvas.style.width = `${width}px`;
     canvas.style.height = `${height}px`;
-    sprite.width = Math.ceil(spriteWidth * ratio);
-    sprite.height = Math.ceil(spriteHeight * ratio);
-    const style = window.getComputedStyle(firstBar);
-    paint!.setTransform(ratio, 0, 0, ratio, 0, 0);
-    paint!.fillStyle = style.backgroundColor;
-    // Computed box shadows serialize their color before the offsets.
-    paint!.shadowColor =
-      style.boxShadow.slice(0, style.boxShadow.indexOf(")") + 1) || "transparent";
-    paint!.shadowBlur = 5 * ratio;
-    paint!.beginPath();
-    paint!.roundRect(BLEED, BLEED, barWidth, barHeight, barWidth / 2);
-    paint!.fill();
+    color = window.getComputedStyle(host).color;
     lastDrawAt = -Infinity;
     schedule();
   };
@@ -193,7 +186,7 @@ export function createMicrophoneMeter(
     }
   };
   // Readiness belongs to this canvas, so retiring a keyed predecessor cannot
-  // hide its successor. The host and seven layout spans stay in place.
+  // hide its successor. The host stays in place.
   const stops = [
     subscribeDocumentVisibility(document, (next) => {
       visible = next;
@@ -214,18 +207,14 @@ export function createMicrophoneMeter(
   ];
   observeResolution();
   // ResizeObserver supplies initial geometry; eager setup would allocate and
-  // paint both bitmaps again when that first observation arrives.
+  // paint the bitmap again when that first observation arrives.
   return {
     setLevel(next: number) {
-      if (animated || level === next) {
+      if (thinking || level === next) {
         return;
       }
-      const now = performance.now();
-      fromLevel = level === undefined ? next : sampleLevel(now);
-      // CSS does not transition solely because an animation was canceled.
-      // A new lifetime starts at the current level; only later levels smooth.
-      transitionAt = level === undefined ? now - 90 : now;
       level = next;
+      peak = Math.max(peak, next);
       schedule();
     },
     dispose() {
