@@ -259,7 +259,10 @@ describe("CronService failure alerts", () => {
         await runJob(job, 1);
 
         await runJob(job, 2, timeoutFailure);
-        expectAlertTextContaining(sendCronFailureAlert, "Cause: timeout");
+        // The streak mixes unclassified and timeout failures; only the last run timed out.
+        expect(alertCallArg(sendCronFailureAlert).text).toBe(
+          'Automation "daily report" failed 5 times in a row\nLatest cause: timeout',
+        );
 
         await runJob(job, 2, { status: "ok" });
 
@@ -274,6 +277,21 @@ describe("CronService failure alerts", () => {
         failureAlert: { enabled: true, after: 2, cooldownMs: 60_000 },
         runResult: { status: "error", error: "wrong model id" },
       },
+    ));
+
+  it("labels a webhook streak's cause as the latest run's", () =>
+    withAlerts(
+      async ({ sendCronFailureAlert, addJob, runJob }) => {
+        const job = await addJob("webhook streak", {
+          failureAlert: { mode: "webhook", to: "https://alerts.example.test/cron", after: 2 },
+        });
+        await runJob(job, 0);
+        await runJob(job, 1, timeoutFailure);
+        expect(alertCallArg(sendCronFailureAlert).text).toBe(
+          'Automation "webhook streak" failed 2 times in a row\nLatest cause: timeout\nLast error: timeout',
+        );
+      },
+      { runResult: { status: "error", error: "wrong model id" } },
     ));
 
   it("fences delayed alerts across recovery and failure in the same clock tick", () =>

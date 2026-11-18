@@ -1,6 +1,9 @@
 /** Shared state and owner-notification policy for cron auto-disable transitions. */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { cronFailureDetailLines } from "../failure-notification-text.js";
+import {
+  cronFailureDetailLines,
+  labelLatestCronFailureCause,
+} from "../failure-notification-text.js";
 import type { CronFailureNotificationDetail, CronJob, CronJobState } from "../types.js";
 import { cronNotificationJob } from "./notification-intents.js";
 import type { DeferredCronNotifications } from "./state.js";
@@ -30,7 +33,10 @@ export function buildCronAutoDisableNotice(params: {
     params.reason === "consecutive-failures" ? job.state.lastErrorReason : undefined;
   return [
     `⚠️ Automation "${name}" was auto-disabled after ${params.consecutiveErrors} consecutive ${autoDisableReasonLabel(params.reason)}.`,
-    ...cronFailureDetailLines(errorReason, params.failureNotificationDetail),
+    ...labelLatestCronFailureCause(
+      cronFailureDetailLines(errorReason, params.failureNotificationDetail),
+      params.consecutiveErrors,
+    ),
     `Fix the underlying cause, then run \`openclaw automations enable ${job.id}\` to re-enable it.`,
   ].join("\n");
 }

@@ -20,7 +20,10 @@ import {
   resolveCronFailureAlertDefaults,
 } from "../delivery-defaults.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
-import { cronFailureDetailLines } from "../failure-notification-text.js";
+import {
+  cronFailureDetailLines,
+  labelLatestCronFailureCause,
+} from "../failure-notification-text.js";
 import { hasCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
 import type {
   CronCompletionStatus,
@@ -308,7 +311,7 @@ function buildFailureAlertPayload(params: {
       params.consecutiveErrors > 1
         ? `Automation "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times in a row`
         : `Automation "${safeJobName}" ${statusVerb}`,
-      ...detailLines,
+      ...labelLatestCronFailureCause(detailLines, params.consecutiveErrors),
     ].join("\n");
   }
   const oauthRefreshFailure = params.error ? classifyOAuthRefreshFailure(params.error) : null;
