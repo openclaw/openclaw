@@ -1,0 +1,138 @@
+name: GC Config Export Causality
+run-name: GC config export causality ${{ github.sha }}
+on:
+  push:
+    branches: [diagnostic/frv7-gc-config-export]
+permissions:
+  contents: read
+concurrency:
+  group: gc-config-export-causality-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  three-original-groups:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CI: "true"
+      NODE_OPTIONS: --max-old-space-size=8192
+      OPENCLAW_VITEST_MAX_WORKERS: "3"
+      OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1"
+      OPENCLAW_TEST_PROJECTS_PARALLEL: "1"
+      OPENCLAW_CI_TEST_RUNTIME: node
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: node
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
+      OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: "[]"
+      RUNNER_ENVIRONMENT: github-hosted
+      FROZEN_TARGET: "false"
+    steps:
+      - name: Validate pinned invocation
+        env:
+          TARGET_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$TARGET_SHA" = "$WORKFLOW_SHA"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Setup original hosted Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.22.1"
+          semantic-checks: "true"
+          install-bun: "false"
+          cache-mode: restore
+          dependency-cache: "false"
+          vitest-fs-cache: "true"
+          vitest-worker-cache: "true"
+          vitest-worker-preset: full
+          node-compile-cache: "true"
+      - name: Verify original host shape and diagnostic source
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import os from 'node:os';
+          assert.equal(process.version, 'v24.22.1');
+          assert.equal(os.availableParallelism(), 4);
+          assert(os.totalmem() >= 15 * 2 ** 30 && os.totalmem() <= 17 * 2 ** 30);
+          console.log(JSON.stringify({ node: process.version, cpus: os.availableParallelism(),
+            memory: os.totalmem(), cpuModels: os.cpus().map(cpu => cpu.model) }));
+          JS
+      - name: Original gc group (serial)
+        id: gc
+        continue-on-error: true
+        timeout-minutes: 60
+        env:
+          OPENCLAW_CAUSALITY_GROUP: gc
+        shell: bash
+        run: |
+          set -euo pipefail
+          export OPENCLAW_QUALIFICATION_DIR="$RUNNER_TEMP/gc-config-export/gc"
+          mkdir -p "$OPENCLAW_QUALIFICATION_DIR"
+          python3 scripts/qualification/gc-config-export-observer.py 2>&1 | tee "$OPENCLAW_QUALIFICATION_DIR/test.log"
+      - name: Upload gc observations
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: gc-config-export-gc-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gc-config-export/gc/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Original config group (serial)
+        id: config
+        continue-on-error: true
+        timeout-minutes: 60
+        env:
+          OPENCLAW_CAUSALITY_GROUP: config
+        shell: bash
+        run: |
+          set -euo pipefail
+          export OPENCLAW_QUALIFICATION_DIR="$RUNNER_TEMP/gc-config-export/config"
+          mkdir -p "$OPENCLAW_QUALIFICATION_DIR"
+          python3 scripts/qualification/gc-config-export-observer.py 2>&1 | tee "$OPENCLAW_QUALIFICATION_DIR/test.log"
+      - name: Upload config observations
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: gc-config-export-config-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gc-config-export/config/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Original export group (serial)
+        id: export
+        continue-on-error: true
+        timeout-minutes: 60
+        env:
+          OPENCLAW_CAUSALITY_GROUP: export
+        shell: bash
+        run: |
+          set -euo pipefail
+          export OPENCLAW_QUALIFICATION_DIR="$RUNNER_TEMP/gc-config-export/export"
+          mkdir -p "$OPENCLAW_QUALIFICATION_DIR"
+          python3 scripts/qualification/gc-config-export-observer.py 2>&1 | tee "$OPENCLAW_QUALIFICATION_DIR/test.log"
+      - name: Upload export observations
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: gc-config-export-export-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gc-config-export/export/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Preserve all group outcomes
+        if: always()
+        env:
+          GC_OUTCOME: ${{ steps.gc.outcome }}
+          CONFIG_OUTCOME: ${{ steps.config.outcome }}
+          EXPORT_OUTCOME: ${{ steps.export.outcome }}
+        shell: bash
+        run: |
+          test "$GC_OUTCOME" = success && test "$CONFIG_OUTCOME" = success && test "$EXPORT_OUTCOME" = success

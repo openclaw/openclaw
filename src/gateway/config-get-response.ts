@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { redactConfigSnapshot } from "../config/redact-snapshot.js";
 import { getRuntimeConfigAppliedHash, hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
@@ -5,6 +6,8 @@ import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import { getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import type { GatewayHotReloadStatus } from "./config-reload-status.types.js";
 import type { GatewayConfigRevisionProjector } from "./config-revision-token.js";
+
+const configReadDiagnostics = channel("openclaw.config-get.read");
 
 type ConfigGetResponse = ReturnType<typeof createConfigGetResponse>;
 let configGetResponseCache:
@@ -43,12 +46,20 @@ export async function readConfigGetResponse(params: {
   revisionProjector: GatewayConfigRevisionProjector;
 }): Promise<ConfigGetResponse> {
   const readResponse = async () => {
+    configReadDiagnostics.publish({ stage: "schema.begin" });
     const { loadGatewayConfigRedactionHints } = await import("../config/runtime-schema.js");
-    return createConfigGetResponse(
-      await readConfigFileSnapshot(),
+    configReadDiagnostics.publish({ stage: "schema.end" });
+    configReadDiagnostics.publish({ stage: "snapshot.begin" });
+    const snapshot = await readConfigFileSnapshot();
+    configReadDiagnostics.publish({ stage: "snapshot.end" });
+    configReadDiagnostics.publish({ stage: "projection.begin" });
+    const response = createConfigGetResponse(
+      snapshot,
       loadGatewayConfigRedactionHints(),
       params.revisionProjector,
     );
+    configReadDiagnostics.publish({ stage: "projection.end" });
+    return response;
   };
   const getHotReloadStatus = params.getHotReloadStatus;
   if (!getHotReloadStatus || getHotReloadStatus() !== "active") {
@@ -64,6 +75,7 @@ export async function readConfigGetResponse(params: {
     configGetResponseCache.appliedConfigHash === appliedConfigHash &&
     configGetResponseCache.pluginRegistryVersion === pluginRegistryVersion
   ) {
+    configReadDiagnostics.publish({ stage: "cache.join" });
     return await configGetResponseCache.promise;
   }
 

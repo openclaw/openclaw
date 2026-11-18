@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -19,6 +20,24 @@ import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-s
 import { getFreePort } from "../../../src/test-utils/ports.js";
 import { withTestTimeout } from "../promise.js";
 import { runQaGatewayFixture } from "../qa-gateway-cleanup.js";
+
+let traceNumericConfig = false;
+let configRpcOrdinal = 0;
+let configRecords = 0;
+const configMark = (stage: string) => {
+  if (traceNumericConfig && configRecords++ <= 128) {
+    console.error(
+      "[config-causality]",
+      JSON.stringify({
+        stage: configRecords === 129 ? "observation-limit" : stage,
+        ordinal: configRpcOrdinal,
+        at: Date.now(),
+        cpu: process.cpuUsage(),
+        pid: process.pid,
+      }),
+    );
+  }
+};
 
 const GATEWAY_TOKEN = "config-rpc-synthetic-token";
 
@@ -50,9 +69,19 @@ export async function rpcReq<T extends Record<string, unknown>>(
   payload?: T;
   error?: { message?: string; code?: string; details?: unknown };
 }> {
+  if (traceNumericConfig) {
+    configRpcOrdinal++;
+    configMark(method === "config.get" ? "get.request" : "write.request");
+  }
   try {
-    return { ok: true, payload: await gatewayClient.request<T>(method, params, { timeoutMs }) };
+    const payload = await gatewayClient.request<T>(method, params, {
+      timeoutMs,
+      onSent: () => configMark("client.sent"),
+    });
+    configMark("client.receipt");
+    return { ok: true, payload };
   } catch (error) {
+    configMark("client.rejected");
     if (!(error instanceof GatewayClientRequestError)) {
       throw error;
     }
@@ -317,6 +346,54 @@ export async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) 
 export function installConfigWriteGatewayHooks(options: ConfigRpcGatewayOptions = {}) {
   const phasesByTask = new WeakMap<TestContext["task"], { setup: string; teardown: string }>();
   beforeEach((context) => {
+    traceNumericConfig = context.task.name === "accepts exact numeric record keys in replacePaths";
+    configRpcOrdinal = 0;
+    configRecords = 0;
+    const rpc = channel("openclaw.gateway.rpc");
+    const read = channel("openclaw.config-get.read");
+    // This case awaits each RPC serially. Project only fixed stages, never payloads or IDs.
+    const onRpc = (value: unknown) => {
+      const event = value as { method?: string; phase?: string; outcome?: string };
+      if (event.method === "config.get") {
+        if (event.phase === "received") {
+          configMark("server.received");
+        }
+        if (event.phase === "response") {
+          configMark(event.outcome === "ok" ? "server.emitted" : "server.response-other");
+        }
+        if (event.phase === "handler") {
+          configMark("server.handler-settled");
+        }
+        if (event.phase === "dispatch") {
+          configMark("server.dispatch-settled");
+        }
+      }
+    };
+    const onRead = (value: unknown) => {
+      const stage = (value as { stage?: string }).stage;
+      if (
+        [
+          "schema.begin",
+          "schema.end",
+          "snapshot.begin",
+          "snapshot.end",
+          "projection.begin",
+          "projection.end",
+          "cache.join",
+        ].includes(stage ?? "")
+      ) {
+        configMark("read." + stage);
+      }
+    };
+    if (traceNumericConfig) {
+      rpc.subscribe(onRpc);
+      read.subscribe(onRead);
+    }
+    context.onTestFinished(() => {
+      rpc.unsubscribe(onRpc);
+      read.unsubscribe(onRead);
+      traceNumericConfig = false;
+    });
     const phases = { setup: "not-started", teardown: "not-started" };
     phasesByTask.set(context.task, phases);
     context.onTestFailed(() => {

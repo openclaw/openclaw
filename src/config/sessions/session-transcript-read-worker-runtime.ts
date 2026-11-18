@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import path from "node:path";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { ContextPreparationTimeoutError } from "../../agents/failover/local-preparation-error.js";
@@ -42,6 +43,8 @@ import type {
   SessionTranscriptWorkerInput,
   SessionTranscriptWorkerReply,
 } from "./session-transcript-worker.types.js";
+
+const exportDiagnostics = channel("openclaw.session-export.stage");
 
 export function createSessionTranscriptReadPool<Input extends SessionTranscriptWorkerInput>(
   maxWorkers: number,
@@ -88,10 +91,19 @@ export function createSessionTranscriptReadPool<Input extends SessionTranscriptW
             resource.pending++;
           }
         }
+        if (input.kind === "session-entries") {
+          exportDiagnostics.publish({ stage: "admission.wait" });
+        }
         return await runWithSqliteDatabaseAdmissionTurn(
           databases.admissionPaths,
-          () =>
-            lane.pool.run(() => {
+          () => {
+            if (input.kind === "session-entries") {
+              exportDiagnostics.publish({ stage: "admission.enter" });
+            }
+            return lane.pool.run(() => {
+              if (input.kind === "session-entries") {
+                exportDiagnostics.publish({ stage: "pool.input-ready" });
+              }
               if ([...resources].some((resource) => resource.revoked)) {
                 throw new WorkerTaskError(
                   "Session transcript database read was revoked",
@@ -103,10 +115,14 @@ export function createSessionTranscriptReadPool<Input extends SessionTranscriptW
                 resource.nativeLanes.add(lane);
               }
               return input;
-            }, options),
+            }, options);
+          },
           databases.families,
         );
       } finally {
+        if (input.kind === "session-entries") {
+          exportDiagnostics.publish({ stage: "pool.settled" });
+        }
         for (const resource of resources) {
           resource.pending--;
         }

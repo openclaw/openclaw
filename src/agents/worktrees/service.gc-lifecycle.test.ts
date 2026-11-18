@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -310,9 +311,40 @@ it("continues cleanup when a failed snapshot's session was deleted before outcom
 it(
   "lets admitted content writers publish refs while pack maintenance waits for a slot",
   { timeout: 5_000 },
-  async ({ signal }) => {
+  async ({ signal, onTestFinished }) => {
+    const mark = (stage: string, count = 0) =>
+      console.error(
+        "[gc-causality]",
+        JSON.stringify({ stage, count, at: Date.now(), cpu: process.cpuUsage(), pid: process.pid }),
+      );
+    const slots = channel("openclaw.git.content-slot");
+    let slotRecords = 0;
+    const onSlot = (value: unknown) => {
+      if (slotRecords++ >= 128) {
+        if (slotRecords === 129) {
+          mark("slot.observation-limit", 128);
+        }
+        return;
+      }
+      const slot = value as { stage: string; ordinal: number; active: number; waiting: number };
+      console.error(
+        "[gc-slot-causality]",
+        JSON.stringify({
+          at: Date.now(),
+          pid: process.pid,
+          stage: slot.stage,
+          ordinal: slot.ordinal,
+          active: slot.active,
+          waiting: slot.waiting,
+        }),
+      );
+    };
+    slots.subscribe(onSlot);
+    onTestFinished(() => slots.unsubscribe(onSlot));
+    mark("fixture.begin");
     const root = tempDirs.make("worktree-maintenance-content-admission-");
     const repoRoot = await initializeRepository(root);
+    mark("repository.ready");
     const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
     setRuntimeConfigSnapshot({});
     await materializeManagedWorktreeFixture({
@@ -322,8 +354,11 @@ it(
       name: "publication",
       now: 1,
     });
+    mark("materialization.ready");
     await requireGit(repoRoot, ["repack", "-d"]);
+    mark("repack.ready");
     const head = await requireGit(repoRoot, ["rev-parse", "HEAD"]);
+    mark("fixture.ready");
     const refs = ["refs/openclaw/test-publication/one", "refs/openclaw/test-publication/two"];
     const abort = new AbortController();
     const occupied = createDeferred();
@@ -335,6 +370,7 @@ it(
       (run, queueSignal, interactive) => {
         const pending = withSlot(run, queueSignal, interactive);
         if (observeWait) {
+          mark("maintenance.slot-requested");
           maintenanceWaiting.resolve();
         }
         return pending;
@@ -345,26 +381,36 @@ it(
     vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
       const result = await execute(cwd, args, options);
       if (options?.operation === "worktree.maintenance" && args[1] === "--git-common-dir") {
+        mark("maintenance.metadata-ready");
         let active = 0;
         // Fill the budget after maintenance's metadata read. Snapshot workers also
         // hold a content slot while publishing through the real shared ref queue.
         writers = refs.map((ref) =>
           withSlot(async () => {
+            mark("writer.acquired", active + 1);
             if (++active === refs.length) {
               occupied.resolve();
             }
             await publish.promise;
-            return requireGit(repoRoot, ["update-ref", ref, head], { signal: abort.signal });
+            mark("writer.publish.begin");
+            const published = await requireGit(repoRoot, ["update-ref", ref, head], {
+              signal: abort.signal,
+            });
+            mark("writer.publish.end");
+            return published;
           }, abort.signal),
         );
         for (const writer of writers) {
           void writer.catch(() => {});
         }
+        mark("writers.requested", refs.length);
         await occupied.promise;
+        mark("writers.occupied");
         observeWait = true;
       }
       return result;
     });
+    mark("maintenance.begin");
     const maintenance = createWorktreeGitMaintenance(env)({ signal: abort.signal });
     void maintenance.catch(() => {});
     try {
@@ -376,15 +422,19 @@ it(
         ),
         signal,
       );
+      mark("publication.release");
       publish.resolve();
       await withinTest(Promise.all([...writers, maintenance]), signal);
+      mark("maintenance-and-writers.settled");
       for (const ref of refs) {
         expect(await requireGit(repoRoot, ["rev-parse", ref])).toBe(head);
       }
     } finally {
+      mark("cleanup.begin");
       abort.abort(new Error("content admission test finished"));
       publish.resolve();
       await Promise.allSettled([...writers, maintenance]);
+      mark("cleanup.end");
     }
   },
 );

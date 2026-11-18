@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
@@ -10,11 +11,26 @@ const budget = resolveGlobalSingleton(Symbol.for("openclaw.gitContentBudget"), (
   interactiveWaiters: new Set<() => void>(),
 }));
 
+const slotDiagnostics = channel("openclaw.git.content-slot");
+let slotOrdinal = 0;
+
 export async function withContentGitSlot<T>(
   run: () => Promise<T>,
   signal?: AbortSignal,
   interactive = false,
 ): Promise<T> {
+  const ordinal = slotDiagnostics.hasSubscribers ? ++slotOrdinal : 0;
+  const emitSlot = (stage: string) => {
+    if (slotDiagnostics.hasSubscribers) {
+      slotDiagnostics.publish({
+        stage,
+        ordinal,
+        active: budget.active,
+        waiting: budget.waiters.size + budget.interactiveWaiters.size,
+      });
+    }
+  };
+  emitSlot("request");
   signal?.throwIfAborted();
   const waiters = interactive ? budget.interactiveWaiters : budget.waiters;
   await new Promise<void>((resolve, reject) => {
@@ -23,6 +39,7 @@ export async function withContentGitSlot<T>(
       signal?.removeEventListener("abort", abort);
       budget.active++;
       budget.activeInteractive += Number(interactive);
+      emitSlot("acquired");
       resolve();
     };
     const abort = () => {
@@ -33,6 +50,7 @@ export async function withContentGitSlot<T>(
       start();
     } else {
       waiters.add(start);
+      emitSlot("queued");
       signal?.addEventListener("abort", abort, { once: true });
     }
   });
@@ -43,6 +61,7 @@ export async function withContentGitSlot<T>(
     // Cancellation can retire a worker before its Git process; retain the slot through cleanup.
     budget.active--;
     budget.activeInteractive -= Number(interactive);
+    emitSlot("released");
     // Prioritize polls without starving FIFO background work or preempting active children.
     const next =
       budget.interactiveWaiters.size > 0 &&
