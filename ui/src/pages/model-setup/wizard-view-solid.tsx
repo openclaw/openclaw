@@ -84,6 +84,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
   const retainedStep = createMemo(
     (previous: ReturnType<typeof stepState>) => stepState() ?? previous,
   );
+  const initialStep = createMemo(retainedStep, { equals: (a, b) => Boolean(a) === Boolean(b) });
   // Browser sign-in steps carry their own provider heading and corner cancel control.
   const signInStep = () => {
     const step = stepState()?.step;
@@ -205,64 +206,68 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                   )}
                 </Match>
                 <Match when={displayPhase() === "step"}>
-                  <Show when={retainedStep()}>
-                    {(state) => (
-                      <>
-                        <Show when={state().validationError}>
-                          <InlineAlert
-                            tone="danger"
-                            id="model-setup-wizard-validation-error"
-                            role="alert"
+                  <Show when={initialStep()} keyed>
+                    {(initial) => {
+                      // In-flight reads can outlive the Show condition during settlement.
+                      const state = () => retainedStep() ?? initial;
+                      return (
+                        <>
+                          <Show when={state().validationError}>
+                            <InlineAlert
+                              tone="danger"
+                              id="model-setup-wizard-validation-error"
+                              role="alert"
+                            >
+                              {state().validationError}
+                            </InlineAlert>
+                          </Show>
+                          <WizardStepControls
+                            presentation="model-setup"
+                            step={state().step}
+                            externalAuthInput={state().externalAuthInput}
+                            signInIcon={props.signInIcon}
+                            brandId={props.state.authBrandId}
+                            providerLabel={props.state.authLabel}
+                            value={props.value}
+                            busy={props.busy || state().busy}
+                            inputId="model-setup-wizard-text-input"
+                            validationErrorId={
+                              state().validationError
+                                ? "model-setup-wizard-validation-error"
+                                : undefined
+                            }
+                            confirmAffirmativeLabel={
+                              props.mode === "prepare" && state().step.type === "confirm"
+                                ? t("modelSetup.wizard.continue")
+                                : undefined
+                            }
+                            leadingAction={
+                              signInStep() || !stepHasPrimary() ? undefined : (
+                                <button type="button" class="btn" onClick={() => props.onCancel()}>
+                                  {t("common.cancel")}
+                                </button>
+                              )
+                            }
+                            onValueChange={(value) => props.onValueChange(value)}
+                            onAnswer={(value) => props.onAnswer(value)}
+                            onAutofocusRef={autofocusRef}
+                          />
+                          <Show
+                            when={
+                              (props.busy || state().busy) &&
+                              state().step.type !== "progress" &&
+                              !state().step.externalUrl &&
+                              !state().step.deviceCode
+                            }
                           >
-                            {state().validationError}
-                          </InlineAlert>
-                        </Show>
-                        <WizardStepControls
-                          presentation="model-setup"
-                          step={state().step}
-                          externalAuthInput={state().externalAuthInput}
-                          signInIcon={props.signInIcon}
-                          brandId={props.state.authBrandId}
-                          providerLabel={props.state.authLabel}
-                          value={props.value}
-                          busy={props.busy || state().busy}
-                          inputId="model-setup-wizard-text-input"
-                          validationErrorId={
-                            state().validationError
-                              ? "model-setup-wizard-validation-error"
-                              : undefined
-                          }
-                          confirmAffirmativeLabel={
-                            props.mode === "prepare" && state().step.type === "confirm"
-                              ? t("modelSetup.wizard.continue")
-                              : undefined
-                          }
-                          leadingAction={
-                            signInStep() || !stepHasPrimary() ? undefined : (
-                              <button type="button" class="btn" onClick={() => props.onCancel()}>
-                                {t("common.cancel")}
-                              </button>
-                            )
-                          }
-                          onValueChange={(value) => props.onValueChange(value)}
-                          onAnswer={(value) => props.onAnswer(value)}
-                          onAutofocusRef={autofocusRef}
-                        />
-                        <Show
-                          when={
-                            (props.busy || state().busy) &&
-                            state().step.type !== "progress" &&
-                            !state().step.externalUrl &&
-                            !state().step.deviceCode
-                          }
-                        >
-                          <div class="wizard-step__progress" role="status" aria-busy="true">
-                            <span class="wizard-step__spinner" aria-hidden="true" />
-                            {t("modelSetup.wizard.working")}
-                          </div>
-                        </Show>
-                      </>
-                    )}
+                            <div class="wizard-step__progress" role="status" aria-busy="true">
+                              <span class="wizard-step__spinner" aria-hidden="true" />
+                              {t("modelSetup.wizard.working")}
+                            </div>
+                          </Show>
+                        </>
+                      );
+                    }}
                   </Show>
                 </Match>
               </Switch>
