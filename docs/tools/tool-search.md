@@ -8,7 +8,7 @@ read_when:
   - You are implementing or debugging tool discovery for OpenClaw runs
 ---
 
-Tool Search is an experimental OpenClaw agent runtime feature. It gives agents one
+Tool Search is an OpenClaw agent runtime feature. It gives agents one
 compact way to discover and call large tool catalogs. It is useful when the run
 has many available tools but the model is likely to need only a few of them.
 
@@ -26,6 +26,9 @@ policy-approved capabilities available. It does not enable lean mode or remove
 optional tools. Set `tools.toolSearch: false` to restore direct schemas. Engaged
 [Code Mode](/tools/code-mode) takes precedence, and Codex keeps its native surface.
 This automatic default does not rewrite the configuration file.
+Manage the global setting in **Settings → Agents → Agent defaults → Tools →
+Tool Search**. Changes apply to future replies without restarting the Gateway;
+turning it off or on preserves an authored mode and other Tool Search options.
 
 Embedded runs with a local model on the native Ollama transport keep
 policy-approved `web_search`, `web_fetch`, `memory_search`, and `memory_get`
@@ -81,7 +84,7 @@ OpenClaw keeps the same authorized tools and maps the enabled/disabled setting t
 native deferral. The native tool does not use OpenClaw's search modes, limits, or
 include/exclude selectors. See [CLI backends](/gateway/cli-backends#keeping-claude-code-orchestration-tools-on-managed-turns).
 
-Codex harness runs do not receive these experimental OpenClaw Tool Search
+Codex harness runs do not receive these OpenClaw Tool Search
 controls. OpenClaw passes product capabilities to Codex as dynamic tools, and
 Codex owns the stable native code mode, native tool search, deferred dynamic
 tools, and nested tool calls.
