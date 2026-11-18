@@ -640,6 +640,45 @@ it.skipIf(process.platform === "win32").each(["", "0"])(
   },
 );
 
+it.each(["refused-update", "update-repair-probe"])(
+  "publishes the failed live-gateway command %s with its output",
+  (name) => {
+    const f = fixture();
+    // The live-gateway driver writes root-level command files and a cut-less record.
+    const current = {
+      cut: null,
+      name,
+      stdout: `${name}.out`,
+      stderr: `${name}.err`,
+      state: "completed",
+      status: 1,
+      treeJoined: true,
+      startedAt: 1000,
+      elapsedMs: 50,
+    };
+    writeJson(f.run.summary, {
+      status: "running",
+      runDirectory: path.basename(f.run.directory),
+      selectedCuts: ["live-gateway"],
+      scope: "installed-killed-update-live-gateway",
+      commands: [],
+      current,
+    });
+    fs.writeFileSync(path.join(f.run.directory, current.stdout), "update refused\n");
+    fs.writeFileSync(path.join(f.run.directory, current.stderr), `token=${secret}\n`);
+    fs.writeFileSync(path.join(f.run.directory, "driver.err"), privateData);
+    const report = capture(f);
+    expect(report.installedRecovery).toMatchObject({
+      availability: "captured",
+      status: "running",
+      current,
+      driverError: { availability: "captured" },
+      logs: { stdout: "update refused\n" },
+    });
+    expect(report.installedRecovery.logs.stderr).toContain("token=");
+  },
+);
+
 it.each(["stale", "symlink", "oversize", "partial-checkpoint"])(
   "retains only current safe evidence for %s input",
   (fault) => {

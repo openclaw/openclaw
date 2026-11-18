@@ -82,7 +82,14 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
       timeout,
       timeoutKillGraceMs: 10_000,
       record: (outcome) => {
-        evidence.current = { name, ...outcome };
+        // Root-level files: the shared diagnostics reader publishes this cut-less record.
+        evidence.current = {
+          cut: null,
+          name,
+          stdout: `${name}.out`,
+          stderr: `${name}.err`,
+          ...outcome,
+        };
         write(summary, evidence);
       },
     });
