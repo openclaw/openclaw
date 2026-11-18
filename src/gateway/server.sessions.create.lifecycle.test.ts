@@ -15,12 +15,17 @@ import {
   createGatewayActiveWorkSnapshot,
   waitForGatewayActiveWork,
 } from "../infra/gateway-active-work.js";
-import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   setupPersistentSessionCreateTestHarness,
+  removeSessionWorktree,
   chatSendOwner,
   sessionCreateRuntimeClient,
 } from "./server.sessions.create.test-support.js";
@@ -31,6 +36,8 @@ import {
   directSessionReq,
   sessionHookMocks,
   sessionLifecycleHookMocks,
+  beforeResetHookMocks,
+  beforeResetHookState,
 } from "./test/server-sessions.test-helpers.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 const { createSessionStoreDir, openClient } = setupPersistentSessionCreateTestHarness();
@@ -583,3 +590,95 @@ test("sessions.create replays an identical creation once and rejects conflicting
     chatSend.mockRestore();
   }
 });
+test.each([
+  { parentKey: "agent:main:dashboard:busy", worktree: false },
+  { parentKey: "agent:main:main", worktree: false },
+  { parentKey: "agent:main:dashboard:busy", worktree: true },
+])(
+  "sessions.create preserves active $parentKey with worktree=$worktree",
+  async ({ parentKey, worktree }) => {
+    const parentSessionId = "sess-active-parallel-parent";
+    const previousSessionConfig = testState.sessionConfig;
+    testState.sessionConfig = { dmScope: "main" };
+    await writeSessionStore({
+      entries: {
+        [parentKey]: sessionStoreEntry(parentSessionId, {
+          providerOverride: "anthropic",
+          modelOverride: "parent-model",
+          modelOverrideSource: "user",
+          thinkingLevel: "high",
+          fastMode: true,
+        }),
+      },
+    });
+    beforeResetHookState.hasBeforeResetHook = true;
+    const parentOperation = createReplyOperation({
+      sessionKey: parentKey,
+      sessionId: parentSessionId,
+      agentId: "main",
+      resetTriggered: false,
+      target: captureSessionTarget({
+        storeScope: storePath,
+        sessionKey: parentKey,
+        incarnation: parentSessionId,
+        agentId: "main",
+      }),
+    });
+    parentOperation.setPhase("running");
+    // Model a producer that releases custody when reset requests cancellation.
+    parentOperation.abortSignal.addEventListener("abort", () => parentOperation.complete(), {
+      once: true,
+    });
+    let createdKey: string | undefined;
+    try {
+      const created = await directSessionReq<CreatedSession>(
+        "sessions.create",
+        {
+          agentId: "main",
+          parentSessionKey: parentKey,
+          emitCommandHooks: true,
+          succeedsParent: false,
+          ...(worktree ? { worktree: true, worktreeSource: "empty" } : {}),
+        },
+        adminClient(),
+      );
+      createdKey = created.payload?.key;
+      if (worktree) {
+        expect(created).toMatchObject({
+          ok: false,
+          error: { code: "UNAVAILABLE", message: expect.stringContaining("active") },
+        });
+      } else {
+        expect(created.ok, JSON.stringify(created.error)).toBe(true);
+        expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+        expect(created.payload?.key).not.toBe(parentKey);
+        expect(created.payload?.entry).toMatchObject({
+          parentSessionKey: parentKey,
+          providerOverride: "anthropic",
+          modelOverride: "parent-model",
+          thinkingLevel: "high",
+          fastMode: true,
+        });
+      }
+      expect(readEntry(parentKey)?.sessionId).toBe(parentSessionId);
+      expect(parentOperation.phase).toBe("running");
+      expect(parentOperation.abortSignal.aborted).toBe(false);
+      expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+      expect(beforeResetHookMocks.runBeforeReset).not.toHaveBeenCalled();
+      expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
+      if (worktree) {
+        expect(sessionLifecycleHookMocks.runSessionStart).not.toHaveBeenCalled();
+      } else {
+        expect(sessionLifecycleHookMocks.runSessionStart.mock.calls[0]?.[0]).toMatchObject({
+          sessionKey: created.payload?.key,
+        });
+      }
+    } finally {
+      parentOperation.complete();
+      if (worktree && createdKey) {
+        await removeSessionWorktree(createdKey);
+      }
+      testState.sessionConfig = previousSessionConfig;
+    }
+  },
+);

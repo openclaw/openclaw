@@ -533,6 +533,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       clearExecBinding: !requestedExecNode,
       // A plain New Chat with no cwd must not inherit the prior session cwd.
       clearSpawnedCwd: p.worktree !== true && !sessionCwd,
+      worktree: p.worktree,
       fork: p.fork,
       forkFrom: p.forkFrom,
       ...resolveSessionCreateSpawnContext({
