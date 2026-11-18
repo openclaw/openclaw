@@ -249,19 +249,29 @@ it("shows dictation starting at once and microphone guidance only when access is
     onUseSystemDefaultMicrophone: vi.fn(),
     onDismissRealtimeTalkError: dismissRecovery,
   });
-  await vi.advanceTimersByTimeAsync(0);
-  voiceButton(container).dispatchEvent(dictationPointer("pointerdown", 15));
-  expect(dismissRecovery).toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(800);
-  const starting = query('.agent-chat__dictation-status[role="status"]');
-  expect(starting?.textContent).toBe(t("chat.composer.dictationStarting"));
-  expect(
-    starting?.querySelector('.agent-chat__voice-activity[data-status="connecting"]'),
-  ).not.toBeNull();
-  await vi.advanceTimersByTimeAsync(1_000);
-  expect(query('.agent-chat__dictation-status[role="status"]')?.textContent).toBe(
-    microphoneGuidance,
-  );
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    voiceButton(container).dispatchEvent(dictationPointer("pointerdown", 15));
+    expect(dismissRecovery).toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(800);
+    const starting = query('.agent-chat__dictation-status[role="status"]');
+    expect(starting?.textContent).toBe(t("chat.composer.dictationStarting"));
+    expect(
+      starting?.querySelector('.agent-chat__voice-activity[data-status="connecting"]'),
+    ).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(query('.agent-chat__dictation-status[role="status"]')?.textContent).toBe(
+      microphoneGuidance,
+    );
+  } catch (error) {
+    console.error("dictation-admission-probe", {
+      microphoneCalls: openMicrophoneMock.mock.calls.length,
+      dictationStatusPresent: Boolean(query('.agent-chat__dictation-status[role="status"]')),
+      unsupportedAudioShown:
+        container.textContent?.includes(t("chat.composer.dictationAudioUnsupported")) === true,
+    });
+    throw error;
+  }
 });
 
 it("clears a live whitespace draft when the last rendered draft was already empty", () => {
