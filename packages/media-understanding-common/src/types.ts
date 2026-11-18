@@ -41,6 +41,8 @@ export type MediaAttachment = {
    * display only, never format detection.
    */
   fileName?: string;
+  /** Gateway-client composer provenance; `paste` is the sender's own clipboard text. */
+  origin?: "paste" | "file";
   workspaceDir?: string;
   index: number;
   alreadyTranscribed?: boolean;

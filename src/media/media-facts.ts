@@ -21,7 +21,7 @@ export type MediaFact = {
   contentType?: string;
   kind?: MediaKind;
   fileName?: string;
-  /** Composer attachment provenance for display; never part of model input. */
+  /** Composer attachment provenance; `paste` text renders as user input, not external content. */
   origin?: "paste" | "file";
   sizeBytes?: number;
   durationMs?: number;
