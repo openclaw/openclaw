@@ -55,6 +55,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/helpers/run-quiet-steering-live.mts!",
   // The PR artifact Vitest suite launches this standalone Node regression by path.
   "test/scripts/pr-review-artifacts.node.mjs!",
+  // The PR cache suite launches this standalone Node regression by path.
+  "test/scripts/pr-cache-deferral.node.mjs!",
   // The compiler scheduling test launches this dependency-hook fixture by exact path.
   "test/scripts/fixtures/vitest-worker-scheduling.cjs!",
   // The cache test launches this isolated GC worker through runRetentionNodeScript.

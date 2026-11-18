@@ -2,7 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { AssistantMessage } from "../../llm/types.js";
-import { clearBoundaryMaintenance, isBoundaryMaintenanceDeclined } from "../context-pressure.js";
+import { clearBoundaryMaintenance, decideContextPressure } from "../context-pressure.js";
 import { buildAssistantFailoverSignal } from "../embedded-agent-helpers/assistant-message-failures.js";
 import { classifyFailoverSignal } from "../failover/classify.js";
 import { agentSessionAutomaticCompaction } from "../sessions/agent-session-compaction.js";
@@ -449,7 +449,15 @@ describe("recoverEmbeddedRunOverflow", () => {
       expect(mocks.compact).toHaveBeenCalledOnce();
       expect(input.prepareCurrentTranscriptRetry).toHaveBeenCalled();
       // Maintenance that cannot reduce context is not retried at every later request.
-      expect(isBoundaryMaintenanceDeclined(runId)).toBe(true);
+      expect(
+        decideContextPressure({
+          estimatedPromptTokens: 210_000,
+          windowTokens: 272_000,
+          maintenanceDue: true,
+          boundarySafe: true,
+          runId,
+        }),
+      ).toBeUndefined();
     } finally {
       clearBoundaryMaintenance(runId);
     }

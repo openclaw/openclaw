@@ -336,6 +336,7 @@ function createInlineHost(
         params.budget,
         params.approvalWait,
         signal,
+        params.owner.registerAwaiting,
       );
       // The host timer owns exhaustion; do not open a second wait after checkpointing.
       if (!ready && !signal.aborted) {
@@ -464,7 +465,12 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
           throw new Error("interrupted");
         }
         await raceWithAbortSignal(
-          waitForPendingBridgeSettlement(pending, result.settlementMode, params.signal),
+          waitForPendingBridgeSettlement(
+            pending,
+            result.settlementMode,
+            params.signal,
+            params.owner.registerAwaiting,
+          ),
           params.signal,
         );
         params.budget.deadlineMs = performance.now() + remainingBudgetMs;
@@ -476,6 +482,7 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
           params.budget,
           params.approvalWait,
           params.signal,
+          params.owner.registerAwaiting,
         );
       }
       const resumeBudgetMs = ready
@@ -626,6 +633,7 @@ export async function runWait(params: {
       budget,
       approvalWait,
       signal,
+      state.owner.registerAwaiting,
     );
     const resumeBudgetMs = ready
       ? usableResumeBudgetMs(budget.deadlineMs, state.config)

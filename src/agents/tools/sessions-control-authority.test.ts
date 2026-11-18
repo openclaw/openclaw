@@ -4,6 +4,8 @@ import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.
 import { assignSessionOwner } from "../../config/sessions/session-accessor.sqlite-owner.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -81,6 +83,46 @@ describe("session control source capability", () => {
         expect(captureSessionControlAuthority()?.authority).toBe(authority);
         expect(hasSessionControlAuthority()).toBe(false);
         expect(() => hasSessionControlAuthority(upgrade)).toThrow(/source changed/i);
+      },
+    );
+  });
+
+  const ambientScope = (
+    authority: AdmittedRunOperatorAuthority,
+    hasCurrentClientAuthority?: () => boolean,
+  ) => ({
+    isWebchatConnect: () => false,
+    hasCurrentClientAuthority,
+    client: createSyntheticPluginRuntimeClient({
+      operatorRoleActor: { kind: "operator", profileId: "control-profile" },
+      operatorRunAuthority: authority,
+      scopes: ["operator.write"],
+    }),
+  });
+
+  it("keeps a completed request's client out of an admitted run's session controls", () => {
+    const { authority: ambient, revoke } = issueAuthority("control-profile");
+    const { authority: admitted } = issueAuthority("control-profile");
+    revoke();
+    withPluginRuntimeGatewayRequestScope(ambientScope(ambient), () => {
+      expect(hasSessionControlAuthority(admitted)).toBe(true);
+      // Without an admitted run the ambient client is still the caller's authority.
+      expect(() => captureSessionControlAuthority()).toThrow("session control source revoked");
+    });
+  });
+
+  it("keeps the live client check when the ambient authority is passed back as prepared", () => {
+    const { authority } = issueAuthority("control-profile");
+    let connected = true;
+    withPluginRuntimeGatewayRequestScope(
+      ambientScope(authority, () => connected),
+      () => {
+        const target = captureSessionControlAuthority();
+        expect(() => captureSessionControlAuthority(target?.authority)).not.toThrow();
+        connected = false;
+        expect(() => captureSessionControlAuthority(target?.authority)).toThrow(
+          "Session control caller authority is no longer active.",
+        );
       },
     );
   });
