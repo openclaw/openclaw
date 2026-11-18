@@ -3,7 +3,7 @@ import {
   skipWhitespaceGraphemes,
   trimEndWhitespaceGraphemes,
 } from "@openclaw/normalization-core/grapheme";
-import { normalizeChunkLimit } from "@openclaw/normalization-core/number-coercion";
+import { normalizeChunkLimit } from "../../packages/markdown-core/src/chunk-text.js";
 
 const CJK_PUNCTUATION_BREAK_AFTER_RE = /[、。，．！？；：）］｝〉》」』】〕〗〙]/u;
 
