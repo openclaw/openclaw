@@ -206,11 +206,7 @@ export async function executeSendAction(params: SendActionParams): Promise<{
         onHandled: async (deliveryFact) => {
           try {
             await params.ctx.onSendAccepted?.();
-            if (
-              !deliveryFact ||
-              deliveryFact.partialDelivery ||
-              params.ctx.input.callerRecordsDestinationHistory
-            ) {
+            if (!deliveryFact || deliveryFact.partialDelivery) {
               return;
             }
             if (deliveryFact.createdThreadIds.length > 1) {
@@ -322,7 +318,6 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     deliveryIntentId: params.ctx.input.deliveryIntentId,
     deliveryCompletion: params.ctx.input.deliveryCompletion,
     transcriptRoute: params.ctx.transcriptRoute,
-    skipDestinationHistory: params.ctx.input.callerRecordsDestinationHistory,
     conversationDeliveryTarget: params.ctx.input.conversationDeliveryTarget,
     deliveryRetryOwner: params.ctx.deliveryRetryOwner,
     requireUnknownSendReconciliation: params.ctx.input.requireQueuePersistence ? false : undefined,

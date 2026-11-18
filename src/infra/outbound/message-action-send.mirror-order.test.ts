@@ -226,7 +226,7 @@ describe("confirmed outbound route and transcript ownership", () => {
       executionMode = "local";
     });
 
-    it("records a send during the destination turn, outside the source writer", async ({
+    it("does not write delegated history while the destination turn is active", async ({
       signal,
     }) => {
       const target = {
@@ -252,12 +252,8 @@ describe("confirmed outbound route and transcript ownership", () => {
         expect(sent.result.handledBy).toBe("plugin");
         expect(gatewayRequest).toHaveBeenCalledOnce();
         expect(handleAction).not.toHaveBeenCalled();
-        // The destination's active turn does not delay its confirmed history.
-        expect(transcriptMessages(OTHER_SESSION_KEY)).toEqual([
-          expect.objectContaining({
-            message: expect.objectContaining({ content: [{ type: "text", text: "card details" }] }),
-          }),
-        ]);
+        // The RPC owner records delivery; the delegating process never opens a second writer.
+        expect(transcriptMessages(OTHER_SESSION_KEY)).toEqual([]);
         expect(transcriptMessages(MAIN_SESSION_KEY)).toEqual([]);
         turnGate.release();
         await withinTest(turn, signal);

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -605,10 +604,8 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
         }),
       });
   if (gatewayPluginAction) {
-    const deliveryFact = projectPluginMessageDeliveryFact(gatewayPluginAction.payload);
-    if (!deliveryFact || deliveryFact.status === "settled") {
-      await commitOutboundSessionRoute();
-    }
+    // The Gateway commits the route and transcript together. Repeating the route
+    // write here opens a second process-local owner behind its resident session.
     return await annotateSourceDelivery(
       withSendNormalization(gatewayPluginAction, sendPayload.normalization),
       ctx,

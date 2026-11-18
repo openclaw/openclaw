@@ -1,0 +1,4 @@
+# Distinct regressions require both payload/thread persistence at the Gateway
+# boundary and a separate CLI/resident-Gateway/model/tool round trip proving
+# no foreign route writer or transcript sequence collision after replay.
+129

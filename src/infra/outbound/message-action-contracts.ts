@@ -100,8 +100,6 @@ export type MessageActionInput = Pick<
   agentId?: string;
   /** @internal The Gateway owns this call and may use its active gateway-mode adapter directly. */
   gatewayOwnedDelivery?: boolean;
-  /** @internal The delegating client records destination history for this send. */
-  callerRecordsDestinationHistory?: boolean;
   /** @internal Bypass provider-native action dispatch so core durable delivery owns the send. */
   forceCoreDelivery?: boolean;
   /** @internal Fail before platform I/O unless the core delivery queue persisted the intent. */
@@ -311,6 +309,7 @@ export function createChannelActionContext(params: {
     gateway: params.ctx.gateway,
     toolContext: params.ctx.input.toolContext,
     dryRun: params.ctx.dryRun,
+    deliveryRetryOwner: params.ctx.input.actionOrigin === "message-tool" ? "caller" : undefined,
     onPlatformSendDispatch: params.ctx.input.onPlatformSendDispatch,
     assertDirectAdapterHandoff: params.ctx.input.assertDirectAdapterHandoff,
     ...(params.action === "send" ? { skipQueue: params.ctx.input.skipQueue } : {}),

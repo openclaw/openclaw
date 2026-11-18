@@ -12,12 +12,12 @@ import {
   validateSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { sendDurableMessageBatchCore } from "../../channels/message/runtime.js";
+import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import { resolveChannelThreadAddressing } from "../../channels/thread-addressing.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
-import { dispatchDirectGatewayMessageAction } from "../../infra/outbound/message-action-gateway-transcript.js";
 import { resolveImplicitMessageActionTarget } from "../../infra/outbound/message-action-normalization.js";
 import {
   hydrateAttachmentParamsForAction,
@@ -33,6 +33,7 @@ import { maybeResolvePluginMessagingTarget } from "../../infra/outbound/target-n
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
+import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { normalizePollInput } from "../../polls.js";
 import {
   isAgentHarnessSessionKey,
@@ -321,7 +322,8 @@ export const sendHandlers: GatewayRequestHandlers = {
                     Boolean(trustedContext.messageActionAuthorization?.scheduled)),
               };
               let payload: unknown;
-              if (canonicalAction || messageAuthority.assertScheduledWriteCurrent) {
+              const useMessageRunner = request.action === "send" || canonicalAction;
+              if (useMessageRunner || messageAuthority.assertScheduledWriteCurrent) {
                 const { runMessageAction } =
                   await import("../../infra/outbound/message-action-runner.js");
                 const result = await runMessageAction({
@@ -342,12 +344,8 @@ export const sendHandlers: GatewayRequestHandlers = {
               } else {
                 await messageAuthority.beforeDeliveryAttempt();
                 assertDirectAdapterHandoff?.();
-                const direct = await dispatchDirectGatewayMessageAction(
-                  actionContext,
-                  request.idempotencyKey,
-                  sourceReplySessionKey,
-                );
-                if (!direct.handled) {
+                const handled = await dispatchChannelMessageAction(actionContext);
+                if (!handled) {
                   return createGatewayInflightResult({
                     context,
                     dedupeKey,
@@ -361,7 +359,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                     },
                   });
                 }
-                payload = direct.payload;
+                payload = extractToolPayload(handled);
               }
               await scheduleDeliveredSourceReplyTranscriptMirror({
                 context,

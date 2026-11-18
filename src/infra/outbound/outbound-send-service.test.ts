@@ -322,15 +322,6 @@ it("keeps a confirmed plugin send when its history write fails", async () => {
   expect(mocks.send).not.toHaveBeenCalled();
 });
 
-it("leaves destination history to a delegating client on both send paths", async () => {
-  const input = { callerRecordsDestinationHistory: true };
-  await send({ input });
-  expect(mocks.commit).not.toHaveBeenCalled();
-  mocks.dispatch.mockResolvedValueOnce(null);
-  await send({ input });
-  expectCall(mocks.send, { skipDestinationHistory: true });
-});
-
 it("bypasses plugin sends during dry runs", async () => {
   await send({ dryRun: true, silent: true, gateway, idempotencyKey: "stable-send" });
   expect(mocks.dispatch).not.toHaveBeenCalled();
