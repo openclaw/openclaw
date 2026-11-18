@@ -1,3 +1,4 @@
+import "../styles/sidebar-pages.css";
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
@@ -6,10 +7,16 @@ import {
   serializeSidebarEntry,
   SIDEBAR_NAV_ROUTES,
   titleForRoute,
+  USERS_SECTION_PLUGIN_PAGES,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
+import {
+  isNavigationSectionChild,
+  navigationSectionChildren,
+  navigationSectionForPage,
+} from "../plugins/navigation-sections.ts";
 import { renderAppSidebarPluginTab, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { Icon } from "./solid/icon.tsx";
 
@@ -46,7 +53,10 @@ export function SidebarPagesMenu(props: {
 }): JSX.Element {
   const zone = createMemo(() => props.host.reconciledSidebarZone());
   const routes = createMemo(() =>
-    SIDEBAR_NAV_ROUTES.filter((route) => props.host.sidebarMenus.isRouteEnabled(route))
+    // Sessions opens from the agent avatar and its groups, so the menu leaves it out.
+    SIDEBAR_NAV_ROUTES.filter(
+      (route) => route !== "sessions" && props.host.sidebarMenus.isRouteEnabled(route),
+    )
       .toSorted((left, right) => titleForRoute(left, t).localeCompare(titleForRoute(right, t)))
       .map((route) => serializeSidebarEntry({ type: "route", route })),
   );
@@ -54,9 +64,16 @@ export function SidebarPagesMenu(props: {
     [
       ...new Set([
         ...zone().pluginTabs.keys(),
-        ...props.host.pluginNavigation().map((entry) => entry.key),
+        // A plugin's child items (Workboard's boards) live in its own sidebar, not here.
+        ...props.host
+          .pluginNavigation()
+          .filter((entry, _, all) => !isNavigationSectionChild(all, entry))
+          .map((entry) => entry.key),
       ]),
-    ].map((key) => serializeSidebarEntry({ type: "plugin", key })),
+    ]
+      // The Users section lists its plugin pages itself.
+      .filter((key) => !USERS_SECTION_PLUGIN_PAGES.has(key))
+      .map((key) => serializeSidebarEntry({ type: "plugin", key })),
   );
   const Entry = (entry: { key: string }) => {
     // Allocate once per entry; the rendered link owns its reactive fields.
@@ -64,6 +81,7 @@ export function SidebarPagesMenu(props: {
       props.host,
       parseSidebarEntry(entry.key)!,
       () => zone().pluginTabs,
+      true,
     );
     return (
       <div class="sidebar-pages__entry">
@@ -109,10 +127,48 @@ export function SidebarPagesMenu(props: {
   );
 }
 
+/**
+ * A plugin page whose navigation item has children, such as Workboard and its boards: the
+ * item itself, then each child, each with its pin toggle so a child can sit on the rail.
+ */
+export function SidebarPluginSection(props: { host: AppSidebarRenderHost }): JSX.Element {
+  const section = createMemo(() =>
+    navigationSectionForPage(props.host.pluginNavigation(), props.host.activePluginTabId),
+  );
+  const keys = createMemo(() => {
+    const parent = section();
+    return parent
+      ? [parent, ...navigationSectionChildren(props.host.pluginNavigation(), parent)].map((entry) =>
+          serializeSidebarEntry({ type: "plugin", key: entry.key }),
+        )
+      : [];
+  });
+  const zone = createMemo(() => props.host.reconciledSidebarZone());
+  return (
+    <nav class="sidebar-pages sidebar-plugin-section" aria-label={section()?.value.label}>
+      <For each={keys()}>
+        {(key) => (
+          <div class="sidebar-pages__entry">
+            {renderAppSidebarPageEntry(
+              props.host,
+              parseSidebarEntry(key)!,
+              () => zone().pluginTabs,
+              false,
+            )}
+            <PinToggle host={props.host} entry={key} />
+          </div>
+        )}
+      </For>
+    </nav>
+  );
+}
+
 function renderAppSidebarPageEntry(
   host: AppSidebarRenderHost,
   entry: SidebarZoneEntry,
   pluginTabs: () => ReadonlyMap<string, GatewayControlUiPluginTab>,
+  // The pages menu lists a section's parent alone, so the parent stands for its children too.
+  section: boolean,
 ): JSX.Element {
   if (entry.type === "person" || entry.type === "session") {
     return undefined;
@@ -130,6 +186,7 @@ function renderAppSidebarPageEntry(
             prop:kind={"navigation"}
             prop:navigationKey={entry.key}
             prop:navigationChildren={false}
+            prop:navigationSection={section}
             prop:navigationMenus={host.sidebarMenus}
           />
         }

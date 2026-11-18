@@ -5,7 +5,10 @@ import {
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { labelRuntimeContextText } from "../../llm/types.js";
-import type { CliBackendMessageInjection } from "../../plugins/cli-backend.types.js";
+import type {
+  CliBackendMessageInjection,
+  CliBackendPromptContext,
+} from "../../plugins/cli-backend.types.js";
 import { isHostGeneratedInputProvenance } from "../../sessions/input-provenance.js";
 import type {
   ReplyBackendMessageInjectionV2,
@@ -15,14 +18,21 @@ import type {
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import { projectRuntimeContextFragments } from "../internal-runtime-context.js";
 import { cliBackendLog } from "./log.js";
+import { readCliPromptContext, toCliModelRequestPayload } from "./model-request-hook.js";
+import type { PreparedCliRunContext } from "./types.js";
 
 /** One host adapter owns final input admission and accepted transcript custody. */
 export function createSteeredCliMessageInjection(params: {
   getInjection: () => CliBackendMessageInjection | undefined;
   signal: AbortSignal;
   assertCurrent: SessionSourceAssertion;
-  cwd: string;
+  /** Owning run: its working directory and before_model_request gate. */
+  context: {
+    params: Pick<PreparedCliRunContext["params"], "cwd" | "workspaceDir">;
+    beforeModelRequest?: PreparedCliRunContext["beforeModelRequest"];
+  };
 }): ReplyBackendMessageInjectionV2 {
+  const gate = params.context.beforeModelRequest;
   const queueMessage = async (
     text: string,
     options: ReplyBackendQueueMessageOptions | undefined,
@@ -33,7 +43,7 @@ export function createSteeredCliMessageInjection(params: {
     if (!injection) {
       throw new Error("CLI plugin runtime does not accept input during its turn.");
     }
-    const cwd = params.cwd;
+    const cwd = params.context.params.cwd ?? params.context.params.workspaceDir;
     let accepted = false;
     let failure: Error | undefined;
     let result: ReplyBackendQueueMessageResult | undefined;
@@ -41,8 +51,27 @@ export function createSteeredCliMessageInjection(params: {
     try {
       const message = await recorder?.resolveMessage();
       const context = options?.currentInboundContext;
+      let steeredText = text;
+      let promptContext: CliBackendPromptContext | undefined = context
+        ? {
+            prependContext: labelRuntimeContextText(
+              projectRuntimeContextFragments(
+                context.fragments ?? [{ kind: "conversation-data", text: context.text }],
+              ),
+            ),
+          }
+        : undefined;
+      // Steered input reaches the model without a new turn; gate it like the turn prompt.
+      if (gate) {
+        const request = await gate(
+          toCliModelRequestPayload(steeredText, promptContext),
+          message ?? { role: "user", content: text },
+        );
+        steeredText = request.prompt;
+        promptContext = readCliPromptContext(request);
+      }
       await injection.queueMessage(
-        text,
+        steeredText,
         async (submit) => {
           let submitted = false;
           try {
@@ -67,17 +96,7 @@ export function createSteeredCliMessageInjection(params: {
           ...(isHostGeneratedInputProvenance(message?.provenance)
             ? { promptOrigin: "host" as const }
             : {}),
-          ...(context
-            ? {
-                promptContext: {
-                  prependContext: labelRuntimeContextText(
-                    projectRuntimeContextFragments(
-                      context.fragments ?? [{ kind: "conversation-data", text: context.text }],
-                    ),
-                  ),
-                },
-              }
-            : {}),
+          ...(promptContext ? { promptContext } : {}),
         },
       );
       accepted = true;

@@ -7,13 +7,18 @@ import {
   nextEventLoopTurn,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import type { SandboxBackendHandle } from "../../agents/sandbox/backend-handle.types.js";
 import { captureWorktreeRunEndContext } from "../../agents/worktrees/run-end-lifecycle.js";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-error.js";
+import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
 import { withOpenClawStateLeaseAsync } from "../../state/openclaw-state-lease.js";
 import { prepareSandboxCheckpointFixture } from "./local-workspace-incremental.test-support.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
+import { provePublicationPauseAttribution } from "./local-workspace-publication.test-support.js";
 import { readLocalWorkspaceProjection } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
+import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 
 let checkpointLog: Mock<(message: string) => void>;
 
@@ -23,6 +28,63 @@ const expectText = async (directory: string, relative: string, expected: string)
   expect(await fs.readFile(path.join(directory, relative), "utf8")).toBe(expected);
 const expectMissing = async (directory: string, relative: string) =>
   expect(fs.stat(path.join(directory, relative))).rejects.toMatchObject({ code: "ENOENT" });
+
+async function proveCheckpointProjectionCallerStop(owner: LocalWorkspaceOwner) {
+  const caller = new AbortController();
+  using projection = await prepareSandboxCheckpointFixture(
+    owner,
+    () => caller.signal.throwIfAborted(),
+    caller.signal,
+  );
+  const worker = await import("./workspace-manifest-worker.js");
+  const stores = await import("./local-workspace-store.js");
+  const preparePatch = worker.prepareWorkspacePatch;
+  const patch = vi.spyOn(worker, "prepareWorkspacePatch");
+  // Leave a real staged host receipt for checkpoint's settle path to import.
+  patch.mockRejectedValueOnce(new Error("private fixture path must not enter diagnostics"));
+  await writeText(owner.worktree.path, "source.txt", "host update\n");
+  await expect(
+    withLocalWorkspaceProjection(owner, (state) => state.synchronize("projection")),
+  ).rejects.toThrow("private fixture path");
+  const withStore = stores.withLocalWorkspaceStore;
+  let journals = 0;
+  vi.spyOn(stores, "withLocalWorkspaceStore").mockImplementation((params, run) =>
+    withStore(params, (store) =>
+      run({
+        ...store,
+        update: (row, update, authority, manifest, pack) => {
+          if (update.journal_json) {
+            journals++;
+          }
+          return store.update(row, update, authority, manifest, pack);
+        },
+      }),
+    ),
+  );
+  patch.mockImplementationOnce(async (params) => {
+    const prepared = await preparePatch(params);
+    caller.abort(createAgentRunDirectAbortError(true));
+    return prepared;
+  });
+  await projection.checkpoint();
+  expect(caller.signal.aborted).toBe(true);
+  await expectText(projection.workspaceDir, "source.txt", "host update\n");
+  using next = await prepareSandboxCheckpointFixture(owner);
+  expect(next.workspaceDir).toBe(projection.workspaceDir);
+  expect(journals, "Caller stop must not make preparation write another journal").toBe(1);
+  expect(await readLocalWorkspaceProjection(owner.worktree.id)).toMatchObject({
+    journal_json: null,
+    pending_ref: null,
+  });
+  const finishes = checkpointLog.mock.calls
+    .map(([message]) => message)
+    .filter((message) => message.startsWith("Local workspace reconcile finish:"));
+  expect(finishes.some((message) => message.includes("outcome=applied"))).toBe(true);
+  expect(
+    finishes.some((message) => message.includes("abortReason=operation-failed phase=patch")),
+  ).toBe(true);
+  expect(finishes.join("\n")).not.toContain("private fixture path");
+}
 
 async function proveReconcilePauseWindow(owner: LocalWorkspaceOwner) {
   const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
@@ -195,6 +257,39 @@ async function proveLocalWorkspaceCaptures(
   });
   const takesSnapshot = atomicCapture === true || atomicCapture === "nested";
   const reconcile = atomicCapture && atomicCapture !== "direct";
+  let beforePauseEdit: (() => Promise<void>) | undefined;
+  if (atomicCapture === "direct") {
+    const worker = await import("./workspace-manifest-worker.js");
+    const prepare = worker.prepareWorkspaceStageInput;
+    const { parseWorkerWorkspaceManifest } = await import("./workspace-manifest.js");
+    const { parseChangedWorkspaceResult } = await import("./workspace-manifest-comparison.js");
+    vi.spyOn(worker, "prepareWorkspaceStageInput").mockImplementation(async (input, authority) => {
+      if (
+        !("publication" in input) &&
+        !input.existingObjects?.length &&
+        parseChangedWorkspaceResult(
+          parseWorkerWorkspaceManifest(
+            input.baseManifestRaw,
+            input.baseManifestRef,
+            input.buildCacheInputs,
+          ),
+          parseWorkerWorkspaceManifest(
+            input.currentManifestRaw,
+            input.currentManifestRef,
+            input.buildCacheInputs,
+          ),
+        ).entries.length
+      ) {
+        expect(paused, "Changed payload preparation must run before the guest pause").toBe(false);
+      }
+      const result = await prepare(input, authority);
+      if (input.blobsOnly && beforePauseEdit) {
+        await beforePauseEdit();
+        beforePauseEdit = undefined;
+      }
+      return result;
+    });
+  }
   if (atomicCapture) {
     const { nativeWorktreeFilesystem } =
       await import("../../agents/worktrees/filesystem-native.js");
@@ -244,8 +339,6 @@ async function proveLocalWorkspaceCaptures(
     );
   }
   const reconciler = await import("./workspace-reconcile.js");
-  const { AcceptedWorkspacePublicationIndeterminateError } =
-    await import("./workspace-accepted-publication.js");
   const apply = reconciler.applyStagedWorkerWorkspace;
   const accepting = createDeferred();
   const accept = createDeferred();
@@ -308,7 +401,7 @@ async function proveLocalWorkspaceCaptures(
         ...store,
         manifest: async (row, action) => {
           if (action.kind === "scan") {
-            expect(paused).toBe(!action.capture);
+            expect(paused).toBe(!action.capture && !action.prehash);
             if (atomicCapture === "nested" && action.capture) {
               // The manifest worker reports omitted nested subvolumes before preparing CAS writes.
               throw Object.assign(new Error("Btrfs snapshot omitted a nested subvolume"), {
@@ -475,6 +568,28 @@ async function proveLocalWorkspaceCaptures(
     if (atomicCapture) {
       await expectMissing(path.dirname(projection.workspaceDir), "checkpoint-capture");
     }
+    if (atomicCapture === "direct") {
+      for (const name of ["keep.txt", "rewrite.txt", "remove.txt"]) {
+        await writeText(projection.workspaceDir, name, "before\n");
+      }
+      beforePauseEdit = async () => {
+        const source = path.join(projection.workspaceDir, "rewrite.txt");
+        const before = await fs.stat(source);
+        await fs.writeFile(source, "after!\n");
+        await fs.utimes(source, before.atime, before.mtime);
+        await fs.unlink(path.join(projection.workspaceDir, "remove.txt"));
+        await writeText(projection.workspaceDir, "added.txt", "during prehash\n");
+      };
+      await projection.checkpoint();
+      expect(beforePauseEdit).toBeUndefined();
+      await expectText(owner.worktree.path, "keep.txt", "before\n");
+      await expectText(owner.worktree.path, "rewrite.txt", "after!\n");
+      await expectText(owner.worktree.path, "added.txt", "during prehash\n");
+      await expectMissing(owner.worktree.path, "remove.txt");
+      const before = pauses;
+      await projection.checkpoint();
+      expect(pauses).toBe(before);
+    }
   } finally {
     accept.resolve();
     releaseRemoval.resolve();
@@ -488,6 +603,55 @@ export function registerSandboxCheckpointTests(
   logObserver: typeof checkpointLog,
 ) {
   checkpointLog = logObserver;
+  it("attributes publication reconciliation and snapshot staging while keeping the guest frozen", () =>
+    provePublicationPauseAttribution(owner(), checkpointLog));
+  it("finishes checkpoint-owned projection work after caller stop without replaying its journal", () =>
+    proveCheckpointProjectionCallerStop(owner()));
+  it("records closed reconcile abort reasons without replacing the original failure", async () => {
+    const { withLocalWorkspaceReconciliation } = await import("./local-workspace-store.js");
+    for (const [failure, reason] of [
+      [createAgentRunDirectAbortError(true), "stop"],
+      [
+        new OpenClawStateLeaseError("private", { code: "OPENCLAW_STATE_LEASE_ABORTED" }),
+        "OPENCLAW_STATE_LEASE_ABORTED",
+      ],
+      [
+        new OpenClawStateLeaseError("private", {
+          code: "OPENCLAW_STATE_LEASE_LOST",
+          loss: { reason: "missing" },
+        }),
+        "lease-missing",
+      ],
+      [new SqliteWorkerError("private", "outcome-unknown"), "sqlite-outcome-unknown"],
+      [
+        new AcceptedWorkspacePublicationIndeterminateError("commit", new Error("private")),
+        "publication-indeterminate",
+      ],
+      [
+        Object.assign(new Error("private"), { code: "private", name: "private" }),
+        "operation-failed",
+      ],
+    ] as const) {
+      await expect(
+        withLocalWorkspaceReconciliation(
+          {
+            worktreeId: owner().worktree.id,
+            pendingRef: "synthetic",
+            baseCommit: null,
+            targetCommit: null,
+            target: "projection",
+            reason: "checkpoint",
+          },
+          async (markPhase) => {
+            markPhase("patch");
+            throw failure;
+          },
+        ),
+      ).rejects.toBe(failure);
+      expect(checkpointLog.mock.lastCall?.[0]).toContain(`abortReason=${reason} phase=patch`);
+      expect(checkpointLog.mock.lastCall?.[0]).not.toContain("private");
+    }
+  });
   it("keeps the guest running during reconcile patch preparation and fences concurrent edits", () =>
     proveReconcilePauseWindow(owner()));
   it("keeps unchanged commands running while checkpointing edits and deletions", () =>

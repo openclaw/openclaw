@@ -206,8 +206,10 @@ operation across waits and append `session-rows:select`, `session-rows:prepare`,
 `session-rows:consume`; roster fact batches preserve their caller's task label. For example,
 `gateway:rpc:sessions.list:session-rows:select` identifies list selection, and
 scheduled work retains its `scheduler:<lane>:<task>` prefix. Labels contain only
-code-owned operation names, never session keys or request content. Labels cover
-the synchronous portion of explicit task scopes. Other asynchronous continuations
+code-owned operation names, never session keys or request content. Host exec
+preparation uses `exec:spawn-prepare`; detached terminal-upload expiration uses
+`terminal-upload:cleanup`. Labels cover the synchronous portion of explicit task
+scopes. Other asynchronous continuations
 and unknown callbacks use best-effort unattributed
 delay warnings from the event-loop sampler; the Gateway does not install
 process-wide async hooks to time every promise continuation. During healthy idle

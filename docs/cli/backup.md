@@ -100,6 +100,11 @@ A PostgreSQL capture contains the original anchor, a sanitized SQLite export
 image, and a format-2 manifest with the profile, engine, store UUID, versions,
 active fragments, allocation facts, sizes, and hashes. The manifest contains no
 DSN. Keep these artifacts together; copying only the anchor does not back up rows.
+Before upgrading, keep a verified PostgreSQL backup made with the release you
+might roll back to. Newer OpenClaw can verify and restore exports that lack a
+row digest identifier. Older releases such as 2026.11.3 reject `typed-v1`
+exports before writing PostgreSQL data. If you roll back to one of those
+releases, restore its pre-upgrade backup instead.
 Existing format-1 SQLite snapshots remain readable. See
 [Database engines](/reference/database-engines#anchors-and-backups) for matched
 restore and update-recovery behavior.
@@ -140,6 +145,7 @@ exports and restore them into fresh namespaces for disaster recovery.
 
 ## Notes
 
+- Archive compression uses dedicated worker threads on hosts with seven or more available cores, up to eight workers while reserving two cores for archive traversal and writing. Hosts with six or fewer cores keep the existing shared-pool compression path. Larger hosts may use more memory and CPU during compression; the archive remains a standard `.tar.gz` file.
 - The archive embeds a schema-version-1 `manifest.json` with the resolved source paths and archive layout. Additive ownership metadata records configured agent ids and roots, including agent roots already covered by another asset; existing archive layout and older archives remain supported. New archives also record the current-layout SQLite snapshots captured at creation; standalone verification rejects missing or mismatched inventory entries. Legacy archives without this inventory remain readable, but verification reports `sqliteInventoryVerified: false` because complete database coverage cannot be established. An empty inventory means no current-layout databases were captured (for example, a config-only export), not a full database recovery point.
 - Without `--to`, default output is a timestamped `.tar.gz` archive in the current working directory. Local timestamped filenames use your machine's local timezone and include the UTC offset. If the current working directory is inside a backed-up source tree, OpenClaw falls back to your home directory for the default archive location. With `--to`, the default archive is temporary; pass `--output` as well to retain a local copy.
 - Existing archive files are never overwritten. Output paths inside the source state/workspace trees are rejected to avoid self-inclusion.

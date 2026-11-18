@@ -473,7 +473,7 @@ describe("personal navigation rail", () => {
   });
 
   it.each([false, true])(
-    "collapses shortcut navigation only on desktop (mobile: %s)",
+    "leaves shortcut pages their own sidebar and collapses only for Home on desktop (mobile: %s)",
     async (mobile) => {
       mockMobile((query) => query.includes("max-width") && mobile);
       const { sidebar, gateway, dom } = await fixture();
@@ -513,9 +513,11 @@ describe("personal navigation rail", () => {
         expect(shortcut).not.toBeNull();
         shortcut!.click();
         await sidebar.updateComplete;
-        expect(sidebar.navigationCollapsed, selector).toBe(!mobile);
+        // The opened page decides whether a sidebar shows; only Home's panel collapses it.
+        const home = selector === ".sidebar-footer-bar__home";
+        expect(sidebar.navigationCollapsed, selector).toBe(home && !mobile);
       }
-      expect(toggle).toHaveBeenCalledTimes(mobile ? 0 : 5);
+      expect(toggle).toHaveBeenCalledTimes(mobile ? 0 : 1);
     },
   );
 

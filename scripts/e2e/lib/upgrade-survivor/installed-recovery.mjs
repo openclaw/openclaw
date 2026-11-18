@@ -4,7 +4,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspect } from "node:util";
-import { packFirstHopUpdateFixture } from "../update-first-hop-package-fixtures.mjs";
+import {
+  packFirstHopUpdateFixture,
+  packKilledUpdaterDoctorFixture,
+} from "../update-first-hop-package-fixtures.mjs";
 import { selectInstalledRecoveryCuts } from "./installed-recovery-cases.mjs";
 import { runInstalledRecoveryCommand } from "./installed-recovery-command.mjs";
 import {
@@ -22,6 +25,7 @@ import {
   writeInstalledRecoveryEvidence as write,
 } from "./installed-recovery-observations.mjs";
 import { extractPackedRecoveryHelper } from "./installed-recovery-package.mjs";
+import { readDatabase } from "./observations.mjs";
 
 const read = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const packedManifest = (tarball) =>
@@ -89,7 +93,7 @@ async function main([artifacts, prefix, tarball, configPath, summary, selectedCu
     npm_config_fund: "false",
   });
   const commands = [];
-  const run = async (directory, name, command, args, faultCut) => {
+  const run = async (directory, name, command, args, faultCut, killed = false) => {
     console.log(`[installed-recovery] ${path.basename(directory)}: ${name}`);
     const stdout = path.join(directory, `${name}.out`);
     const stderr = path.join(directory, `${name}.err`);
@@ -121,7 +125,7 @@ async function main([artifacts, prefix, tarball, configPath, summary, selectedCu
     });
     const { status } = result;
     commands.push({ ...evidence.current, preload: faultCut ?? null });
-    assert.equal(status === 0, !faultCut, `${name}: exit ${status}`);
+    assert.equal(status === 0, !faultCut && !killed, `${name}: exit ${status}`);
     return result;
   };
   const settingsUnchanged = () =>
@@ -309,8 +313,46 @@ async function main([artifacts, prefix, tarball, configPath, summary, selectedCu
     fs.unlinkSync(target);
   }
 
+  // Kill the next updater after it installed its candidate, before it confirmed it.
+  // The plain update after it must finish that update as repair does, with no repair.
+  const stateDir = process.env.OPENCLAW_STATE_DIR;
+  assert(stateDir && path.isAbsolute(stateDir), "missing isolated state directory");
+  const stateDatabase = path.join(stateDir, "state", "openclaw.sqlite");
+  const runs = () =>
+    readDatabase(stateDatabase, (db) =>
+      db
+        .prepare("SELECT run_id, trigger, status, reason, steps_json FROM update_runs")
+        .all()
+        .map(({ run_id, trigger, status, reason, steps_json }) => ({
+          run_id,
+          trigger,
+          status,
+          reason,
+          steps: JSON.parse(steps_json),
+        })),
+    );
+  const killedTarget = path.join(artifacts, "killed-update.tgz");
+  const killedDoctor = path.join(artifacts, "killed-update.doctor");
+  packKilledUpdaterDoctorFixture(tarball, killedTarget, stateDir, killedDoctor, 7);
+  const killedVersion = packedManifest(killedTarget).version;
+  const runsBefore = new Set(runs().map((row) => row.run_id));
+  await run(
+    artifacts,
+    "killed-update",
+    node,
+    [bin, "update", "--tag", `file:${killedTarget}`, "--yes", "--no-restart", "--json"],
+    undefined,
+    true,
+  );
+  assert(fs.existsSync(killedDoctor), "the post-activation Doctor must kill the updater");
+  assert.equal(read(path.join(root, "package.json")).version, killedVersion);
+  const [killedRun, ...otherKilled] = runs().filter((row) => !runsBefore.has(row.run_id));
+  assert.equal(otherKilled.length, 0);
+  assert.deepEqual([killedRun.trigger, killedRun.status], ["cli", "running"]);
+  fs.unlinkSync(killedTarget);
+
   const target = path.join(artifacts, "next-update.tgz");
-  packFirstHopUpdateFixture(tarball, target, 7);
+  packFirstHopUpdateFixture(tarball, target, 8);
   const expected = packedManifest(target);
   const next = await run(artifacts, "next-update", node, [
     bin,
@@ -321,6 +363,66 @@ async function main([artifacts, prefix, tarball, configPath, summary, selectedCu
     "--no-restart",
     "--json",
   ]);
+  // One result document for the whole update: the stage printed none of its own.
+  const nextResult = JSON.parse(next.stdout.trim());
+  const after = runs();
+  const killedAfter = after.find((row) => row.run_id === killedRun.run_id);
+  const created = after.filter((row) => !runsBefore.has(row.run_id) && row !== killedAfter);
+  const isStage = (row) => row.steps.some(({ step }) => step === "finalize:repair-continuation");
+  const stages = created.filter(isStage);
+  const nextRuns = created.filter((row) => !isStage(row));
+  const interrupted = (row) => row?.steps.filter(({ step }) => step.includes("interrupted-update"));
+  evidence.killedUpdate = {
+    killedVersion,
+    killedBy: fs.readFileSync(killedDoctor, "utf8").trim().slice(0, 200),
+    killedExit: commands.find(({ name }) => name === "killed-update")?.status ?? null,
+    killed: { runId: killedRun.run_id, status: killedAfter?.status, reason: killedAfter?.reason },
+    stages: stages.map((row) => ({
+      runId: row.run_id,
+      trigger: row.trigger,
+      status: row.status,
+      steps: row.steps.map(({ step, status }) => `${step}:${status}`),
+    })),
+    nextRuns: nextRuns.map((row) => ({
+      runId: row.run_id,
+      status: row.status,
+      interrupted: interrupted(row),
+    })),
+    nextResult: { status: nextResult.status, restart: nextResult.restart ?? null },
+  };
+  write(summary, evidence);
+  assert.equal(nextResult.status, "ok");
+  assert.deepEqual([killedAfter.status, killedAfter.reason], ["failed", "abandoned"]);
+  assert(
+    killedAfter.steps.some(
+      ({ step, status }) => step === "reconcile:acknowledged" && status === "completed",
+    ),
+    "the killed run must be acknowledged",
+  );
+  assert.equal(stages.length, 1, "one repair-shaped run finishes the killed update");
+  const [stage] = stages;
+  assert.deepEqual([stage.trigger, stage.status], ["cli", "succeeded"]);
+  assert.equal(nextRuns.length, 1);
+  const [nextRun] = nextRuns;
+  assert.equal(nextRun.status, "succeeded");
+  const steps = new Map(nextRun.steps.map((step) => [step.step, step]));
+  for (const name of ["interrupted-update-recovery", "interrupted-update-finalization"]) {
+    assert.equal(steps.get(name)?.status, "completed", name);
+  }
+  // The pointer names the killed run and the run that finished it.
+  const pointer = steps.get("warning:interrupted-update-finalization")?.detail ?? "";
+  assert(pointer.includes(killedRun.run_id) && pointer.includes(stage.run_id), pointer);
+  assert.equal(after.filter((row) => row.status === "running").length, 0);
+  evidence.killedUpdate = {
+    ...evidence.killedUpdate,
+    killedRunId: killedRun.run_id,
+    killedStatus: killedAfter.status,
+    killedReason: killedAfter.reason,
+    stageRunId: stage.run_id,
+    stageStatus: stage.status,
+    nextRunStatus: nextRun.status,
+  };
+  write(summary, evidence);
   // Healthy update runs Doctor and may persist bookkeeping. Status inspection
   // must preserve those new bytes as well as the configured operator settings.
   const updatedConfig = fs.readFileSync(configPath);

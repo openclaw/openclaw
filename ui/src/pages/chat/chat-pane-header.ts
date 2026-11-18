@@ -320,7 +320,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             addPanelAction(slot, {
               id: `session-${slot}`,
               label: t(subagents ? "chat.subagentsPanel.title" : "chat.processesPanel.title"),
-              icon: subagents ? "bot" : "terminal",
+              icon: subagents ? "bot" : "listTree",
               active: subagents ? subagentsVisible : processesVisible,
               onActivate: () => this.requestBackgroundPanel(slot, "toggle"),
             });

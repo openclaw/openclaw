@@ -2,8 +2,6 @@ import { createCronExecutionId } from "../../../../src/cron/run-id.js";
 import type { CronJob } from "../../api/types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
-import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
-import { updateCronRunsFilter } from "../../lib/cron/runs.ts";
 import type { CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 
@@ -12,19 +10,16 @@ export function resolveCronRouteData(search: string): {
   runId: string | null;
   /** `?new` opens the create panel, as the sidebar's New automation does. */
   create?: true;
-  session?: { sessionKey: string; sessionAgentId: string };
+  /** `?activity` opens every automation's run history, as the sidebar's Activity does. */
+  activity?: true;
 } {
   const params = new URLSearchParams(search);
   const jobId = params.get("job")?.trim() || null;
-  const sessionKey = params.get("session")?.trim();
-  const agentId = params.get("agent")?.trim();
   return {
     jobId,
     runId: jobId ? params.get("run")?.trim() || null : null,
     ...(!jobId && params.has("new") ? { create: true as const } : {}),
-    ...(!jobId && sessionKey && agentId
-      ? { session: { sessionKey, sessionAgentId: agentId } }
-      : {}),
+    ...(!jobId && params.has("activity") ? { activity: true as const } : {}),
   };
 }
 
@@ -73,42 +68,17 @@ export function createCronRouteSelection() {
     selection.target = { jobId, runId };
     selection.requested = true;
   }
-  function resolveLoadedSession(state: CronState, apply: (job: CronJob) => void) {
-    if (selection.target?.session && state.cronJobsSnapshotRevision && !state.cronLoading) {
-      selection.target = null;
-      const [job] = state.cronJobs;
-      if (state.cronJobsTotal === 1 && job) {
-        apply(job);
-      }
-    }
-  }
-  return Object.assign(selection, { bind, resolve, resolveLoadedSession, select });
+  return Object.assign(selection, { bind, resolve, select });
 }
 
-export function resolveCronDetailTab(
-  job: CronJob | null,
-  runId: string | null | undefined,
-): "history" | "settings" {
-  return job && (runId || isCronJobActiveFailure(job)) ? "history" : "settings";
+/** The run a failure banner reviews: the saved job's last run, when the job recorded one. */
+export function failedRunId(job: CronJob): string | null {
+  return typeof job.state.lastRunAtMs === "number"
+    ? createCronExecutionId(job.id, job.state.lastRunAtMs)
+    : null;
 }
 
-/** Resolve attention from the saved job; explicit historical run links always win. */
-export function resolveCronDetailSelection(state: CronState, job: CronJob, runId: string | null) {
-  const needsAttention = isCronJobActiveFailure(job);
-  const selectedRunId =
-    runId ??
-    (needsAttention && typeof job.state.lastRunAtMs === "number"
-      ? createCronExecutionId(job.id, job.state.lastRunAtMs)
-      : null);
-  if (needsAttention && !selectedRunId) {
-    updateCronRunsFilter(state, {
-      cronRunsQuery: "",
-      cronRunsStatuses: [],
-      cronRunsDeliveryStatuses: [],
-    });
-  }
-  return {
-    runId: selectedRunId,
-    tab: resolveCronDetailTab(job, selectedRunId),
-  };
+/** An automation opens on its prompt and history; its settings open from Edit. */
+export function resolveCronDetailTab(job: CronJob | null): "history" | "settings" {
+  return job ? "history" : "settings";
 }

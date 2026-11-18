@@ -85,6 +85,15 @@ Multiple independent npm failures are recovery errors, not broader retries. Coll
 the new attempt and require final verification. A failed producer is retryable;
 local controller upgrades cannot retrofit receipt adoption into frozen workflows.
 
+**Plugin npm artifact recovery:** continuation authenticates the original
+`plugin-npm-release.yml` preflight by its repository, workflow SHA/ref, target,
+dist-tag, dispatch identity, and run attempt. It reruns `preview_plugins_npm`
+and its dependents on that same run, not just a failed package: plugin packs,
+readback, and the prepared roster must belong to one attempt. Green diagnostic
+children remain untouched. The parent then adopts the original producer’s new
+prepared descriptor and must reseal and pass strict verification. No replacement
+producer or publication is dispatched.
+
 Send each child/parent mutation once. On ambiguous transient errors, reconcile
 read-only until a newer attempt appears or the bounded deadline expires; never
 repeat, and stop on provenance drift. After timeout/interruption, inspect

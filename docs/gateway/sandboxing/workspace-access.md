@@ -336,8 +336,11 @@ are unchanged and no recovery is pending, its runtimes keep running. Changed or
 interrupted checks return to paused reconciliation; file edits are never applied
 from the live check. Checkpoints after commands and file mutations use the same
 check for the guest workspace: commands that leave accepted files unchanged do
-not pause the sandbox. Changed command checkpoints pause until their files are
-stored in an immutable Git result, then resume before canonical publication.
+not pause the sandbox. Changed command checkpoints prepare file hashes and Git
+blobs while the guest runs, then pause to check the current file inventory and
+identities. Files changed again or too recent for safe reuse are hashed during
+that pause. The guest resumes once an immutable Git result owns the final capture,
+before canonical publication.
 They do not create disposable filesystem snapshots, avoiding snapshot creation
 and recursive retirement after each changed command. Pending recovery retains
 its consistency pause. A container pause does not flush application buffers;
@@ -413,9 +416,16 @@ Release records `Local workspace unpause` with the same `reason`, elapsed
 `phaseDurationsMs` lists every cumulative phase lasting at least one second;
 shorter phases are omitted. Fixed `operation.*` sub-phases distinguish Git-state
 verification, pristine source checks, canonical snapshot preparation, and commit
-bookkeeping during base refresh. These use the same exclusive timing field;
-they include awaited worker and Git work, not
-just Gateway CPU time. Initial workspace-lease acquisition precedes the pause.
+bookkeeping during base refresh. These use the same exclusive timing field and
+include awaited worker and Git work, not just Gateway CPU time.
+Publication also reports reconciliation phases (`scan`, `staging`, `materialization`,
+`preflight`, `patch`, `apply`, `acceptance`, and `cleanup`). Its fixed `operation.*`
+sub-phases separate source admission, Git policy preparation, snapshot safety checks,
+index copying, Git staging, admitted-path pruning, attribute verification, and
+temporary-index cleanup. The diagnostics timeline observes these same structural
+phases without file paths or content. Timings preserve the existing consistency pause;
+they do not establish that a long operation waited for a fixed timeout.
+Initial workspace-lease acquisition precedes the pause.
 Resume inspection, generation validation, and unpause
 are separated as `resumeInspect`, `resumeAuthority`, and `unpause`. Engine-command
 times include broker admission, transport, and command completion, not just engine

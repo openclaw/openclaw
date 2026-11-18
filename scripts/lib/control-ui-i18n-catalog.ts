@@ -34,6 +34,7 @@ import { registerChatQuestionsEnglish } from "../../ui/src/i18n/locales/en-chat-
 import { registerChatSessionOptionalEnglish } from "../../ui/src/i18n/locales/en-chat-session-optional.ts";
 import { registerChatSessionSharingEnglish } from "../../ui/src/i18n/locales/en-chat-session-sharing.ts";
 import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
+import { registerChatSystemNoticeEnglish } from "../../ui/src/i18n/locales/en-chat-system-notice.ts";
 import { registerChatToolContentEnglish } from "../../ui/src/i18n/locales/en-chat-tool-content.ts";
 import { registerChatToolLabelsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-labels.ts";
 import { registerChatToolWidgetsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-widgets.ts";
@@ -161,6 +162,7 @@ const sourceFiles = [
   "en-chat-public-qr.ts",
   "en-chat-questions.ts",
   "en-chat-session.ts",
+  "en-chat-system-notice.ts",
   "en-chat-tool-content.ts",
   "en-chat-tool-labels.ts",
   "en-chat-tool-widgets.ts",
@@ -593,6 +595,10 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         sessionDetails,
         sessionSharing,
         subagentsPanel,
+        pendingInputs: {
+          ...registerChatSessionEnglish.catalog.chat.pendingInputs,
+          ...registerChatSystemNoticeEnglish.catalog.chat.pendingInputs,
+        },
         sessionHeader: {
           ...registerChatSessionEnglish.catalog.chat.sessionHeader,
           continueInTerminal,
