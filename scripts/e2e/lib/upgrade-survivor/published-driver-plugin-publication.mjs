@@ -271,7 +271,8 @@ async function observe(label, port, token, commandEnv) {
     (target) => target.url === `ws://127.0.0.1:${port}`,
   )?.server?.version;
   await run(`${label}-plugins-list`, "openclaw", ["plugins", "list", "--json"], commandEnv);
-  facts.loaded = Object.fromEntries(
+  // `plugins list` reads the local plugin inventory; it does not query the running Gateway.
+  facts.inventory = Object.fromEntries(
     (parseJsonOutput(`${label}-plugins-list`)?.plugins ?? [])
       .filter((plugin) => Object.hasOwn(facts.plugins, plugin.id))
       .map((plugin) => [plugin.id, { version: plugin.version, status: plugin.status }]),
@@ -304,7 +305,7 @@ function assertConverged(facts, target, lagging) {
     const id = spec.split("/")[1];
     const expected = spec === lagging ? driverVersion : target;
     assert.deepEqual(facts.plugins[id], { version: expected, diskVersion: expected }, id);
-    assert.deepEqual(facts.loaded[id], { version: expected, status: "loaded" }, id);
+    assert.deepEqual(facts.inventory[id], { version: expected, status: "loaded" }, id);
   }
 }
 
@@ -427,6 +428,9 @@ try {
     // A real config change is still refused; the installed Gateway keeps serving the update.
     assert.notEqual(firstExit, 0, "The refused channel write fails the update");
     assert.equal(first?.run?.status, "failed");
+    // It failed because the requested channel write reached the config writer's refusal.
+    const verification = first?.steps?.find((step) => step.name === "post-update verification");
+    assert.match(verification?.stderrTail ?? "", /openclaw\.json is a symlink/);
     assert.equal(fs.readFileSync(configPath, "utf8"), configBefore);
     assert.equal(afterFirst.servingVersion, target);
     assert.equal(afterFirst.readyz, 200);

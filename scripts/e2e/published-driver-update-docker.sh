@@ -31,7 +31,15 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
-ARTIFACT_DIR="${2:-$ROOT_DIR/.artifacts/published-driver-update}"
+# The plugin publication cell drives its own first update with official npm plugins installed,
+# and keeps its diagnostics apart from the other published-driver cells.
+CELL_ENTRY=published-driver.mjs
+DEFAULT_ARTIFACT_DIR="$ROOT_DIR/.artifacts/published-driver-update"
+if [ "${OPENCLAW_PUBLISHED_DRIVER_PLUGIN_PUBLICATION:-0}" = "1" ]; then
+  CELL_ENTRY=published-driver-plugin-publication.mjs
+  DEFAULT_ARTIFACT_DIR="$ROOT_DIR/.artifacts/published-driver-plugin-publication"
+fi
+ARTIFACT_DIR="${2:-$DEFAULT_ARTIFACT_DIR}"
 DRIVER_TAG="${3:-latest}"
 mkdir -p "$ARTIFACT_DIR"
 ARTIFACT_DIR="$(cd "$ARTIFACT_DIR" && pwd)"
@@ -44,11 +52,6 @@ docker_e2e_build_or_reuse "$IMAGE_NAME" published-driver-update \
   "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" bare
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 DRIVER_ARGS=(-e GITHUB_EVENT_NAME -e OPENCLAW_PUBLISHED_DRIVER_LEGACY_SQLITE -e OPENCLAW_PUBLISHED_DRIVER_LINKED_ROOT -e OPENCLAW_PUBLISHED_DRIVER_OWNED_PREFIX -e OPENCLAW_PUBLISHED_DRIVER_FOLLOW_UP -e OPENCLAW_PUBLISHED_DRIVER_SCOPED_RESTORE -e OPENCLAW_PUBLISHED_DRIVER_PLUGIN_FAULT)
-# The plugin publication cell drives its own first update with official npm plugins installed.
-CELL_ENTRY=published-driver.mjs
-if [ "${OPENCLAW_PUBLISHED_DRIVER_PLUGIN_PUBLICATION:-0}" = "1" ]; then
-  CELL_ENTRY=published-driver-plugin-publication.mjs
-fi
 if [ "${OPENCLAW_PUBLISHED_DRIVER_SCOPED_RESTORE:-0}" = "1" ]; then
   fixture_root="${DOCKER_E2E_HARNESS_ROOT_DIR:-$ROOT_DIR}"
   DRIVER_ARGS+=(-v "$fixture_root/test/fixtures/sqlite/openclaw-agent-schema-v26.sql:/app/test/fixtures/sqlite/openclaw-agent-schema-v26.sql:ro")
