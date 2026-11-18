@@ -79,6 +79,7 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     failureAlertToSuggestions: [],
     accountSuggestions: [],
     onDetailTabChange: () => undefined,
+    onCancelEdit: () => undefined,
     onFormChange: () => undefined,
     onRefresh: () => Promise.resolve(),
     onSubmit: () => undefined,

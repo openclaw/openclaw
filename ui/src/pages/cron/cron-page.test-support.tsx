@@ -247,6 +247,16 @@ export async function openJob(page: CronTestPage, id: string): Promise<void> {
   await page.settle();
 }
 
+/** Opens a held automation and its settings, as Edit on the automation's prompt does. */
+export async function editJob(page: CronTestPage, id: string): Promise<void> {
+  await openJob(page, id);
+  await waitForSolid(() =>
+    expect(page.querySelector('[data-test-id="cron-edit"]')).toBeInstanceOf(HTMLButtonElement),
+  );
+  page.querySelector<HTMLButtonElement>('[data-test-id="cron-edit"]')!.click();
+  await page.settle();
+}
+
 export function cronListResponse(jobs: CronJob[]): CronJobsListResult {
   return {
     jobs: jobs.map((job) => ({

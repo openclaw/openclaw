@@ -233,8 +233,10 @@ openclaw gateway --verbose --ws-log full
 When the reply watchdog stops a run, the existing `lane task error` record includes
 `staleReason` (`no_activity` or `rate_limited`) and `pendingTools`. The latter lists
 at most the first five pending tools in start order, each with `toolName`,
-`toolCallId`, and `elapsedMs` measured at the stop. These facts survive abort
-cleanup; tool arguments, results, and message content are excluded. Code Mode
+`toolCallId`, and `elapsedMs` measured at the stop decision, before recovery or
+abort cleanup can settle the tools. Code Mode entries can also include the bounded
+`awaiting` bridge details described in [Code Mode internals](/tools/code-mode/internals#nested-tool-execution).
+Tool arguments, results, and message content are excluded. Code Mode
 host calls carry their own tool name and call ID, including on worker turns.
 Automation run history appends these pending-tool details to its recovery cause;
 provider rate-limit text keeps precedence.

@@ -27,7 +27,7 @@ function selectSchedule(container: Element, kind: string) {
 }
 
 function expectInvalidField(container: Element, id: string, errorId: string, message: string) {
-  const field = getElement(container, `#cron-${id}`, HTMLInputElement);
+  const field = getElement(container, `#cron-${id}`, HTMLElement);
   expect(field.getAttribute("aria-invalid")).toBe("true");
   expect(field.getAttribute("aria-describedby")).toBe(`cron-error-${errorId}`);
   expect(text(container, `#cron-error-${errorId}`)).toContain(message);

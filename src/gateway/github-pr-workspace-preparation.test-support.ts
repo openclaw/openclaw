@@ -65,7 +65,11 @@ export function observeManagedLayoutCaptures() {
         run({
           ...store,
           manifest: async (row, action) => {
-            if (layoutChanged && (action.kind === "probe" || action.kind === "scan")) {
+            if (
+              layoutChanged &&
+              (action.kind === "probe" || action.kind === "scan") &&
+              !action.prehash
+            ) {
               observations.push(`${action.kind}:${action.target}`);
             }
             return await store.manifest(row, action);

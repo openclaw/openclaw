@@ -61,6 +61,24 @@ const callback = (id: string, data: string, chat_instance: string, message_id: n
   message: { message_id, date: messageBase.date, chat },
 });
 
+it.each([
+  { text: "Send /model to choose another model.", command: "/model" },
+  { text: "Please explain /status", command: "/status" },
+])("does not promote a mid-message command entity: $text", async ({ text, command }) => {
+  const bot = await configuredBot(openUnstreamed, { commands: { native: true } });
+  await handleMessage(bot, nextTelegramTestMessageId(), {
+    ...commandMessage("/status"),
+    text,
+    entities: [{ type: "bot_command", offset: text.indexOf(command), length: command.length }],
+  });
+  expect(harness.replySpy).toHaveBeenCalledOnce();
+  expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
+    CommandBody: text,
+    commandText: text,
+    CommandTurn: { kind: "normal", source: "message" },
+  });
+});
+
 it.each(["forum", "DM"] as const)("routes native commands to the %s topic", async (kind) => {
   const dm = kind === "DM";
   harness.replySpy.mockResolvedValue({ text: "response" });
