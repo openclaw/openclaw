@@ -45,8 +45,11 @@ export async function proveRejectedWorkspaceCheckpoint(
   // Model an old, already-staged result refused by reconciliation admission.
   const admission = vi
     .spyOn(staging, "stageWorkerWorkspaceResult")
-    .mockImplementationOnce(async (params) => {
-      await stage(params);
+    .mockImplementation(async (params) => {
+      const result = await stage(params);
+      if (params.blobsOnly) {
+        return result;
+      }
       throw Object.assign(
         new Error("Result changes too many files; add build outputs to .gitignore"),
         {

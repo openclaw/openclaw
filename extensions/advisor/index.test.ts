@@ -152,15 +152,36 @@ it.each(["Looks fine to me.", "CORRECTION", "NO_CHANGE"])(
   },
 );
 
-it("ignores non-user and subagent runs and does not review at run end", async () => {
+it.each([
+  ["the effective tool policy restricts Codex native tools for this session", "tool_policy"],
+  ["OpenClaw sandboxing is active for this session", "sandbox"],
+  ["OpenClaw exec host=node is active for this session", "exec_host_node"],
+  ["an unexpected failure occurred", undefined],
+])("records an advisor outcome when the fork refuses: %s", async (cause, reason) => {
+  const run = await startAdvisor();
+  // The fork boundary returns plain Errors; Codex's side-question suite pins these sentences.
+  run.forkSession.mockRejectedValue(
+    new Error(`Codex-native /btw side-question mode is unavailable because ${cause}.`),
+  );
+  await run.tool(1);
+  expect(run.warn).toHaveBeenCalledExactlyOnceWith(
+    reason
+      ? `advisor: review skipped for session agent:main:main: ${reason}`
+      : "advisor: review failed for session agent:main:main: fork_failed",
+  );
+  expect(run.steer).not.toHaveBeenCalled();
+});
+
+it("reviews subagent runs, ignores non-user runs and does not review at run end", async () => {
   const run = await startAdvisor(1, "NO_CHANGE", "cron");
   await run.tool();
   await run.send("lifecycle", "end", {}, 0);
   await run.startRun("run-sub", "user", "agent:main:subagent:child");
   await run.send("tool", "start", { toolCallId: "sub" }, undefined, "run-sub");
-  await run.send("tool", "result", { toolCallId: "sub" }, 0, "run-sub");
+  await run.send("tool", "result", { toolCallId: "sub" }, 1, "run-sub");
+  expect(run.forkSession.mock.calls[0]?.[0].sessionKey).toBe("agent:main:subagent:child");
   await run.startRun("run-2");
-  await run.send("lifecycle", "end", {}, 0, "run-2");
+  await run.send("lifecycle", "end", {}, 1, "run-2");
 });
 
 it.each(["run_end", "run_aborted"])("cancels in-flight reviews at run end (%s)", async (reason) => {

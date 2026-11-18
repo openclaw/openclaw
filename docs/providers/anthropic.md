@@ -512,7 +512,11 @@ order, and lifetime without changing the pinned system prompt.
 Tool results and queued extension context also clear turn-scoped messages, so
 OpenClaw renews the current user turn's runtime context after those continuations.
 
-OAuth, proxies, Bedrock, Vertex, and Foundry keep their existing behavior.
+Every other Anthropic route (OAuth, proxies and custom base URLs, Vertex,
+Foundry, Bedrock, and other Claude models) also pins the session system prompt. The prompt
+updates arrive as user-role notes, because these routes cannot send
+mid-conversation system messages. Runtime context keeps its user-role carrier.
+See [Session prefix stability](/reference/prompt-caching#session-prefix-stability).
 Every Claude model binds its thinking to the request prefix except a closed list
 of older generations: Claude 3, Claude 4.x, Opus 5, Sonnet 5, Fable 5, Mythos 5,
 and Mythos Preview. That list never grows, so a Claude model released after this
@@ -521,13 +525,13 @@ Prefix-binding models such as Fable 5.2, Fable 5.1, Opus 5.5, and Sonnet 5.5 ret
 user-role runtime-context carriers and inline inbound metadata, preserving
 consecutive user turns on the Messages API; Bedrock Converse still merges
 consecutive user turns. Those carriers contain the delimited context body,
-with interpretation guidance once in the stable system prompt. Routes without
-either capability keep transient carriers and normal user-turn merging.
+with interpretation guidance once in the stable system prompt. Every other
+route also retains earlier runtime-context carriers, so each request extends the
+previous one; Messages API routes keep consecutive user turns separate. A
+provider plugin can opt out with `appendOnlyRuntimeContext: false` in its replay
+policy, for a proxy that answers a trailing carrier instead of the user.
 Fallback attempts keep the same route-specific context format without repeating
 the original user message or attachments.
-Transient carriers remain the cheaper shape on routes without in-history
-system updates when thinking does not bind the prefix: old carriers consume no
-later context or repeated cache-read charges.
 
 Direct Anthropic API-key requests with adaptive thinking send the
 `thinking-binding-controls-2026-08-01` beta and

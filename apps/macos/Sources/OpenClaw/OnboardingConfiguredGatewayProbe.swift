@@ -158,7 +158,8 @@ final class OnboardingConfiguredGatewayProbe {
             self.reconnectHandler = nil
             self.reconnectPending = false
         }
-        let stream = await gateway.subscribe(bufferingNewest: 1)
+        // Only snapshots trigger a recheck; server traffic must not evict the hello.
+        let stream = await gateway.subscribe(bufferingNewest: 1, matching: { _ in false })
         for await delivery in stream {
             guard !Task.isCancelled else { return }
             guard delivery.isCurrent, case .snapshot = delivery.push else { continue }

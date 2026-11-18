@@ -1,4 +1,7 @@
 /* @vitest-environment jsdom */
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Compile } from "typebox/compile";
 import { expect, vi } from "vitest";
@@ -12,6 +15,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/plugins.ts";
 import type { MockGatewayWindow } from "./control-ui-e2e-contract.ts";
 import {
+  createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
   type ControlUiMockRequestHandler,
 } from "./control-ui-e2e.ts";
@@ -21,6 +25,33 @@ import { flushMockTimers, mockGatewayTest as it } from "./mock-gateway-page.test
 
 const getGateway = (window: MockGatewayWindow) =>
   expectDefined(window.openclawControlUiE2eGateway, "Mock Gateway was not installed");
+
+const lobsterAvatar = `data:image/svg+xml;base64,${readFileSync(
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public/favicon.svg"),
+).toString("base64")}`;
+
+it.for([
+  { scenario: {}, avatar: lobsterAvatar },
+  { scenario: { basePath: "/control" }, avatar: lobsterAvatar },
+  { scenario: { assistantName: "Scout" }, avatar: "" },
+  { scenario: { assistantAvatar: "" }, avatar: "" },
+  { scenario: { assistantAvatar: "🔭" }, avatar: "🔭" },
+])(
+  "keeps demo branding consistent across bootstrap and identity reads ($scenario)",
+  async ({ scenario, avatar }, { gatewayPage }) => {
+    expect(createControlUiMockBootstrapConfig(scenario).assistantAvatar).toBe(avatar);
+    gatewayPage.execute(createControlUiMockGatewayInitScript(scenario));
+    const { request } = gatewayPage.connect();
+    await flushMockTimers();
+    expect(await request("identity", "agent.identity.get", { agentId: "main" })).toMatchObject({
+      avatar,
+    });
+    const roster = await request("roster", "agents.list", {});
+    expect(roster.agents).toEqual([
+      expect.objectContaining({ identity: expect.objectContaining({ avatar }) }),
+    ]);
+  },
+);
 
 it("emits integer challenge timestamps from a fractional virtual clock", async ({
   gatewayPage,

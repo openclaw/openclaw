@@ -124,7 +124,8 @@ itUnix.for(["transfer", "cancel"] as const)(
     const identity = { kind: "managed-update-handoff", ...result };
     if (mode === "cancel") assert.equal(await handoff.cancelManagedServiceUpdateHandoff(identity), "restored-in-process");
     else assert(await handoff.transferManagedServiceUpdateHandoff(identity));
-    fs.writeFileSync(${JSON.stringify(transferred)}, JSON.stringify(result));
+    fs.writeFileSync(${JSON.stringify(transferred + ".tmp")}, JSON.stringify(result));
+    fs.renameSync(${JSON.stringify(transferred + ".tmp")}, ${JSON.stringify(transferred)});
   `,
     );
     const { spawn } =

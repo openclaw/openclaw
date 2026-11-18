@@ -433,10 +433,11 @@ function* createOpenClawToolsSteps(
     denylist: explicitFactoryDenylist,
   });
   const widgetBoardSessionKey = scheduledTargets?.boardSessionKey ?? sessionKey;
-  // Authorized recovery and capped scheduled turns can author boards without an inline renderer.
+  // A recorded widget surface can keep authoring its durable board on internal
+  // wakes. Tool policy and board authority still apply; this grants no renderer.
   const pinnedWidgetAuthoringAdmitted =
     (options?.pinnedWidgetAuthoring === true ||
-      (scheduledCaller && scheduledWidgetExplicitlyAllowed)) &&
+      (scheduledCaller ? scheduledWidgetExplicitlyAllowed : inlineWidgetClientAvailable)) &&
     !currentChannelWidgetPresenter &&
     Boolean(widgetBoardSessionKey) &&
     !isCronRunSessionKey(widgetBoardSessionKey);
@@ -484,6 +485,12 @@ function* createOpenClawToolsSteps(
       (options?.runSessionKey ?? options?.agentSessionKey) ? options?.sessionId : undefined,
     agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
     requesterTurnRunId: options?.runId,
+    // A scheduled owner run carries no sender bit; its children record the owner
+    // bit the occurrence was admitted with, as the run's own memory audience does.
+    senderIsOwner: scheduledTargets?.spawnSenderIsOwner ?? options?.senderIsOwner,
+    ...(scheduledTargets?.spawnSenderIsOwner
+      ? { assertSenderOwnerCurrent: scheduledTargets.assertOwnerCurrent }
+      : {}),
     completionOwnerKey: options?.runSessionKey,
     currentMessagingTarget: options?.currentMessagingTarget ?? options?.currentChannelId,
     currentChannelId: options?.nativeChannelId ?? options?.currentChannelId,

@@ -168,7 +168,7 @@ export function registerGatewayRuntimeRecovery(params: {
     if (!service.running || !executable || !isNodeRuntime(executable)) {
       return reportGatewayRuntimeRecoveryOnly("the service has no verified Node command.");
     }
-    const probe = probeChildRuntimeExecutable(executable, {
+    const probe = await probeChildRuntimeExecutable(executable, {
       env: service.env,
       cwd: service.command?.workingDirectory,
     });

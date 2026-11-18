@@ -102,11 +102,11 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
             serviceUpdateVerdict: { kind: "absent" },
           };
         });
-        mocks.validateCanary.mockImplementation(async () => {
+        mocks.checkCandidate.mockImplementation(async () => {
           if (phase === "validating") {
-            events.push("canary");
+            events.push("candidate-check");
           }
-          return { status: "ok", phase: "readiness", steps: [], durationMs: 1, logTail: [] };
+          return { status: "ok", steps: [] };
         });
         mocks.runPackageUpdate.mockImplementation(async (options: PackageInstallUpdateParams) => {
           if (phase === "validating") {
@@ -214,7 +214,11 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
           release.resolve();
           expect(await pending).toMatchObject({ result: { status: "ok" } });
           expect(fixture.events).toContain(
-            phase === "validating" ? "canary" : phase === "activating" ? "activated" : "prepared",
+            phase === "validating"
+              ? "candidate-check"
+              : phase === "activating"
+                ? "activated"
+                : "prepared",
           );
           expect(hostWrites).toEqual([]);
           expect(admissionSql).toEqual([]);
@@ -242,7 +246,7 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
         expect(await fixture.start()).toMatchObject({ result: { status: "ok" } });
         expect(releasedBeforeSettlement).toBe(true);
         expect((await fixture.readRun())?.phase).toBe("validating");
-        expect(fixture.events).toContain("canary");
+        expect(fixture.events).toContain("candidate-check");
       } finally {
         if (releaseTurn) {
           clearImmediate(releaseTurn);
@@ -322,7 +326,7 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
         { env: fixture.run.env },
       );
       expect(await fixture.start()).toMatchObject({ result: { status: "ok" } });
-      expect(fixture.events).toContain("canary");
+      expect(fixture.events).toContain("candidate-check");
       expect(await fixture.readRun()).toEqual(terminal);
     });
   });

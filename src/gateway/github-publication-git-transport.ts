@@ -2,11 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { githubRepositoryUrl } from "../agents/github-host.js";
 import type { WorktreeGitPolicy } from "../agents/worktrees/checkout-git-config.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { gitNullConfigPath, gitReadOnlyEnvironment } from "../infra/git-exec.js";
-import { appendGitConfig, gitMaintenanceEnvironment } from "../infra/git-maintenance-env.js";
+import { gitNullConfigPath } from "../infra/git-exec.js";
 import { retryableGitNetworkOperation, withGitNetworkRetry } from "../infra/git-network-retry.js";
 import { withGitObjectStoreTransport } from "../infra/git-object-store-transport.js";
 import { createCommandError } from "../process/command-error.js";
@@ -18,11 +18,14 @@ import {
   githubPublicationUnsafeConfigArgs,
   parseGitHubPublicationBaseRef,
 } from "./github-publication-base.js";
+import { publicationCommandEnv } from "./github-publication-command-env.js";
+import { GitHubPublicationApiError } from "./github-publication-failure.js";
 import { createGitHubPublicationGitError } from "./github-publication-git-error.js";
 
 type GitCommandOptions = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  prepareEnv?: () => NodeJS.ProcessEnv;
   input?: string | Buffer | (() => string | Buffer);
   maxOutputBytes?: number;
   beforeRun?: () => void;
@@ -59,14 +62,9 @@ export async function runPublicationCommand(argv: string[], options: GitCommandO
       (timeoutMs) =>
         runCommandBuffered(argv, {
           ...(options.cwd ? { cwd: options.cwd } : {}),
-          env: {
-            ...(argv[0] === "git"
-              ? gitReadOnlyEnvironment(argv.slice(1), options.env ?? {})
-              : (options.env ?? {})),
-            GIT_NO_REPLACE_OBJECTS: "1",
-            // Pin every command against repository hooks; explicit hook-disabling -c flags stay stronger.
-            ...appendGitConfig(gitMaintenanceEnvironment(), [["core.hooksPath", os.devNull]]),
-          },
+          ...(options.prepareEnv
+            ? { preparedEnv: options.prepareEnv() }
+            : { env: publicationCommandEnv(argv, options.env) }),
           // Resolve optional disclosure after beforeRun, directly at the transport boundary.
           ...(options.input !== undefined
             ? { input: typeof options.input === "function" ? options.input() : options.input }
@@ -86,6 +84,9 @@ export async function requirePublicationCommand(
 ): Promise<string> {
   const result = await runPublicationCommand(argv, options);
   if (result.code !== 0 || result.error) {
+    if (argv[0] === "gh") {
+      throw new GitHubPublicationApiError(result, options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS);
+    }
     throw createCommandError(
       argv[0] ?? "command",
       { ...result, stdout: Buffer.alloc(0) },
@@ -744,4 +745,11 @@ export function githubPublicationUpdateRefArgs(
     commit,
     previousHead,
   ];
+}
+
+export function gitHubPublicationObjectSha(value: unknown): string {
+  if (!isRecord(value) || typeof value.sha !== "string" || !/^[a-f0-9]{40}$/u.test(value.sha)) {
+    throw new Error("GitHub returned an invalid Git object identity.");
+  }
+  return value.sha;
 }

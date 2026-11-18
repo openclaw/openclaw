@@ -42,9 +42,12 @@ import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 import {
   controlUiClient,
+  expectChatEvent,
+  expectPreparedProject,
   initializeRepository,
   publishRepositoryFixtureCheckpoint,
   removeOwnedSessionWorktree,
+  retryRemoteProjectSession,
   settleWorkspaceRuns,
   successfulSessionRequest as request,
 } from "./server.sessions.create.projects.test-support.js";
@@ -110,26 +113,6 @@ function mockDispatch() {
     counts: { block: 0, final: 0, tool: 0 },
   });
 }
-function expectChatEvent(broadcast: ReturnType<typeof vi.fn>, fields: Record<string, unknown>) {
-  expect(broadcast).toHaveBeenCalledWith(
-    "chat",
-    expect.objectContaining(fields),
-    expect.anything(),
-  );
-}
-function expectPreparedProject(
-  entry: SessionEntry | null | undefined,
-  sessionId: string,
-  project: Awaited<ReturnType<typeof registerProjectRegistry>>,
-  projectRoot: string,
-) {
-  expect(entry).toMatchObject({
-    sessionId,
-    projectId: project.id,
-    worktree: { canonicalWorkspaceDir: projectRoot },
-  });
-  expect(entry?.spawnedCwd).not.toBe(projectRoot);
-}
 async function remoteProjectFixture<T = Awaited<ReturnType<typeof registerProjectRegistry>>>(
   prefix: string,
   options: { sandboxed?: boolean; alias?: boolean; recordInput?: boolean } = {},
@@ -150,7 +133,11 @@ async function remoteProjectFixture<T = Awaited<ReturnType<typeof registerProjec
   const { storePath } = await createSessionStoreDir();
   const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
   const materialization = createDeferredCore<T>();
-  projectCloneMocks.materialize.mockReturnValueOnce(materialization.promise);
+  const materializationStarted = createDeferredCore();
+  projectCloneMocks.materialize.mockImplementationOnce(() => {
+    materializationStarted.resolve();
+    return materialization.promise;
+  });
   if (options.recordInput) {
     projectCloneMocks.prepareIdentity.mockResolvedValue({
       token: "protected-native-token",
@@ -164,7 +151,7 @@ async function remoteProjectFixture<T = Awaited<ReturnType<typeof registerProjec
   } else {
     mockDispatch();
   }
-  return { storePath, projectRoot, project, materialization };
+  return { storePath, projectRoot, project, materialization, materializationStarted };
 }
 
 type CreatedSession = {
@@ -194,7 +181,7 @@ function createRemoteSession(
   );
 }
 
-test.each([
+test.for([
   { mode: "ready", worktree: true, sandboxed: false, image: true, baseRef: "main" },
   { mode: "ready", worktree: false, sandboxed: true },
   { mode: "abort", worktree: true },
@@ -202,16 +189,18 @@ test.each([
   { mode: "retry", worktree: true },
 ])(
   "remote project $mode (worktree=$worktree, sandboxed=$sandboxed)",
-  async ({ mode, worktree, sandboxed, image, baseRef }) => {
+  async ({ mode, worktree, sandboxed, image, baseRef }, { signal: testSignal }) => {
     const ready = mode === "ready";
     if (ready) {
       vi.stubEnv("GH_TOKEN", "");
       vi.stubEnv("GITHUB_TOKEN", "");
     }
-    const { storePath, projectRoot, project, materialization } = await remoteProjectFixture(
-      `openclaw-remote-${mode}-`,
-      { sandboxed, alias: ready, recordInput: ready },
-    );
+    const { storePath, projectRoot, project, materialization, materializationStarted } =
+      await remoteProjectFixture(`openclaw-remote-${mode}-`, {
+        sandboxed,
+        alias: ready,
+        recordInput: ready,
+      });
     const attachments = image
       ? [
           {
@@ -384,6 +373,9 @@ test.each([
         const entryAfterCreation = readEntry(storePath, key);
         const failureMessage =
           "Git clone could not reach GitHub. Check the Gateway network connection and retry.";
+        const retainedCause = expect.stringContaining(failureMessage);
+        const desktopNotice = "Git clone could not reach GitHub.";
+        await withinTest(materializationStarted.promise, testSignal);
         materialization.reject(new ProjectCloneError("network", failureMessage));
         await settleWorkspaceRuns(context, storePath, key);
         expectChatEvent(broadcast, {
@@ -406,7 +398,7 @@ test.each([
               status: "failed",
               hasActiveRun: false,
               lastRunId: runId,
-              lastRunError: expect.stringContaining(failureMessage),
+              lastRunError: retainedCause,
             },
             messages: [
               expect.objectContaining({ role: "user" }),
@@ -414,7 +406,7 @@ test.each([
                 role: "custom",
                 customType: "run-failed-before-reply",
                 display: true,
-                content: "Your request couldn't be completed.",
+                content: failureMessage,
               }),
             ],
           });
@@ -427,7 +419,7 @@ test.each([
           expect.objectContaining({
             type: "custom_message",
             customType: "run-failed-before-reply",
-            details: { runId, error: expect.stringContaining(failureMessage) },
+            details: { runId, error: retainedCause, desktopNotice },
           }),
         );
 
@@ -438,26 +430,43 @@ test.each([
             { ...entryAfterFailure!, pendingWorktree: undefined },
           );
         }
+        if (worktree) {
+          const retryFailure =
+            "GitHub denied access to this repository. Ask the Gateway operator to check the configured GitHub credential and repository access before retrying.";
+          projectCloneMocks.materialize.mockRejectedValueOnce(
+            new ProjectCloneError("auth_required", retryFailure),
+          );
+          await retryRemoteProjectSession(key, "remote-project-failed-retry", context);
+          await settleWorkspaceRuns(context, storePath, key);
+          const history = await request("chat.history", { sessionKey: key }, controlUiClient);
+          expect(history).toMatchObject({
+            sessionInfo: {
+              sessionId,
+              status: "failed",
+              hasActiveRun: false,
+              lastRunId: "remote-project-failed-retry",
+              lastRunError: expect.stringContaining("GitHub denied access"),
+            },
+          });
+          expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        }
         const retriedMaterialization = createDeferredCore<typeof project>();
         projectCloneMocks.materialize.mockReturnValueOnce(retriedMaterialization.promise);
         const restartedContext = { broadcast, dedupe: new Map() };
 
         try {
-          const retried = await request<{ runId: string; status: string }>(
-            "chat.send",
-            {
-              sessionKey: key,
-              agentId: "main",
-              message: "Retry the remote project",
-              idempotencyKey: "remote-project-retry",
-            },
-            { ...controlUiClient, context: restartedContext },
+          const retried = await retryRemoteProjectSession(
+            key,
+            "remote-project-retry",
+            restartedContext,
           );
           expect(retried).toMatchObject({
             runId: "remote-project-retry",
             status: "started",
           });
-          await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledTimes(2));
+          await vi.waitFor(() =>
+            expect(projectCloneMocks.materialize).toHaveBeenCalledTimes(worktree ? 3 : 2),
+          );
           expect(readEntry(storePath, key)?.lastRunError).toBe(undefined);
           expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
           for (const entry of [entryAfterCreation, entryAfterFailure, readEntry(storePath, key)]) {

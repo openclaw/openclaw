@@ -32,6 +32,7 @@ import {
 } from "./failover/error.js";
 import { findLocalWorkerTaskFailure } from "./failover/local-preparation-error.js";
 import { resolveExecutionApprovalFailureMessage } from "./failover/message-patterns.js";
+import { resolveRetryAfterMs } from "./failover/retry-evidence.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./failover/signal.js";
 import { renderRateLimitRetryExhaustion } from "./failover/user-copy.js";
 import {
@@ -72,6 +73,8 @@ const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
   "SessionTranscriptReadFenceError",
   "SqliteWorkerError",
   "SessionCapabilityMetadataChangedError",
+  "SessionDeliveryGenerationUnavailableError",
+  "SessionDeliveryGenerationRevokedError",
 ]);
 
 export { recordModelFallbackStop } from "./model-fallback-stop.js";
@@ -557,6 +560,7 @@ export function describeFailoverError(err: unknown): {
   message: string;
   rawError?: string;
   rateLimitRetriesExhausted?: number;
+  rateLimitResetAt?: number;
   reason?: FailoverReason;
   status?: number;
   code?: string;
@@ -579,6 +583,7 @@ export function describeFailoverError(err: unknown): {
       message: err.message,
       rawError: err.rawError,
       rateLimitRetriesExhausted: err.rateLimitRetriesExhausted,
+      rateLimitResetAt: err.rateLimitResetAt,
       reason: err.reason,
       status: normalizeFailoverStatus(err.status, err.code),
       code: err.code,
@@ -659,6 +664,7 @@ export function coerceToFailoverError(
           timeout: err.timeout ?? context?.timeout,
           attempts: err.attempts,
           soonestCooldownExpiry: err.soonestCooldownExpiry,
+          rateLimitResetAt: err.rateLimitResetAt,
         },
       );
       copyErrorDiagnostic(err, enriched);
@@ -675,6 +681,8 @@ export function coerceToFailoverError(
   const message = signal.message ?? String(err);
   const code = signal.code;
   const status = signal.status ?? resolveFailoverStatus(reason, code);
+  const retryAfterMs =
+    reason === "rate_limit" ? resolveRetryAfterMs(message, Date.now(), err) : undefined;
 
   // Suspend when hitting rate limits or billing issues in an attributed session
   const shouldSuspend =
@@ -686,6 +694,7 @@ export function coerceToFailoverError(
       {
         reason,
         rateLimitRetriesExhausted: context?.rateLimitRetriesExhausted,
+        rateLimitResetAt: retryAfterMs === undefined ? undefined : Date.now() + retryAfterMs,
         provider: context?.provider ?? signal.provider,
         model: context?.model,
         profileId: context?.profileId,

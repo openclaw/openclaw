@@ -1,6 +1,6 @@
 // Make reachable's claw name check: which address Discovery assigns the link code's
 // account for a claw name ("<name>-<account tag>.<loader domain>") and whether it is
-// free. Signed with K_gw, and only for the operator on this machine.
+// free. Signed with K_gw, and only on the ceremony channel (openclaw-id-remote-access.ts).
 import type { Channel } from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { GatewayOpenClawIdConfig } from "../../config/types.gateway.js";
 import { isOpenClawIdEnabled } from "../../shared/openclaw-id-policy.js";

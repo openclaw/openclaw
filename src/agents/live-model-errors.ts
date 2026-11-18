@@ -1,3 +1,18 @@
+// Bodies that OpenAI and Google return when a model they list cannot serve a chat request.
+const LISTED_MODEL_CHAT_REJECTION_RE =
+  /\bmodel\b[^\r\n,;]{0,120}\bdoes not exist\b|not supported with the Responses API|not supported for generateContent|response modalities|bidiGenerateContent|not allowed to sample/i;
+
+/**
+ * A deterministic 400, 403 or 404 that says the model cannot serve this chat request. Only
+ * meaningful for a model in the credential's current listing; otherwise the model is missing.
+ */
+export function isListedModelChatRejection(status: number | undefined, message: string): boolean {
+  return (
+    (status === 400 || status === 403 || status === 404) &&
+    LISTED_MODEL_CHAT_REJECTION_RE.test(message)
+  );
+}
+
 /**
  * Probe and fallback code uses these string checks to distinguish missing or
  * deprecated model ids from generic provider/runtime failures.
@@ -24,7 +39,7 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
     ) ||
     (/model:\s*[a-z0-9._/-]+/i.test(msg) && /not(?:[_\-\s])?found/i.test(msg)) ||
     /models\/[^\s]+ is not found/i.test(msg) ||
-    (/model/i.test(msg) && /does not exist/i.test(msg)) ||
+    /\bmodel\b[^\r\n,;]{0,120}\bdoes not exist\b/i.test(msg) ||
     (/selected model/i.test(msg) && /not(?:[_\-\s])?found/i.test(msg)) ||
     (/model/i.test(msg) && /deprecated/i.test(msg) && /(upgrade|transition) to/i.test(msg)) ||
     // A failed turn naming the model itself as deprecated ("Model exo-free has been deprecated.").

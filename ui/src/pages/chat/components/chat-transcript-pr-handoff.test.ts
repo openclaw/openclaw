@@ -403,7 +403,7 @@ describe("workspace publication handoff", () => {
     arguments: { action: "publish", workspacePath: "/work/app" },
   };
   const report =
-    "Published example/app branch fix/menus: https://github.com/example/app/pull/2 Using @bot (Agent override).";
+    "Published example/app branch fix/menus: https://github.com/example/app/pull/2 Using @bot (Own account).";
   const messages = [
     makeMessage("publish-request", 1, {
       role: "user",

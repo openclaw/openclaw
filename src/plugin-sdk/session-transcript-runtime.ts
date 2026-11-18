@@ -40,7 +40,7 @@ import {
   type SessionTranscriptReplayGroup,
   type SessionTranscriptReplaySelection,
 } from "../config/sessions/session-transcript-replay.types.js";
-import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { recordAssistantManagedMediaUrls } from "../config/sessions/transcript-assistant-delivery.js";
 import {
   resolveMirroredTranscriptText,
@@ -483,7 +483,7 @@ export async function appendAssistantMirrorMessageByIdentity(
             params.signal?.throwIfAborted();
           },
           undefined,
-          targetDiscoveryLane,
+          sessionStoreLane,
         );
     if (!currentEntry?.sessionId) {
       return { ok: false, reason: "missing active session", code: "blocked" };
@@ -539,7 +539,7 @@ export async function appendAssistantMirrorMessageByIdentity(
               },
               undefined,
               params.signal,
-              targetDiscoveryLane,
+              sessionStoreLane,
             ).readLatestActiveMessage();
             events = latest ? [latest.event] : [];
           } catch (error) {

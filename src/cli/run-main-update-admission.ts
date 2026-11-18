@@ -37,7 +37,7 @@ export async function tryRunUpdateAdmissionBeforeStartup(
         `${JSON.stringify({
           protocol: 1,
           mode: "preflight",
-          coverage: "isolated-core-startup",
+          coverage: "candidate-runtime",
           candidateVersion: null,
           status: "unverified",
           reason: "preflight-execution-failed",

@@ -27,6 +27,10 @@ export function createMediaGenerateExecute(params: {
     agentSessionKey?: string;
     requesterAgentId?: string;
   };
+  customAction?: (
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) => Promise<MediaGenerateActionResult> | undefined;
   list: (
     auth: MediaGenerateProviderAuth,
   ) => MediaGenerateActionResult | Promise<MediaGenerateActionResult>;
@@ -38,6 +42,10 @@ export function createMediaGenerateExecute(params: {
 }): AnyAgentTool["execute"] {
   return async (_toolCallId, rawArgs: Record<string, unknown>, signal) => {
     const args = rawArgs;
+    const customResult = params.customAction?.(args, signal);
+    if (customResult !== undefined) {
+      return customResult;
+    }
     const action = resolveGenerateAction(args);
     const options = params.options;
     if (action === "list") {

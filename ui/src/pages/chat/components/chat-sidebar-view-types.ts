@@ -15,6 +15,7 @@ import type {
   FileReaderDraftState,
   WorkspaceFileLinkTarget,
 } from "./chat-sidebar-content-types.ts";
+import type { SidebarPanelHostRegistration } from "./chat-sidebar-panel-host.ts";
 
 type SessionWorkspaceView = ReturnType<typeof createSessionWorkspaceProps>;
 type SessionWorkspaceOptionalKey =
@@ -55,6 +56,7 @@ export type FileReaderWorkspace = {
 };
 
 export type ChatDetailPanelProps = {
+  registerPanelHost?: SidebarPanelHostRegistration;
   attachmentChat?: import("./chat-composer-types.ts").ChatComposerProps;
   onScrollPortRef?: (element: HTMLElement) => void | (() => void);
   panelPresentation?: "desktop" | "mobile";

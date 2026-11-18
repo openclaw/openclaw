@@ -52,8 +52,8 @@ it.each([
 
 const zod = { ship: "~zod" };
 it.each([
-  [[["@ALL uppercase"], [zod, ", hi"], [{ bold: [zod] }, " hi"], [{ strike: [zod] }, "?"]], true],
-  [[["nimbus, hello"], ["say ", { italics: [zod] }, "."], ["Are you there, ", zod, "?"]], true],
+  [[["@ALL"], [zod, ","], [{ bold: [zod] }], [{ strike: [zod] }], ["nimbus:"]], true],
+  [[["nimbus,"], ["x ", { italics: [zod] }, "."], ["x ", zod, "?"], [{ bold: ["nimbus"] }]], true],
   [[[{ "inline-code": "a`b" }, " ", zod, " hi ", { "inline-code": "c" }]], true],
   [[["~zod-extra"], ["my~zodfriend"], [{ "inline-code": "ping ~zod, now" }], ["nimbusy"]], false],
   [[["https://tlon.io/~zod"], ["prenimbus"], [], { block: { code: { code: "~zod, hi" } } }], false],

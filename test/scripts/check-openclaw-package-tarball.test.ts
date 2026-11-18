@@ -1129,6 +1129,23 @@ syncBuiltinESMExports();
       ],
     },
     {
+      name: "accepts registry Ciao when Bonjour imports its package root",
+      files: { "dist/index.js": 'export const load = () => import("@homebridge/ciao");\n' },
+      options: { packageJson: { dependencies: { "@homebridge/ciao": "1.3.12" } } },
+      status: 0,
+    },
+    {
+      name: "rejects registry Ciao when Bonjour imports its patched native entry",
+      files: {
+        "dist/index.js": 'export const load = () => import("@homebridge/ciao/native.js");\n',
+      },
+      options: { packageJson: { dependencies: { "@homebridge/ciao": "1.3.12" } } },
+      status: "nonzero",
+      stderr: [
+        "package.json dependencies.@homebridge/ciao must be listed in bundleDependencies because its patched runtime must not be replaced by the registry package",
+      ],
+    },
+    {
       name: "accepts separately published private workspace dependencies by default",
       version: "2026.6.11",
       options: { packageJson: { dependencies: { "@openclaw/ai": "2026.6.11" } } },

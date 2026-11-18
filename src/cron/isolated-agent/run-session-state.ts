@@ -15,6 +15,7 @@ import {
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { readSessionTranscriptWatermarkAsync } from "../../config/sessions/session-transcript-watermark.js";
+import type { SessionScheduledMemoryParent } from "../../config/sessions/types.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/work-start-error.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import {
@@ -102,6 +103,11 @@ export type CronRunContinuationSession = {
     execution?: { cliExecutionProvider?: string },
   ) => Promise<void>;
   seal: (options?: { basePersisted?: boolean }) => Promise<void>;
+  /**
+   * Records the parent an occurrence was admitted against, so sessions this run
+   * spawns resolve memory through it. Undefined clears an earlier attempt's receipt.
+   */
+  recordScheduledMemoryParent: (parent: SessionScheduledMemoryParent | undefined) => Promise<void>;
 };
 
 function resolveCronLifecycleRevisionIdentity(lifecycleRevision: string): string {
@@ -336,7 +342,14 @@ export function createCronRunContinuationSession(params: {
       : {}),
   };
   let sealed = false;
-  let persistedSnapshot: { source: SessionEntry; continuation: typeof continuation } | undefined;
+  let scheduledMemoryParent: SessionScheduledMemoryParent | undefined;
+  let persistedSnapshot:
+    | {
+        source: SessionEntry;
+        continuation: typeof continuation;
+        scheduledMemoryParent?: SessionScheduledMemoryParent;
+      }
+    | undefined;
   const persist = async (
     create: boolean,
     phase: "running" | "ready",
@@ -358,7 +371,11 @@ export function createCronRunContinuationSession(params: {
     delete source.previousSessionId;
     delete source.forkSource;
     delete source.usageFamilySessionIds;
-    const snapshot = { source, continuation: { ...continuation } };
+    const snapshot = {
+      source,
+      continuation: { ...continuation },
+      ...(scheduledMemoryParent ? { scheduledMemoryParent: { ...scheduledMemoryParent } } : {}),
+    };
     if (phase === "running" && isDeepStrictEqual(snapshot, persistedSnapshot)) {
       return;
     }
@@ -371,6 +388,7 @@ export function createCronRunContinuationSession(params: {
           kind: "cron-run-continuation",
           sessionKey: params.runSessionKey,
           source,
+          ...(scheduledMemoryParent ? { scheduledMemoryParent } : {}),
           create,
           creation: buildSessionCreationStamp({
             via: "cron",
@@ -422,6 +440,10 @@ export function createCronRunContinuationSession(params: {
       await persist(false, "running", false, assertCommitAllowed);
     },
     seal: async (options) => await persist(false, "ready", options?.basePersisted === true),
+    recordScheduledMemoryParent: async (parent) => {
+      scheduledMemoryParent = parent ? { ...parent } : undefined;
+      await persist(false, "running");
+    },
   };
 }
 

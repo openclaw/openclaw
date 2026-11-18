@@ -75,10 +75,14 @@ describe("candidate-owned frozen qualification coverage", () => {
       const planPath = join(directory, "plan.json");
       const statePath = join(directory, "decision.json");
       const validator = join(directory, "verifier.mjs");
+      const evidencePath = join(directory, "evidence.json");
       writeFileSync(planPath, JSON.stringify(sealed));
+      // Keep full evidence out of environment entries, which have OS size limits.
+      writeFileSync(evidencePath, JSON.stringify(evidence));
       writeFileSync(
         validator,
-        `import { isDeepStrictEqual } from "node:util";
+        `import { readFileSync } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 const args = process.argv;
 const value = (flag) => args[args.indexOf(flag) + 1];
 const expected = JSON.parse(process.env.FRV_EXPECTED_VERIFIER);
@@ -86,7 +90,7 @@ for (const [flag, wanted] of Object.entries(expected)) {
   const actual = flag === "--qualification-reuse-json" ? JSON.parse(value(flag)) : value(flag);
   if (!isDeepStrictEqual(actual, wanted)) throw new Error("Admitted verifier mismatch: " + flag);
 }
-console.log(process.env.FRV_VERIFIED_EVIDENCE);
+console.log(readFileSync(process.env.FRV_VERIFIED_EVIDENCE_PATH, "utf8"));
 `,
       );
       const responses: Record<string, string> = {};
@@ -145,14 +149,17 @@ console.log(response);
               }
             : {}),
         }),
-        FRV_VERIFIED_EVIDENCE: JSON.stringify(evidence),
+        FRV_VERIFIED_EVIDENCE_PATH: evidencePath,
         FRV_GITHUB_RESPONSES: JSON.stringify(responses),
         PATH: `${bin}:${process.env.PATH}`,
       });
       const decisionJson = existsSync(statePath)
         ? readFileSync(statePath, "utf8")
         : "<missing decision>";
-      expect(result.status, [result.stderr, result.stdout, decisionJson].join("\n")).toBe(0);
+      expect(
+        result.status,
+        [result.error, result.signal, result.stderr, result.stdout, decisionJson].join("\n"),
+      ).toBe(0);
       expect(JSON.parse(readFileSync(statePath, "utf8"))).toMatchObject({ state: "passed" });
     },
   );

@@ -115,7 +115,7 @@ it.for(["before-ready", "success", "failure"] as const)(
 );
 
 it.for(["full", "runtime", "tooling"] as const)(
-  "preserves the %s preset through a private child bootstrap",
+  "preserves the %s preset through a private child bootstrap and native CLI shim",
   async (preset, { signal }) => {
     const lifetime = createFixtureLifetime();
     try {
@@ -129,11 +129,25 @@ it.for(["full", "runtime", "tooling"] as const)(
         `const { getVitestWorkerDescriptor } = await import(process.argv[2]);
 process.stdout.write(JSON.stringify({ descriptor: getVitestWorkerDescriptor(), args: process.argv.slice(3) }));`,
       );
+      const shim = path.join(path.dirname(fixture), "shim.mts");
+      fs.writeFileSync(
+        shim,
+        `import { runNodeCliShim } from ${JSON.stringify(new URL("../../scripts/lib/tsx-cli-shim.mjs", import.meta.url).href)};
+import { createVitestWorkerRun } from ${JSON.stringify(new URL("../../scripts/lib/vitest-worker-run.mts", import.meta.url).href)};
+import { getVitestWorkerDescriptor } from ${JSON.stringify(new URL("../../scripts/lib/vitest-worker-descriptor.mts", import.meta.url).href)};
+const workers = createVitestWorkerRun(process.env, getVitestWorkerDescriptor());
+let result;
+try {
+  result = await runNodeCliShim(import.meta.url, { implementation: "./descriptor.mts", workerRun: workers });
+} finally {
+  await workers.dispose({ interrupted: Boolean(result?.interrupted) });
+}`,
+      );
       const result = await lifetime.track(
         runVitestShutdownCommand({
           workerRun: owner,
           args: [
-            fixture,
+            shim,
             pathToFileURL(
               path.resolve(import.meta.dirname, "../../scripts/lib/vitest-worker-descriptor.mts"),
             ).href,

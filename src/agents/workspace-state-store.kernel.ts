@@ -77,7 +77,7 @@ export type WorkspaceStateDatabase = Pick<
 
 export type WorkspaceStateDatabaseHandle = Pick<OpenClawStateDatabase, "db" | "path">;
 
-export function workspacePathEntryExists(workspaceDir: string): boolean {
+function workspacePathEntryExists(workspaceDir: string): boolean {
   try {
     fs.lstatSync(path.resolve(resolveUserPath(workspaceDir)));
     return true;
@@ -92,11 +92,19 @@ type WorkspaceIdentityResolution = {
   missingAliasKeys: string[];
 };
 
+export type WorkspacePathFacts = {
+  aliases: WorkspaceStateIdentity[];
+  pathEntryExisted: boolean;
+};
+
 export function resolveWorkspaceIdentityFromDatabase(params: {
   workspaceDir: string;
   database: WorkspaceStateDatabaseHandle;
+  pathFacts?: WorkspacePathFacts;
 }): WorkspaceIdentityResolution {
-  const aliases = resolveWorkspaceStateAliases(params.workspaceDir);
+  // Runtime workers carry their observed target through the final host grant.
+  // Native Template/maintenance kernels retain their synchronous path discovery.
+  const aliases = params.pathFacts?.aliases ?? resolveWorkspaceStateAliases(params.workspaceDir);
   const canonicalIdentity = aliases.at(-1)!;
   const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(params.database.db);
   const rows = executeSqliteQuerySync(
@@ -124,7 +132,7 @@ export function resolveWorkspaceIdentityFromDatabase(params: {
     // A repointed alias can also resolve to an already initialized workspace.
     // Report the repairable alias failure before the two owners look like corruption.
     if (
-      workspacePathEntryExists(params.workspaceDir) &&
+      (params.pathFacts?.pathEntryExisted ?? workspacePathEntryExists(params.workspaceDir)) &&
       rowIdentity.workspaceKey !== canonicalIdentity.workspaceKey
     ) {
       throw new WorkspaceAliasRepointedError({
@@ -325,6 +333,7 @@ export type WorkspaceAttestationInput = {
 export function replaceWorkspaceAttestationInDatabase(
   database: WorkspaceStateDatabaseHandle,
   params: WorkspaceAttestationInput,
+  pathFacts?: WorkspacePathFacts,
 ): WorkspaceAttestation {
   assertCanonicalIntegerTimestamp(params.attestedAtMs, "attestation");
   if (params.nowMs !== undefined) {
@@ -344,6 +353,7 @@ export function replaceWorkspaceAttestationInDatabase(
   const resolution = resolveWorkspaceIdentityFromDatabase({
     workspaceDir: params.workspaceDir,
     database,
+    pathFacts,
   });
   const identity = resolution.identity;
   const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });

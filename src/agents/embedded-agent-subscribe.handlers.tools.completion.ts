@@ -90,6 +90,7 @@ import {
 import { resolveFileMutationToolName } from "./tool-mutation-names.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { isToolResultError, readToolResultDetails } from "./tool-result-error.js";
+import { successfulToolUsage } from "./tool-usage.js";
 import { cancelAskUserPromptDelivery } from "./tools/ask-user-tool.js";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
@@ -98,6 +99,7 @@ export async function prepareToolExecutionEnd(
   ctx: ToolHandlerContext,
   evt: Extract<AgentEvent, { type: "tool_execution_end" }>,
   readResult: () => unknown,
+  nestedToolUsageId?: string | null,
 ) {
   const toolName = normalizeToolPolicyName(evt.toolName);
   const toolCallId = evt.toolCallId;
@@ -236,6 +238,19 @@ export async function prepareToolExecutionEnd(
         }
       : {}),
   });
+  const toolUsageId = nestedToolUsageId === undefined ? startData?.toolUsageId : nestedToolUsageId;
+  if (
+    ctx.params.toolUsageRecorder &&
+    toolUsageId &&
+    (trackedExecutionStarted ?? evt.executionStarted) === true &&
+    successfulToolUsage({
+      isError: observerIsError,
+      result,
+      executionStarted: terminal.executionStarted,
+    })
+  ) {
+    ctx.params.toolUsageRecorder.record(toolUsageId);
+  }
   ctx.state.lastToolError = terminal.lastToolError;
   const terminalErrorStatus = terminal.executionStarted ? "failed" : "blocked";
   const toolErrorSummary = ctx.state.lastToolError
@@ -497,14 +512,8 @@ export async function prepareToolExecutionEnd(
       data: createResultData(),
     });
 
-    // Retire accepted catalog wrappers now, before a later model call or quiet
-    // yield can leave their duplicate start rows as the last visible preview.
-    if (
-      startData?.parentToolCallId ||
-      ctx.state.toolMetas.some((call) => call.parentToolCallId === toolCallId)
-    ) {
-      finalizeToolActivity(ctx);
-    }
+    ctx.state.toolActivityPresentation.complete(terminalMeta);
+    finalizeToolActivity(ctx);
 
     if (isExecToolName(toolName)) {
       const commandItemId = buildCommandItemId(toolCallId);

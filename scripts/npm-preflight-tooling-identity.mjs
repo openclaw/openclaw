@@ -207,8 +207,7 @@ export function validateFullReleaseNpmPreflight({
     String(manifest.runId) !== String(runId) ||
     String(manifest.runAttempt) !== String(runAttempt) ||
     manifest.targetSha !== sourceSha ||
-    (manifest.workflowSha !== toolingSha &&
-      !(manifest.receiptRecovery && retainedSource?.workflow.sha === toolingSha)) ||
+    manifest.workflowSha !== toolingSha ||
     qualified?.schema !== "openclaw.qualified-npm-preflight/v1" ||
     qualified.source?.sha !== sourceSha ||
     !/^[a-f0-9]{64}$/u.test(qualified.manifestSha256 ?? "") ||
@@ -232,7 +231,7 @@ export function validateFullReleaseNpmPreflight({
           )))
   ) {
     throw new Error(
-      "Full Release Validation does not bind a qualified npm preflight for this exact release and attempt; supply its historical separate preflight run when recovering an older release.",
+      "Full Release Validation does not bind a qualified npm preflight for this exact release and attempt; obtain new admitted qualification.",
     );
   }
   return qualified;
@@ -386,60 +385,35 @@ export async function verifyNpmPreflightPublicationLineage({
   publisherSha,
   producerRunId,
   producerRunAttempt,
-  runGh = runReleaseToolingGh,
   evidenceClient,
   publisherFullRef = "refs/heads/main",
   publicationAuthority,
 }) {
-  if (manifest?.sourceAdmission?.qualificationAdmission || manifest?.receiptRecovery) {
-    const { authenticateCandidateOwnedArtifact } =
-      await import("./validate-full-release-validation-evidence.mjs");
-    const authenticated = await authenticateCandidateOwnedArtifact({
-      manifest,
-      repository,
-      candidateSha: sourceSha,
-      qualificationSha: toolingSha,
-      publisherSha,
-      publisherFullRef,
-      client: evidenceClient,
-    });
-    if (!authenticated) {
-      throw new Error("Candidate publication requires authenticated qualification authority");
-    }
-    const qualified = validateNpmPreflightQualification({
-      manifest,
-      repository,
-      sourceSha,
-      toolingSha,
-      producerRunId,
-      producerRunAttempt,
-    });
-    if (publicationAuthority) {
-      verifyReleaseToolingIdentity(publicationAuthority);
-    }
-    // The full authentication above awaits artifact and child evidence. Refresh
-    // admission after that work and the publisher/parent check, not just preflight.
-    authenticated.revalidateAuthority();
-    return qualified;
-  }
-  const comparison = parseJson(
-    runGh([
-      "api",
-      `repos/${repository}/compare/${toolingSha}...${publisherSha}`,
-      "--method",
-      "GET",
-      "--jq",
-      "{status}",
-    ]),
-    "npm preflight producer ancestry",
-  );
-  if (!["ahead", "identical"].includes(comparison.status)) {
-    throw new Error("Npm preflight tooling is not on the selected publisher lineage.");
-  }
+  const { authenticateCandidateOwnedArtifact } =
+    await import("./validate-full-release-validation-evidence.mjs");
+  const authenticated = await authenticateCandidateOwnedArtifact({
+    manifest,
+    repository,
+    candidateSha: sourceSha,
+    qualificationSha: toolingSha,
+    publisherSha,
+    publisherFullRef,
+    client: evidenceClient,
+  });
+  const qualified = validateNpmPreflightQualification({
+    manifest,
+    repository,
+    sourceSha,
+    toolingSha,
+    producerRunId,
+    producerRunAttempt,
+  });
   if (publicationAuthority) {
     verifyReleaseToolingIdentity(publicationAuthority);
   }
-  return null;
+  // Refresh live admission after artifact/child acquisition and publisher checks.
+  authenticated.revalidateAuthority();
+  return qualified;
 }
 
 export function verifyReleasePreflightToolingIdentity({
@@ -555,30 +529,17 @@ async function main() {
         releasePublishParentStatePolicy: env.RELEASE_PUBLISH_PARENT_STATE_POLICY,
         allowPrevalidatedRef: true,
       };
-      // Preserve the historical off-main extended-stable preflight route, not
-      // a bypass for admitted candidate-owned qualification.
-      if (
-        !fullManifest?.sourceAdmission?.qualificationAdmission &&
-        !fullManifest?.receiptRecovery &&
-        env.OPENCLAW_NPM_PUBLISH_TAG === "extended-stable" &&
-        env.PREFLIGHT_WORKFLOW_BRANCH &&
-        env.PREFLIGHT_WORKFLOW_BRANCH === env.EXPECTED_EXTENDED_STABLE_BRANCH &&
-        env.PREFLIGHT_WORKFLOW_PATH === ".github/workflows/openclaw-npm-release.yml"
-      ) {
-        identity = verifyReleaseToolingIdentity(publicationAuthority);
-      } else {
-        identity = await verifyNpmPreflightPublicationLineage({
-          manifest: fullManifest,
-          repository: env.GITHUB_REPOSITORY,
-          sourceSha: env.EXPECTED_RELEASE_SHA,
-          toolingSha: env.PREFLIGHT_WORKFLOW_SHA,
-          publisherSha: env.WORKFLOW_SHA,
-          publisherFullRef: env.WORKFLOW_FULL_REF,
-          producerRunId: env.PREFLIGHT_RUN_ID,
-          producerRunAttempt: env.PREFLIGHT_RUN_ATTEMPT,
-          publicationAuthority,
-        });
-      }
+      identity = await verifyNpmPreflightPublicationLineage({
+        manifest: fullManifest,
+        repository: env.GITHUB_REPOSITORY,
+        sourceSha: env.EXPECTED_RELEASE_SHA,
+        toolingSha: env.PREFLIGHT_WORKFLOW_SHA,
+        publisherSha: env.WORKFLOW_SHA,
+        publisherFullRef: env.WORKFLOW_FULL_REF,
+        producerRunId: env.PREFLIGHT_RUN_ID,
+        producerRunAttempt: env.PREFLIGHT_RUN_ATTEMPT,
+        publicationAuthority,
+      });
     } else if (values["verify-publication-lineage"]) {
       identity = await verifyNpmPreflightPublicationLineage({
         manifest: values["full-release-manifest"]

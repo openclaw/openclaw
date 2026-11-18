@@ -57,7 +57,10 @@ describe("prompt cache request observer", () => {
   beforeEach(() => {
     currentTestScope = String(++testScope);
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
 
   it("pairs a drop with the last measured wire request across missing usage and run boundaries", async () => {
     const sessionId = scopedKey("wire-pair");
@@ -113,6 +116,8 @@ describe("prompt cache request observer", () => {
   });
 
   it("retains the input change when a request has no usage callback", async () => {
+    // Deliberate prefix drift exercises production diagnostics instead of assertion mode.
+    vi.stubEnv("OPENCLAW_PROMPT_CACHE_ASSERT", "0");
     const observer = createObserver(scopedKey("unfinished-request"));
     await requestContext(observer, "before");
     observer.onModelUsage({ cacheRead: 8_000 });

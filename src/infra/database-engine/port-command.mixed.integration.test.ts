@@ -214,6 +214,14 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
       assertCurrent() {},
     });
     expect(backup.source.owner).toBe("agent");
+    // An update without an agent schema change leaves the previous release in schema_meta.
+    const anchor = readBackupEngine(agent);
+    if (anchor.engine !== "postgres") {
+      throw new Error("agent anchor must select PostgreSQL");
+    }
+    await client.query(
+      `UPDATE "${anchor.namespace}".schema_meta SET app_version = '2026.1.1' WHERE meta_key = 'primary'`,
+    );
     await port({ family: "agent", to: "sqlite" });
     expect(config().database?.families).toBeUndefined();
     expect(readBackupEngine(shared).engine).toBe("sqlite");
@@ -221,6 +229,9 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
     using db = openNodeSqliteDatabase(agent, { readOnly: true });
     const row = db.prepare("SELECT value_json FROM cache_entries WHERE scope = 'retained'").get();
     expect(row).toEqual({ value_json: '"agent-data"' });
+    expect(db.prepare("SELECT app_version FROM schema_meta").get()).toEqual({
+      app_version: "2026.1.1",
+    });
   }, 120_000);
 
   describe("interrupted scoped publication", () => {
