@@ -343,6 +343,29 @@ export async function startTelegramTestApiProxy({
           assertLeaseHealthy();
           rejection.times -= 1;
           if (rejection.times <= 0) requestRejection = undefined;
+          if (rejection.reset === "hang") {
+            // Models a server that accepts the request and never answers: only the
+            // client's own timeout ends it (or proxy shutdown).
+            rejectionEvents.push({
+              method,
+              ordinal,
+              rejectedAt: Date.now(),
+              upstreamForwarded: false,
+              hang: true,
+            });
+            await readBody();
+            if (logged) logged.status = "hang";
+            await new Promise((resolve) => {
+              const done = () => {
+                stopController.signal.removeEventListener("abort", done);
+                resolve();
+              };
+              response.once("close", done);
+              stopController.signal.addEventListener("abort", done, { once: true });
+            });
+            request.socket.destroy();
+            return;
+          }
           resetAfterForward = rejection.reset === "after-forward";
           if (!resetAfterForward) {
             // Models a request lost on the way: Telegram never sees it.

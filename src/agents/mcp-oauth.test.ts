@@ -191,6 +191,34 @@ describe("MCP OAuth provider", () => {
     authMock.mockReset();
   });
 
+  it.each([
+    [{ port: 18790 }, "http://127.0.0.1:18790/oauth/mcp/callback", false],
+    [
+      { publicOrigin: "https://gateway.example.com", port: 18790 },
+      "https://gateway.example.com/oauth/mcp/callback",
+      true,
+    ],
+  ] satisfies [OpenClawConfig["gateway"], string, boolean][])(
+    "uses the Gateway's redirect origin for a shared sign-in: %j",
+    (gateway, redirectUrl, usesPublicOrigin) =>
+      withTempHome(async () => {
+        authMock.mockImplementationOnce(persistRedirect);
+        const cfg: OpenClawConfig = {
+          gateway,
+          mcp: { servers: { docs: { url: "https://mcp.example.com/mcp", auth: "oauth" } } },
+        };
+        const result = await startOperatorMcpOAuthLink({ cfg, serverName: "docs" });
+        expect(result).toMatchObject({
+          status: "redirect",
+          serverName: "docs",
+          redirectUrl,
+          usesPublicOrigin,
+        });
+        assert(result.status === "redirect");
+        expect(new URL(result.authorizationUrl).searchParams.get("redirect_uri")).toBe(redirectUrl);
+      }, "openclaw-mcp-oauth-"),
+  );
+
   itWithHome(
     "keeps credentials when a sign-in link cannot renew a client pinned to another callback",
     async () => {

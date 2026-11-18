@@ -546,11 +546,7 @@ export function PortalContent(props: { model: PortalsModel; mobile?: boolean }) 
           when={props.model.presentation().embedded}
           fallback={
             <ShellLayoutBoundary traits={{ portalsPage: true }}>
-              <HubPageHeader
-                active="portals"
-                wide
-                docsUrl="https://docs.openclaw.ai/gateway/portals"
-              />
+              <HubPageHeader active="portals" docsUrl="https://docs.openclaw.ai/gateway/portals" />
               <PortalReadiness model={props.model} readReady={readReady}>
                 <Show when={selectedPortal()} fallback={<EmptyState model={props.model} />}>
                   <section class="portals-layout">

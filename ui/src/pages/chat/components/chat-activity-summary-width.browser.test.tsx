@@ -6,17 +6,20 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { ActivityGroup, MessageGroup, MessageGroupContent } from "./chat-message-group-view.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
+// Distinct actions keep the semantic summary long enough to exercise truncation.
 const TOOLS = [
   "exec",
   "read",
-  "knowledge_status",
-  "knowledge_ontology",
-  "knowledge_remember",
+  "edit",
+  "write",
+  "grep",
+  "web_fetch",
   "knowledge_save_page",
-  "knowledge_record",
   "knowledge_lookup",
-  "sessions_history",
-  "sessions_search",
+  "sessions_send",
+  "agents_wait",
+  "ask_user",
+  "custom_tool",
 ];
 const PROSE = "The reply wraps inside the reading column of the conversation. ".repeat(6);
 
@@ -63,7 +66,7 @@ it.each(
   async ({ thread, presentation }) => {
     const container = document.body.appendChild(document.createElement("div"));
     container.className = "chat";
-    container.style.width = "768px";
+    container.style.width = "640px";
     const root = mountSolid(
       () => (
         <div class={["chat-thread", { "chat-thread--direct": thread === "direct" }]}>

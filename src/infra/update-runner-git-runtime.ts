@@ -8,6 +8,7 @@ import { settleWithCleanup, throwSettledAggregate } from "./error-graph-internal
 import { formatErrorMessage } from "./errors.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import { isPathInside } from "./path-guards.js";
+import { readBuiltGatewayBuildId } from "./update-git-runtime.js";
 import type { CommandRunner } from "./update-runner-types.js";
 import {
   readRuntimeModulesManifest,
@@ -463,8 +464,11 @@ export function createGitRuntimeTransaction({
   promotion,
   assertRollbackSafe,
   restoreRuntime,
+  activation,
 }: {
   root: string;
+  /** The checked-out candidate commit and the build it replaced. */
+  activation?: { sha: string; previousBuildId: string | null };
   promotion: Pick<Awaited<ReturnType<typeof prepareGitRuntimePromotion>>, "backupRoot"> & {
     cleanup: (assertCurrent?: () => void) => Promise<UpdateStepResult | void>;
   };
@@ -484,6 +488,13 @@ export function createGitRuntimeTransaction({
   });
   const transaction: PackageUpdateTransaction = {
     backupRoot: promotion.backupRoot,
+    ...(activation && {
+      // Activation copies the candidate's build-info unchanged: this is the validated build.
+      readGitActivation: async () => {
+        const buildId = await readBuiltGatewayBuildId(root);
+        return buildId ? { ...activation, buildId } : undefined;
+      },
+    }),
     assertRollbackSafe,
     rollback: (assertCurrent) => {
       assertCurrent();

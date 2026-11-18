@@ -207,9 +207,10 @@ messaging channel without enabling `/plugins` or opening a terminal. Non-ClawHub
 sources require explicit source acknowledgement in the requesting chat. If the
 plugin needs capability consent, OpenClaw presents the declared capabilities
 as a separate exact approval before installing and applying the runtime. Source
-approval does not accept capabilities or grant conversation access. Conversation
-access remains a separate `plugins.entries.<id>.hooks.allowConversationAccess`
-config change. Local files and marketplace sources are not accepted by
+approval does not accept capabilities. Approving capabilities grants conversation
+access only when the plugin declares `contracts.conversationAccess`; otherwise it
+remains a separate `plugins.entries.<id>.hooks.allowConversationAccess` config
+change. Local files and marketplace sources are not accepted by
 `plugin_install`; task-authored archives use `plugin_activate_artifact`.
 
 Plugin uninstall refuses a

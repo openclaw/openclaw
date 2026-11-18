@@ -32,7 +32,7 @@ const {
   updateCommand: runUpdate,
   updateGitCheckout: gitUpdate,
 } = cli;
-const { packageInstallCommandCall: packageInstall, freshRestartCalls: restarts } = check;
+const { freshRestartCalls: restarts } = check;
 
 describe("update-cli", () => {
   // Reuse native reader imports; each request still captures fresh state and admission.
@@ -384,20 +384,20 @@ describe("update-cli", () => {
     expect(check.lastNpmPluginUpdateCall()?.coreVersion).toBe("2026.6.33");
   });
 
-  it("rejects --tag for a stored extended-stable channel", async () => {
+  it("honors a one-off tag without replacing the stored extended-stable channel", async () => {
     await mockPackageInstallAtCaseDir();
+    mocks.readPackageVersion.mockResolvedValueOnce("1.0.0").mockResolvedValue("9999.0.0");
     vi.mocked(cli.readConfigFileSnapshot).mockResolvedValue(
       configSnapshot({ update: { channel: "extended-stable" } }),
     );
 
-    await expect(runUpdate({ tag: "latest", yes: true })).rejects.toEqual(new cli.ExitError(1));
+    await runUpdate({ tag: "latest", yes: true, restart: false });
 
     expect(cli.resolveExtendedStablePackage).not.toHaveBeenCalled();
-    expect(packageInstall()?.[0]).toBeUndefined();
-    check.expectNoSideEffects(
-      cli.replaceConfigFile,
-      mocks.launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
-    );
+    check.expectPackageInstallSpec("openclaw@9999.0.0");
+    expect(cli.replaceConfigFile).not.toHaveBeenCalled();
+    expect(check.syncPluginCall()?.channel).toBe("extended-stable");
+    expect(check.syncPluginCall()?.coreVersion).toBe("9999.0.0");
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 

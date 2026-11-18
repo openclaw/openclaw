@@ -10,7 +10,10 @@ import {
   validateTemplatesAddApplyParams,
   validateTemplatesAddPlanParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { TemplatesAddReviewedApplyParamsSchema } from "../../../packages/gateway-protocol/src/schema/templates.js";
+import {
+  TemplateCatalogCoordinateSchema,
+  TemplatesAddReviewedApplyParamsSchema,
+} from "../../../packages/gateway-protocol/src/schema/templates.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
@@ -261,7 +264,7 @@ const SystemAgentToolSchema = Type.Object({
     Type.String({ description: "npm, ClawHub, or remote git: spec for plugin_install" }),
   ),
   pluginId: Type.Optional(Type.String({ description: "Plugin id for plugin_uninstall" })),
-  source: Type.Optional(TemplatesAddReviewedApplyParamsSchema.properties.source),
+  source: Type.Optional(TemplateCatalogCoordinateSchema),
   planIntegrity: TemplatesAddReviewedApplyParamsSchema.properties.planIntegrity,
   acknowledgeClawHubRisk: TemplatesAddReviewedApplyParamsSchema.properties.acknowledgeClawHubRisk,
   acknowledgeCapabilities: TemplatesAddReviewedApplyParamsSchema.properties.acknowledgeCapabilities,
@@ -343,12 +346,12 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
         source: params.source,
         ...optionalStrings("agentId"),
       };
-      if (!validateTemplatesAddPlanParams(review)) {
+      if (!validateTemplatesAddPlanParams(review) || "kind" in review.source) {
         throw new ToolInputError(
           "openclaw: template_review requires source { packageName, version } for a published ClawHub Template",
         );
       }
-      return { kind: "template-review", ...review };
+      return { kind: "template-review", ...review, source: review.source };
     }
     case "template_install": {
       const install = {
@@ -366,10 +369,14 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
           : {}),
       };
       // The helper installs from a reviewed plan only; chat-based Add is not offered here.
-      if (!validateTemplatesAddApplyParams(install) || "mode" in install) {
+      if (
+        !validateTemplatesAddApplyParams(install) ||
+        "mode" in install ||
+        "kind" in install.source
+      ) {
         throw new ToolInputError("openclaw: invalid Template install review or acknowledgements");
       }
-      return { kind: "template-install", ...install };
+      return { kind: "template-install", ...install, source: install.source };
     }
     case "channel_info":
       return { kind: "channel-info", channel: requireParam(params, "channel").toLowerCase() };

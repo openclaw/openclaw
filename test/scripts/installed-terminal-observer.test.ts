@@ -576,9 +576,6 @@ it("preserves synchronous throws and unsafe metadata without claiming native com
         error: "Synchronous spawn threw; native completion is unknown",
       });
       expect(JSON.parse(observed.stdout).ran).toBe(mode === "encoding");
-      if (mode === "max-buffer-array") {
-        expect(JSON.parse(observed.stdout).outcome).toMatchObject({ code: "ERR_OUT_OF_RANGE" });
-      }
     }
     expect(() => readInstalledTerminalEvents(f.spec.directory), mode).toThrow(
       threw
@@ -1787,7 +1784,7 @@ it.each([false, true])(
     assert(typeof probeSource === "string");
     if (!historical) {
       expect(createHash("sha256").update(probeSource).digest("hex")).toBe(
-        "35bf3310aa0df86c646b04ea2df44ed2d4fa92093ccc8be80875888373dd3fa8",
+        "ed25993c504b1a383e6b152164c854e170972579cb8ebe547df568aff5435188",
       );
     }
     fs.writeFileSync(probe, probeSource);

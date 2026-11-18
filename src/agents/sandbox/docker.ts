@@ -21,6 +21,7 @@ import {
   type ContainerSourceLease,
 } from "./container-lifecycle.js";
 import { handleHotSandboxConfigMismatch } from "./current-config.js";
+import type { InspectedSandboxMount } from "./docker-mount-source.js";
 import { throwAfterPartialSandboxCleanup } from "./docker-partial-cleanup.js";
 import {
   dockerPersistentTargetFromEngineTarget,
@@ -112,6 +113,7 @@ type SandboxContainerAllocation = {
   podmanTarget?: SandboxContainerEngineTarget;
   configHash: string | null;
   mountPlan: SandboxMountPlan;
+  mounts?: readonly InspectedSandboxMount[];
   currentConfig: boolean;
 };
 
@@ -300,7 +302,12 @@ async function ensureSandboxContainerLifecycle<T>(
         phases.mark("attempt.setup.sandbox.backend.mount_compare");
         const mounts = params.requireCurrentConfig
           ? "match"
-          : await compareSandboxMountPlan({ engine, containerName: containerId, plan: mountPlan });
+          : await compareSandboxMountPlan({
+              engine,
+              containerName: containerId,
+              plan: mountPlan,
+              mounts: state.mounts,
+            });
         if (
           mounts === "protected-mounts-added" &&
           !persistent &&
@@ -366,6 +373,8 @@ async function ensureSandboxContainerLifecycle<T>(
       ...(podmanRuntimeInfo ? { podmanTarget: podmanRuntimeInfo.target } : {}),
       configHash,
       mountPlan,
+      // Configured mounts belong to this immutable generation. Replacement must inspect anew.
+      mounts: hasContainer && state.exists ? state.mounts : undefined,
       currentConfig,
     };
     // Backend inspection must finish before releasing the allocation's cleanup boundary.

@@ -885,9 +885,15 @@ it("invalidates pending custody for staging, promotion, terminal completion and 
 
   const withdraw = stage("withdraw");
   hydrate(fixture);
-  mutate({ ...withdraw, kind: "finish", inputId: "withdraw", disposition: "cancelled" });
+  mutate({
+    ...withdraw,
+    kind: "finish",
+    inputId: "withdraw",
+    disposition: "cancelled",
+    endCause: "failed",
+  });
   expect(reloadInvalidated(fixture).pendingInputs).toMatchObject([
-    { input_id: "withdraw", state: "cancelled" },
+    { input_id: "withdraw", state: "cancelled", end_cause: "failed" },
   ]);
 });
 

@@ -323,7 +323,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // Binding inspection: +1 (#192623); service V3 types in core and plugin-entry: +8 (#176886).
       // Decisions HTTP replaces the unshipped OpenAI executor: +3 net (#195641).
       // Gateway person principal and access-refresh classifier: +2 (#196276, #176886).
-      3888,
+      // +6: expose the existing model-request hook (#193550) and metric (#198455) types through plugin-entry.
+      3894,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

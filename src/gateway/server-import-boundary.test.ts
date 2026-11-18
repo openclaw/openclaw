@@ -151,6 +151,7 @@ console.log(JSON.stringify({ utilityModel: result.utilityModel, setupComplete: r
           { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...state.envVars },
           30_000,
         );
+        expect(result.error).toBeUndefined();
         expect(result.status, result.stderr).toBe(0);
         expect(JSON.parse(result.stdout)).toEqual({
           utilityModel: "fixture/utility",
@@ -192,6 +193,7 @@ console.log("prewarm-cold-selection-ok");`,
           { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...state.envVars },
           30_000,
         );
+        expect(result.error).toBeUndefined();
         expect(result.status, result.stderr).toBe(0);
         expect(result.stdout).toContain("prewarm-cold-selection-ok");
       },

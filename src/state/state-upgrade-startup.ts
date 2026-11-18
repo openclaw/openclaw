@@ -66,22 +66,30 @@ export async function upgradeStateOnGatewayStart(
           return undefined;
         }
         const { createConfigIO } = await import("../config/io.factory.js");
-        const { configDiagnostics } = await createConfigIO({
-          env: {
-            ...env,
-            OPENCLAW_STATE_DIR: shadow.stateDir,
-            OPENCLAW_CONFIG_PATH: shadow.configPath,
-          },
-          configPath: shadow.configPath,
-          observe: false,
-          pluginValidation: "skip",
-        }).readBestEffortConfigSnapshot();
-        return configDiagnostics === null
-          ? undefined
-          : `the upgraded config is invalid (${configDiagnostics.issues
-              .slice(0, 3)
-              .map((issue) => `${issue.path}: ${issue.message}`)
-              .join("; ")})`;
+        try {
+          const { configDiagnostics } = await createConfigIO({
+            env: {
+              ...env,
+              OPENCLAW_STATE_DIR: shadow.stateDir,
+              OPENCLAW_CONFIG_PATH: shadow.configPath,
+            },
+            configPath: shadow.configPath,
+            observe: false,
+            pluginValidation: "skip",
+          }).readBestEffortConfigSnapshot();
+          return configDiagnostics === null
+            ? undefined
+            : `the upgraded config is invalid (${configDiagnostics.issues
+                .slice(0, 3)
+                .map((issue) => `${issue.path}: ${issue.message}`)
+                .join("; ")})`;
+        } finally {
+          // Provider defaults can open metadata readers even when plugin validation is skipped.
+          // Drain them before the shadow is renamed or removed; SQLite retains its original path.
+          await closeOpenClawStateDatabaseByPathAsync(
+            path.join(shadow.stateDir, "state", "openclaw.sqlite"),
+          );
+        }
       },
     });
   } finally {
