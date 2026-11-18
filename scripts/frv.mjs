@@ -2314,6 +2314,17 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
     // idling until unrelated siblings settle. The budget is re-derived from attempts.
     const failedAgain = status.failed.find((child) => ownedAttempts.has(child.runId));
     if (failedAgain) {
+      if (target?.name !== undefined && failedAgain.key === target.childKey) {
+        const job = failedAgain.jobs.find((entry) => entry.name === target.name);
+        if (job?.acceptedRunAttempt === ownedAttempts.get(failedAgain.runId)) {
+          log(
+            `[frv] target ${target.childKey}:${target.name}: ${job.conclusion} (accepted attempt ${job.acceptedRunAttempt})`,
+          );
+          log(
+            `[frv] composite ${failedAgain.key}: failed (attempt ${failedAgain.effectiveRunAttempt})`,
+          );
+        }
+      }
       const used = failedAgain.effectiveRunAttempt - failedAgain.plannedRunAttempt + 1;
       throw new Error(
         `child ${failedAgain.key} failed again on attempt ${failedAgain.effectiveRunAttempt}; rerun budget remaining ${Math.max(0, DEFAULT_CHILD_MAX_ATTEMPTS - used)}; rerun pnpm frv continue --failed --run ${rootRunId}${repositoryOption} to retry a confirmed flake, otherwise start a fresh all-group FRV`,

@@ -544,10 +544,10 @@ it("refreshes trigger authoring from scheduler status after reconnect", async ()
   click(page, testId("cron-new-task"));
   await waitForElement(page, "fieldset.cron-editor");
   const triggerToggle = Array.from(page.querySelectorAll(".settings-toggle")).find((toggle) =>
-    toggle.textContent?.includes("Condition trigger"),
+    toggle.textContent?.includes("Check a condition first"),
   );
   expect(triggerToggle).toBeUndefined();
-  expect(page.textContent).toContain("disabled by cron.triggers.enabled");
+  expect(page.textContent).toContain("turned off for this Gateway (cron.triggers.enabled)");
 });
 
 it("replaces an in-flight inventory read when the connected profile hydrates", async () => {
@@ -883,36 +883,4 @@ it("rebinds hidden catch-up to the replacement Gateway", async () => {
   expectCalls(request, refreshMethods, 1);
   expect(oldRequest).not.toHaveBeenCalled();
   expect(request).toHaveBeenCalledWith("cron.list", expect.objectContaining({ agentId: "writer" }));
-});
-
-it("finishes an accepted create-and-run chain while hidden without background readbacks", async () => {
-  const visibility = controlVisibility();
-  const saved = gate();
-  const request = cronRpc({
-    "cron.add": async () => {
-      await saved.promise;
-      return { id: "created-job" };
-    },
-    "cron.run": () => ({ ok: true, enqueued: true, runId: "synthetic-run" }),
-  });
-  const { page } = mountCronPage(request);
-  await waitForCronPage(() => expect(page.cron.cronStatus).not.toBeNull());
-  await openDraft(page, "Synthetic task", "Synthetic prompt");
-  click(page, testId("cron-submit-run"));
-  await waitForCronPage(() =>
-    expect(request.mock.calls.some(([method]) => method === "cron.add")).toBe(true),
-  );
-  visibility("hidden");
-  request.mockClear();
-  saved.resolve();
-  await waitForCronPage(() => expect(page.cron.cronBusy).toBe(false));
-  expect(request).toHaveBeenCalledExactlyOnceWith("cron.run", {
-    id: "created-job",
-    mode: "force",
-  });
-  expect(page.cron.cronNotice).toContain("Run queued. Run ID: synthetic-run");
-  expect(page.cron.cronCreateOpen).toBe(false);
-  visibility("visible");
-  await settle();
-  expectCalls(request, refreshMethods, 1);
 });

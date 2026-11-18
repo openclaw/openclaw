@@ -217,6 +217,28 @@ async function clickMouseAtCurrentCenter(page: Page, button: Locator): Promise<v
 }
 
 suite.define(() => {
+  it("keeps the first editor tap focused when the keyboard moves the composer before release", async () => {
+    await withComposer(true, false, async (page) => {
+      const editor = page.locator(".agent-chat__input textarea");
+      const bounds = (await editor.boundingBox())!;
+      const point = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+      const touch = await page.context().newCDPSession(page);
+      await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+      await expectComposerFocus(page);
+      // Desktop Chromium has no software keyboard. Supply its viewport change,
+      // but let Chromium hit-test and dispatch the rest of the real tap.
+      await page.evaluate(() => {
+        Object.defineProperty(visualViewport!, "height", { configurable: true, value: 480 });
+        visualViewport!.dispatchEvent(new Event("resize"));
+      });
+      await expect.poll(async () => (await editor.boundingBox())!.y).toBeLessThan(480);
+      await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await expectComposerFocus(page);
+      await page.keyboard.type("First tap");
+      expect(await editor.inputValue()).toBe("First tap");
+    });
+  });
+
   it("sends and stops without moving the action out from under an Android-like tap", async () => {
     await narrowSendAndStop(true);
   });

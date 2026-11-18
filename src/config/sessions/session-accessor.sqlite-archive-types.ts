@@ -33,7 +33,9 @@ type SessionColdOversized = {
   sessionId: string;
   lowerBoundBytes: number;
 };
+export type SessionColdCleanupCursor = { sessionId: string; afterSeq?: number };
 export type SessionColdBatchInput = {
+  cleanupCursor?: SessionColdCleanupCursor;
   databaseOptions: OpenClawAgentDatabaseOptions & { path: string };
   admissionIdentities: string[];
   liveSessionKeys: string[];
@@ -43,6 +45,7 @@ export type SessionColdBatchInput = {
   maxBytes: number;
 };
 export type SessionColdBatchPrepared = {
+  cleanupCursor?: SessionColdCleanupCursor;
   freePages: number;
   cleanupSessionIds: string[];
   needsReconcile: boolean;

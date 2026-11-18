@@ -17,6 +17,97 @@ const cases = ["provider", "search"].flatMap((target) =>
 );
 
 suite.define(() => {
+  it("reorders Favorites without selecting a model and keeps the order after reload", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, colorScheme: "dark", reducedMotion: "reduce" },
+      async ({ page }) => {
+        const models = [
+          { provider: "openai", id: "example-large", name: "Example Large" },
+          { provider: "anthropic", id: "example-sonnet", name: "Example Sonnet" },
+          { provider: "google", id: "example-flash", name: "Example Flash" },
+        ];
+        const initial = models.map(({ provider, id }) => provider + "/" + id);
+        const [first, second, third] = initial;
+        // An unavailable model ref must not disappear from the saved preference.
+        const missing = "test/unlisted";
+        const gateway = await installMockGateway(page, {
+          agentModel: first,
+          models,
+          presenceUsers: [{ id: "synthetic-operator", self: true }],
+          featureMethods: [...defaultControlUiFeatureMethods, "users.prefs.get", "users.prefs.set"],
+          bootstrapPreferences: {
+            profileId: "synthetic-operator",
+            entries: { [prefsKey]: [first, missing, second, third] },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        const { picker, trigger, search } = modelPicker(page);
+        await trigger.click();
+        const tab = picker.getByRole("tab", { name: "Favorites" });
+        await tab.click();
+        const list = picker.getByRole("listbox", { name: "Favorites models" });
+        const order = () =>
+          list
+            .getByRole("option")
+            .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-chat-model-option")));
+        const row = (model: string) => list.locator('[data-chat-model-option="' + model + '"]');
+        const handle = (model: string) => row(model).getByRole("button", { name: /^Reorder/ });
+        await expect.poll(order).toEqual(initial);
+        expect(await handle(third!).count()).toBe(0);
+        const firstRow = row(first!);
+        const source = await row(third!).getByText("Example Flash", { exact: true }).boundingBox();
+        const target = await firstRow.boundingBox();
+        if (!source || !target) {
+          throw new Error("Favorite source or destination is not visible");
+        }
+        const x = target.x + target.width - 54;
+        const top = target.y + 5;
+        const bottom = target.y + target.height - 5;
+        await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(x, bottom, { steps: 8 });
+        await page.mouse.move(x - 1, bottom);
+        const marker = () =>
+          firstRow.evaluate((element) => {
+            const style = getComputedStyle(element, "::before");
+            return { top: style.top, bottom: style.bottom, height: style.height };
+          });
+        await expect.poll(marker).toMatchObject({ bottom: "0px", height: "2px" });
+        await page.mouse.move(x, top, { steps: 3 });
+        await expect.poll(marker).toMatchObject({ top: "0px", height: "2px" });
+        await expect
+          .poll(() => row(third!).evaluate((element) => getComputedStyle(element).opacity))
+          .toBe("0.45");
+        await page.mouse.up();
+        await expect.poll(order).toEqual([third, first, second]);
+        expect(
+          await gateway.getRequests("users.prefs.set", {
+            entries: { [prefsKey]: [third, first, missing, second] },
+            expectedEntries: { [prefsKey]: [first, missing, second, third] },
+          }),
+        ).toHaveLength(1);
+        await search.fill("example");
+        await expect
+          .poll(() => picker.locator('[data-chat-model-option][draggable="true"]:visible').count())
+          .toBe(0);
+        await search.clear();
+        await expect.poll(order).toEqual([third, first, second]);
+        await page.reload();
+        await trigger.click();
+        await expect.poll(order).toEqual([third, first, second]);
+        await expect.poll(() => row(first!).getAttribute("draggable")).toBe("true");
+        await row(first!).press("Alt+ArrowDown");
+        await expect.poll(order).toEqual([third, second, first]);
+        await expect
+          .poll(() => row(first!).evaluate((element) => document.activeElement === element))
+          .toBe(true);
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+        await row(second!).getByText("Example Sonnet", { exact: true }).click();
+        await expect.poll(async () => (await gateway.getRequests("sessions.patch")).length).toBe(1);
+      },
+    );
+  });
+
   it.each(["chat", "new"])(
     "persists provider drag order after closing and reloading /%s",
     async (route) => {

@@ -492,6 +492,58 @@ function yamlTempEntries(root: string) {
 }
 
 describe("release plan producer", () => {
+  it.skipIf(process.platform === "win32")(
+    "retains GitHub failure diagnostics in the producer CLI",
+    () => {
+      const bin = tempDirs.make("release-plan-gh-failure-");
+      const requests = join(bin, "requests");
+      writeFileSync(
+        join(bin, "gh"),
+        `#!/bin/sh
+printf '%s\n' "$@" > "$REQUESTS"
+printf 'sensitive-response-body\n'
+printf 'gh: API rate limit exceeded (HTTP 403)\nX-GitHub-Request-Id: RRI451-SYNTHETIC\nX-RateLimit-Reset: 1794910200\n' >&2
+exit 1
+`,
+        { mode: 0o755 },
+      );
+      const sha = "a".repeat(40);
+      const result = spawnSync(
+        process.execPath,
+        [
+          resolve("scripts/release-plan-producer.mts"),
+          "--intent",
+          "diagnostic",
+          "--candidate-sha",
+          sha,
+          "--candidate-ref",
+          "refs/heads/main",
+          "--tooling-sha",
+          sha,
+          "--tooling-full-ref",
+          "refs/heads/main",
+        ],
+        { encoding: "utf8", env: { PATH: bin, REQUESTS: requests, GH_TOKEN: "synthetic-token" } },
+      );
+
+      expect(readFileSync(requests, "utf8").trim().split("\n")).toEqual([
+        "api",
+        `repos/openclaw/openclaw/compare/${sha}...main`,
+        "--method",
+        "GET",
+        "--jq",
+        "{status}",
+      ]);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("main release tooling ancestry could not be verified");
+      expect(result.stderr).toContain("HTTP 403");
+      expect(result.stderr).toContain("X-GitHub-Request-Id: RRI451-SYNTHETIC");
+      expect(result.stderr).toContain("X-RateLimit-Reset: 1794910200");
+      expect(result.stderr).not.toContain("sensitive-response-body");
+      expect(result.stderr).not.toContain("synthetic-token");
+    },
+  );
   it("produces admitted inventory with independent C, Q, and P through the verified wrapper", () => {
     const { result, fixture } = runYamlPackageSubprocess({ inventory: true, admission: "valid" });
     expect(result.status, result.stderr).toBe(0);
