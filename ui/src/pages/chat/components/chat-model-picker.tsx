@@ -138,13 +138,15 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
       ? undefined
       : contextWindow?.options.find((option) => option.id === contextWindow.selected);
   });
-  const triggerTitle = () =>
-    [
-      params.triggerStatusLabel ?? params.triggerModelLabel,
-      triggerModel()?.supportsTools === false ? t("chat.modelControls.chatOnly") : "",
-    ]
-      .filter(Boolean)
-      .join(" · ");
+  const triggerLabel = () =>
+    params.triggerLabelPending ? "" : (params.triggerStatusLabel ?? params.triggerModelLabel);
+  const triggerAriaLabel = () => {
+    const label = triggerLabel();
+    const chatOnly =
+      triggerModel()?.supportsTools === false ? t("chat.modelControls.chatOnly") : "";
+    const detail = [label, chatOnly].filter(Boolean).join(" · ");
+    return `${t("chat.selectors.model")}${detail ? `: ${detail}` : ""}${params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""}`;
+  };
   const showProviderIcon = () => {
     const model = triggerModel();
     return Boolean(
@@ -178,7 +180,7 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
               ? "true"
               : "false"
           }
-          aria-label={`${t("chat.selectors.model")}${params.triggerLabelPending ? "" : `: ${triggerTitle()}`}${params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""}`}
+          aria-label={triggerAriaLabel()}
           aria-busy="false"
           aria-disabled={params.disabled ? "true" : "false"}
           aria-description={params.disabledReason}
@@ -190,11 +192,7 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
               class="chat-controls__trigger-provider-icon"
             />
           </Show>
-          <span class="chat-controls__inline-select-label">
-            {params.triggerLabelPending
-              ? null
-              : (params.triggerStatusLabel ?? params.triggerModelLabel)}
-          </span>
+          <span class="chat-controls__inline-select-label">{triggerLabel()}</span>
           {contextWindowBadge() ? (
             <span
               class="chat-controls__locked-model-badge chat-controls__model-context-badge"
