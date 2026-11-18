@@ -3,6 +3,10 @@ import { expect, it, vi } from "vitest";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { sessionsResult as sessionListFixture } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient as clientWithRequest } from "../../test-helpers/gateway-client.ts";
+import {
+  getChatAttachmentDataUrl,
+  registerChatAttachmentPayload,
+} from "./attachment-payload-store.ts";
 import { createStagedAttachment } from "./chat-delivery-attachments.test-support.ts";
 import {
   createBrowserAnnotationAttachment,
@@ -122,4 +126,29 @@ it("creates a pasted-text card even when upload limits would reject it as a file
   expect(onAttachmentsChange).toHaveBeenCalledWith([
     expect.objectContaining({ origin: "paste", sizeBytes: text.length }),
   ]);
+});
+
+it("releases a consumed pasted-text card payload after an ordinary send", async () => {
+  const pasted = "Release me.\n".repeat(120);
+  const card = registerChatAttachmentPayload({
+    attachment: {
+      id: "registered-card",
+      mimeType: "text/plain",
+      fileName: "pasted-text-2.txt",
+      origin: "paste",
+    },
+    dataUrl: `data:text/plain;base64,${Buffer.from(pasted).toString("base64")}`,
+    file: new File([pasted], "pasted-text-2.txt", { type: "text/plain" }),
+  });
+  const host = makeChatHost({
+    chatMessage: "Review this",
+    chatAttachments: [card],
+    requestHandlers: { "chat.send": { status: "started" } },
+  });
+
+  await handleSendChat(host);
+
+  expect(findChatSendPayload(host).message).toBe(`Review this\n\n${pasted.trimEnd()}`);
+  expect(host.chatAttachments).toEqual([]);
+  expect(getChatAttachmentDataUrl(card)).toBeNull();
 });

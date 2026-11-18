@@ -69,7 +69,9 @@ export function clearSubmittedComposerState(
   host.chatMessage = "";
   host.chatMentions = [];
   host.chatReplyTarget = null;
-  // Submission always consumes pasted-text cards: their text is already in the message.
+  // Submission always consumes pasted-text cards: their text is already in the message and
+  // no queued row owns their payload. Recovery snapshots carry their own data URLs.
+  const consumed = host.chatAttachments.filter(isPastedTextAttachment);
   host.chatAttachments =
     retainAttachments === "all"
       ? host.chatAttachments.filter((attachment) => !isPastedTextAttachment(attachment))
@@ -78,6 +80,7 @@ export function clearSubmittedComposerState(
             (attachment) => attachment.browserAnnotation || attachment.selectionAnnotation,
           )
         : [];
+  releaseChatAttachmentPayloads(consumed);
   resetChatInputHistoryNavigation(host);
   host.composerDraftChanged?.();
   return {
