@@ -296,7 +296,7 @@ describe("chat Details presentation", () => {
   );
 
   it.each(["transcript paint", "explicit open"] as const)(
-    "holds automatic content until %s and retains it through later hydration",
+    "keeps automatic Details quiet until %s and retains it through later hydration",
     async (release) => {
       // A cold lazy import must not accidentally satisfy the initial hold assertion.
       await import("./chat-details-session.tsx");
@@ -314,6 +314,7 @@ describe("chat Details presentation", () => {
         panel.getBoundingClientRect().left,
       );
       expect(panel.querySelector(".chat-details-session")).toBeNull();
+      expect(getComputedStyle(panel).visibility).toBe("hidden");
 
       if (release === "transcript paint") {
         update({ contentPending: false });
@@ -321,10 +322,12 @@ describe("chat Details presentation", () => {
         open(trigger);
       }
       await expect.poll(() => panel.querySelector(".chat-details-session")).not.toBeNull();
+      expect(getComputedStyle(panel).visibility).toBe("visible");
       const session = panel.querySelector(".chat-details-session");
       update({ contentPending: true });
       flush();
       expect(panel.querySelector(".chat-details-session")).toBe(session);
+      expect(getComputedStyle(panel).visibility).toBe("visible");
       expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
     },
   );
