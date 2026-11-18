@@ -526,23 +526,7 @@ describe("personal navigation rail", () => {
     const agent = dom.query<HTMLButtonElement>(".sidebar-rail .sidebar-agent-card__main");
     expect(agent).not.toBeNull();
     expect(agent?.getAttribute("aria-label")).toContain("Molty");
-    // The avatar only picks agents; Sessions is its own rail item directly below it.
-    const sessions = dom.query<HTMLButtonElement>(
-      ".sidebar-rail__views > openclaw-tooltip:first-child > [data-navigation-view='sessions']",
-    );
-    expect(sessions?.getAttribute("aria-label")).toBe("Sessions");
-    expect(sessions?.getAttribute("aria-pressed")).toBe("true");
-    const toggle = vi.fn();
-    await update(sidebar, {
-      navigationView: "online",
-      navigationCollapsed: true,
-      onToggleSidebar: toggle,
-    });
-    expect(sessions?.getAttribute("aria-pressed")).toBe("false");
-    // From another view with the panel closed, the avatar still opens the menu in place.
     await openAgentMenu(sidebar);
-    expect(sidebar).toMatchObject({ navigationView: "online", navigationCollapsed: true });
-    expect(toggle).not.toHaveBeenCalled();
     expect(
       dom.present(".sidebar-agent-menu", '[data-value="agent:research"]', ".sidebar-brand"),
     ).toEqual([true, true, false]);

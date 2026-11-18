@@ -122,13 +122,12 @@ participation and mentions. External catalog entries appear in **Involving me**
 only when their adopted OpenClaw conversation is in the Gateway-filtered list.
 Shared or imported catalog access alone does not establish involvement; use
 **All owners** to browse those sources. The separate filter button controls the
-remaining session filters. New session stays in the rail rather than moving
-into this header. In mobile chat, open navigation to reach **New session**
-in the rail; the conversation header reserves its two right-hand controls for
-**Session actions** and **Panels**. Other mobile pages keep an equivalent **+** in
-the page topbar while the drawer is closed. Opening the drawer moves that action
-back to the rail, without a second header button. In team mode, creation opens the
-same agent picker as the rail. Native apps keep their native creation controls.
+remaining session filters. On mobile chat, open navigation and choose **Sessions**
+to reach **New session** in the list header. The conversation header keeps its
+two right-hand controls for **Session actions** and **Panels**. Other mobile pages
+also offer **New session** (**+**) in the page topbar while the drawer is closed.
+In team mode, **New session** first opens an agent picker. Native apps keep their
+native creation controls.
 
 Session activity and unread indicators stay in the leading column across owner
 filters, grouping modes, pinned sessions, and child rows. Idle rows reserve the
