@@ -470,7 +470,7 @@ it.each([
         }
       } finally {
         commit.mockRestore();
-        receipt?.finish("interrupted");
+        receipt?.finish("interrupted", "failed");
         await receipt?.settled?.();
         work.release();
         registration.cleanup();

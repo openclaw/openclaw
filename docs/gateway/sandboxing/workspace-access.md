@@ -55,6 +55,14 @@ project and admitted host checkouts retain their existing diff behavior.
 
 ## Managed project workspaces
 
+File tools serialize operations on the same physical file. Stopping a run cancels
+its queued file operations and signals active sandbox filesystem commands to stop.
+An operation waiting behind another file operation fails after three minutes with
+a busy-file error and the earlier operation's running time. Retry later or work on
+another file; if the file stays busy, ask the operator to restart the Gateway.
+The earlier operation retains its file reservation until it actually finishes,
+so a canceled or timed-out waiter cannot cause overlapping writes.
+
 A sandboxed session with a session-owned managed worktree uses a private Git
 checkout on Docker and Podman. A registered project may be outside the agent's
 configured workspace when it is selected with `worktree: true`. This authorizes
@@ -73,6 +81,12 @@ package lifecycle scripts still run.
 
 Visible child sessions keep their managed worktree as the sandbox workspace on
 later turns, including sessions created before an update.
+
+Sandbox tool calls and checkpoints for the same managed worktree take turns in
+arrival order within the Gateway. Waiting for workspace custody is limited to
+60 seconds; a timeout reports the workspace and asks you to retry after the
+current checkpoint or reconciliation finishes. An operation that already owns
+the workspace must release it before requesting another checkpoint.
 
 Rewind and branch switching keep that managed workspace and its accepted edits.
 OpenClaw settles pending sandbox edits and retires the old runtime before changing
@@ -270,7 +284,9 @@ file contents from the selected repository before offline merge and snapshot
 operations, including the ancestor versions needed to merge diverged branches.
 This also works when a partial clone already knows the base commit. A
 content-fetch failure leaves saved work available for retry. Refresh preserves
-saved guest files, ignored guest data, and empty directories. The operation returns the exact
+saved guest files, ignored guest data, and empty directories. Preparation reads the
+existing Git object store and reuses the accepted inventory for unchanged source
+files instead of creating two complete temporary checkouts. The operation returns the exact
 `baseCommit`, changed paths, and conflicting paths; it does not publish or change
 the GitHub pull request. It accepts no repository, URL, arbitrary ref, other
 session, or pull-request selector.
@@ -320,31 +336,29 @@ are unchanged and no recovery is pending, its runtimes keep running. Changed or
 interrupted checks return to paused reconciliation; file edits are never applied
 from the live check. Checkpoints after commands and file mutations use the same
 check for the guest workspace: commands that leave accepted files unchanged do
-not pause the sandbox. Small, fast workspaces capture directly into an immutable
-Git result. A probe taking at least half a second or an accepted inventory of at
-least 20,000 entries selects filesystem capture for private checkouts provisioned
-as btrfs subvolumes. Clean command checkpoints take an atomic snapshot without
-pausing, then scan and reconcile the captured files into the managed worktree.
-Pending recovery retains its consistency pause. A container pause does not flush
-application buffers; neither capture path promises application-level transactions
-across background writes. The first capture after substantial workspace growth can
-still use the direct path; later probes see the larger accepted inventory.
-Other checkouts pause until their files are stored in an immutable Git
-result. A snapshot that omits nested subvolumes is discarded and captured again
-under pause, preserving their contents. Command completion still waits for
+not pause the sandbox. Changed command checkpoints prepare file hashes and Git
+blobs while the guest runs, then pause to check the current file inventory and
+identities. Files changed again or too recent for safe reuse are hashed during
+that pause. The guest resumes once an immutable Git result owns the final capture,
+before canonical publication.
+They do not create disposable filesystem snapshots, avoiding snapshot creation
+and recursive retirement after each changed command. Pending recovery retains
+its consistency pause. A container pause does not flush application buffers;
+capture does not promise application-level transactions across background writes.
+Command completion still waits for
 canonical acceptance, so a read after a completed command sees its saved changes.
 Acceptance preserves each workspace's file fingerprints for unchanged paths when
 the shared baseline advances. The next check still walks file metadata, but only
 changed or unverifiable identities need content hashing. Imported files acquire
 fresh fingerprints on that check; source filesystem identities are never copied.
 Later background writes remain in the private checkout for the next checkpoint.
-After acceptance and runtime resume, the workspace lease transfers the snapshot
+When reconciliation uses a snapshot, the workspace lease transfers it after
+acceptance and runtime resume
 to a unique retired path for asynchronous cleanup. The next command can run while
 cleanup continues. Before another snapshot, capture admission waits for cleanup
 and retries any interrupted removal, keeping the cleanup backlog bounded.
-Snapshot creation may wait for dirty data to flush. Clean command exports keep
-the guest running during that wait; captures requiring recovery still have no
-fixed maximum pause duration.
+Snapshot creation may wait for dirty data to flush. Captures requiring a stable
+live tree have no fixed maximum pause duration.
 Concurrent preparations of the same workspace and session
 generation share queued reconciliation. Once filesystem observation begins,
 later preparations require a fresh check so intervening edits remain visible.
@@ -372,7 +386,9 @@ the canonical file, and import the saved change into the private checkout under 
 same custody before resuming its runtimes. Capture,
 publication, and lifecycle operations retain their reconciliation lease and pause
 requirements.
-Ordinary reconciliation also uses the btrfs capture for guest exports. Once an
+Ordinary reconciliation uses btrfs capture for guest exports from private
+checkouts provisioned as subvolumes. A snapshot that omits nested subvolumes is
+discarded and captured again under pause, preserving their contents. Once an
 immutable result owns the source bytes, staged-file materialization, Git patch
 preparation, and temporary-file cleanup run with the guest resumed. Imports pause
 again before confirming the target and applying changes; edits made during
@@ -400,9 +416,16 @@ Release records `Local workspace unpause` with the same `reason`, elapsed
 `phaseDurationsMs` lists every cumulative phase lasting at least one second;
 shorter phases are omitted. Fixed `operation.*` sub-phases distinguish Git-state
 verification, pristine source checks, canonical snapshot preparation, and commit
-bookkeeping during base refresh. These use the same exclusive timing field;
-they include awaited worker and Git work, not
-just Gateway CPU time. Initial workspace-lease acquisition precedes the pause.
+bookkeeping during base refresh. These use the same exclusive timing field and
+include awaited worker and Git work, not just Gateway CPU time.
+Publication also reports reconciliation phases (`scan`, `staging`, `materialization`,
+`preflight`, `patch`, `apply`, `acceptance`, and `cleanup`). Its fixed `operation.*`
+sub-phases separate source admission, Git policy preparation, snapshot safety checks,
+index copying, Git staging, admitted-path pruning, attribute verification, and
+temporary-index cleanup. The diagnostics timeline observes these same structural
+phases without file paths or content. Timings preserve the existing consistency pause;
+they do not establish that a long operation waited for a fixed timeout.
+Initial workspace-lease acquisition precedes the pause.
 Resume inspection, generation validation, and unpause
 are separated as `resumeInspect`, `resumeAuthority`, and `unpause`. Engine-command
 times include broker admission, transport, and command completion, not just engine

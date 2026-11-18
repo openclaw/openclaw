@@ -225,7 +225,8 @@ export function createOpenClawDelegateToolsForRun(
     // Keep human approval in one model tool call; a yielded cell can outlive its turn.
     catalogMode: "direct-only",
     description:
-      "Delegate system setup or repair to a separate model turn. " +
+      "Run system setup or repair. Natural-language requests use a separate model turn; exact config commands do not need helper inference. " +
+      "Use message 'config set <path> <value>', 'config unset <path>', 'config get <path>', 'config schema <path>', or 'config validate' for deterministic config recovery with the same approval and write checks. " +
       "Prefer your available tools for routine status and session/workspace checks. " +
       "Gateway restart, config, channels, plugins, published ClawHub Template review/install, agents, models/providers, API keys. " +
       "Supports multiple named custom/local model endpoints; provider IDs can be user-defined, while api selects the protocol. " +

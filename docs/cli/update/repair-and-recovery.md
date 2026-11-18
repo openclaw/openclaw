@@ -327,6 +327,24 @@ while a surviving Doctor process finishes; retry when that process exits. Run
 `openclaw update status`, then `openclaw update repair` for any recovery that
 remains pending.
 
+The next `openclaw update` settles the plugin recovery a killed command-line
+update reserved, and continues without a repair. When the killed update had
+replaced the installed version without confirming it, had begun rolling back on
+it, or left the Gateway stopped, the update first finishes that version the way
+`openclaw update repair` does: Doctor, plugin convergence, and a Gateway restart.
+That work is recorded on its own repair run, and the update's history names it.
+A stopped Gateway is restarted only when the update would restart it anyway.
+The update refuses and names the command to run, in most cases
+`openclaw update repair`, when the update ran with `--no-restart` and the
+Gateway is still stopped, when finishing the installed version fails, when the
+Gateway started that update, when an update may still be running, or when the
+update lease store no longer holds that update's lease. After a restart cleared
+that store, the update still settles the recovery on Linux and macOS hosts when
+the killed update recorded that it ran in an earlier boot of the same machine.
+Windows, containers, and updates killed while running an older version keep
+the refusal. See
+[how updates run](/cli/update/how-updates-run#replacing-the-package-directory).
+
 ### Interrupted state restore
 
 Update commands, including `update repair`, refuse with
@@ -354,7 +372,9 @@ beside the installation or in the system temporary directory. The updater settle
 its workers after success, failure, an exception, or `SIGINT`/`SIGTERM`, including
 failures while reporting the outcome. Complete projections record
 `Runtime retained at <path>: <reason>` for the next eligible update or Doctor
-cleanup, so recursive deletion does not delay command exit. Incomplete preparation
+cleanup, so recursive deletion does not delay command exit. Run
+`openclaw doctor --fix` before uninstalling; manual removal on Windows needs the
+extended-length path prefix ([Uninstall](/install/uninstall#remove-the-cli)). Incomplete preparation
 keeps immediate best-effort cleanup. Unsettled workers retain their runtime with
 the failure reason. A cleanup warning does not replace the original update
 outcome. An earlier nonzero exit remains nonzero while workers are draining.

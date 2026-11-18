@@ -428,7 +428,7 @@ suite.define(() => {
     });
   });
 
-  it("retires an empty picker snapshot when the Gateway reconnects", async () => {
+  it("retires an empty catalog snapshot when the Gateway reconnects", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const routedModel = catalogModel("openai", "gpt-5.6-luna", "GPT-5.6 Luna");
       const gateway = await installMockGateway(page, {
@@ -453,10 +453,9 @@ suite.define(() => {
 
       const composer = page.locator(".agent-chat__input");
       const pickerTrigger = composer.locator('[data-chat-model-select="true"]');
-      await pickerTrigger.click();
       await gateway.waitForRequest("models.list");
-      await expectText(composer.locator("[data-chat-model-catalog-state]"), "No models available");
-      await pickerTrigger.click();
+      await expectVisible(composer.getByRole("button", { name: "Set up a model", exact: true }));
+      await expectCount(pickerTrigger, 0);
 
       const startupCount = (await gateway.getRequests("chat.startup")).length;
       await gateway.setOnline(false);

@@ -465,6 +465,13 @@ That marker permanently excludes the run from automatic reconciliation, even
 if known parents later exit; existing recorded identities remain protected.
 A fresh run without identity follows the legacy explicit repair/supersession
 rules below.
+On Linux and macOS each adopter also stores an optional `namespace` string on
+its `origin.driver` entry, retained with it in `origin.previousDrivers`: the
+platform, kernel boot, Linux PID namespace, and digested machine identity it ran
+under, or `null` when they could not be read. A later `openclaw update` reads it
+only to show that a killed run's processes ended with an earlier boot of the
+same machine. Older readers drop the key; lease payloads, recovery receipts, and
+the public run record never carry it.
 This is additive JSON metadata;
 there are no new columns, tables, or schema versions. The separate
 `verification.pid` still identifies the Gateway service, not the updater.
@@ -860,3 +867,12 @@ it does not automatically scan or import existing transcripts.
 
 See [usage-ranked tool index](/concepts/experimental-features#usage-ranked-tool-index)
 for authenticated inspection, explicit transcript import, reset, and privacy.
+
+### Pending-input endings
+
+Agent schema 43 adds nullable `end_cause` and `origin_source_json` columns to
+`session_pending_inputs` on SQLite and PostgreSQL. The forward migration marks
+legacy cancelled inputs carrying a user Stop or dismissal marker as `user-stop`,
+without changing their message bytes. Stores without the optional pending-input
+table keep it absent until first use. `origin_source_json` reserves storage for
+the original input source; this migration does not populate it.

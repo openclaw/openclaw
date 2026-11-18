@@ -13120,9 +13120,16 @@ describe("ci workflow guards", () => {
         check_name: "checks-node-compact-small-1",
         groups_gzip_base64: expect.any(String),
       });
+      // Only the grouped fixture selects the full infra suite, including its Bun child.
+      if (grouped) {
+        expect(row.requires_bun).toBe(true);
+      } else if (eventName === "pull_request") {
+        expect(row).not.toHaveProperty("requires_bun");
+      } else {
+        expect(row.requires_bun).toBe(false);
+      }
       if (eventName === "pull_request") {
         for (const field of [
-          "requires_bun",
           "requires_dist",
           "requires_go",
           "requires_ripgrep",
@@ -13902,7 +13909,11 @@ describe("ci workflow guards", () => {
     ]);
   });
 
-  it("provisions pinned Bun for Node-hosted standalone code generation", () => {
+  it("provisions pinned Bun for Node-hosted code generation, retained imports, and native filesystem copies", () => {
+    const nativeFilesystem = "src/agents/worktrees/filesystem-native.test.ts";
+    const agentsSupport = "test/vitest/vitest.agents-support.config.ts";
+    const retainedImports = "src/infra/update-retained-runtime-imports.process.test.ts";
+    const infra = "test/vitest/vitest.infra.config.ts";
     const codegen = "test/scripts/bun-standalone-codegen.test.ts";
     const unrelated = "test/scripts/ci-git-owner.test.ts";
     const tooling = "test/vitest/vitest.tooling.config.ts";
@@ -13912,6 +13923,40 @@ describe("ci workflow guards", () => {
       { includePatterns: ["test/scripts/bun-*.test.ts"] },
       { groups: [{ configs: [tooling], includePatterns: [codegen] }] },
       { configs: [tooling] },
+      { configs: [infra], targets: [retainedImports] },
+      { configs: [infra], includePatterns: [retainedImports] },
+      { configs: [infra], includePatterns: ["src/infra/update-retained-*.test.ts"] },
+      {
+        groups: [
+          {
+            configs: [infra],
+            includePatterns: [retainedImports],
+            shard_name: "core-runtime-infra-system-runtime-hosted-2",
+          },
+        ],
+      },
+      { configs: [infra] },
+      { configs: [agentsSupport], targets: [nativeFilesystem] },
+      { configs: [agentsSupport], includePatterns: [nativeFilesystem] },
+      { configs: [agentsSupport], includePatterns: ["src/agents/worktrees/*.test.ts"] },
+      { groups: [{ configs: [agentsSupport], includePatterns: [nativeFilesystem] }] },
+      { configs: [agentsSupport] },
+      { groups: [{ configs: [agentsSupport], shard_name: "agentic-agents-support" }] },
+      { configs: [agentsSupport], targets: ["src/agents/worktrees/filesystem-refs.test.ts"] },
+      {
+        groups: [
+          {
+            configs: [agentsSupport],
+            includePatterns: ["src/agents/worktrees/filesystem-refs.test.ts"],
+          },
+        ],
+      },
+      { configs: [infra], includePatterns: ["src/infra/update-retained-runtime.test.ts"] },
+      {
+        groups: [
+          { configs: [infra], includePatterns: ["src/infra/update-retained-runtime.test.ts"] },
+        ],
+      },
       { includePatterns: [unrelated] },
       { groups: [{ configs: [tooling], includePatterns: [unrelated] }] },
       { configs: ["test/vitest/vitest.tooling-isolated.config.ts"] },
@@ -13936,7 +13981,7 @@ describe("ci workflow guards", () => {
     const rows = readJsonOutput(result.outputs, "checks_node_core_nondist_matrix").include;
     expect(rows).toHaveLength(selections.length);
     for (let index = 0; index < selections.length; index += 1) {
-      expect(Boolean(rows[index].requires_bun)).toBe(index < 5);
+      expect(Boolean(rows[index].requires_bun), JSON.stringify(selections[index])).toBe(index < 16);
       expect(rows[index].test_runtime_policy).toBe("node");
     }
   });
