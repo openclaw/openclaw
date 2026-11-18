@@ -19,7 +19,8 @@ const transport = vi.hoisted(() => ({
     stopAndWait: ReturnType<typeof vi.fn>;
   }>,
 }));
-vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
+vi.mock(import("openclaw/plugin-sdk/gateway-runtime"), async (importOriginal) => ({
+  ...(await importOriginal()),
   loadGatewayReaderIdentityV1: async (key: string) => {
     if (transport.identityMissing || !key || key === "primary") {
       throw new Error("missing identity");
@@ -35,7 +36,8 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
     start() {}
   },
 }));
-vi.mock("openclaw/plugin-sdk/secret-ref-runtime", () => ({
+vi.mock(import("openclaw/plugin-sdk/secret-ref-runtime"), async (importOriginal) => ({
+  ...(await importOriginal()),
   coerceSecretRef: (value: unknown) => value,
   resolveSecretRefValues: async () => {
     await transport.onResolve?.();
@@ -92,13 +94,13 @@ it("polls only selected outbound sources and rejects retired connections without
   });
   client.request.mockImplementationOnce(async () => {
     (client.options.onClose as () => void)();
+    (client.options.onHelloOk as () => void)();
     return { sessions: [session] };
   });
   expect((await catalog.list({}))[0]).toMatchObject({
     sessions: [],
     error: { code: "SOURCE_UNAVAILABLE" },
   });
-  (client.options.onHelloOk as () => void)();
   client.request.mockRejectedValueOnce(new Error("synthetic-secret"));
   expect(JSON.stringify(await catalog.list({}))).not.toContain("synthetic-secret");
   client.request.mockImplementationOnce(async () => {

@@ -34,7 +34,8 @@ type Source = {
   label: string;
   client: GatewayClient;
   connected: boolean;
-  generation: number;
+  // Socket turnover only; this never compares or pins a session/transcript identity.
+  connectionVersion: number;
   assertConfigured: () => void;
 };
 
@@ -65,10 +66,10 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
       }),
     };
   };
-  const assertCurrent = (source: Source, generation: number) => {
+  const assertCurrent = (source: Source, connectionVersion: number) => {
     if (
       !source.connected ||
-      source.generation !== generation ||
+      source.connectionVersion !== connectionVersion ||
       sources.get(source.hostId) !== source
     ) {
       throw new Error("Shared Gateway is unavailable. Refresh the catalog.");
@@ -141,7 +142,7 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
             hostId,
             label: typeof value.label === "string" ? value.label : id,
             connected: false,
-            generation: 0,
+            connectionVersion: 0,
             assertConfigured,
             client: new GatewayClient({
               url: url.href,
@@ -163,11 +164,11 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
               },
               onHelloOk: () => {
                 source.connected = true;
-                source.generation++;
+                source.connectionVersion++;
               },
               onClose: () => {
                 source.connected = false;
-                source.generation++;
+                source.connectionVersion++;
               },
             }),
           };
@@ -206,16 +207,16 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
             };
             try {
               query.signal?.throwIfAborted();
-              const generation = source.generation;
+              const connectionVersion = source.connectionVersion;
               source.assertConfigured();
-              assertCurrent(source, generation);
+              assertCurrent(source, connectionVersion);
               const raw = await source.client.request("session-share.list", {
                 limit: sessionCatalogPaging.boundedLimit(query.limitPerHost),
                 ...(query.search ? { searchTerm: query.search } : {}),
                 ...(query.cursors?.[source.hostId] ? { cursor: query.cursors[source.hostId] } : {}),
               });
               const page = parseSessionSharePage(raw);
-              assertCurrent(source, generation);
+              assertCurrent(source, connectionVersion);
               query.signal?.throwIfAborted();
               return Object.assign(common, page, {
                 sessions: page.sessions.map((session) =>
@@ -250,9 +251,9 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
       if (!source) {
         throw new Error("Shared Gateway is unavailable. Refresh the catalog.");
       }
-      const generation = source.generation;
+      const connectionVersion = source.connectionVersion;
       source.assertConfigured();
-      assertCurrent(source, generation);
+      assertCurrent(source, connectionVersion);
       try {
         const raw = await source.client.request("session-share.read", {
           threadId: request.threadId,
@@ -260,7 +261,7 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
           ...(request.cursor ? { cursor: request.cursor } : {}),
         });
         const page = parseSessionShareTranscriptPage(raw, request.threadId);
-        assertCurrent(source, generation);
+        assertCurrent(source, connectionVersion);
         return {
           ...page,
           hostId: source.hostId,
