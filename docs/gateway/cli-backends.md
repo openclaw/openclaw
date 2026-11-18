@@ -615,6 +615,7 @@ A `claude-cli` attempt can fail over to a non-CLI candidate in [`agents.defaults
 - Tool blocks are coalesced to compact `(tool call: name)` and `(tool result: …)` hints to keep the prompt budget honest. An oversized summary is truncated and labeled `(truncated)`.
 - Same-provider `claude-cli` to `claude-cli` fallbacks rely on Claude's own `--resume` and skip the prelude. If the first turn exceeds an output limit, OpenClaw keeps its native session for retry once Claude has flushed the transcript. Existing bindings and the current session owner's authority still govern that write.
 - The seed reuses the existing Claude session-file path validation, so arbitrary paths cannot be read.
+- A turn that called a tool and then exceeded the stream output limit (`CLI JSONL output exceeded …`) does not fall back. Another model would run the user message again and repeat the completed tool calls, so the run fails with that error instead.
 
 ## Images
 

@@ -1,0 +1,2 @@
+# Prevent replay of completed CLI tool work after an output-limit refusal; preserve no-tool fallback.
+29

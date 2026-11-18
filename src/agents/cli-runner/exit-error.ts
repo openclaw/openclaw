@@ -1,5 +1,6 @@
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { hasAcceptedSessionSpawn } from "../accepted-session-spawn.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { CliOutput } from "../cli-output-contracts.js";
 import { extractCliErrorMessage } from "../cli-output.js";
@@ -7,8 +8,21 @@ import {
   coerceToFailoverError,
   FailoverError,
   isFailoverError,
+  recordModelFallbackStop,
   resolveFailoverStatus,
 } from "../failover-error.js";
+
+// A turn that ends without a final answer cannot authorize replaying the tool effects it completed.
+export function stopFallbackAfterToolEffects(
+  error: unknown,
+  output: Pick<CliOutput, "toolSummary" | "acceptedSessionSpawns">,
+): void {
+  const completedToolEffects =
+    (output.toolSummary?.calls ?? 0) > 0 || hasAcceptedSessionSpawn(output.acceptedSessionSpawns);
+  if (completedToolEffects && error instanceof Error) {
+    recordModelFallbackStop(error);
+  }
+}
 
 type CliResumeAttempt = {
   // Option name the backend was invoked with, e.g. --resume-session-at.
@@ -59,6 +73,17 @@ export function createCliStreamRefusalError(
 
 export function readCliStreamRefusalOutput(error: unknown): CliOutput | undefined {
   return error instanceof FailoverError ? refusedStreamOutputs.get(error) : undefined;
+}
+
+/** Adds the run's tool facts to a refused stream's partial output, as a returned turn carries them. */
+export function recordCliStreamRefusalToolEffects(
+  error: unknown,
+  effects: Pick<CliOutput, "toolSummary" | "acceptedSessionSpawns">,
+): void {
+  const output = readCliStreamRefusalOutput(error);
+  if (output && error instanceof FailoverError) {
+    refusedStreamOutputs.set(error, { ...output, ...effects });
+  }
 }
 
 export function resolveCliResumeAtError(
