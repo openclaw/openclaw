@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Errored, For, latest, Loading } from "solid-js";
+import { createMemo, Errored, For, latest, Loading, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -225,7 +225,13 @@ function EngineSection(props: MemoryViewProps) {
               : undefined
           }
           control={
-            available() ? (
+            // Keep the same select while the catalog refreshes after a write.
+            <Show
+              when={available()}
+              fallback={
+                <SettingsValue mono={true} value={engineId() ?? t("memoryPage.engine.off")} />
+              }
+            >
               <SettingsSelect
                 aria-label={t("memoryPage.engine.rowTitle")}
                 aria-busy={props.engineSaving ? "true" : undefined}
@@ -241,9 +247,7 @@ function EngineSection(props: MemoryViewProps) {
                   props.onEngineChange(event.currentTarget.value || null);
                 }}
               />
-            ) : (
-              <SettingsValue mono={true} value={engineId() ?? t("memoryPage.engine.off")} />
-            )
+            </Show>
           }
         />
         {available() ? <DisabledEngineRow {...props} engineDisabled={blocked()} /> : undefined}
