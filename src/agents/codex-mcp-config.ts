@@ -151,15 +151,12 @@ export function normalizeCodexMcpServerConfig(
  * Requester-scoped servers are excluded: harness-native MCP clients are
  * session-shared and must never dial placeholder or requester-bound URLs.
  */
-export function buildCodexMcpServersConfig(
-  config: BundleMcpConfig,
-  grants: readonly McpToolGrant[] = [],
-): CodexMcpServersConfig {
+export function buildCodexMcpServersConfig(config: BundleMcpConfig): CodexMcpServersConfig {
   const { staticServers } = partitionMcpServersByConnectionScope(config.mcpServers);
   return Object.fromEntries(
     Object.entries(staticServers).map(([name, server]) => [
       name,
-      normalizeCodexMcpServerConfig(name, server, grants),
+      normalizeCodexMcpServerConfig(name, server),
     ]),
   );
 }
