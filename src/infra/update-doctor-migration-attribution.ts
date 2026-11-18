@@ -18,6 +18,7 @@ export type UpdateDoctorMigrationCapture = {
   /** Captured SQLite sources admitted by this Doctor session. */
   openedSqlitePaths?: Set<string>;
   expected(pathname: string): string | null | undefined;
+  rebuiltIndex(pathname: string): string | undefined;
   assertCurrent(): void;
   accept(pathname: string, before: string | null, after: string | null): void;
   refuse(message: string): void;
@@ -206,14 +207,21 @@ export function runUpdateSqliteMigration<T>(
         // Before native exclusion, a cold read-only open may add an empty WAL
         // index to the captured family. Exclusive handles keep the isolated read:
         // closing a raw source descriptor here would release their process locks.
+        const rebuilt = capture.rebuiltIndex(key);
         const before =
           expected === null
             ? null
             : opened || mode === "exclusive"
               ? readSqliteGeneration(pathname)
-              : readMatchingUpdateDatabaseGeneration(pathname, expected);
+              : readMatchingUpdateDatabaseGeneration(
+                  pathname,
+                  rebuilt === undefined ? [expected] : [expected, rebuilt],
+                );
         assertCurrent();
-        if (before === undefined || (!opened && mode === "exclusive" && before !== expected)) {
+        if (
+          before === undefined ||
+          (!opened && mode === "exclusive" && before !== expected && before !== rebuilt)
+        ) {
           throw new Error(`SQLite migration source changed after update capture: ${pathname}`);
         }
         capture.openedSqlitePaths?.add(key);
@@ -282,7 +290,11 @@ export function beginUpdateSqliteCompanion(db: DatabaseSync, pathname: string, c
   const before = created && expected === null ? null : readSqliteGeneration(pathname);
   assertCurrent();
   // Session settlement owns the final postimage of paths this Doctor already opened.
-  if (!capture.openedSqlitePaths?.has(key) && before !== expected) {
+  if (
+    !capture.openedSqlitePaths?.has(key) &&
+    before !== expected &&
+    before !== capture.rebuiltIndex(key)
+  ) {
     capture.refuse("Migration companion changed after update capture.");
     throw new Error("Database migration companion no longer matches its capture.");
   }

@@ -617,7 +617,13 @@ it.each(["captured-generation", null, undefined])(
         backupPath: "/synthetic/relocated/scoped.bak",
       };
     });
-    const capture = { expected: () => generation, assertCurrent() {}, accept() {}, refuse };
+    const capture = {
+      expected: () => generation,
+      rebuiltIndex: () => undefined,
+      assertCurrent() {},
+      accept() {},
+      refuse,
+    };
     runWithDoctorMigrationBackup(backup, () =>
       runWithUpdateDoctorMigrationCapture(capture, () => {
         const getBackup = () =>

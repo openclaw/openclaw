@@ -238,6 +238,7 @@ it.each([
           committed: databaseGenerations,
           physical: databaseGenerations,
           emptyReaderAlternates: {},
+          rebuiltIndexAlternates: {},
         };
       },
     );
