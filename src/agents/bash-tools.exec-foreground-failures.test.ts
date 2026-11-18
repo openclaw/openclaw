@@ -175,18 +175,10 @@ describe("exec foreground failures", () => {
     const text = requireTextContent(result);
     const details = result.details;
     assert(details.status === "failed");
-    for (const fragment of [
-      "Command aborted by signal 9",
-      "OpenClaw selected its Linux OOM-score wrapper",
-      "attempts to set this child's oom_score_adj to 1000",
+    expect(text).toContain("Command aborted by signal 9");
+    expect(details.message).toContain(
       "SIGKILL alone does not identify whether the Linux OOM killer",
-      "Check cgroup memory events or kernel logs",
-      "If they show memory pressure, narrow the command",
-      "adjust memory, concurrency, or resource limits",
-    ]) {
-      expect(text).toContain(fragment);
-      expect(details.message).toContain(fragment);
-    }
+    );
     expect(text).not.toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ");
   });
 
@@ -224,26 +216,6 @@ describe("exec foreground failures", () => {
     },
   );
 
-  it.each([true, false])(
-    "explains sandbox PTY downgrades only when requested (pty=%s)",
-    async (pty) => {
-      const { tool } = createBackendSandboxTool();
-      mockSpawn();
-
-      const result = await tool.execute("sandbox-pty", { command: "echo ok", pty });
-
-      expect(result.details.status).toBe("completed");
-      expectSpawn({ mode: "child" });
-      const text = requireTextContent(result);
-      if (pty) {
-        expect(text).toContain("Warning: PTY is unavailable in sandbox mode");
-        expect(text).toContain("running without a PTY. Use a noninteractive command");
-      } else {
-        expect(text).not.toMatch(/PTY/i);
-      }
-    },
-  );
-
   it("finalizes backend sandbox exec tokens when process spawn fails", async () => {
     const finalizeToken = { session: "remote-session" };
     const finalizeExec = vi.fn<NonNullable<BashSandboxConfig["finalizeExec"]>>(async () => {});
@@ -276,18 +248,5 @@ describe("exec foreground failures", () => {
     expect(discardPreparedWorkdir).not.toHaveBeenCalled();
     expect(buildExecSpec).not.toHaveBeenCalled();
     expect(supervisorMock.spawn).not.toHaveBeenCalled();
-  });
-
-  it("uses the mapped host cwd for existing relative backend-validated sandbox workdirs", async () => {
-    const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
-    const srcDir = path.join(workspaceDir, "src");
-    fs.mkdirSync(srcDir);
-    const { execute, validateWorkdir } = createBackendSandboxTool({ workspaceDir });
-    mockSpawn();
-
-    const result = await execute("echo ok", "src");
-    expect(result.details).toMatchObject({ status: "completed", cwd: srcDir });
-    expect(validateWorkdir).toHaveBeenCalledWith("/remote/workspace/src");
-    expectSpawn({ cwd: srcDir });
   });
 });

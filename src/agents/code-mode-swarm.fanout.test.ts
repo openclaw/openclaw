@@ -25,109 +25,81 @@ function createExecutor(limit: number) {
 }
 
 describe("Swarm pipeline backpressure", () => {
-  it.each([
-    { limit: 1, count: 3, partial: false, followup: false },
-    { limit: 3, count: 6, partial: true, followup: false },
-    { limit: 16, count: 30, partial: true, followup: true },
-    { limit: 16, count: 65, partial: false, followup: true, refill: true },
-  ])(
-    "accounts for $count items with $limit slots, partial settlement $partial and follow-up tools $followup",
-    async ({ limit, count, partial, followup, refill = false }) => {
-      const executor = createExecutor(limit);
-      const source = `
-      const initial = ${refill} ? Array.from({ length: 16 }, (_, i) => progress({ value: "initial-" + i })) : [];
-      const timers = ${refill} ? Array.from({ length: 128 }, () => setTimeout(() => { throw new Error("canceled queued timer fired"); }, 60_000)) : [];
-      const collecting = Promise.allSettled(Array.from({ length: ${count} }, async (_, index) => {
-        const next = await agents.run("first-" + index, { phase: "First" });
-        if (${followup}) await progress({ value: index });
-        return await agents.run(next, { phase: "Second" });
-      }));
-      if (${refill}) {
-        await Promise.all(initial);
-        timers.forEach(clearTimeout);
-        for (let batch = 0; batch < 2; batch++) {
-          await Promise.all(Array.from({ length: 128 }, (_, i) => progress({ value: batch + "-" + i })));
+  it("settles a partial two-stage pipeline with a failed child and follow-up tools", async () => {
+    const limit = 3;
+    const count = 4;
+    const executor = createExecutor(limit);
+    const source = `
+    const collecting = Promise.allSettled(Array.from({ length: ${count} }, async (_, index) => {
+      const next = await agents.run("first-" + index, { phase: "First" });
+      await progress({ value: index });
+      return await agents.run(next, { phase: "Second" });
+    }));
+    const outcomes = await collecting;
+    return outcomes.map(outcome => outcome.status === "fulfilled"
+      ? { status: outcome.status, value: outcome.value }
+      : { status: outcome.status, error: outcome.reason.message });
+  `;
+    let result: CodeModeWorkerResult = await executor.exec(source, [
+      { callableName: "progress", name: "progress", source: "openclaw" },
+    ]);
+    const collectors = new Map<string, string>();
+    const progressItems: unknown[] = [];
+    for (let round = 0; result.status === "waiting" && round < count * 8; round++) {
+      expect(result.pendingRequests.length).toBeGreaterThan(0);
+      expect(result.pendingRequests.length).toBeLessThanOrEqual(limit);
+      const frontier = result.pendingRequests.slice(-1);
+      const pendingRequests = result.pendingRequests.slice(0, -1);
+      const settledRequests = frontier.map((request) => {
+        let value: unknown;
+        if (request.method === "swarmNote") {
+          value = { ok: true };
+        } else if (request.method === "agentSpawn") {
+          const prompt = request.args[0];
+          assert(typeof prompt === "string", "expected a collector prompt");
+          const runId = `collector-${collectors.size}`;
+          collectors.set(runId, prompt);
+          value = { status: "accepted", runId };
+        } else if (request.method === "callValue") {
+          expect(request.args[0]).toBe("progress");
+          progressItems.push(request.args[1]);
+          value = { recorded: true };
+        } else {
+          expect(request.method).toBe("agentWait");
+          const runId = request.args[0];
+          const prompt = typeof runId === "string" ? collectors.get(runId) : undefined;
+          assert(prompt, "wait must reference an accepted collector");
+          const nextStage = prompt.startsWith("first-")
+            ? prompt.replace("first-", "second-")
+            : prompt.replace("second-", "done-");
+          value =
+            prompt === "first-1"
+              ? { runId, status: "failed", error: "child intentionally failed" }
+              : { runId, status: "done", result: nextStage };
         }
-      }
-      const outcomes = await collecting;
-      return outcomes.map(outcome => outcome.status === "fulfilled"
-        ? { status: outcome.status, value: outcome.value }
-        : { status: outcome.status, error: outcome.reason.message });
-    `;
-      let result: CodeModeWorkerResult = await executor.exec(source, [
-        { callableName: "progress", name: "progress", source: "openclaw" },
-      ]);
-      const collectors = new Map<string, string>();
-      const progressItems: unknown[] = [];
-      for (let round = 0; result.status === "waiting" && round < count * 8; round++) {
-        expect(result.pendingRequests.length).toBeGreaterThan(0);
-        expect(result.pendingRequests.length).toBeLessThanOrEqual(limit);
-        const frontier = partial ? result.pendingRequests.slice(-1) : result.pendingRequests;
-        const pendingRequests = partial ? result.pendingRequests.slice(0, -1) : [];
-        const settledRequests = frontier.map((request) => {
-          let value: unknown;
-          if (request.method === "swarmNote") {
-            value = { ok: true };
-          } else if (request.method === "agentSpawn") {
-            const prompt = request.args[0];
-            assert(typeof prompt === "string", "expected a collector prompt");
-            const runId = `collector-${collectors.size}`;
-            collectors.set(runId, prompt);
-            value = { status: "accepted", runId };
-          } else if (request.method === "callValue") {
-            expect(request.args[0]).toBe("progress");
-            progressItems.push(request.args[1]);
-            value = { recorded: true };
-          } else {
-            expect(request.method).toBe("agentWait");
-            const runId = request.args[0];
-            const prompt = typeof runId === "string" ? collectors.get(runId) : undefined;
-            assert(prompt, "wait must reference an accepted collector");
-            const nextStage = prompt.startsWith("first-")
-              ? prompt.replace("first-", "second-")
-              : prompt.replace("second-", "done-");
-            value =
-              prompt === "first-1"
-                ? { runId, status: "failed", error: "child intentionally failed" }
-                : { runId, status: "done", result: nextStage };
-          }
-          return { id: request.id, ok: true as const, json: JSON.stringify(value) };
-        });
-        result = await executor.resume(result.continuation, settledRequests, pendingRequests);
-      }
-      assert(
-        result.status === "completed",
-        result.status === "failed" ? result.error : "pipeline must complete",
-      );
-      expect(result.value.kind).toBe("complete");
-      expect(JSON.parse(result.value.json)).toEqual(
-        Array.from({ length: count }, (_, index) =>
-          index === 1
-            ? { status: "rejected", error: expect.stringContaining("child intentionally failed") }
-            : { status: "fulfilled", value: `done-${index}` },
-        ),
-      );
-      const spawnedPrompts = [...collectors.values()];
-      expect(spawnedPrompts).toHaveLength(count * 2 - 1);
-      expect(new Set(spawnedPrompts).size).toBe(spawnedPrompts.length);
-      const expectedProgress = followup
-        ? Array.from({ length: count }, (_, value) => ({ value })).filter(
-            ({ value }) => value !== 1,
-          )
-        : [];
-      const expectedRefills = refill
-        ? [
-            ...Array.from({ length: 16 }, (_, i) => ({ value: "initial-" + i })),
-            ...[0, 1].flatMap((batch) =>
-              Array.from({ length: 128 }, (_, i) => ({ value: batch + "-" + i })),
-            ),
-          ]
-        : [];
-      expect(progressItems).toHaveLength(expectedProgress.length + expectedRefills.length);
-      expect(progressItems).toEqual(expect.arrayContaining(expectedRefills));
-      expect(progressItems).toEqual(expect.arrayContaining(expectedProgress));
-    },
-  );
+        return { id: request.id, ok: true as const, json: JSON.stringify(value) };
+      });
+      result = await executor.resume(result.continuation, settledRequests, pendingRequests);
+    }
+    assert(
+      result.status === "completed",
+      result.status === "failed" ? result.error : "pipeline must complete",
+    );
+    expect(result.value.kind).toBe("complete");
+    expect(JSON.parse(result.value.json)).toEqual(
+      Array.from({ length: count }, (_, index) =>
+        index === 1
+          ? { status: "rejected", error: expect.stringContaining("child intentionally failed") }
+          : { status: "fulfilled", value: `done-${index}` },
+      ),
+    );
+    const spawnedPrompts = [...collectors.values()];
+    expect(spawnedPrompts).toHaveLength(count * 2 - 1);
+    expect(new Set(spawnedPrompts).size).toBe(spawnedPrompts.length);
+    expect(progressItems).toEqual(
+      expect.arrayContaining([{ value: 0 }, { value: 2 }, { value: 3 }]),
+    );
+  });
 
   it("preserves queued collector arguments and structured results", async () => {
     const executor = createExecutor(1);

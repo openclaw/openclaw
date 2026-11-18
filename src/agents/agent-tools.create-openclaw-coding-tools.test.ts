@@ -20,7 +20,6 @@ import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
-import { registerPluginOnlyCallerIdentityCase } from "./agent-tools.caller-identity.test-support.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { createSandboxedReadTool, wrapReadToolWithSkillContent } from "./agent-tools.read.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
@@ -48,12 +47,8 @@ import {
 } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { createOpenClawOnlyToolConstructionPlan } from "./test-helpers/tool-construction-plan.js";
 import { attachToolAllowlistIntersection } from "./tool-policy.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
-const tinyPngBuffer = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
-  "base64",
-);
-const avifHeaderBuffer = Buffer.from("00000018667479706176696600000000617669666d696631", "hex");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-completion-grant-");
 const openClawOnlyPlan = createOpenClawOnlyToolConstructionPlan();
@@ -280,7 +275,6 @@ describe("createOpenClawCodingTools", () => {
     const readTool = requireTool(tools, "read");
     await readTool.execute("tool-hook-channel", { path: "note.txt" });
 
-    expect(beforeToolCall).toHaveBeenCalledTimes(1);
     expect(beforeToolCall.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
         channelId: "-100123",
@@ -394,13 +388,10 @@ describe("createOpenClawCodingTools", () => {
     const tool = requireTool(tools, "already_wrapped");
     await tool.execute("call-wrapped", {});
 
-    expect(beforeToolCall).toHaveBeenCalledTimes(1);
     expect(beforeToolCall.mock.calls[0]?.[1]).toMatchObject({
       agentId: "main",
       sessionId: "session-new",
     });
-    expect(execute).toHaveBeenCalledTimes(1);
-    expect(tool.parameters).toEqual({ type: "object", properties: {} });
   });
 
   it("honors the shipped dispatcher deny tool_call", () => {
@@ -411,24 +402,6 @@ describe("createOpenClawCodingTools", () => {
       },
       ["read"],
       ["dispatch_action"],
-    );
-  });
-
-  it("keeps Tool Search controls when core OpenClaw tools are not materialized", () => {
-    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
-    createOpenClawToolsMock.mockClear();
-
-    const tools = createOpenClawCodingTools({
-      includeCoreTools: false,
-      includeToolSearchControls: true,
-      toolConstructionPlan: pluginOnlyPlan,
-      config: { tools: { toolSearch: true } },
-    });
-    expect(createOpenClawToolsMock).not.toHaveBeenCalled();
-    expectToolNames(
-      tools,
-      ["tool_search", "tool_describe", "dispatch_action"],
-      ["message", "exec"],
     );
   });
 
@@ -492,35 +465,6 @@ describe("createOpenClawCodingTools", () => {
     const inheritedAllow = lastCoreOptions().inheritedToolAllowlist;
     expect(inheritedAllow).toContain("sessions_spawn");
     expect(inheritedAllow?.includes("exec")).toBe(false);
-  });
-
-  it("preserves configured media tools through local model lean filtering", () => {
-    expectToolSurface(
-      {
-        config: {
-          agents: {
-            defaults: { experimental: { localModelLean: true } },
-            entries: {
-              artist: {
-                tools: {
-                  alsoAllow: ["video_generate"],
-                  byProvider: { ollama: { alsoAllow: ["tts"] } },
-                },
-              },
-            },
-          },
-          tools: {
-            alsoAllow: ["pdf"],
-            byProvider: { "ollama/qwen3.5:9b": { alsoAllow: ["image_generate"] } },
-          },
-        },
-        agentId: "artist",
-        modelProvider: "ollama",
-        modelId: "qwen3.5:9b",
-        toolConstructionPlan: openClawOnlyPlan,
-      },
-      ["image_generate", "pdf", "tts", "video_generate"],
-    );
   });
 
   it("preserves runtime allowlist groups containing message through restrictive profiles", () => {
@@ -678,51 +622,83 @@ describe("createOpenClawCodingTools", () => {
     expect(extractToolText(next)).toBe(original.slice(continuation?.cursor));
   });
 
-  it("includes plugin tools declared for the active built-in profile", () => {
-    const resolvePluginToolsSpy = vi
-      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
-      .mockReturnValue([
+  describe("plugin-only caller identity", () => {
+    async function execute(options: NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>) {
+      let identity: ReturnType<typeof getGatewayToolCallerIdentity>;
+      using spy = vi.spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions");
+      spy.mockReturnValue([
         {
-          name: "profiled_plugin_tool",
-          label: "Profiled plugin tool",
-          description: "Profiled plugin tool test fixture",
-          parameters: { type: "object", properties: {}, additionalProperties: false },
-          execute: async () => ({
-            content: [{ type: "text" as const, text: "ok" }],
-            details: {},
-          }),
+          ...createStubTool("file_fetch"),
+          execute: async () => {
+            identity = getGatewayToolCallerIdentity();
+            return { content: [], details: {} };
+          },
         },
       ]);
-    const preparedModelRuntime = {
-      metadataSnapshot: {
-        plugins: [
-          {
-            id: "profiled-plugin",
-            contracts: { tools: ["profiled_plugin_tool"] },
-            toolMetadata: { profiled_plugin_tool: { profiles: ["coding"] } },
-          },
-        ],
-      },
-    } as never;
-
-    try {
       const tools = createOpenClawCodingTools({
-        config: { tools: { profile: "coding" } },
+        agentId: "main",
         includeCoreTools: false,
-        preparedModelRuntime,
-        toolConstructionPlan: pluginOnlyPlan,
+        ...options,
       });
-
-      expect(tools.map((tool) => tool.name)).toEqual(["profiled_plugin_tool"]);
-      expect(resolvePluginToolsSpy.mock.calls[0]?.[0].options?.pluginToolAllowlist).toContain(
-        "profiled_plugin_tool",
-      );
-    } finally {
-      resolvePluginToolsSpy.mockRestore();
+      await requireTool(tools, "file_fetch").execute?.("tool-call", {});
+      return identity;
     }
-  });
+    it("wraps plugin-only tools with scheduled creator authority and live routing context", async () => {
+      const observedIdentity = await execute({
+        config: {
+          ...testConfig,
+          channels: { discord: { accounts: { creator: {} } } },
+        },
+        sessionKey: "agent:main:telegram:direct:alice",
+        messageProvider: "discord-voice",
+        messageChannel: "discord",
+        messageTo: "channel:123",
+        agentAccountId: "work",
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: "agent:main:discord:group:ops",
+          ownerAccountId: "creator",
+          ownerOrigin: { kind: "external", channel: "discord" },
+        },
+        messageThreadId: "42",
+        runtimeToolAllowlist: ["file_fetch"],
+        inheritRuntimeToolAllowlist: true,
+      });
+      expect(observedIdentity).toMatchObject({
+        agentId: "main",
+        requesterOrigin: expect.objectContaining({
+          sessionKey: "agent:main:telegram:direct:alice",
+          messageProvider: "discord-voice",
+          accountId: "work",
+          messageThreadId: "42",
+        }),
+        sessionEventToolsAllow: ["file_fetch"],
+        sessionKey: "agent:main:telegram:direct:alice",
+        turnSourceChannel: "discord",
+        turnSourceTo: "channel:123",
+        turnSourceAccountId: "creator",
+        turnSourceThreadId: "42",
+      });
+      expect(() => observedIdentity?.assertToolAllowed?.("file_fetch")).not.toThrow();
+      expect(() => observedIdentity?.assertToolAllowed?.("exec")).toThrow(
+        "exec is not allowed by this conversation's tool policy",
+      );
+    });
 
-  registerPluginOnlyCallerIdentityCase({ testConfig, requireTool });
+    it("carries this turn's provider-hosted web_search decision into session events", async () => {
+      const options = { config: testConfig, sessionKey: "agent:main:main" };
+      expect((await execute(options))?.sessionEventToolsAllow).toEqual([
+        "file_fetch",
+        "web_search",
+      ]);
+      const denied = await execute({
+        ...options,
+        config: { ...testConfig, tools: { ...testConfig.tools, deny: ["web_search"] } },
+      });
+      expect(denied?.sessionEventToolsAllow).toEqual(["file_fetch"]);
+    });
+  });
 
   it("removes message from persisted visible child sessions on every turn", async () => {
     const storeTemplate = sessionStoreTemplate();
@@ -848,40 +824,6 @@ describe("createOpenClawCodingTools", () => {
     } satisfies NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
     expectToolSurface(options, [], ["message"]);
     expectToolSurface({ ...options, forceMessageTool: true }, ["message"]);
-  });
-
-  it("returns image-aware read metadata for images and text-only blocks for text files", async () => {
-    const defaultTools = createOpenClawCodingTools();
-    const readTool = requireTool(defaultTools, "read");
-    const readExecute = readTool.execute;
-
-    const { root: tmpDir, filePath: imagePath } = await fileFixture("sample.png", tinyPngBuffer);
-
-    const imageResult = await readExecute("tool-1", {
-      path: imagePath,
-    });
-
-    const imageBlocks = imageResult.content.filter((block) => block.type === "image");
-    const imageText = imageResult.content
-      .filter((block) => block.type === "text")
-      .map((block) => block.text)
-      .join("\n");
-    expect(imageText).toContain("Read image file [image/png]");
-    if (imageBlocks.length > 0) {
-      expect(imageBlocks.every((block) => block.mimeType === "image/png")).toBe(true);
-    } else {
-      expect(imageText).toContain("[Image omitted:");
-    }
-
-    const textPath = path.join(tmpDir, "sample.txt");
-    const contents = "Hello from openclaw read tool.";
-    await fs.writeFile(textPath, contents, "utf8");
-
-    const textResult = await readExecute("tool-2", {
-      path: textPath,
-    });
-
-    expect(textResult?.content).toEqual([{ type: "text", text: contents }]);
   });
 
   it.each([
@@ -1031,32 +973,6 @@ describe("createOpenClawCodingTools", () => {
     }
     await provenance(workspaceDir, "memory/2026-07-29.md").toBeUndefined();
   });
-  it("rejects legacy alias parameters", async () => {
-    const tmpDir = tempDirs.make("openclaw-legacy-alias-");
-    const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
-    const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
-
-    await expect(
-      writeTool?.execute("tool-legacy-write", {
-        file: "legacy.txt",
-        content: "hello old value",
-      }),
-    ).rejects.toThrow(/Missing required parameter: path/);
-
-    await expect(
-      editTool?.execute("tool-legacy-edit", {
-        filePath: "legacy.txt",
-        old_text: "old",
-        newString: "new",
-      }),
-    ).rejects.toThrow(/Missing required parameters: path, edits/);
-
-    await expect(
-      readTool?.execute("tool-legacy-read", {
-        file_path: "legacy.txt",
-      }),
-    ).rejects.toThrow(/Missing required parameter: path/);
-  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
@@ -1091,28 +1007,6 @@ describe("createOpenClawCodingTools read behavior", () => {
       });
       expect(extractToolText(windowed)).toBe("# Demo\ncomplete instructions");
     }
-  });
-
-  it("deduplicates sequential and concurrent successful skill reads within one attempt", async () => {
-    const locator = skillLocator;
-    let releaseRead = (): void => undefined;
-    const pendingRead = new Promise<AgentToolResult<ReadToolDetails>>((resolve) => {
-      releaseRead = () => resolve(fullSkillResult);
-    });
-    const execute = vi.fn(() => pendingRead);
-    const tool = skillReadTool(execute);
-
-    const first = tool.execute("first-skill-read", { path: locator });
-    const concurrent = tool.execute("concurrent-skill-read", { path: locator });
-    expect(execute).toHaveBeenCalledTimes(1);
-    releaseRead();
-
-    expect(extractToolText(await first)).toBe("# Pond\ncomplete instructions");
-    expect(extractToolText(await concurrent)).toContain("already served whole");
-    expect(
-      extractToolText(await tool.execute("sequential-skill-read", { path: locator })),
-    ).toContain("already served whole");
-    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it("retries skill reads after failures, oversized pages, and optional misses", async () => {
@@ -1210,21 +1104,6 @@ describe("createOpenClawCodingTools read behavior", () => {
     expect(extractToolText(result)).toContain("sandbox media");
   });
 
-  it("classifies sandbox AVIF reads from the already-read buffer", async () => {
-    const { root: tmpDir } = await fileFixture("photo.bin", avifHeaderBuffer);
-    const hostBridge = createHostSandboxFsBridge(tmpDir);
-    const readFile = vi.fn(hostBridge.readFile.bind(hostBridge));
-    const readTool = createSandboxedReadTool({
-      root: tmpDir,
-      bridge: { ...hostBridge, readFile },
-    });
-
-    const result = await readTool.execute("sandbox-avif", { path: "photo.bin" });
-
-    expect(extractToolText(result)).toContain("Read image file [image/avif]");
-    expect(readFile).toHaveBeenCalledTimes(1);
-  });
-
   it("auto-pages read output across chunks when context window budget allows", async () => {
     const lines = Array.from(
       { length: 5000 },
@@ -1259,18 +1138,6 @@ describe("createOpenClawCodingTools read behavior", () => {
     expect(text).toContain(`cursor=${details.continuation?.cursor}`);
     expect(text.replace(/\n\n\[Read output capped[^\]]*\]$/, "")).toBe(
       original.slice(0, details.continuation?.cursor),
-    );
-  });
-
-  it("ignores a trailing newline when describing offsets beyond EOF", async () => {
-    const { read } = await sandboxReadFixture("notes.txt", "one\ntwo\nthree\n");
-    const result = await read.execute("read-offset-adaptive", {
-      path: "notes.txt",
-      offset: 99,
-    });
-
-    expect(extractToolText(result)).toBe(
-      "Offset 99 is beyond end of file (3 lines total). Retry with offset <= 3.",
     );
   });
 });

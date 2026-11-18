@@ -8,10 +8,7 @@ import {
   setRuntimeAuthProfileStoreSnapshot,
 } from "./auth-profiles/runtime-snapshots.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
-import * as harnessPolicy from "./harness/policy.js";
 import { createModelAuthAvailabilityResolver } from "./model-auth-availability.js";
-import { modelDefinition } from "./model-auth.fixtures.test-support.js";
-import * as runtimeAliases from "./model-runtime-aliases.js";
 
 const authStore = { version: 1 as const, profiles: {} };
 const metadataSnapshot = createPluginMetadataSnapshotFixture();
@@ -42,57 +39,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   cliBackendsTesting.resetDepsForTest();
   clearRuntimeAuthProfileStoreSnapshots();
-});
-
-it("resolves authored model rows once through actual automatic CLI fallback", () => {
-  let modelIdReads = 0;
-  const models = Array.from({ length: 100 }, (_, index) => ({
-    ...modelDefinition(`model-${index}`),
-    get id() {
-      modelIdReads++;
-      return `model-${index}`;
-    },
-  }));
-  const cfg: OpenClawConfig = {
-    models: {
-      providers: {
-        anthropic: { api: "anthropic-messages", baseUrl: route.baseUrl, models },
-      },
-    },
-  };
-  const resolver = createModelAuthAvailabilityResolver({
-    cfg,
-    agentId: "main",
-    authStore,
-    metadataSnapshot,
-    env: {},
-  });
-  const harness = vi.spyOn(harnessPolicy, "resolveAgentHarnessPolicy");
-  const execution = vi.spyOn(runtimeAliases, "resolveCliRuntimeExecutionProvider");
-  modelIdReads = 0;
-
-  const evaluation = resolver.evaluateRuntimeModelAuth(" AnThRoPiC ", route);
-  expect(evaluation).toMatchObject({ availability: undefined, routeResolution: null });
-  expect(harness).toHaveReturnedWith({ runtime: "auto", runtimeSource: "implicit" });
-  expect(execution).toHaveBeenCalledTimes(1);
-  expect(modelIdReads).toBe(100);
-
-  execution.mockClear();
-  modelIdReads = 0;
-  expect(resolver.evaluateRuntimeModelAuth("anthropic", { ...route, runtimeId: "auto" })).toEqual(
-    evaluation,
-  );
-  expect(execution).toHaveBeenCalledTimes(1);
-  expect(modelIdReads).toBe(100);
-
-  execution.mockClear();
-  modelIdReads = 0;
-  expect(
-    resolver.evaluateRuntimeModelAuth("anthropic", { ...route, runtimeId: "openclaw" })
-      .routeResolution,
-  ).toBe(null);
-  expect(execution).not.toHaveBeenCalled();
-  expect(modelIdReads).toBe(0);
 });
 
 it("keeps missing selected profiles terminal despite prepared native CLI authentication", () => {

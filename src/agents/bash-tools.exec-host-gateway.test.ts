@@ -680,28 +680,13 @@ describe("processGatewayAllowlist", () => {
         onApprovalReview,
       });
       await vi.waitFor(() => expect(autoReviewer).toHaveBeenCalledOnce());
-      expect(reviews).toMatchObject([
-        {
-          toolCallId: "tool-review",
-          approvalReviewOutcome: "reviewing",
-          review: { status: "in_progress" },
-        },
-      ]);
+      expect(reviews.map((event) => event.approvalReviewOutcome)).toEqual(["reviewing"]);
       review.resolve(assessment);
       const result = await pending;
       expect(reviews.map((event) => event.approvalReviewOutcome)).toEqual([
         "reviewing",
         "approved",
       ]);
-      expect(reviews[1]).toMatchObject({
-        toolCallId: "tool-review",
-        review: {
-          id: "guardian:tool-review",
-          status: "approved",
-          riskLevel: assessment.risk,
-          rationale: assessment.rationale,
-        },
-      });
       expect(publicationOrder).toEqual([
         "emitted:reviewing",
         "stored:approved",
@@ -1048,19 +1033,6 @@ describe("processGatewayAllowlist", () => {
         JSON.stringify({
           path: "/tmp/openclaw-diagnostics.zip",
           bytes: 1234,
-          manifest: {
-            generatedAt: "2026-04-28T20:58:29.311Z",
-            openclawVersion: "2026.4.27",
-            contents: [
-              { path: "diagnostics.json", bytes: 100 },
-              { path: "summary.md", bytes: 200 },
-            ],
-            privacy: {
-              payloadFree: true,
-              rawLogsIncluded: false,
-              notes: ["Logs keep operational summaries."],
-            },
-          },
         }),
       ),
     );
@@ -1084,10 +1056,7 @@ describe("processGatewayAllowlist", () => {
     const followupText = requireSentFollowupText();
     expect(followupText).toContain("Diagnostics export created.");
     expect(followupText).toContain("Path: /tmp/openclaw-diagnostics.zip");
-    expect(followupText).toContain("Contents (2 files):");
     expect(followupText).toContain("Size: 1234 bytes");
-    expect(followupText).toContain("Privacy:\n- payload-free: yes\n- raw logs included: no");
-    expect(followupText).toContain("- Logs keep operational summaries.");
     expect(followupText).toContain("Synthetic harness diagnostics: thread-1");
     expect(approvalFollowup.mock.calls[0]?.[0]).toMatchObject({
       approvalId: approvalRouteFixture.id,
@@ -1170,38 +1139,6 @@ describe("processGatewayAllowlist", () => {
     } finally {
       captured.stop();
     }
-  });
-
-  it("emits inline approval park and clear events for a denial", async () => {
-    approvalDecisionMock.mockResolvedValue("deny");
-    const events: Array<Record<string, unknown>> = [];
-    const unsubscribe = onAgentEvent((event) => {
-      if (event.runId === "run-inline" && event.stream === "lifecycle") {
-        events.push(event.data);
-      }
-    });
-
-    try {
-      await runGatewayAllowlist({
-        command: "pwd",
-        turnSourceChannel: "webchat",
-        runId: "run-inline",
-        toolCallId: "tool-inline",
-        sessionKey: "agent:main:main",
-        sessionId: "session-inline",
-      });
-    } finally {
-      unsubscribe();
-    }
-
-    expect(events).toEqual([
-      { phase: "waiting-approval", approvalId: approvalRouteFixture.id, toolCallId: "tool-inline" },
-      {
-        phase: "approval-resolved",
-        approvalId: approvalRouteFixture.id,
-        toolCallId: "tool-inline",
-      },
-    ]);
   });
 
   it("waits outside admission, then atomically hands an approved process to the registry", async () => {

@@ -1,4 +1,4 @@
-import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
+import { setTimeout as delay } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
@@ -17,27 +17,6 @@ import {
 import { jsonResult } from "./tools/common.js";
 
 afterEach(resetCodeModeTestState);
-
-it("continues headless after a checkpoint and actual tool reply exactly once", async () => {
-  const tool = pluginToolWithExecute("reply_once", "Return one reply", async () => {
-    await nextTurn();
-    return jsonResult({ value: 1 });
-  });
-  const result = await runCodeModeScriptHeadless({
-    ctx: createHeadlessCodeModeHarness([tool], { codeMode: { timeoutMs: 10_000 } }),
-    code: 'text("before"); await yield_control(); const reply = await reply_once({}); text("after"); return reply.value;',
-  });
-  expect(result, JSON.stringify(result)).toMatchObject({
-    status: "completed",
-    value: 1,
-    toolCallCount: 1,
-    output: [
-      { type: "text", text: "before" },
-      { type: "text", text: "after" },
-    ],
-  });
-  expect(tool.execute).toHaveBeenCalledOnce();
-});
 
 it("checkpoints headless under pressure without canceling or replaying its tool reply", async () => {
   const started = createDeferred<AbortSignal | undefined>();

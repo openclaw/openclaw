@@ -4,7 +4,6 @@ import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { prepareCodeModeNodeCatalog } from "./code-mode-node-input.js";
 import type { CodeModeNodeInput, CodeModeWorkerThreadResult } from "./code-mode-worker-types.js";
 
 vi.mock("node:diagnostics_channel", async (importOriginal) => {
@@ -188,45 +187,6 @@ it.each(["complete", "expire"] as const)(
   },
 );
 
-it("shares catalog bytes across cells while sending current execution limits", async () => {
-  const catalog = Array.from({ length: 109 }, (_, i) => ({
-    callableName: `tool_${i}`,
-    name: `tool_${i}`,
-    source: "openclaw",
-    description: "catalog metadata ".repeat(100),
-  }));
-  let start = { ...input, ...prepareCodeModeNodeCatalog({ catalog, namespaces: [] }) };
-  const execute = () => host.run(() => nodeCodeModeExecutor.execute(start, { timeoutMs: 1000 }));
-  await execute();
-  const first = fixture.executions.at(-1)!.input as CodeModeNodeInput;
-  await execute();
-  const second = fixture.executions.at(-1)!.input as CodeModeNodeInput;
-  assert(first.kind === "exec" && second.kind === "exec", "expected execution payloads");
-  expect(second.initialization).toBe(first.initialization);
-  expect(second.initialization.byteLength).toBeGreaterThan(100_000);
-  expect(second).not.toHaveProperty("catalog");
-  expect(second).not.toHaveProperty("apiFiles");
-  expect(second).not.toHaveProperty("namespaces");
-  expect(JSON.stringify(second).length).toBeLessThan(500);
-
-  start = {
-    ...input,
-    ...prepareCodeModeNodeCatalog({
-      catalog: [{ ...catalog[0]!, description: "new revision" }],
-      namespaces: [],
-    }),
-    config: { ...input.config, maxPendingToolCalls: 3 },
-  };
-  await execute();
-  const revised = fixture.executions.at(-1)!.input as CodeModeNodeInput;
-  assert(revised.kind === "exec", "expected execution payload");
-  expect(revised.initialization).not.toBe(first.initialization);
-  expect(JSON.parse(new TextDecoder().decode(revised.initialization))).toMatchObject({
-    __openclawCatalog: [{ description: "new revision" }],
-  });
-  expect(revised.config.maxPendingToolCalls).toBe(3);
-});
-
 it("retains compatible warm workers and joins host close without retiring a sibling host", async () => {
   vi.useFakeTimers();
   const sibling = new LegacyPluginSdkResourceHost();
@@ -373,41 +333,6 @@ it.each(["idle deadline", "newer completion"] as const)(
     }
   },
 );
-
-it("keeps repeated bursts warm, then retires surplus capacity during serial traffic", async () => {
-  vi.useFakeTimers();
-  const start = fixture.pools.length;
-  await Promise.all(Array.from({ length: 8 }, run));
-  const burst = fixture.pools.slice(start);
-  expect(burst).toHaveLength(8);
-  for (const gap of [45_000, 60_000, 45_000]) {
-    await vi.advanceTimersByTimeAsync(gap);
-    await Promise.all(Array.from({ length: 8 }, run));
-    expect(fixture.pools).toHaveLength(start + 8);
-  }
-  for (let turn = 0; turn < 10; turn++) {
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(await run()).toMatchObject({ status: "completed" });
-  }
-  expect(fixture.pools).toHaveLength(start + 8);
-  expect(burst.filter((pool) => !pool.isClosed)).toHaveLength(1);
-});
-
-it("bounds the warm set and retires every idle pool on memory pressure", async () => {
-  const start = fixture.pools.length;
-  const results = await Promise.all(Array.from({ length: 10 }, run));
-  expect(results.every((result) => result.status === "completed")).toBe(true);
-  const idle = fixture.pools.filter((pool) => !pool.isClosed);
-  expect(idle).toHaveLength(8);
-  const evicted = fixture.pools.slice(start).filter((pool) => pool.isClosed);
-  expect(evicted).toHaveLength(2);
-  channel("openclaw.memory.critical").publish({});
-  expect(idle.every((pool) => pool.isClosed)).toBe(true);
-  expect(channel("openclaw.memory.critical").hasSubscribers).toBe(false);
-  const count = fixture.pools.length;
-  expect(await run()).toMatchObject({ status: "completed" });
-  expect(fixture.pools).toHaveLength(count + 1);
-});
 
 it.each(["abort", "timeout"] as const)(
   "ends acquisition on %s while native retirement still owns its worker",

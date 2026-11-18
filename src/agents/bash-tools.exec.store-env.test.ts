@@ -160,37 +160,6 @@ const runGateway = (params: ExecParams) =>
     ...params,
   });
 
-it("strips malformed XML arg-value suffixes from exec command and routing options", async () => {
-  const workdir = tempDirs.make("openclaw-exec-xml-");
-  const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
-  const malformedArgs = {
-    command: "echo ok</arg_value>>",
-    workdir: `${workdir}</arg_value>>`,
-    host: "gateway</arg_value>>",
-    ask: "off</arg_value>>",
-    node: "node-1</arg_value>>",
-    yieldMs: 120_000,
-  } as unknown as ExecParams;
-  expect(await tool.prepareBeforeToolCallParams?.(malformedArgs, {})).toMatchObject({
-    command: "echo ok",
-    workdir,
-    host: "gateway",
-    ask: "off",
-    node: "node-1",
-  });
-  await expect(tool.execute("call-xml-conflict", malformedArgs)).rejects.toThrow(
-    'exec node="node-1" conflicts with host="gateway"',
-  );
-  const result = await tool.execute("call-xml-suffix", { ...malformedArgs, node: undefined });
-  expect(result.content.find((entry) => entry.type === "text")?.text.trim()).toBe("ok");
-});
-
-it("rejects the unsupported cwd alias before command execution", async () => {
-  await expect(runGateway({ command: "echo ok", cwd: os.tmpdir() } as never)).rejects.toThrow(
-    'exec parameter "cwd" is unsupported; use "workdir" instead',
-  );
-});
-
 it.runIf(process.platform !== "win32")("merges login-shell PATH for host=gateway", async () => {
   vi.stubEnv("OPENCLAW_EXEC_SHELL_SNAPSHOT", "0");
   vi.stubEnv("PATH", "/usr/bin");

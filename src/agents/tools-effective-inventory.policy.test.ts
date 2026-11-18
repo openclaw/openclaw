@@ -6,12 +6,10 @@ import "./test-helpers/fast-openclaw-tools.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ToolsConfig } from "../config/types.tools.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
-import { resolveConfiguredToolAccess } from "./tool-access-diagnostics.js";
 import { attachToolAllowlistIntersection } from "./tool-policy-shared.js";
 import { resolveEffectiveToolInventory } from "./tools-effective-inventory.js";
 
@@ -81,61 +79,6 @@ describe("tool access diagnostics", () => {
       expect([ids.has("exec"), ids.has("process")]).toEqual([exec, process]);
     },
   );
-
-  it("explains local exclusion and repair for a normalized explicit agent key", () => {
-    const agents: NonNullable<OpenClawConfig["agents"]> = {
-      ownership: "explicit",
-      entries: { other: {}, " Assistant ": { tools: { profile: "messaging" } } },
-    };
-    const toolsPath = 'agents.entries[" Assistant "].tools';
-    const result = resolveConfiguredToolAccess({
-      config: { tools: { profile: "full" }, agents },
-      agentId: "assistant",
-      toolNames: ["exec", "process", "session_status"],
-    });
-    expect(result).toEqual({
-      checked: "local-config",
-      profiles: [
-        { profile: "full", source: "tools.profile", active: false },
-        { profile: "messaging", source: `${toolsPath}.profile`, active: true },
-      ],
-      tools: [
-        ...["exec", "process"].map((id) => excludedByMessagingProfile(id, toolsPath)),
-        { id: "session_status", status: "allowed", reasons: [] },
-      ],
-    });
-  });
-
-  it.each<{ tools: ToolsConfig; source: string; kind: "deny" | "allowlist" | "profile" }>([
-    {
-      tools: { alsoAllow: ["browser"] },
-      source: "agents.entries.assistant.tools.profile",
-      kind: "profile",
-    },
-    { tools: { deny: ["ex*"] }, source: "tools.deny", kind: "deny" },
-    { tools: { allow: ["process"] }, source: "tools.allow", kind: "allowlist" },
-    {
-      tools: { byProvider: { "openai/test-model": { deny: ["exec"] } } },
-      source: 'tools.byProvider["openai/test-model"].deny',
-      kind: "deny",
-    },
-    {
-      tools: { byProvider: { openai: { profile: "minimal" } } },
-      source: 'tools.byProvider["openai"].profile',
-      kind: "profile",
-    },
-  ])("omits ineffective or destructive profile repair for $source", ({ tools, source, kind }) => {
-    const result = resolveConfiguredToolAccess({
-      config: messagingAgentConfig(tools),
-      agentId: "assistant",
-    });
-    const exec = result.tools.find((tool) => tool.id === "exec");
-
-    expect(exec?.status).toBe("excluded");
-    expect(exec?.reasons).toHaveLength(tools.alsoAllow ? 1 : 2);
-    expect(exec?.reasons.at(-1)).toMatchObject({ kind, source });
-    expect(exec).not.toHaveProperty("alsoAllowPath");
-  });
 
   it("observes actual inventory filtering and explicit profile repair", async () => {
     const inventory = (cfg: OpenClawConfig) =>

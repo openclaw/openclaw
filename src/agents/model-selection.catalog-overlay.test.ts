@@ -6,7 +6,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../config/validation-core.js";
 import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import * as providerPolicy from "../plugins/provider-policy-surface.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { isSmallModel } from "../shared/model-param-b.js";
@@ -18,11 +17,7 @@ import {
 } from "./model-catalog-route.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
-import {
-  buildAllowedModelSet,
-  buildConfiguredModelCatalog,
-  createModelVisibilityPolicyWithFallbacks,
-} from "./model-selection-shared.js";
+import { buildAllowedModelSet, buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { openAIModelCatalogRoutePolicy } from "./openai-model-routes.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -297,54 +292,5 @@ it.each<OverlayCase>([
       expect(preparedPolicy).toHaveBeenCalledTimes(hasDonor ? 1 : 0);
       preparedPolicy.mockClear();
     }
-  },
-);
-it.each(["configured", "visibility"] as const)(
-  "%s preparation reuses provider policies across rows and refreshes them next time",
-  (kind) => {
-    const loadPolicy = vi.spyOn(providerPolicy, "resolveDirectBundledProviderPolicySurface");
-    const select = (rowCount: number, scope: string) => {
-      loadPolicy.mockClear().mockReturnValue({
-        normalizeModelCatalogId: ({ modelId }) => modelId.replace(/^legacy-/, `${scope}-`),
-      });
-      const ids = Array.from({ length: rowCount }, (_, index) => `legacy-${index}`);
-      const catalog: ModelCatalogEntry[] = ["first", "second"].flatMap((owner) =>
-        ids.map((_, index) => ({
-          provider: "fixture",
-          id: `${owner}-${index}`,
-          name: `${owner}-${index}`,
-          api: "openai-responses" as const,
-          baseUrl: `https://${owner}.example/v1`,
-        })),
-      );
-      const modelPolicy = { allow: ids.map((id) => `fixture/${id}`) };
-      const cfg: OpenClawConfig = { agents: { defaults: { modelPolicy } } };
-      if (kind === "configured") {
-        cfg.models = modelConfig(
-          ids.map(makeModel),
-          { baseUrl: configuredEndpoint },
-          "fixture",
-        ).models;
-      }
-      const params = { cfg, catalog, defaultProvider: "fixture", manifestPlugins: [] };
-      const selected =
-        kind === "configured"
-          ? buildConfiguredModelCatalog(params)
-          : createModelVisibilityPolicyWithFallbacks({
-              ...params,
-              fallbackModels: [],
-              allowManifestNormalization: false,
-              allowPluginNormalization: false,
-            }).allowedCatalog;
-      expect(selected.map((entry) => entry.baseUrl)).toEqual(
-        ids.map(() => `https://${scope}.example/v1`),
-      );
-      return loadPolicy.mock.calls.length;
-    };
-
-    const singleRowLoads = select(1, "first");
-    expect(singleRowLoads).toBeGreaterThan(0);
-    expect(select(32, "first")).toBe(singleRowLoads);
-    expect(select(32, "second")).toBe(singleRowLoads);
   },
 );

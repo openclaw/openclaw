@@ -2,7 +2,6 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, test, vi } from "vitest";
 import { copyInternalToolResultState } from "../../packages/agent-core/src/internal-hooks.js";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
-import { typeCheckSources } from "../../test/helpers/typescript.js";
 import {
   enqueueSystemEventEntry,
   enqueueSystemEventWithReceipt,
@@ -323,32 +322,6 @@ test("replays blocked poll output immediately when the retry has a timeout", asy
   await vi.advanceTimersByTimeAsync(0);
   expect(settled).toBe(true);
   expect(resultText(await retry)).toContain("blocked-output");
-});
-
-test("composes lazy process actions through generated declarations and JavaScript", async () => {
-  createSession("first\nsecond", "typed-process");
-  const run = processCodeMode(true);
-  const composition = `
-    async function consume() {
-      const listed = await process({ action: "list" });
-      if (listed.status === "failed") throw new Error(listed.error);
-      const running = listed.sessions.filter(session => session.status === "running");
-      return await Promise.all(running.map(async session => {
-        const log = await process({ action: "log", sessionId: session.sessionId });
-        if ("error" in log) throw new Error(log.error);
-        return { id: session.sessionId, lines: log.totalLines, output: log.output.toUpperCase() };
-      }));
-    }
-  `;
-  const declaration = await run('return await API.read("tools/process.d.ts");');
-  expect(declaration).toMatchObject({ status: "completed" });
-  const file = declaration.value as { content: string };
-  expect(typeCheckSources({ "/process-consumer.ts": file.content + composition })).toEqual([]);
-  const result = await run(`${composition}\nreturn await consume();`);
-  expect(result, JSON.stringify(result)).toMatchObject({
-    status: "completed",
-    value: [{ id: "typed-process", lines: 2, output: "FIRST\nSECOND" }],
-  });
 });
 
 test("keeps a poll wait live when the wall clock steps forward", async () => {

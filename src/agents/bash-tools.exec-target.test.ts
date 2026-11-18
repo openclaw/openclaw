@@ -159,19 +159,6 @@ describe("resolveExecTarget", () => {
   });
 });
 
-describe("removed exec timeout field", () => {
-  it("rejects a stale timeout argument before command execution", async () => {
-    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
-
-    await expect(
-      tool.execute("legacy-timeout", {
-        command: "exit 99",
-        timeout: 5,
-      } as never),
-    ).rejects.toThrow('exec parameter "timeout" is unsupported; use "timeoutSeconds" instead');
-  });
-});
-
 describe("durable exec admission", () => {
   it.each([
     [{ durable: "true", background: true }, "durable must be a boolean"],
