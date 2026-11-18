@@ -214,7 +214,10 @@ function* updateSqliteMigrationSteps<T>(
             before =
               opened || mode === "exclusive"
                 ? readSqliteGeneration(pathname)
-                : readMatchingUpdateDatabaseGeneration(pathname, expected, rebuilt);
+                : readMatchingUpdateDatabaseGeneration(
+                    pathname,
+                    rebuilt === undefined ? [expected] : [expected, rebuilt],
+                  );
           },
           async readAsync(signal) {
             const { readUpdateSqliteDatabaseGenerationPairIsolated } =

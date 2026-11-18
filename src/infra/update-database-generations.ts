@@ -437,16 +437,17 @@ export function readUpdateDatabaseGenerationPair(
   return { committed, physical, emptyReaderAlternates, rebuiltIndexAlternates };
 }
 
-/** Same raw-close restrictions as readUpdateDatabaseGenerations; never under native exclusion. */
+/**
+ * Same raw-close restrictions as readUpdateDatabaseGenerations; never under native exclusion.
+ * `accepted` holds the expected generation and its no-write equivalents.
+ */
 export function readMatchingUpdateDatabaseGeneration(
   pathname: string,
-  expected: string,
-  rebuiltIndex?: string,
+  accepted: readonly string[],
 ): string | undefined {
-  const observed = readUpdateDatabaseGeneration(pathname);
-  return observed.generation === expected ||
-    observed.emptyReaderAlternate === expected ||
-    observed.generation === rebuiltIndex
-    ? (observed.generation ?? undefined)
+  const { generation, emptyReaderAlternate } = readUpdateDatabaseGeneration(pathname);
+  return (generation !== null && accepted.includes(generation)) ||
+    (emptyReaderAlternate !== undefined && accepted.includes(emptyReaderAlternate))
+    ? (generation ?? undefined)
     : undefined;
 }

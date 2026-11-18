@@ -262,23 +262,19 @@ export function createUpdateDoctorDatabaseWriteCapture(
     options.assertCurrent?.();
     return observation;
   };
-  const acceptNoWriteTransitions = (
+  const acceptEmptyReaderTransitions = (
     observation: import("./update-database-generations.js").UpdateDatabaseGenerationPair,
   ) => {
     // Share migration admission's no-write equivalence, from this same observation.
     for (const [pathname, generation] of Object.entries(observation.committed)) {
       const alternate = observation.emptyReaderAlternates[pathname];
-      if (
-        expectedGenerations &&
-        ((alternate !== undefined && expectedGenerations[pathname] === alternate) ||
-          generation === rebuiltIndexes[pathname])
-      ) {
+      if (alternate !== undefined && expectedGenerations?.[pathname] === alternate) {
         expectedGenerations[pathname] = generation;
       }
     }
   };
-  // Outside readers can rebuild a retained index after this observation; only an index
-  // over the same frames, content, and file identity stays equivalent to it.
+  // Outside readers can rebuild a retained index after this observation; migrations accept
+  // only an index over the same frames, content, and file identity as equivalent to it.
   const bindRebuiltIndexes = (
     observation: import("./update-database-generations.js").UpdateDatabaseGenerationPair,
   ) => {
@@ -350,7 +346,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
         const generations = observation.committed;
         historicalScans.admit(generations);
         const incoming = physical ? observation.physical : { ...expectedGenerations };
-        acceptNoWriteTransitions(observation);
+        acceptEmptyReaderTransitions(observation);
         const matches = isDeepStrictEqual(generations, expectedGenerations);
         fromGenerations ??= matches ? incoming : generations;
         // A changed rollback baseline stays ineligible after forward admission.
@@ -390,7 +386,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
             expectedGenerations[pathname] = generation;
           }
         }
-        acceptNoWriteTransitions(observation!);
+        acceptEmptyReaderTransitions(observation!);
         unchanged &&= isDeepStrictEqual(generations, expectedGenerations);
         receipt = {
           unchanged,

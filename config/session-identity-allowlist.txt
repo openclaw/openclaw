@@ -1345,7 +1345,7 @@ src/infra/system-run-approval-binding.ts	1
 src/infra/system-run-cwd-binding.ts	1
 src/infra/update-candidate-predecessor-stop.ts	3
 src/infra/update-database-backup.ts	1
-src/infra/update-database-generations.ts	2
+src/infra/update-database-generations.ts	1
 src/infra/update-doctor-migration-attribution.ts	1
 src/infra/update-doctor-process-custody.ts	4
 src/infra/update-doctor-scan-receipts.ts	2
