@@ -11,6 +11,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
+import { mock } from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { createUnavailableRuntime } from "../../src/plugins/api-builder.ts";
 import {
@@ -113,16 +114,13 @@ for (const mode of ["bundled", "mixed"]) {
   }
   await run(1000);
   let entries = 0;
-  // oxlint-disable-next-line typescript/unbound-method -- Save for restoration; the probe supplies the storage receiver with call().
-  const enter = AsyncLocalStorage.prototype.enterWith;
-  AsyncLocalStorage.prototype.enterWith = function (value) {
-    entries++;
-    return enter.call(this, value);
-  };
+  const probe = mock.method(AsyncLocalStorage.prototype, "enterWith");
   try {
     await run(10);
+    entries = probe.mock.callCount();
   } finally {
-    AsyncLocalStorage.prototype.enterWith = enter;
+    probe.mock.restore();
+    probe.mock.resetCalls();
   }
   globalThis.gc();
   const cpu = process.cpuUsage();
