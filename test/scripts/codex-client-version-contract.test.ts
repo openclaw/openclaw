@@ -9,7 +9,7 @@ const OPENAI_CLIENT_VERSION_URL = new URL(
   import.meta.url,
 );
 const OPENAI_CODEX_CLIENT_VERSION_FLOOR_PATTERN =
-  /^export const OPENAI_CODEX_CLIENT_VERSION_FLOOR = "([^"]+)";$/mu;
+  /^const OPENAI_CODEX_CLIENT_VERSION_FLOOR = "([^"]+)";$/mu;
 
 function readManagedCodexVersion(): string {
   const packageJson = JSON.parse(fs.readFileSync(CODEX_PACKAGE_JSON_URL, "utf8")) as {
