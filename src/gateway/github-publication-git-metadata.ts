@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
-import type { runPublicationCommand as runCommand } from "./github-publication-git-transport.js";
 
 function assertNoGitFilterAttributes(contents: Buffer): void {
   for (const line of contents.toString("latin1").split(/\r?\n/u)) {
@@ -29,7 +28,10 @@ export async function readOptionalAttributeFile(file: string): Promise<Buffer | 
 export async function assertGitHubPublicationIndexHasNoFilters(
   cwd: string,
   indexFile: string,
-  runPublicationCommand: typeof runCommand,
+  runPublicationCommand: (
+    argv: string[],
+    options: { cwd: string; env?: NodeJS.ProcessEnv; maxOutputBytes?: number },
+  ) => Promise<{ code: number | null; stdout: Buffer }>,
   maxOutputBytes: number,
 ): Promise<void> {
   // This private index just produced the accepted tree, including admission pruning.
