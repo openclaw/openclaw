@@ -16,9 +16,7 @@ import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 export function SessionPicker(props: {
   kind: "where" | "project" | "checkout";
   label: string;
-  value: string;
-  labelPending?: boolean;
-  disabled?: boolean;
+  value?: string;
   icon: JSX.Element;
   summary?: string;
   triggerAttributes?: Pick<JSX.HTMLAttributes<HTMLButtonElement>, "title" | "aria-description"> & {
@@ -60,9 +58,8 @@ export function SessionPicker(props: {
           aria-haspopup="dialog"
           aria-controls={`new-session-${props.kind}-popover`}
           aria-expanded={props.params.place.browser.popoverOpen(props.kind) ? "true" : "false"}
-          aria-busy={props.labelPending ? "true" : undefined}
+          aria-busy={props.value === undefined ? "true" : undefined}
           disabled={
-            props.disabled ||
             props.params.submitting ||
             props.params.pendingPlacement ||
             (props.kind === "where" && props.params.place.suggestedCloudProfile.pending)
@@ -72,9 +69,7 @@ export function SessionPicker(props: {
           <span class="new-session-page__target-icon" aria-hidden="true">
             {props.icon}
           </span>
-          <span class="new-session-page__trigger-label">
-            {props.labelPending ? null : props.value}
-          </span>
+          <span class="new-session-page__trigger-label">{props.value}</span>
           {props.summary ? (
             <>
               {" "}

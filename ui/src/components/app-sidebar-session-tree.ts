@@ -10,6 +10,7 @@ import {
   resolveSidebarSessionParentKey,
 } from "./app-sidebar-session-parent.ts";
 import {
+  childShowsParentWorking,
   SIDEBAR_SESSION_NO_ATTENTION,
   summarizeSidebarSessionAttention,
   type SidebarRecentSession,
@@ -45,8 +46,7 @@ function summarizeChildren(
     unreadChildCount += Number(child.unread) + (descendants?.unreadChildCount ?? 0);
     const visuallyActive = child.isRunVisuallyActive ?? child.hasActiveRun;
     runningChildCount +=
-      Number(visuallyActive || (child.backgroundProcessCount ?? 0) > 0) +
-      (descendants?.runningChildCount ?? 0);
+      Number(childShowsParentWorking(child)) + (descendants?.runningChildCount ?? 0);
     queuedChildCount +=
       Number(visuallyActive && child.status === "queued") + (descendants?.queuedChildCount ?? 0);
     workspaceConflictCount += onlySubagents

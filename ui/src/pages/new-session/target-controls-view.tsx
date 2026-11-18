@@ -1,5 +1,6 @@
 import { createMemo, Loading, onSettled } from "solid-js";
 import type { AgentSelectElement } from "../../components/agent-select.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import type { PopoverHandle } from "../../components/solid/popover.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
@@ -18,6 +19,24 @@ import { draftWhereChipParams, resolveWhereChip } from "./where-chip.ts";
 import { WhereChip } from "./where-chip.tsx";
 
 registerNewSessionSetupEnglish();
+
+function CheckoutLoadingRow() {
+  return (
+    <span class="new-session-page__select new-session-page__checkout-loading">
+      <span
+        class="new-session-page__trigger new-session-page__checkout-skeleton"
+        role="status"
+        aria-label={t("common.loading")}
+        style={{ "pointer-events": "none" }}
+      >
+        <span class="new-session-page__target-icon" aria-hidden="true">
+          <Icon name="gitBranch" />
+        </span>
+        <span class="new-session-page__skeleton-bar" aria-hidden="true" style={{ width: "80px" }} />
+      </span>
+    </span>
+  );
+}
 
 export function AgentSelect(props: {
   params: AgentSelectOptions;
@@ -236,11 +255,11 @@ export function NewSessionPlaceControls(props: {
             )}
             {(view().checkoutPending || props.params.place.checkoutVisible) &&
             !(view().nativeTerminal && props.params.place.terminalOnNode) ? (
-              <CheckoutChip
-                params={props.params}
-                folderLabel={view().projectState.label}
-                labelPending={view().checkoutPending}
-              />
+              view().checkoutPending || props.params.place.repositoryState.checkoutPending ? (
+                <CheckoutLoadingRow />
+              ) : (
+                <CheckoutChip params={props.params} folderLabel={view().projectState.label} />
+              )
             ) : undefined}
           </div>
           {props.params.place.deviceFolder ? (

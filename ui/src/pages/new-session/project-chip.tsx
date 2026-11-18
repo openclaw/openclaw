@@ -33,8 +33,7 @@ export function ProjectChip(props: ProjectChipProps) {
       lazy
       kind="project"
       label={props.labelPending ? t("newSession.what") : `${t("newSession.what")}: ${label()}`}
-      labelPending={props.labelPending}
-      value={label()}
+      value={props.labelPending ? undefined : label()}
       icon={
         <Icon
           name={

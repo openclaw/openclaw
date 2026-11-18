@@ -2115,7 +2115,18 @@ span.new-session-page__select {
   }
 }
 
+.new-session-page__checkout-skeleton > .new-session-page__skeleton-bar {
+  animation: new-session-placeholder-pulse 1.4s ease-in-out infinite;
+}
+
+@media (width > 768px) {
+  span.new-session-page__select.new-session-page__checkout-loading {
+    display: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .new-session-page__checkout-skeleton > .new-session-page__skeleton-bar,
   .new-session-page__skeleton-row {
     animation: none;
   }

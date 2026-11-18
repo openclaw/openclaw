@@ -58,22 +58,23 @@ suite.define(() => {
       const where = page.locator("#new-session-where-trigger .new-session-page__trigger-label");
       const folder = page.locator("#new-session-project-trigger .new-session-page__trigger-label");
       const checkout = page.locator("#new-session-checkout-trigger");
-      const placementRows = () =>
+      const skeleton = page.locator(".new-session-page__checkout-skeleton");
+      const placementRows = (checkoutRow: typeof checkout) =>
         Promise.all(
-          ["where", "project", "checkout"].map(async (kind) => {
-            const trigger = page.locator(`#new-session-${kind}-trigger`);
-            return (await trigger.count()) ? (await trigger.boundingBox())?.y : undefined;
-          }),
+          [
+            page.locator("#new-session-where-trigger"),
+            page.locator("#new-session-project-trigger"),
+            checkoutRow,
+          ].map(async (row) => (await row.boundingBox())?.y),
         );
       await editor.waitFor();
       await page.evaluate(() => document.fonts.ready);
       await captureUiProof(suite, page, `placement-${width}-loading.png`);
       const initial = await editor.boundingBox();
       const pendingLabels = await Promise.all([where.textContent(), folder.textContent()]);
-      const pendingRows = width === 400 ? await placementRows() : undefined;
+      const pendingRows = width === 400 ? await placementRows(skeleton) : undefined;
       if (pendingRows) {
-        await pollAttribute(checkout, "aria-busy").toBe("true");
-        await pollDisabled(checkout).toBe(true);
+        expect(await checkout.count()).toBe(0);
       }
       const shifts = await observeLayoutShifts(page);
 
@@ -91,7 +92,7 @@ suite.define(() => {
       await shifts.dispose();
       expect(await editor.boundingBox()).toEqual(initial);
       if (pendingRows) {
-        expect(await placementRows()).toEqual(pendingRows);
+        expect(await placementRows(checkout)).toEqual(pendingRows);
         await pollDisabled(checkout).toBe(false);
       }
       expect(
@@ -118,12 +119,14 @@ suite.define(() => {
     await page.goto(suite.server.baseUrl + "new");
     await gateway.waitForRequest("agents.list");
     const checkout = page.locator("#new-session-checkout-trigger");
-    await pollDisabled(checkout).toBe(true);
+    const skeleton = page.locator(".new-session-page__checkout-skeleton");
+    await skeleton.waitFor();
     await gateway.resolveDeferred("agents.list");
     await pollLocatorText(
       page.locator("#new-session-project-trigger .new-session-page__trigger-label"),
     ).toBe("openclaw");
-    await checkout.waitFor({ state: "detached" });
+    await skeleton.waitFor({ state: "detached" });
+    expect(await checkout.count()).toBe(0);
   });
 
   it("registers a Git checkout from Browse and selects the refreshed project", async () => {

@@ -642,15 +642,15 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
         selectedAgentRuntime,
         sessionModelPinned,
         sessionKey: props.sessionKey,
-        triggerModelLabel: formatPickerModelLabel(committedModelLabel),
-        triggerModelValue: currentOverride || undefined,
-        triggerStatusLabel: props.modelSelectionLocked ? undefined : catalogTriggerStatus,
-        triggerLabelPending:
+        triggerModelLabel:
           props.initialDefaultsPending &&
           !currentOverride &&
           !defaultModel &&
-          !catalogTriggerStatus &&
-          !props.modelSelectionLocked,
+          !props.modelSelectionLocked
+            ? ""
+            : formatPickerModelLabel(committedModelLabel),
+        triggerModelValue: currentOverride || undefined,
+        triggerStatusLabel: props.modelSelectionLocked ? undefined : catalogTriggerStatus,
         onModelSetup:
           policy?.restricted || retired || uninitialized ? undefined : props.onModelSetup,
         onProviderSettings:
@@ -699,7 +699,9 @@ export function ChatModelControls(props: ModelControlsViewProps) {
   return (
     <div
       class="chat-controls__session chat-controls__model chat-controls__model-settings"
-      data-model-pending={controls().model.triggerLabelPending ? "true" : undefined}
+      data-model-pending={
+        !(controls().model.triggerStatusLabel ?? controls().model.triggerModelLabel) || undefined
+      }
     >
       <ChatModelPicker {...controls().model} />
       {props.showEffort !== false && controls().showEffort ? (

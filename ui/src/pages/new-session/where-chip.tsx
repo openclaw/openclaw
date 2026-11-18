@@ -72,8 +72,7 @@ export function WhereChip(props: WhereChipProps) {
       ref={props.ref}
       kind="where"
       label={label()}
-      labelPending={labelPending()}
-      value={view().label}
+      value={labelPending() ? undefined : view().label}
       icon={triggerIcon()}
       summary={view().configurationSummary}
       triggerAttributes={{

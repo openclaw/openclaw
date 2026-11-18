@@ -57,7 +57,6 @@ export type ChatModelPickerParams = {
   triggerModelLabel: string;
   triggerModelValue?: string;
   triggerStatusLabel?: string;
-  triggerLabelPending?: boolean;
   onModelSetup?: () => void;
   onProviderSettings?: (provider: string) => void;
   onOpen?: () => unknown;
@@ -138,13 +137,13 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
       ? undefined
       : contextWindow?.options.find((option) => option.id === contextWindow.selected);
   });
-  const triggerLabel = () =>
-    params.triggerLabelPending ? "" : (params.triggerStatusLabel ?? params.triggerModelLabel);
+  const triggerLabel = () => params.triggerStatusLabel ?? params.triggerModelLabel;
   const triggerAriaLabel = () => {
     const label = triggerLabel();
-    const chatOnly =
-      triggerModel()?.supportsTools === false ? t("chat.modelControls.chatOnly") : "";
-    const detail = [label, chatOnly].filter(Boolean).join(" · ");
+    const detail =
+      label && triggerModel()?.supportsTools === false
+        ? `${label} · ${t("chat.modelControls.chatOnly")}`
+        : label;
     return `${t("chat.selectors.model")}${detail ? `: ${detail}` : ""}${params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""}`;
   };
   const showProviderIcon = () => {
