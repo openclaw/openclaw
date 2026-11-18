@@ -83,39 +83,6 @@ function hasCurrentStandingIntentsSchema(db: DatabaseSync): boolean {
   }
 }
 
-/** Additive location columns for standing_intents, in admission-safe form.
- *
- * The canonical schema's idx_standing_intents_location references these
- * columns, so any path that repairs canonical indexes or asserts the
- * canonical shape must add them FIRST. Kept separate from the full ensure
- * (which also installs the FTS/trigger section and the index) so the
- * migration owner can run it before canonical index repair without
- * touching anything else.
- */
-export function ensureStandingIntentsLocationColumns(db: DatabaseSync): void {
-  const columns = db.prepare("PRAGMA main.table_info(standing_intents)").all() as Array<{
-    name: string;
-  }>;
-  if (columns.length === 0) {
-    return; // Table absent: the canonical DDL will create it with the columns.
-  }
-  const presentColumns = new Set(columns.map((column) => column.name));
-  for (const column of locationColumns) {
-    if (!presentColumns.has(column.name)) {
-      db.exec(`ALTER TABLE main.standing_intents ADD COLUMN ${column.sql}`);
-    }
-  }
-  // The canonical schema asserts this index, and the migration witness
-  // validates the finished migration against the CURRENT canonical shape.
-  // Fast-path migrations that repair indexes against the historical schema
-  // never see it, so converge it here: without this, a pre-location database
-  // finishes migration with the columns but not the index, and the witness
-  // rejects it with "missing or drifted index idx_standing_intents_location".
-  db.exec(
-    "CREATE INDEX IF NOT EXISTS main.idx_standing_intents_location ON standing_intents(status, trigger_kind, location_trigger)",
-  );
-}
-
 /** The optional synchronous owner supplies write grants only when main-schema DDL is needed. */
 export function ensureOpenClawAgentStandingIntentsSchema(
   db: DatabaseSync,

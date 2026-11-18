@@ -108,6 +108,10 @@ import {
 } from "./openclaw-agent-db.paths.js";
 import { AGENT_INDEX_RETIREMENT_SQL } from "./openclaw-agent-index-retirement-migration.js";
 import { migrateAgentJsonPredicatesInTransaction } from "./openclaw-agent-json-predicate-schema.js";
+import {
+  AGENT_LOCATION_INTENTS_SCHEMA_VERSION,
+  migrateAgentLocationIntentsInTransaction,
+} from "./openclaw-agent-location-intents-schema.js";
 import { AGENT_MEMORY_REVISION_SQL } from "./openclaw-agent-memory-revision-migration.js";
 import { migrateOutboxEnqueueSequenceInTransaction } from "./openclaw-agent-outbox-sequence-migration.js";
 import { migrateSessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
@@ -122,7 +126,6 @@ import {
   SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION,
   withoutSessionEntrySnapshotsSchema,
 } from "./openclaw-agent-session-snapshots-schema.js";
-import { ensureStandingIntentsLocationColumns } from "./openclaw-agent-standing-intents-schema.js";
 import { migrateAgentStorageInTransaction } from "./openclaw-agent-storage-migration.js";
 import { withLegacyAgentStorageSchema } from "./openclaw-agent-storage-schema.js";
 import {
@@ -319,14 +322,14 @@ function ensureAgentSchema(
       assertMigration();
       if (previousVersion < targetVersion) {
         interruptHistoricalPendingInputs(db, previousVersion);
-        // The canonical schema's idx_standing_intents_location references the
-        // additive location columns. A pre-location standing_intents table
-        // (any schema created before the location feature) lacks them, so
-        // canonical index repair and schema asserts below would fail with
-        // "no such column: trigger_kind" before the standing-intents ensure
-        // could ever run. Add the columns first; the ensure installs the
-        // index afterwards.
-        ensureStandingIntentsLocationColumns(db);
+        // The target schema's idx_standing_intents_location references the
+        // additive location columns, and migration branches repair canonical
+        // indexes against the target schema — including early-return
+        // historical branches that never reach the versioned steps below.
+        // migrateAgentLocationIntentsInTransaction is idempotent, so this
+        // converges pre-location tables and re-converges the same columns
+        // when the versioned v44 step runs.
+        migrateAgentLocationIntentsInTransaction(db);
       }
       if (isEmptyDatabase && targetVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
         // Canonical creation has no legacy rows or definitions to converge or repair.
@@ -408,6 +411,9 @@ function ensureAgentSchema(
         }
         if (crossesVersion(AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION)) {
           migrateAgentPendingInputEndingsInTransaction(db);
+        }
+        if (crossesVersion(AGENT_LOCATION_INTENTS_SCHEMA_VERSION)) {
+          migrateAgentLocationIntentsInTransaction(db);
         }
         // Historical rebuilds also converge indexes. Later version steps own
         // only their declared tables; additive index repair stays at admission.

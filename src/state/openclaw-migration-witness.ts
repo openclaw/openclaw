@@ -59,7 +59,7 @@ const derivedMigrationColumns = new Map<string, ReadonlySet<string>>(
     session_windows: ["row_transcript_json", "row_transcript_updated_at"],
     trajectory_runtime_events: ["event_utf8_bytes", "event_payload", "event_codec"],
     session_pending_inputs: ["end_cause", "origin_source_json"],
-    // Added by ensureStandingIntentsLocationColumns during schema migration,
+    // Added by migrateAgentLocationIntentsInTransaction during schema migration,
     // after the pre-migration witness was captured. A crossing comparison
     // (e.g. v24 -> current) sees them only on the current side, so they must
     // be excluded from the crossing schema hash the same way the session
