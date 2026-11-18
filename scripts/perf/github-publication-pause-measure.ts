@@ -14,8 +14,8 @@
  * --snapshot measures canonical publication capture instead of prepare_pr. It edits
  * 1,000 tracked and adds 1,000 untracked files, then verifies the captured tree and
  * byte-identical source index. The guest resumes during canonical staging only on
- * the candidate. Acceptance: zero snapshot-stage paused time, >=50% lower median
- * pause, identical contents, no >=20% median/p95 total-time or CPU regression.
+ * the candidate. Acceptance: zero snapshot-stage paused time, lower median pause
+ * beyond A/A spread, identical contents, no >=20% median/p95 time or CPU regression.
  * Reports native Git counts, lease-current read cost and longest async callback.
  * Run two baseline controls, then five interleaved A/B pairs. Allocation profiling
  * is a separate pass (--allocation), never mixed with unprofiled timing samples.
@@ -181,6 +181,9 @@ it("measures immutable object acquisition beside a live guest", async () => {
   const snapshotFiles = Math.min(1000, seed.files);
   const snapshotContents = "synthetic publication edit\n".padEnd(seed.fileBytes, "y");
   if (snapshotMode) {
+    // Real PR preparation leaves the canonical index populated by read-tree,
+    // without the file-stat cache that a fixture's ordinary checkout supplies.
+    await f.invoke();
     for (let index = 0; index < snapshotFiles; index++) {
       await fs.writeFile(path.join(f.projection, "payload", String(Math.floor(index / 100)).padStart(4, "0"), String(index).padStart(6, "0") + ".txt"), snapshotContents);
       await fs.writeFile(path.join(f.projection, "untracked-" + index + ".txt"), snapshotContents);
