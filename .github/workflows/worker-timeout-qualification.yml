@@ -53,6 +53,7 @@ jobs:
           node-compile-cache: "true"
       - name: Verify host and source, then run original complete group
         env:
+          OPENCLAW_DIAGNOSTICS: plugin.load-profile
           TARGET_SHA: ${{ github.sha }}
         shell: bash
         run: |
