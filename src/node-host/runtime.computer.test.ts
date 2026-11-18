@@ -79,7 +79,8 @@ async function startComputer(ephemeral = true, prepare?: () => Promise<void>) {
     requests.push(args);
     return {};
   }
-  const runtime = prepared.start({ client: { request }, onManifestChanged: vi.fn() });
+  const onManifestChanged = vi.fn();
+  const runtime = prepared.start({ client: { request }, onManifestChanged });
   let invokeId = 0;
   const invoke = async (input: unknown, command = NODE_WORKER_DESKTOP_COMPUTER_COMMAND) => {
     const id = `invoke-${++invokeId}`;
@@ -104,6 +105,7 @@ async function startComputer(ephemeral = true, prepare?: () => Promise<void>) {
     close,
     stopWatching,
     openExecution,
+    onManifestChanged,
     setProviderGeneration(value: string) {
       providerGeneration = value;
     },
@@ -171,6 +173,39 @@ describe("private worker computer runtime", () => {
     } finally {
       gate.resolve();
       await (await starting).runtime.close();
+    }
+  });
+
+  it("retires deferred preparation resources when closed before readiness", async () => {
+    const prepared = createDeferredCore();
+    const retired = createDeferredCore();
+    const retiring = createDeferredCore();
+    const host = await startComputer(true, () => prepared.promise);
+    host.stopWatching.mockImplementation(() => {
+      retiring.resolve();
+      return retired.promise;
+    });
+    let closed = false;
+    const closing = host.runtime.close().then(() => {
+      closed = true;
+    });
+    try {
+      await setImmediate();
+      expect(closed).toBe(false);
+      prepared.resolve();
+      await Promise.race([retiring.promise, closing]);
+      expect(host.stopWatching).toHaveBeenCalledOnce();
+      expect(closed).toBe(false);
+      expect(host.onManifestChanged).not.toHaveBeenCalled();
+      retired.resolve();
+      await closing;
+      await host.runtime.close();
+      expect(host.stopWatching).toHaveBeenCalledOnce();
+      expect(host.openExecution).not.toHaveBeenCalled();
+    } finally {
+      prepared.resolve();
+      retired.resolve();
+      await closing;
     }
   });
 
