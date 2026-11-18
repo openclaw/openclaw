@@ -209,11 +209,12 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     { name: "quiet trigger", status: "skipped", quietTrigger: true, notice: false },
     { name: "unstarted skip", status: "skipped", quietTrigger: false, notice: true },
     { name: "unstarted error", status: "error", quietTrigger: false, notice: true },
+    { name: "active-hours", status: "skipped", deferred: "active-hours", notice: false },
+    { name: "busy", status: "skipped", deferred: "busy", notice: false },
   ] as const)(
     "keeps the $name conversation outcome separate from its completion webhook",
-    async ({ status, quietTrigger, notice }) => {
-      const job = createCompletionWebhookJob();
-      job.sessionKey = "agent:main:owner";
+    async ({ status, notice, ...admission }) => {
+      const job = { ...createCompletionWebhookJob(), sessionKey: "agent:main:owner" };
       const logger = { warn: vi.fn() };
       const evt = {
         jobId: job.id,
@@ -226,11 +227,10 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       dispatchCompletion(job, {
         evt,
         runNotStarted: true,
-        quietTrigger,
+        ...("deferred" in admission ? { admissionDeferredReason: admission.deferred } : admission),
         resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
         logger,
       });
-
       await waitForFast(() => {
         expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
         expect(getActiveGatewayRootWorkCount()).toBe(0);
