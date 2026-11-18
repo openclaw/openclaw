@@ -1,5 +1,4 @@
-import { describe } from "vitest";
-import { afterEach, expect, it, vi } from "vitest";
+import { describe, afterEach, expect, it, vi } from "vitest";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { waitForSessionRunEnd as waitForEmbeddedAgentRunEnd } from "../../sessions/session-controller.native-runtime.js";
@@ -8,11 +7,13 @@ import { captureSessionTarget } from "../../sessions/session-controller.target.j
 import { testing as replyRunTesting } from "../../sessions/session-controller.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
-import { captureEmbeddedRunDrainTarget } from "./runs.js";
-import { claimPendingEmbeddedAgentQuestionAnswer } from "./runs.js";
-import type { EmbeddedAgentQueueHandle } from "./runs.js";
-import { clearTestEmbeddedRun as clearActiveEmbeddedRun } from "./runs.test-support.js";
 import {
+  captureEmbeddedRunDrainTarget,
+  claimPendingEmbeddedAgentQuestionAnswer,
+  type EmbeddedAgentQueueHandle,
+} from "./runs.js";
+import {
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
   registerTestEmbeddedRun as setActiveEmbeddedRun,
   createEmbeddedRunHandle,
   testing,
@@ -127,7 +128,6 @@ it.each(["stopped", "replaced", "caller-revoked", "receiver-revoked"] as const)(
 
 describe("captured question and drain ownership", () => {
   type Injection = NonNullable<EmbeddedAgentQueueHandle["messageInjectionV2"]>;
-  const accept = () => true;
   const asyncNoop = async () => {};
   function unused(...mocks: unknown[]) {
     for (const mock of mocks) {
@@ -182,7 +182,7 @@ describe("captured question and drain ownership", () => {
     expect(claimed).toEqual(["right"]);
   });
 
-  it.each(["claim"] as const)("rejects backend replacement during question %s", async (stage) => {
+  it.each(["claim"] as const)("rejects backend replacement during question %s", async (_stage) => {
     const entered = createDeferredCore(),
       released = createDeferredCore();
     const queueMessage = vi.fn(asyncNoop),

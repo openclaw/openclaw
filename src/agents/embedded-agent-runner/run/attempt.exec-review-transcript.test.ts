@@ -11,8 +11,7 @@ import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.j
 import { createFixtureSkillEntry } from "../../../skills/test-support/test-helpers.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import type { createOpenClawCodingTools } from "../../agent-tools.js";
-import { Agent } from "../../runtime/index.js";
-import { type AgentEvent } from "../../runtime/index.js";
+import { Agent, type AgentEvent } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import {
   makeAgentAssistantMessage,
@@ -23,7 +22,7 @@ import { formatToolExecutionGatedMessage } from "../../tool-policy-shared.js";
 import { isToolResultError } from "../../tool-result-error.js";
 import { createToolSearchTools } from "../../tool-search.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
-import { type AnyAgentTool } from "../../tools/common.js";
+import type { AnyAgentTool } from "../../tools/common.js";
 import { createInstalledSkillTools } from "../../tools/installed-skill-tools.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { createAgentBackedAttemptSession } from "./attempt-agent.test-support.js";
@@ -105,7 +104,7 @@ function enableSkills() {
   hoisted.prepareWorkspaceSkillsMock.mockResolvedValue([createFixtureSkillEntry("demo")]);
   hoisted.resolveSkillsPromptForRunMock.mockReturnValue(skillsPrompt);
 }
-function tool(name: string, execute: AnyAgentTool["execute"]): AnyAgentTool {
+function createTool(name: string, execute: AnyAgentTool["execute"]): AnyAgentTool {
   return { name, label: name, description: name, execute, parameters: Type.Object({}) };
 }
 const ok = () => ({ content: [{ type: "text" as const, text: "ok" }], details: undefined });
@@ -127,8 +126,8 @@ function run({
   sessionKey = "agent:main:main",
   sessionPrompt,
   ...attemptOverrides
-}: NonNullable<Parameters<typeof runAttempt>[0]["attemptOverrides"]> &
-  Pick<Parameters<typeof runAttempt>[0], "sessionPrompt"> & { sessionKey?: string }) {
+}: NonNullable<NonNullable<Parameters<typeof runAttempt>[0]>["attemptOverrides"]> &
+  Pick<NonNullable<Parameters<typeof runAttempt>[0]>, "sessionPrompt"> & { sessionKey?: string }) {
   return runAttempt({ sessionKey, sessionPrompt, attemptOverrides });
 }
 it("keeps draft-review skill reads gated without changing source bytes", async () => {
@@ -142,7 +141,7 @@ it("keeps draft-review skill reads gated without changing source bytes", async (
   const execute = vi.fn(async () => ok());
   enableSkills();
   hoisted.createOpenClawCodingToolsMock.mockReturnValue(
-    ["skill_workshop", "message", "read"].map((name) => tool(name, execute)),
+    ["skill_workshop", "message", "read"].map((name) => createTool(name, execute)),
   );
   const session = resolveInternalSessionEffectsIdentity({
     agentId: "main",
@@ -218,7 +217,7 @@ it("gates catalog-hidden tools during review while skill_workshop stays callable
         executeTool: options?.toolSearchCatalogExecutor,
       }),
       ...["skill_workshop", "read"].map((name) =>
-        tool(name, async () => {
+        createTool(name, async () => {
           executed.push(name);
           return ok();
         }),
@@ -252,8 +251,8 @@ function runDeniedAttempt({
   sessionKey = "agent:main:main",
   createSession,
   ...attemptOverrides
-}: NonNullable<Parameters<typeof runAttempt>[0]["attemptOverrides"]> &
-  Pick<Parameters<typeof runAttempt>[0], "createSession"> & { sessionKey?: string }) {
+}: NonNullable<NonNullable<Parameters<typeof runAttempt>[0]>["attemptOverrides"]> &
+  Pick<NonNullable<Parameters<typeof runAttempt>[0]>, "createSession"> & { sessionKey?: string }) {
   return runAttempt({
     sessionKey,
     createSession,
@@ -261,11 +260,11 @@ function runDeniedAttempt({
   });
 }
 it.each([
-  ["direct spawn", "sessions_spawn", undefined, undefined],
-  ["raw catalog wait", "agents_wait", 'return await agents_wait({ ids: ["child"] });', "bridge"],
+  ["direct spawn", "sessions_spawn", undefined],
+  ["raw catalog wait", "agents_wait", 'return await agents_wait({ ids: ["child"] });'],
 ] as const)(
   "does not enter the original preparer or action through denied %s",
-  async (_mode, toolName, code, failurePhase) => {
+  async (_mode, toolName, code) => {
     const sessionManager = SessionManager.inMemory();
     const execute = vi.fn(async () => ({ content: [], details: {} }));
     const prepare = vi.fn(async (args: unknown) => args);
@@ -333,14 +332,7 @@ it.each([
       const activity = entry.type === "message" && readNestedToolActivity(entry.message);
       return activity ? [activity.details] : [];
     });
-    if (failurePhase === "guest") {
-      // Swarm globals are absent from the guest, so the script itself fails.
-      expect(outcome).toMatchObject({
-        isError: true,
-        result: { details: { status: "failed", failurePhase, bridgeDispatchStarted: false } },
-      });
-      expect(activities).toEqual([]);
-    } else if (code) {
+    if (code) {
       // Code Mode dispatched the call, which reached only the gated stand-in.
       expect(activities).toEqual([expect.objectContaining({ toolName })]);
     } else {

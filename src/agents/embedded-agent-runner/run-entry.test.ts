@@ -4,21 +4,23 @@ import { prepareSessionUsageUpdate } from "../../auto-reply/reply/session-usage.
 import * as runtimeConfig from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as runRegistry from "../../infra/agent-run-registry.js";
-import { resolveModelCostConfig } from "../../utils/usage-format.js";
-import { estimateAggregateUsageCostAsync } from "../../utils/usage-format.js";
-import { type NormalizedUsage } from "../usage.js";
+import {
+  resolveModelCostConfig,
+  estimateAggregateUsageCostAsync,
+} from "../../utils/usage-format.js";
+import type { NormalizedUsage } from "../usage.js";
 import { makeModel } from "./model.test-harness.js";
 import { registerRunEntryFailureTests } from "./run-entry.failures.test-support.js";
 import { runEmbeddedAgentEntry, setupRunEntryTestState } from "./run-entry.test-harness.js";
-import { fallbackAttemptOptions } from "./run-entry.test-support.js";
 import {
+  fallbackAttemptOptions,
   createDirectHarness,
   makeResult,
   recordTurnAttempt,
   initialAttemptOptions,
   type FallbackRunnerParams,
 } from "./run-entry.test-support.js";
-import { type EmbeddedAgentMeta } from "./types.js";
+import type { EmbeddedAgentMeta } from "./types.js";
 
 const state = setupRunEntryTestState();
 
@@ -537,7 +539,9 @@ describe("fallback usage accounting", () => {
     const { result } = await runEntry({
       runCandidate: async (provider, model, options) => {
         const usage = options.isFallbackRetry ? fallback : primary;
-        if (usage instanceof Error) throw usage;
+        if (usage instanceof Error) {
+          throw usage;
+        }
         const candidate = makeResult({
           provider,
           model,

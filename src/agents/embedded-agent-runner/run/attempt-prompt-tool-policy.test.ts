@@ -1,5 +1,4 @@
-import { vi } from "vitest";
-import { expect, it } from "vitest";
+import { vi, expect, it } from "vitest";
 import * as hostHookState from "../../../plugins/host-hook-state.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
@@ -145,7 +144,7 @@ it("keeps cataloged plugin tools allowed through the plugin group", () => {
 });
 
 it("preserves an explicit empty per-turn tool allowlist", async () => {
-  using drain = vi
+  using _ = vi
     .spyOn(hostHookState, "drainPluginNextTurnInjectionContext")
     .mockResolvedValue({ queuedInjections: [] });
   const result = await resolvePromptBuildHookResult({

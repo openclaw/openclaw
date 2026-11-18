@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { AgentRunTerminalOutcomeError } from "../../agent-run-terminal-error.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
@@ -133,7 +132,9 @@ it("classifies timeout during pending LSP acquisition through the full attempt",
   vi.spyOn(bundle, "createBundleLspToolRuntime").mockImplementationOnce(({ abortSignal }) => {
     const onAbort = () => acquisition.reject(abortSignal?.reason);
     abortSignal?.addEventListener("abort", onAbort, { once: true });
-    if (abortSignal?.aborted) onAbort();
+    if (abortSignal?.aborted) {
+      onAbort();
+    }
     acquired.resolve();
     return acquisition.promise.finally(() => abortSignal?.removeEventListener("abort", onAbort));
   });

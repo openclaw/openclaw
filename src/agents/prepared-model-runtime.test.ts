@@ -2,8 +2,7 @@
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
-import { withinTest } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { dispatchLowLevelChannelReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { getPreparedReplyDispatchRuntime } from "../auto-reply/reply/prepared-reply-dispatch-context.js";
@@ -34,8 +33,10 @@ import { createEnteredGate } from "./entered-gate.test-support.js";
 import { modelDefinition, providerConfig } from "./model-auth.fixtures.test-support.js";
 import { getPreparedModelCatalogOwnerSnapshot as catalogOwner } from "./prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
-import { scopePreparedModelRuntimeLease } from "./prepared-model-runtime-generation-scope.js";
-import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
+import {
+  scopePreparedModelRuntimeLease,
+  withPreparedModelRuntimePluginGenerationScope,
+} from "./prepared-model-runtime-generation-scope.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   acquireAgentRunPreparedModelRuntime as acquireRun,
@@ -48,8 +49,8 @@ import {
   publishPreparedModelRuntimeSnapshot as publish,
   refreshPreparedModelRuntimeSnapshots as refresh,
   type PreparedModelRuntimeInput,
+  applyRemoteModelCatalogUpdate,
 } from "./prepared-model-runtime.js";
-import { applyRemoteModelCatalogUpdate } from "./prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
@@ -702,12 +703,12 @@ describe("prepared runtime generation admission", () => {
         "openai/gpt-5": { params: { transport: "sse" as const, openaiWsWarmup: false } },
       },
     };
-    const configFor = (responsePrefix: string) => ({
+    const responseConfig = (responsePrefix: string) => ({
       agents: { defaults },
       messages: { responsePrefix },
     });
-    const previousConfig = configFor("previous");
-    const committedConfig = configFor("committed");
+    const previousConfig = responseConfig("previous");
+    const committedConfig = responseConfig("committed");
     const publicationOptions = {
       allowGatewaySubagentBinding: true,
       catalogMode: "static" as const,

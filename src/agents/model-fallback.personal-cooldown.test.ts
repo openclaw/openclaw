@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
-import { vi } from "vitest";
-import { describe, expect, it } from "vitest";
+import { vi, describe, expect, it } from "vitest";
 import {
   connectUserModelAccount,
   updateUserModelAuthProfile,
@@ -10,9 +9,11 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { FailoverError } from "./failover-error.js";
 import { isFallbackSummaryError } from "./model-fallback-attempt.js";
-import { markProbeAttempt } from "./model-fallback-cooldown.js";
-import { resolveCooldownDecision } from "./model-fallback-cooldown.js";
-import { resolveProbeThrottleKey } from "./model-fallback-cooldown.js";
+import {
+  markProbeAttempt,
+  resolveCooldownDecision,
+  resolveProbeThrottleKey,
+} from "./model-fallback-cooldown.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
 import * as sessionSuspension from "./session-suspension.js";
 import { createModelFallbackConfig } from "./test-helpers/model-fallback-config-fixture.js";
@@ -112,11 +113,12 @@ describe("fallback probe and deferred suspension guards", () => {
     skipAuthProfileRuntime: true,
   };
   const runProbe = (
-    params: Omit<Parameters<typeof runWithModelFallback>[0], "provider" | "model">,
+    params: Omit<Parameters<typeof runWithModelFallback>[0], "provider" | "model" | "cfg"> &
+      Partial<Pick<Parameters<typeof runWithModelFallback>[0], "cfg">>,
   ) => runWithModelFallback({ ...defaults, ...params });
   async function withSuspension(action: (suspend: ReturnType<typeof vi.spyOn>) => Promise<void>) {
     using suspend = vi.spyOn(sessionSuspension, "suspendSession").mockResolvedValue(undefined);
-    using scope = vi
+    using _ = vi
       .spyOn(sessionSuspension, "runWithDeferredSessionSuspension")
       .mockImplementation((run, onDeferred) => {
         onDeferred?.(deferred);
@@ -191,9 +193,11 @@ describe("fallback probe and deferred suspension guards", () => {
           }),
         ).rejects.toBe(error);
         expect(run).toHaveBeenCalledOnce();
-        if (mode === "terminal classified result")
+        if (mode === "terminal classified result") {
           expect(suspend).toHaveBeenCalledExactlyOnceWith(deferred);
-        else expect(suspend).not.toHaveBeenCalled();
+        } else {
+          expect(suspend).not.toHaveBeenCalled();
+        }
       });
     },
   );

@@ -4,13 +4,14 @@ import { setImmediate as checkpoint } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
-import { type OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { modelsHandlers } from "../gateway/server-methods/models.js";
-import { type GatewayRequestContext } from "../gateway/server-methods/types.js";
-import { type RespondFn } from "../gateway/server-methods/types.js";
+import type { GatewayRequestContext, RespondFn } from "../gateway/server-methods/types.js";
 import { registerGatewayModelCatalogPrivateAccess } from "../gateway/server-model-catalog-auth.js";
-import { loadGatewayModelCatalogSnapshot as loadPublicCatalog } from "../gateway/server-model-catalog.js";
-import { loadPreparedGatewayModelCatalogSnapshot } from "../gateway/server-model-catalog.js";
+import {
+  loadGatewayModelCatalogSnapshot as loadPublicCatalog,
+  loadPreparedGatewayModelCatalogSnapshot,
+} from "../gateway/server-model-catalog.js";
 import * as providerRuntime from "../plugins/provider-runtime.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
@@ -18,23 +19,27 @@ import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime
 import { configFor } from "./model-auth.fixtures.test-support.js";
 import { model } from "./model-catalog-fixtures.test-support.js";
 import * as catalogWorker from "./prepared-model-catalog-worker.js";
-import { HARNESS_ID } from "./prepared-model-catalog-worker.test-support.js";
-import { catalogEntry } from "./prepared-model-catalog-worker.test-support.js";
-import { catalogInput } from "./prepared-model-catalog-worker.test-support.js";
-import { PLUGIN_ID } from "./prepared-model-catalog-worker.test-support.js";
-import { PROVIDER_ID } from "./prepared-model-catalog-worker.test-support.js";
-import { REF_ONLY_API_ENV } from "./prepared-model-catalog-worker.test-support.js";
-import { REF_ONLY_TOKEN_ENV } from "./prepared-model-catalog-worker.test-support.js";
-import { UNRELATED_PLUGIN_ID } from "./prepared-model-catalog-worker.test-support.js";
-import { UNRELATED_PLUGIN_WORKER_MARKER_ENV } from "./prepared-model-catalog-worker.test-support.js";
-import { writeFixturePlugin } from "./prepared-model-catalog-worker.test-support.js";
-import { writeUnrelatedFixturePlugin } from "./prepared-model-catalog-worker.test-support.js";
+import {
+  HARNESS_ID,
+  catalogEntry,
+  catalogInput,
+  PLUGIN_ID,
+  PROVIDER_ID,
+  REF_ONLY_API_ENV,
+  REF_ONLY_TOKEN_ENV,
+  UNRELATED_PLUGIN_ID,
+  UNRELATED_PLUGIN_WORKER_MARKER_ENV,
+  writeFixturePlugin,
+  writeUnrelatedFixturePlugin,
+} from "./prepared-model-catalog-worker.test-support.js";
 import { materializePreparedModelCatalogOwner } from "./prepared-model-catalog.js";
 import { loadPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
-import { getPreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
-import { publishPreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
-import { refreshPreparedModelRuntimeCatalog } from "./prepared-model-runtime.js";
-import { markPreparedModelRuntimeSnapshotsStale } from "./prepared-model-runtime.js";
+import {
+  getPreparedModelRuntimeSnapshot,
+  publishPreparedModelRuntimeSnapshot,
+  refreshPreparedModelRuntimeCatalog,
+  markPreparedModelRuntimeSnapshotsStale,
+} from "./prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
 import { createCatalogFleetFixture } from "./test-helpers/prepared-model-catalog-fleet-fixture.js";
 import {

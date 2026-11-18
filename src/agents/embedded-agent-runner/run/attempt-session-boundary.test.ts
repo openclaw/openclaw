@@ -1,9 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach } from "vitest";
-import { describe, expect, it, vi } from "vitest";
-import { type ProviderMessage } from "../../../../packages/ai/src/provider-types.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ProviderMessage } from "../../../../packages/ai/src/provider-types.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
@@ -13,9 +12,11 @@ import { cloneTranscriptView } from "../../../config/sessions/transcript-snapsho
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import { labelRuntimeContextText } from "../../../llm/types.js";
 import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
-import { buildPersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.js";
-import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
-import { type PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
+import {
+  buildPersistedUserTurnMessage,
+  createUserTurnTranscriptRecorder,
+} from "../../../sessions/user-turn-transcript.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
 import { freezeJsonSnapshot } from "../../../shared/immutable-data.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -31,15 +32,19 @@ import {
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import type { AgentSession } from "../../sessions/agent-session.js";
-import { convertToLlm } from "../../sessions/messages.js";
-import { convertToLlmWithBlockImages } from "../../sessions/messages.js";
-import { convertToLlm as convertHarnessMessages } from "../../sessions/messages.js";
+import {
+  convertToLlm,
+  convertToLlmWithBlockImages,
+  convertToLlm as convertHarnessMessages,
+} from "../../sessions/messages.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { beginPromptCacheObservation } from "../prompt-cache-observability.js";
-import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
-import { recordToolResultPromptProjection } from "../session-prompt-state.js";
-import { type ToolResultPromptProjectionState } from "../session-prompt-state.js";
+import {
+  createToolResultPromptProjectionState,
+  recordToolResultPromptProjection,
+  type ToolResultPromptProjectionState,
+} from "../session-prompt-state.js";
 import { bindToolResultPromptProjectionKeys } from "../tool-result-projection-key.js";
 import { projectToolResultMessages } from "../tool-result-truncation.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
@@ -50,9 +55,11 @@ import {
 } from "./attempt-session-boundary.test-support.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
 import { materializeProviderContext } from "./images.js";
-import { applyRuntimeContextCarrierRetention } from "./runtime-context-prompt.js";
-import { buildSystemUpdateMessage } from "./runtime-context-prompt.js";
-import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
+import {
+  applyRuntimeContextCarrierRetention,
+  buildSystemUpdateMessage,
+  buildRuntimeContextCustomMessage,
+} from "./runtime-context-prompt.js";
 
 describe("prepareEmbeddedAttemptSessionBoundary", () => {
   it("strips persisted carriers when a session switches to transient replay", async () => {

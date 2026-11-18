@@ -2,15 +2,13 @@
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 
-import { describe } from "vitest";
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { type OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDirectChatContext } from "../gateway/server-chat.agent-events.test-helpers.js";
 import { sessionCreateHandlers } from "../gateway/server-methods/sessions-create.js";
-import { type GatewayClient } from "../gateway/server-methods/types.js";
-import { type RespondFn } from "../gateway/server-methods/types.js";
+import type { GatewayClient, RespondFn } from "../gateway/server-methods/types.js";
 import { readPreparedGatewayModelCatalog } from "../gateway/server-model-catalog.js";
 import { gatewayConnect } from "../gateway/server/client-fixtures.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -20,13 +18,15 @@ import {
   getPluginRuntimeGenerationRegistry,
   withPluginRuntimeGenerationScope,
 } from "../plugins/runtime/generation-scope.js";
-import { harnessRegistry } from "./model-catalog-fixtures.test-support.js";
-import { model as configuredModel } from "./model-catalog-fixtures.test-support.js";
-import { providerConfig as configuredProvider } from "./model-catalog-fixtures.test-support.js";
-import { type ModelCatalogEntry } from "./model-catalog.types.js";
-import { getPreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
-import { markPreparedModelRuntimeSnapshotsStale } from "./prepared-model-runtime.js";
 import {
+  harnessRegistry,
+  model as configuredModel,
+  providerConfig as configuredProvider,
+} from "./model-catalog-fixtures.test-support.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import {
+  getPreparedModelRuntimeSnapshot,
+  markPreparedModelRuntimeSnapshotsStale,
   prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";

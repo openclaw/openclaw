@@ -1,18 +1,15 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
-import { afterEach } from "vitest";
-import { beforeEach } from "vitest";
-import { describe } from "vitest";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveModelFallbackOptions } from "../auto-reply/reply/agent-runner-run-params.js";
 import * as replyAdmission from "../auto-reply/reply/get-reply-run-admission.js";
 import * as replyContext from "../auto-reply/reply/get-reply-run-context.js";
 import * as replyExecution from "../auto-reply/reply/get-reply-run-execute.js";
 import { runPreparedReply } from "../auto-reply/reply/get-reply-run.js";
-import { type RunPreparedReplyParams } from "../auto-reply/reply/get-reply-run.types.js";
+import type { RunPreparedReplyParams } from "../auto-reply/reply/get-reply-run.types.js";
 import { bindPreparedReplyDispatchRuntime } from "../auto-reply/reply/prepared-reply-dispatch-context.js";
-import { type FollowupRun } from "../auto-reply/reply/queue.js";
+import type { FollowupRun } from "../auto-reply/reply/queue.js";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -27,7 +24,7 @@ import {
 import * as modelCatalog from "../model-catalog/index.js";
 import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
 import { listRuntimePluginIdsFromRegistry } from "../plugins/active-runtime-registry.js";
-import { type PluginManifestRecord } from "../plugins/manifest-registry.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -35,14 +32,15 @@ import { getPluginRuntimeLoadContextState } from "../plugins/runtime/load-contex
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import * as agentScope from "./agent-scope.js";
 import { createContextEngineLogicalTurnLease } from "./harness/context-engine-logical-turn.js";
-import { resolveAgentRuntimePluginLoadPlan } from "./harness/runtime-plugin-load-plan.js";
-import { resolveAgentRuntimePluginSelections } from "./harness/runtime-plugin-load-plan.js";
+import {
+  resolveAgentRuntimePluginLoadPlan,
+  resolveAgentRuntimePluginSelections,
+} from "./harness/runtime-plugin-load-plan.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import * as modelSelectionConfig from "./model-selection-config.js";
 import { getPreparedModelRuntimePluginGeneration } from "./prepared-model-runtime-generation-scope.js";
-import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
-import { loadPublishedGatewayReplyDispatchRuntime } from "./prepared-model-runtime.js";
 import {
+  acquireAgentRunPreparedModelRuntime,
   loadPublishedGatewayReplyDispatchRuntime as loadDispatch,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
@@ -372,7 +370,7 @@ describe("prepared reply fallback authority", () => {
           manifestPlugins: metadata.plugins,
         });
         expect(candidates.map((candidate) => candidate.provider)).toEqual(["selected"]);
-        await using nested = await acquireAgentRunPreparedModelRuntime(
+        await using _ = await acquireAgentRunPreparedModelRuntime(
           {
             config,
             agentId: run.agentId,

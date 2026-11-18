@@ -872,7 +872,7 @@ it("does not publish a static catalog generation superseded while its hook is ru
   const defaultPrepareStaticCatalog = mocks.prepareStaticCatalog.getMockImplementation();
   const started = createDeferred();
   const finish = createDeferred();
-  mocks.prepareStaticCatalog.mockImplementationOnce(async (...args: unknown[]) => {
+  mocks.prepareStaticCatalog.mockImplementationOnce(async (...args) => {
     started.resolve();
     await finish.promise;
     return await defaultPrepareStaticCatalog!(...args);

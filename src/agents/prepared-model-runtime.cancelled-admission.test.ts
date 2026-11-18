@@ -1,16 +1,14 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import {
-  getPreparedModelRuntimeTestApi,
-  usePreparedModelRuntimeHarness,
-} from "./prepared-model-runtime.test-harness.js";
+import { getPreparedModelRuntimeTestApi, usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
-import { createDeferred } from "../../test/helpers/promise.js";
-import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
-import { makeRegistry } from "../config/plugin-auto-enable.test-helpers.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
@@ -20,16 +18,11 @@ import { acquirePreparedModelRuntimeLeaseFromOwners } from "./prepared-model-run
 import * as runtimeBuild from "./prepared-model-runtime.build.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
-import { markPreparedModelRuntimeSnapshotsStale as markStale } from "./prepared-model-runtime.js";
-import { publishPreparedModelRuntimeSnapshot as publish } from "./prepared-model-runtime.js";
-import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
-import { prepareModelRuntimeSnapshot } from "./prepared-model-runtime.js";
-import { getPreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
-import { loadPublishedGatewayReplyDispatchRuntime } from "./prepared-model-runtime.js";
-import { markPreparedModelRuntimeSnapshotsStale } from "./prepared-model-runtime.js";
-import { publishPreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
-import { refreshPreparedModelRuntimeSnapshots } from "./prepared-model-runtime.js";
 import {
+  markPreparedModelRuntimeSnapshotsStale as markStale,
+  publishPreparedModelRuntimeSnapshot as publish,
+  acquireAgentRunPreparedModelRuntime,
+  getPreparedModelRuntimeSnapshot,
   acquireAgentRunPreparedModelRuntime as acquireRun,
   activateStandalonePreparedModelRuntime as activate,
   getPreparedModelRuntimeSnapshot as readSnapshot,
@@ -42,7 +35,6 @@ import {
 import { createPreparedModelRuntimeReplacement } from "./prepared-model-runtime.lifecycle.js";
 import * as owners from "./prepared-model-runtime.owner.js";
 import { PreparedModelRuntimeOwnerRetention } from "./prepared-model-runtime.retention.js";
-import { observeSettlement } from "./promise-settlement.test-support.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 const fixture = usePreparedModelRuntimeHarness(
@@ -613,8 +605,8 @@ describe("borrowed preparation cancellation", () => {
       workspaceDir: "/tmp/dynamic-workspace",
     };
     await refresh(config, { gatewayLifecycle: true });
-    const testApi = getPreparedModelRuntimeTestApi();
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
+    const admissionTestApi = getPreparedModelRuntimeTestApi();
+    expect(admissionTestApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
     const finishAuthRefreshGate = createDeferred();
     let finishAuthRefresh: (() => void) | undefined;
     mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, _agentDir) => {
@@ -636,18 +628,18 @@ describe("borrowed preparation cancellation", () => {
       await expect(Promise.race([observed, Promise.resolve("pending")])).resolves.toBe("pending");
       abort.abort(new Error("request cancelled"));
       await expect(admission).rejects.toMatchObject({ name: "AbortError" });
-      expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
+      expect(admissionTestApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
 
       finishAuthRefreshGate.resolve();
       await loadPublishedDispatch({ agentId: "default" });
-      expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
+      expect(admissionTestApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
       await using lease = await acquireAgentRunPreparedModelRuntime(input);
       expect(lease.snapshot).toMatchObject({
         agentId: "default",
         agentDir: input.agentDir,
         workspaceDir: "/tmp/unused-workspace",
       });
-      expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
+      expect(admissionTestApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
     } finally {
       finishAuthRefreshGate.resolve();
       await Promise.allSettled([

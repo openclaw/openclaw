@@ -5,9 +5,11 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { onInternalDiagnosticEvent } from "../../../infra/diagnostic-events.js";
-import { waitForDiagnosticEventsDrained } from "../../../infra/diagnostic-events.js";
-import { resetDiagnosticEventsForTest } from "../../../infra/diagnostic-events.js";
+import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+  resetDiagnosticEventsForTest,
+} from "../../../infra/diagnostic-events.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { flushDiagnosticsTimeline } from "../../../infra/diagnostics-timeline.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -94,7 +96,9 @@ function wrap(
 async function collect(run: () => Promise<void>) {
   const events: Array<{ type: string }> = [];
   const stop = onInternalDiagnosticEvent((event) => {
-    if (event.type.startsWith("model.call.")) events.push(event);
+    if (event.type.startsWith("model.call.")) {
+      events.push(event);
+    }
   });
   try {
     await run();

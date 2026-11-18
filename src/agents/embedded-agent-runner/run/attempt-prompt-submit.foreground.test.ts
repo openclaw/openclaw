@@ -1,14 +1,13 @@
 import path from "node:path";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { describe } from "vitest";
-import { afterEach, expect, it, vi } from "vitest";
+import { describe, afterEach, expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import { acquireSessionActorStorage } from "../../../config/sessions/session-actor-storage-acquisition.js";
 import type { Context } from "../../../llm/types.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
-import { type PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -540,11 +539,9 @@ describe("provider retry and cold history", () => {
           expect(serialized.match(/CURRENT: what is the codeword\?/g)).toHaveLength(1);
           expect(serialized).toContain("2024-06-05 07:00");
           expect(serialized).toContain("2024-06-05 07:01");
-          {
-            expect(request.filter((message) => message.role === "user")).toHaveLength(
-              request === requests[2] ? 2 : 1,
-            );
-          }
+          expect(request.filter((message) => message.role === "user")).toHaveLength(
+            request === requests[2] ? 2 : 1,
+          );
         }
         const prefix = (messages: Context["messages"]) =>
           messages.map(({ role, content }) => ({ role, content }));
@@ -570,7 +567,7 @@ describe("provider retry and cold history", () => {
     },
   ])(
     "preserves hidden runtime input across provider retry and cold session reopen: $name",
-    async ({ api, override, retained, suppressOnly = false }) => {
+    async ({ api, override, retained, suppressOnly }) => {
       const { appendOnlyRuntimeContext } = resolveTranscriptPolicy({
         modelApi: api,
         runtimeHandle: {

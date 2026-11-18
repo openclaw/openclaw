@@ -2,8 +2,7 @@ import type { LlmRuntime } from "@openclaw/ai";
 import { defaultLlmRuntime } from "@openclaw/ai/internal/runtime";
 import { describe, expect, it, vi } from "vitest";
 import { streamSimple } from "../../../llm/stream.js";
-import { type Context } from "../../../llm/types.js";
-import { type Model } from "../../../llm/types.js";
+import type { Context, Model } from "../../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
 import type { StreamFn } from "../../runtime/index.js";
@@ -623,7 +622,9 @@ it.each([
   } as Model<"anthropic-messages">;
   const errorMessage = `Unhandled stop reason: ${stopReason}`;
   const base: StreamFn = () => {
-    if (mode === "throw") throw new Error(errorMessage);
+    if (mode === "throw") {
+      throw new Error(errorMessage);
+    }
     return createQueuedAssistantStream((push) =>
       push({
         type: "error",

@@ -69,7 +69,6 @@ import {
   ownerKey,
   resolvePreparedModelRuntimeOwnerBySnapshot,
 } from "./prepared-model-runtime.owner.js";
-import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import * as pluginLifetime from "./prepared-model-runtime.plugin-lifetime.js";
 import { updateOwnersForScopedRefresh } from "./prepared-model-runtime.refresh-scope.js";
 import { observeSettlement } from "./promise-settlement.test-support.js";
@@ -115,9 +114,9 @@ async function publishOwner(
 async function retiredGenerationFailure(snapshot: PreparedModelRuntimeSnapshot) {
   const generation = resolvePreparedModelRuntimeOwnerBySnapshot(snapshot)!.pluginGeneration!;
   const retired = { ...generation, pluginRegistry: undefined, inboundPluginRegistry: undefined };
-  await retainPreparedPluginGeneration(retired)();
+  await pluginLifetime.retainPreparedPluginGeneration(retired)();
   try {
-    await retainPreparedPluginGeneration(retired)();
+    await pluginLifetime.retainPreparedPluginGeneration(retired)();
   } catch (error) {
     expect(error).toMatchObject({ message: "Prepared plugin generation has retired" });
     return error;
@@ -156,7 +155,7 @@ describe("configured plugin generation recovery", () => {
       }),
     );
     const generation = resolvePreparedModelRuntimeOwnerBySnapshot(snapshot)!.pluginGeneration!;
-    const release = retainPreparedPluginGeneration(generation);
+    const release = pluginLifetime.retainPreparedPluginGeneration(generation);
     const ambient = createEmptyPluginRegistry();
     ambient.providers.push({
       pluginId: "ambient-policy",

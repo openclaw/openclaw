@@ -1,8 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
-import { describe } from "vitest";
-import { beforeEach, expect, it, vi } from "vitest";
+import { describe, beforeEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
@@ -27,28 +26,26 @@ import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveEmbeddedRunModelSetup } from "./embedded-agent-runner/run/model-setup.js";
-import { type AgentHarnessModelCatalogResult } from "./harness/types.js";
-import type { AgentHarness } from "./harness/types.js";
+import type { AgentHarnessModelCatalogResult, AgentHarness } from "./harness/types.js";
 import { harnessRegistry, snapshot } from "./model-catalog-fixtures.test-support.js";
-import { type ModelCatalogEntry } from "./model-catalog.types.js";
-import { type ModelCatalogSnapshot } from "./model-catalog.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { loadPreparedModelCatalogSnapshot as loadCatalog } from "./prepared-model-catalog.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
-import { acquirePreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
-import { getPreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
-import { markPreparedModelRuntimeSnapshotsStale } from "./prepared-model-runtime.js";
-import { publishPreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import {
+  acquirePreparedModelRuntimeSnapshot,
+  publishPreparedModelRuntimeSnapshot,
   getPreparedModelRuntimeSnapshot as readSnapshot,
   markPreparedModelRuntimeSnapshotsStale as invalidate,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 import { resolvePreparedModelRuntimeOwnerBySnapshot } from "./prepared-model-runtime.owner.js";
 import { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.publication-events.js";
-import { type PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
-import { type PreparedModelRuntimeLease } from "./prepared-model-runtime.types.js";
-import { type PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
-import type { PreparedModelCatalogRefreshOptions } from "./prepared-model-runtime.types.js";
+import type {
+  PreparedModelRuntimeInput,
+  PreparedModelRuntimeLease,
+  PreparedModelRuntimeSnapshot,
+  PreparedModelCatalogRefreshOptions,
+} from "./prepared-model-runtime.types.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "native-demand" });
 const { mocks } = fixture;
@@ -677,7 +674,7 @@ describe("native selection authority", () => {
     );
   }
   it("keeps native selection bound to its admitted lease when run authority is revoked", async () => {
-    const { input, owner, b, loadB } = await pickerFixture(false, true);
+    const { input, b, loadB } = await pickerFixture(false, true);
     await using lease = await acquirePreparedModelRuntimeSnapshot(input);
     let leaseOpen = true;
     let runCurrent = true;

@@ -1,13 +1,12 @@
-import { describe } from "vitest";
-import { beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { describe, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { type OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import { buildEmbeddedRunBlockedResult } from "./embedded-agent-runner/run/blocked-run-result.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
-import { type EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
+import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { FailoverError } from "./failover-error.js";
 import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.test-support.js";
 import { model as catalogModel } from "./model-catalog-fixtures.test-support.js";

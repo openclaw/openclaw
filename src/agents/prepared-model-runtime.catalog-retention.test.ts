@@ -2,16 +2,16 @@
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { setImmediate } from "node:timers/promises";
-import { describe } from "vitest";
-import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
-import { withinTest } from "../../test/helpers/promise.js";
-import { bindPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
-import { createPluginCache } from "../plugins/plugin-cache.js";
-import { getPluginCache } from "../plugins/plugin-cache.js";
-import { getProcessPluginCache } from "../plugins/plugin-cache.js";
-import { retirePluginCache } from "../plugins/plugin-cache.js";
-import { withPluginCache } from "../plugins/plugin-cache.js";
+import { describe, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import {
+  bindPluginMetadataSnapshotCache,
+  createPluginCache,
+  getPluginCache,
+  getProcessPluginCache,
+  retirePluginCache,
+  withPluginCache,
+} from "../plugins/plugin-cache.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { expectCollected, forceFullGc } from "../test-utils/retention.js";
@@ -19,13 +19,13 @@ import { retireAgentDeleteRuntime } from "./agent-delete-databases.js";
 import { withAgentDeletion } from "./agent-lifecycle-registry.js";
 import type { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
-import { getPreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
-import { loadPublishedGatewayReplyDispatchRuntime } from "./prepared-model-runtime.js";
-import { publishPreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
-import { prepareModelRuntimeSnapshot as prepare } from "./prepared-model-runtime.js";
-import { refreshPreparedModelRuntimeSnapshots as refresh } from "./prepared-model-runtime.js";
-import { retirePreparedModelRuntimeAgent } from "./prepared-model-runtime.js";
 import {
+  getPreparedModelRuntimeSnapshot,
+  loadPublishedGatewayReplyDispatchRuntime,
+  publishPreparedModelRuntimeSnapshot,
+  prepareModelRuntimeSnapshot as prepare,
+  refreshPreparedModelRuntimeSnapshots as refresh,
+  retirePreparedModelRuntimeAgent,
   markPreparedModelRuntimeSnapshotsStale,
   prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,

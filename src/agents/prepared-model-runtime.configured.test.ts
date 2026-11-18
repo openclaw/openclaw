@@ -1,13 +1,12 @@
-import { describe } from "vitest";
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { type PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resolveEmbeddedRuntimeModelPolicy } from "./embedded-agent-runner/run/setup.js";
 import { modelDefinition } from "./model-auth.fixtures.test-support.js";
 import { providerConfig } from "./model-catalog-fixtures.test-support.js";
-import { type ModelCatalogEntry } from "./model-catalog.types.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { prepareModelCatalogPublication } from "./prepared-model-runtime.catalog-publication.js";
 import { prepareCapturedRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
 import {
@@ -15,12 +14,11 @@ import {
   collectPreparedModelRuntimeProviderIds as providerIds,
 } from "./prepared-model-runtime.configured.js";
 import { materializePreparedModelCatalog } from "./prepared-model-runtime.full-catalog.js";
-import { AuthStorage } from "./sessions/index.js";
-import { ModelRegistry } from "./sessions/index.js";
+import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 
 const harness = (id: string) => ({ agentRuntime: { id } });
 const runtimeIds = ["fixture", "fixture-harness"];
-const provider = (fields: Partial<ModelProviderConfig> = {}): ModelProviderConfig => ({
+const modelProvider = (fields: Partial<ModelProviderConfig> = {}): ModelProviderConfig => ({
   baseUrl: "https://fixture.invalid/v1",
   models: [],
   ...fields,
@@ -30,10 +28,10 @@ it("keeps credential-only providers out of static catalog preparation", () => {
   const config: OpenClawConfig = {
     models: {
       providers: {
-        inline: provider({ apiKey: "fixture-key" }),
-        referenced: provider({ apiKey: { source: "file", provider: "fixture", id: "key" } }),
-        blank: provider({ apiKey: " " }),
-        unrelated: provider(),
+        inline: modelProvider({ apiKey: "fixture-key" }),
+        referenced: modelProvider({ apiKey: { source: "file", provider: "fixture", id: "key" } }),
+        blank: modelProvider({ apiKey: " " }),
+        unrelated: modelProvider(),
       },
     },
   };
@@ -79,7 +77,7 @@ it("prepares scoped refs and literal selections without changing config or Decis
   ]);
   const withProvider = {
     ...config,
-    ...providerConfig("fixture", provider(harness("fixture-harness"))),
+    ...providerConfig("fixture", modelProvider(harness("fixture-harness"))),
   };
   const decisions = refs.filter((ref) => ref.capability === "decision");
   expect(providerIds(withProvider, {}, false, decisions)).toEqual(["fixture"]);

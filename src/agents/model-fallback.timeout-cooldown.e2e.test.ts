@@ -6,11 +6,11 @@ import type {
 } from "./embedded-agent-runner/run/types.js";
 import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.test-support.js";
 import { AgentHarnessModelRequestPolicyError } from "./harness/errors.js";
-import { type ModelFallbackStepFields } from "./model-fallback-observation.js";
+import type { ModelFallbackStepFields } from "./model-fallback-observation.js";
 import { createFallbackE2eMocks } from "./model-fallback.e2e.test-support.js";
 import { createModelFallbackAttemptMocks } from "./model-fallback.run-embedded.attempts.test-support.js";
-import { RATE_LIMIT_ERROR_MESSAGE } from "./model-fallback.run-embedded.e2e.test-support.js";
 import {
+  RATE_LIMIT_ERROR_MESSAGE,
   createEmbeddedFallbackEntryRunner,
   makeModelFallbackConfig,
   readFallbackUsageStats,

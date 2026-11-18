@@ -3,7 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import { createBundledStaticCatalogModelResolver } from "./model.static-catalog.js";
+import {
+  createBundledStaticCatalogModelResolver,
+  createBundledProviderStaticCatalogContextResolver,
+  loadBundledProviderStaticCatalogContextModels,
+  resolveBundledProviderStaticCatalogModel,
+  resolveBundledStaticCatalogModel,
+  resolveManifestModelCatalogProviderAliasMetadata as resolveAlias,
+} from "./model.static-catalog.js";
 import { createManifestRecord, setManifestPlugins } from "./model.static-catalog.test-helpers.js";
 
 const mistralLookup = { provider: "mistral", modelId: "mistral-medium-3-5" };
@@ -59,17 +66,10 @@ vi.mock("../../plugins/provider-discovery.js", async (importOriginal) => ({
 }));
 
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
-import {
-  createBundledProviderStaticCatalogContextResolver,
-  loadBundledProviderStaticCatalogContextModels,
-  resolveBundledProviderStaticCatalogModel,
-  resolveBundledStaticCatalogModel,
-  resolveManifestModelCatalogProviderAliasMetadata as resolveAlias,
-} from "./model.static-catalog.js";
 
 function createMistralManifestPlugin(overrides?: {
   discovery?: "static" | "refreshable" | "runtime";
-  origin?: string;
+  origin?: PluginManifestRecord["origin"];
   cost?: ModelDefinitionConfig["cost"];
 }) {
   return {
@@ -80,12 +80,12 @@ function createMistralManifestPlugin(overrides?: {
       providers: {
         mistral: {
           baseUrl: "https://api.mistral.ai/v1",
-          api: "openai-completions",
+          api: "openai-completions" as const,
           models: [
             {
               id: "mistral-medium-3-5",
               name: "Mistral Medium 3.5",
-              input: ["text", "image"],
+              input: ["text", "image"] satisfies Array<"text" | "image">,
               reasoning: true,
               contextWindow: 262144,
               maxTokens: 8192,

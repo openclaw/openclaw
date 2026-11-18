@@ -19,8 +19,8 @@ import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture
 import { createImageTool } from "../tools/image-tool.js";
 import { normalizeMessagesForLlmBoundary } from "./run/attempt-llm-boundary.js";
 import { resolveProjectedRequestPressure } from "./run/preemptive-compaction.js";
-import { TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE } from "./tool-result-char-estimator.js";
 import {
+  TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   estimateMessageCharsCached,
   getToolResultText as getAllToolResultText,
 } from "./tool-result-char-estimator.js";

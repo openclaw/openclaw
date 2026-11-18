@@ -3,35 +3,31 @@
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { withinTest } from "../../test/helpers/promise.js";
-import { type ModelProviderConfig } from "../config/types.models.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { refreshModelRuntimeAfterHotReload } from "../gateway/server-reload-model-runtime-scope.js";
 import * as manifestEligibility from "../plugins/manifest-contract-eligibility.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { type ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
+import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { type ModelCatalogEntry } from "./model-catalog.types.js";
-import { type ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { getPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
-import { setPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
-import { type PreparedModelCatalogAuth } from "./prepared-model-runtime-auth.js";
-import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
-import { advancePreparedModelRuntimeConfig } from "./prepared-model-runtime.js";
-import { beginPreparedModelRuntimePluginDrain } from "./prepared-model-runtime.js";
-import { loadPublishedGatewayReplyDispatchRuntime as loadPublishedDispatch } from "./prepared-model-runtime.js";
-import { markPreparedModelRuntimeSnapshotsStale as markStale } from "./prepared-model-runtime.js";
-import { prepareModelRuntimeSnapshot as prepare } from "./prepared-model-runtime.js";
-import { publishPreparedModelRuntimeSnapshot as publish } from "./prepared-model-runtime.js";
-import { refreshPreparedModelRuntimeSnapshots as refresh } from "./prepared-model-runtime.js";
-import { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.js";
-import { type PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
+  getPreparedModelFullCatalogAuth,
+  setPreparedModelFullCatalogAuth,
+  type PreparedModelCatalogAuth,
+} from "./prepared-model-runtime-auth.js";
+import {
+  acquireAgentRunPreparedModelRuntime,
+  beginPreparedModelRuntimePluginDrain,
+  loadPublishedGatewayReplyDispatchRuntime as loadPublishedDispatch,
+  prepareModelRuntimeSnapshot as prepare,
+  refreshPreparedModelRuntimeSnapshots as refresh,
+  registerPreparedModelRuntimePublicationListener,
   getPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
@@ -371,7 +367,9 @@ describe("auth replacement publication", () => {
           release();
         }
         await Promise.allSettled(operations);
-        for (const cleanup of cleanups) cleanup();
+        for (const cleanup of cleanups) {
+          cleanup();
+        }
       },
     };
   }

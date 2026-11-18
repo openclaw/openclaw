@@ -3,15 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSolidPngBuffer } from "../../../../test/helpers/image-fixtures.js";
-import { createNoisyPngBuffer } from "../../../../test/helpers/image-fixtures.js";
+import {
+  createSolidPngBuffer,
+  createNoisyPngBuffer,
+} from "../../../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
-import { type UserMessage } from "../../../llm/types.js";
+import type { UserMessage } from "../../../llm/types.js";
 import * as mediaLocalRoots from "../../../media/local-roots.js";
-import { type MediaFact } from "../../../media/media-facts.js";
 import {
+  type MediaFact,
   attachRuntimePromptMediaFacts,
   readRuntimePromptMediaFacts,
 } from "../../../media/media-facts.js";
@@ -26,15 +28,15 @@ import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-br
 import { createUnsafeMountedSandbox } from "../../test-helpers/unsafe-mounted-sandbox.js";
 import { log } from "../logger.js";
 import { describedImageUnderstanding } from "./image-description.test-support.js";
-import { buildPromptImageFailureNotice } from "./images.js";
-import { materializeProviderContext } from "./images.js";
 import {
+  buildPromptImageFailureNotice,
+  materializeProviderContext,
   detectAndLoadPromptImages,
   detectImageReferences,
   hydratePromptMediaMessages,
 } from "./images.js";
 import { promptImageSessionKey } from "./prompt-image-decisions.js";
-import { type MediaImageLayout } from "./prompt-image-metadata.js";
+import type { MediaImageLayout } from "./prompt-image-metadata.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 
 const TINY_PNG_BASE64 =
@@ -737,14 +739,11 @@ describe("persisted image replay", () => {
   const mediaAt = (...paths: string[]) =>
     paths.map((file) => ({ path: file, contentType: "image/png" }));
   let workspaceDir: string;
-  type LoadOptions = Omit<Parameters<typeof detectAndLoadPromptImages>[0], "model">;
   const options = (): Parameters<typeof hydratePromptMediaMessages>[1] => ({
     workspaceDir,
     model: { input: ["text", "image"] },
   });
-  const loadImages = (params: Partial<LoadOptions>) =>
-    detectAndLoadPromptImages({ prompt: "inspect", ...options(), ...params });
-  const hydrate = async (message: AgentMessage, workspaceOnly = true) =>
+  const hydrateReplay = async (message: AgentMessage, workspaceOnly = true) =>
     (await hydratePromptMediaMessages([message], { ...options(), workspaceOnly }))[0];
   const contentOf = (message: AgentMessage | undefined) => {
     if (!message) {
@@ -752,15 +751,15 @@ describe("persisted image replay", () => {
     }
     return "content" in message ? message.content : undefined;
   };
-  const TINY_PNG_BASE64 =
+  const REPLAY_PNG_BASE64 =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
-  const image = (data = TINY_PNG_BASE64) => ({
+  const image = (data = REPLAY_PNG_BASE64) => ({
     type: "image" as const,
     data,
     mimeType: "image/png",
   });
   const png = (r = 0, g = 0, b = 0) => createSolidPngBuffer(1, 1, { r, g, b });
-  const tinyPng = Buffer.from(TINY_PNG_BASE64, "base64");
+  const tinyPng = Buffer.from(REPLAY_PNG_BASE64, "base64");
   async function writeImage(dir: string, name: string, data: Uint8Array = tinyPng) {
     const target = path.join(dir, name);
     await fs.mkdir(path.dirname(target), { recursive: true });
@@ -869,7 +868,7 @@ describe("persisted image replay", () => {
       ["inline", "offloaded"],
     );
 
-    const first = await hydrate(message);
+    const first = await hydrateReplay(message);
     const firstContent = contentOf(first);
     expect(firstContent).toEqual([
       { type: "text", text: "compare" },
@@ -881,6 +880,8 @@ describe("persisted image replay", () => {
     for (const { path: file } of media) {
       await fs.rm(file);
     }
-    expect(contentOf(await hydrate(JSON.parse(serialized) as AgentMessage))).toEqual(firstContent);
+    expect(contentOf(await hydrateReplay(JSON.parse(serialized) as AgentMessage))).toEqual(
+      firstContent,
+    );
   });
 });

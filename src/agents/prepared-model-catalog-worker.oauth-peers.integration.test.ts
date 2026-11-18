@@ -2,17 +2,14 @@ import { once } from "node:events";
 import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
-import { vi } from "vitest";
-import { expect, it } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
-import { withTestTimeout } from "../../test/helpers/promise.js";
-import { withinTest } from "../../test/helpers/promise.js";
+import { vi, expect, it } from "vitest";
+import { createDeferred, withTestTimeout, withinTest } from "../../test/helpers/promise.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { getConfigResolutionFacts } from "../config/resolution-facts.js";
 import * as configRuntime from "../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
-import { type ModelProviderConfig } from "../config/types.models.js";
-import { type OpenClawConfig } from "../config/types.openclaw.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { captureTemplateInstallSchemaVersionFacts } from "../templates/provenance-runtime-read.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -21,15 +18,18 @@ import { MINIMAX_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
 import { isPendingOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
-import { model } from "./model-catalog-fixtures.test-support.js";
 import { prepareModelCatalogWorkerContext } from "./prepared-model-catalog-fingerprints.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
-import { catalogEntry } from "./prepared-model-catalog-worker.test-support.js";
-import { writeFixtureFiles } from "./prepared-model-catalog-worker.test-support.js";
-import { HARNESS_ID } from "./prepared-model-catalog-worker.test-support.js";
-import { PROVIDER_ID } from "./prepared-model-catalog-worker.test-support.js";
-import { loadPublishedPreparedModelCatalogOwnerSnapshot } from "./prepared-model-catalog.js";
-import { refreshExpiredPreparedModelCatalog } from "./prepared-model-catalog.js";
+import {
+  catalogEntry,
+  writeFixtureFiles,
+  HARNESS_ID,
+  PROVIDER_ID,
+} from "./prepared-model-catalog-worker.test-support.js";
+import {
+  loadPublishedPreparedModelCatalogOwnerSnapshot,
+  refreshExpiredPreparedModelCatalog,
+} from "./prepared-model-catalog.js";
 import { getPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
 import { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.publication-events.js";
@@ -38,8 +38,10 @@ import { createCatalogFleetFixture } from "./test-helpers/prepared-model-catalog
 import { createCatalogInspectionPool } from "./test-helpers/prepared-model-catalog-inspection.js";
 import { withHeldCatalogOAuthRefresh } from "./test-helpers/prepared-model-catalog-oauth-fixture.js";
 import { createStaticCatalogSnapshotFixture } from "./test-helpers/prepared-model-catalog-static-fixture.js";
-import { loadCompletedFullCatalog } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
-import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
+import {
+  loadCompletedFullCatalog,
+  usePreparedCatalogWorkerFixtures,
+} from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
 const { makeTempDir, retireAfterTest } = usePreparedCatalogWorkerFixtures();
 const profileId = `${PROVIDER_ID}:oauth`;

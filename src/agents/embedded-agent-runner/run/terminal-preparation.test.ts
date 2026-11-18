@@ -19,8 +19,8 @@ import {
   prepareAttempt,
 } from "./terminal-preparation.test-support.js";
 import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
-import { expectComplete } from "./terminal-resolution.test-support.js";
-import { makeTerminalInput } from "./terminal-resolution.test-support.js";
+import { expectComplete, makeTerminalInput } from "./terminal-resolution.test-support.js";
+
 function hardTimeoutState(): NonNullable<Parameters<typeof prepareAttempt>[0]["terminalState"]> {
   return {
     outcome: {

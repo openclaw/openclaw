@@ -3,7 +3,7 @@ import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import * as modelsConfig from "../../models-config-state.js";
-import { makeEmbeddedRunnerAttempt as makeAttempt } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { makeEmbeddedRunnerAttempt } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
@@ -63,6 +63,12 @@ vi.mock("../../harness/selection.js", () => ({
 vi.mock("../../../plugin-sdk/session-transcript-runtime.js", () => ({
   appendAssistantMirrorMessageByIdentity: transcriptMocks.append,
 }));
+
+function makeAttempt(
+  overrides: Partial<EmbeddedRunAttemptWithReceiptEvidence>,
+): EmbeddedRunAttemptWithReceiptEvidence {
+  return makeEmbeddedRunnerAttempt(overrides);
+}
 
 function expectPayload(
   result: Awaited<ReturnType<typeof finalize>>,
@@ -712,7 +718,9 @@ it.each(["pending", "missing"] as const)(
         settledTurnFinalizationOutcome: settled.finalizationOutcome,
       }),
     );
-    if (resolved.action !== "complete") throw new Error("Expected terminal completion");
+    if (resolved.action !== "complete") {
+      throw new Error("Expected terminal completion");
+    }
     const payloads = resolved.result.payloads ?? [];
     expect(payloads[0]?.text).toBe("Earlier committed reply.");
     expect(getReplyPayloadMetadata(payloads[0]!)).toHaveProperty("sourceReplyTranscriptMirror");
@@ -725,10 +733,11 @@ it.each(["pending", "missing"] as const)(
       expect(released.prepared.payloadsWithToolMedia?.flatMap((p) => p.mediaUrls ?? [])).toEqual(
         expect.arrayContaining(["/tmp/current.pdf", "/tmp/carried-current.pdf"]),
       );
-    } else
+    } else {
       expect(payloads.flatMap((p) => p.mediaUrls ?? [])).toEqual(
         expect.arrayContaining(["/tmp/current.pdf", "/tmp/carried-current.pdf"]),
       );
+    }
   },
 );
 it("preserves a tool-authored source projection and its owned media while custody is pending", async () => {
@@ -880,6 +889,8 @@ it.each([
         pending ? [] : [expect.objectContaining({ text: "The note is saved." })],
       );
       expect(prepared.replyDeliveryState).toBe(pending ? "pending" : "missing");
-    } else expect(prepared.payloadsWithToolMedia).toEqual([]);
+    } else {
+      expect(prepared.payloadsWithToolMedia).toEqual([]);
+    }
   },
 );

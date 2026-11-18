@@ -1,6 +1,4 @@
-import { afterAll } from "vitest";
-import { beforeAll } from "vitest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureSessionEventConfigPolicy } from "../auto-reply/reply/session-event-policy.js";
 import {
   SessionDeliveryGenerationRevokedError,
@@ -16,8 +14,7 @@ import { SqliteTranscriptMutationConflictError } from "../config/sessions/sessio
 import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence-error.js";
 import { SessionWorkStartChangedError } from "../config/sessions/work-start-error.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
-import { resetLogger } from "../logging/logger.js";
-import { setLoggerOverride } from "../logging/logger.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { testApi as loggerTestApi } from "../logging/logger.test-support.js";
 import { loggingState } from "../logging/state.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
@@ -46,8 +43,8 @@ import {
 import { runWithModelFallback } from "./model-fallback-runner.js";
 import { recordModelFallbackStop as recordLightweightStop } from "./model-fallback-stop.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
-import { createAgentRunDirectAbortError } from "./run-termination.js";
 import {
+  createAgentRunDirectAbortError,
   createSessionPlacementSettlementClosedAbortError,
   isSessionPlacementSettlementClosedError,
   createAgentRunSupersededAbortError,

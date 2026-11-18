@@ -1,21 +1,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as checkpoint } from "node:timers/promises";
-import { BroadcastChannel } from "node:worker_threads";
-import { threadId } from "node:worker_threads";
+import { BroadcastChannel, threadId } from "node:worker_threads";
 import { beforeEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
-import { createDeferred } from "../../test/helpers/promise.js";
-import { withinTest } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import * as captureResources from "../plugins/plugin-capture-native-resource.client.js";
 import { sweepPluginSourceCapturesForTest } from "../plugins/plugin-source-capture-directory.test-support.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import { readFixtureLines } from "./prepared-model-catalog-worker.shared.test-support.js";
-import { createCatalogFixture } from "./prepared-model-catalog-worker.test-support.js";
-import { writeFixtureFiles } from "./prepared-model-catalog-worker.test-support.js";
 import {
+  createCatalogFixture,
+  writeFixtureFiles,
   catalogEntry,
   EXTERNAL_AUTH_PROFILE_ID,
   PROVIDER_ID,

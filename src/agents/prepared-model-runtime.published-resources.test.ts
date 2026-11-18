@@ -4,23 +4,23 @@ import type { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
-import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
-import { writePlugin } from "../plugins/loader.test-fixtures.js";
 import {
+  writePlugin,
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,
 } from "../plugins/loader.test-fixtures.js";
 import { cleanupNativeFixture } from "../plugins/native-resource.test-support.js";
-import { createPluginCache } from "../plugins/plugin-cache.js";
-import { withPluginCache } from "../plugins/plugin-cache.js";
+import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { getPluginInstance, type PluginInstanceHandle } from "../plugins/plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { createPluginRegistryOwner } from "../plugins/runtime.js";
-import { clearActivePluginRegistry } from "../plugins/runtime.js";
+import { createPluginRegistryOwner, clearActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
@@ -32,8 +32,10 @@ import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.j
 import { runBtwSideQuestion } from "./btw.js";
 import { makeModel } from "./embedded-agent-runner/model.test-harness.js";
 import { createContextEngineLogicalTurnLease } from "./harness/context-engine-logical-turn.js";
-import { createPreparedInboundRegistryLoader } from "./prepared-model-runtime.inbound-registry.js";
-import { prepareWorkspacePluginRegistries } from "./prepared-model-runtime.inbound-registry.js";
+import {
+  createPreparedInboundRegistryLoader,
+  prepareWorkspacePluginRegistries,
+} from "./prepared-model-runtime.inbound-registry.js";
 import {
   acquireReadOnlyPreparedModelRuntime,
   acquireAgentRunPreparedModelRuntime,

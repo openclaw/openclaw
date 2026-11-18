@@ -1,6 +1,8 @@
 import type { Mock } from "vitest";
-import { type EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
-import type { EmbeddedRunAttemptResult as Attempt } from "./embedded-agent-runner/run/types.js";
+import type {
+  EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptResult as Attempt,
+} from "./embedded-agent-runner/run/types.js";
 import {
   type EmbeddedAttemptParams,
   makeFallbackSuccessAttempt,

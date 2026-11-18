@@ -1,32 +1,40 @@
 import assert from "node:assert/strict";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeEach } from "vitest";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import {
+  getAgentEventLifecycleGeneration,
+  rotateAgentEventLifecycleGeneration,
+} from "../../infra/agent-events.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
-import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
-import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
-import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
-import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
+import {
+  resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
+} from "../../infra/diagnostic-events.js";
+import {
+  RUN_STALE_TAKEOVER_MS,
+  resetDiagnosticRunActivityForTest,
+} from "../../logging/diagnostic-run-activity.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
 import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
-import { type ReplyOperation } from "../../sessions/session-controller.js";
-import { createReplyOperation } from "../../sessions/session-controller.js";
+import { type ReplyOperation, createReplyOperation } from "../../sessions/session-controller.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
-import { listActiveSessionRunIds } from "../../sessions/session-controller.queries.js";
-import { listActiveSessionRunKeys } from "../../sessions/session-controller.queries.js";
-import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
-import { assertSessionControllerOperation } from "../../sessions/session-controller.state.js";
-import { isReplyRunEvidenceStale } from "../../sessions/session-controller.state.js";
-import { getSessionControllerEntryForOperation } from "../../sessions/session-controller.state.js";
+import {
+  listActiveSessionRunIds,
+  listActiveSessionRunKeys,
+  isSessionRunActive,
+} from "../../sessions/session-controller.queries.js";
+import {
+  assertSessionControllerOperation,
+  isReplyRunEvidenceStale,
+  getSessionControllerEntryForOperation,
+} from "../../sessions/session-controller.state.js";
 import { supersedeReplyRunByRunId } from "../../sessions/session-controller.stop-runtime.js";
 import {
   captureSessionControllerStop,
@@ -35,39 +43,45 @@ import {
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { testing as replyRunTesting } from "../../sessions/session-controller.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
-import { type PreparedAgentRunAdmission } from "../admitted-run-context.js";
-import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
+import {
+  prepareSystemAgentRunAdmission,
+  type PreparedAgentRunAdmission,
+  createOperationalRunInstanceRef,
+} from "../admitted-run-context.js";
 import { createEnteredGate } from "../entered-gate.test-support.js";
 import { SessionControllerAdmissionRequiredError } from "../harness/errors.js";
 import { captureRequesterOrigin, hasSameRequesterOrigin } from "../requester-origin.js";
 import { withSessionPlacementForcedTerminalSettlement } from "../session-placement-forced-terminal-settlement.js";
-import { createAdmittedGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import {
+  createAdmittedGatewayToolCallerIdentity,
   captureGatewayToolCallerAssertion,
   withGatewayToolCallerIdentity,
 } from "../tools/gateway-caller-context.js";
 import { prepareEmbeddedRunPermissionChange } from "./run-permissions.js";
-import { resolveActiveEmbeddedRunRecoveryBlocker } from "./run-state.js";
-import { getActiveNativeAttempt } from "./run-state.js";
-import { getEmbeddedRunAttachment } from "./run-state.js";
-import { createEmbeddedRunPermissionChanges } from "./run/permission-change.js";
-import { resolveActiveEmbeddedRunSessionIdBySessionFile as resolveRunByFile } from "./runs.js";
-import { abortAndDrainEmbeddedAgentRun } from "./runs.js";
-import { abortEmbeddedAgentRun } from "./runs.js";
-import { captureEmbeddedRunDrainTarget } from "./runs.js";
-import { type EmbeddedAgentQueueHandle } from "./runs.js";
-import { isEmbeddedAgentRunHandleActive } from "./runs.js";
-import { markActiveEmbeddedRunAbandoned } from "./runs.js";
-import { markEmbeddedRunRecoveringTimeout } from "./runs.js";
-import { restoreEmbeddedRunTimeoutAbandonment } from "./runs.js";
-import { prepareEmbeddedAgentRunCompletionClaim } from "./runs.js";
-import { resolveActiveEmbeddedRunOwner } from "./runs.js";
-import { resolveActiveEmbeddedRunOwnerByRunId } from "./runs.js";
-import { resolveEmbeddedRunAbandonment } from "./runs.js";
-import { attachActiveEmbeddedRun as setDetachedEmbeddedRun } from "./runs.js";
-import { steerTestSessionTurn } from "./runs.test-support.js";
 import {
+  resolveActiveEmbeddedRunRecoveryBlocker,
+  getActiveNativeAttempt,
+  getEmbeddedRunAttachment,
+} from "./run-state.js";
+import { createEmbeddedRunPermissionChanges } from "./run/permission-change.js";
+import {
+  resolveActiveEmbeddedRunSessionIdBySessionFile as resolveRunByFile,
+  abortAndDrainEmbeddedAgentRun,
+  abortEmbeddedAgentRun,
+  captureEmbeddedRunDrainTarget,
+  type EmbeddedAgentQueueHandle,
+  isEmbeddedAgentRunHandleActive,
+  markActiveEmbeddedRunAbandoned,
+  markEmbeddedRunRecoveringTimeout,
+  restoreEmbeddedRunTimeoutAbandonment,
+  prepareEmbeddedAgentRunCompletionClaim,
+  resolveActiveEmbeddedRunOwner,
+  resolveActiveEmbeddedRunOwnerByRunId,
+  resolveEmbeddedRunAbandonment,
+  attachActiveEmbeddedRun as setDetachedEmbeddedRun,
+} from "./runs.js";
+import {
+  steerTestSessionTurn,
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
   registerTestEmbeddedRun as setActiveEmbeddedRun,
   createEmbeddedRunHandle,
@@ -672,8 +686,8 @@ describe("embedded run ownership", () => {
 });
 
 describe("runtime liveness ownership", () => {
-  const sessionId = "runtime-liveness-session";
-  const sessionKey = "agent:main:runtime-liveness";
+  const livenessSessionId = "runtime-liveness-session";
+  const livenessSessionKey = "agent:main:runtime-liveness";
   const runId = "runtime-liveness-run";
   let admission: PreparedAgentRunAdmission;
   let operation: ReplyOperation;
@@ -689,9 +703,13 @@ describe("runtime liveness ownership", () => {
     runtimeOwnsLiveness = true;
     admission = prepareSystemAgentRunAdmission({}, runId, "main", "runtime-liveness-test");
     const admitted = await admission.admit("embedded");
-    operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
+    operation = createReplyOperation({
+      sessionId: livenessSessionId,
+      sessionKey: livenessSessionKey,
+      resetTriggered: false,
+    });
     abort.mockReset().mockImplementation(() => {
-      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+      clearActiveEmbeddedRun(livenessSessionId, handle, livenessSessionKey);
       operation.complete();
     });
     queueMessage.mockClear();
@@ -707,7 +725,7 @@ describe("runtime liveness ownership", () => {
     const caller = createAdmittedGatewayToolCallerIdentity({
       admittedRunContext: admitted,
       agentId: "main",
-      sessionKey,
+      sessionKey: livenessSessionKey,
     });
     if (!caller) {
       throw new Error("liveness fixture requires an admitted Gateway caller");
@@ -738,7 +756,7 @@ describe("runtime liveness ownership", () => {
           };
         },
       },
-      () => setActiveEmbeddedRun(sessionId, handle, sessionKey),
+      () => setActiveEmbeddedRun(livenessSessionId, handle, livenessSessionKey),
     );
   });
 
@@ -756,14 +774,14 @@ describe("runtime liveness ownership", () => {
     await vi.advanceTimersByTimeAsync(RUN_STALE_TAKEOVER_MS + 1);
 
     expect(isReplyRunEvidenceStale(operation)).toBe(false);
-    await expect(steerTestSessionTurn(sessionId, "continue")).resolves.toMatchObject({
+    await expect(steerTestSessionTurn(livenessSessionId, "continue")).resolves.toMatchObject({
       status: "accepted",
     });
     expect(queueMessage).toHaveBeenCalledOnce();
     await expect(
       recoverStuckDiagnosticSession({
-        sessionId,
-        sessionKey,
+        sessionId: livenessSessionId,
+        sessionKey: livenessSessionKey,
         operation,
         ageMs: RUN_STALE_TAKEOVER_MS + 1,
         queueDepth: 1,
@@ -774,11 +792,15 @@ describe("runtime liveness ownership", () => {
   });
   it("rechecks ownership after a probe replaces the handle", async () => {
     handle.ownsLiveness = () => {
-      setActiveEmbeddedRun(sessionId, { ...handle, ownsLiveness: undefined }, sessionKey);
+      setActiveEmbeddedRun(
+        livenessSessionId,
+        { ...handle, ownsLiveness: undefined },
+        livenessSessionKey,
+      );
       return true;
     };
     await vi.advanceTimersByTimeAsync(RUN_STALE_TAKEOVER_MS + 1);
-    await expect(steerTestSessionTurn(sessionId, "continue")).resolves.toMatchObject({
+    await expect(steerTestSessionTurn(livenessSessionId, "continue")).resolves.toMatchObject({
       status: "rejected",
       reason: "no_active_run",
     });
@@ -789,7 +811,7 @@ describe("runtime liveness ownership", () => {
       admission.close();
       return true;
     };
-    expect(resolveActiveEmbeddedRunRecoveryBlocker(sessionId)).toBeUndefined();
+    expect(resolveActiveEmbeddedRunRecoveryBlocker(livenessSessionId)).toBeUndefined();
   });
 });
 
@@ -892,8 +914,10 @@ describe("native lifecycle admission and cancellation", () => {
 });
 
 describe("lifecycle generation ownership", () => {
-  function createRunHandle(
-    params: Partial<EmbeddedAgentQueueHandle> & { compacting?: boolean } = {},
+  function createGenerationRunHandle(
+    params: NonNullable<Parameters<typeof createEmbeddedRunHandle>[0]> & {
+      compacting?: boolean;
+    } = {},
   ) {
     return {
       ...createEmbeddedRunHandle({
@@ -910,7 +934,11 @@ describe("lifecycle generation ownership", () => {
   function mockRun(runId: string) {
     const abort = vi.fn();
     const queueMessage = vi.fn(async () => {});
-    return { abort, queueMessage, handle: createRunHandle({ runId, abort, queueMessage }) };
+    return {
+      abort,
+      queueMessage,
+      handle: createGenerationRunHandle({ runId, abort, queueMessage }),
+    };
   }
 
   function registerSharedRun(
@@ -945,7 +973,7 @@ describe("lifecycle generation ownership", () => {
       identities: [sessionId],
     });
     const abort = vi.fn();
-    const handle = { ...createRunHandle({ abort }), runId: undefined };
+    const handle = { ...createGenerationRunHandle({ abort }), runId: undefined };
     const attachment = registerActiveEmbeddedRun(sessionId, handle, undefined, sessionFile);
     try {
       expect(resolveRunByFile(sessionFile)).toBe(sessionId);
@@ -963,7 +991,7 @@ describe("lifecycle generation ownership", () => {
   });
   it("aborts a rootless compacting run when its gateway lifecycle rotates", () => {
     const abort = vi.fn();
-    const handle = createRunHandle({ abort, compacting: true, runId: "rootless-run" });
+    const handle = createGenerationRunHandle({ abort, compacting: true, runId: "rootless-run" });
     const operation = setActiveEmbeddedRun("rootless-session", handle);
     try {
       rotateAgentEventLifecycleGeneration();
@@ -975,57 +1003,34 @@ describe("lifecycle generation ownership", () => {
     }
     expect(listActiveSessionRunIds()).not.toContain("rootless-session");
   });
-  it.each([true])(
-    "rejects prior-lifecycle registration with a replacement: %s",
-    async (replacement) => {
-      const generation = getAgentEventLifecycleGeneration();
-      const stale = mockRun("stale-run");
-      const staleId = replacement ? "shared-session" : "stale-session";
-      rotateAgentEventLifecycleGeneration();
-      const current = mockRun("current-run");
-      if (replacement) {
-        registerSharedRun(current.handle, "current", undefined, sessionId);
-      }
-      registerSharedRun(stale.handle, "stale", generation, staleId);
-      if (replacement) {
-        await expectCurrentRun(current, sessionId, "still live");
-      } else {
-        await expect(steerTestSessionTurn(staleId, "should not arrive")).resolves.toMatchObject({
-          status: "rejected",
-          reason: "no_active_run",
-        });
-        expect(listActiveSessionRunKeys()).not.toContain("agent:main:stale");
-        expect(resolveRunByFile("/tmp/stale-session.jsonl")).toBeUndefined();
-      }
-      expect(stale.queueMessage).not.toHaveBeenCalled();
-      expect(stale.abort).toHaveBeenCalledWith("restart");
-      expect(listActiveSessionRunIds()).not.toContain(staleId);
-    },
-  );
-  it.each([true])(
-    "preserves a replacement installed during stale abort: %s",
-    async (synchronous) => {
-      const current = mockRun("current-run");
-      const stale = mockRun("stale-run");
-      const replace = () => {
-        clearActiveEmbeddedRun("shared-session", stale.handle, "agent:main:stale");
-        staleOperation.complete();
-        registerSharedRun(current.handle, "current");
-      };
-      if (synchronous) {
-        stale.abort.mockImplementation(replace);
-      }
-      const staleOperation = registerSharedRun(stale.handle, "stale");
-      rotateAgentEventLifecycleGeneration();
-      if (!synchronous) {
-        expect(listActiveSessionRunIds()).toContain("shared-session");
-        replace();
-      }
+  it("rejects prior-lifecycle registration with a replacement", async () => {
+    const generation = getAgentEventLifecycleGeneration();
+    const stale = mockRun("stale-run");
+    const staleId = "shared-session";
+    rotateAgentEventLifecycleGeneration();
+    const current = mockRun("current-run");
+    registerSharedRun(current.handle, "current", undefined, sessionId);
+    registerSharedRun(stale.handle, "stale", generation, staleId);
+    await expectCurrentRun(current, sessionId, "still live");
+    expect(stale.queueMessage).not.toHaveBeenCalled();
+    expect(stale.abort).toHaveBeenCalledWith("restart");
+    expect(listActiveSessionRunIds()).not.toContain(staleId);
+  });
+  it("preserves a replacement installed during stale abort", async () => {
+    const current = mockRun("current-run");
+    const stale = mockRun("stale-run");
+    const replace = () => {
       clearActiveEmbeddedRun("shared-session", stale.handle, "agent:main:stale");
-      await expectCurrentRun(current, "shared-session", "current survives");
-      expect(stale.queueMessage).not.toHaveBeenCalled();
-      expect(stale.abort).toHaveBeenCalledExactlyOnceWith("restart");
-      expect(resolveRunByFile("/tmp/stale-session.jsonl")).toBeUndefined();
-    },
-  );
+      staleOperation.complete();
+      registerSharedRun(current.handle, "current");
+    };
+    stale.abort.mockImplementation(replace);
+    const staleOperation = registerSharedRun(stale.handle, "stale");
+    rotateAgentEventLifecycleGeneration();
+    clearActiveEmbeddedRun("shared-session", stale.handle, "agent:main:stale");
+    await expectCurrentRun(current, "shared-session", "current survives");
+    expect(stale.queueMessage).not.toHaveBeenCalled();
+    expect(stale.abort).toHaveBeenCalledExactlyOnceWith("restart");
+    expect(resolveRunByFile("/tmp/stale-session.jsonl")).toBeUndefined();
+  });
 });

@@ -3,10 +3,7 @@ import "../templates/tool-policy-runtime.js";
 import { createServer } from "node:http";
 import path from "node:path";
 import { threadId } from "node:worker_threads";
-import { describe } from "vitest";
-import { vi } from "vitest";
-import { onTestFinished } from "vitest";
-import { expect, it } from "vitest";
+import { describe, vi, onTestFinished, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolvePluginRuntimeLoadContext } from "../plugins/runtime/load-context.resolve.js";
@@ -15,27 +12,36 @@ import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
-import { type AuthProfileStore } from "./auth-profiles/types.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { prepareModelCatalogWorkerContext } from "./prepared-model-catalog-fingerprints.js";
-import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
-import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
-import { stubCatalogEnv } from "./prepared-model-catalog-worker.shared.test-support.js";
-import { readFixtureLines } from "./prepared-model-catalog-worker.shared.test-support.js";
-import { catalogEntry } from "./prepared-model-catalog-worker.test-support.js";
-import { createCatalogFixture } from "./prepared-model-catalog-worker.test-support.js";
-import { catalogInput } from "./prepared-model-catalog-worker.test-support.js";
-import { makeCatalogAgentFacts } from "./prepared-model-catalog-worker.test-support.js";
-import { PLUGIN_ID } from "./prepared-model-catalog-worker.test-support.js";
-import { PROVIDER_ID, writeFixtureFiles } from "./prepared-model-catalog-worker.test-support.js";
-import { type PreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.types.js";
+import {
+  createPreparedModelCatalogWorker,
+  createPreparedModelCatalogWorkerInput,
+} from "./prepared-model-catalog-worker.js";
+import {
+  stubCatalogEnv,
+  readFixtureLines,
+} from "./prepared-model-catalog-worker.shared.test-support.js";
+import {
+  catalogEntry,
+  createCatalogFixture,
+  catalogInput,
+  makeCatalogAgentFacts,
+  PLUGIN_ID,
+  PROVIDER_ID,
+  writeFixtureFiles,
+} from "./prepared-model-catalog-worker.test-support.js";
+import type { PreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.types.js";
 import { getPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import { createCatalogFleetFixture } from "./test-helpers/prepared-model-catalog-fleet-fixture.js";
-import { createCatalogInspectionPool } from "./test-helpers/prepared-model-catalog-inspection.js";
-import { type CatalogInspectionTask } from "./test-helpers/prepared-model-catalog-inspection.js";
-import { catalogTask } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 import {
+  createCatalogInspectionPool,
+  type CatalogInspectionTask,
+} from "./test-helpers/prepared-model-catalog-inspection.js";
+import {
+  catalogTask,
   loadCompletedFullCatalog,
   usePreparedCatalogWorkerFixtures,
 } from "./test-helpers/prepared-model-catalog-worker-fixture.js";

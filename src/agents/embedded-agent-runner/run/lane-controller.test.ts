@@ -7,18 +7,22 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
 import { startChatSendDiagnostics } from "../../../gateway/server-methods/chat-send-diagnostics.js";
-import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
+  getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
   rotateAgentEventLifecycleGeneration,
 } from "../../../infra/agent-events.js";
-import { isAgentRunWaitingForCapacity } from "../../../infra/agent-run-capacity-wait.js";
-import { registerAgentRunCapacityWait } from "../../../infra/agent-run-capacity-wait.js";
-import { claimAgentRunContext } from "../../../infra/agent-run-registry.js";
-import { clearAgentRunContext } from "../../../infra/agent-run-registry.js";
-import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
-import { registerAgentRunContext } from "../../../infra/agent-run-registry.js";
-import { sweepStaleRunContexts } from "../../../infra/agent-run-registry.js";
+import {
+  isAgentRunWaitingForCapacity,
+  registerAgentRunCapacityWait,
+} from "../../../infra/agent-run-capacity-wait.js";
+import {
+  claimAgentRunContext,
+  clearAgentRunContext,
+  getAgentRunContext,
+  registerAgentRunContext,
+  sweepStaleRunContexts,
+} from "../../../infra/agent-run-registry.js";
 import { withDiagnosticsTimelineObserver } from "../../../infra/diagnostics-timeline.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../../logging/diagnostic-run-activity.js";
 import { formatSessionActivityLogFields } from "../../../logging/diagnostic-session-attention.js";
@@ -34,10 +38,12 @@ import type {
   CommandQueueEnqueueOptions,
 } from "../../../process/command-queue.types.js";
 import { createReplyOperation } from "../../../sessions/session-controller.js";
-import { getExistingSessionControllerMailbox } from "../../../sessions/session-controller.mailbox.js";
-import { abortSessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
-import { isReplyRunEvidenceStale } from "../../../sessions/session-controller.state.js";
 import {
+  getExistingSessionControllerMailbox,
+  abortSessionControllerInput,
+} from "../../../sessions/session-controller.mailbox.js";
+import {
+  isReplyRunEvidenceStale,
   getSessionControllerOperation,
   readSessionControllerOperationState,
 } from "../../../sessions/session-controller.state.js";
@@ -929,7 +935,7 @@ it("releases global waiting context when its source owner cancels", async () => 
     execute = vi.fn(result);
   setCommandLaneConcurrency(globalLane, 0);
   const run = state.controller.enqueueSession(() =>
-    state.controller.enqueueGlobal(execute, { onQueued: queued.resolve }),
+    state.controller.enqueueGlobal(execute, { onQueued: () => queued.resolve() }),
   );
   const rejected = expect(run).rejects.toThrow();
   try {

@@ -4,8 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Context } from "../../../../packages/ai/src/types.js";
 import { projectProviderError } from "../../../../packages/ai/src/utils/provider-error.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { AssistantMessage } from "../../../llm/types.js";
 import {
+  type AssistantMessage,
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
 } from "../../../llm/types.js";
@@ -697,8 +697,9 @@ describe("assistant failure fallback guards", () => {
       (error: unknown) => error,
     );
     expect(failure).toBeInstanceOf(FailoverError);
-    if (!(failure instanceof FailoverError))
+    if (!(failure instanceof FailoverError)) {
       throw new Error("Expected an assistant failover error");
+    }
     return failure;
   }
   it.each([
@@ -711,7 +712,9 @@ describe("assistant failure fallback guards", () => {
       for (;;) {
         attempts++;
         const outcome = await handleEmbeddedAssistantFailure(input);
-        if (outcome.action !== "retry") throw new Error("failure was not surfaced");
+        if (outcome.action !== "retry") {
+          throw new Error("failure was not surfaced");
+        }
         input.emptyErrorRetries = outcome.emptyErrorRetries;
       }
     });

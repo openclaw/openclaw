@@ -1,24 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as runtimeConfig from "../../config/runtime-snapshot.js";
 import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
-import {
   createAdmittedRunOperatorAuthority,
   prepareSystemAgentRunAdmission,
 } from "../admitted-run-context.js";
 import * as authStoreRuntime from "../auth-profiles/store-runtime.js";
-import { type AuthProfileStore } from "../auth-profiles/types.js";
-import { isProfileInCooldown } from "../auth-profiles/usage.js";
-import { markAuthProfileFailure } from "../auth-profiles/usage.js";
-import { FailoverError } from "../failover-error.js";
-import { recordModelFallbackStop } from "../failover-error.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { isProfileInCooldown, markAuthProfileFailure } from "../auth-profiles/usage.js";
+import { FailoverError, recordModelFallbackStop } from "../failover-error.js";
 import { resetFallbackSkipCacheForTest } from "../fallback-skip-cache.test-support.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { runEmbeddedAgentEntry } from "./run-entry.js";
-import { makeResult as makeBaseResult } from "./run-entry.test-support.js";
 import {
+  makeResult as makeBaseResult,
   createDirectHarness,
   initialAttemptOptions,
   makeResult,
@@ -30,7 +24,9 @@ import type { EmbeddedAgentRunResult } from "./types.js";
 const retryModel = "gpt-5.6";
 const cyberRefusal = { provider: "openai", category: "cyber" } as const;
 const cyberCode = "OPENAI_CYBER_POLICY_REFUSAL";
-const runWithModelFallback = vi.hoisted(() => vi.fn<typeof runFallback>());
+type FallbackRunner =
+  typeof import("../model-fallback-runner.js").runWithModelFallback<EmbeddedAgentRunResult>;
+const runWithModelFallback = vi.hoisted(() => vi.fn<FallbackRunner>());
 
 // mock-isolation: Drive fallback outcomes without invoking provider runtimes.
 vi.mock("../model-fallback-runner.js", () => ({ runWithModelFallback }));
@@ -107,11 +103,11 @@ function failRetry(error: Error) {
 
 describe("runEmbeddedAgentEntry cyber failover", () => {
   beforeEach(() => {
-    setRuntimeConfigSnapshot({});
+    runtimeConfig.setRuntimeConfigSnapshot({});
     resetFallbackSkipCacheForTest();
     runWithModelFallback.mockReset().mockImplementation(runFallback);
   });
-  afterEach(clearRuntimeConfigSnapshot);
+  afterEach(runtimeConfig.clearRuntimeConfigSnapshot);
 
   it.each([
     { scope: "operator.admin", grants: undefined, allowed: true },
@@ -342,15 +338,19 @@ describe("runEmbeddedAgentEntry cyber failover", () => {
 
 describe("cyber failover against real fallback", () => {
   beforeEach(async () => {
-    setRuntimeConfigSnapshot({});
+    runtimeConfig.setRuntimeConfigSnapshot({});
     resetFallbackSkipCacheForTest();
     const actual = await vi.importActual<typeof import("../model-fallback-runner.js")>(
       "../model-fallback-runner.js",
     );
     runWithModelFallback.mockReset().mockImplementation(actual.runWithModelFallback);
   });
-  afterEach(clearRuntimeConfigSnapshot);
-  function makeResult(provider: string, model: string, refused = true): EmbeddedAgentRunResult {
+  afterEach(runtimeConfig.clearRuntimeConfigSnapshot);
+  function makeFallbackResult(
+    provider: string,
+    model: string,
+    refused = true,
+  ): EmbeddedAgentRunResult {
     const result = makeBaseResult({ provider, model });
     result.payloads = refused
       ? [{ text: "policy refusal", isError: true }]
@@ -369,7 +369,7 @@ describe("cyber failover against real fallback", () => {
       reason,
     });
   }
-  function runEntry(
+  function runFallbackEntry(
     runId: string,
     runCandidate: RunCandidate,
     hasCommittedSideEffect = () => false,
@@ -396,14 +396,14 @@ describe("cyber failover against real fallback", () => {
     const failure = retryFailure("daybreak overloaded after delivering", "overloaded");
     let delivered = false;
     await expect(
-      runEntry(
+      runFallbackEntry(
         "run-cyber-real-runner",
         async (provider, model, options) => {
           if (options.isFallbackRetry) {
             delivered = true;
             throw failure;
           }
-          return makeResult(provider, model);
+          return makeFallbackResult(provider, model);
         },
         () => delivered,
       ),
@@ -439,16 +439,16 @@ describe("cyber failover against real fallback", () => {
       }
       expect(isProfileInCooldown(authStore, profileId, undefined, model)).toBe(false);
       primaryAttempts += 1;
-      return makeResult(provider, model, primaryAttempts === 1);
+      return makeFallbackResult(provider, model, primaryAttempts === 1);
     };
 
-    const refusedResult = await runEntry("run-cyber-real-runner-clean", runCandidate);
+    const refusedResult = await runFallbackEntry("run-cyber-real-runner-clean", runCandidate);
     expect(refusedResult.model).toBe("gpt-5.6");
     expect(refusedResult.result.payloads).toEqual([{ text: "policy refusal", isError: true }]);
     expect(authStore.usageStats?.[profileId]).toBeUndefined();
     expect(update).not.toHaveBeenCalled();
 
-    const recoveredResult = await runEntry("run-cyber-real-runner-recovered", runCandidate);
+    const recoveredResult = await runFallbackEntry("run-cyber-real-runner-recovered", runCandidate);
     expect(recoveredResult.model).toBe("gpt-5.6");
     expect(recoveredResult.result.payloads).toEqual([{ text: "primary model recovered" }]);
     expect(authFailurePolicies).toEqual([undefined, "local", undefined]);

@@ -29,21 +29,22 @@ import {
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "../auth-profiles/store-runtime.js";
 import { withAuthProfileStoreAgentDir } from "../auth-profiles/store.js";
 import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
-import { type PreparedConfiguredRuntimeModel } from "../prepared-model-runtime.types.js";
+import type { PreparedConfiguredRuntimeModel } from "../prepared-model-runtime.types.js";
 import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
 import { AuthStorage, ModelRegistry } from "../sessions/index.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { createModelAliasMetadata } from "./model-alias-metadata.test-support.js";
 import { resolveTieredModel } from "./model-resolution.js";
-import { createEmptyPreparedModelRuntimeFixture } from "./model.fixture.test-support.js";
-import { guardModelFixtureAuth } from "./model.fixture.test-support.js";
+import {
+  createEmptyPreparedModelRuntimeFixture,
+  guardModelFixtureAuth,
+} from "./model.fixture.test-support.js";
 import {
   createModelGenerationFixture,
   publishCurrentModelGeneration,
   resetModelGenerationFixtureState,
 } from "./model.generation-scope.test-support.js";
-import { createEmptyAgentDiscoveryStores } from "./model.js";
-import { resolveModelAsync } from "./model.js";
+import { createEmptyAgentDiscoveryStores, resolveModelAsync } from "./model.js";
 import { createPreparedConfiguredRuntimeModelLookup } from "./model.static-id.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -667,8 +668,11 @@ describe("model runtime generation scope", () => {
 describe("prepared model identity and captured policy", () => {
   const provider = "configured-index-fixture",
     baseUrl = "https://configured-index.example.invalid/v1";
-  const model = (id: string) =>
-    makeProviderModelFixture({ provider, id, api: "openai-completions", baseUrl });
+  const model = (id: string) => ({
+    ...makeProviderModelFixture({ provider, id, api: "openai-completions", baseUrl }),
+    contextWindow: 16_000,
+    maxTokens: 4_096,
+  });
   const rows: PreparedConfiguredRuntimeModel[] = ["first", "second"].map((modelId, index) => ({
     provider,
     modelId,

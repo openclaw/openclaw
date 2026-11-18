@@ -39,7 +39,7 @@ const modelWithWindow = (contextWindow: number) =>
   ({ contextWindow }) as Parameters<typeof resolveCompactionContextTokenBudget>[0]["model"];
 const aliases = { "openai/gpt-5.4-mini": { alias: "gpt54mini" } };
 
-function context(params: Omit<ContextInput, "workspaceDir"> = {}) {
+function createContext(params: Omit<ContextInput, "workspaceDir"> = {}) {
   return buildEmbeddedCompactionRuntimeContext({
     workspaceDir: "/tmp/workspace",
     agentDir: "/tmp/agent",
@@ -185,7 +185,7 @@ describe("compaction runtime context", () => {
       senderId: "user-123",
       toolsAllow: ["read"],
     } satisfies ContextInput;
-    expect(context({ ...routing, provider: "openai", modelId: "gpt-5.4" })).toMatchObject({
+    expect(createContext({ ...routing, provider: "openai", modelId: "gpt-5.4" })).toMatchObject({
       ...routing,
       provider: "openai",
       model: "gpt-5.4",
@@ -194,7 +194,7 @@ describe("compaction runtime context", () => {
 
   it("normalizes nullable routing fields", () => {
     expect(
-      context({
+      createContext({
         sessionKey: null,
         messageChannel: null,
         messageProvider: null,
@@ -238,7 +238,7 @@ describe("compaction runtime context", () => {
         .mockImplementation(forbidden);
       try {
         expect(
-          context({
+          createContext({
             config: config("gpt-4o", models),
             provider: "openai",
             modelId: "gpt-3.5-turbo",
@@ -256,7 +256,7 @@ describe("compaction runtime context", () => {
     "applies cross-provider override without leaking credentials (%s)",
     (override) => {
       expect(
-        context({
+        createContext({
           config: override ? config("anthropic/claude-opus-4-6") : {},
           provider: "ollama",
           modelId: "minimax-m2.7:cloud",
@@ -290,7 +290,7 @@ describe("compaction runtime context", () => {
     addSession(active);
     addSession(other);
     try {
-      expect(context({ sessionKey: scopeKey }).activeProcessSessions).toEqual([
+      expect(createContext({ sessionKey: scopeKey }).activeProcessSessions).toEqual([
         {
           command: "sleep 600",
           cwd: "/tmp",
@@ -304,7 +304,7 @@ describe("compaction runtime context", () => {
           truncated: false,
         },
       ]);
-      expect(context().activeProcessSessions).toBeUndefined();
+      expect(createContext().activeProcessSessions).toBeUndefined();
     } finally {
       deleteSession(active.id);
       deleteSession(other.id);
@@ -332,7 +332,7 @@ describe("compaction runtime context", () => {
       modelSelectionLocked: true,
     };
     checkTarget(params, "openai", "gpt-5.5", "openai:default");
-    expect(context({ ...params, harnessRuntime: "codex" })).toMatchObject({
+    expect(createContext({ ...params, harnessRuntime: "codex" })).toMatchObject({
       agentHarnessId: "codex",
       modelSelectionLocked: true,
       provider: "openai",
@@ -349,7 +349,7 @@ describe("compaction runtime context", () => {
       forwardedAuthProfileSource: "user",
       modelRoute: createPlatformAuthRoute(),
     } as const;
-    const matching = context({
+    const matching = createContext({
       provider: "openai",
       modelId: "gpt-5.5",
       authProfileId: "openai:work",
@@ -359,7 +359,7 @@ describe("compaction runtime context", () => {
     expect(matching.runtimeAuthPlan).toBe(runtimeAuthPlan);
     expect(matching.authProfileIdSource).toBe("user");
     expect(
-      context({ provider: "openai", modelId: "gpt-5.4", runtimeAuthPlan }).runtimeAuthPlan,
+      createContext({ provider: "openai", modelId: "gpt-5.4", runtimeAuthPlan }).runtimeAuthPlan,
     ).toBeUndefined();
   });
 
@@ -502,11 +502,12 @@ it.each([true, false])("preserves process scope and model policy (locked=%s)", (
   for (const [id, scopeKey, pid] of [
     [scopedId, "session-123", 1234],
     [foreignId, "agent:main", undefined],
-  ] as const)
+  ] as const) {
     addSession({
       ...createProcessSessionFixture({ id, command: "sleep 600", backgrounded: true, pid }),
       scopeKey,
     });
+  }
   try {
     const runtimePlan = buildAgentRuntimePlan({
       provider: "openai",
@@ -565,7 +566,9 @@ it.each([true, false])("preserves process scope and model policy (locked=%s)", (
       model: locked ? "gpt-5.5" : "anthropic/claude-sonnet-4-5",
       modelCallUrgency: "background",
     });
-    if (!locked) expect(context.authProfileId).toBeUndefined();
+    if (!locked) {
+      expect(context.authProfileId).toBeUndefined();
+    }
     expect(context.runtimeAuthPlan).toBe(locked ? runtimePlan.auth : undefined);
   } finally {
     deleteSession(scopedId);

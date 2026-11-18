@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type OpenClawConfig } from "../config/types.openclaw.js";
-import { createProviderRateLimitRequest } from "../llm/provider-rate-limit.js";
-import { withProviderRateLimitRetryDeadline } from "../llm/provider-rate-limit.js";
-import { type AuthProfileStore } from "./auth-profiles/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  createProviderRateLimitRequest,
+  withProviderRateLimitRetryDeadline,
+} from "../llm/provider-rate-limit.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import { prepareModelFallbackRateLimit } from "./model-fallback-rate-limit.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
@@ -160,7 +162,7 @@ describe("shared model saturation guards", () => {
       }),
     );
   }
-  const runTurn = (
+  const runSharedTurn = (
     sessionId: string,
     run: Parameters<typeof runWithModelFallback<string>>[0]["run"],
     fallbacksOverride?: string[],
@@ -188,14 +190,14 @@ describe("shared model saturation guards", () => {
       sent.push(model);
       return model;
     });
-    const pending = runTurn("shared-both-saturated", run);
+    const pending = runSharedTurn("shared-both-saturated", run);
     await vi.advanceTimersByTimeAsync(4_999);
     expect(sent).toEqual([]);
     await vi.advanceTimersByTimeAsync(1);
     expect(sent).toEqual(["backup"]);
     expect((await pending).model).toBe("backup");
 
-    const strict = runTurn("shared-strict", run, []);
+    const strict = runSharedTurn("shared-strict", run, []);
     await vi.advanceTimersByTimeAsync(15_000);
     expect((await strict).model).toBe("primary");
     expect(sent).toEqual(["backup", "primary"]);
