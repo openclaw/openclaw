@@ -334,10 +334,23 @@ async function commitRows<T>(
   runs: ReadonlyMap<string, SubagentRunRecord>,
 ): Promise<SubagentRunMutationReceipt<T>> {
   const postimages = new Map(
-    [...(planned.postimages ?? [])].map(
-      ([runId, row]) =>
-        [runId, row ? copySubagentRunRuntimeOwner(row, structuredClone(row)) : null] as const,
-    ),
+    [...(planned.postimages ?? [])].map(([runId, row]) => {
+      // Only reuse containers from the registry's immutable current row.
+      const captured = row && { ...row };
+      const previous = runs.get(runId);
+      if (captured) {
+        for (const [key, value] of Object.entries(captured)) {
+          if (
+            value &&
+            typeof value === "object" &&
+            (!previous || value !== Reflect.get(previous, key))
+          ) {
+            Reflect.set(captured, key, structuredClone(value));
+          }
+        }
+      }
+      return [runId, row && captured ? copySubagentRunRuntimeOwner(row, captured) : null] as const;
+    }),
   );
   const values = [...postimages.values()].flatMap((row) => {
     if (!row) {
