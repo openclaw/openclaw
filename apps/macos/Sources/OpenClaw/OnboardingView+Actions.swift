@@ -56,6 +56,22 @@ extension OnboardingView {
         self.probeConfiguredGatewayForDashboard()
     }
 
+    /// Get started means this Mac on a fresh install; a reopened setup keeps its hosting choice page.
+    func getStarted() {
+        guard self.startsOnThisMac else {
+            self.handleNext()
+            return
+        }
+        self.hostingChoiceShown = false
+        self.selectLocalGateway()
+        withAnimation { self.currentPage = 1 }
+    }
+
+    func showHostingChoice() {
+        self.hostingChoiceShown = true
+        withAnimation { self.currentPage = self.pageOrder.firstIndex(of: self.connectionPageIndex) ?? 0 }
+    }
+
     func handleBack() {
         withAnimation {
             self.currentPage = max(0, self.currentPage - 1)

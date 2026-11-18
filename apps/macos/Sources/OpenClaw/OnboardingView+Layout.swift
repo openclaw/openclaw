@@ -30,7 +30,12 @@ extension OnboardingView {
                 .frame(height: contentHeight)
 
                 Spacer(minLength: 0)
+                // Welcome carries its own Get started; the bar keeps its height so pages don't jump.
+                let onWelcome = self.activePageIndex == 0
                 self.navigationBar
+                    .opacity(onWelcome ? 0 : 1)
+                    .disabled(onWelcome)
+                    .accessibilityHidden(onWelcome)
             }
             .frame(maxHeight: .infinity)
         }

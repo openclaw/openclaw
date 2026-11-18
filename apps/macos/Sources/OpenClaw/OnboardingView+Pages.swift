@@ -41,51 +41,32 @@ extension OnboardingView {
 
     func welcomePage() -> some View {
         onboardingPage {
-            VStack(spacing: 18) {
-                VStack(spacing: 8) {
-                    Text("Welcome to OpenClaw")
-                        .font(.largeTitle.weight(.semibold))
-                    Text("Your personal AI assistant, living on your own Mac.")
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
-                }
-                Text(
-                    "It answers questions, works with your files and apps, and can chat with you " +
-                        "on WhatsApp or Telegram. Setup takes about two minutes.")
-                    .font(.body)
+            VStack(spacing: 12) {
+                Text("Welcome to OpenClaw")
+                    .font(.largeTitle.weight(.semibold))
+                Text("Your own AI assistant, right here on your Mac.")
+                    .font(.title3)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                    .frame(maxWidth: 520)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                self.onboardingCard(spacing: 14, padding: 16) {
-                    self.featureRow(
-                        title: "Ask, create, and automate",
-                        subtitle: "Give your assistant tasks and let it help across your Mac.",
-                        systemImage: "sparkles")
-                    self.featureRow(
-                        title: "Chat wherever you like",
-                        subtitle: "This app, WhatsApp, Telegram, Discord, Slack — your choice.",
-                        systemImage: "bubble.left.and.bubble.right.fill")
-                    self.featureRow(
-                        title: "Stay in control",
-                        subtitle: "Everything runs where you decide, with permissions you grant.",
-                        systemImage: "hand.raised.fill")
+                Button(action: self.getStarted) {
+                    Text("Get started")
+                        .frame(minWidth: 120)
                 }
-                .frame(maxWidth: 520)
-
-                Label {
-                    Text(
-                        "OpenClaw can take actions using the permissions and services you enable. " +
-                            "Review prompts and only connect tools you trust.")
-                } icon: {
-                    Image(systemName: "info.circle")
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .keyboardShortcut(.defaultAction)
+                .padding(.top, 20)
+                if self.startsOnThisMac {
+                    HStack(spacing: 4) {
+                        Text("Already use OpenClaw on another computer?")
+                            .foregroundStyle(.secondary)
+                        Button("Connect to it", action: self.showHostingChoice)
+                            .buttonStyle(.link)
+                    }
+                    .font(.callout)
+                    .padding(.top, 8)
                 }
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: 500, alignment: .leading)
             }
-            .padding(.top, 8)
         }
     }
 

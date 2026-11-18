@@ -76,8 +76,12 @@ automatic setup cannot finish. The screenshots show an earlier manual flow;
 your build may use different labels or layouts.
 
 <Steps>
-<Step title="Read the security notice">
+<Step title="Get started">
 <a id="welcome-and-security-notice" />
+On a new install, **Get started** sets OpenClaw up on this Mac. To use OpenClaw
+that already runs somewhere else, choose **Already use OpenClaw on another
+computer? Connect to it** instead; it opens the choices in the next step.
+
 OpenClaw is a personal agent designed for one trusted operator. For shared use,
 separate trust boundaries and limit tool access; see [Security](/gateway/security).
 Use a strong modern model and strict tool policy or sandboxing when enabling
@@ -94,6 +98,8 @@ These rules apply to automatic setup too.
 </Step>
 <Step title="Choose where the Gateway runs">
 <a id="local-vs-remote" />
+This page appears when you choose **Connect to it** on the Welcome page, and
+when you reopen setup on a Mac that already has a connection.
 
 - **This Mac (Local only):** set up authentication and save credentials on this Mac.
 - **Remote (over SSH/Tailnet):** connect to a Gateway that already has credentials

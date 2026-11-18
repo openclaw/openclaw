@@ -3436,7 +3436,7 @@ struct OnboardingAISetupTests {
                 try #require(await harness.recorder.snapshot().methods.allSatisfy { $0 == "agents.list" })
                 try #require(!isPending(defaults))
                 try #require(!model.connected && model.phase == .idle)
-                try await pressOnboardingEntryButton("Next", in: hosting)
+                try await pressOnboardingEntryButton("Get started", in: hosting)
                 try await TestWait.state("connection page buttons") {
                     let ax = try await inspectAISetupAccessibility(hosting)
                     return ax.actions["Back"] == true && ax.actions["Next"] == true

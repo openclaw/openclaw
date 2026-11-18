@@ -168,14 +168,12 @@ struct OnboardingViewSmokeTests {
             let requiresSetup = managedAttachment || ["unreadable", "fresh", "fresh-recommended"].contains(scenario)
 
             #expect(!view.cliInstalled)
-            let expectedOrder = scenario == "remote"
-                ? [0, 1, 4, 3, 9]
-                : (requiresSetup ? [0, 1, 2, 3, 5, 9] : [0, 1, 3, 5, 9])
-            try #require(view.pageOrder == expectedOrder)
+            // A fresh install's Get started means this Mac, so it skips the hosting choice (1).
+            let localOrder = (requiresSetup ? [0, 1, 2, 3, 5, 9] : [0, 1, 3, 5, 9])
+                .filter { scenario != "fresh-recommended" || $0 != 1 }
             // Remote setup visits the remote connection page (4) before AI setup.
-            #expect(view.activePageIndex(for: 2) == (scenario == "remote"
-                    ? 4
-                    : (requiresSetup ? view.cliPageIndex : view.aiPageIndex)))
+            let expectedOrder = scenario == "remote" ? [0, 1, 4, 3, 9] : localOrder
+            try #require(view.pageOrder == expectedOrder)
             if scenario == "fresh-recommended" {
                 #expect(view.selectedConnectionMode == .local)
                 #expect(view.isConnectionSelectionBlocking)
