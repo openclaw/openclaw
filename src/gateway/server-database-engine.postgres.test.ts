@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import { getEnvironmentData } from "node:worker_threads";
@@ -618,7 +619,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
   );
 
   it(
-    "recovers completed and interrupted one-shots after their Gateway process is killed",
+    "drains completed one-shots on graceful stop and recovers interrupted runs after a crash",
     { timeout: 90_000 },
     async ({ signal }) => {
       await using resources = new AsyncDisposableStack();
@@ -626,6 +627,8 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       const summary = "Retained one-shot completed.";
       const unfinishedPrompt = "Report the unfinished one-shot result.";
       const accepted = createDeferred();
+      const completeResponse = createDeferred<() => void>();
+      let holdCompleted = true;
       let holdUnfinished = true;
       const requests: string[] = [];
       const providerServer = createServer((request, response) => {
@@ -636,17 +639,24 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
           }
           const body = await readRequestText(request);
           requests.push(body);
+          const complete = () =>
+            writeOpenAiResponsesText(response, {
+              text: summary,
+              messageId: "retained-one-shot-message",
+              responseId: "retained-one-shot-response",
+            });
+          if (holdCompleted && body.includes(prompt)) {
+            holdCompleted = false;
+            completeResponse.resolve(complete);
+            return;
+          }
           if (holdUnfinished && body.includes(unfinishedPrompt)) {
             holdUnfinished = false;
             // Leave the accepted response open; a duplicate must finish so replay fails visibly.
             accepted.resolve();
             return;
           }
-          writeOpenAiResponsesText(response, {
-            text: summary,
-            messageId: "retained-one-shot-message",
-            responseId: "retained-one-shot-response",
-          });
+          complete();
         })().catch((error: unknown) => {
           response.writeHead(500).end(String(error));
         });
@@ -654,6 +664,9 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       const providerUrl = await listenLoopback(providerServer);
       resources.defer(() => closeHttpServer(providerServer));
       const nodeExecutable = resolveTestNodeExecPath();
+      const applicationName = `gateway-cron-stop-${randomUUID()}`;
+      const gatewayConnection = new URL(connection!);
+      gatewayConnection.searchParams.set("application_name", applicationName);
       const instance = await createOpenClawTestInstance({
         name: "postgres-retained-cron-crash",
         signal,
@@ -685,6 +698,8 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
         },
       });
       resources.defer(() => instance.cleanup());
+      // Tag only child connections; fixture-side observers must survive its shutdown.
+      instance.env[DSN_ENV] = gatewayConnection.href;
       const current = instance.state;
       state = current;
       current.applyEnv();
@@ -710,8 +725,8 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       delete instance.env.VITEST;
       delete instance.env.NODE_ENV;
       await instance.startGateway();
-      const firstChild = instance.child!;
-      const gateway = await connectGatewayClient({
+      let firstChild = instance.child!;
+      let gateway = await connectGatewayClient({
         url: instance.url,
         token: instance.gatewayToken,
         clientDisplayName: "vitest-postgres-cron",
@@ -730,14 +745,90 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
         payload: { kind: "agentTurn", message: prompt },
         delivery: { mode: "none" },
       });
-      const run = await gateway.request<{ runId: string }>(
-        "cron.run",
-        { id: job.id, mode: "force", waitTimeoutMs: 30_000 },
-        { timeoutMs: 35_000 },
+      const run = await gateway.request<{ runId: string }>("cron.run", {
+        id: job.id,
+        mode: "force",
+      });
+      expect(run).toMatchObject({ enqueued: true, runId: expect.any(String) });
+      const complete = await withinTest(completeResponse.promise, signal);
+      const anchor = await readPostgresAnchor(current);
+      if (!anchor) {
+        throw new Error("Gateway cron did not persist its PostgreSQL anchor");
+      }
+      const receipts = await queryRows<{ receipt_id: string; status: string }>(
+        `SELECT receipt_id, status FROM ${quoteIdentifier(anchor.namespace)}.cron_run_receipts WHERE request_run_id = $1`,
+        [run.runId],
       );
-      expect(run).toMatchObject({
-        enqueued: true,
-        run: { status: "ok", completionStatus: "succeeded", summary },
+      expect(receipts).toEqual([{ receipt_id: expect.any(String), status: "running" }]);
+      const locker = new pg.Client({ connectionString: connection });
+      resources.defer(() => locker.end());
+      await locker.connect();
+      await locker.query("BEGIN");
+      const lock = resources.use(new AsyncDisposableStack());
+      lock.defer(() => locker.query("ROLLBACK").then(() => undefined));
+      await locker.query(
+        `SELECT receipt_id FROM ${quoteIdentifier(anchor.namespace)}.cron_run_receipts WHERE receipt_id = $1 FOR UPDATE`,
+        [receipts[0]!.receipt_id],
+      );
+      const lockerPid = (await locker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
+        .rows[0]!.pid;
+      const blockedBackends = () =>
+        queryRows<{ pid: number }>(
+          "SELECT pid FROM pg_stat_activity WHERE application_name = $1 AND query ILIKE '%UPDATE%cron_run_receipts%' AND $2 = ANY(pg_blocking_pids(pid)) ORDER BY pid",
+          [applicationName, lockerPid],
+        );
+      const ownedBackends = () =>
+        queryRows<{ pid: number }>(
+          "SELECT pid FROM pg_stat_activity WHERE application_name = $1 ORDER BY pid",
+          [applicationName],
+        );
+      complete();
+      await expect
+        .poll(blockedBackends, { timeout: 15_000 })
+        .toEqual([{ pid: expect.any(Number) }]);
+      const blocked = await blockedBackends();
+      expect(blocked).toHaveLength(1);
+      const exited = once(firstChild, "exit");
+      // SIGINT enters shutdown without a restart-intent read queued behind the held write.
+      // Signal the command directly; the fixture adapter's kill cancels its whole tree.
+      process.kill(firstChild.pid!, "SIGINT");
+      await expect
+        .poll(
+          async () => {
+            const response = await fetch(`http://127.0.0.1:${instance.port}/readyz`, {
+              headers: { authorization: `Bearer ${instance.gatewayToken}` },
+              signal,
+            });
+            return { status: response.status, body: await response.json() };
+          },
+          { timeout: 15_000 },
+        )
+        .toMatchObject({
+          status: 503,
+          body: { ready: false, failing: expect.arrayContaining(["gateway-draining"]) },
+        });
+      expect(await blockedBackends()).toEqual(blocked);
+      expect(firstChild.exitCode).toBeNull();
+      expect(firstChild.signalCode).toBeNull();
+      await lock.disposeAsync();
+      expect(await withinTest(exited, signal)).toEqual([0, null]);
+      await expect.poll(ownedBackends).toEqual([]);
+      expect(
+        await queryRows<{ request_run_id: string; status: string }>(
+          `SELECT request_run_id, status FROM ${quoteIdentifier(anchor.namespace)}.cron_run_receipts WHERE receipt_id = $1`,
+          [receipts[0]!.receipt_id],
+        ),
+      ).toEqual([{ request_run_id: run.runId, status: "ok" }]);
+      await disconnectGatewayClient(gateway);
+      await instance.stopGateway();
+      await instance.startGateway();
+      expect(instance.child?.pid).not.toBe(firstChild.pid);
+      firstChild = instance.child!;
+      gateway = await connectGatewayClient({
+        url: instance.url,
+        token: instance.gatewayToken,
+        clientDisplayName: "vitest-postgres-cron-after-stop",
+        signal,
       });
       await expect(
         gateway.request("cron.runs", { id: job.id, runId: run.runId, limit: 1 }),
@@ -749,10 +840,6 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
         enabled: false,
       });
       expect(requests.filter((body) => body.includes(prompt))).toHaveLength(1);
-      const anchor = await readPostgresAnchor(current);
-      if (!anchor) {
-        throw new Error("Gateway cron did not persist its PostgreSQL anchor");
-      }
       const readOwner = () =>
         queryRows<{ payload_json: string }>(
           `SELECT payload_json FROM ${quoteIdentifier(anchor.namespace)}.state_leases WHERE scope = $1 AND lease_key = $2`,
@@ -925,7 +1012,12 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       expect(privateState.runningScheduleChangeId).toBeUndefined();
       expect(privateState.failureAlertIncident).toBeUndefined();
       await disconnectGatewayClient(restarted);
+      const lastChild = instance.child!;
+      const stopped = once(lastChild, "exit");
+      process.kill(lastChild.pid!, "SIGINT");
+      expect(await withinTest(stopped, signal)).toEqual([0, null]);
       await instance.stopGateway();
+      await expect.poll(ownedBackends).toEqual([]);
       expect(await readPostgresAnchor(current)).toEqual(anchor);
       expect(requests.filter((body) => body.includes(prompt))).toHaveLength(1);
       expect(requests.filter((body) => body.includes(unfinishedPrompt))).toHaveLength(1);
