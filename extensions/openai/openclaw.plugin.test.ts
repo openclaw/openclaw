@@ -129,7 +129,7 @@ it("labels and orders OpenAI authentication choices", () => {
     expect(choice(id)).not.toHaveProperty("assistantVisibility");
   }
   expect(choice("openai-token-sharing")?.onboardingFeatured).toBe(true);
-  expect(choice("openai-device-code")?.onboardingFeatured).not.toBe(true);
+  expect(choice("openai-device-code")?.onboardingFeatured).toBe(true);
   expect(choice("openai")?.onboardingFeatured).not.toBe(true);
   expect(choices.find((entry) => entry.provider === "openai" && entry.method === "api-key")).toBe(
     choice("openai-api-key"),

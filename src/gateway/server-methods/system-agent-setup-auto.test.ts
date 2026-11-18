@@ -103,7 +103,7 @@ const chatGptSignIn = {
   brandId: "openai",
   label: "ChatGPT",
   kind: "device-code" as const,
-  featured: false,
+  featured: true,
 };
 // OpenAI lists Sign in with ChatGPT first, and another OpenAI device-code sign-in
 // may sort ahead of Codex; Codex setup must still offer Codex login.

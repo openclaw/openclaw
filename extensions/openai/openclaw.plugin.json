@@ -518,7 +518,8 @@
       "assistantPriority": -40,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "Codex login, Sign in with ChatGPT, or API key"
+      "groupHint": "Codex login, Sign in with ChatGPT, or API key",
+      "onboardingFeatured": true
     },
     {
       "provider": "openai",
