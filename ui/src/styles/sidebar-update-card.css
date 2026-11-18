@@ -223,8 +223,9 @@ body.update-dialog-open .sidebar-update-card__status {
   }
 }
 
-/* The toast surface: neutral and elevated. Reload is the one accent, so the
-   notice reads as a call to action rather than an error. */
+/* The composer's own surface, edge and depth, so the pill reads as part of the
+   writing area below it. Reload is the one accent, so the notice reads as a
+   call to action rather than an error. */
 .refresh-notice__surface {
   display: flex;
   align-items: center;
@@ -232,13 +233,12 @@ body.update-dialog-open .sidebar-update-card__status {
   max-width: 100%;
   min-height: 44px;
   padding: 8px 8px 8px 14px;
-  border: 0;
+  border: 1px solid color-mix(in srgb, var(--text-strong) 16%, transparent);
   border-radius: min(28px, calc(28px * var(--openclaw-corner-radius-scale)));
-  background: var(--popover);
-  box-shadow:
-    0 0 0 0.5px color-mix(in srgb, var(--text-strong) 14%, transparent),
-    0 1px 2px rgb(30 24 18 / 5%),
-    0 10px 26px -8px rgb(30 24 18 / 18%);
+  background:
+    linear-gradient(var(--chat-composer-surface), var(--chat-composer-surface)),
+    var(--bg-content, var(--bg));
+  box-shadow: 0 4px 16px rgb(0 0 0 / 5%);
   color: var(--text-strong);
   cursor: var(--cursor-action);
   font-family: var(--font-body);
@@ -246,6 +246,18 @@ body.update-dialog-open .sidebar-update-card__status {
   font-weight: 500;
   line-height: calc(20px * var(--control-ui-text-scale));
   text-align: start;
+}
+
+:root[data-theme-mode="dark"] .refresh-notice__surface {
+  border-color: color-mix(in srgb, var(--text-strong) 9%, transparent);
+}
+
+:root[data-theme-mode="light"] .refresh-notice__surface {
+  border-color: transparent;
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 6%),
+    0 1px 2px -1px rgb(0 0 0 / 6%),
+    0 2px 4px rgb(0 0 0 / 4%);
 }
 
 .refresh-notice__surface:focus-visible {
