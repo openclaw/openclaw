@@ -1,5 +1,18 @@
+import {
+  buildMentionRegexes,
+  implicitMentionKindWhen,
+  matchesMentionPatterns,
+  resolveInboundMentionDecision,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { resolveChannelImplicitMentions } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { resolveChannelGroupRequireMention } from "openclaw/plugin-sdk/channel-policy";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { SignalMention } from "./event-handler.types.js";
+import type {
+  SignalDataMessage,
+  SignalEventHandlerDeps,
+  SignalMention,
+} from "./event-handler.types.js";
 
 const OBJECT_REPLACEMENT = "\uFFFC";
 
@@ -51,34 +64,68 @@ function normalizeAccountPhone(account?: string | null) {
   return trimmed ? normalizeE164(trimmed) : undefined;
 }
 
-export function resolveSignalMentionFacts(
-  identity: {
-    account?: string | null;
-    accountUuid?: string | null;
-  },
-  message: string,
-  mentions?: SignalMention[] | null,
-) {
+export function resolveSignalMentionDecision(params: {
+  cfg: OpenClawConfig;
+  account: Pick<SignalEventHandlerDeps, "account" | "accountUuid" | "accountId">;
+  agentId: string;
+  groupId?: string;
+  rawMessage: string;
+  messageText: string;
+  dataMessage: SignalDataMessage;
+  hasControlCommand: boolean;
+  commandAuthorized: boolean;
+}) {
+  const { cfg, account, groupId, dataMessage } = params;
+  const isGroup = Boolean(groupId);
+  const mentionRegexes = buildMentionRegexes(cfg, params.agentId);
+  const { mentions, quote } = dataMessage;
   const validMentions = (mentions ?? []).filter((mention) =>
-    isValidStructuredMention(message, mention),
+    isValidStructuredMention(params.rawMessage, mention),
   );
-  const botUuid = identity.accountUuid?.trim();
-  const botPhone = normalizeAccountPhone(identity.account);
-  const canDetectBotMention = Boolean(botUuid || botPhone);
-  const mentionsBot = validMentions.some((mention) => {
-    const mentionUuid = mention.uuid?.trim();
-    if (botUuid && mentionUuid === botUuid) {
+  const botUuid = account.accountUuid?.trim();
+  const botPhone = normalizeAccountPhone(account.account);
+  const matchesBot = (uuid?: string | null, number?: string | null) => {
+    if (botUuid && uuid?.trim() === botUuid) {
       return true;
     }
-    const mentionNumber = mention.number?.trim();
-    return Boolean(botPhone && mentionNumber && normalizeE164(mentionNumber) === botPhone);
-  });
-
-  return {
-    canDetectBotMention,
-    hasAnyMention: validMentions.length > 0,
-    mentionsBot,
+    return Boolean(botPhone && normalizeAccountPhone(number) === botPhone);
   };
+  // signal-cli's legacy author field can contain a UUID when no number is known.
+  const legacyQuoteAuthor = quote?.author?.trim();
+  const quotePhone =
+    quote?.authorNumber ?? (legacyQuoteAuthor?.startsWith("+") ? legacyQuoteAuthor : undefined);
+  const quotesBot = isGroup && matchesBot(quote?.authorUuid, quotePhone);
+  const canDetectMention = mentionRegexes.length > 0 || Boolean(botUuid || botPhone);
+  const { effectiveWasMentioned, shouldSkip } = resolveInboundMentionDecision({
+    facts: {
+      canDetectMention,
+      wasMentioned:
+        isGroup &&
+        (matchesMentionPatterns(params.messageText, mentionRegexes) ||
+          validMentions.some(({ uuid, number }) => matchesBot(uuid, number))),
+      hasAnyMention: validMentions.length > 0,
+      implicitMentionKinds: implicitMentionKindWhen("quoted_bot", quotesBot),
+    },
+    policy: {
+      isGroup,
+      requireMention:
+        isGroup &&
+        resolveChannelGroupRequireMention({
+          cfg,
+          channel: "signal",
+          groupId,
+          accountId: account.accountId,
+          configuredGroupDefaultsToNoMention: true,
+        }),
+      implicitMentions: quotesBot
+        ? resolveChannelImplicitMentions({ cfg, channel: "signal", accountId: account.accountId })
+        : undefined,
+      allowTextCommands: true,
+      hasControlCommand: params.hasControlCommand,
+      commandAuthorized: params.commandAuthorized,
+    },
+  });
+  return { canDetectMention, effectiveWasMentioned, shouldSkip };
 }
 
 export function renderSignalMentions(message: string, mentions?: SignalMention[] | null) {
