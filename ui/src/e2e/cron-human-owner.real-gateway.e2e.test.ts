@@ -363,6 +363,8 @@ suite.define(() => {
     await expect
       .poll(async () => (await rpc<CronJob>(admin, "cron.get", { id: job.id })).name)
       .toBe("Hourly ping edited by Alice");
+    await alice.locator('[data-test-id="cron-edit"]').click();
+    await alice.locator('[data-test-id="cron-advanced"]').click();
     await selectPickerValue(ownerPicker, profiles[2]!);
     await alice.locator('[data-test-id="cron-submit"]').click();
     await expect
@@ -370,6 +372,7 @@ suite.define(() => {
       .toBe(profiles[2]);
     const transferred = await rpc<CronJob>(admin, "cron.get", { id: job.id });
     expect(transferred.enabled).toBe(false);
+    await alice.locator('[data-test-id="cron-edit"]').click();
     await expect.poll(() => alice.locator("#cron-name").isDisabled()).toBe(true);
     await expect(
       rpc(alice, "cron.update", { id: job.id, patch: { name: "Former owner cannot edit" } }),
