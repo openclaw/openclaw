@@ -236,6 +236,7 @@ export function ScheduleSentence(
   };
   type Of<F extends CronSentence["frequency"]> = Extract<CronSentence, { frequency: F }>;
   // Parts stay mounted while the frequency holds, so their menus stay open across edits.
+  // SAFETY: Each accessor is used only in its matching branch of the Show keyed by sentence frequency.
   const as = <F extends CronSentence["frequency"]>() => sentence() as Of<F>;
   const withDays = () => as<"hourly" | "daily">();
   const timed = () => as<"daily" | "weekly" | "monthly">();

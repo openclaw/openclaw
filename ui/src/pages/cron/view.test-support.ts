@@ -125,7 +125,7 @@ export function getButtonByText(container: Element, text: string): HTMLButtonEle
 }
 
 export function getElement<T extends Element>(
-  container: Element,
+  container: Pick<ParentNode, "querySelector">,
   selector: string,
   constructor: new () => T,
 ): T {
@@ -155,9 +155,9 @@ export function chooseSchedule(root: Pick<ParentNode, "querySelector">, kind: st
     selectSegmented(segmented);
     return;
   }
-  getElement(root as ParentNode, '[data-test-id="cron-schedule-frequency"]', HTMLElement).click();
+  getElement(root, '[data-test-id="cron-schedule-frequency"]', HTMLElement).click();
   getElement(
-    root as ParentNode,
+    root,
     `[data-test-id="cron-schedule-frequency-${SENTENCE_FREQUENCY[kind] ?? kind}"]`,
     HTMLButtonElement,
   ).click();

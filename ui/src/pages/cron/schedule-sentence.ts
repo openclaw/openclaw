@@ -145,7 +145,7 @@ export function formatCronSentence(sentence: CronSentence): string {
       return `${sentence.minute} ${sentence.hour} * * ${formatDays(sentence.days)}`;
     case "weekly":
       return `${sentence.minute} ${sentence.hour} * * ${sentence.day}`;
-    case "monthly":
+    default:
       return `${sentence.minute} ${sentence.hour} ${sentence.dayOfMonth} * *`;
   }
 }
@@ -202,9 +202,9 @@ export function sentenceForFrequency(
               : 1,
         ...time,
       };
-    case "monthly":
+    default:
       return {
-        frequency,
+        frequency: frequency satisfies "monthly",
         dayOfMonth: current?.frequency === "monthly" ? current.dayOfMonth : 1,
         ...time,
       };
