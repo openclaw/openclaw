@@ -223,7 +223,7 @@ export function NewSessionPlaceControls(props: {
                 <span
                   class="new-session-page__checkout-skeleton"
                   role="status"
-                  aria-label={t("newSession.checkingPlace")}
+                  aria-label={t("common.loading")}
                 >
                   <span class="new-session-page__target-icon" aria-hidden="true">
                     <Icon name="gitBranch" />
