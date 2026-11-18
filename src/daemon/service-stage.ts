@@ -33,6 +33,7 @@ export const GatewayServiceDefinitionBackupReceiptSchema = z.strictObject({
   id: z.uuid(),
   files: z.array(definitionFile).min(1).max(4),
   guards: z.array(definitionFile.pick({ sourcePath: true, after: true })),
+  unchanged: z.literal(true).optional(),
   task: z
     .strictObject({
       beforeSha256: fileState.shape.sha256,
@@ -47,6 +48,7 @@ export type GatewayServiceDefinitionBackupReceipt = z.infer<
 >;
 export type GatewayServiceDefinitionTransactionHooks = {
   preservePolicy?: readonly string[];
+  preserveUnchangedFiles?: boolean;
   assertCurrent: () => void;
   beforeWrite: () => Promise<void>;
   filePrepared: (sourcePath: string, temporaryPath: string | null) => Promise<void>;
@@ -102,6 +104,16 @@ export async function publishServiceFile(params: {
   const hooks = params.definitionTransaction;
   const dirMode = (await fs.stat(path.dirname(params.filePath))).mode & 0o7777;
   assertGatewayServiceUpdateCurrent();
+  if (hooks?.preserveUnchangedFiles) {
+    const current = await readServiceFileState(params.filePath);
+    if (current?.mode === params.mode && current.sha256 === sha256Hex(params.contents)) {
+      await params.beforeRename?.();
+      await hooks.beforeWrite();
+      hooks.assertCurrent();
+      params.assertCurrent?.();
+      return;
+    }
+  }
   await replaceFileAtomic({
     filePath: params.filePath,
     content: params.contents,

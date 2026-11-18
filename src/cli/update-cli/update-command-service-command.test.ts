@@ -6,7 +6,14 @@ import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import type { UpdateServiceDefinitionRecovery } from "./update-command-service-context-types.js";
 
-it.each(["installed", "load-failed", "start-refused", "invalid-receipt", "compensation-failed"])(
+it.each([
+  "installed",
+  "unchanged-receipt",
+  "load-failed",
+  "start-refused",
+  "invalid-receipt",
+  "compensation-failed",
+])(
   "retains installer warnings and rollback evidence after child settlement: %s",
   async (outcome) => {
     await withTestDir({ prefix: "openclaw-definition-response-" }, async (root) => {
@@ -15,6 +22,7 @@ it.each(["installed", "load-failed", "start-refused", "invalid-receipt", "compen
         id: "00000000-0000-4000-8000-000000000001",
         files: [{ sourcePath: path.join(root, "service"), before: null, after: null }],
         guards: [],
+        ...(outcome === "unchanged-receipt" ? { unchanged: true } : {}),
       };
       const preserved = outcome === "start-refused";
       const warning = "installer warning";

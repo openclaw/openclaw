@@ -1,5 +1,6 @@
 import "./service-definition-backup.mocks.test-support.js";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { DOMParser } from "linkedom";
 import { expect, it, vi } from "vitest";
@@ -319,6 +320,123 @@ it.each(["publication", "activation"])(
     expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
     for (const input of f.files.slice(1)) {
       await expect(fs.access(input)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  },
+);
+
+it.each(["legacy updater", "current updater", "activation fails", "mode repair", "backup fails"])(
+  "preserves LaunchAgent rollback during reconciliation: %s",
+  async (scenario) => {
+    const f = await fixture("darwin");
+    await f.install();
+    const allowUnchangedReceipt = scenario !== "legacy updater";
+    const repairMode = scenario === "mode repair" || scenario === "backup fails";
+    if (repairMode) {
+      await fs.chmod(f.sourcePath, 0o600);
+    }
+    const readFiles = () => Promise.all(f.files.map(readServiceFileState));
+    const before = await readFiles();
+    const skipBackup = allowUnchangedReceipt && !repairMode;
+    const backupNames = async () =>
+      (
+        await Promise.all(
+          [...new Set(f.files.map((file) => path.dirname(file)))].map((directory) =>
+            fs.readdir(directory),
+          ),
+        )
+      )
+        .flat()
+        .filter((file) => file.endsWith(".bak"))
+        .toSorted();
+    const previousBackups = await backupNames();
+    if (scenario === "backup fails") {
+      const writeFile = fs.writeFile.bind(fs);
+      vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
+        if (String(file).startsWith(`${f.sourcePath}.reconcile-`)) {
+          throw new Error("injected backup failure");
+        }
+        return await writeFile(file, data, options);
+      });
+    }
+    let loaded = true;
+    native.launchctl.mockImplementation(async (args) => {
+      if (args[0] === "bootout") {
+        loaded = false;
+      } else if (args[0] === "bootstrap") {
+        const current = await readFiles();
+        if (repairMode) {
+          expect(current[0]?.mode).toBe(0o644);
+          expect(current[0]?.sha256).toBe(before[0]?.sha256);
+          expect(current.slice(1)).toEqual(before.slice(1));
+          expect((await backupNames()).length).toBeGreaterThan(previousBackups.length);
+        } else {
+          expect(current).toEqual(before);
+        }
+        if (scenario === "activation fails") {
+          throw new Error("injected activation failure");
+        }
+        loaded = true;
+      } else if (args[0] === "print" && !loaded) {
+        return nativeExit("", "Could not find service", 113);
+      }
+      return nativeExit(`${args[1]} = {\n\tstate = running\n\tpid = 42\n}`);
+    });
+    const refresh = reconcileGatewayServiceDefinition({
+      env: f.env,
+      root: "/old",
+      command: f.command,
+      expectedCommand: f.command,
+      allowUnchangedReceipt,
+      install: async (hooks) => {
+        await installLaunchAgent({
+          env: f.env,
+          stdout: new PassThrough(),
+          programArguments: ["/usr/bin/node", "/new/index.js", "gateway"],
+          environment: { ...f.command.environment, OPERATOR_SETTING: "new-value" },
+          definitionTransaction: hooks,
+        });
+      },
+      warn: () => {},
+    });
+    let receipt;
+    if (scenario === "backup fails") {
+      await expect(refresh).rejects.toThrow(
+        /previous definition was left unchanged.*injected backup failure/,
+      );
+      expect(native.launchctl.mock.calls.map(([args]) => args[0])).not.toContain("bootout");
+      expect(await readFiles()).toEqual(before);
+      expect(await backupNames()).toEqual(previousBackups);
+      return;
+    }
+    if (scenario === "activation fails") {
+      await expect(refresh).rejects.toThrow(
+        /previous definition was left unchanged.*injected activation failure/,
+      );
+    } else {
+      receipt = await refresh;
+      expect(receipt.unchanged).toBe(skipBackup ? true : undefined);
+      await restoreGatewayServiceDefinitionBackup({ ...f, receipt });
+    }
+    expect(native.launchctl.mock.calls.map(([args]) => args[0])).toEqual(
+      expect.arrayContaining(["bootout", "bootstrap"]),
+    );
+    const after = await readFiles();
+    if (repairMode) {
+      expect(after[0]).toMatchObject({ mode: 0o600, sha256: before[0]?.sha256 });
+      expect(after.slice(1)).toEqual(before.slice(1));
+    } else {
+      expect(after).toEqual(before);
+    }
+    if (skipBackup) {
+      expect(await backupNames()).toEqual(previousBackups);
+    } else {
+      expect((await backupNames()).length).toBeGreaterThan(previousBackups.length);
+    }
+    if (receipt?.unchanged) {
+      await fs.chmod(f.sourcePath, 0o600);
+      await expect(restoreGatewayServiceDefinitionBackup({ ...f, receipt })).rejects.toThrow(
+        /Service definition changed/,
+      );
     }
   },
 );
