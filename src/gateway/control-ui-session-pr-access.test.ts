@@ -14,7 +14,7 @@ import { createSpawnBrokerHost, type SpawnBrokerHost } from "../process/spawn-br
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
+import * as agentDb from "../state/openclaw-agent-db.js";
 import * as stateReadWorker from "../state/openclaw-state-read-worker.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -265,7 +265,7 @@ it.each(["incarnation", "namespace", "repository"] as const)(
           } else {
             if (change === "namespace") {
               const source = await sessionSource(key);
-              await closeOpenClawAgentDatabaseByPathAsync(source.path);
+              await agentDb.closeOpenClawAgentDatabaseByPathAsync(source.path);
             }
             await f.seed(key, f.profile.id, {
               ...entry,
@@ -351,7 +351,7 @@ it.each(["unchanged", "revoked"] as const)(
             own: (close) => source.own(close),
             createTransport(command) {
               const owned = source.createTransport(command);
-              if (held || command.type !== "agentDatabaseDeletion.snapshot") {
+              if (held || command.type !== "agentDbDeletion.snapshot") {
                 return owned;
               }
               held = true;
@@ -668,7 +668,7 @@ it.each([
           "The registered check-details loader was not entered",
         );
         if (mutation === "store closure") {
-          await closeOpenClawAgentDatabaseByPathAsync((await sessionSource(key)).path);
+          await agentDb.closeOpenClawAgentDatabaseByPathAsync((await sessionSource(key)).path);
         } else if (mutation === "row refresh") {
           sessionChanges.emit({ agentId: "main", sessionKey: key, scope: "session-entry" });
           await projection?.ensureMaterialized();
@@ -904,7 +904,7 @@ it("checks physical source once per load while every assertion observes owner re
         }
         expect(identities).toHaveBeenCalledTimes(captured);
         expect(captured).toBe(1);
-        await closeOpenClawAgentDatabaseByPathAsync(source.path);
+        await agentDb.closeOpenClawAgentDatabaseByPathAsync(source.path);
         expect(assertCurrent).toThrow("Session PR source changed or closed");
       });
     } finally {
@@ -933,11 +933,12 @@ it("drops cached subscription hydration after physical database replacement", as
     ]);
     const requestsBeforeReplacement = provider.mock.calls.length;
     const source = await sessionSource(sessionKey);
-    // Checkpoint the native owner, then replace only the file identity; logical headers match.
-    await closeOpenClawAgentDatabaseByPathAsync(source.path);
+    // Closing preserves admission; reopen the replacement without clearing cached PR hydration.
+    await agentDb.closeOpenClawAgentDatabaseByPathAsync(source.path);
     const replacementPath = `${source.path}.replacement`;
     copyFileSync(source.path, replacementPath);
     renameSync(replacementPath, source.path);
+    agentDb.openOpenClawAgentDatabase({ agentId: source.agentId, path: source.path });
     rateLimited = true;
 
     const peer = f.addReader("physical-replacement-reader");
@@ -999,15 +1000,17 @@ it.each(["concurrency limit", "earlier refresh", "refresh timer", "publication"]
             ? f.subscriptions.replace(f.client.connId!, keys, new Set(keys))
             : Promise.resolve();
         const source = await sessionSource(keys[0]!);
-        let retirement: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
+        let retirement:
+          | ReturnType<typeof agentDb.closeOpenClawAgentDatabaseByPathAsync>
+          | undefined;
         const peer = waitingOn === "publication" ? f.addReader("publication-peer") : undefined;
         if (peer) {
           await f.subscribe(keys, peer.client);
           f.socket.send.mockImplementationOnce(() => {
-            retirement = closeOpenClawAgentDatabaseByPathAsync(source.path);
+            retirement = agentDb.closeOpenClawAgentDatabaseByPathAsync(source.path);
           });
         } else {
-          await closeOpenClawAgentDatabaseByPathAsync(source.path);
+          await agentDb.closeOpenClawAgentDatabaseByPathAsync(source.path);
         }
         release.resolve();
         const settled = Promise.all([f.subscriptions.pollNow(), queuedRefresh]);
