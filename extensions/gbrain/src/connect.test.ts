@@ -14,6 +14,7 @@ const ADMIN = `${HOME}/.gbrain/serve/admin-token`;
 const GBRAIN = `${HOME}/.bun/bin/gbrain`;
 const BUN = `${HOME}/.bun/bin/bun`;
 const BUN_GLOBAL_BIN = `${HOME}/.cache/.bun/bin`;
+const RELEASE_BINARY = `${HOME}/.gbrain/bin/gbrain`;
 const MCP_URL = "http://127.0.0.1:3131/mcp";
 
 /** A host with a fake GBrain: commands change the fake's state the way the real CLI does. */
@@ -27,6 +28,11 @@ function fakeHost(initial: {
   /** Host GBrain's server answers on; other hosts read as down. */
   serverHost?: string;
   acceptedTokens?: string[];
+  /** Defaults to linux/arm64, a host GBrain publishes no release binary for. */
+  platform?: string;
+  arch?: string;
+  /** Why the release download fails; it succeeds when unset. */
+  releaseFailure?: string;
 }) {
   const files = new Map(Object.entries(initial.files ?? {}));
   const setFile = (file: string, content: string) => files.set(file, content);
@@ -36,6 +42,7 @@ function fakeHost(initial: {
   let server = initial.server;
   const accepted = new Set(initial.acceptedTokens ?? []);
   const commands: string[] = [];
+  const releaseInstalls: string[] = [];
   let minted = 0;
   const ok = (stdout = ""): Awaited<ReturnType<ConnectDeps["run"]>> => ({
     code: 0,
@@ -47,6 +54,8 @@ function fakeHost(initial: {
     env: {},
     hosts: initial.inContainer ? ["127.0.0.1", "gbrain"] : ["127.0.0.1"],
     inContainer: initial.inContainer ?? false,
+    platform: initial.platform ?? "linux",
+    arch: initial.arch ?? "arm64",
     readFile: (file) => files.get(file),
     findExecutable: (name, candidates) =>
       [...candidates, `/usr/bin/${name}`].find((file) => executables.has(file)),
@@ -86,6 +95,14 @@ function fakeHost(initial: {
       accepted.add(token);
       return token;
     },
+    installRelease: async (asset, destination) => {
+      releaseInstalls.push(`${asset} -> ${destination}`);
+      if (initial.releaseFailure) {
+        throw new Error(initial.releaseFailure);
+      }
+      executables.add(destination);
+      return "0.60.734.0";
+    },
     readServer: async () => server,
     writeServer: async ({ url, authorization }) => {
       server ??= {};
@@ -96,6 +113,7 @@ function fakeHost(initial: {
   return {
     deps,
     commands,
+    releaseInstalls,
     get server() {
       return server;
     },
@@ -134,6 +152,40 @@ describe("connectGbrain", () => {
       transport: "streamable-http",
       headers: { Authorization: "Bearer gbrain_minted1" },
     });
+  });
+
+  it("installs GBrain's release binary on Apple Silicon and x86-64 Linux without Bun", async () => {
+    for (const [platform, arch, asset] of [
+      ["darwin", "arm64", "gbrain-darwin-arm64"],
+      ["linux", "x64", "gbrain-linux-x64"],
+    ]) {
+      const host = fakeHost({ platform, arch });
+      expect(await connectGbrain(host.deps, { allowSetup: true })).toMatchObject({
+        state: "connected",
+        mcpUrl: MCP_URL,
+      });
+      expect(host.releaseInstalls).toEqual([`${asset} -> ${RELEASE_BINARY}`]);
+      expect(host.commands).toEqual([
+        "mcp expose --no-tailscale --yes --json",
+        "init --pglite --no-embedding",
+        "mcp expose --no-tailscale --yes --json",
+      ]);
+    }
+  });
+
+  it("reports a failed release download and writes nothing", async () => {
+    const host = fakeHost({
+      platform: "darwin",
+      arch: "arm64",
+      releaseFailure: "The downloaded gbrain-darwin-arm64 has no build-provenance attestation.",
+    });
+    expect(await connectGbrain(host.deps, { allowSetup: true })).toMatchObject({
+      state: "blocked",
+      reason: "gbrain-install-failed",
+      message: expect.stringContaining("no build-provenance attestation"),
+    });
+    expect(host.server).toBeUndefined();
+    expect(host.commands).toEqual([]);
   });
 
   it("keeps a working key and mints a new one after the old key is revoked", async () => {

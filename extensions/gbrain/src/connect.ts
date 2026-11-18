@@ -39,11 +39,15 @@ export type ConnectDeps = {
   hosts: string[];
   inContainer: boolean;
   readFile: (file: string) => string | undefined;
+  platform: string;
+  arch: string;
   findExecutable: (name: string, candidates: string[]) => string | undefined;
   run: (argv: string[], timeoutMs: number) => Promise<CommandResult>;
   health: (baseUrl: string) => Promise<Health>;
   tokenAccepted: (mcpUrl: string, token: string) => Promise<boolean>;
   mintKey: (baseUrl: string, adminToken: string, name: string) => Promise<string>;
+  /** Installs GBrain's stable release binary `asset` at `destination`; throws with the reason. */
+  installRelease: (asset: string, destination: string) => Promise<string>;
   /**
    * The entry as authored in the config file (no `${ENV}` substitution), so ownership and the
    * bearer come from what the user wrote; an entry outside the root file reads as foreign.
@@ -157,12 +161,30 @@ function describeFailure(result: CommandResult): string {
   return lines.findLast((line) => line.trim())?.trim() ?? `exit ${result.code}`;
 }
 
-/** Install the GBrain CLI with Bun, GBrain's documented installer, when it is missing. */
+/** The asset GBrain publishes for this host, or undefined where it ships none (Intel macOS, ARM Linux). */
+export function gbrainReleaseAsset(platform: string, arch: string): string | undefined {
+  if (platform === "darwin" && arch === "arm64") {
+    return "gbrain-darwin-arm64";
+  }
+  if (platform === "linux" && arch === "x64") {
+    return "gbrain-linux-x64";
+  }
+  return undefined;
+}
+
+/**
+ * The GBrain CLI: an existing install, else GBrain's verified release binary in
+ * `~/.gbrain/bin` (which `gbrain upgrade` then updates itself), else GBrain's Bun
+ * install on hosts it publishes no binary for.
+ */
 async function ensureCli(deps: ConnectDeps): Promise<string | ConnectOutcome> {
+  const releaseBinary = path.join(gbrainDir(deps), "bin", "gbrain");
   const bunBin = path.join(deps.env.BUN_INSTALL?.trim() || path.join(deps.home, ".bun"), "bin");
-  const candidates = [deps.env.GBRAIN_BIN?.trim(), path.join(bunBin, "gbrain")].filter(
-    (value): value is string => Boolean(value),
-  );
+  const candidates = [
+    deps.env.GBRAIN_BIN?.trim(),
+    releaseBinary,
+    path.join(bunBin, "gbrain"),
+  ].filter((value): value is string => Boolean(value));
   const existing = deps.findExecutable("gbrain", candidates);
   if (existing) {
     return existing;
@@ -173,11 +195,23 @@ async function ensureCli(deps: ConnectDeps): Promise<string | ConnectOutcome> {
       "GBrain is not running next to this container. Start it with the GBrain Compose overlay (docker compose -f docker-compose.yml -f deploy/gbrain/compose.yaml up -d); OpenClaw connects on its own.",
     );
   }
+  const asset = gbrainReleaseAsset(deps.platform, deps.arch);
+  if (asset) {
+    try {
+      await deps.installRelease(asset, releaseBinary);
+      return releaseBinary;
+    } catch (error) {
+      return blocked(
+        "gbrain-install-failed",
+        `Installing GBrain failed: ${error instanceof Error ? error.message : String(error)} OpenClaw retries within 10 minutes.`,
+      );
+    }
+  }
   const bun = deps.findExecutable("bun", [path.join(bunBin, "bun")]);
   if (!bun) {
     return blocked(
       "bun-missing",
-      "GBrain needs Bun 1.4.4 or newer. Install it with: curl -fsSL https://bun.sh/install | bash (on Linux, Bun's installer also needs unzip). OpenClaw finishes the GBrain setup within a minute.",
+      "GBrain publishes release binaries only for Apple Silicon macOS and x86-64 Linux; on this computer it needs Bun 1.4.4 or newer. Install it with: curl -fsSL https://bun.sh/install | bash (on Linux, Bun's installer also needs unzip). OpenClaw finishes the GBrain setup within a minute.",
     );
   }
   // Bun links global binaries where its own settings say (BUN_INSTALL_BIN, XDG_CACHE_HOME, ...).

@@ -18,7 +18,12 @@ MODEL="${MODEL:-openai/gpt-5.6-sol}"
 mkdir -p "$WORK/logs" "$WORK/prefix"
 FRICTION="$WORK/friction.jsonl"
 : >"$FRICTION"
-export PATH="$WORK/prefix/bin:$WORK/node/bin:$HOME/.bun/bin:$PATH"
+export PATH="$WORK/prefix/bin:$WORK/node/bin:$HOME/.gbrain/bin:$HOME/.bun/bin:$PATH"
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) RELEASE_ASSET=gbrain-darwin-arm64 ;;
+  Linux-x86_64) RELEASE_ASSET=gbrain-linux-x64 ;;
+  *) RELEASE_ASSET= ;;
+esac
 OS="$(uname -s)"
 FAILED=0
 
@@ -178,7 +183,8 @@ step model-provider oc config set models.providers.openai \
 step model-default oc config set agents.defaults.model "\"$MODEL\"" --strict-json || fail "model"
 step gateway-start gateway_start || fail "gateway start"
 
-# 2. One install request, as the Control UI sends it. A clean host has no Bun: record what the user sees.
+# 2. One install request, as the Control UI sends it. Apple Silicon macOS and x86-64 Linux get
+# GBrain's release binary with no user step; elsewhere a host without Bun shows the Bun command.
 # The Gateway answers `retryable: true` ("Another plugin or config operation is already
 # running") while its own startup work holds the plugin lock; retry like a second click.
 install_plugin() {
@@ -197,15 +203,18 @@ install_plugin() {
   return 1
 }
 step plugin-install install_plugin || fail "plugins.install"
-if ! command -v bun >/dev/null 2>&1; then
+if [ -n "$RELEASE_ASSET" ]; then
+  step no-bun bash -c '! command -v bun && ! command -v unzip; echo "bun and unzip absent: $?"'
+elif ! command -v bun >/dev/null 2>&1; then
   sleep 10
-  step bun-missing-message grep -m1 'GBrain needs Bun' "$WORK/logs/gateway.out" || fail "no Bun message"
-  if [ "$OS" = Linux ] && ! command -v unzip >/dev/null 2>&1; then
-    step unzip-install bash -c 'sudo apt-get install -y -qq unzip' || fail "unzip install"
-  fi
+  step bun-missing-message grep -m1 'needs Bun 1.4.4' "$WORK/logs/gateway.out" || fail "no Bun message"
   step bun-install bash -c 'curl -fsSL https://bun.sh/install | bash' || fail "bun install"
 fi
 step connect wait_connected 600 || fail "plugin did not connect"
+if [ -n "$RELEASE_ASSET" ]; then
+  step release-binary bash -c "test -x '$HOME/.gbrain/bin/gbrain' && '$HOME/.gbrain/bin/gbrain' --version" ||
+    fail "release binary not installed"
+fi
 step inspect-runtime inspect_loaded || fail "inspect"
 
 # 3. Seed a codeword no session has seen, restart, probe offline, recall without saying where to look.
@@ -277,8 +286,15 @@ step fault-rotate-recovered turn "e2e-after-rotate-$RANDOM" "What is our Avocet 
 
 # 6. gbrain upgrade with no plugin change: go back one release, then let GBrain upgrade itself.
 PREV="$(gbrain --version)"
-step upgrade-downgrade bash -c 'bun install -g "github:garrytan/gbrain#v0.60.732.0" && gbrain --version' || fail "gbrain downgrade"
-step upgrade-run bash -c 'gbrain upgrade && v="$(gbrain --version)" && echo "$v" && [ "$v" != "gbrain 0.60.732.0" ]' || fail "gbrain upgrade"
+if [ -n "$RELEASE_ASSET" ]; then
+  # Swap in the older release the way GBrain's self-update does: download beside it, then rename.
+  step upgrade-downgrade bash -c "curl -fsSL -o '$HOME/.gbrain/bin/gbrain.old' 'https://github.com/garrytan/gbrain/releases/download/v0.60.733.0/$RELEASE_ASSET' && chmod +x '$HOME/.gbrain/bin/gbrain.old' && mv '$HOME/.gbrain/bin/gbrain.old' '$HOME/.gbrain/bin/gbrain' && gbrain --version" || fail "gbrain downgrade"
+  OLD="gbrain 0.60.733.0"
+else
+  step upgrade-downgrade bash -c 'bun install -g "github:garrytan/gbrain#v0.60.732.0" && gbrain --version' || fail "gbrain downgrade"
+  OLD="gbrain 0.60.732.0"
+fi
+step upgrade-run bash -c "gbrain upgrade && v=\"\$(gbrain --version)\" && echo \"\$v\" && [ \"\$v\" != '$OLD' ]" || fail "gbrain upgrade"
 health_ok 120
 CW8="$(codeword)"
 seed "Project Godwit" "Our Godwit beacon code is $CW8." >/dev/null 2>&1
