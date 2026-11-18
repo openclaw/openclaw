@@ -37,6 +37,8 @@ Assess actual impact, dependency closure, and maintenance risk, not just labels.
 These are selection defaults, not permission to expand frozen intake, bypass
 approval, or weaken validation. Record exceptions and rationale in the ledger.
 
+The required [bundled Codex update](preparation.md#update-and-pin-bundled-codex-required) is not subject to the optional product hotfix thresholds.
+
 ## Freeze the Audit
 
 1. Pin the exact maintenance-line baseline and the exact `origin/main` SHA.

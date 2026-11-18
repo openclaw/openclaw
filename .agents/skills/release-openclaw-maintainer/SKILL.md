@@ -45,6 +45,8 @@ Read only the references needed for the selected phase:
 
 ## Backports and new fixes
 
+During preparation, complete the required [bundled Codex update and pin](references/preparation.md#update-and-pin-bundled-codex-required).
+
 For every release track, apply approved changes already on `main` directly to
 the canonical release branch, one commit at a time in dependency order with
 `git cherry-pick -x`. Keep each backport separate, including the initial set;
