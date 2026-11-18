@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { readProcessIdentity, isSupported } from "@openclaw/proc-safe/identity";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { isPidDefinitelyDead, isPidDefinitelyDeadAsync } from "../../shared/pid-alive.js";
@@ -94,8 +96,35 @@ async function waitForExit(entry: Pick<AdoptedProcess, "pid" | "startTime">, tim
   return (await isSameLiveProcess(entry)) === false;
 }
 
-/** SIGTERM, then SIGKILL after the cancel grace; each signal re-checks process identity. */
-async function terminate(entry: Pick<AdoptedProcess, "pid" | "startTime">): Promise<StopOutcome> {
+/** The process group a live pid runs in; undefined when it cannot be read. */
+function processGroupOf(pid: number): number | undefined {
+  try {
+    if (process.platform === "linux" || process.platform === "android") {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      return Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[2]) || undefined;
+    }
+    const ps = spawnSync("/bin/ps", ["-o", "pgid=", "-p", String(pid)], {
+      encoding: "utf8",
+      timeout: 1_000,
+    });
+    return (ps.status === 0 && Number(ps.stdout.trim())) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * SIGTERM, then SIGKILL after the cancel grace; each signal re-checks process identity.
+ * A group stop signals the group the survivor ran in at hand-off, while it still runs there,
+ * so children it forked after adoption stop with it. That group was created for its command,
+ * never the Gateway's own. Accepted edge: a group emptied in the instant after the survivor
+ * exited can be reused before the final SIGKILL.
+ */
+async function terminate(
+  entry: Pick<AdoptedProcess, "pid" | "startTime" | "pgid">,
+  group: boolean,
+): Promise<StopOutcome> {
+  let pgid: number | undefined;
   // "sent", "gone", or the reason the signal failed.
   const signal = async (
     name: NodeJS.Signals,
@@ -107,8 +136,13 @@ async function terminate(entry: Pick<AdoptedProcess, "pid" | "startTime">): Prom
     if (live === undefined) {
       return { failed: "process identity unavailable" };
     }
+    if (group && name === "SIGTERM" && entry.pgid && entry.pgid > 1) {
+      const current = processGroupOf(entry.pid);
+      pgid =
+        current === entry.pgid && current !== processGroupOf(process.pid) ? current : undefined;
+    }
     try {
-      process.kill(entry.pid, name);
+      process.kill(pgid ? -pgid : entry.pid, name);
       return { result: "sent" };
     } catch (error) {
       const code = error instanceof Error && "code" in error ? String(error.code) : String(error);
@@ -120,6 +154,14 @@ async function terminate(entry: Pick<AdoptedProcess, "pid" | "startTime">): Prom
     return { status: "stopped" };
   }
   if ("result" in term && (await waitForExit(entry, GRACEFUL_CANCEL_TIMEOUT_MS))) {
+    // Group members that outlived the grace are forced too.
+    if (pgid) {
+      try {
+        process.kill(-pgid, "SIGKILL");
+      } catch {
+        // The group already emptied.
+      }
+    }
     return { status: "stopped" };
   }
   const kill = await signal("SIGKILL");
@@ -138,8 +180,8 @@ async function terminate(entry: Pick<AdoptedProcess, "pid" | "startTime">): Prom
   return { status: "uncertain", reason };
 }
 
-function stopEntry(entry: AdoptedProcess): Promise<StopOutcome> {
-  return (entry.stopping ??= terminate(entry).then((outcome) => {
+function stopEntry(entry: AdoptedProcess, group = false): Promise<StopOutcome> {
+  return (entry.stopping ??= terminate(entry, group).then((outcome) => {
     if (outcome.status === "stopped") {
       settle(entry);
     } else {
@@ -152,13 +194,14 @@ function stopEntry(entry: AdoptedProcess): Promise<StopOutcome> {
 
 /**
  * Take custody of a handed-off process: it is reaped when it exits and stopped on
- * request, session reset, or host stop. Undefined when it already exited.
+ * request, session reset, or host stop. Chat end and host stop stop its whole group;
+ * a single `process kill` stops only this process. Undefined when it already exited.
  */
 export function adoptReleasedProcess(
   scopeKey: string,
   survivor: ReleasedProcess,
   onExit: () => void,
-): { stop: () => Promise<StopOutcome> } | undefined {
+): { stop: (options?: { group?: boolean }) => Promise<StopOutcome> } | undefined {
   const startTime = startTimeOf(survivor.pid);
   if (startTime === undefined && isPidDefinitelyDead(survivor.pid)) {
     return undefined;
@@ -171,7 +214,7 @@ export function adoptReleasedProcess(
     void reap();
   }, REAP_INTERVAL_MS);
   state.reaper.unref();
-  return { stop: () => stopEntry(entry) };
+  return { stop: (options) => stopEntry(entry, options?.group) };
 }
 
 /** A one-shot run ends: its processes keep running without OpenClaw. */
@@ -199,7 +242,7 @@ export async function forgetReleasedProcesses(scopeKey: string): Promise<Release
 /** Host stop: stop every adopted process and report those whose exit could not be confirmed. */
 export async function stopReleasedProcesses(): Promise<void> {
   const entries = [...state.adopted];
-  const outcomes = await Promise.all(entries.map(stopEntry));
+  const outcomes = await Promise.all(entries.map((entry) => stopEntry(entry, true)));
   const unconfirmed = entries.flatMap((entry, index) => {
     const outcome = outcomes[index]!;
     return outcome.status === "uncertain" ? [`pid ${entry.pid} (${outcome.reason})`] : [];

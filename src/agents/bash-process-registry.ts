@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionEventTarget } from "../auto-reply/reply/session-event-contract.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
+import type { StopOutcome } from "../process/supervisor/released-processes.js";
 import type {
   ManagedRunStdin,
   ProcessRunActivity,
@@ -230,9 +231,9 @@ export interface ProcessSession {
   backgrounded: boolean;
   /** Explicit `background: true` service. */
   independentService?: true;
-  /** A process a completed command left running, tracked by identity instead of a run. */
+  /** A process a completed command left running, tracked by identity; chat end stops its group. */
   adopted?: {
-    stop: () => Promise<{ status: "stopped" } | { status: "uncertain"; reason: string }>;
+    stop: (options?: { group?: boolean }) => Promise<StopOutcome>;
   };
   /** PTY cursor key mode: unknown until a PTY reports smkx/rmkx. */
   cursorKeyMode: "unknown" | "normal" | "application";
@@ -310,15 +311,14 @@ export function onBackgroundProcessesChanged(listener: (target: ProcessChange) =
 }
 
 function queueProcessChange(session: ProcessSession) {
-  const sessionKey = session.scopeKey;
   if (changeListeners.size === 0) {
     return;
   }
-  const agents = pendingChanges.get(sessionKey);
+  const agents = pendingChanges.get(session.scopeKey);
   if (agents) {
     agents.add(session.agentId);
   } else {
-    pendingChanges.set(sessionKey, new Set([session.agentId]));
+    pendingChanges.set(session.scopeKey, new Set([session.agentId]));
   }
   // Bound chatty output to the former five-second polling cadence. Later writes
   // never postpone the signal, and no command text or output crosses this bus.

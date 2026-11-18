@@ -2,7 +2,8 @@ import type { WindowsJobExtinction } from "../../../scripts/lib/managed-windows-
 import type { ProcessExecutionIntent } from "../linux-exec-cgroup.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
 
-export type ReleasedProcess = { pid: number; command?: string };
+/** `pgid` is the process group it ran in at hand-off; a chat-end stop signals that group. */
+export type ReleasedProcess = { pid: number; command?: string; pgid?: number };
 
 /** Custody ended without signalling: these processes outlived their command. */
 export type ProcessRelease = { status: "released"; survivors: ReleasedProcess[] };

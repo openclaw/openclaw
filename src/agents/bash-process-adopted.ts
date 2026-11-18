@@ -101,8 +101,8 @@ function adoptSurvivor(parent: ProcessSession, survivor: ReleasedProcess) {
     pid: survivor.pid,
     processActivity: { resultSettled: false, lastOutputAtMs: Date.now() },
     adopted: {
-      stop: async () => {
-        const outcome = await adopted.stop();
+      stop: async (options) => {
+        const outcome = await adopted.stop(options);
         session.cleanupUncertain = outcome.status === "uncertain";
         if (outcome.status === "uncertain") {
           appendOutput(

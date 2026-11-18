@@ -1,7 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
@@ -72,7 +72,7 @@ function failure(data: Record<string, unknown>) {
   };
 }
 
-/** The child's three styles of leftover work: a hand-off, a service and a survivor. */
+/** The child's styles of leftover work: a hand-off, a service, a survivor and its later child. */
 async function startChildProcesses(childKey: string): Promise<number[]> {
   const pidOf = (text: string | undefined) => Number(/PID=(\d+)/.exec(text ?? "")?.[1]);
   return withEnvAsync(
@@ -82,6 +82,7 @@ async function startChildProcesses(childKey: string): Promise<number[]> {
       SHELL: "/bin/sh",
     },
     async () => {
+      const cwd = mkdtempSync(path.join(os.tmpdir(), "task-end-exec-"));
       const exec = createExecTool({
         host: "gateway",
         mode: "full",
@@ -89,7 +90,7 @@ async function startChildProcesses(childKey: string): Promise<number[]> {
         allowBackground: true,
         notifyOnExit: false,
         scopeKey: childKey,
-        cwd: mkdtempSync(path.join(os.tmpdir(), "task-end-exec-")),
+        cwd,
       });
       const ids: string[] = [];
       for (const args of [
@@ -101,12 +102,18 @@ async function startChildProcesses(childKey: string): Promise<number[]> {
       await vi.waitFor(() =>
         expect(ids.map((id) => pidOf(getSession(id)?.aggregated))).not.toContain(Number.NaN),
       );
+      // The survivor forks its child after the command returned and it was adopted.
       const left = await exec.execute("left", {
-        command: `${sleeper} >/dev/null 2>&1 & echo PID=$!`,
+        command: `sh -c 'sleep 1; sleep 60 & echo PID=$! > late.pid; wait' >/dev/null 2>&1 & echo PID=$!`,
+      });
+      const late = path.join(cwd, "late.pid");
+      await vi.waitFor(() => expect(readFileSync(late, "utf8")).toMatch(/PID=\d+/), {
+        timeout: 10_000,
       });
       return [
         ...ids.map((id) => pidOf(getSession(id)?.aggregated)),
         pidOf((left.details as { aggregated: string }).aggregated),
+        pidOf(readFileSync(late, "utf8")),
       ];
     },
   );

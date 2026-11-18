@@ -525,11 +525,12 @@ export function describeReleasedProcesses(
   return rows
     .filter((row) => row.live && released.has(row.pid) && !helpers.has(row.pid))
     .toSorted((left, right) => left.pid - right.pid)
-    .map(({ pid, command }) =>
+    .map(({ pid, pgid, command }) =>
       command === undefined
-        ? { pid }
+        ? { pid, pgid }
         : {
             pid,
+            pgid,
             command:
               command.length > MAX_RELEASED_COMMAND_CHARS
                 ? `${command.slice(0, MAX_RELEASED_COMMAND_CHARS - 1)}…`

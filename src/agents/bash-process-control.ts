@@ -144,7 +144,8 @@ async function drainExecSessions(
         markCancellationRequested(session);
         if (session.adopted) {
           // Adopted processes have no run to join; the stop outcome is the confirmation.
-          adoptedStops.push(session.adopted.stop());
+          // Chat end takes its group too: children it forked after adoption.
+          adoptedStops.push(session.adopted.stop({ group: true }));
         } else if (session.durable) {
           session.durable.cancel(assertCurrent);
         } else {
