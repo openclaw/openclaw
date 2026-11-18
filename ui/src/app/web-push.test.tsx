@@ -510,8 +510,8 @@ describe("web push Gateway reconciliation", () => {
     });
     const firstSave = createDeferred();
     const firstSaveStarted = createDeferred();
-    const first = notificationPreferences(true);
-    const second = notificationPreferences(false);
+    const first = { ...notificationPreferences(true), agentIds: ["unlisted", "research"] };
+    const second = { ...notificationPreferences(false), agentIds: ["unlisted", "main"] };
     let stored = first;
     let saveCount = 0;
     const request = vi.fn(async (method: string, params?: unknown) => {
