@@ -594,13 +594,6 @@ const startupEnglish = {
       waitingForIdle: "Waiting for active work · forced update in {time}",
       held: "Update held · resumes in {time}",
       applying: "Applying update…",
-      // A campaign without a target restarts the Gateway to finish an earlier update's plugins.
-      finishing: {
-        countdown: "Restarting in {time} to finish plugin updates",
-        waitingForIdle: "Waiting for active work · restarting in {time} to finish plugin updates",
-        held: "Restart held · resumes in {time}",
-        applying: "Finishing plugin updates…",
-      },
     },
 
     run: {

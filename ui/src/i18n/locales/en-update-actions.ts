@@ -10,6 +10,14 @@ const enUpdateActions = {
     refreshUnreachable: "Couldn't reach the server",
     refreshBlocked: "Finish pending work first",
     campaign: en.updates.campaign,
+    // A campaign without a target restarts the Gateway to finish an earlier update's plugins.
+    // Only lazy update views format it, so this copy stays out of the boot catalog.
+    finishing: {
+      countdown: "Restarting in {time} to finish plugin updates",
+      waitingForIdle: "Waiting for active work · restarting in {time} to finish plugin updates",
+      held: "Restart held · resumes in {time}",
+      applying: "Finishing plugin updates…",
+    },
     holdOneHour: "Hold 1 h",
     reviewUpdate: "Review update",
     run: {
@@ -171,6 +179,7 @@ export const registerUpdateActionsEnglish = Object.assign(
       refreshBlocked,
       holdOneHour,
       reviewUpdate,
+      finishing,
     } = enUpdateActions.updates;
     const { phase, ...runLabels } = run;
     Object.assign(en.updates, {
@@ -180,6 +189,7 @@ export const registerUpdateActionsEnglish = Object.assign(
       refreshBlocked,
       holdOneHour,
       reviewUpdate,
+      finishing,
     });
     Object.assign(en.updates.run, runLabels);
     Object.assign(en.updates.run.phase, phase);

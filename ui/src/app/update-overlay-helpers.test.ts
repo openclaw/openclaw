@@ -5,6 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateScheduleState } from "../api/types.ts";
 import { i18n } from "../i18n/index.ts";
+import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 import { client } from "./overlays-access.test-support.ts";
 import {
   createUpdateStatusRefresher,
@@ -164,6 +165,8 @@ describe("update schedule hydration", () => {
     expect(label({ state: "applying", holdUntilMs: 762_000 })).toBe("Applying update…");
 
     // Without a target, the campaign restarts the running version to finish owed plugin updates.
+    // The lazy update views that format it register this copy.
+    registerUpdateActionsEnglish();
     const { target: _target, ...untargeted } = schedule;
     const finishing = (campaign: Partial<NonNullable<UpdateScheduleState["campaign"]>> = {}) =>
       formatUpdateCampaignLabel(
