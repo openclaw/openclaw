@@ -22,9 +22,6 @@ export function DiscordIdentity() {
     !view.read().selected?.senderIds.length &&
     !view.read().error;
   const linked = () => !view.read().loading && Boolean(view.read().selected?.senderIds.length);
-  // No Discord account on this Gateway means nothing to link; the row would only say so.
-  const noDiscord = () =>
-    !view.read().loading && !view.read().error && view.read().accounts.length === 0;
   onSettled(() => {
     const stop = context.gateway.subscribe((snapshot) => state.sync(snapshot));
     const stopEvents = context.gateway.subscribeEvents((event) => {
@@ -45,7 +42,7 @@ export function DiscordIdentity() {
     };
   });
   return (
-    <Show when={!noDiscord()}>
+    <>
       <SettingsRow
         title={t("profilePage.discord.title")}
         description={
@@ -62,7 +59,11 @@ export function DiscordIdentity() {
                   <span class="identity-account">{view.read().selected?.senderIds.join(", ")}</span>
                 </span>
               ) : unavailable() ? (
-                t("profilePage.discord.unavailable")
+                view.read().available && view.read().accounts.length === 0 ? (
+                  t("profilePage.discord.noGatewayAccount")
+                ) : (
+                  t("profilePage.discord.unavailable")
+                )
               ) : (
                 // Holds the line while the status is pending or failed; the failure has its own row.
                 <span
@@ -100,7 +101,15 @@ export function DiscordIdentity() {
                     when={view.read().flow}
                     fallback={
                       // Linking that isn't set up has no action here; the description says why.
-                      <Show when={!unavailable()}>
+                      <Show
+                        when={!unavailable()}
+                        fallback={
+                          <SettingsStatus
+                            kind="muted"
+                            label={t("profilePage.discord.notConnected")}
+                          />
+                        }
+                      >
                         <button
                           class="btn btn--sm"
                           disabled={
@@ -187,6 +196,6 @@ export function DiscordIdentity() {
           </div>
         )}
       </Show>
-    </Show>
+    </>
   );
 }
