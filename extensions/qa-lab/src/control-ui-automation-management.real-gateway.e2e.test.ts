@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { GATEWAY_RESTART_RESUME_TEXT } from "openclaw/plugin-sdk/qa-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "openclaw/plugin-sdk/test-env";
 import type { Page } from "playwright";
@@ -293,8 +294,7 @@ suite.define(() => {
         });
         expect(originalMessages[0]?.provenance).toMatchObject({ kind: "external_user" });
         const userInputs = userMessages.map(userMessageText);
-        const resumeText =
-          "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.";
+        const resumeText = GATEWAY_RESTART_RESUME_TEXT;
         expect(userInputs.filter((text) => text.includes(resumeText))).toHaveLength(1);
         expect(
           await gateway.call("cron.list", { sessionKey, includeDisabled: true }),

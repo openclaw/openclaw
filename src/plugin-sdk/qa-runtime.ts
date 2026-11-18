@@ -20,6 +20,7 @@ export { mergeAttemptToolMediaPayloads } from "../agents/embedded-agent-runner/r
 export { wrapPromptDataBlock } from "../agents/sanitize-for-prompt.js";
 export { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 export { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
+export { GATEWAY_RESTART_RESUME_TEXT } from "../gateway/session-restart-resume-prompt.js";
 export {
   createLazyCliRuntimeLoader,
   createLiveTransportQaCliRegistration,

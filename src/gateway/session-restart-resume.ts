@@ -62,10 +62,9 @@ import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-age
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { GATEWAY_RESTART_RESUME_TEXT } from "./session-restart-resume-prompt.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
-const GATEWAY_RESTART_RESUME_TEXT =
-  "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.";
 const BACKGROUND_EXEC_STOPPED_TEXT =
   "Background exec processes were stopped; rerun them if still needed.";
 // Old shutdown bumped updatedAt, but abandoned cycles can survive for weeks. Limit adoption
