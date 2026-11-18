@@ -14,20 +14,12 @@ import {
   startQaMockOpenAiServer,
   writeJson,
 } from "../../../../extensions/qa-lab/api.js";
-import {
-  hasTranscriptMediaFacts,
-  isProjectedForwardedMessage,
-} from "../../../../src/gateway/chat-display-projection.helpers.js";
+import { isProjectedForwardedMessage } from "../../../../src/gateway/chat-display-projection.helpers.js";
 import type { SessionsListResult } from "../../../../src/gateway/session-utils.types.js";
 import { listenLoopback } from "../../../helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaPreparedRepoCliCommand } from "../../../helpers/qa-prepared-repo-cli.js";
-import {
-  createRequestSummary,
-  deliveryQueueDiagnostics,
-  rethrowWithDeliveryDiagnostics,
-} from "./delivery-diagnostics.test-support.js";
 import {
   bindTelegramProof,
   telegramProofChannel,
@@ -72,28 +64,14 @@ const documents: Array<{ chatId: string; name: string; content: string }> = [];
 const writeCalls: JsonObject[] = [];
 const toolCalls: JsonObject[] = [];
 const completedWrites: JsonObject[] = [];
-const finalizers: Array<{ requestId: number; callId: unknown; emittedArtifact: boolean | null }> =
-  [];
+const finalizers: Array<{ requestId: number; callId: unknown }> = [];
 const markerResponses: boolean[] = [];
-const requests = createRequestSummary();
 let overloads = 0;
 let modelRequestId = 0;
 let overloadedRequestId = 0;
 const marker = `QA-RECOVERED-ARTIFACT-${randomUUID()}`;
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
-  const operation =
-    /^\/bot[^/]+\/(getMe|getUpdates|getChat|sendMessage|sendDocument|sendChatAction)$/u.exec(
-      pathname,
-    )?.[1];
-  requests.record(
-    req.method,
-    operation
-      ? `/bot/:token/${operation}`
-      : pathname === "/v1/responses"
-        ? "/v1/responses"
-        : "/other",
-  );
   if (!pathname.startsWith("/v1/") && !pathname.endsWith("/sendDocument")) {
     await api.handle(req, res);
     return;
@@ -114,11 +92,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // The next request carrying the completed write must recover the reply,
     // regardless of its tool catalog or the wording of its instructions.
     const finalizer = modelRequest && completedWrite !== undefined && overloads > 0;
-    const finalizerObservation: (typeof finalizers)[number] | undefined = finalizer
-      ? { requestId: modelRequestId, callId: completedWrite.call_id, emittedArtifact: null }
-      : undefined;
-    if (finalizerObservation) {
-      finalizers.push(finalizerObservation);
+    if (finalizer) {
+      finalizers.push({ requestId: modelRequestId, callId: completedWrite.call_id });
     } else if (modelRequest && completedWrite) {
       completedWrites.push(completedWrite);
       overloads += 1;
@@ -147,13 +122,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         .split("\n")
         .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
         .map((line) => JSON.parse(line.slice(6)) as JsonObject);
-      if (finalizerObservation) {
-        finalizerObservation.emittedArtifact = events.some(
-          (event) =>
-            event.type === "response.output_text.done" &&
-            String(event.text).includes(`MEDIA:./${FILE_NAME}`),
-        );
-      }
       for (const event of events) {
         const item = event.item as JsonObject | undefined;
         if (
@@ -359,8 +327,6 @@ test("delivers a recovered artifact once while preserving its inter-session tran
     expect(documents).toHaveLength(0);
     // Exclude seed-run context reads, but count every recovery tool call.
     const recoveryToolStart = toolCalls.length;
-    const artifactStart = Date.now();
-    const artifactLogStart = gateway.markLogs();
     const receipt = (await gateway.call("chat.send", {
       sessionKey,
       message: `Empty response after write recovery QA check: write ${FILE_NAME}, then reply with exact marker: \`${marker}\nMEDIA:./${FILE_NAME}\`.`,
@@ -379,67 +345,7 @@ test("delivers a recovered artifact once while preserving its inter-session tran
       { timeoutMs: 35_000 },
     );
     expect(waited).toMatchObject({ status: "ok" });
-    try {
-      await expect.poll(() => documents.length, { timeout: 30_000 }).toBe(1);
-    } catch (error) {
-      await rethrowWithDeliveryDiagnostics(error, async () => {
-        const logs = gateway.readLogsSince(artifactLogStart);
-        const facts = {
-          runId: receipt.runId,
-          overloadedRequestId,
-          finalizers: finalizers.slice(-4).map(({ requestId, emittedArtifact }) => ({
-            requestId,
-            emittedArtifact,
-          })),
-          documentsReceived: documents.length,
-          requests: requests.snapshot(),
-          ...deliveryQueueDiagnostics(gateway, [sessionKey], { since: artifactStart }),
-          finalizationAndDispatch: logs
-            .split("\n")
-            .flatMap((line) => {
-              if (line.includes("running isolated finalization")) {
-                return ["finalization_started"];
-              }
-              if (line.includes("settled-turn finalization completed without a visible answer")) {
-                return ["finalization_empty"];
-              }
-              if (line.includes("settled-turn finalization failed:")) {
-                return ["finalization_failed"];
-              }
-              if (line.includes("webchat media finalization failed:")) {
-                return ["media_finalization_failed"];
-              }
-              if (line.includes("Failed to route reply to telegram:")) {
-                return ["telegram_dispatch_failed"];
-              }
-              if (line.includes("followup queue: origin reply suppressed by source policy")) {
-                return ["origin_dispatch_suppressed"];
-              }
-              return [];
-            })
-            .slice(-6),
-        };
-        const observed = await gateway
-          .call("chat.history", { sessionKey, limit: 30 }, { timeoutMs: 1_000 })
-          .then((result: unknown) => {
-            const { messages } = result as { messages: Array<Record<string, unknown>> };
-            const authored = messages.filter(
-              (message) => message.role === "assistant" && !isProjectedForwardedMessage(message),
-            );
-            return {
-              marker: authored.some((message) => JSON.stringify(message.content).includes(marker)),
-              media: authored.some(
-                (message) =>
-                  hasTranscriptMediaFacts(message) ||
-                  (Array.isArray(message.content) &&
-                    message.content.some((block) => block?.type === "attachment")),
-              ),
-            };
-          })
-          .catch(() => "unavailable");
-        return { ...facts, authoredHistory: observed };
-      });
-    }
+    await expect.poll(() => documents.length, { timeout: 30_000 }).toBe(1);
     const history = (await gateway.call("chat.history", { sessionKey, limit: 30 })) as {
       messages: Array<{ role: string; content: unknown }>;
     };

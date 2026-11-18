@@ -4,8 +4,6 @@ import {
 } from "../../../../src/infra/delivery-queue-sqlite-bound.js";
 import { resolveDeliveryQueueAttemptCount } from "../../../../src/infra/delivery-queue-sqlite.types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../../src/infra/kysely-sync.js";
-import { OUTBOUND_EXECUTABLE_QUEUE_NAMES } from "../../../../src/infra/outbound/delivery-queue-namespaces.js";
-import { projectOutboundDelivery } from "../../../../src/infra/outbound/delivery-queue-projection.js";
 import { withOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db-readonly.js";
 
 export function deliveryErrorCode(error: string | null | undefined) {
@@ -27,7 +25,7 @@ export function deliveryErrorCode(error: string | null | undefined) {
   );
 }
 
-function readQueue(env: NodeJS.ProcessEnv, sessionKeys: string[], ids: string[], since: number) {
+function readQueue(env: NodeJS.ProcessEnv, sessionKeys: string[], ids: string[]) {
   if (!env.OPENCLAW_STATE_DIR) {
     return "unavailable";
   }
@@ -41,7 +39,7 @@ function readQueue(env: NodeJS.ProcessEnv, sessionKeys: string[], ids: string[],
             .selectAll()
             .where((eb) =>
               eb.or([
-                eb.and([eb("session_key", "in", sessionKeys), eb("enqueued_at", ">=", since)]),
+                eb("session_key", "in", sessionKeys),
                 ...(ids.length > 0 ? [eb("id", "in", ids)] : []),
               ]),
             )
@@ -51,12 +49,6 @@ function readQueue(env: NodeJS.ProcessEnv, sessionKeys: string[], ids: string[],
           .rows.toReversed()
           .map((row) => {
             const entry = inflateDeliveryQueueRow(row);
-            const prepared =
-              entry &&
-              (row.status === "pending" || row.recovery_state === "settlement_pending") &&
-              OUTBOUND_EXECUTABLE_QUEUE_NAMES.some((name) => name === row.queue_name)
-                ? projectOutboundDelivery(row.queue_name, entry).preparedBatch
-                : undefined;
             return {
               id: row.id,
               queue: row.queue_name,
@@ -70,13 +62,6 @@ function readQueue(env: NodeJS.ProcessEnv, sessionKeys: string[], ids: string[],
                 (entry && "owner" in entry),
               ),
               lastErrorCode: deliveryErrorCode(row.last_error),
-              prepared: prepared?.entries
-                .slice(0, 3)
-                .map((item) =>
-                  item.status === "accepted"
-                    ? { status: item.status, mediaCount: item.preparedMediaCount }
-                    : { status: item.status, reason: item.reason },
-                ),
             };
           }),
       { env },
@@ -89,9 +74,9 @@ function readQueue(env: NodeJS.ProcessEnv, sessionKeys: string[], ids: string[],
 export function deliveryQueueDiagnostics(
   gateway: { runtimeEnv: NodeJS.ProcessEnv; logs(): string },
   sessionKeys: string[],
-  { ids = [], since = 0 }: { ids?: string[]; since?: number } = {},
+  ids: string[],
 ) {
-  const queue = readQueue(gateway.runtimeEnv, sessionKeys, ids, since);
+  const queue = readQueue(gateway.runtimeEnv, sessionKeys, ids);
   const rowIds = new Set([...ids, ...(Array.isArray(queue) ? queue.map(({ id }) => id) : [])]);
   const recovery: Array<{ source: string; rowId?: string; event: string; at?: string }> = [];
   let unmatchedRecoveryEvents = 0;
@@ -145,9 +130,8 @@ export function deliveryQueueDiagnostics(
 export function createRequestSummary() {
   const counts = new Map<string, { method: string; path: string; count: number }>();
   return {
-    record(method: string | undefined, path: string) {
-      const httpMethod =
-        method && /^(?:GET|POST|PUT|PATCH|DELETE|HEAD)$/u.test(method) ? method : "OTHER";
+    record(method: string, path: string) {
+      const httpMethod = /^(?:GET|POST|PUT|PATCH|DELETE|HEAD)$/u.test(method) ? method : "OTHER";
       const key = `${httpMethod} ${path}`;
       const existing = counts.get(key);
       if (existing) {
@@ -160,14 +144,11 @@ export function createRequestSummary() {
   };
 }
 
-export async function rethrowWithDeliveryDiagnostics(
-  error: unknown,
-  collect: () => object | Promise<object>,
-): Promise<never> {
+export function rethrowWithDeliveryDiagnostics(error: unknown, collect: () => object): never {
   if (error instanceof Error) {
     let diagnostics = "unavailable";
     try {
-      const bytes = Buffer.from(JSON.stringify(await collect()));
+      const bytes = Buffer.from(JSON.stringify(collect()));
       diagnostics =
         bytes.length > 4_000 ? `${bytes.subarray(0, 4_000).toString()}…` : bytes.toString();
     } catch {

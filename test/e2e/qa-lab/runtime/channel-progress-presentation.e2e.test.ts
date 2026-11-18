@@ -1308,7 +1308,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
           ...deliveryQueueDiagnostics(
             gateway,
             childSessionKey ? [requesterKey, childSessionKey] : [requesterKey],
-            { ids: [...observedQueueIds, ...(taskQueueId ? [taskQueueId] : [])] },
+            [...observedQueueIds, ...(taskQueueId ? [taskQueueId] : [])],
           ),
         };
       }),
