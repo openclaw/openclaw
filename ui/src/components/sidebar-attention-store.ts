@@ -41,7 +41,7 @@ import {
   cronOverdueAt,
 } from "./sidebar-attention-items.ts";
 import type { OpenClawIdAttention } from "./sidebar-attention-openclaw-id.ts";
-import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
+import { retainedDismissals, resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
 
 type SidebarAttentionOwner = {
   connectionRevision: number;
@@ -330,7 +330,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       return;
     }
     this.#dismissed = reconcileSidebarAttentionDismissals({
-      active: this.#buildEntries().flatMap((entry) => (entry.dismissal ? [entry.dismissal] : [])),
+      active: this.#buildEntries().flatMap(retainedDismissals),
       key: this.#dismissalKey,
       scope,
     });

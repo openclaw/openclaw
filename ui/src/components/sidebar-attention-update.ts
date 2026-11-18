@@ -13,6 +13,7 @@ import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   isUpdateAttentionForced,
   resolveUpdateAttentionDismissal,
+  type SidebarAttentionDismissal,
 } from "./sidebar-attention-dismissals.ts";
 import type { SidebarInboxEntry } from "./sidebar-attention-entries.ts";
 
@@ -40,6 +41,13 @@ export function isUpdateRunAttentionVisible(
       (!acknowledged &&
         run.finishedAtMs !== null &&
         Date.now() - run.finishedAtMs < 24 * 60 * 60 * 1000)),
+  );
+}
+
+/** Stored dismissals an Inbox entry keeps, including one its update row shows without offering. */
+export function retainedDismissals(entry: SidebarInboxEntry): SidebarAttentionDismissal[] {
+  return [entry.dismissal, entry.type === "update" ? entry.retainedDismissal : null].flatMap(
+    (dismissal) => (dismissal ? [dismissal] : []),
   );
 }
 
@@ -82,11 +90,17 @@ export function resolveSidebarUpdateAttention(
   ) {
     return null;
   }
-  // A finishing restart leads the row it shares with the run that owes it, so dismissing the
-  // run's outcome cannot also hide the restart.
-  const dismissal =
-    runVisible && run?.status !== "running" && !isFinishingUpdateCampaign(snapshot.updateSchedule)
+  const runDismissal =
+    runVisible && run?.status !== "running"
       ? { kind: "updateAvailable" as const, signature: JSON.stringify(["run", run?.runId]) }
+      : null;
+  // A finishing restart leads the row it shares with the run that owes it, so dismissing the
+  // run's outcome cannot also hide the restart. A stored dismissal of that outcome applies
+  // again once the restart is gone.
+  const finishing = isFinishingUpdateCampaign(snapshot.updateSchedule);
+  const dismissal =
+    runDismissal && !finishing
+      ? runDismissal
       : resolveUpdateAttentionDismissal({
           gatewayBootId: context.gateway.snapshot.hello?.server?.bootId,
           updateAvailable: snapshot.updateAvailable,
@@ -97,6 +111,7 @@ export function resolveSidebarUpdateAttention(
     type: "update",
     category: "system",
     dismissal: canUpdate && !forced ? dismissal : null,
+    retainedDismissal: finishing ? runDismissal : null,
     requiresAction: forced || (canUpdate && actionable),
     severity: snapshot.updateStatusBanner?.tone === "danger" ? "error" : "warning",
   };
