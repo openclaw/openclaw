@@ -103,18 +103,21 @@ export class DraftGatewayState {
   #synchronizeGatewayName() {
     const gateway =
       this.read().isConnected && this.#gatewayConnectedValue ? this.#gatewaySource : null;
-    const available =
-      canReadSystemInfo(this.read().context?.gateway.snapshot) &&
-      document.visibilityState !== "hidden";
-    const args = [gateway, available, this.#gatewayConnectionEpochValue];
+    const allowed = canReadSystemInfo(this.read().context?.gateway.snapshot);
+    const epoch = this.#gatewayConnectionEpochValue;
+    const args = [gateway, epoch, allowed, document.visibilityState];
     if (args.every((arg, index) => Object.is(arg, this.#gatewayNameArgs[index]))) {
       return;
+    }
+    // Visibility pauses discovery, but only a new connection or loss of access
+    // retires the last accepted name.
+    if (!allowed || gateway !== this.#gatewayNameArgs[0] || epoch !== this.#gatewayNameArgs[1]) {
+      this.#gatewayNameValue = "";
     }
     this.#gatewayNameArgs = args;
     this.#gatewayNameRequest?.abort();
     this.#gatewayNameRequest = undefined;
-    this.#gatewayNameValue = "";
-    if (!gateway || !available) {
+    if (!gateway || !allowed || document.visibilityState === "hidden") {
       return;
     }
     const request = new AbortController();
@@ -218,6 +221,10 @@ export class DraftGatewayState {
 
   get gatewayName(): string {
     return this.#gatewayNameValue;
+  }
+
+  get gatewayNamePending(): boolean {
+    return !this.#gatewayNameValue && this.#gatewayNameRequest !== undefined;
   }
 
   get cloudProfiles(): readonly DraftCloudProfile[] {
