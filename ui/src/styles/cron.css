@@ -471,7 +471,7 @@
 .cron-prompt__name::placeholder,
 .cron-prompt__text::placeholder,
 .cron-tray-input::placeholder,
-.cron-advanced__card .settings-input::placeholder {
+.cron-advanced .settings-input::placeholder {
   color: var(--cron-placeholder);
 }
 
@@ -847,21 +847,21 @@
   transform: rotate(180deg);
 }
 
-.cron-advanced__desc {
-  margin: 14px 16px 0;
+/* One settings section per concern; pickers' menus and focus rings stay unclipped. */
+.cron-advanced__sections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  min-width: 0;
+  margin-top: var(--space-1);
 }
 
-.cron-advanced__group + .cron-advanced__group {
-  margin-top: 6px;
+.cron-advanced__sections .settings-group {
+  overflow: visible;
 }
 
-.cron-advanced__heading {
-  margin: 14px 16px 2px;
-  color: var(--muted-strong);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+.cron-advanced__sections .settings-section__header {
+  padding-inline: 16px;
 }
 
 .cron-trigger-icon {

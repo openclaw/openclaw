@@ -738,7 +738,7 @@ suite.define(() => {
           after: "",
           cooldown: "1.001",
           mode: "",
-          modeLabel: "Inherit global setting",
+          modeLabel: "Default",
         };
         expect({ loaded, savedFields, clonedFields }).toEqual({
           loaded: expectedFields,
@@ -775,14 +775,14 @@ suite.define(() => {
         await deliveryMode.locator(".picker-select__trigger").click();
         const inheritOption = deliveryMode.locator('[role="option"][data-value=""]');
         await inheritOption.waitFor({ state: "visible" });
-        expect(await inheritOption.textContent()).toContain("Inherit global setting");
+        expect(await inheritOption.textContent()).toContain("Default");
         await inheritOption.click();
         await expect.poll(() => pickerValue(deliveryMode)).toBe("");
         await expect
           .poll(() =>
             deliveryMode.locator(".picker-select__trigger .picker-select__label").textContent(),
           )
-          .toBe("Inherit global setting");
+          .toBe("Default");
         const cleared = await submitCronForm(evidence, "cron.update");
         expect(cleared.request.params).toMatchObject({
           patch: { failureAlert: { after: null, cooldownMs: null, mode: null } },
