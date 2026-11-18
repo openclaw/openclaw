@@ -6,10 +6,7 @@ import type {
   NodePairingState,
   PairedDeviceTokenIdentity,
 } from "./device-pairing-core.types.js";
-import {
-  mergeDevicePairingRoles,
-  normalizeDevicePairingRole,
-} from "./device-pairing-state.kernel.js";
+import { mergeDevicePairingRoles, normalizeDevicePairingRole } from "./device-pairing-roles.js";
 import type { DeviceAuthToken, PairedDevice } from "./device-pairing.types.js";
 export type { NodePairingGeneration, NodePairingState } from "./device-pairing-core.types.js";
 

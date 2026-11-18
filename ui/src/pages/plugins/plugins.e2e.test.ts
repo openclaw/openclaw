@@ -150,7 +150,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     expect.soft(await labels()).toEqual(categories);
   });
 
-  it("renders unified discovery with focused search, category sections, and settings navigation", async () => {
+  it("renders unified discovery with an unfocused search, category sections, and settings navigation", async () => {
     const context = await newContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -165,9 +165,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const catalog = page.getByRole("region", { name: "Explore plugins" });
       const search = catalog.getByRole("searchbox", { name: "Search plugins" });
       await search.waitFor();
-      await expect
-        .poll(() => search.evaluate((element) => element === document.activeElement))
-        .toBe(true);
+      expect(await search.evaluate((element) => element === document.activeElement)).toBe(false);
       expect(
         await page.getByRole("heading", { name: "Installed plugins", exact: true }).count(),
       ).toBe(0);

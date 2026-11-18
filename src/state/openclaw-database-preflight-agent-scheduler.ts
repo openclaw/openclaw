@@ -1,8 +1,8 @@
 import { realpathSync } from "node:fs";
 import { availableParallelism } from "node:os";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import {
   isSqliteInspectionDeadlineOwnedByCaller,
-  resolveSqliteInspectionSignal,
   withSqliteReadOnlyWorkerScope,
 } from "../infra/sqlite-readonly-worker.js";
 import { createDeferredCore } from "../shared/deferred.js";

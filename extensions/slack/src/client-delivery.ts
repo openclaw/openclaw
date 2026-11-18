@@ -10,6 +10,7 @@ import {
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
@@ -329,10 +330,7 @@ export async function uploadSlackFile(params: {
   completionClient?: WebClient;
   channelId: string;
   mediaUrl: string;
-  mediaAccess?: {
-    localRoots?: readonly string[];
-    readFile?: (filePath: string) => Promise<Buffer>;
-  };
+  mediaAccess?: OutboundMediaAccess;
   uploadFileName?: string;
   uploadTitle?: string;
   mediaLocalRoots?: readonly string[];

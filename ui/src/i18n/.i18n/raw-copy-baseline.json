@@ -304,6 +304,13 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "placeholder",
+      "path": "ui/src/pages/config/talk-transcription.tsx",
+      "text": "openrouter/openai/whisper-large-v3-turbo"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/updates-recorded-attempt.tsx",
@@ -336,13 +343,6 @@
       "name": "placeholder",
       "path": "ui/src/pages/connection/view.tsx",
       "text": "wss://gateway.example:443"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "placeholder",
-      "path": "ui/src/pages/cron/view-delivery.tsx",
-      "text": "agent:main:main"
     },
     {
       "count": 1,

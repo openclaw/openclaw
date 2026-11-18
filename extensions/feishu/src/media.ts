@@ -351,12 +351,7 @@ async function resolveFeishuOutboundMediaKind(params: FeishuMedia): Promise<{
     return { msgType: "image" };
   }
 
-  if (
-    ext === ".opus" ||
-    ext === ".ogg" ||
-    contentType === "audio/ogg" ||
-    contentType === "audio/opus"
-  ) {
+  if (isOggOpusAudio(buffer)) {
     return { fileType: "opus", msgType: "audio" };
   }
 
@@ -388,6 +383,19 @@ function assertFeishuUploadWithinEnvelope(params: {
     const label = params.msgType === "image" ? "image" : "file";
     throw new Error(`Feishu ${label} exceeds its ${String(maxBytes)}-byte upload limit`);
   }
+}
+
+function isOggOpusAudio(buffer: Buffer): boolean {
+  const segmentCount = buffer[26];
+  if (!segmentCount || buffer.toString("latin1", 0, 4) !== "OggS") {
+    return false;
+  }
+  // RFC 7845: the first Ogg page contains only the Opus identification packet.
+  const packetOffset = 27 + segmentCount;
+  return (
+    buffer.length >= packetOffset + 19 &&
+    buffer.toString("latin1", packetOffset, packetOffset + 8) === "OpusHead"
+  );
 }
 
 function isFeishuNativeVoiceAudio(params: { fileName: string; contentType?: string }): boolean {
@@ -588,7 +596,7 @@ export async function sendMediaFeishu(
   );
 
   const prepared = await runBeforeFeishuMessageDispatch(async () => {
-    if (isFeishuNativeVoiceAudio(loaded) || audioAsVoice !== true) {
+    if (isOggOpusAudio(loaded.buffer) || audioAsVoice !== true) {
       return loaded;
     }
     const ext = normalizeLowercaseStringOrEmpty(path.extname(loaded.fileName));

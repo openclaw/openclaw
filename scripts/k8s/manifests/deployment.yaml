@@ -32,6 +32,7 @@ spec:
             - sh
             - -c
             - |
+              set -eu
               # Seed-if-missing: the PVC copy owns config after first boot so edits made
               # through OpenClaw (onboard, channels add, doctor --fix, Control UI) survive
               # restarts. ConfigMap edits need an explicit reseed (see docs/install/kubernetes.md).

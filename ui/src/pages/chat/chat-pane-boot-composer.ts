@@ -1,4 +1,10 @@
 import { takeBootComposer } from "../../app/boot-composer.ts";
+import {
+  composerInputHasFocus,
+  focusComposerInput,
+  readComposerEditor,
+  selectComposerInput,
+} from "../../lib/composer-input.ts";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
 import { getChatComposerState, queueComposerSubmit } from "./components/chat-composer-state.ts";
 
@@ -34,16 +40,17 @@ export function adoptBootComposer(
     composer.restoreComposerFocus = true;
     return;
   }
-  textarea.focus({ preventScroll: true });
+  focusComposerInput(textarea, { preventScroll: true });
   // The draft owner publishes from this frame's commit; wait for its next DOM
   // commit before restoring selection. A merged saved draft has a different layout.
   const offset = draft.length - boot.text.length;
   const [start, end, direction] = boot.selection;
   void pane.awaitDomCommit().then(() => {
-    if (textarea.value === draft && document.activeElement === textarea) {
-      textarea.setSelectionRange(start + offset, end + offset, direction);
+    if (textarea.value === draft && composerInputHasFocus(textarea)) {
+      selectComposerInput(textarea, start + offset, end + offset, direction);
       if (!saved) {
-        [textarea.scrollLeft, textarea.scrollTop] = boot.scroll;
+        const scroll = readComposerEditor(textarea)?.scrollElement ?? textarea;
+        [scroll.scrollLeft, scroll.scrollTop] = boot.scroll;
       }
     }
   });

@@ -14,14 +14,14 @@ import {
   type SqliteDatabaseAdmissionKey,
 } from "../infra/sqlite-database-admission.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion, writeSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   runUpdateSqliteMigration,
   runUpdateSqliteMigrationAsync,
-} from "../infra/update-doctor-migration-attribution.js";
+} from "../infra/update-doctor-migration-context.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { DAEMON_RUNTIME_PIN_SCHEMA_SQL } from "./runtime-pin-schema.js";
 
@@ -179,6 +179,18 @@ function admitDaemonRuntimePinStore<T>(
     publishSqliteDatabaseAdmission(db, schemaAdmission, true);
   }
   return writable ? runSqliteImmediateTransactionSync(db, () => operation(db)) : operation(db);
+}
+
+/** A different spelling can reuse a completed receipt only for the same existing source. */
+export function daemonRuntimePinMigrationSourcesMatch(recorded: string, current: string): boolean {
+  if (recorded === current) {
+    return true;
+  }
+  try {
+    return fs.realpathSync.native(recorded) === fs.realpathSync.native(current);
+  } catch {
+    return false;
+  }
 }
 
 /** The versioned receipt is independent of pin-data admission until a pin is used. */

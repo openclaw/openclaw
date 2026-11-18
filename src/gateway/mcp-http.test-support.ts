@@ -273,6 +273,7 @@ export function registerRequesterPolicyTests({
                 agentAccountId: "verified-account",
                 senderId: "verified-sender",
                 memberRoleIds: ["verified-role"],
+                trigger: "user",
                 ...(identity !== "unknown" ? { senderIsOwner: identity === "owner" } : {}),
               }
             : {}),
@@ -311,6 +312,7 @@ export function registerRequesterPolicyTests({
       expect(execute).toHaveBeenCalledTimes(identity === "owner" ? 1 : 0);
       const hookContext = beforeToolCall.mock.calls[0]?.[0].ctx;
       expect(hookContext?.agentId).toBe("main");
+      expect(hookContext?.trigger).toBe(hasSender ? "user" : undefined);
       expect(hookContext?.requester).toEqual(
         hasSender
           ? {

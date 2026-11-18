@@ -8,6 +8,7 @@ import { createRuntimeTestRegistry } from "../../plugins/registry-runtime.test-h
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import {
   GatewayDrainingError,
+  getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -39,6 +40,24 @@ const withQueue = useIngressMonitorQueueFixture();
 afterEach(() => vi.useRealTimers());
 
 describe("channel ingress monitor", () => {
+  it("reports a direct delivery as active before a synchronous transport failure", async () => {
+    await withQueue(async (queue) => {
+      const activity: boolean[] = [];
+      const monitor = createMonitor(queue, vi.fn(), (active) => activity.push(active));
+      const failure = new Error("direct dispatch failed");
+      let activeAtDispatch: boolean | undefined;
+      await expect(
+        monitor.dispatchDirect(() => {
+          activeAtDispatch = activity.at(-1);
+          throw failure;
+        }),
+      ).rejects.toBe(failure);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect(activeAtDispatch).toBe(true);
+      expect(activity.at(-1)).toBe(false);
+    });
+  });
+
   it("creates named plain and reasoned ingress errors", () => {
     const PayloadError = createChannelIngressError("TestIngressPayloadError");
     const PermanentError = createChannelIngressError<"invalid-event">("TestIngressPermanentError", {
@@ -829,6 +848,7 @@ it.each([
   "late",
   "late-start",
   "abort",
+  "direct",
 ] as const)("retains monitor custody across %s without granting fresh delivery", async (mode) => {
   await withStateDirEnv("ingress-plugin-", async ({ stateDir }) => {
     const builder = createRuntimeTestRegistry(createPluginRuntime());
@@ -848,6 +868,7 @@ it.each([
     const seen: string[] = [];
     const errors: unknown[] = [];
     let lateLifecycle: ChannelIngressMonitorLifecycle | undefined;
+    let directDelivery: Promise<void> | undefined;
     const monitor = owner.run(() =>
       createMonitor(
         queue,
@@ -870,6 +891,8 @@ it.each([
         },
         {
           admissionMode: mode === "late-start" ? "while-running" : "durable-after-stop",
+          // Direct listeners must join even when the channel owns durable-delivery grace.
+          waitForDeliveryIdleOnStop: mode !== "direct",
           abortSignal: abort.signal,
           inspectAsync: async (raw, context) => {
             if (mode === "inspection" && context.phase === "claim" && raw.id === "first") {
@@ -886,13 +909,39 @@ it.each([
       if (mode === "late-start") {
         monitor.start();
       }
-      await monitor.admit({ id: "first", lane: "a", text: "first" });
+      if (mode === "direct") {
+        directDelivery = service.run(() =>
+          monitor.dispatchDirect(async () => {
+            entered.resolve();
+            await finish.promise;
+            seen.push("direct");
+          }),
+        );
+      } else {
+        await monitor.admit({ id: "first", lane: "a", text: "first" });
+      }
       vi.useFakeTimers();
       monitor.start();
       await entered.promise;
       await monitor.waitForPumpIdle();
       owner.quiesce();
-      if (mode === "late-start") {
+      if (mode === "direct") {
+        // Retained service authority can finish accepted work, but cannot admit
+        // a fresh interaction after this exact plugin instance quiesces.
+        await expect(
+          service.run(() =>
+            monitor.dispatchDirect(async () => {
+              seen.push("unexpected-direct");
+            }),
+          ),
+        ).rejects.toThrow();
+        const stopping = monitor.stop().then(() => seen.push("stopped"));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(seen).toEqual([]);
+        finish.resolve();
+        await Promise.all([directDelivery, stopping]);
+        expect(seen).toEqual(["direct", "stopped"]);
+      } else if (mode === "late-start") {
         finish.resolve();
         await monitor.pause();
         service.run(() => monitor.start());
@@ -946,7 +995,7 @@ it.each([
       }
     } finally {
       finish.resolve();
-      await Promise.allSettled([monitor.stop()]);
+      await Promise.allSettled([monitor.stop(), directDelivery]);
       service.release();
       await owner.dispose();
       vi.useRealTimers();

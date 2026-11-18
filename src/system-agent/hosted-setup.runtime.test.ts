@@ -234,9 +234,7 @@ describe("SystemAgentChatEngine runtime", () => {
     expect(portStep.text).toContain(
       "changing the Gateway port, bind address, or auth credential requires a Gateway restart",
     );
-    expect(portStep.text).toContain(
-      "sign in to the Control UI again with the new address or credential",
-    );
+    expect(portStep.text).toContain("sign in to OpenClaw again with the new address or credential");
     expect(portStep.text).toContain("Gateway port");
 
     expect(storageStep.sensitive).not.toBe(true);

@@ -1,2 +1,0 @@
-15
-# Inline YAML normalization and disk-to-CLI metadata regression coverage.

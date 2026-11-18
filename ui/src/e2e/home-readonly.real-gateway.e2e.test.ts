@@ -228,12 +228,10 @@ suite.define(() => {
           HOME_PANEL_TOGGLE_EVENT,
         );
         await expect(rpc(reader, "chat.history", { sessionKey: homeKey })).rejects.toThrow();
+        await dock.getByText(/^This Home is unavailable\./).waitFor({ state: "visible" });
         expect(
-          await reader
-            .locator("openclaw-assistant-panel")
-            .getByRole("textbox", { name: "Chat composer", exact: true })
-            .isDisabled(),
-        ).toBe(true);
+          await dock.getByRole("textbox", { name: "Chat composer", exact: true }).count(),
+        ).toBe(0);
         expect(await reader.getByText(message, { exact: true }).count()).toBe(0);
       },
       async close() {

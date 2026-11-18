@@ -7,7 +7,7 @@ import type {
   SessionClaim,
   SessionComparisonClaim,
 } from "./legacy-main-session-migration.contract.js";
-import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
+import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-read.js";
 import {
   readSqliteSessionGenerationClaim,
   readSqliteSessionGenerationComparison,

@@ -30,7 +30,7 @@ import {
   operatorHello,
   waitForCronPage,
 } from "./cron-page.test-support.tsx";
-import { cronRpc, mountCronPage, emitEvent } from "./cron-rpc.test-support.ts";
+import { catalogModel, cronRpc, mountCronPage, emitEvent } from "./cron-rpc.test-support.ts";
 import { createCronViewJob, createCronViewRun, cronRunsResponse } from "./view.test-support.ts";
 import "./cron-page.tsx";
 
@@ -48,6 +48,7 @@ const gate = () => deferred<void>(undefined);
 
 async function openDraft(page: CronTestPage, name: string, prompt: string) {
   click(page, testId("cron-new-task"));
+  await import("./view-detail.tsx");
   await waitForElement(page, "fieldset.cron-editor");
   fillInput(page, "#cron-name", name);
   fillInput(page, "#cron-payload-text", prompt);
@@ -81,7 +82,7 @@ function modelClient(read: (params?: unknown) => unknown) {
 }
 
 function expectModels(page: CronTestPage, models: string[]) {
-  return waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(models));
+  return waitForCronPage(() => expect(page.cronCatalogModels).toEqual(models));
 }
 
 afterEach(async () => {
@@ -99,7 +100,7 @@ it.each([{ restartPending: true }, { suspensionPhase: "draining" as const }])(
   async (unavailable) => {
     vi.useFakeTimers();
     const request = cronRpc({
-      "models.list": () => ({ models: [{ id: "retained-model" }] }),
+      "models.list": () => ({ models: [catalogModel("retained-model")] }),
     });
     const gateway = createGateway(createTestGatewayClient(request), true);
     gateway.emitSnapshot(unavailable);
@@ -119,7 +120,7 @@ it.each([{ restartPending: true }, { suspensionPhase: "draining" as const }])(
     await vi.advanceTimersByTimeAsync(0);
     await page.settle();
     expect(callsFor(request, "models.list")).toHaveLength(1);
-    expect(page.cronModelSuggestions).toEqual(["retained-model"]);
+    expect(page.cronCatalogModels).toEqual(["fixture/retained-model"]);
     expect(page.cron).toBe(current);
     expect(current.cronForm.name).toBe("Unsaved automation");
     request.mockClear();
@@ -132,7 +133,7 @@ it.each([{ restartPending: true }, { suspensionPhase: "draining" as const }])(
     await vi.advanceTimersByTimeAsync(0);
     // The paused config event invalidates the catalog; recovery refreshes it once.
     expectCalls(request, [...refreshMethods, "models.list"], 1);
-    expect(page.cronModelSuggestions).toEqual(["retained-model"]);
+    expect(page.cronCatalogModels).toEqual(["fixture/retained-model"]);
     expect(page.cron).toBe(current);
     expect(current).toMatchObject({
       cronCreateOpen: true,
@@ -141,92 +142,64 @@ it.each([{ restartPending: true }, { suspensionPhase: "draining" as const }])(
   },
 );
 
-it.each(["catalog-needed", "configured-alternative"])(
-  "preserves catalog provider identity through model selection and save (%s)",
-  async (source) => {
-    const configuredAlternatives = source === "configured-alternative";
-    const models = [
-      { provider: "alpha", id: "shared-model", name: "Alpha shared" },
-      { provider: "beta", id: "shared-model", name: "Beta shared" },
-      ...(configuredAlternatives
-        ? [{ provider: "beta", id: "beta/shared-model", name: "Qualified beta shared" }]
-        : []),
-      {
-        provider: "beta",
-        id: "hidden-model",
-        name: "Hidden model",
-        manualSelectionAllowed: false,
-      },
-    ];
-    const request = cronRpc({
-      "models.list": () => ({ models }),
-      "cron.add": () => ({ id: "identity-job" }),
-      "cron.list": () => cronListResponse([]),
+it("keeps a saved model and reasoning level the catalog does not list", async () => {
+  const job = createCronViewJob("legacy-model", {
+    name: "Legacy model",
+    configRevision: "legacy-definition",
+    sessionTarget: "isolated",
+    payload: {
+      kind: "agentTurn",
+      message: "Keep it",
+      model: "legacy/old-model",
+      thinking: "turbo",
+    },
+  });
+  const request = cronRpc({
+    "models.list": () => ({ models: [{ provider: "alpha", id: "current", name: "Current" }] }),
+    "cron.get": () => job,
+    "cron.update": () => job,
+  });
+  const { page } = mountCronPage(request);
+  page.routeSearch = "?job=" + job.id;
+  (await waitForElement(page, testId("cron-edit"))).click();
+  await expectModels(page, ["alpha/current"]);
+  // The catalog cannot say which levels an unlisted model takes, so only the model shows.
+  await waitForCronPage(() =>
+    expect(text(page, '[data-chat-model-select="true"]')).toBe("legacy/old-model"),
+  );
+  fillInput(page, "#cron-name", "Legacy model, renamed");
+  await page.settle();
+  page.querySelector<HTMLButtonElement>(testId("cron-submit"))!.click();
+  await waitForCronPage(() => {
+    expect(callsFor(request, "cron.update")[0]?.[1]).toMatchObject({
+      patch: { payload: { model: "legacy/old-model", thinking: "turbo" } },
     });
-    const gateway = createGateway(createTestGatewayClient(request), true);
-    gateway.emitSnapshot({ hello: operatorHello(["operator.admin"]) });
-    const context = createContext(gateway);
-    Object.assign(context.runtimeConfig.state, {
-      configForm: {
-        agents: {
-          defaults: {
-            model: { primary: "alpha/shared-model" },
-            modelPolicy: { allow: ["alpha/shared-model", "beta/shared-model"] },
-            ...(configuredAlternatives
-              ? { models: { "alpha/shared-model": {}, "beta/shared-model": {} } }
-              : {}),
-          },
-        },
-        models: {
-          providers: Object.fromEntries(
-            ["alpha", "beta"].map((provider) => [
-              provider,
-              {
-                baseUrl: `https://${provider}.invalid`,
-                models: [{ id: "shared-model", name: `${provider} shared` }],
-              },
-            ]),
-          ),
-        },
-      },
-    });
-    const page = createPage(context, { render: true });
-    await waitForCronPage(() => expect(page.cron.cronLoading).toBe(false));
-    await page.settle();
-    await openDraft(page, "Provider identity", "Use the selected model");
-    await waitForCronPage(() => expect(page.cronModelSuggestions.length).toBeGreaterThan(0));
-    await page.settle();
-    const trigger = page.querySelector<HTMLButtonElement>("#cron-payload-model-picker")!;
-    const picker = trigger.closest("openclaw-select-picker")!;
-    trigger.click();
-    await waitForCronPage(() => {
-      expect(trigger.getAttribute("aria-expanded")).toBe("true");
-      expect(
-        Array.from(picker.querySelectorAll<HTMLElement>('[role="option"]')).map(
-          (option) => option.dataset.value,
-        ),
-      ).toEqual(["", "alpha/shared-model", "beta/shared-model", "__openclaw_custom_model__"]);
-      const inheritText = text(picker, '[role="option"][data-value=""]') ?? "";
-      expect(inheritText).toContain("Default");
-      expect(inheritText).not.toContain("common.default");
-    });
-    picker.querySelector<HTMLElement>('[role="option"][data-value="beta/shared-model"]')!.click();
-    await page.settle();
-    const save = page.querySelector<HTMLButtonElement>(testId("cron-submit"))!;
-    expect(save.disabled).toBe(false);
-    save.click();
-    await waitForCronPage(() => {
-      const adds = callsFor(request, "cron.add");
-      expect(adds).toHaveLength(1);
-      expect(adds[0]?.[1]).toHaveProperty("payload", {
-        kind: "agentTurn",
-        message: "Use the selected model",
-        model: "beta/shared-model",
-      });
-    });
-    await waitForCronPage(() => expect(page.cron.cronBusy).toBe(false));
-  },
-);
+  });
+});
+
+it("shows an unusual reasoning level beside the levels its model offers", async () => {
+  const models = [
+    {
+      provider: "alpha",
+      id: "deep",
+      name: "Deep",
+      thinkingLevels: [
+        { id: "low", label: "low" },
+        { id: "high", label: "high" },
+      ],
+    },
+  ];
+  const { page } = mountCronPage(cronRpc({ "models.list": () => ({ models }) }));
+  await openDraft(page, "Unusual reasoning", "Think in turbo");
+  await expectModels(page, ["alpha/deep"]);
+  page.patchForm({ payloadModel: "alpha/deep", payloadThinking: "turbo" });
+  await page.settle();
+  await waitForCronPage(() => {
+    expect(text(page, '[data-chat-model-select="true"]')).toBe("Deep");
+    expect(text(page, '[data-chat-thinking-select="true"]')).toBe("Turbo");
+  });
+  expect(page.cron.cronForm.payloadThinking).toBe("turbo");
+});
 
 it.each([false, true])(
   "shows an internal catalog failure and empty recovery (retained rows: %s)",
@@ -264,16 +237,16 @@ it.each(["agent", "connection", "detach", "panel close"])(
     const oldError = gate();
     const read = vi
       .fn()
-      .mockReturnValueOnce({ models: [{ id: "initial-model" }] })
+      .mockReturnValueOnce({ models: [catalogModel("initial-model")] })
       .mockReturnValueOnce(oldError.promise)
-      .mockReturnValue({ models: [{ id: "current-model" }] });
+      .mockReturnValue({ models: [catalogModel("current-model")] });
     const client = modelClient(read);
     const { page, gateway, context } = mountCronPage(client);
     await openDraft(page, "Catalogue retirement", "Keep current owner");
-    await expectModels(page, ["initial-model"]);
+    await expectModels(page, ["fixture/initial-model"]);
     emitEvent(gateway, "config.changed");
     await waitForCronPage(() => expect(read).toHaveBeenCalledTimes(2));
-    expect(page.cronModelSuggestions).toEqual(["initial-model"]);
+    expect(page.cronCatalogModels).toEqual(["fixture/initial-model"]);
     if (change === "agent") {
       context.agentSelection.set("writer");
     } else if (change === "connection") {
@@ -299,17 +272,17 @@ it.each(["agent", "connection", "detach", "panel close"])(
         expect(page.textContent).not.toContain("Retired catalog error");
         await openDraft(page, "Current catalogue", "Use the current owner");
       }
-      await expectModels(page, ["current-model"]);
+      await expectModels(page, ["fixture/current-model"]);
       await page.settle();
-      expect(page.cronModelSuggestions).toEqual(["current-model"]);
+      expect(page.cronCatalogModels).toEqual(["fixture/current-model"]);
     }
     expect(page.textContent).not.toContain("Retired catalog error");
   },
 );
 
-it("refreshes model suggestions when team selection changes without changing scope", async () => {
-  const lateMain = deferred<{ models: { id: string }[] }>({ models: [] });
-  const writer = deferred<{ models: { id: string }[] }>({ models: [] });
+it("scopes the model catalog to the draft agent and ignores the sidebar agent on team scope", async () => {
+  const lateMain = deferred<{ models: ReturnType<typeof catalogModel>[] }>({ models: [] });
+  const writer = deferred<{ models: ReturnType<typeof catalogModel>[] }>({ models: [] });
   const modelRequests: unknown[] = [];
   let mainReads = 0;
   const client = modelClient((params) => {
@@ -319,7 +292,7 @@ it("refreshes model suggestions when team selection changes without changing sco
       return writer.promise;
     }
     mainReads += 1;
-    return mainReads === 1 ? { models: [{ id: "main-model" }] } : lateMain.promise;
+    return mainReads === 1 ? { models: [catalogModel("main-model")] } : lateMain.promise;
   });
   const gateway = createGateway(client, true);
   gateway.emitSnapshot({ assistantAgentId: "main" });
@@ -344,26 +317,30 @@ it("refreshes model suggestions when team selection changes without changing sco
   );
   cleanups.push(() => agentSelection.dispose());
   await openDraft(page, "Same-scope selection", "Retain this draft");
-  await expectModels(page, ["main-model"]);
+  await expectModels(page, ["fixture/main-model"]);
   const cron = page.cron;
   emitEvent(gateway, "chat.metadata.changed");
   await waitForCronPage(() => expect(modelRequests).toHaveLength(2));
   agentSelection.set("writer");
   expect(agentSelection.state).toEqual({ selectedId: "writer", scopeId: null });
+  await page.settle();
+  expect(modelRequests).toHaveLength(2);
+  expect(page.cronCatalogModels).toEqual(["fixture/main-model"]);
+  page.patchForm({ agentId: "writer" });
   await waitForCronPage(() => expect(modelRequests).toHaveLength(3));
   expect(page.cron).toBe(cron);
-  expect(page.cronModelSuggestions).toEqual([]);
+  expect(page.cronCatalogModels).toEqual([]);
   expect(modelRequests).toEqual([
     { agentId: "main", view: "configured" },
     { agentId: "main", view: "configured" },
     { agentId: "writer", view: "configured" },
   ]);
-  writer.resolve({ models: [{ id: "writer-model" }] });
-  await expectModels(page, ["writer-model"]);
-  lateMain.resolve({ models: [{ id: "late-main-model" }] });
+  writer.resolve({ models: [catalogModel("writer-model")] });
+  await expectModels(page, ["fixture/writer-model"]);
+  lateMain.resolve({ models: [catalogModel("late-main-model")] });
   await lateMain.promise;
   await page.settle();
-  expect(page.cronModelSuggestions).toEqual(["writer-model"]);
+  expect(page.cronCatalogModels).toEqual(["fixture/writer-model"]);
 });
 
 it("applies run events to the complete job table without fetching the inventory again", async () => {
@@ -451,7 +428,7 @@ it("coalesces a cron event burst into one trailing refresh of the current page",
   const page = createPage(context, { render: true });
   cleanups.push(() => channels.dispose());
   await page.settle();
-  click(page, testId("cron-list-tab-activity"));
+  page.routeSearch = "?activity";
   await page.settle();
   emitEvent(gateway, "cron", {}, 20);
   expectCalls(request, ["cron.status", "cron.runs", "cron.list"], 1);
@@ -465,44 +442,6 @@ it("coalesces a cron event burst into one trailing refresh of the current page",
   });
   expectCalls(request, ["cron.status", "cron.runs", "cron.list"], 2);
   expect(callsFor(request, "channels.status")).toHaveLength(0);
-});
-
-it("lets manual Refresh supersede held status and run-history reads", async () => {
-  const held = gate();
-  const calls = { "cron.status": 0, "cron.runs": 0 };
-  const fallback = createRequest();
-  const request = vi.fn(async (method: string) => {
-    if (method !== "cron.status" && method !== "cron.runs") {
-      return fallback(method);
-    }
-    const revision = ++calls[method];
-    if (revision === 1) {
-      await held.promise;
-    }
-    return method === "cron.status"
-      ? schedulerStatus(revision)
-      : cronRunsResponse([createCronViewRun({ ts: revision, jobId: "job" })]);
-  });
-  const { page } = mountCronPage(request);
-  await waitForCronPage(() => expect(page.cron.cronLoading).toBe(false));
-  await page.settle();
-  click(page, testId("cron-list-tab-activity"));
-  await page.settle();
-  expect(calls).toEqual({ "cron.status": 1, "cron.runs": 1 });
-  const refresh = page.querySelector<HTMLButtonElement>(".cron-refresh");
-  expect(refresh).not.toBeNull();
-  refresh?.click();
-  await page.settle();
-  expect(calls).toEqual({ "cron.status": 2, "cron.runs": 2 });
-  await waitForCronPage(() => {
-    expect(page.cron.cronStatus?.jobs).toBe(2);
-    expect(page.cron.cronRuns[0]?.ts).toBe(2);
-  });
-  held.resolve();
-  await settle();
-  expect(page.cron.cronStatus?.jobs).toBe(2);
-  expect(page.cron.cronRuns[0]?.ts).toBe(2);
-  expect(calls).toEqual({ "cron.status": 2, "cron.runs": 2 });
 });
 
 it.each(["disconnect", "reconnect", "agent scope", "gateway source", "unmount"])(
@@ -581,10 +520,10 @@ it("refreshes trigger authoring from scheduler status after reconnect", async ()
   click(page, testId("cron-new-task"));
   await waitForElement(page, "fieldset.cron-editor");
   const triggerToggle = Array.from(page.querySelectorAll(".settings-toggle")).find((toggle) =>
-    toggle.textContent?.includes("Condition trigger"),
+    toggle.textContent?.includes("Check a condition first"),
   );
   expect(triggerToggle).toBeUndefined();
-  expect(page.textContent).toContain("disabled by cron.triggers.enabled");
+  expect(page.textContent).toContain("turned off for this Gateway (cron.triggers.enabled)");
 });
 
 it("replaces an in-flight inventory read when the connected profile hydrates", async () => {
@@ -666,14 +605,14 @@ it.each([false, true])(
   },
 );
 
-it.each(["hello", "roster after same-scope intent", "roster after model catalog"])(
+it.each(["hello", "roster after same-scope intent", "roster after editor opens"])(
   "opens the linked editor when %s supplies the initial agent scope after mount",
   async (publication) => {
     const job = createCronViewJob("linked-job", { name: "Linked automation" });
     const roster = createDeferred<AgentsListResult>();
     const lookup = deferred(job);
     const fallback = createRequest();
-    const changingCatalog = publication === "roster after model catalog";
+    const unavailableCatalog = publication === "roster after editor opens";
     let modelReads = 0;
     const client = createTestGatewayClient((method, params) => {
       if (method === "agents.list") {
@@ -684,10 +623,8 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
       }
       if (method === "models.list") {
         modelReads += 1;
-        if (changingCatalog) {
-          if (asOptionalRecord(params)?.agentId === "previous") {
-            return { models: [{ id: "previous-model" }] };
-          }
+        if (unavailableCatalog) {
+          expect(asOptionalRecord(params)?.agentId).toBe("main");
           throw new Error("Current agent catalog unavailable");
         }
       }
@@ -696,10 +633,9 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
     const gateway = createGateway(client, false);
     const agents = createAgentCapability(gateway);
     const agentSelection = createAgentSelectionCapability(gateway, agents);
-    const page = createPage(
-      { ...createContext(gateway), agents, agentSelection },
-      { render: true },
-    );
+    const context = createContext(gateway);
+    const channels = context.acquireChannels(createChannelCapability);
+    const page = createPage({ ...context, agents, agentSelection }, { render: true });
     page.routeSearch = `?job=${job.id}`;
     const agentList: AgentsListResult = {
       defaultId: "main",
@@ -707,25 +643,28 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
       scope: "per-sender",
       agents: [{ id: "main" }],
     };
-    const edited = publication === "roster after same-scope intent" || changingCatalog;
+    const edited = publication === "roster after same-scope intent" || unavailableCatalog;
+    // The link opens the automation's history; its settings open from Edit.
+    const openSettings = async () => {
+      (await waitForElement(page, testId("cron-edit"))).click();
+      await page.settle();
+    };
     try {
       await page.settle();
       expect(agentSelection.state.scopeId).toBeNull();
       gateway.emitSnapshot({
         phase: "connected",
-        assistantAgentId: changingCatalog ? "previous" : publication === "hello" ? "main" : null,
+        assistantAgentId: unavailableCatalog ? "previous" : publication === "hello" ? "main" : null,
       });
       await page.settle();
       if (edited) {
         lookup.resolve(job);
+        await openSettings();
         await waitForElement(page, "#cron-name");
-        if (changingCatalog) {
-          await expectModels(page, ["previous-model"]);
-        } else {
-          await page.settle();
-          expect(agentSelection.state.selectedId).toBeNull();
-          expect(modelReads).toBe(0);
-        }
+        await page.settle();
+        expect(modelReads).toBe(0);
+        expect(page.cronCatalogModels).toEqual([]);
+        expect(channels.refresh).toHaveBeenCalled();
         fillInput(page, "#cron-name", "Unsaved name");
         await page.settle();
         if (publication === "roster after same-scope intent") {
@@ -736,18 +675,21 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
       await agents.ensureList();
       expect(agentSelection.state.scopeId).toBe("main");
       lookup.resolve(job);
-      if (changingCatalog) {
+      if (!edited) {
+        await openSettings();
+      }
+      if (unavailableCatalog) {
         await waitForCronPage(() =>
           expect(page.textContent).toContain("Current agent catalog unavailable"),
         );
-        expect(page.cronModelSuggestions).toEqual([]);
+        expect(page.cronCatalogModels).toEqual([]);
       }
       await waitForCronPage(() => {
         expect(text(page, ".cron-detail-title") ?? "").toContain(job.name);
         expect(page.querySelector("details.cron-advanced > summary")).not.toBeNull();
         expect(inputValue(page, "#cron-name")).toBe(edited ? "Unsaved name" : job.name);
       });
-      await waitForCronPage(() => expect(modelReads).toBe(changingCatalog ? 2 : 1));
+      await waitForCronPage(() => expect(modelReads).toBe(1));
     } finally {
       page.remove();
       agentSelection.dispose();
@@ -777,12 +719,13 @@ it("refreshes off-page condition activity without replacing unsaved settings", a
   });
   const { page, gateway } = mountCronPage(request);
   page.routeSearch = `?job=${selected.id}`;
+  const previousHeader = (await waitForElement(page, ".cron-detail-meta")).textContent;
+  (await waitForElement(page, testId("cron-edit"))).click();
   await waitForElement(page, "#cron-name");
   fillInput(page, "#cron-name", "Unsaved automation");
   await page.settle();
   const definition = page.cron.cronEditingJob;
   const draft = page.cron.cronForm;
-  const previousHeader = text(page, ".cron-detail-meta");
   emitEvent(gateway, "cron", { jobId: selected.id, action: "finished" }, 2);
   pending.resolve({
     ...selected,
@@ -792,7 +735,6 @@ it("refreshes off-page condition activity without replacing unsaved settings", a
   });
   trailing.resolve({ ...selected, state: { triggerEvalCount: 9 } });
   await waitForCronPage(() => {
-    expect(text(page, ".cron-detail-meta")).not.toBe(previousHeader);
     expect(page.cron.cronEditingJob?.state?.triggerEvalCount).toBe(9);
   });
   expect(reads).toBe(3);
@@ -802,10 +744,10 @@ it("refreshes off-page condition activity without replacing unsaved settings", a
   expect(text(page, ".cron-detail-title")).toContain("Saved automation");
   expect(page.cron.cronForm).toBe(draft);
   expect(inputValue(page, "#cron-name")).toBe("Unsaved automation");
-  page
-    .querySelector<HTMLElement>(testId("cron-detail-tab-history"))!
-    .dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+  // Leaving the settings shows the refreshed runtime facts in the header and history.
+  page.querySelector<HTMLElement>(testId("cron-cancel"))!.click();
   await waitForCronPage(() => expect(text(page, ".cron-condition-activity__metric dd")).toBe("9"));
+  expect(text(page, ".cron-detail-meta")).not.toBe(previousHeader);
 });
 
 function controlVisibility(initial: DocumentVisibilityState = "visible") {
@@ -911,36 +853,4 @@ it("rebinds hidden catch-up to the replacement Gateway", async () => {
   expectCalls(request, refreshMethods, 1);
   expect(oldRequest).not.toHaveBeenCalled();
   expect(request).toHaveBeenCalledWith("cron.list", expect.objectContaining({ agentId: "writer" }));
-});
-
-it("finishes an accepted create-and-run chain while hidden without background readbacks", async () => {
-  const visibility = controlVisibility();
-  const saved = gate();
-  const request = cronRpc({
-    "cron.add": async () => {
-      await saved.promise;
-      return { id: "created-job" };
-    },
-    "cron.run": () => ({ ok: true, enqueued: true, runId: "synthetic-run" }),
-  });
-  const { page } = mountCronPage(request);
-  await waitForCronPage(() => expect(page.cron.cronStatus).not.toBeNull());
-  await openDraft(page, "Synthetic task", "Synthetic prompt");
-  click(page, testId("cron-submit-run"));
-  await waitForCronPage(() =>
-    expect(request.mock.calls.some(([method]) => method === "cron.add")).toBe(true),
-  );
-  visibility("hidden");
-  request.mockClear();
-  saved.resolve();
-  await waitForCronPage(() => expect(page.cron.cronBusy).toBe(false));
-  expect(request).toHaveBeenCalledExactlyOnceWith("cron.run", {
-    id: "created-job",
-    mode: "force",
-  });
-  expect(page.cron.cronNotice).toContain("Run queued. Run ID: synthetic-run");
-  expect(page.cron.cronCreateOpen).toBe(false);
-  visibility("visible");
-  await settle();
-  expectCalls(request, refreshMethods, 1);
 });

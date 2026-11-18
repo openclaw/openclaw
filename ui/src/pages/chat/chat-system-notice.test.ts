@@ -48,6 +48,47 @@ function render(
   );
 }
 
+it("suppresses the cancellation notice after user Stop without a message marker", () => {
+  const inputs = pending({ role: "user", content: "Retained request" }, "cancelled");
+  inputs[0]!.endCause = "user-stop";
+  const items = render([], inputs);
+  expect(items.filter((item) => item.kind === "notice")).toEqual([]);
+  expect(items).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "group" })]));
+});
+
+it.each([
+  ["delete", "This message did not run because the session was deleted."],
+  ["reset", "This message did not run because the session was reset. Send it again if needed."],
+  ["revoked", "This message did not run because access was revoked."],
+  ["restart-unrecoverable", "The Gateway restarted before this message ran. Send it again."],
+  ["overflow", "The queue was full, so this message did not run. Send it again."],
+  ["policy-refused", "This message was blocked by a policy and did not run."],
+  ["failed", "This message could not be started. Send it again."],
+] as const)("projects readable cancellation copy for %s", (endCause, text) => {
+  const items = projectChatSystemNotice(
+    { kind: "message", key: "message", message: { role: "user", content: "Retained request" } },
+    undefined,
+    { status: "cancelled", key: "notice", timestamp: 1000, endCause },
+  );
+  expect(items.filter((item) => item.kind === "notice")).toEqual([
+    { kind: "notice", key: "notice", timestamp: 1000, text },
+  ]);
+  expect(text).not.toContain(`(${endCause})`);
+});
+
+it.each([undefined, "future-cause", "toString"])(
+  "keeps generic cancellation copy for %s",
+  (endCause) => {
+    const inputs = pending({ role: "user", content: "Retained request" }, "cancelled");
+    inputs[0]!.endCause = endCause;
+    expect(render([], inputs)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "notice", text: t("chat.pendingInputs.cancelled") }),
+      ]),
+    );
+  },
+);
+
 afterEach(() => resetChatThreadState());
 
 describe("system notices through pending-to-history promotion", () => {
@@ -257,7 +298,8 @@ describe("plugin steering notices", () => {
         { kind: "group", role: "user", messages: [{ message: before }] },
         {
           kind: "notice",
-          label: `${name} guidance`,
+          icon: "compass",
+          label: name,
           text: steering.content,
           timestamp: 1000,
           collapsedBody: true,
@@ -274,7 +316,7 @@ describe("plugin steering notices", () => {
       expect(chatItemStartsDisplayTurn(notice)).toBe(false);
       expect(coalesceAgentRunFrames(items)).toMatchObject([
         { kind: "group", role: "user" },
-        { kind: "notice", label: `${name} guidance` },
+        { kind: "notice", label: name },
         { kind: "agent-run-frame", runId: "run", boundaryId: "send:run" },
       ]);
       expect(render([before, steering, after], [], "rollback")).toMatchObject([

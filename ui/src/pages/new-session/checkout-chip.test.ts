@@ -248,6 +248,54 @@ describe("Checkout chip state", () => {
     },
   );
 
+  it("finds branches beyond the initial suggestions without losing custom input", async () => {
+    const params = checkoutFixture({
+      baseRef: "",
+      worktreeName: "branch-search",
+      repository: {
+        kind: "git",
+        repoRoot: "/repo",
+        branches: [
+          ...Array.from({ length: 8 }, (_, index) => ({
+            name: "feature/" + index,
+            kind: "local" as const,
+          })),
+          { name: "release/customer-portal", kind: "remote" },
+        ],
+      },
+    });
+    const { container, update } = mountCheckout(params);
+    params.onBaseRefInput.mockImplementation((baseRef) => {
+      params.baseRef = baseRef;
+      update({ ...params });
+    });
+    await waitForOpen(container);
+    const branch = container.querySelector<HTMLInputElement>("#new-session-worktree-base-ref")!;
+    branch.focus();
+    input(branch, "PORTAL");
+    await waitForSolid(() =>
+      expect(
+        container.querySelector('[data-worktree-suggestion="release/customer-portal"]'),
+      ).not.toBeNull(),
+    );
+    expect(container.querySelectorAll("[data-worktree-suggestion]")).toHaveLength(1);
+    keydown(branch, "ArrowDown");
+    keydown(branch, "Enter");
+    expect(params.onBaseRefInput).toHaveBeenLastCalledWith("release/customer-portal");
+    expect(params.onConfirm).not.toHaveBeenCalled();
+    input(branch, "v3.1-custom");
+    await waitForSolid(() =>
+      expect(container.querySelectorAll("[data-worktree-suggestion]")).toHaveLength(0),
+    );
+    expect(container.querySelector("#new-session-worktree-base-ref")).toBe(branch);
+    expect(document.activeElement).toBe(branch);
+    expect(branch.value).toBe("v3.1-custom");
+    input(branch, "");
+    await waitForSolid(() =>
+      expect(container.querySelectorAll("[data-worktree-suggestion]")).toHaveLength(8),
+    );
+  });
+
   it("preserves editable fields through repository discovery failure and retry", async () => {
     const initial = createDeferred();
     const initialRead = { completed: initial.promise };
@@ -298,9 +346,8 @@ describe("Checkout chip state", () => {
       worktreeAvailable: true,
     });
     retry.resolve();
-    await waitForSolid(() =>
-      expect(container.querySelector('[data-worktree-suggestion="main"]')).not.toBeNull(),
-    );
+    await waitForSolid(() => expect(branch.getAttribute("role")).toBe("combobox"));
+    expect(container.querySelectorAll("[data-worktree-suggestion]")).toHaveLength(0);
     expect(container.querySelector("#new-session-worktree-base-ref")).toBe(branch);
     expect(container.querySelector("[data-worktree-name]")).toBe(name);
     expect(document.activeElement).toBe(name);
@@ -311,7 +358,7 @@ describe("Checkout chip state", () => {
   });
 
   it("keeps suggestion identities current and only confirms valid input", async () => {
-    const params = checkoutFixture({ worktreeName: "picker-fixes" });
+    const params = checkoutFixture({ worktreeName: "picker-fixes", baseRef: "" });
     const { onConfirm, onPopoverShow, onPopoverHide, onPopoverAfterHide } = params;
     const { container, update } = mountCheckout(params);
     const renderNamed = (worktreeName: string) => update({ ...params, worktreeName });
@@ -365,9 +412,7 @@ describe("Checkout chip state", () => {
     onPopoverShow.mockClear();
     onPopoverHide.mockClear();
 
-    expect(container.textContent).toContain(
-      "Creates branch openclaw/picker-fixes in a separate checkout.",
-    );
+    expect(name.title).toBe("Creates branch openclaw/picker-fixes in a separate checkout.");
     const suggestionPopup = container.querySelector(".new-session-page__branch-popup")!;
     for (const type of ["overlay-show", "overlay-hide", "overlay-after-hide"]) {
       suggestionPopup.dispatchEvent(new CustomEvent(type, { bubbles: true, composed: true }));

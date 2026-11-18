@@ -65,6 +65,20 @@ function duringWriterAdmission(run: () => void) {
 }
 
 describe("user profiles", () => {
+  it("reads legacy nonmember profiles without an identity table", () => {
+    const db = new (requireNodeSqlite().DatabaseSync)(":memory:");
+    try {
+      db.exec(`CREATE TABLE user_profiles (
+        id TEXT PRIMARY KEY, display_name TEXT, avatar BLOB, avatar_mime TEXT,
+        avatar_sha256 TEXT, merged_into TEXT, created_at INTEGER, updated_at INTEGER
+      ); INSERT INTO user_profiles (id, created_at, updated_at) VALUES ('legacy', 1, 1);`);
+      expect(readDisplays(db)).toMatchObject([["legacy", { id: "legacy" }]]);
+      expect(readDisplays(db)[0]?.[1]).not.toHaveProperty("hasOpenClawIdIdentity");
+    } finally {
+      db.close();
+    }
+  });
+
   it.each([false, true])(
     "display lookup leaves absent storage absent (database exists: %s)",
     (exists) => {

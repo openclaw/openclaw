@@ -43,13 +43,13 @@ interface EditOperations {
   /** Resolve the physical identity used to order this backend's file operations. */
   resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
   /** Read file contents as a Buffer */
-  readFile: (absolutePath: string) => Promise<Buffer>;
+  readFile: (absolutePath: string, signal?: AbortSignal) => Promise<Buffer>;
   /** Write content to a file */
-  writeFile: (absolutePath: string, content: string) => Promise<void>;
+  writeFile: (absolutePath: string, content: string, signal?: AbortSignal) => Promise<void>;
   /** Stat the target before reporting success */
-  statFile: (absolutePath: string) => Promise<PersistedFileStat | null>;
+  statFile: (absolutePath: string, signal?: AbortSignal) => Promise<PersistedFileStat | null>;
   /** Check if file is readable and writable (throw if not) */
-  access: (absolutePath: string) => Promise<void>;
+  access: (absolutePath: string, signal?: AbortSignal) => Promise<void>;
 }
 
 const defaultEditOperations: EditOperations = {
@@ -150,89 +150,93 @@ export function createEditTool(
       const absolutePath = resolvePath(path, cwd);
       const queueKey = resolveFileMutationQueueKey(absolutePath, ops.resolveQueueKey, signal);
 
-      return withFileMutationQueueKeyResolution(queueKey, async () => {
-        assertFileToolNotAborted(signal);
-
-        let editCount = 0;
-        let expectedContent: string | undefined;
-
-        try {
-          await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-            assertCurrent();
-            await ops.access(absolutePath);
-          });
-        } catch (error: unknown) {
-          const errorMessage =
-            error instanceof Error && "code" in error
-              ? `Error code: ${String(error.code)}`
-              : String(error);
-          throw new Error(`Could not edit file: ${path}. ${errorMessage}.`, {
-            cause: error,
-          });
-        }
-
-        const buffer = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-          assertCurrent();
-          return ops.readFile(absolutePath);
-        });
-        const rawContent = decodeUtf8Input(buffer, `File ${absolutePath}`);
-        try {
+      return withFileMutationQueueKeyResolution(
+        queueKey,
+        async () => {
           assertFileToolNotAborted(signal);
 
-          const plan = await planFileEdit(
-            { path, content: rawContent, edits: originalEdits },
-            signal,
-          );
-          assertFileToolNotAborted(signal);
-          if (!plan.changed) {
-            return textResult(plan.message, { changed: false } satisfies EditToolDetails);
-          }
-          editCount = plan.editCount;
-          expectedContent = plan.content;
-          await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-            assertCurrent();
-            await ops.writeFile(absolutePath, plan.content);
-          });
-          assertFileToolNotAborted(signal);
-          if (
-            !(await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+          let editCount = 0;
+          let expectedContent: string | undefined;
+
+          try {
+            await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
               assertCurrent();
-              return verifyPersistedUtf8File(absolutePath, plan.content, ops);
-            }))
-          ) {
-            throw new Error(
-              `Edit verification failed for ${path}: the persisted regular file does not match the requested content. Inspect the target and retry.`,
+              await ops.access(absolutePath, signal);
+            });
+          } catch (error: unknown) {
+            const errorMessage =
+              error instanceof Error && "code" in error
+                ? `Error code: ${String(error.code)}`
+                : String(error);
+            throw new Error(`Could not edit file: ${path}. ${errorMessage}.`, {
+              cause: error,
+            });
+          }
+
+          const buffer = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+            assertCurrent();
+            return ops.readFile(absolutePath, signal);
+          });
+          const rawContent = decodeUtf8Input(buffer, `File ${absolutePath}`);
+          try {
+            assertFileToolNotAborted(signal);
+
+            const plan = await planFileEdit(
+              { path, content: rawContent, edits: originalEdits },
+              signal,
             );
-          }
-
-          return textResult<EditToolDetails>(
-            `Successfully replaced ${editCount} block(s) in ${path}.`,
-            { changed: true, ...plan.receipt },
-          );
-        } catch (error: unknown) {
-          await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-            assertCurrent();
-          });
-          const normalizedError = error instanceof Error ? error : new Error(String(error));
-          const recoveryContent = expectedContent;
-          if (
-            recoveryContent !== undefined &&
-            (await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+            assertFileToolNotAborted(signal);
+            if (!plan.changed) {
+              return textResult(plan.message, { changed: false } satisfies EditToolDetails);
+            }
+            editCount = plan.editCount;
+            expectedContent = plan.content;
+            await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
               assertCurrent();
-              return verifyPersistedUtf8File(absolutePath, recoveryContent, ops);
-            }))
-          ) {
+              await ops.writeFile(absolutePath, plan.content, signal);
+            });
+            assertFileToolNotAborted(signal);
+            if (
+              !(await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+                assertCurrent();
+                return verifyPersistedUtf8File(absolutePath, plan.content, ops, signal);
+              }))
+            ) {
+              throw new Error(
+                `Edit verification failed for ${path}: the persisted regular file does not match the requested content. Inspect the target and retry.`,
+              );
+            }
+
             return textResult<EditToolDetails>(
               `Successfully replaced ${editCount} block(s) in ${path}.`,
-              { changed: true, diff: "", patch: "" },
+              { changed: true, ...plan.receipt },
             );
+          } catch (error: unknown) {
+            await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+              assertCurrent();
+            });
+            const normalizedError = error instanceof Error ? error : new Error(String(error));
+            const recoveryContent = expectedContent;
+            if (
+              recoveryContent !== undefined &&
+              (await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+                assertCurrent();
+                return verifyPersistedUtf8File(absolutePath, recoveryContent, ops, signal);
+              }))
+            ) {
+              return textResult<EditToolDetails>(
+                `Successfully replaced ${editCount} block(s) in ${path}.`,
+                { changed: true, diff: "", patch: "" },
+              );
+            }
+            if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
+              throw appendMismatchHint(normalizedError, rawContent);
+            }
+            throw normalizedError;
           }
-          if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
-            throw appendMismatchHint(normalizedError, rawContent);
-          }
-          throw normalizedError;
-        }
-      });
+        },
+        signal,
+      );
     },
   });
 }

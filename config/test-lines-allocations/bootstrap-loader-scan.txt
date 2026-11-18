@@ -1,2 +1,0 @@
-# Exercise optional aliased literal-template loaders through extracted runtime execution, and reject false required-import edges.
-17

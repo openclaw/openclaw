@@ -1,2 +1,0 @@
-393
-# 393 lines: distinct lease-diagnostic, privacy, error, and lifecycle regressions.

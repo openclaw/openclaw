@@ -14,6 +14,7 @@ import {
 } from "../infra/sqlite-worker-operation-admission.js";
 import { readTrajectoryRuntimeRetentionLease } from "../trajectory/runtime-retention.contract.js";
 import type { createAgentDatabaseMaintenanceOwner } from "./openclaw-agent-execution-maintenance.js";
+import { loadAgentToolUsageOperations } from "./openclaw-agent-execution-tool-usage.worker.js";
 import {
   initializeReplacementTranscript,
   loadAgentTranscriptOperations,
@@ -202,7 +203,10 @@ async function loadAgentMaintenanceFinalizationOperations() {
 
 async function loadAgentMessageCutOperations() {
   const kernel = await import("../config/sessions/session-message-cut.worker.js");
-  return { "session.messageCut.commit": kernel.commitSessionMessageCut } satisfies Handlers;
+  return {
+    "session.messageCut.commit": kernel.commitSessionMessageCut,
+    "session.messageCut.preflight": kernel.preflightSessionMessageCut,
+  } satisfies Handlers;
 }
 
 async function loadAgentNativeBindingOperations() {
@@ -307,6 +311,25 @@ async function loadAgentArchiveOperations() {
         admit("commit");
         return result;
       }),
+  } satisfies Handlers;
+}
+
+async function loadSessionColdOperations() {
+  const { sweepSessionColdInTransaction } =
+    await import("../config/sessions/session-cold-storage-worker.js");
+  return {
+    "session.cold.sweep": (
+      input: { sessionId: string; afterSeq?: number; maxRows: number },
+      { writeTransaction, admit },
+    ) => {
+      const startedAt = performance.now();
+      const rows = writeTransaction("session.cold.sweep", "Cold transcript cleanup", (database) => {
+        const deleted = sweepSessionColdInTransaction(database, input);
+        admit("commit");
+        return deleted;
+      });
+      return { ...rows, elapsedMs: performance.now() - startedAt };
+    },
   } satisfies Handlers;
 }
 
@@ -515,11 +538,13 @@ export function createAgentWorkerOperationLoaders(
     "session.maintenance.size": loadAgentMaintenanceFinalizationOperations,
     "session.nativeBindings.delete": loadAgentNativeBindingOperations,
     "session.messageCut.commit": loadAgentMessageCutOperations,
+    "session.messageCut.preflight": loadAgentMessageCutOperations,
     "trajectory.events.append": loadAgentTrajectoryOperations,
     "trajectory.retention.begin": loadAgentTrajectoryOperations,
     "trajectory.retention.delete": loadAgentTrajectoryOperations,
     "session.archives.preparePublication": loadAgentArchiveOperations,
     "session.archives.recordPublication": loadAgentArchiveOperations,
+    "session.cold.sweep": loadSessionColdOperations,
     "session.transcript.initialize": loadAgentTranscriptOperations,
     "session.transcript.rawDelta.read": loadAgentTranscriptReadOperations,
     "session.transcript.watermark.read": loadAgentTranscriptReadOperations,
@@ -545,6 +570,10 @@ export function createAgentWorkerOperationLoaders(
     "session.archivePruning.reclaimPages": loadAgentArchivePruningOperations,
     "session.maintenance.prepare": loadMaintenanceOperations,
     "session.maintenance.metadata": loadMaintenanceOperations,
+    "toolUsage.prune": loadAgentToolUsageOperations,
+    "toolUsage.flush": loadAgentToolUsageOperations,
+    "toolUsage.reset": loadAgentToolUsageOperations,
+    "toolUsage.import": loadAgentToolUsageOperations,
     "usageCache.writeRollup": loadUsageCacheOperations,
     "usageCache.writeQuarters": loadUsageCacheOperations,
     "usageCache.prune": loadUsageCacheOperations,

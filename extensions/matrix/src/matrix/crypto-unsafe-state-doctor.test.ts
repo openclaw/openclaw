@@ -4,6 +4,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { resetFileLockStateForTest } from "openclaw/plugin-sdk/file-lock";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import type { PluginDoctorRecoveryCliContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { registerMatrixDoctorCommands } from "../cli-doctor.js";
@@ -30,9 +31,16 @@ const keyStore = { name: "keys", keyPath: null, autoIncrement: false, indexes: [
 const keysSnapshot = (records: unknown[], indexes: unknown[] = []) => [
   { ...database, stores: [{ ...keyStore, records, indexes }] },
 ];
+const context: PluginDoctorRecoveryCliContext["context"] = {
+  openPluginStateKeyedStore: (options) => getMatrixRuntime().state.openKeyedStoreV2(options),
+};
 const recover = (acceptSnapshotRollback = true) =>
-  recoverMatrixCryptoUnsafeState({ storageRootDir, acceptSnapshotRollback });
-const inspect = () => listMatrixCryptoUnsafeState(stateDir);
+  recoverMatrixCryptoUnsafeState({
+    storageRootDir,
+    acceptSnapshotRollback,
+    stateRuntime: { openKeyedStoreV2: context.openPluginStateKeyedStore },
+  });
+const inspect = () => listMatrixCryptoUnsafeState(stateDir, getMatrixRuntime().state);
 function writeSnapshot(root = storageRootDir, databases: unknown[] = [database]) {
   return writeMatrixIdbSnapshotJson({
     storageRootDir: root,
@@ -49,11 +57,15 @@ function doctor() {
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
   const command = new Command();
-  registerMatrixDoctorCommands(command);
+  registerMatrixDoctorCommands({
+    program: command.command("doctor"),
+    stateDir,
+    context,
+  });
   return {
-    recover: () =>
+    recover: (account = "default") =>
       command.parseAsync(
-        ["doctor", "recover", "--account", "default", "--accept-snapshot-rollback"],
+        ["doctor", "recover", "--account", account, "--accept-snapshot-rollback"],
         { from: "user" },
       ),
     inspect: async () => {
@@ -185,3 +197,19 @@ it.each([
     expect(await inspect()).toEqual([storageRootDir]);
   },
 );
+
+it("refuses unknown and ambiguous account recovery without clearing either store", async () => {
+  await fs.writeFile(markerPath, "unsafe\n");
+  await writeSnapshot();
+  const cli = doctor();
+  await expect(cli.recover("unknown")).rejects.toThrow("found 0");
+  const legacyGuard = path.join(
+    stateDir,
+    "matrix",
+    `${MATRIX_IDB_SNAPSHOT_FILENAME}.owner.poisoned`,
+  );
+  await fs.writeFile(legacyGuard, "unsafe\n");
+  await expect(cli.recover()).rejects.toThrow("found 2");
+  expect(await fs.readFile(markerPath, "utf8")).toBe("unsafe\n");
+  expect(await fs.readFile(legacyGuard, "utf8")).toBe("unsafe\n");
+});

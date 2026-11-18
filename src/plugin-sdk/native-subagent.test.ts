@@ -7,6 +7,7 @@ type CommandContext = Parameters<Command["handler"]>[0];
 type SelectionControls = {
   model?: string;
   thinking?: string;
+  cyberAccessProgram?: "standard" | "daybreak_blue" | "daybreak_red";
   fastMode?: boolean | "auto" | "ultrafast";
 };
 type Selection = {
@@ -21,6 +22,9 @@ it("exports the optional native contract through the public plugin API", () => {
   >();
   expectTypeOf<Parameters<Native["spawn"]>[0]["model"]>().toEqualTypeOf<string | undefined>();
   expectTypeOf<Parameters<Native["spawn"]>[0]["thinking"]>().toEqualTypeOf<string | undefined>();
+  expectTypeOf<Parameters<Native["spawn"]>[0]["cyberAccessProgram"]>().toEqualTypeOf<
+    "standard" | "daybreak_blue" | "daybreak_red" | undefined
+  >();
   expectTypeOf<Parameters<Native["spawn"]>[0]["fastMode"]>().toEqualTypeOf<
     boolean | "auto" | "ultrafast" | undefined
   >();

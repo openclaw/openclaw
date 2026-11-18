@@ -130,6 +130,8 @@ export function createAgentViewTestProps(
       modelSelectionPolicy: undefined,
       onModelChange: () => false,
       onDecisionModelChange: () => false,
+      onUtilityModelChange: () => false,
+      onThinkingDefaultChange: () => false,
       onModelFallbacksChange: () => false,
       onModelCatalogOpen: () => undefined,
       onIdentityFieldChange: () => undefined,

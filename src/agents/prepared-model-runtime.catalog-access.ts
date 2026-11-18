@@ -37,6 +37,7 @@ import {
   retainPreparedModelCatalogPublication,
 } from "./prepared-model-runtime.catalog-publication.js";
 import {
+  createCatalogInventoryPublisher,
   listChangedPreparedCatalogProviders,
   preparedProviderCatalogCredentials,
   preparedProviderCatalogSource,
@@ -112,6 +113,7 @@ export async function createFullModelCatalogAccess(
   const projectInventory = createPreparedModelCatalogProjection({ ...params, normalizeProvider });
   const project = (...args: Parameters<typeof projectInventory>) =>
     attempt.withRefreshStatus(projectInventory(...args));
+  const publishInventory = createCatalogInventoryPublisher(params.inventoryOwner);
   const {
     retainedInventory,
     providerSources,
@@ -250,7 +252,7 @@ export async function createFullModelCatalogAccess(
       ...next,
       catalog: retainPreparedModelCatalogPublication(next.catalog, previous.catalog),
     };
-    params.inventoryOwner.catalogInventory = published.inventory;
+    publishInventory(published.inventory);
     return { previous, current: published, staticCatalog };
   };
   const acquireProviderCatalog = async (
@@ -405,7 +407,7 @@ export async function createFullModelCatalogAccess(
     }
     const previousNative = nativePending;
     let failedProviders: readonly string[] | undefined;
-    const promise = runWithPreparedPluginGeneration(params.pluginGeneration, async () => {
+    const promise = runWithPreparedPluginGeneration(params, async () => {
       await previousNative?.catch(() => undefined);
       const settledCatalog = readReadyCatalog();
       if (settledCatalog) {
@@ -548,6 +550,8 @@ export async function createFullModelCatalogAccess(
 
   const authOwner = {
     pluginGeneration: params.pluginGeneration,
+    agentFacts: params.agentFacts,
+    retirementSignal: params.retirementSignal,
     accountCatalog,
     normalizeProvider,
     assertCurrent,
@@ -555,35 +559,29 @@ export async function createFullModelCatalogAccess(
       getPreparedModelFullCatalogAuth(published.catalog ?? staticCatalog) ?? currentAuth,
     refreshAuth: worker.loadAuth,
   };
-  const recheckNativeLogin = createNativeLoginRecheck(
-    authOwner,
-    params,
-    eligibleProviders,
-    (auth) => {
-      const inventory = {
-        runtimeModels: new Map(),
-        providers: new Map(),
-        discoveryOrigins: [],
-        ...published.inventory,
-        key: inventoryKey,
-        pluginFingerprint,
-        nativeSource,
-        catalog: { ...(published.inventory?.catalog ?? params.catalogFacts.modelCatalog) },
-      };
-      setCatalogAuth(inventory.catalog, auth);
-      const change = publishCatalog({ ...published, inventory }, "native");
-      notifyPreparedModelCatalogPublication(change);
-    },
-  );
+  const recheckNativeLogin = createNativeLoginRecheck(authOwner, eligibleProviders, (auth) => {
+    const inventory = {
+      runtimeModels: new Map(),
+      providers: new Map(),
+      discoveryOrigins: [],
+      ...published.inventory,
+      key: inventoryKey,
+      pluginFingerprint,
+      nativeSource,
+      catalog: { ...(published.inventory?.catalog ?? params.catalogFacts.modelCatalog) },
+    };
+    setCatalogAuth(inventory.catalog, auth);
+    const change = publishCatalog({ ...published, inventory }, "native");
+    notifyPreparedModelCatalogPublication(change);
+  });
   const refreshExpiredModelCatalog = () => {
     assertCurrent();
     void recheckNativeLogin();
     if (pending || !published.inventory) {
       return;
     }
-    const now = Date.now();
     const providers = [...published.inventory.providers]
-      .filter(([, { expiresAt }]) => expiresAt !== undefined && expiresAt <= now)
+      .filter(([, { expiresAt }]) => expiresAt !== undefined && expiresAt <= Date.now())
       .map(([provider]) => provider);
     if (providers.length) {
       void acquireCatalog({ providerIds: providers, refresh: true }, "expiry").catch(
@@ -596,7 +594,7 @@ export async function createFullModelCatalogAccess(
     trigger: "request" | "expiry" = "request",
   ): Promise<ModelCatalogSnapshot> => {
     assertCurrent();
-    // Expiry renews inventory without invalidating still-fresh sibling metadata feeds.
+    // Expiry renews in the background: no pending check, and fresh sibling feeds stay valid.
     const refreshResponses = options.refresh === true && trigger === "request";
     if (
       !options.refresh &&
@@ -648,9 +646,13 @@ export async function createFullModelCatalogAccess(
       await current.promise.catch(() => undefined);
       return acquireCatalog(options, trigger);
     }
-    attempt.setPending(fullRefresh || providers.length ? providers : undefined);
+    if (trigger === "request") {
+      attempt.setPending(fullRefresh || providers.length ? providers : undefined);
+    }
     const providerIds = fullRefresh ? undefined : providers;
-    const promise = runWithPreparedPluginGeneration(params.pluginGeneration, async () => {
+    // Generation custody spans both phases so native acquisition never finds it retired; custody
+    // holds no plugin, so a slow native lookup does not defer reloads (#199521).
+    const promise = runWithPreparedPluginGeneration(params, async () => {
       if (fullRefresh || providers.length) {
         const candidate = await acquireProviderCatalog(providerIds, refreshResponses).catch(
           (error: unknown) => {
@@ -662,10 +664,14 @@ export async function createFullModelCatalogAccess(
         // discard them. Native discovery starts from this accepted publication.
         attempt.published(providerIds, "provider", () => publishCatalog(candidate, "provider"));
       }
-      if (includeNative) {
-        return await acquireNativeCatalog(nativeScope, undefined, options.refresh);
+      const catalog = includeNative
+        ? await acquireNativeCatalog(nativeScope, undefined, options.refresh)
+        : (published.catalog ?? staticCatalog);
+      // Completed discovery cannot satisfy a later refresh while generation custody settles.
+      if (pending) {
+        pending.refresh = false;
       }
-      return published.catalog ?? staticCatalog;
+      return catalog;
     }).finally(() => {
       pending = undefined;
       retryFailedDiscovery();

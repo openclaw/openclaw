@@ -66,6 +66,7 @@ export type HeaderMenuProps = {
     UiSettings,
     | "chatShowThinking"
     | "chatShowToolCalls"
+    | "chatInlineCommands"
     | "chatPersistCommentary"
     | "chatBubbleSessionKeys"
     | "chatBubbleDisabledSessionKeys"

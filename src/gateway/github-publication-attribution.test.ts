@@ -17,10 +17,12 @@ import {
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { gitCoauthorOrganizationPolicy } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { createInitialSubagentSession } from "../agents/subagents/spawn/subagent-spawn-session-patch.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
   replaceSessionEntrySync,
@@ -30,6 +32,7 @@ import { recordSessionParticipant } from "../config/sessions/session-accessor.sq
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { setUserPreferences } from "../state/user-preferences.test-support.js";
 import { syncGitHubIdentity } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import * as publicationExecutor from "./github-publication-executor.js";
 import { readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublication } from "./github-publication-store.test-support.js";
 import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
@@ -127,6 +130,56 @@ function afterEffect(
 
 describe("Gateway GitHub publication attribution", () => {
   installGitHubPublicationTestHarness();
+
+  it.each([false, true])(
+    "keeps only independently verified mentions with organization trailers (linked=%s)",
+    async (linked) => {
+      await persistPublicationTestSession();
+      const original = getRuntimeConfig();
+      const mapping = { nameHeader: "x-credit-name", emailHeader: "x-credit-email" };
+      const config = {
+        ...original,
+        gateway: {
+          ...original.gateway,
+          auth: {
+            mode: "trusted-proxy" as const,
+            trustedProxy: { userHeader: "x-auth-subject", gitCoauthor: mapping },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(config);
+      onTestFinished(() => setRuntimeConfigSnapshot(original));
+      const person = linked ? createPerson(7, "alice") : ensureProfileForEmail("oidc:credit-only");
+      participate(person.id);
+      expect(
+        setUserPreferences(
+          person.id,
+          {
+            "git.coauthor.organization": {
+              name: "Alice Organization",
+              email: "work@example.test",
+              policy: gitCoauthorOrganizationPolicy("x-auth-subject", mapping),
+            },
+            [GIT_COAUTHOR_PREFERENCE_KEY]: true,
+          },
+          { trustedProxyGitCoauthor: true },
+        ).ok,
+      ).toBe(true);
+      await useRealAttribution();
+      const coordinator = createGitHubPublicationCoordinator();
+      const result = await coordinator.requestForSessionV2(
+        publicationRequest("organization-mentions"),
+      );
+      expect(result.status).toBe("published");
+      const message = commandCalls.find(({ argv }) => argv.includes("commit-tree"))?.input;
+      expect(message).toContain("Co-authored-by: Alice Organization <work@example.test>");
+      if (linked) {
+        expect(message).toContain("Worked on by:\n- @alice");
+      } else {
+        expect(message).not.toContain("Worked on by:");
+      }
+    },
+  );
 
   it("emits a Git-recognized coauthor trailer even when the title contains the exact credit", async () => {
     await persistPublicationTestSession();

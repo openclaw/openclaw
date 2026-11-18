@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatInstallOwnerMessage, readInstallOwner } from "../../infra/install-owner.js";
 import { resolveOcmUpdateManager } from "../../infra/ocm-update-client.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
+import { resolvePackageReleaseSlotForRootSync } from "../../infra/package-release-slot-path.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { currentUpdateCheckLifecycle } from "../../infra/update-check-lifecycle.js";
@@ -170,9 +171,11 @@ export function retainUpdateRequesterAuthority(
 export async function resolveGatewayUpdateAdmission(runId: string, timeoutMs?: number) {
   await recordUpdateRunStep(runId, { step: "installation-inspection", status: "in_progress" });
   const lifecycle = currentUpdateCheckLifecycle();
-  const { root, status } = await lifecycle.run((signal) =>
+  const { root: runningRoot, status } = await lifecycle.run((signal) =>
     resolveStartupInstallStatus(false, signal, lifecycle.installStatus),
   );
+  // The Gateway runs its release by real path; the installation it updates is the link.
+  const root = runningRoot && (resolvePackageReleaseSlotForRootSync(runningRoot) ?? runningRoot);
   if (status.error?.timeoutMs) {
     throw new Error(status.error.message);
   }

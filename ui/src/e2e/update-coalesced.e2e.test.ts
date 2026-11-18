@@ -100,7 +100,7 @@ suite.define(() => {
       });
       await updateIssue.locator(".sidebar-update-card__actions").tap();
       await expect.poll(() => tooltipHost.getAttribute("data-e2e-after-show")).not.toBeNull();
-      expect(await tooltip.textContent()).toContain("You need admin access");
+      expect(await tooltip.textContent()).toContain("Admin access required");
       expect(await gateway.getRequests("update.run")).toHaveLength(0);
     });
   });

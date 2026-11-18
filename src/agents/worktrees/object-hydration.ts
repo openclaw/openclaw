@@ -1,5 +1,7 @@
 import { requireGitCommandOutput, type GitCommandOptions } from "../../infra/git-exec.js";
+import { appendGitConfig } from "../../infra/git-maintenance-env.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { withIsolatedWorktreeGitTransport } from "./base-fetch.js";
 import { requireGit, requireGitBuffer, runGit, WORKTREE_CHECKOUT_TIMEOUT_MS } from "./git.js";
 
 const log = createSubsystemLogger("agents/worktrees");
@@ -60,28 +62,33 @@ export async function hydrateCommitObjects(
       throw missingObjectsError(commit, missing.length);
     }
     // Hydrate one batch without auto-maintenance or unused fetch-summary abbreviation scans.
-    // Shared commits do not prove that their promised blobs are present.
-    await requireGit(
+    // Shared commits do not prove blob presence; noop still skips an already-satisfied batch.
+    await withIsolatedWorktreeGitTransport(
       repoRoot,
-      [
-        "fetch",
-        "--quiet",
-        "--refetch",
-        // Even refetch's noop negotiator otherwise parses every local ref tip.
-        `--negotiation-tip=${commit}`,
-        "--no-auto-maintenance",
-        remote,
-        "--no-tags",
-        "--no-prune",
-        "--no-write-fetch-head",
-        "--recurse-submodules=no",
-        "--stdin",
-      ],
-      {
-        ...options,
-        input: Buffer.from(`${missing.join("\n")}\n`),
-        timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
-      },
+      repoRoot,
+      options,
+      (transport) =>
+        requireGit(
+          repoRoot,
+          [
+            "fetch",
+            "--quiet",
+            "--no-auto-maintenance",
+            remote,
+            "--no-tags",
+            "--no-prune",
+            "--no-write-fetch-head",
+            "--recurse-submodules=no",
+            "--stdin",
+          ],
+          {
+            ...transport,
+            env: appendGitConfig(transport.env ?? {}, [["fetch.negotiationAlgorithm", "noop"]]),
+            input: Buffer.from(`${missing.join("\n")}\n`),
+            timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
+          },
+        ),
+      remote,
     ).catch((error: unknown) => {
       log.warn(
         `worktree prefetch failed: ${missing.length} missing objects for ${commit}; check the promisor remote.`,

@@ -13,8 +13,8 @@ export function createLayoutMeasurement<T>(
     fonts?: boolean;
     /** Admit a known empty layout before a measurable element exists. */
     measureWithoutTarget?: boolean;
-    /** Keyboard and disclosure commits need geometry before the next animation frame. */
-    changeTiming?: "sync";
+    /** Select input changes that need geometry before the next animation frame. */
+    changeTiming?: "sync" | (() => "sync" | undefined);
   },
 ) {
   const key = {};
@@ -53,7 +53,9 @@ export function createLayoutMeasurement<T>(
     if (!ready) {
       return;
     }
-    if (options.changeTiming === "sync") {
+    const timing =
+      typeof options.changeTiming === "function" ? options.changeTiming() : options.changeTiming;
+    if (timing === "sync") {
       cancelLayout(key);
       read()?.();
     } else {

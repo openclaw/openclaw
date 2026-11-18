@@ -1,10 +1,12 @@
-// The OpenClaw ID account this Control UI origin is signed in with. Sign-in is
-// an OIDC authorization code flow with PKCE in a popup: the Gateway builds the
-// authorization URL and redeems the code (the issuer serves no CORS), the
-// popup returns to <origin>/openclaw-id/callback and hands the code back
-// through this origin's localStorage (a `storage` event in this tab), and the
-// account (with its ID token) stays in localStorage until it expires or the
-// owner signs out.
+// The OpenClaw ID account this Control UI origin is signed in with. On the claw's
+// own computer, sign-in is an OIDC authorization code flow with PKCE in a popup:
+// the Gateway builds the authorization URL and redeems the code (the issuer serves
+// no CORS), the popup returns to <origin>/openclaw-id/callback and hands the code
+// back through this origin's localStorage (a `storage` event in this tab). Over a
+// personal sign-in such as Tailscale the issuer cannot redirect here, so the
+// Gateway runs a device sign-in instead: this tab shows the user code and asks the
+// Gateway to poll until the user approves it. Either way the account (with its ID
+// token) stays in localStorage until it expires or the user signs out.
 import { createSignal } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
@@ -233,6 +235,25 @@ export async function signInWithOpenClawId(params: {
     popup?.close();
     throw error;
   }
+}
+
+/** This origin's sign-out marker; a device sign-in started before a later sign-out is retired. */
+export function readOpenClawIdSignOutGeneration(): string | null | undefined {
+  return getSafeLocalStorage()?.getItem(SIGN_OUT_KEY);
+}
+
+/** Keeps a completed device sign-in like a popup sign-in, with its issuer and return base. */
+export function keepOpenClawIdDeviceSignIn(
+  signedIn: OpenClawIdSignedIn,
+  issuerOrigin: string,
+  basePath: string,
+): void {
+  getSafeLocalStorage()?.setItem(ISSUER_KEY, issuerOrigin);
+  getSafeLocalStorage()?.setItem(
+    RETURN_KEY,
+    `${window.location.origin}${basePath.replace(/\/+$/, "")}/`,
+  );
+  keep(signedIn);
 }
 
 /** Captures account custody for work that can outlive a tab's sign-out or replacement. */

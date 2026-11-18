@@ -12,7 +12,6 @@ import {
   createControlUiE2eSuite,
   createControlUiE2eContextOptions,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
 const suite = createControlUiE2eSuite({
   name: "Queued correction update recovery",
@@ -83,7 +82,7 @@ async function reviewStaleBuild(page: Page, gateway: Gateway, build: string) {
   await gateway.waitForRequest("connect", { after: previous });
   await gateway.rejectDeferred("connect", {
     code: "UNAVAILABLE",
-    message: "protocol mismatch: Control UI updated; reload this page to continue",
+    message: "protocol mismatch: OpenClaw updated; reload this page to continue",
     details: { code: "PROTOCOL_MISMATCH", gatewayBuildId: build, reloadRequired: true },
     retryable: false,
   });
@@ -174,8 +173,8 @@ suite.define(() => {
         .getByText("Save or cancel your queued message edit before reloading.", { exact: true })
         .waitFor();
       if (otherPage) {
-        const pages = await openSidebarPages(page);
-        await pages.getByRole("link", { name: "Sessions", exact: true }).click();
+        // Sessions opens from a group heading, and this ungrouped roster has none.
+        await page.evaluate(() => window.openclawControlUi?.navigate("sessions"));
         await page.waitForURL((url) => url.pathname.endsWith("/sessions"));
       }
       await exactButton(page, "Review edit").click();

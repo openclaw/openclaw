@@ -1,10 +1,12 @@
 import type {
-  LocalWorkspacePausePhase,
   LocalWorkspacePauseReason,
   quiesceLocalWorkspace,
 } from "../../agents/sandbox/local-workspace-quiescence.js";
+import type { LocalWorkspacePausePhase } from "../../agents/sandbox/types.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { localWorkspaceProjectionPath } from "./local-workspace-checkout.js";
 import {
   prepareLocalWorkspaceCheckpointCapture,
   removeLocalWorkspaceCheckpointCapture,
@@ -31,10 +33,12 @@ export async function runLocalWorkspaceProjection<T>(
   options: {
     provision?: boolean;
     reason?: LocalWorkspacePauseReason;
-    snapshotCapture?: boolean;
     onPhase?: (phase: LocalWorkspacePausePhase | "capturePreparation") => void;
   } = {},
 ) {
+  using phases = observeDiagnosticsTimelinePhases(
+    "attempt.setup.sandbox.workspace_selection.projection.operation",
+  );
   owner.assertCurrent();
   options.onPhase?.("operation");
   let previous = store.get();
@@ -58,10 +62,14 @@ export async function runLocalWorkspaceProjection<T>(
       options.reason === "reconcile" ||
       options.reason === "preparation");
   let captured = false;
+  const projectionPath = await localWorkspaceProjectionPath(owner);
+  owner.assertCurrent();
+  store.assertCurrent();
   const operations = projectionOperations(
     owner,
     store,
     previous,
+    projectionPath,
     reconcile
       ? {
           pause: () => pause(),
@@ -77,6 +85,8 @@ export async function runLocalWorkspaceProjection<T>(
           markPhase: (phase) => markPhase(phase),
         }
       : undefined,
+    options.reason,
+    (phase) => markPhase(phase),
   );
   if (previous) {
     operations.current();
@@ -87,9 +97,11 @@ export async function runLocalWorkspaceProjection<T>(
     env: owner.env,
     signal: store.signal,
     commitGuard: () => void operations.current(),
+    workerAuthority: owner.workerAuthority,
   };
   let quiescence: Awaited<ReturnType<typeof quiesceLocalWorkspace>> | undefined;
   const markPhase = (phase: LocalWorkspacePausePhase) => {
+    phases.mark(`attempt.setup.sandbox.workspace_selection.projection.${phase}`);
     quiescence?.markPhase(phase);
     options.onPhase?.(phase);
   };
@@ -132,10 +144,9 @@ export async function runLocalWorkspaceProjection<T>(
     diagnostics.pausedAt = performance.now();
     options.onPhase?.("operation");
   };
-  const useCapture = reconcile || (options.reason === "checkpoint" && options.snapshotCapture);
   options.onPhase?.("capturePreparation");
   let capture =
-    previous?.baseline_ref && useCapture
+    previous?.baseline_ref && reconcile
       ? await prepareLocalWorkspaceCheckpointCapture(
           previous.projection_path,
           filesystemOptions,
@@ -144,16 +155,22 @@ export async function runLocalWorkspaceProjection<T>(
           diagnostics,
         )
       : undefined;
+  if (options.reason === "checkpoint") {
+    await operations.prehash();
+  }
   await pause();
   let accepted = false;
   try {
     const result = await run(
       operations,
-      quiescence && {
+      (quiescence || capture) && {
         get retired() {
-          return quiescence!.retired;
+          return quiescence?.retired ?? false;
         },
-        retire: () => quiescence!.retire(),
+        retire: async () => {
+          await pause();
+          await quiescence?.retire();
+        },
         resume,
         markPhase,
       },
