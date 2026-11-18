@@ -223,7 +223,9 @@ setPhase("preparation");
     writePrivate("version", configVersion);
   };
   const runtimeRoot = path.join(home, ".openclaw-worker", "node-runtimes");
-  const runtimeDir = path.join(runtimeRoot, bootstrap.sha256);
+  const runtimePath = path.join(runtimeRoot, bootstrap.sha256);
+  // Retained digest aliases select an existing installation; verify its canonical directory.
+  const runtimeDir = fs.existsSync(runtimePath) ? fs.realpathSync(runtimePath) : runtimePath;
   const cli = path.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
   const pidFile = stateDir && path.join(stateDir, "node.pid");
   const launchFile = stateDir && path.join(stateDir, "node-launch.json");

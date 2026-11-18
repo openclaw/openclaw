@@ -88,6 +88,18 @@ ${desktopTarget === "windows/normal" ? createCrabboxWindowsDesktopNodeLauncher()
     const invocation = entry.commandLine.match(/^(?:"([^"]+)"|([^\\s"]+))\\s+(?:"([^"]+)"|([^\\s"]+))(?:\\s|$)/);
     return invocation !== null && (invocation[3] ?? invocation[4]) === cli && fs.realpathSync(invocation[1] ?? invocation[2]) === fs.realpathSync(process.execPath) && fs.realpathSync(entry.executablePath) === fs.realpathSync(process.execPath);
   };
+  const nodeProcessAlive = (pid) => {
+    try {
+      process.kill(pid, 0);
+      if (process.platform === "linux") {
+        // A terminated child can remain visible until init reaps it. Its private
+        // environ/cwd are already gone; only the kernel process state is readable.
+        const stat = fs.readFileSync(path.join("/proc", String(pid), "stat"), "utf8");
+        return stat.slice(stat.lastIndexOf(")") + 2)[0] !== "Z";
+      }
+      return true;
+    } catch (error) { if (!["ESRCH", "ENOENT"].includes(error.code)) throw error; return false; }
+  };
   const reuseNodeProcess = () => {
   const hasPid = mode && fs.existsSync(pidFile);
   if (mode && !hasPid) {
@@ -104,8 +116,7 @@ ${desktopTarget === "windows/normal" ? createCrabboxWindowsDesktopNodeLauncher()
     const pidText = fs.readFileSync(pidFile, "utf8").trim();
     if (!/^[1-9][0-9]*$/.test(pidText)) throw new Error("Cloud worker node PID is invalid; release and reprovision the worker");
     const pid = Number(pidText);
-    let alive = true;
-    try { process.kill(pid, 0); } catch (error) { if (error.code !== "ESRCH") throw error; alive = false; }
+    const alive = nodeProcessAlive(pid);
     if (alive) {
       let verified = false;
       if (process.platform === "linux") {
@@ -290,17 +301,19 @@ ${desktopTarget === "windows/normal" ? createCrabboxWindowsDesktopNodeLauncher()
 
 type ResumeRequest = Parameters<NonNullable<WorkerProvider["resumeNode"]>>[0];
 
-/** No setup, artifact download, enrollment credential, or repository command enters recovery. */
+/** Recover the saved identity; only fresh runtime grants permit replacing its package. */
 export function createCrabboxNodeResumeScript(
   request: ResumeRequest,
   phase: "inspect" | "launch",
 ): string {
+  const runtime = request.retainedRuntimeOnly ? undefined : request.runtime;
   const script = `const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const crypto = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const { once } = require("node:events");
+const { setTimeout: delay } = require("node:timers/promises");
 (async () => {
   process.umask(0o077);
   const home = fs.realpathSync(os.homedir());
@@ -309,17 +322,23 @@ const { once } = require("node:events");
   const displayName = "Cloud worker";
   const setPhase = () => {};
   const stateDir = path.join(home, ".openclaw", "cloud-workers", leaseId);
-  const runtimeDir = path.join(home, ".openclaw-worker", "node-runtimes", ${JSON.stringify(request.nodeBootstrapSha256)});
   const runtimeLink = path.join(stateDir, "runtime");
-  const cli = path.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
+  if (!fs.lstatSync(stateDir).isDirectory() || fs.realpathSync(stateDir) !== stateDir || !fs.lstatSync(runtimeLink).isSymbolicLink()) throw new Error("Cloud worker saved runtime is missing or changed; resume refused");
+  // A saved selector or creation-time digest can be an alias after an in-place update.
+  let runtimeDir = fs.realpathSync(runtimeLink);
+  let cli = path.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
   const pidFile = path.join(stateDir, "node.pid");
   const launchFile = path.join(stateDir, "node-launch.json");
   const setupFile = path.join(stateDir, "setup-code");
-  if (!fs.lstatSync(stateDir).isDirectory() || fs.realpathSync(stateDir) !== stateDir || !fs.lstatSync(runtimeDir).isDirectory() || fs.realpathSync(runtimeDir) !== runtimeDir || !fs.lstatSync(runtimeLink).isSymbolicLink() || fs.realpathSync(runtimeLink) !== runtimeDir) throw new Error("Cloud worker saved runtime is missing or changed; resume refused");
-  const packageRoot = path.join(runtimeDir, "node_modules", "openclaw");
+  const verifyPackage = (root, expectedVersion) => {
+  if (!fs.lstatSync(root).isDirectory() || !fs.existsSync(path.join(root, "node_modules", "openclaw", "package.json"))) throw new Error("Cloud worker saved runtime is missing or changed; resume refused");
+  const packageRoot = path.join(root, "node_modules", "openclaw");
   if ([".openclaw-lifecycle-pending", "dist/openclaw-install-guard"].some((file) => fs.existsSync(path.join(packageRoot, file)))) throw new Error("Cloud worker saved package requires repair; resume refused");
   const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
-  if (manifest.name !== "openclaw" || manifest.version !== ${JSON.stringify(request.openclawVersion)}) throw new Error("Cloud worker saved package identity changed; resume refused");
+  if (manifest.name !== "openclaw" || typeof manifest.version !== "string" || (expectedVersion !== undefined && manifest.version !== expectedVersion)) throw new Error("Cloud worker saved package identity changed; resume refused");
+  };
+  // Creation-time preparation hints do not supersede the saved runtime after an upgrade.
+  verifyPackage(runtimeDir);
   // The saved process receipt names the actual CLI, not a compile-cache respawn.
   const nodeEnv = { ...process.env, OPENCLAW_STATE_DIR: stateDir, NODE_DISABLE_COMPILE_CACHE: "1", OPENCLAW_NO_RESPAWN: "1" };
   nodeEnv.PATH = path.dirname(process.execPath) + path.delimiter + path.join(runtimeDir, "node_modules", "openclaw", "dist", "worker-tools", "bin") + path.delimiter + (nodeEnv.PATH || "");
@@ -330,9 +349,39 @@ const { once } = require("node:events");
   const identity = spawnSync(process.execPath, [cli, "node", "identity", "--json"], { cwd: runtimeDir, env: nodeEnv, encoding: "utf8", timeout: 30000, maxBuffer: 65536 });
   if (identity.status !== 0 || JSON.parse(identity.stdout).deviceId !== ${JSON.stringify(request.deviceId)}) throw new Error("Cloud worker saved device identity changed; resume refused");`
       : `${createCrabboxNodeProcessRuntime(undefined, request.leaseId, request.deviceId)}
+  let reused = reuseNodeProcess();
+  ${
+    runtime
+      ? `// Installation completed before touching the old process or publishing its replacement.
+  const nextRuntime = fs.realpathSync(path.join(home, ".openclaw-worker", "node-runtimes", ${JSON.stringify(runtime.nodeBootstrap.sha256)}));
+  verifyPackage(nextRuntime, ${JSON.stringify(runtime.nodeBootstrap.openclawVersion)});
+  if (nextRuntime !== runtimeDir) {
+    // The host admits this upgrade only while the placement is idle. Signal only
+    // the exact saved node; a failed graceful stop leaves its selector unchanged.
+    if (reused) {
+      const pid = Number(fs.readFileSync(pidFile, "utf8").trim());
+      process.kill(pid, "SIGTERM");
+      const deadline = Date.now() + 30000;
+      while (nodeProcessAlive(pid)) {
+        if (Date.now() >= deadline) throw new Error("Cloud worker saved node did not stop for runtime upgrade; retry recovery");
+        await delay(50);
+      }
+    }
+    const temporary = runtimeLink + "." + crypto.randomUUID();
+    try {
+      fs.symlinkSync(nextRuntime, temporary, "dir");
+      fs.renameSync(temporary, runtimeLink);
+    } finally { fs.rmSync(temporary, { force: true }); }
+    runtimeDir = nextRuntime;
+    reused = false;
+    cli = path.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
+    nodeEnv.PATH = path.dirname(process.execPath) + path.delimiter + path.join(runtimeDir, "node_modules", "openclaw", "dist", "worker-tools", "bin") + path.delimiter + (process.env.PATH || "");
+  }`
+      : ""
+  }
   // Runtime/receipt checks are repeated in this write invocation; the node runner
   // independently enforces the exact saved device, configuration and paired token.
-  if (!reuseNodeProcess()) await launchNodeProcess();`
+  if (!reused) await launchNodeProcess();`
   }
 })().catch((error) => { console.error(error.message); process.exitCode = 1; });`;
   return wrapCrabboxNodeScript(

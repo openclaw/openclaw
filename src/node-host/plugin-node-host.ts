@@ -164,9 +164,8 @@ export function watchRegisteredNodeHostCommandAvailability(
   let stopped = false;
   let stopping: Promise<void> | undefined;
   const start = () => {
-    if (stopped) {
-      return;
-    }
+    // Preparation may own resources before shutdown. Collect its disposers even
+    // when stop arrived first; the stop barrier joins and immediately retires them.
     withPluginRuntimeRegistryScope(registry, () => {
       for (const entry of registry?.nodeHostCommands ?? []) {
         if (commandAllowlist && !commandAllowlist.has(entry.command.command)) {
@@ -182,7 +181,7 @@ export function watchRegisteredNodeHostCommandAvailability(
         }
       }
     });
-    if (ready) {
+    if (ready && !stopped) {
       onChange();
     }
   };
