@@ -5,7 +5,9 @@ import {
   captureUiProof,
   createNewSessionPageE2eSuite,
   installMockGateway,
+  LOCAL_GIT_WORKSPACE_RESPONSES,
   waitForCommittedChatRoute,
+  WORKSPACE,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -37,6 +39,16 @@ suite.define(() => {
           const gateway = await installMockGateway(page, {
             heldMethods: [method],
             agentModel: "openai/gpt-5.5",
+            // Isolate submission readiness from the optional checkout row disappearing.
+            ...(method === "agents.list"
+              ? {
+                  workspace: WORKSPACE,
+                  workspaceGit: true,
+                  methodResponses: {
+                    "worktrees.branches": LOCAL_GIT_WORKSPACE_RESPONSES["worktrees.branches"],
+                  },
+                }
+              : {}),
           });
           await page.goto(`${suite.server.baseUrl}new?agent=main`);
           const composer = page.locator(".new-session-page__message");
@@ -53,6 +65,10 @@ suite.define(() => {
           const start = page.getByRole("button", { name: "Start session", exact: true });
           const notice = page.locator(".new-session-page__blocked-submit");
           const frame = page.locator(".new-session-page__composer");
+          await gateway.waitForRequest(method);
+          if (method === "agents.list") {
+            await frame.locator(".new-session-page__checkout-skeleton").waitFor();
+          }
           const bounds = await frame.boundingBox();
           const inputBounds = await composer.boundingBox();
           const stableBounds =
@@ -76,6 +92,9 @@ suite.define(() => {
 
           await gateway.resolveDeferred(method);
           await page.locator(".new-session-page__start-submit:not(:disabled)").waitFor();
+          if (method === "agents.list") {
+            await frame.locator("#new-session-checkout-trigger").waitFor();
+          }
           expect(await notice.count()).toBe(0);
           expect(await composer.inputValue()).toBe(message);
           expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
