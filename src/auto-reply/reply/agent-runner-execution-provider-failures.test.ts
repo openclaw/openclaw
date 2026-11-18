@@ -604,6 +604,31 @@ describe("provider failures seen by non-owners in shared chats", () => {
     expect(payload.text).toContain("Check its results before trying again");
   });
 
+  it("keeps the completed-work warning when a fallback times out after a provider outage", async () => {
+    const timeout = createCliTimeoutError(
+      { provider: "claude-cli" },
+      {
+        mode: "overall",
+        timeoutSeconds: 600,
+        observedActivity: true,
+        activeToolCount: 0,
+        backgroundTaskCount: 0,
+      },
+      "cli_overall_timeout",
+    );
+    const chain = createTestFallbackSummaryError({
+      message: "All models failed (2)",
+      attempts: [
+        { provider: "openai", model: "gpt-5.5", error: "503", reason: "server_error", status: 503 },
+        { provider: "claude-cli", model: "opus", error: "timed out", reason: "timeout" },
+      ],
+      cause: timeout,
+    });
+    const payload = await replyTo(chain, false);
+    expect(payload.text).not.toBe(UNAVAILABLE_TEXT);
+    expect(payload.text).toContain("Check its results before trying again");
+  });
+
   it("keeps failures that are not about the provider", async () => {
     const payload = await replyTo(
       new Error("Preflight compaction required but failed: summary too large"),

@@ -202,7 +202,10 @@ export function resolveNonOwnerProviderFailureText(params: {
       channel: params.sessionCtx.Provider ?? params.sessionCtx.Surface,
       accountId: params.sessionCtx.AccountId,
     }).length === 0 ||
-    !isNonDirectConversationContext(params.sessionCtx)
+    !isNonDirectConversationContext(params.sessionCtx) ||
+    // CLI timeout and stop copy says whether work may already have run; keep it.
+    findCliTimeoutError(error) !== undefined ||
+    findCliTerminalStopError(error) !== undefined
   ) {
     return undefined;
   }
