@@ -69,6 +69,27 @@ describe("broadcast dispatch", () => {
     resolvedTurnCalls,
   } = setupFeishuBroadcastTestHarness();
 
+  it.each([
+    "@Ada /status",
+    "@Ada /model openai/gpt-4o-mini",
+    "Send /model to choose another model.",
+  ])("keeps mention-shaped prose as text through ingress: %j", async (text) => {
+    await handleFeishuMessage({
+      cfg: createBroadcastConfig(false),
+      event: createBroadcastEvent({ messageId: "msg-command-prose", text }),
+      botOpenId: "bot-open-id",
+      runtime: createRuntimeEnv(),
+    });
+    expect(resolvedTurnCalls).toHaveLength(2);
+    for (const call of resolvedTurnCalls) {
+      expect(call.ctxPayload).toMatchObject({
+        CommandBody: text,
+        BodyForCommands: text,
+        CommandTurn: { kind: "normal", source: "message", body: text },
+      });
+    }
+  });
+
   function mockActiveDispatcher(ensureNoVisibleReplyFallback = vi.fn()) {
     const dispatcher = { ...createReplyDispatcher(), ensureNoVisibleReplyFallback };
     mockCreateFeishuReplyDispatcher.mockReturnValueOnce(dispatcher);

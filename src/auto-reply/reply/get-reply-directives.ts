@@ -139,6 +139,11 @@ export async function resolveReplyDirectives(params: {
   const targetSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
 
   const commandText = sessionCtx.commandText;
+  // Admit slash syntax once from the sender text, before stripping directives.
+  // Keep that decision when projecting raw channel text or parsing chained directives.
+  const startsWithSlash = (isGroup ? stripMentions(commandText, ctx, cfg, agentId) : commandText)
+    .trimStart()
+    .startsWith("/");
   const commandContext = {
     ctx,
     cfg,
@@ -162,17 +167,15 @@ export async function resolveReplyDirectives(params: {
     command.isAuthorizedSender &&
     ctx.CommandInterpretationSuppressed !== true &&
     matchSlashCommandToken(command.commandBodyNormalized, "/followup") === null;
-  const commandTextHasSlash = commandText.includes("/");
-  const configuredModelAliases = commandTextHasSlash
+  const configuredModelAliases = commandText.includes("/")
     ? listModelAliasCandidates(cfg, agentId)
         .map((candidate) => candidate.alias)
         .filter(Boolean)
     : [];
-  const hasConfiguredModelAliases = configuredModelAliases.length > 0;
   const hasSkillReferences =
     canInterpretTextDirectives && hasSkillReferenceCandidate(command.commandBodyNormalized);
   const reservedCommands = new Set<string>();
-  if (hasConfiguredModelAliases) {
+  if (configuredModelAliases.length > 0) {
     const { listChatCommands } = await commandsRegistryLoader.load();
     for (const chatCommand of listChatCommands()) {
       for (const alias of chatCommand.textAliases) {
@@ -231,8 +234,8 @@ export async function resolveReplyDirectives(params: {
       reply: markCommandReplyForDelivery({ text: explicitSkillReferences.error }),
     };
   }
-  const hasExplicitSkillInvocation = Boolean(explicitSkillReferences?.skills.length);
-  const canInterpretMessageDirectives = canInterpretTextDirectives && !hasExplicitSkillInvocation;
+  const canInterpretMessageDirectives =
+    startsWithSlash && canInterpretTextDirectives && !explicitSkillReferences?.skills.length;
 
   const configuredAliases = rawAliases.filter(
     (alias) => !reservedCommands.has(normalizeLowercaseStringOrEmpty(alias)),
@@ -266,12 +269,14 @@ export async function resolveReplyDirectives(params: {
   let preparedModelCatalog = params.preparedModelCatalog;
   let isKnownInlineModel: ((raw: string) => boolean) | undefined;
   const parseDirectives = (text: string) =>
-    parseInlineSessionDirectives(text, {
-      modelAliases: configuredAliases,
-      isKnownInlineModel,
-      allowStatusDirective: canInterpretMessageDirectives,
-      command: routingCommand,
-    });
+    startsWithSlash
+      ? parseInlineSessionDirectives(text, {
+          modelAliases: configuredAliases,
+          isKnownInlineModel,
+          allowStatusDirective: canInterpretMessageDirectives,
+          command: routingCommand,
+        })
+      : clearInlineDirectives(text);
   const cleanStatus = (text: string) =>
     canInterpretMessageDirectives ? stripInlineStatus(text).cleaned : text;
   let directives = parseDirectives(directiveCommandText);

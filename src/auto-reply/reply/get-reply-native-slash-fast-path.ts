@@ -32,7 +32,6 @@ import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { initFastReplySessionState } from "./get-reply-fast-path.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
-import { stripStructuralPrefixes } from "./mentions.js";
 import { resolveContextTokens } from "./model-selection-context.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
 import { persistReplySessionEntry } from "./session-entry-persistence.js";
@@ -52,7 +51,7 @@ function shouldRunNativeSlashCommandFastPath(ctx: MsgContext): boolean {
   if (!isNativeCommandTurn(commandTurn) && !isAuthorizedTextSlashCommandTurn(commandTurn)) {
     return false;
   }
-  const commandName = resolveSlashCommandName(stripStructuralPrefixes(ctx.commandText ?? ""));
+  const commandName = resolveSlashCommandName(ctx.commandText);
   if (
     !commandName ||
     commandName === "new" ||

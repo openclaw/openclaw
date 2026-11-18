@@ -11,7 +11,7 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { isAbortRequestText } from "./abort-primitives.js";
-import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { stripMentions } from "./mentions.js";
 
 export type FastAbortRequestParams = {
   ctx: FinalizedRuntimeMsgContext;
@@ -66,7 +66,7 @@ function resolveFastAbortRequest(params: FastAbortRequestParams) {
       config: cfg,
       fallbackAgentId: ctx.AgentId,
     });
-  const raw = stripStructuralPrefixes(ctx.commandText);
+  const raw = ctx.commandText;
   const isGroup = normalizeOptionalLowercaseString(ctx.ChatType) === "group";
   const stripped = isGroup ? stripMentions(raw, ctx, cfg, resolveTargetAgentId()) : raw;
   if (!isAbortRequestText(stripped)) {
