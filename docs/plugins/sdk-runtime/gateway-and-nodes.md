@@ -787,3 +787,13 @@ publish any session: the source plugin must separately authorize the exact
 device against its live publication grant, and enforce its group and canonical
 person selection before each disclosure. That source grant is not supplied by
 this host capability. It grants no human steering authority.
+
+### Existing named reader identity
+
+`loadGatewayReaderIdentityV1(identityKey)` from
+`openclaw/plugin-sdk/gateway-runtime` reads a preprovisioned signing identity from
+the host credential owner. Empty, whitespace-padded and `primary` keys are
+rejected. Missing identities throw; the helper never creates or enrolls a device.
+Pass the returned identity explicitly to `GatewayClient` with an explicit device
+token. The identity is signing material, not session authorization. Never expose
+its private key in logs or responses.

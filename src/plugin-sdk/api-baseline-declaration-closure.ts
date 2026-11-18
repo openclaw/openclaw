@@ -446,10 +446,18 @@ export function createDeclarationClosureRenderer(params: {
 
   // Fail toward recall: an unindexable declaration retains the whole declaration subtree;
   // omitting it could let a reachable private type change escape the API baseline.
-  const recallFallback = (sourceFile: ts.SourceFile): Walk => ({
-    sections: fallbackFile(sourceFile),
-    tainted: false,
-  });
+  const fallbackRoots = new Map<string, Walk>();
+  const recallFallback = (sourceFile: ts.SourceFile): Walk => {
+    const key = canonical(sourceFile.fileName);
+    let result = fallbackRoots.get(key);
+    if (!result) {
+      // Only complete roots are reusable in this immutable renderer. Recursive fallbackFile
+      // results omit visited ancestors and must not be cached independently.
+      result = { sections: fallbackFile(sourceFile), tainted: false };
+      fallbackRoots.set(key, result);
+    }
+    return result;
+  };
 
   const ambientContribution = (sourceFile: ts.SourceFile): Walk => {
     const key = canonical(sourceFile.fileName);

@@ -3,6 +3,7 @@ import { X509Certificate } from "node:crypto";
 import { once } from "node:events";
 import https from "node:https";
 import tls from "node:tls";
+import { loadGatewayReaderIdentityV1 } from "openclaw/plugin-sdk/gateway-runtime";
 import * as transcript from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import sessionShare from "../../extensions/session-share/index.js";
@@ -81,7 +82,7 @@ it.each([false, true])(
       throw new Error(`Fixture token refused: ${issued.reason}`);
     }
     const device = {
-      identity,
+      identity: await loadGatewayReaderIdentityV1(identityKey),
       issued: issued.entry,
     };
     const share = {
