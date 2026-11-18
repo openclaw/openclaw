@@ -404,6 +404,22 @@ A liveness check sent to your own number can therefore become agent input with `
 
   </Accordion>
 
+  <Accordion title="Batching rapid messages">
+    `messages.inbound.byChannel.whatsapp` (milliseconds) holds rapid text from the same sender and sends it as one agent turn after the quiet window. Media flushes immediately unless `channels.whatsapp.debounceMedia` is `true`:
+
+    ```json5
+    {
+      messages: { inbound: { byChannel: { whatsapp: 20000 } } },
+      channels: { whatsapp: { debounceMedia: true } },
+    }
+    ```
+
+    With `debounceMedia`, direct-chat photos, videos, voice notes, documents, and stickers wait in the same window. The batch keeps every attachment with its own caption in arrival order, and each uncaptioned voice note is transcribed in place. Groups, quoted replies, locations, and control commands such as `/stop` still dispatch immediately. Each new message restarts the window, up to five windows in total.
+
+    A message that arrives while its media is still downloading can miss a short window and start its own turn. Per-account override: `channels.whatsapp.accounts.<id>.debounceMedia`.
+
+  </Accordion>
+
   <Accordion title="Pending group history injection">
     Unprocessed group messages buffer and inject as context when the bot is finally triggered.
 
@@ -745,7 +761,7 @@ Primary reference: [Configuration reference - WhatsApp](/gateway/config-channels
 | Delivery         | `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `reactionLevel`                     |
 | Multi-account    | `accounts.<id>.enabled`, `accounts.<id>.authDir`, and other per-account overrides                              |
 | Operations       | `configWrites`, `enabled`                                                                                      |
-| Inbound batching | `messages.inbound.debounceMs`, `messages.inbound.byChannel.whatsapp`                                           |
+| Inbound batching | `messages.inbound.debounceMs`, `messages.inbound.byChannel.whatsapp`, `debounceMedia`                          |
 | Acknowledgments  | `messages.ackReaction`, `messages.ackReactionScope`                                                            |
 | Session behavior | `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`                                   |
 | Prompts          | `groups.<id>.systemPrompt`, `groups["*"].systemPrompt`, `direct.<id>.systemPrompt`, `direct["*"].systemPrompt` |

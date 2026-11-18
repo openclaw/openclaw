@@ -35,6 +35,7 @@ import type {
 } from "../deliver-reply.js";
 import { createWhatsAppReplyTransportContext } from "../deliver-reply.js";
 import { markWhatsAppVisibleDeliveryError } from "../util.js";
+import { listWhatsAppInboundMedia } from "./audio-preflight.js";
 import { resolveWebMonitorConfigSnapshot } from "./config.js";
 import { formatGroupMembers } from "./group-members.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
@@ -208,16 +209,15 @@ export async function prepareWhatsAppInboundContext(params: {
         })
       : undefined;
 
+  const inboundMedia = listWhatsAppInboundMedia(params.msg);
   const media = await toInboundMediaFactsWithMetadata(
-    params.msg.payload.media
-      ? [
-          {
-            path: params.msg.payload.media?.path,
-            url: params.msg.payload.media?.url ?? params.msg.payload.media?.path,
-            contentType: params.msg.payload.media?.type,
-            kind: params.msg.payload.media?.kind,
-          },
-        ]
+    inboundMedia.length > 0
+      ? inboundMedia.map((entry) => ({
+          path: entry.path,
+          url: entry.url ?? entry.path,
+          contentType: entry.type,
+          kind: entry.kind,
+        }))
       : undefined,
     { transcribed: (_entry, index) => params.mediaTranscribedIndexes?.includes(index) === true },
   );

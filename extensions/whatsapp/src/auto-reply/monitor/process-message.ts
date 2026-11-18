@@ -30,7 +30,13 @@ import { formatError } from "../../session.js";
 import { deliverWebReply } from "../deliver-reply.js";
 import { whatsappInboundLog } from "../loggers.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
-import { hasWhatsAppAudioBody, transcribeWhatsAppAudioMessage } from "./audio-preflight.js";
+import {
+  hasWhatsAppAudioBody,
+  listWhatsAppInboundMedia,
+  transcribeWhatsAppAudioMessage,
+  transcribeWhatsAppBatchedAudio,
+  type WhatsAppBatchedAudioTranscript,
+} from "./audio-preflight.js";
 import {
   resolveVisibleWhatsAppGroupHistory,
   resolveVisibleWhatsAppReplyContext,
@@ -113,6 +119,8 @@ export async function processMessage(params: {
    * - null    → preflight was attempted but failed / returned nothing; skip internal STT
    * - undefined (omitted) → caller did not attempt preflight; run internal STT as normal */
   preflightAudioTranscript?: string | null;
+  /** Caller-level preflight of a debounced batch, shared the same way; null records an attempt. */
+  preflightBatchedAudio?: WhatsAppBatchedAudioTranscript | null;
   buildContext?: typeof buildChannelInboundEventContext;
   dispatchReplyFromConfig?: NonNullable<ChannelInboundTurnPlan["dispatchReplyFromConfig"]>;
 }) {
@@ -161,14 +169,28 @@ export async function processMessage(params: {
     }
   }
 
+  // A batch carries no single media fact, so each of its voice notes is transcribed in place.
+  const batchedAudio =
+    params.preflightBatchedAudio !== undefined
+      ? (params.preflightBatchedAudio ?? undefined)
+      : await transcribeWhatsAppBatchedAudio(params.cfg, params.msg, params.route.accountId);
+  if (batchedAudio) {
+    audioTranscript = batchedAudio.transcript;
+  }
+  const agentBody = batchedAudio
+    ? batchedAudio.body
+    : audioTranscript !== undefined
+      ? formatAudioTranscriptForAgent(audioTranscript)
+      : undefined;
+
   // Commands retain the original body; media facts and the transcript prevent duplicate STT.
   const msgForAgent: AdmittedWebInboundMessage =
-    audioTranscript !== undefined
+    agentBody !== undefined
       ? {
           ...params.msg,
           payload: {
             ...params.msg.payload,
-            body: formatAudioTranscriptForAgent(audioTranscript),
+            body: agentBody,
           },
         }
       : params.msg;
@@ -272,7 +294,10 @@ export async function processMessage(params: {
     });
   }
 
-  const kindLabel = params.msg.payload.media?.type ? `, ${params.msg.payload.media?.type}` : "";
+  const mediaTypes = listWhatsAppInboundMedia(params.msg).flatMap((media) =>
+    media.type ? [media.type] : [],
+  );
+  const kindLabel = mediaTypes.length > 0 ? `, ${mediaTypes.join(", ")}` : "";
   whatsappInboundLog.info(
     `Inbound message ${conversationId} -> ${params.msg.platform.recipientJid} (${conversationKind}${kindLabel}, ${combinedBody.length} chars)`,
   );
@@ -345,7 +370,9 @@ export async function processMessage(params: {
       e164: sender.e164 ?? undefined,
     },
     ...(audioTranscript !== undefined ? { transcript: audioTranscript } : {}),
-    ...(audioTranscript !== undefined ? { mediaTranscribedIndexes: [0] } : {}),
+    ...(audioTranscript !== undefined
+      ? { mediaTranscribedIndexes: batchedAudio?.transcribedIndexes ?? [0] }
+      : {}),
     replyThreading,
     visibleReplyTo: visibleReplyTo ?? undefined,
     suppressMessageReceivedHooks: true,

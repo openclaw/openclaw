@@ -46,7 +46,13 @@ import { jidToE164 } from "../../targets-runtime.js";
 import { whatsappInboundLog } from "../loggers.js";
 import { buildMentionConfig, isBotMentioned, resolveOwnerList } from "../mentions.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
-import { hasWhatsAppAudioBody, transcribeWhatsAppAudioMessage } from "./audio-preflight.js";
+import {
+  hasWhatsAppAudioToTranscribe,
+  listWhatsAppInboundMedia,
+  transcribeWhatsAppAudioMessage,
+  transcribeWhatsAppBatchedAudio,
+  type WhatsAppBatchedAudioTranscript,
+} from "./audio-preflight.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
 import { noteGroupMember } from "./group-members.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
@@ -130,6 +136,7 @@ export function createWebOnMessageHandler(params: {
       groupHistory?: GroupHistoryEntry[];
       suppressGroupHistoryClear?: boolean;
       preflightAudioTranscript?: string | null;
+      preflightBatchedAudio?: WhatsAppBatchedAudioTranscript | null;
       ackAlreadySent?: boolean;
       ackReaction?: AckReactionHandle | null;
       statusReactionController?: StatusReactionController | null;
@@ -198,7 +205,9 @@ export function createWebOnMessageHandler(params: {
     // Share one transcript across broadcast agents, after DM or group admission.
     // Null records a completed attempt; undefined permits a later preflight.
     let preflightAudioTranscript: string | null | undefined;
-    const hasAudioBody = hasWhatsAppAudioBody(msg);
+    // A debounced batch also shares its rebuilt body and transcribed media indexes.
+    let preflightBatchedAudio: WhatsAppBatchedAudioTranscript | null | undefined;
+    const hasAudioToTranscribe = hasWhatsAppAudioToTranscribe(msg);
     const canRunEarlyAudioPreflight =
       conversationKind === "group" || canRunDirectEarlyAudioPreflight;
     let ackAlreadySent = false;
@@ -225,23 +234,31 @@ export function createWebOnMessageHandler(params: {
       }
     };
     const transcribeAudioOnce = async () => {
-      if (preflightAudioTranscript !== undefined || !hasAudioBody || !msg.payload.media?.path) {
+      if (preflightAudioTranscript !== undefined || !hasAudioToTranscribe) {
         return;
       }
       try {
-        preflightAudioTranscript =
-          (await transcribeWhatsAppAudioMessage(cfg, msg, route.accountId)) ?? null;
+        if (msg.payload.batchedParts) {
+          preflightBatchedAudio =
+            (await transcribeWhatsAppBatchedAudio(cfg, msg, route.accountId)) ?? null;
+          preflightAudioTranscript = preflightBatchedAudio?.transcript ?? null;
+        } else {
+          preflightAudioTranscript =
+            (await transcribeWhatsAppAudioMessage(cfg, msg, route.accountId)) ?? null;
+        }
       } catch {
         // Non-fatal: store null so per-agent retries are suppressed.
         preflightAudioTranscript = null;
+        if (msg.payload.batchedParts) {
+          preflightBatchedAudio = null;
+        }
       }
     };
     const runAudioPreflightOnce = async () => {
       if (
         preflightAudioTranscript !== undefined ||
         !canRunEarlyAudioPreflight ||
-        !hasAudioBody ||
-        !msg.payload.media?.path
+        !hasAudioToTranscribe
       ) {
         return;
       }
@@ -313,6 +330,7 @@ export function createWebOnMessageHandler(params: {
               senderIdentity.e164 ??
               getPrimaryIdentityId(senderIdentity) ??
               "Unknown");
+        const historyMedia = listWhatsAppInboundMedia(msg);
         createChannelHistoryWindow({ historyMap: params.groupHistories }).record({
           historyKey: groupHistoryKey,
           limit: params.groupHistoryLimit,
@@ -322,16 +340,14 @@ export function createWebOnMessageHandler(params: {
             timestamp: msg.event.timestamp,
             id: msg.event.id,
             senderJid: senderIdentity.jid ?? msg.platform.senderJid,
-            ...(msg.payload.media
+            ...(historyMedia.length > 0
               ? {
-                  media: [
-                    {
-                      path: msg.payload.media.path,
-                      url: msg.payload.media.url ?? msg.payload.media.path,
-                      contentType: msg.payload.media.type,
-                      kind: msg.payload.media.kind ?? undefined,
-                    },
-                  ],
+                  media: historyMedia.map((media) => ({
+                    path: media.path,
+                    url: media.url ?? media.path,
+                    contentType: media.type,
+                    kind: media.kind ?? undefined,
+                  })),
                 }
               : {}),
           },
@@ -483,10 +499,7 @@ export function createWebOnMessageHandler(params: {
 
         return { shouldProcess: true };
       };
-      let gating = await applyGroupGating(
-        undefined,
-        hasAudioBody && Boolean(msg.payload.media?.path),
-      );
+      let gating = await applyGroupGating(undefined, hasAudioToTranscribe);
       if (
         !gating.shouldProcess &&
         "needsMentionText" in gating &&
@@ -589,6 +602,7 @@ export function createWebOnMessageHandler(params: {
             groupHistory: turn.round === 1 ? groupHistorySnapshot : [],
             suppressGroupHistoryClear: true,
             ...(preflightAudioTranscript !== undefined ? { preflightAudioTranscript } : {}),
+            ...(preflightBatchedAudio !== undefined ? { preflightBatchedAudio } : {}),
             ...(broadcastAckAlreadySent || turn.round > 1 ? { ackAlreadySent: true } : {}),
             ...(ackReaction && conversationKind !== "group" && turn.round === 1
               ? { ackReaction }
@@ -608,6 +622,7 @@ export function createWebOnMessageHandler(params: {
 
     await processForRoute(cfg, msg, route, groupHistoryKey, {
       ...(preflightAudioTranscript !== undefined ? { preflightAudioTranscript } : {}),
+      ...(preflightBatchedAudio !== undefined ? { preflightBatchedAudio } : {}),
       ...(ackAlreadySent ? { ackAlreadySent: true } : {}),
       ...(ackReaction ? { ackReaction } : {}),
       ...(statusReactionController ? { statusReactionController } : {}),

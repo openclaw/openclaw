@@ -116,7 +116,7 @@ channels.telegram.accounts.*.direct.*.topics.*.groupPolicy
 channels.telegram.accounts.*.groups.*.groupPolicy
 channels.telegram.accounts.*.groups.*.topics.*.groupPolicy
 channels.telegram.direct.*.topics.*.groupPolicy
-channels.whatsapp.groups.*.requireMention channels.whatsapp.selfChatMode
+channels.whatsapp.debounceMedia channels.whatsapp.groups.*.requireMention channels.whatsapp.selfChatMode
 cron.enabled env.vars gateway.auth.mode gateway.auth.password gateway.auth.token
 gateway.cliAgents.enabled gateway.uploads.enabled
 gateway.auth.trustedProxy.allowUsers gateway.auth.trustedProxy.userHeader gateway.bind

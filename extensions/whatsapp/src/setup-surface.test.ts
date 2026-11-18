@@ -354,6 +354,7 @@ describe("whatsapp setup wizard", () => {
         accountId: "work",
         enabled: true,
         sendReadReceipts: true,
+        debounceMedia: false,
         authDir: "/tmp/work",
         isLegacyAuthDir: false,
         groupPolicy: "open",

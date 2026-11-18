@@ -1,7 +1,6 @@
 import type { WAMessageKey } from "baileys";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
-import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
@@ -45,6 +44,7 @@ import { getRuntimeConfig } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { createWebChannelStatusController } from "./monitor-state.js";
 import { resolveWebMonitorConfigSnapshot } from "./monitor/config.js";
+import { shouldDebounceWhatsAppInbound } from "./monitor/debounce-policy.js";
 import type { GroupHistoryEntry } from "./monitor/inbound-context.js";
 import { createWebOnMessageHandler } from "./monitor/on-message.js";
 import type { WebMonitorTuning } from "./types.js";
@@ -170,12 +170,12 @@ export async function monitorWebChannel(
       }
 
       const connectionId = newConnectionId();
+      // Read config live so the media toggle follows hot reloads like the window.
       const shouldDebounce = (msg: WebInboundCallbackMessage) =>
-        shouldDebounceTextInbound({
-          text: msg.payload.commandBody ?? msg.payload.body,
-          cfg,
-          hasMedia: Boolean(msg.payload.media?.path || msg.payload.media?.type),
-          allowDebounce: !(msg.payload.location || msg.quote?.id || msg.quote?.body),
+        shouldDebounceWhatsAppInbound({
+          msg,
+          cfg: loadCurrentMonitorConfig(),
+          accountId: account.accountId,
         });
 
       let connection;
