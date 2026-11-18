@@ -7,7 +7,7 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 // Bundled @openai/codex pin: the floor when the registry cannot be read. The
 // client-version contract test keeps it equal to extensions/codex's exact dependency.
-export const OPENAI_CODEX_CLIENT_VERSION_FLOOR = "0.169.0";
+const OPENAI_CODEX_CLIENT_VERSION_FLOOR = "0.169.0";
 
 const CODEX_LATEST_VERSION_URL = "https://registry.npmjs.org/@openai/codex/latest";
 // npm publishes a Codex release at most a few times a day; a launch needs one refresh.
