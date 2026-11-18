@@ -9,6 +9,84 @@ const dirs = useAutoCleanupTempDirTracker(afterAll);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 const command = "prepare-correction-continue";
 
+describePosix("published correction continuation at the exact hosted head", () => {
+  it("accepts a fresh NEEDS WORK review without requiring another local commit", () => {
+    const f = createBaselineFixture(dirs.make("openclaw-pr-equal-head-continuation-"), 1);
+    // Native Git publication creates the real receipt. No local descendant is
+    // added: the signed retained preparation is exactly the newly reviewed head.
+    const head = f.publish();
+    const tree = f.prepGit("rev-parse", "HEAD^{tree}");
+    expect(head).not.toBe(f.incoming);
+    expect(f.prepGit("rev-parse", "HEAD")).toBe(head);
+    expect(f.git(f.repo, "rev-parse", "topic")).toBe(head);
+    f.prepGit("verify-commit", head);
+    const receipt = f.readLocal("prepare-push-result.env");
+    expect(receipt.toString()).toContain(`PUSHED_FROM_SHA=${f.incoming}`);
+
+    f.pass("review-init");
+    f.pass("review-checkout-pr");
+    f.pass("review-artifacts-init");
+    const review = validReview(head);
+    review.issueValidation.status = "valid";
+    review.findings.push({
+      id: "I2",
+      severity: "IMPORTANT",
+      title: "Remaining behavior at the published head",
+      area: f.product[0]!,
+      fix: "Continue correction from the published candidate",
+    });
+    f.writeLocal("review.json", JSON.stringify(review));
+    f.pass("review-validate-artifacts");
+    f.prepGit("switch", "-q", "pr-42-prep");
+    const fresh = f.snapshot(["pr-meta.json", "pr-meta.env", "review.json"]);
+    const oid = (name: string) => f.prepGit("hash-object", "--no-filters", f.local(name));
+    const args = Object.entries({
+      "expected-head": head,
+      "expected-tree": tree,
+      "incoming-head": head,
+      "incoming-review": oid("review.json"),
+      "publication-receipt": "push",
+      "publication-oid": oid("prepare-push-result.env"),
+    }).flatMap(([name, value]) => [`--${name}`, value]);
+
+    const authority = f.snapshot([
+      "prep-context.env",
+      "prep.env",
+      "gates.env",
+      "correction-review.json",
+      "prepare-push-result.env",
+    ]);
+    const signers = join(f.root, "signers");
+    const trusted = readFileSync(signers);
+    try {
+      writeFileSync(signers, "");
+      const untrusted = f.run(command, args);
+      expect(untrusted.status).not.toBe(0);
+      expect(untrusted.stdout + untrusted.stderr).toContain("verify-commit");
+      f.expectSnapshot(authority);
+      f.expectSnapshot(fresh);
+      f.expectAbsent("review-transition.json");
+    } finally {
+      writeFileSync(signers, trusted);
+    }
+
+    f.pass(command, args);
+
+    expect(f.prepGit("rev-parse", "HEAD")).toBe(head);
+    expect(f.prepGit("write-tree")).toBe(tree);
+    expect(f.prepGit("status", "--porcelain")).toBe("");
+    expect(f.readLocal("prep-context.env").toString()).toContain(`PR_HEAD_SHA_BEFORE='${head}'`);
+    f.expectSnapshot(fresh);
+    f.expectAbsent(
+      "review-transition.json",
+      "prep.env",
+      "gates.env",
+      "correction-review.json",
+      "prepare-push-result.env",
+    );
+  });
+});
+
 describePosix("published correction continuation through the canonical wrapper", () => {
   let f: ReturnType<typeof createBaselineFixture>;
   let incoming: string;
