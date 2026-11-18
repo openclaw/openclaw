@@ -753,6 +753,7 @@ it("routes OAuth login and refresh to the explicit agent", async () => {
   expect(mocks.resolveAgentDir).toHaveBeenCalledWith(originalConfig, "coder");
   expectCoderStore(runProviderAuth);
   expectRefresh("coder");
+  expect(mocks.releaseUserProfileCatalog).toHaveBeenCalledOnce();
 });
 
 it("refreshes saved credentials before presenting provider notes", async () => {

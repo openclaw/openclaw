@@ -442,6 +442,15 @@ describe("existing-session browser routes", () => {
     expect(fill).not.toHaveBeenCalled();
     expect(evaluate).not.toHaveBeenCalled();
   });
+
+  it.each([{ button: "right" }, { delayMs: 5 }])(
+    "rejects unsupported native coordinate input %j before clicking",
+    async (options) => {
+      const response = await invoke("act", { kind: "clickCoords", x: 25, y: 32, ...options });
+      expect(response.statusCode).toBe(501);
+      expect(mcp.clickChromeMcpCoords).not.toHaveBeenCalled();
+    },
+  );
 });
 
 const checkNavigation = navigation.assertBrowserNavigationResultAllowed;
