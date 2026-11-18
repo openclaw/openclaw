@@ -234,6 +234,12 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     });
   }
 
+  if (rawJobs.some((job) => isRecord(job.delivery) && "completionDestination" in job.delivery)) {
+    recordFinding({
+      message: "Some automations still have retired secondary webhook settings.",
+      requirement: "retired-secondary-webhook",
+    });
+  }
   const notifyCount = rawJobs.filter((job) => job.notify === true).length;
   if (notifyCount > 0) {
     recordFinding({
@@ -423,7 +429,12 @@ export async function maybeRepairLegacyCronStore(params: {
       `- ${pluralize(notifyCount, "job")} still uses legacy \`notify: true\` webhook fallback`,
     );
   }
-  if (previewLines.length === 0) {
+  if (rawJobs.some((job) => isRecord(job.delivery) && "completionDestination" in job.delivery)) {
+    previewLines.push(
+      "- retired secondary webhooks will be removed; jobs with an active secondary webhook will be paused",
+    );
+  }
+  if (previewLines.length === 0 && !normalized.removedRetiredReasoning) {
     return;
   }
 

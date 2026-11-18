@@ -498,7 +498,7 @@ it.each([
   }
 });
 
-it("round-trips hidden delivery destinations through clone and edit", async () => {
+it("round-trips hidden delivery fields through clone and edit", async () => {
   const sourceJob = createCronJob("job-routing", "Routed job", {
     sessionKey: "agent:ops:main",
     delivery: {
@@ -506,7 +506,6 @@ it("round-trips hidden delivery destinations through clone and edit", async () =
       accountId: "ops-bot",
       threadId: 42,
       bestEffort: true,
-      completionDestination: { mode: "webhook", to: "https://example.test/complete" },
       failureDestination: { mode: "announce", to: "ops" },
     },
   });

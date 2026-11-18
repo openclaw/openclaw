@@ -2280,28 +2280,6 @@ describe("cron method validation", () => {
     },
   );
 
-  it.each([
-    {
-      field: "delivery.completionDestination.to",
-      patch: { completionDestination: { mode: "webhook", to: " " } },
-      current: { mode: "announce" },
-    },
-  ] as const)(
-    "rejects blank $field patches before normalization",
-    async ({ field, patch, current }) => {
-      const { context, respond } = await invokeCronUpdateDelivery(
-        patch,
-        createCronJob({ delivery: current }),
-      );
-
-      expect(context.cron.update).not.toHaveBeenCalled();
-      expectResponseError(respond, {
-        code: "INVALID_REQUEST",
-        messageIncludes: `${field} must be a non-empty string`,
-      });
-    },
-  );
-
   it.each(["add", "update"] as const)(
     "classifies cron.%s parse errors as INVALID_REQUEST (#74066)",
     async (method) => {

@@ -46,7 +46,7 @@ function notificationParams(deps: Parameters<typeof dispatchCronDelivery>[0]["de
     ...params.job,
     id: "structured-report",
     name: "Structured report",
-    payload: { kind: "agentTurn", message: "Report progress", includeReasoning: true },
+    payload: { kind: "agentTurn", message: "Report progress" },
     delivery: { mode: "announce", channel: "matrix", to: "!room:example" },
   };
   // This synthetic transport has no conversation route; notification custody is still real.
@@ -56,7 +56,7 @@ function notificationParams(deps: Parameters<typeof dispatchCronDelivery>[0]["de
   return params;
 }
 
-it("keeps admitted isolated reasoning in the physical notification", async () => {
+it("does not send reasoning in the physical notification", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { common, send } = fixture();
     const params = notificationParams(common.deps);
@@ -66,10 +66,7 @@ it("keeps admitted isolated reasoning in the physical notification", async () =>
     ];
     const result = await dispatchCronDelivery(params);
     expect(result.deliveryState.status).toBe("delivered");
-    expect(send.mock.calls.map(([, text]) => text)).toEqual([
-      "Admitted reasoning",
-      "Prepared final",
-    ]);
+    expect(send.mock.calls.map(([, text]) => text)).toEqual(["Prepared final"]);
   });
 });
 
@@ -154,7 +151,7 @@ it.each(["cli", "descendant"] as const)(
 );
 
 it.each(["original", "reset"])(
-  "delivers admitted reasoning to the %s conversation by its key",
+  "delivers the final result to the %s conversation by its key",
   async (revision) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { common, send } = fixture();
@@ -169,12 +166,11 @@ it.each(["original", "reset"])(
       );
       const operation = sendCronAnnouncePayloadStrict({
         ...common,
-        payload: { text: "Admitted reasoning", isReasoning: true },
-        admittedReasoning: true,
+        payload: { text: "Prepared final" },
         sessionGeneration,
       });
       await expect(operation).resolves.toMatchObject({ status: "sent" });
-      expect(send.mock.calls.map(([, text]) => text)).toEqual(["Admitted reasoning"]);
+      expect(send.mock.calls.map(([, text]) => text)).toEqual(["Prepared final"]);
     });
   },
 );

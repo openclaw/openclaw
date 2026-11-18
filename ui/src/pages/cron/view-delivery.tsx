@@ -124,14 +124,6 @@ function DeliveryRows(
           placeholder={t("cron.form.webhookPlaceholder")}
         />
       ) : undefined}
-      {props.isAgentTurn ? (
-        <ToggleRow
-          {...props}
-          field="payloadIncludeReasoning"
-          label={t("cron.form.includeReasoning")}
-          help={t("cron.form.includeReasoningHelp")}
-        />
-      ) : undefined}
       {props.selectedDeliveryMode !== "none" ? (
         <ToggleRow
           {...props}

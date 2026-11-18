@@ -153,7 +153,8 @@ memory sources to rebuild the PostgreSQL index and may re-embed them. See
     - top-level payload fields (`message`, `model`, `thinking`, ...) → `payload`
     - top-level delivery fields (`deliver`, `channel`, `to`, `provider`, ...) → `delivery`
     - payload `provider` delivery aliases → explicit `delivery.channel`
-    - legacy `notify: true` webhook fallback jobs → explicit webhook delivery from the retired raw `cron.webhook` value when valid; announce jobs keep their chat delivery and get `delivery.completionDestination`. Doctor then removes the old config key. Without a usable legacy webhook, the inert top-level `notify` marker is removed for no-target jobs (existing delivery, including announce, is preserved) since runtime delivery never reads it.
+    - retired agent-turn reasoning and secondary webhook settings → Doctor drops the reasoning flag, removes the secondary webhook, and reports the job and webhook host. It pauses jobs that previously sent to both chat and a webhook, preserving their primary delivery setting. Review delivery before re-enabling them. Existing reminder text is unchanged.
+    - legacy `notify: true` webhook fallback jobs → explicit webhook delivery from the retired raw `cron.webhook` value when valid; jobs that would have sent to both chat and a webhook keep their chat setting and are paused for review. Doctor reports the webhook host. Doctor then removes the old config key. Without a usable legacy webhook, the inert top-level `notify` marker is removed for no-target jobs (existing delivery, including announce, is preserved) since runtime delivery never reads it.
 
     Legacy default-agent ownership is repaired only by Doctor. Gateway startup
     leaves stored cron ownership unchanged. An ownerless job whose config still

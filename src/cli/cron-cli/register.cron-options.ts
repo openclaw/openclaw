@@ -57,8 +57,6 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
       "Skip agent turns with present, empty scratch (missing scratch still runs)",
     )
     .option("--no-skip-if-scratch-empty", "Run agent turns even with empty scratch")
-    .option("--include-reasoning", "Include reasoning in agent job delivery")
-    .option("--no-include-reasoning", "Keep reasoning out of agent job delivery")
     .option("--script <file|->", "Headless script payload file, or - for stdin")
     .option("--script-timeout-seconds <n>", "Script wall-clock timeout seconds")
     .option("--script-tool-budget <n>", "Maximum script tool calls")

@@ -118,13 +118,12 @@ const policyJob = (value: boolean) => ({
       kind: "agentTurn",
       message: "Check",
       skipIfScratchEmpty: value,
-      includeReasoning: value,
     },
   }),
   scratch: { content: "private checklist sentinel" },
 });
 const policyText = (value: boolean) =>
-  `policies: active hours=22:00-06:00 @ America/Los_Angeles; idle only=${value}; delivery target=owner; direct policy=block; skip if scratch empty=${value}; include reasoning=${value}`;
+  `policies: active hours=22:00-06:00 @ America/Los_Angeles; idle only=${value}; delivery target=owner; direct policy=block; skip if scratch empty=${value}`;
 type RenderCase = {
   name: string;
   job: CronJob;

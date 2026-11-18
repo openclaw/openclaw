@@ -108,9 +108,6 @@ function mergePayloadFields(existing: CronPayload, patch: CronPayloadPatch): Cro
     if (typeof patch.skipIfScratchEmpty === "boolean") {
       next.skipIfScratchEmpty = patch.skipIfScratchEmpty;
     }
-    if (typeof patch.includeReasoning === "boolean") {
-      next.includeReasoning = patch.includeReasoning;
-    }
     if (typeof patch.allowUnsafeExternalContent === "boolean") {
       next.allowUnsafeExternalContent = patch.allowUnsafeExternalContent;
     }

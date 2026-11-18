@@ -90,7 +90,6 @@ describe("automation save editor ownership", () => {
         kind: "agentTurn",
         message: "Check notes",
         skipIfScratchEmpty: true,
-        includeReasoning: true,
       },
       delivery: enabled
         ? { mode: "none" }
@@ -112,7 +111,6 @@ describe("automation save editor ownership", () => {
         activeHoursEnabled: false,
         idleOnly: false,
         payloadSkipIfScratchEmpty: false,
-        payloadIncludeReasoning: false,
         deliveryTarget: "owner",
         deliveryDirectPolicy: "allow",
       });
@@ -125,7 +123,6 @@ describe("automation save editor ownership", () => {
         kind: "agentTurn",
         message: "Check notes",
         skipIfScratchEmpty: enabled,
-        includeReasoning: enabled,
       },
     });
     expect(stored.activeHours).toEqual(

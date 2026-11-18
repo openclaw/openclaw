@@ -1,6 +1,4 @@
-import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { hasPendingAutomationContinuation } from "../../cron/automation-result.js";
-import { isHostNoticePayload, isReplyPayloadTerminalContent } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { SettledAgentTurn } from "./agent-runner-execution.types.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
@@ -30,13 +28,7 @@ export function resolveAutomationReplyState(
     successfulTerminal &&
     !pendingContinuation &&
     execution.automation?.result?.outcome === "no_change";
-  const reasoningPayloadsEnabled = execution.automation
-    ? execution.automation.includeReasoning &&
-      successfulTerminal &&
-      !pendingContinuation &&
-      !authoredSilence &&
-      !automationNoChange
-    : opts?.reasoningPayloadsEnabled === true;
+  const reasoningPayloadsEnabled = !execution.automation && opts?.reasoningPayloadsEnabled === true;
   return {
     blocked,
     successfulTerminal,
@@ -45,17 +37,4 @@ export function resolveAutomationReplyState(
     automationNoChange,
     reasoningPayloadsEnabled,
   };
-}
-
-/** Reasoning can accompany an automation's deliverable result, never replace it. */
-export function retainAutomationReasoningWithFinal(payloads: ReplyPayload[]): ReplyPayload[] {
-  return !payloads.some((payload) => payload.isError) &&
-    payloads.some(
-      (payload) =>
-        isReplyPayloadTerminalContent(payload) &&
-        !isHostNoticePayload(payload) &&
-        hasOutboundReplyContent(payload),
-    )
-    ? payloads
-    : payloads.filter((payload) => payload.isReasoning !== true);
 }

@@ -93,13 +93,8 @@ export async function runOutboundDelivery(
 export async function runOutboundDeliveryInternal(
   initialInput: InternalDeliverOutboundPayloadsParams,
   stateContext?: DeliveryQueueStateContext,
-  admittedReasoning?: true,
 ): Promise<OutboundDeliveryResult[]> {
-  return await runDelivery(
-    initialInput,
-    (delivery, options) => prepareOutboundPayloadBatch(delivery, { ...options, admittedReasoning }),
-    stateContext,
-  );
+  return await runDelivery(initialInput, prepareOutboundPayloadBatch, stateContext);
 }
 
 export async function runStructuredOutboundDeliveryInternal(

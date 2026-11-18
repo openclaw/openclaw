@@ -273,7 +273,7 @@ export async function applyLegacyCronStoreRepair(params: {
     (params.cfg.cron as Record<string, unknown> | undefined)?.webhook,
   );
   const notifyMigration = migrateLegacyNotifyFallback({
-    jobs: state.rawJobs.filter((job) => canRepairCronDeliveryForDoctor(job.delivery)),
+    jobs: state.rawJobs,
     legacyWebhook,
   });
   warnings.push(...notifyMigration.warnings);
@@ -405,7 +405,7 @@ export async function applyLegacyCronStoreRepair(params: {
     }
   }
 
-  changes.push(...retirementChanges);
+  changes.push(...retirementChanges, ...notifyMigration.changes);
   if (normalized.issues.reconciledOwnerAccount) {
     changes.push(
       `Reconciled ${pluralize(normalized.issues.reconciledOwnerAccount, "cron job owner account")} from persisted creator identity; existing tool permissions were preserved.`,

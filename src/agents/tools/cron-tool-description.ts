@@ -79,7 +79,7 @@ TARGET+PAYLOAD:
 - "isolated" = fresh detached session; standalone background work recorded in cron run history.
 - "main" = heartbeat lane; payload {kind:"systemEvent",text} (systemEvent default target).
 - "session:<key>" + agentTurn runs a turn inside that existing conversation (same history, saved workspace/worktree). To resume a conversation at a saved time (a reminder, or follow-up from another session), add an at + agentTurn job with sessionTarget "session:<your session key from Runtime>" and message = instructions for your next turn. If that one-shot turn still needs to wait, call next_check in:"5m" to rearm this same job after successful run completion (minimum 2s); target, payload, and tool cap stay unchanged. Without a proposal it completes normally.
-- {kind:"agentTurn",message,includeReasoning?}; includeReasoning includes reasoning only alongside a meaningful delivered result; timeoutSeconds 0=none.
+- {kind:"agentTurn",message}; timeoutSeconds 0=none.
 - Inherited MCP authority covers model-callable tools, not interactive app-view-only capabilities.${scriptPayloadLine}
 
 PACED LOOP: recurring job + pacing{min?,max?} durations (at least one). Call next_check in:"15m" inside its run; delay is clamped to bounds and measured from run end. Failed runs keep normal backoff.
@@ -88,13 +88,13 @@ AUTHORING: keep repeatable logic in workspace scripts and detailed instructions 
 
 ${triggerSection}
 
-DELIVERY: omitted=announce. Agent, command, and script jobs send their final visible result to the destination, then add confirmed delivery once to that conversation, independently of isolated/current/persistent execution. Set channel/to/accountId/threadId to select another destination; the creating conversation is the fallback when no external route exists. Verified matching message-tool delivery suppresses the notification resend, not the conversation result. Failed or uncertain external sends are not added to conversation history; a failed history write after confirmed delivery records a warning without failing delivery. With no external route, the conversation commit completes delivery and appears live and after reconnect. Use none for no automatic result or notification. ${silentWatcherCue} webhook posts finished-run event (successful empty summary is intentional silence, no POST) to URL in \`to\`. To keep announce delivery and also POST completion, use mode:"announce" with completionDestination:{mode:"webhook",to:"https://..."}.
+DELIVERY: omitted=announce. Agent, command, and script jobs send their final visible result to the destination, then add confirmed delivery once to that conversation, independently of isolated/current/persistent execution. Set channel/to/accountId/threadId to select another destination; the creating conversation is the fallback when no external route exists. Verified matching message-tool delivery suppresses the notification resend, not the conversation result. Failed or uncertain external sends are not added to conversation history; a failed history write after confirmed delivery records a warning without failing delivery. With no external route, the conversation commit completes delivery and appears live and after reconnect. Use none for no automatic result or notification. ${silentWatcherCue} webhook posts finished-run event (successful empty summary is intentional silence, no POST) to URL in \`to\`.
 
 FAILURE ALERTS: routed jobs notify on the first execution failure (1h cooldown; the same failure repeats at most daily); jobs owned by a conversation send that notice to its agent instead. failureAlert:false disables execution/delivery alerts, not auto-disable notices. bestEffort suppresses inherited execution alerts. Required-delivery failures use an alternate route, bypass after, and share the cooldown without incrementing the execution streak.
 
 Optional job policy: activeHours{start,end,timezone?} is an end-exclusive execution window (including manual runs); idleOnly:true waits for agent-wide quiet, including other cron jobs and foreground sessions, not just the target session; continuations may defer indefinitely on busy shared agents. false/unset uses normal admission. delivery.target:"owner" resolves the owner DM dynamically, never the last group; delivery.directPolicy:"block" prohibits DMs. agentTurn skipIfScratchEmpty skips an explicitly empty checklist, not missing scratch.
 
-Main-job wakeMode: "now"(default)|"next-heartbeat". contextMessages 0-10 embeds recent chat lines in reminder text.
+Main-job wakeMode: "now"(default)|"next-heartbeat".
 
 Inside a scheduled run only: ${buildCronSelfDescription({ activeRun: true, nextCheckEnabled: true })}${commandPolicySuffix}`;
 }

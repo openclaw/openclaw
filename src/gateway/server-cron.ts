@@ -610,8 +610,6 @@ export function buildGatewayCronService(params: {
           ...eventContext,
           resolveCronAgent,
           logger: cronServiceLogger,
-          webhookToken: params.cfg.cron?.webhookToken,
-          ssrfPolicy: webhookSsrfPolicy,
         });
       }
     },

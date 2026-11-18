@@ -19,7 +19,6 @@ function createContext() {
   context.sessionCtx = { Provider: "discord", Surface: "discord", To: "channel:automation" };
   context.execution.automation = {
     result: { outcome: "no_change", summary: "Nothing new." },
-    includeReasoning: true,
   };
   return { context, failMock };
 }
@@ -98,23 +97,23 @@ describe.each(["ordinary", "queued"] as const)("%s automation final delivery", (
   });
 
   it.each([
-    { includeReasoning: true, final: "Update found.", expected: ["Reasoning", "Update found."] },
-    { includeReasoning: false, final: "Update found.", expected: ["Update found."] },
-    { includeReasoning: true, final: undefined, expected: [] },
-  ])("delivers reasoning only beside an opted-in final: $includeReasoning/$final", async (row) => {
-    const { context } = createContext();
-    context.execution.automation = {
-      result: { outcome: "progress", summary: "Progress recorded." },
-      includeReasoning: row.includeReasoning,
-    };
-    context.followupRun.run.terminalReplyExpectation = "optional";
-    context.execution.result.payloads = [
-      { text: "Reasoning", isReasoning: true },
-      ...(row.final ? [{ text: row.final }] : []),
-    ];
-    // The automation opt-in, not an unrelated foreground display preference, owns this lane.
-    context.opts = { reasoningPayloadsEnabled: !row.includeReasoning };
+    { final: "Update found.", expected: ["Update found."] },
+    { final: undefined, expected: [] },
+  ])(
+    "keeps reasoning out of automation results even with a foreground opt-in: $final",
+    async (row) => {
+      const { context } = createContext();
+      context.execution.automation = {
+        result: { outcome: "progress", summary: "Progress recorded." },
+      };
+      context.followupRun.run.terminalReplyExpectation = "optional";
+      context.execution.result.payloads = [
+        { text: "Reasoning", isReasoning: true },
+        ...(row.final ? [{ text: row.final }] : []),
+      ];
+      context.opts = { reasoningPayloadsEnabled: true };
 
-    expect((await prepare(lane, context)).map((payload) => payload.text)).toEqual(row.expected);
-  });
+      expect((await prepare(lane, context)).map((payload) => payload.text)).toEqual(row.expected);
+    },
+  );
 });

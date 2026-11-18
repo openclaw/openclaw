@@ -163,7 +163,6 @@ describe("ordinary session event execution", () => {
     automation.job.payload = {
       kind: "agentTurn",
       message: "Check quietly",
-      includeReasoning: true,
     };
     automation.deliveryAttemptFence = { beforeAttempt: async () => {}, assertCurrent: vi.fn() };
     const followupRun = createFollowupRun();
@@ -202,7 +201,6 @@ describe("ordinary session event execution", () => {
       status: "ok",
       automation: {
         result: { outcome: "no_change", summary: "Nothing new." },
-        includeReasoning: true,
       },
     });
     expect(redeemed[0]).toMatchObject({ sourceReplySessionKey: "main", deliveryAttempt: {} });

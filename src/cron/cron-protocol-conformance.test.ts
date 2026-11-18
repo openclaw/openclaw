@@ -17,7 +17,6 @@ const DELIVERY_FIXTURES = {
     mode: "announce",
     channel: "telegram",
     threadId: "topic-42",
-    completionDestination: { mode: "webhook", to: "https://example.test/complete" },
     failureDestination: { mode: "announce", channel: "last", to: "ops" },
   },
   webhook: { mode: "webhook", to: "https://example.test/result" },

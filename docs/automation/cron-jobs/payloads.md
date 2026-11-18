@@ -56,13 +56,6 @@ The weekly Skill Workshop curator (declaration key `skill-collection-review:<age
 <ParamField path="--skip-if-scratch-empty" type="boolean">
   Skip an agent turn when its stored scratch is explicitly empty. Missing scratch still runs. Use `--no-skip-if-scratch-empty` to turn this off.
 </ParamField>
-<ParamField path="--include-reasoning" type="boolean">
-  Include reasoning returned by the agent alongside a meaningful result. Reasoning alone does not turn a quiet check into a notification. Use `--no-include-reasoning` to keep it out of delivery. This is separate from the model's thinking level.
-</ParamField>
-<ParamField path="--tools" type="string">
-  Restrict which tools the job can use, for example `--tools exec,read`. Pass `--tools ""` for an empty allowlist that disables all agent tools, including tools used by a condition trigger.
-</ParamField>
-
 New jobs that can run tools always store an explicit tool policy. A job created without
 `--tools` (or with `*`) stores `*`: each run uses the owner session's current tool policy,
 including its group, agent, sandbox, and runtime restrictions. An agent that requests a

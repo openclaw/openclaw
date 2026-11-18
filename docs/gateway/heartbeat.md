@@ -175,8 +175,6 @@ Optional job policies preserve the useful monitoring behavior:
 - `delivery.target: "owner"` resolves an explicitly identified owner DM. It does
   not follow a group conversation as `channel: "last"` can.
 - `delivery.directPolicy` permits or blocks DM delivery.
-- `payload.includeReasoning` controls whether an ordinary job includes available
-  model reasoning in delivery.
 - `payload.skipIfScratchEmpty` skips a check with explicitly empty scratch;
   missing scratch is different from an empty checklist.
 

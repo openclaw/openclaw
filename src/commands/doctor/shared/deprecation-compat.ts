@@ -207,7 +207,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     introduced: "2026-07-18",
     source: "cron.webhook",
     migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.cron.ts",
-    replacement: "per-job delivery.to or delivery.completionDestination",
+    replacement: "primary webhook delivery with delivery.mode and delivery.to",
     docsPath: "/automation/cron-jobs",
   }),
   julyDeprecatedCompatRecord("doctor-canvas-host-root", {

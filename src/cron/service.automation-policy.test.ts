@@ -19,7 +19,7 @@ const prompt = " \tReview the checklist.\r\n  Keep authored spacing.\n ";
 const policy = {
   activeHours: { start: "22:00", end: "07:00", timezone: "UTC" },
   idleOnly: true,
-  payload: { kind: "agentTurn", message: prompt, skipIfScratchEmpty: true, includeReasoning: true },
+  payload: { kind: "agentTurn", message: prompt, skipIfScratchEmpty: true },
   delivery: { mode: "announce", target: "owner", directPolicy: "block" },
 };
 
@@ -62,7 +62,7 @@ it("persists and edits ordinary automation policy through the public Cron bounda
       const patch = normalizeCronJobPatch({
         activeHours: null,
         idleOnly: null,
-        payload: { kind: "agentTurn", skipIfScratchEmpty: false, includeReasoning: false },
+        payload: { kind: "agentTurn", skipIfScratchEmpty: false },
         delivery: { target: null, directPolicy: null, channel: "telegram", to: "synthetic-owner" },
       });
       expect(validateCronUpdateParams({ id: job.id, patch })).toBe(true);
@@ -73,7 +73,7 @@ it("persists and edits ordinary automation policy through the public Cron bounda
       expect(edited).not.toHaveProperty("activeHours");
       expect(edited).not.toHaveProperty("idleOnly");
       expect(edited).toMatchObject({
-        payload: { message: prompt, skipIfScratchEmpty: false, includeReasoning: false },
+        payload: { message: prompt, skipIfScratchEmpty: false },
         delivery: { mode: "announce", channel: "telegram", to: "synthetic-owner" },
       });
       expect(edited.delivery).not.toHaveProperty("target");

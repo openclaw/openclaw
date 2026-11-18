@@ -441,7 +441,6 @@ export function createCronPromptExecutor(
             model: modelOverride,
             thinkLevel: candidateThinkLevel,
             thinkingExplicit: candidateConfiguredThinkLevel !== undefined,
-            reasoningLevel: params.agentPayload?.includeReasoning ? "on" : undefined,
             timeoutMs: params.timeoutMs,
             runId,
             lane: resolveCronAgentLane(params.lane),

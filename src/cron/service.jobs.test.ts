@@ -70,27 +70,16 @@ it.each([
   },
 );
 
-it("clears chat and completion routes when switching to a trimmed webhook", () => {
+it("clears chat routing fields when switching to a trimmed webhook", () => {
   const current = agentJob({
     mode: "announce",
     channel: "telegram",
     to: "-100123",
     threadId: 42,
     accountId: "coordinator",
-    completionDestination: { mode: "webhook", to: WEBHOOK },
   });
   applyJobPatch(current, { delivery: { mode: "webhook", to: `  ${WEBHOOK}  ` } });
   expect(current.delivery).toEqual({ mode: "webhook", to: WEBHOOK });
-});
-
-it("clears a completion webhook explicitly", () => {
-  const current = agentJob({
-    mode: "announce",
-    completionDestination: { mode: "webhook", to: WEBHOOK },
-  });
-  applyJobPatch(current, { delivery: { completionDestination: null } });
-  expect(current.delivery?.mode).toBe("announce");
-  expect(current.delivery?.completionDestination).toBeUndefined();
 });
 
 it("normalizes delivery overrides and preserves the account until explicitly cleared", () => {
@@ -305,7 +294,6 @@ it("preserves a future running marker owned by a live execution", () => {
 });
 
 const patchErrors = {
-  completion: 'cron completion destination webhook is only supported with delivery.mode="announce"',
   webhook: "cron webhook delivery requires delivery.to to be a valid http(s) URL",
   mainFailure:
     'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
@@ -330,11 +318,6 @@ type InvalidPatch = [
   Parameters<typeof applyJobPatch>[2]?,
 ];
 it.each<InvalidPatch>([
-  [
-    "completion",
-    () => agentJob({ mode: "announce" }),
-    { delivery: { mode: "none", completionDestination: { mode: "webhook", to: WEBHOOK } } },
-  ],
   [
     "webhook",
     () => fixtureJob({ delivery: { mode: "webhook" } }),

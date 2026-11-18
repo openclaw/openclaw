@@ -139,8 +139,6 @@ monitoring jobs:
   policy off.
 - `--skip-if-scratch-empty` skips an agent turn with explicitly empty scratch.
   Missing scratch still runs. `--no-skip-if-scratch-empty` turns this off.
-- `--include-reasoning` includes reasoning returned by an agent alongside a meaningful result;
-  `--no-include-reasoning` keeps it out. This does not set the thinking level.
 
 A new window requires both endpoints. An edit can update just one field of an
 existing window. `automations edit --clear-active-hours` removes the window;
@@ -418,7 +416,7 @@ their payload through ordinary session execution when the job is due. It does
 not add another wake or deferral step. Use the job's schedule to control timing.
 
 <Note>
-If you have automation jobs from before the current delivery and store format, run `openclaw doctor --fix`. Doctor normalizes legacy job fields: `jobId`, `schedule.cron`, top-level delivery fields including legacy `threadId`, and payload `provider` delivery aliases. It also migrates `notify: true` webhook fallback jobs from the retired raw `cron.webhook` value to explicit webhook delivery. It removes that config key afterwards. Jobs that already announce to a chat keep that delivery and get a completion webhook destination. Without a legacy webhook, Doctor removes the inert top-level `notify` marker for jobs with no migration target. The existing delivery is preserved unchanged. `doctor --fix` therefore stops re-warning about them.
+If you have automation jobs from before the current delivery and store format, run `openclaw doctor --fix`. Doctor normalizes legacy job fields: `jobId`, `schedule.cron`, top-level delivery fields including legacy `threadId`, and payload `provider` delivery aliases. It also migrates `notify: true` webhook fallback jobs from the retired raw `cron.webhook` value to explicit webhook delivery. It removes that config key afterwards. Jobs that would have sent to both chat and a webhook keep their chat setting and are paused for review. Doctor reports the webhook host. Without a legacy webhook, Doctor removes the inert top-level `notify` marker for jobs with no migration target. The existing delivery is preserved unchanged. `doctor --fix` therefore stops re-warning about them.
 </Note>
 
 ## Common edits

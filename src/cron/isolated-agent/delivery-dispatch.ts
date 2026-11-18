@@ -343,7 +343,6 @@ export async function dispatchCronDelivery(
           sessionKey: params.runSessionKey,
         },
         payload: deliveryPayloads,
-        admittedReasoning: true,
         sessionGeneration,
         transcriptRoute: params.resolvedDelivery.sessionRoute,
         onTranscriptDiagnostic: (message) => {

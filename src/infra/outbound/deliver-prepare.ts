@@ -20,11 +20,7 @@ import {
   resolveChannelHandlerParams,
   stripInternalRuntimeScaffoldingFromPayload,
 } from "./deliver-payload.js";
-import {
-  createOutboundPayloadPlan,
-  createOutboundPayloadPlanWithAdmittedReasoning,
-  createStructuredOutboundPayloadPlan,
-} from "./payloads.js";
+import { createOutboundPayloadPlan, createStructuredOutboundPayloadPlan } from "./payloads.js";
 import {
   PREPARED_OUTBOUND_BATCH_SCHEMA_VERSION,
   type PreparedOutboundBatch,
@@ -120,7 +116,6 @@ function projectMarkdownImages(payload: ReplyPayload): ReplyPayload {
 }
 
 type OutboundPayloadPreparationOptions = {
-  admittedReasoning?: true;
   onBeforeFirstModifier?: () => Promise<void>;
   hookRunner?: HookRunner;
 };
@@ -144,12 +139,9 @@ export async function prepareStructuredOutboundPayloadBatch(
   const handler = await createChannelHandler(
     resolveChannelHandlerParams(params, normalizeOutboundReplyFacts(params), []),
   );
-  const createPlan = options?.admittedReasoning
-    ? createOutboundPayloadPlanWithAdmittedReasoning
-    : createOutboundPayloadPlan;
   let plan =
     structuredPlan ??
-    createPlan(params.payloads, {
+    createOutboundPayloadPlan(params.payloads, {
       extractMarkdownImages: handler.extractMarkdownImages,
     });
   if (structuredPlan && handler.extractMarkdownImages) {

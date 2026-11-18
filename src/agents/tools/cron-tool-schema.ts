@@ -19,7 +19,6 @@ import {
 } from "../schema/typebox.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 
-export const REMINDER_CONTEXT_MESSAGES_MAX = 10;
 export const CRON_TOOL_LIST_MAX_LIMIT = 200;
 
 // Spell out job properties for the model-facing schema; runtime validation
@@ -245,9 +244,6 @@ function createCronPayloadSchema(params: {
             description: "Lightweight bootstrap context (skip full workspace context)",
           }),
         ),
-        includeReasoning: Type.Optional(
-          Type.Boolean({ description: "Include reasoning with a meaningful delivered result" }),
-        ),
         skipIfScratchEmpty: Type.Optional(Type.Boolean()),
         allowUnsafeExternalContent: Type.Optional(
           Type.Boolean({ description: "Allow untrusted external content in prompt" }),
@@ -283,16 +279,6 @@ function createCronDeliverySchema(): TSchema {
     },
     { additionalProperties: true },
   );
-  const completionDestinationObject = Type.Object(
-    {
-      mode: Type.Literal("webhook"),
-      to: Type.String({
-        minLength: 1,
-        description: "Completion webhook target; only valid with delivery.mode=announce",
-      }),
-    },
-    { additionalProperties: true },
-  );
 
   return Type.Optional(
     Type.Object(
@@ -318,11 +304,6 @@ function createCronDeliverySchema(): TSchema {
           Type.Union([failureDestinationObject, Type.Null()], {
             description:
               "Failure-alert route override; required-delivery failures bypass after but share the execution-alert cooldown; null clears.",
-          }),
-        ),
-        completionDestination: Type.Optional(
-          Type.Union([completionDestinationObject, Type.Null()], {
-            description: "Completion webhook; requires delivery.mode=announce; null clears.",
           }),
         ),
       },
@@ -539,9 +520,6 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
       runId: Type.Optional(
         Type.String({ description: 'Run id from action="run" to read with action="runs"' }),
       ),
-      contextMessages: Type.Optional(
-        Type.Integer({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
-      ),
       agentId: Type.Optional(
         Type.String({
           description: managementOnly
@@ -576,7 +554,5 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
           ]),
     ]);
   }
-  return managementOnly
-    ? Type.Omit(schema, ["in", "text", "mode", "contextMessages", "sessionKey", "runId"])
-    : schema;
+  return managementOnly ? Type.Omit(schema, ["in", "text", "mode", "sessionKey", "runId"]) : schema;
 }

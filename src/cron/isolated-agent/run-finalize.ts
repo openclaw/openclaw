@@ -93,7 +93,6 @@ export async function finalizeCronRun(params: {
   const finalRunResult = execution.runResult;
   const replyDisposition = finalRunResult.meta?.terminalReply?.disposition ?? "empty";
   const pendingContinuation = hasPendingAutomationContinuation(finalRunResult.meta);
-  const includeReasoning = prepared.agentPayload?.includeReasoning === true;
   const payloads = (finalRunResult.payloads ?? []).filter(
     (payload) => !shouldSuppressReasoningPayload(payload),
   );
@@ -280,12 +279,6 @@ export async function finalizeCronRun(params: {
     hasFatalErrorPayload,
     embeddedRunError,
   } = cronPayloadOutcome;
-  if (includeReasoning && !hasFatalErrorPayload && deliveryDisposition.kind === "visible") {
-    deliveryPayloads = [
-      ...(finalRunResult.payloads ?? []).filter(shouldSuppressReasoningPayload),
-      ...deliveryPayloads,
-    ];
-  }
   const terminalToolFailure = finalRunResult.meta?.terminalToolFailure;
   const hasTerminalToolFailure = isEmbeddedRunTerminalToolFailure(terminalToolFailure);
   if (hasFatalErrorPayload && hasTerminalToolFailure) {

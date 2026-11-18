@@ -72,16 +72,8 @@ export type CronDelivery = {
   /** Explicit channel account id for multi-account setups (e.g. multiple Telegram bots). */
   accountId?: string;
   bestEffort?: boolean;
-  /** Additional webhook destination used when a job must keep chat delivery. */
-  completionDestination?: CronCompletionDestination;
   /** Separate destination for failure notifications. */
   failureDestination?: CronFailureDestination;
-};
-
-/** Webhook completion destination used alongside chat delivery. */
-type CronCompletionDestination = {
-  mode: "webhook";
-  to?: string;
 };
 
 /** Destination override for failed-run notifications. */
@@ -106,7 +98,6 @@ export type CronDeliveryPatch = Partial<Pick<CronDelivery, "mode" | "bestEffort"
   to?: string | null;
   threadId?: string | number | null;
   accountId?: string | null;
-  completionDestination?: CronCompletionDestination | null;
   failureDestination?: CronFailureDestinationPatch | null;
 };
 

@@ -11,7 +11,6 @@ it.each([
     expected: {
       mode: "announce",
       to: "telegram:123",
-      completionDestination: { mode: "webhook", to: "https://example.invalid/fallback" },
     },
   },
 ])("preserves the mode-less notify destination $to", ({ to, expected }) => {
@@ -21,7 +20,8 @@ it.each([
       jobs: [raw],
       legacyWebhook: "https://example.invalid/fallback",
     }),
-  ).toEqual({ changed: true, warnings: [] });
+  ).toMatchObject({ changed: true, warnings: [] });
   expect(raw.delivery).toEqual(expected);
+  expect(raw.enabled).toBe(to === "telegram:123" ? false : undefined);
   expect(raw).not.toHaveProperty("notify");
 });
