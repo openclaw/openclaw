@@ -55,7 +55,10 @@ import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-age
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import { prepareRestartCompletionCustody } from "./session-restart-resume-custody.js";
+import {
+  hasInterruptedCommittedRequesterSettleInput,
+  prepareRestartCompletionCustody,
+} from "./session-restart-resume-custody.js";
 import {
   discoverRestartSessionStores,
   prepareRestartStores,
@@ -503,12 +506,17 @@ async function resumeRestartStore(
           sessionKeys: [sessionKey],
           assertCommitAllowed: assertRecoveryCurrent,
           requireWriteSuccess: true,
-          update: (current) => {
+          update: async (current) => {
             const selected = current.find((row) => row.sessionKey === sessionKey)?.entry;
             if (!selected) {
               return { result: undefined };
             }
-            const parked = resolveSessionYieldWait(sessionKey, selected, agentId);
+            const parked = (await hasInterruptedCommittedRequesterSettleInput(
+              { ...target, agentId, sessionKey, sessionId: selected.sessionId },
+              selected,
+            ))
+              ? undefined
+              : resolveSessionYieldWait(sessionKey, selected, agentId);
             const skip = restartResumeSkipReason(sessionKey, selected);
             const orphanedRun =
               (!parked || parked === "resume") &&

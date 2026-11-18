@@ -103,9 +103,12 @@ re-evaluates its retained wake. The same requester and wake generation can still
 record a result already delivered after child cleanup. A yielded
 child's pause notice also settles if a resumed sibling changes the batch's run IDs;
 the notice belongs to that child, while the batch still waits for final results.
-The registry owns recovery of requester-settle continuations, including markers
+The registry owns recovery of unconsumed requester-settle results, including markers
 for an earlier cohort or retry. Startup clears those restart markers instead of
-starting a competing requester turn under the old run's operator authority.
+starting a competing requester turn under the old run's operator authority. Once
+the result is committed to the requester transcript, the Gateway owns restarting
+that interrupted turn from its saved conversation; the registry does not replay
+the completion input.
 Completions from different operator invocations use separate settle wakes, each
 with its own retained authority. Sandbox setup failures and an unavailable Gateway
 leave uncommitted results owed for retry. Results already committed to the
