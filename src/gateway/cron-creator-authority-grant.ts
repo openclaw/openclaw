@@ -238,7 +238,9 @@ export function resolveCronCreatorAuthorityGrantProvenance(
     capturesRuntimeAuthority: entry.capturesRuntimeAuthority,
     ...(scope.callerScopedCreation ? { callerScopedCreation: true as const } : {}),
     ...(entry.creatorProfileId ? { creatorProfileId: entry.creatorProfileId } : {}),
-    ...(scope.callerOrigin.kind !== "unknown" && hasCronAuthenticatedRequester(scope)
+    ...(scope.callerOrigin.kind === "local" ||
+    (scope.callerOrigin.kind === "external" &&
+      scope.managementEntitlement?.source === "channel-owner")
       ? { callerOrigin: { ...scope.callerOrigin } }
       : {}),
     ...(channelRequester ? { channelRequester: { ...channelRequester } } : {}),

@@ -142,6 +142,23 @@ describe("cron creator authority grants", () => {
     ).toBe(false);
   });
 
+  it("does not infer external origin from scoped creation authority", () => {
+    const scope = createScope(
+      "scoped-external",
+      { kind: "external", channel: "discord" },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+    const grant = mint(scope, undefined, undefined, undefined, "requester");
+    expect(provenance(grant, scope.runId)).toEqual({
+      capturesRuntimeAuthority: false,
+      callerScopedCreation: true,
+    });
+  });
+
   it("records a channel owner's external origin without granting runtime authority", () => {
     let current = true;
     const scope = createScope(
