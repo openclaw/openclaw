@@ -3,7 +3,12 @@ import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { createCommandError } from "../process/command-error.js";
-import { recordCommandProcessFailure, type SpawnResult } from "../process/exec-result.js";
+import {
+  CommandProcessCleanupError,
+  readCommandProcessCleanup,
+  recordCommandProcessFailure,
+  type SpawnResult,
+} from "../process/exec-result.js";
 import type { BufferSpawnResult } from "../process/exec-runner.js";
 import type {
   BufferedCommandOptions,
@@ -270,21 +275,39 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
   const argv = gitExecutionArgv(cwd, args, options);
   const runAttempt = async (attemptOptions: CommandOptions) => {
-    if (options.maxPatchBytes === undefined) {
-      return await run(argv, attemptOptions);
+    const capture =
+      options.maxPatchBytes === undefined
+        ? undefined
+        : createGitPatchCapture(options.maxPatchBytes);
+    let result = await run(
+      argv,
+      capture
+        ? {
+            ...attemptOptions,
+            outputCapture: "discard",
+            tolerateOutputError: { stderr: true },
+            onOutputChunk: (chunk, stream) => {
+              if (stream === "stdout") {
+                capture.append(chunk);
+              }
+            },
+          }
+        : attemptOptions,
+    );
+    // Startup cancellation can return before its retained process cleanup. Join
+    // before releasing Git custody or copying away the non-enumerable owner.
+    const cleanup = readCommandProcessCleanup(result);
+    if (cleanup) {
+      result = {
+        ...result,
+        cleanup: await cleanup.catch((cause: unknown) => {
+          throw new CommandProcessCleanupError({ cause });
+        }),
+      };
     }
-    const capture = createGitPatchCapture(options.maxPatchBytes);
-    const result = await run(argv, {
-      ...attemptOptions,
-      outputCapture: "discard",
-      tolerateOutputError: { stderr: true },
-      onOutputChunk: (chunk, stream) => {
-        if (stream === "stdout") {
-          capture.append(chunk);
-        }
-      },
-    });
-    return replaceStdout({ ...result, stdoutTruncatedBytes: undefined }, capture.finish());
+    return capture
+      ? replaceStdout({ ...result, stdoutTruncatedBytes: undefined }, capture.finish())
+      : result;
   };
   if (options.waitForExit === true) {
     const start = () => {

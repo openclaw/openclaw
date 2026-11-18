@@ -2,6 +2,7 @@ import { PassThrough } from "node:stream";
 import { setImmediate } from "node:timers/promises";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { executeGitCommand, executeGitCommandBytes } from "../infra/git-exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withMockedPlatform, withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import type { CommandProcessCustody } from "./command-process-custody.types.js";
@@ -458,3 +459,44 @@ it("preserves canonical cleanup remedies through nested scopes and module copies
   expect(failure).toMatchObject({ message, code: original.code, cleanup: "uncertain" });
   expect(collectNestedErrorCandidates(failure)).toContain(cause);
 });
+
+it.each(["text-wait", "bytes-patch"] as const)(
+  "Git %s retains actual startup cancellation cleanup before copying its result",
+  async (mode) => {
+    const fixture = commandFixture();
+    const abort = new AbortController();
+    const finished = vi.fn();
+    const spawned = createDeferredCore();
+    const spawn = transport.spawn.getMockImplementation()!;
+    transport.spawn.mockImplementation((...args) => {
+      spawned.resolve();
+      return spawn(...args);
+    });
+    const work = (
+      mode === "text-wait"
+        ? executeGitCommand("/fixture", ["diff"], {
+            signal: abort.signal,
+            waitForExit: true,
+          })
+        : executeGitCommandBytes("/fixture", ["diff"], {
+            signal: abort.signal,
+            maxPatchBytes: 64,
+          })
+    ).finally(finished);
+    await spawned.promise;
+    abort.abort();
+    try {
+      await expectPending(finished);
+      fixture.open();
+      fixture.finish();
+      await expectPending(finished);
+      fixture.cleanup.resolve("forced");
+      await expect(work).resolves.toMatchObject({ termination: "signal", cleanup: "forced" });
+    } finally {
+      fixture.open();
+      fixture.finish();
+      fixture.cleanup.resolve("forced");
+      await work;
+    }
+  },
+);

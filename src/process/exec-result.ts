@@ -77,6 +77,25 @@ export type SpawnResult = {
   outputErrorStream?: "stdout" | "stderr";
 };
 
+type CommandProcessCleanup = Promise<NonNullable<SpawnResult["cleanup"]>>;
+const commandProcessCleanup = Symbol.for("openclaw.command-process-cleanup");
+
+/** Carry the existing cleanup owner without putting a Promise in public result payloads. */
+export function recordCommandProcessCleanup<Result extends object>(
+  result: Result,
+  cleanup: CommandProcessCleanup | undefined,
+): Result {
+  return cleanup
+    ? Object.defineProperty(result, commandProcessCleanup, { value: cleanup })
+    : result;
+}
+
+export function readCommandProcessCleanup(result: object): CommandProcessCleanup | undefined {
+  const descriptor: TypedPropertyDescriptor<CommandProcessCleanup> | undefined =
+    Object.getOwnPropertyDescriptor(result, commandProcessCleanup);
+  return descriptor?.value;
+}
+
 export type CommandProcessOutcome = Pick<
   SpawnResult,
   "pid" | "code" | "cleanup" | "termination" | "killIssuedByAbort" | "outputLimitExceeded"

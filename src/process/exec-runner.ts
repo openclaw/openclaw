@@ -42,6 +42,7 @@ import {
   createSanitizedCommandError,
   isPlainCommandExitFailure,
   isPlainCommandSignalFailure,
+  recordCommandProcessCleanup,
   recordCommandProcessFailure,
   resolveProcessExitCode,
   TIMEOUT_EXIT_CODE,
@@ -433,9 +434,12 @@ async function runCommandWithOutputEncoding(
         noOutputTimedOut: interrupted === "no-output-timeout",
         outputLimitExceeded: interrupted === "output-limit" || undefined,
       };
-      return raw
-        ? { ...stopped, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), windowsEncoding }
-        : { ...stopped, stdout: "", stderr: "" };
+      return recordCommandProcessCleanup(
+        raw
+          ? { ...stopped, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), windowsEncoding }
+          : { ...stopped, stdout: "", stderr: "" },
+        processCleanup,
+      );
     }
     waitingForSpawn = false;
   }
