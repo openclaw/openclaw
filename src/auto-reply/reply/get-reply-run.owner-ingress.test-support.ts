@@ -1,3 +1,4 @@
+import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
 import {
   createPreparedReplyTurn as turn,
   createProviderSurface,
@@ -29,4 +30,23 @@ export function createOwnerIngress(kind: string, channel: string, body: string, 
         : undefined,
     opts: { runId, suppressNextUserMessagePersistence: kind === "replay" },
   };
+}
+
+export function bindOwnerIngress(
+  params: ReturnType<typeof createOwnerIngress>,
+  channel: string,
+  kind: string,
+  isCurrent: () => boolean,
+) {
+  if (kind === "configured-owner" || kind === "configured-owner-revoked") {
+    return;
+  }
+  bindCommandOwnerAuthority(params.sessionCtx, {
+    channelPrincipal: {
+      channelId: channel,
+      accountId: kind === "telegram-named-account" ? "work" : "default",
+      senderId: "owner-1",
+    },
+    isCurrent,
+  });
 }

@@ -55,7 +55,6 @@ import { testing as controllerTesting } from "../../sessions/session-controller.
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { hasControlCommand } from "../command-detection.js";
-import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import {
   loadAgentRunnerRuntime,
@@ -63,7 +62,10 @@ import {
   loadSessionUpdatesRuntime,
 } from "./get-reply-run-helpers.js";
 import { runPreparedReply } from "./get-reply-run.js";
-import { createOwnerIngress } from "./get-reply-run.owner-ingress.test-support.js";
+import {
+  bindOwnerIngress,
+  createOwnerIngress,
+} from "./get-reply-run.owner-ingress.test-support.js";
 import { registerPendingRequesterAuthorityCases } from "./get-reply-run.requester-authority.test-support.js";
 import { registerSteeringIntentProducerCases } from "./get-reply-run.steering-intent.test-support.js";
 import { registerSystemEventAdmissionCases } from "./get-reply-run.system-event-admission.test-support.js";
@@ -584,9 +586,7 @@ describe("runPreparedReply media-only handling", () => {
             releaseAgentRunDelegatedAuthority(authority);
           }
         });
-        if (kind !== "configured-owner" && kind !== "configured-owner-revoked") {
-          bindCommandOwnerAuthority(params.sessionCtx, { isCurrent: () => current });
-        }
+        bindOwnerIngress(params, channel, kind, () => current);
         try {
           await runPrepared({ ...params, cfg });
           if (capturedOpts?.cronCreatorAuthorityCapability) {
@@ -657,7 +657,6 @@ describe("runPreparedReply media-only handling", () => {
               kind === "owner-overflow" ||
               kind === "owner-batch" ||
               kind === "foreign-defaults" ||
-              kind === "configured-owner" ||
               kind === "discord-owner-alias" ||
               refreshOwner
               ? "gateway"

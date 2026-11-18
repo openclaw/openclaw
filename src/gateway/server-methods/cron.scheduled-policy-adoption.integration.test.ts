@@ -16,6 +16,14 @@ import {
 } from "../../agents/tools/gateway-caller-context.js";
 import * as gatewayModule from "../../agents/tools/gateway.js";
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
+import { getCommandOwnerAuthority } from "../../auto-reply/command-owner-authority.js";
+import { resolveReplyCronChannelRequester } from "../../auto-reply/reply/get-reply-run.cron-requester.js";
+import { buildSessionEventContext } from "../../auto-reply/reply/session-event-context.js";
+import {
+  createHostIngressFixture,
+  ingressInput,
+  ingressMessage,
+} from "../../channels/message-access/host-ingress.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
@@ -23,10 +31,7 @@ import {
 } from "../../config/config.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  admitScheduledOccurrence,
-  checkRequesterOwner,
-} from "../../cron/execution-context-admission.js";
+import { admitScheduledOccurrence } from "../../cron/execution-context-admission.js";
 import { resolveScheduledRequester } from "../../cron/execution-context.js";
 import type { CronScheduledToolCallerOrigin } from "../../cron/scheduled-tool-policy.js";
 import type { CronService } from "../../cron/service.js";
@@ -49,6 +54,7 @@ import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-a
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import { mintCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import type { CronAuthenticatedChannelRequester } from "../cron-creator-authority-grant.types.js";
+import { captureCronJobTurnTarget } from "../cron-job-turn-target.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { callCron, createHistoryJob, createReadService } from "./cron-read.test-support.js";
@@ -100,6 +106,7 @@ async function withAgentManagement<T>(
     channel?: string;
     sessionKey?: string;
     channelRequester?: CronAuthenticatedChannelRequester;
+    ownerAuthority?: ReturnType<typeof getCommandOwnerAuthority>;
   } = {},
 ): Promise<T> {
   const callerSessionKey = options.sessionKey ?? sessionKey;
@@ -124,11 +131,13 @@ async function withAgentManagement<T>(
         options.origin ?? { kind: "unknown" },
         {
           source: "channel-owner",
-          isCurrent: () =>
-            isConfiguredCommandOwner(getRuntimeConfig(), {
-              channel,
-              senderId: "owner-1",
-            }),
+          isCurrent:
+            options.ownerAuthority?.isCurrent ??
+            (() =>
+              isConfiguredCommandOwner(getRuntimeConfig(), {
+                channel,
+                senderId: "owner-1",
+              })),
         },
         undefined,
         options.channelRequester,
@@ -312,6 +321,22 @@ it("records a Telegram owner's origin when creating a job within the visible too
     { sessionId, updatedAt: 1, lifecycleRevision: "creator-origin" },
   );
   const { storePath, context } = createFixture();
+  context.getRuntimeConfig = getRuntimeConfig;
+  const host = createHostIngressFixture("telegram", cfg);
+  const message = ingressMessage("telegram", parentSessionKey, "owner-1", { accountId });
+  const channelIngress = await host.ingress.resolveStable(
+    ingressInput(message, { identity: { authentication: "verified" } }),
+  );
+  const ingressContext = host.buildContext({ ...message, channelIngress });
+  const ownerAuthority = expectDefined(getCommandOwnerAuthority(ingressContext), "host owner");
+  const channelRequester = expectDefined(
+    resolveReplyCronChannelRequester(ingressContext, {
+      channel: "telegram",
+      senderId: "owner-1",
+      accountId,
+    }),
+    "host-bound requester",
+  );
   await withAgentManagement(
     async (identity) => {
       vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(
@@ -352,9 +377,11 @@ it("records a Telegram owner's origin when creating a job within the visible too
       origin: { kind: "external", channel: "telegram" },
       channel: "telegram",
       sessionKey: parentSessionKey,
-      channelRequester: { version: 1, channel: "telegram", accountId, senderId: "owner-1" },
+      channelRequester,
+      ownerAuthority,
     },
   );
+  host.retire();
   const stored = expectDefined((await loadCronStore(storePath)).jobs[0], "created job");
   expect(stored).toMatchObject({
     owner: { agentId: "main", sessionKey: parentSessionKey, accountId },
@@ -367,31 +394,54 @@ it("records a Telegram owner's origin when creating a job within the visible too
       channelRequester: { version: 1, channel: "telegram", accountId, senderId: "owner-1" },
     },
   });
-  // Repair and scheduled-event admission share this live owner check. The persisted
-  // channel requester, not createdActor or delivery metadata, must supply the identity.
   const requester = resolveScheduledRequester(stored);
-  expect(requester).toEqual({
-    kind: "channel",
-    requester: { version: 1, channel: "telegram", accountId, senderId: "owner-1" },
-  });
-  if (requester.kind !== "channel") {
-    throw new Error("created job lost its channel requester");
+  expect(requester).toEqual({ kind: "channel", requester: channelRequester });
+  const captureRepair = async (job = stored) => {
+    const repair = await captureCronJobTurnTarget({
+      job,
+      agentId: "main",
+      sessionKey: parentSessionKey,
+      context,
+    });
+    const event = buildSessionEventContext({
+      cfg: getRuntimeConfig(),
+      agentId: "main",
+      sessionKey: parentSessionKey,
+      text: "Repair the scheduled automation.",
+      options: { source: "cron_failure_repair" },
+      occurrenceId: "channel-owner-repair",
+      target: repair.target,
+      assertCurrent: () => {},
+    });
+    return { owner: getCommandOwnerAuthority(event), release: repair.release };
+  };
+  const repair = await captureRepair();
+  try {
+    expect(repair.owner?.isCurrent()).toBe(true);
+    const revoked = { ...cfg, commands: { ownerAllowFrom: ["telegram:other-owner"] } };
+    setRuntimeConfigSnapshot(revoked);
+    expect(() => repair.owner?.isCurrent()).toThrow("no longer an owner");
+    const denied = await captureRepair();
+    try {
+      expect(denied.owner).toBeUndefined();
+    } finally {
+      denied.release();
+    }
+  } finally {
+    repair.release();
+    setRuntimeConfigSnapshot(cfg);
   }
-  const owner = await checkRequesterOwner(cfg, requester);
-  expect(owner.owner).toBe(true);
-  const revoked = { ...cfg, commands: { ownerAllowFrom: ["telegram:other-owner"] } };
-  setRuntimeConfigSnapshot(revoked);
-  expect(() => owner.assertCurrent?.()).toThrow("no longer an owner");
-  expect((await checkRequesterOwner(revoked, requester)).owner).toBe(false);
-  setRuntimeConfigSnapshot(cfg);
-  expect(
-    (
-      await checkRequesterOwner(cfg, {
-        kind: "channel",
-        requester: { version: 1, channel: "telegram", accountId, senderId: "not-owner" },
-      })
-    ).owner,
-  ).toBe(false);
+  const nonOwner = structuredClone(stored);
+  expectDefined(nonOwner.toolsAllowProvenance, "persisted provenance").channelRequester = {
+    ...channelRequester,
+    senderId: "not-owner",
+  };
+  const denied = await captureRepair(nonOwner);
+  try {
+    expect(denied.owner).toBeUndefined();
+  } finally {
+    denied.release();
+  }
 
   const config: OpenClawConfig = {
     ...cfg,
