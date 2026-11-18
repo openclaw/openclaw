@@ -341,7 +341,7 @@ async function resolveDeliveryTargetWithPolicy(
     to: resolvedTarget.to,
     cfg,
     accountId: effectiveAccountId,
-    channelInferred: target === "last" ? true : undefined,
+    channelInferred: target === "last" && !policy?.to?.trim() ? true : undefined,
   };
   const resolved = await resolveOutboundTargetWithPlugin({
     plugin,
@@ -386,10 +386,7 @@ async function resolveDeliveryTargetWithPolicy(
             )
           : resolved.to,
       plugin,
-      resolvedKind:
-        namespaceTarget?.to === resolved.to && namespaceTarget.resolutionSource !== "normalized"
-          ? namespaceTarget.kind
-          : undefined,
+      resolvedKind: namespaceTarget?.to === resolved.to ? namespaceTarget.kind : undefined,
     });
   // Directory kinds describe their exact recipient, not an opaque policy rewrite.
   if (
@@ -500,7 +497,7 @@ async function resolveDeliveryTargetWithPolicyAndSessionRoute(
     input: deliveryTo,
     accountId: delivery.accountId,
     unknownTargetMode: "normalized",
-    channelInferred: policy?.target === "last" ? true : undefined,
+    channelInferred: policy?.target === "last" && !policy.to?.trim() ? true : undefined,
     plugin,
   }).catch(() => null);
   if (targetResolution?.ok) {

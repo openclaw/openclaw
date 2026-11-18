@@ -13,6 +13,12 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
+const source = {
+  sessionId: "cron-namespace-source",
+  updatedAt: 1,
+  delivery: normalizeSessionDeliveryState({ context: { channel: "alpha", to: "alpha" } }),
+};
+
 it("preserves a namespace directory identity through cron session routing", async () => {
   await withTempCronHome(async () => {
     const plugin = createOutboundTestPlugin({
@@ -44,8 +50,14 @@ it("preserves a namespace directory identity through cron session routing", asyn
     const result = await resolveDeliveryTarget(
       { channels: { alpha: {} } } as OpenClawConfig,
       "main",
-      { channel: "alpha", to: "alpha" },
-      { sessionContext: { mainSessionKey: "agent:main:main", usedSharedMainFallback: false } },
+      { channel: "last" },
+      {
+        sessionContext: {
+          mainSessionKey: "agent:main:main",
+          main: source,
+          usedSharedMainFallback: false,
+        },
+      },
     );
 
     expect(result).toMatchObject({
@@ -59,10 +71,11 @@ it("preserves a namespace directory identity through cron session routing", asyn
 it.each([
   { channel: "last", destination: undefined, denied: false, expected: "missing" },
   { channel: "last", destination: "allowed-room", denied: false, expected: "allowed-room" },
+  { channel: "last", explicitTo: true, destination: undefined, denied: false, expected: "@alpha" },
   { channel: "last", destination: "denied-room", denied: true, expected: "@operator" },
   {
     channel: "last",
-    explicitTo: true,
+    explicitTo: "@denied-room",
     destination: "denied-room",
     denied: true,
     expected: "denied",
@@ -110,21 +123,14 @@ it.each([
       const result = await resolveDeliveryTarget(
         { channels: { alpha: {} } } as OpenClawConfig,
         "main",
-        { channel, ...(explicitTo ? { to: "alpha" } : {}) },
+        {
+          channel,
+          ...(explicitTo ? { to: typeof explicitTo === "string" ? explicitTo : "alpha" } : {}),
+        },
         {
           sessionContext: {
             mainSessionKey: "agent:main:main",
-            main: {
-              sessionId: "cron-namespace-source",
-              updatedAt: 1,
-              ...(!noSource
-                ? {
-                    delivery: normalizeSessionDeliveryState({
-                      context: { channel: "alpha", to: "alpha" },
-                    }),
-                  }
-                : {}),
-            },
+            main: noSource ? { sessionId: source.sessionId, updatedAt: 1 } : source,
             usedSharedMainFallback: false,
           },
         },

@@ -275,7 +275,8 @@ export async function resolveDeliveryTarget(
   });
 
   let fallbackChannel: string | undefined;
-  let channelInferred: true | undefined = requestedChannel === "last" ? true : undefined;
+  let channelInferred: true | undefined =
+    requestedChannel === "last" && !explicitTo ? true : undefined;
   let channelResolutionError: Error | undefined;
   if (!preliminary.channel) {
     if (preliminary.lastChannel) {

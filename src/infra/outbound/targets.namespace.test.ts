@@ -15,6 +15,12 @@ beforeEach(() => {
 });
 afterEach(() => resetPluginRuntimeStateForTest());
 
+const entry = {
+  sessionId: "namespace-source",
+  updatedAt: 1,
+  delivery: normalizeSessionDeliveryState({ context: { channel: "alpha", to: "alpha" } }),
+};
+
 it.each([
   ["alpha", "alpha"],
   ["@alpha", "@alpha"],
@@ -30,9 +36,13 @@ it.each([
   });
 });
 
-it.each(["last", "alpha"])(
-  "guards namespace direct delivery with %s channel selection",
-  async (target) => {
+it.each([
+  { target: "last", explicitTo: false },
+  { target: "alpha", explicitTo: true },
+  { target: "last", explicitTo: true },
+])(
+  "guards only inferred namespace delivery ($target, explicitTo=$explicitTo)",
+  async ({ target, explicitTo }) => {
     const normalizeTarget = vi.fn((raw: string) => `@${raw}`);
     const resolveTarget = vi.fn(({ to }: { to?: string }) => ({ ok: true as const, to: to ?? "" }));
     const plugin: ChannelPlugin = {
@@ -48,19 +58,14 @@ it.each(["last", "alpha"])(
 
     const result = await resolveProactiveDeliveryTarget({
       cfg: {},
-      entry: {
-        sessionId: "namespace-source",
-        updatedAt: 1,
-        delivery: normalizeSessionDeliveryState({ context: { channel: "alpha", to: "alpha" } }),
-      },
-      policy: { target, ...(target === "alpha" ? { to: "alpha" } : {}), directPolicy: "block" },
+      entry,
+      policy: { target, ...(explicitTo ? { to: "alpha" } : { directPolicy: "block" as const }) },
     });
 
-    expect(result).toMatchObject({
-      channel: "none",
-      reason: target === "last" ? "no-target" : "dm-blocked",
-    });
-    if (target === "last") {
+    expect(result).toMatchObject(
+      explicitTo ? { channel: "alpha", to: "alpha" } : { channel: "none", reason: "no-target" },
+    );
+    if (!explicitTo) {
       expect(normalizeTarget).not.toHaveBeenCalled();
       expect(resolveTarget).not.toHaveBeenCalled();
     }
@@ -109,7 +114,8 @@ it.each([
 
     const result = await resolveProactiveDeliveryTarget({
       cfg: {},
-      policy: { target: "alpha", to: "alpha", directPolicy: "block" },
+      entry,
+      policy: { target: "last", directPolicy: "block" },
     });
 
     expect(result).toMatchObject(
@@ -141,6 +147,6 @@ it("fails closed when namespace directory lookup fails", async () => {
   setActivePluginRegistry(createTargetsTestRegistry([plugin]));
 
   expect(
-    await resolveProactiveDeliveryTarget({ cfg: {}, policy: { target: "alpha", to: "alpha" } }),
+    await resolveProactiveDeliveryTarget({ cfg: {}, entry, policy: { target: "last" } }),
   ).toMatchObject({ channel: "none", reason: "no-target" });
 });

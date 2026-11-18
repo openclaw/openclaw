@@ -151,6 +151,7 @@ export async function resolveMessageChannelSelection(params: {
 }): Promise<{
   channel: string;
   plugin: ChannelPlugin;
+  /** A current conversation supplies channel provenance; a sole configured channel does not. */
   channelInferred?: true;
 }> {
   const normalized = normalizeMessageChannel(params.channel);

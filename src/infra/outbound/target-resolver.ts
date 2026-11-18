@@ -4,7 +4,6 @@ import type {
   ChannelDirectoryEntry,
   ChannelDirectoryEntryKind,
   ChannelId,
-  ChannelOutboundTargetMode,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
@@ -225,8 +224,6 @@ export async function resolveChannelTarget(params: {
   runtime?: RuntimeEnv;
   unknownTargetMode?: "error" | "normalized";
   channelInferred?: true;
-  nativeTargetMode?: ChannelOutboundTargetMode;
-  allowFrom?: string[];
   plugin?: ChannelPlugin;
 }): Promise<ResolveMessagingTargetResult> {
   const raw = params.input.trim();
@@ -239,32 +236,27 @@ export async function resolveChannelTarget(params: {
       error: missingTargetError(providerLabel, hint),
     };
   }
-  const channelNamespace = resolveBareTargetChannelNamespace({ raw, plugin });
-  const allowNativeTarget = !channelNamespace || !params.channelInferred;
-  const kind = detectTargetKind(params.channel, raw, params.preferredKind, plugin);
-  // An inferred channel name must not become a plausible recipient through normalization.
-  const normalizedInput = allowNativeTarget
-    ? resolveNormalizedTargetInput(params.channel, raw, plugin)
+  const channelNamespace = params.channelInferred
+    ? resolveBareTargetChannelNamespace({ raw, plugin })
     : undefined;
+  const kind = detectTargetKind(params.channel, raw, params.preferredKind, plugin);
+  const normalizedInput = channelNamespace
+    ? undefined
+    : resolveNormalizedTargetInput(params.channel, raw, plugin);
   const normalized = normalizedInput?.normalized ?? raw;
   const reservedLiteral = resolveReservedTargetLiteral({ raw, plugin });
-  const normalizedResult = (to = normalized): ResolveMessagingTargetResult => ({
+  const normalizedResult = (): ResolveMessagingTargetResult => ({
     ok: true,
     target: {
-      to,
-      kind: channelNamespace
-        ? detectTargetKind(params.channel, to, params.preferredKind, plugin)
-        : kind,
-      display: stripTargetPrefixes(to),
+      to: normalized,
+      kind,
+      display: stripTargetPrefixes(normalized),
       source: "normalized",
       resolutionSource: "normalized",
     },
   });
-  let nativeResolverAttempted = false;
-  const resolvePluginTarget = (requireIdLike?: boolean) => {
-    nativeResolverAttempted = true;
-    return maybeResolvePluginMessagingTarget({ ...params, input: raw, plugin, requireIdLike });
-  };
+  const resolvePluginTarget = (requireIdLike?: boolean) =>
+    maybeResolvePluginMessagingTarget({ ...params, input: raw, plugin, requireIdLike });
   if (
     normalizedInput &&
     !reservedLiteral &&
@@ -276,12 +268,7 @@ export async function resolveChannelTarget(params: {
     })
   ) {
     const target = await resolvePluginTarget(true);
-    if (target) {
-      return { ok: true, target };
-    }
-    if (!channelNamespace || !plugin?.messaging?.targetResolver?.resolveTarget) {
-      return normalizedResult();
-    }
+    return target ? { ok: true, target } : normalizedResult();
   }
   const query = stripTargetPrefixes(raw, params.channel, plugin);
   const directoryKinds: ChannelDirectoryEntryKind[] =
@@ -290,14 +277,8 @@ export async function resolveChannelTarget(params: {
       : [kind === "user" ? "user" : "group"];
   const entries = (
     await Promise.all(
-      directoryKinds.map((directoryKind) =>
-        getDirectoryEntries({
-          ...params,
-          kind: directoryKind,
-          query,
-          preferLiveOnMiss: true,
-          plugin,
-        }),
+      directoryKinds.map((kind) =>
+        getDirectoryEntries({ ...params, kind, query, preferLiveOnMiss: true, plugin }),
       ),
     )
   ).flat();
@@ -343,35 +324,17 @@ export async function resolveChannelTarget(params: {
   if (reservedLiteral) {
     return { ok: false, error: reservedTargetLiteralError(providerLabel, reservedLiteral, hint) };
   }
-  const resolvedFallbackTarget =
-    allowNativeTarget && !nativeResolverAttempted ? await resolvePluginTarget() : undefined;
+  if (channelNamespace) {
+    return {
+      ok: false,
+      error: missingChannelDestinationError(providerLabel, channelNamespace, params.channel, hint),
+    };
+  }
+  const resolvedFallbackTarget = await resolvePluginTarget();
   if (resolvedFallbackTarget) {
     return {
       ok: true,
       target: resolvedFallbackTarget,
-    };
-  }
-
-  if (channelNamespace) {
-    // Some plugins validate native recipients only through their outbound adapter.
-    if (allowNativeTarget && !plugin?.messaging?.targetResolver?.resolveTarget) {
-      const native = plugin?.outbound?.resolveTarget?.({
-        cfg: params.cfg,
-        to: raw,
-        accountId: params.accountId,
-        allowFrom: params.allowFrom,
-        mode: params.nativeTargetMode ?? "explicit",
-      });
-      if (native && !native.ok) {
-        return native;
-      }
-      if (native?.to.trim()) {
-        return normalizedResult(native.to);
-      }
-    }
-    return {
-      ok: false,
-      error: missingChannelDestinationError(providerLabel, channelNamespace, params.channel, hint),
     };
   }
 

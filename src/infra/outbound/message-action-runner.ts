@@ -693,7 +693,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
             gateway,
             input: {
               ...input,
-              channelInferred: route.channelInferred,
+              channelInferred: defersExternalTargetResolution ? route.channelInferred : undefined,
               assertDirectAdapterHandoff:
                 route.assertTargetAuthorityCurrent ?? input.assertDirectAdapterHandoff,
             },

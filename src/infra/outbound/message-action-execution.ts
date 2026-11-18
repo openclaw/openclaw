@@ -30,6 +30,7 @@ import { resolvePollMaxSelections } from "../../polls.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
+import { resolveBareTargetChannelNamespace } from "./channel-target-prefix.js";
 import { assertOutboundHandoffCurrent } from "./deliver-handoff.js";
 import {
   createChannelActionContext,
@@ -222,7 +223,15 @@ export async function executeGatewayAction(
       inboundTurnKind: ctx.input.inboundEventKind,
       agentId: ctx.agentId,
       ...(conversationReadOrigin === "direct-operator" ? { conversationReadOrigin } : {}),
-      channelInferred: ctx.input.channelInferred,
+      ...(ctx.input.channelInferred &&
+      ["to", "channelId"].some((key) =>
+        resolveBareTargetChannelNamespace({
+          raw: normalizeOptionalString(ctx.params[key]),
+          plugin: channelPlugin,
+        }),
+      )
+        ? { channelInferred: true }
+        : {}),
       idempotencyKey,
     };
     const { callGatewayLeastPrivilege } = await loadMessageGatewayRuntime();

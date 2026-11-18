@@ -55,6 +55,7 @@ import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import {
   createMessageActionRuntimeAuthority,
+  resolveMessageActionNamespace,
   resolveAgentRuntimeMessageActionAuthorization,
   resolveAgentRuntimeMessageActionConfig,
   resolveTrustedMessageActionToolContext,
@@ -102,6 +103,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       respond(false, undefined, trustedContext.error);
       return;
     }
+    const { runtimeAgentId, sourceReplySessionKey } = trustedContext;
     const conversationReadOrigin = resolveGatewayConversationReadOrigin({
       client,
       requestedOrigin: request.conversationReadOrigin,
@@ -157,7 +159,8 @@ export const sendHandlers: GatewayRequestHandlers = {
         const cfg = trustedContext.messageActionConfig ?? selectLiveRuntimeConfig(selectedCfg);
         const plugin = resolveOutboundChannelPlugin({ channel, cfg });
         const canonicalAction =
-          ((isSend && Boolean(plugin?.message?.send?.text || plugin?.outbound?.sendText)) ||
+          ((request.action === "send" &&
+            Boolean(plugin?.message?.send?.text || plugin?.outbound?.sendText)) ||
             (request.action === "poll" && Boolean(plugin?.outbound?.sendPoll))) &&
           (!plugin?.actions?.handleAction ||
             plugin.actions.supportsAction?.({ action: request.action }) === false);
@@ -179,8 +182,7 @@ export const sendHandlers: GatewayRequestHandlers = {
               : undefined,
             async () => {
               const sessionKey = normalizeOptionalString(request.sessionKey);
-              const requestedAgentId =
-                normalizeOptionalString(request.agentId) ?? trustedContext.runtimeAgentId;
+              const requestedAgentId = normalizeOptionalString(request.agentId) ?? runtimeAgentId;
               const sessionOwner = sessionKey
                 ? resolveRequestedSessionAgentId(cfg, sessionKey, requestedAgentId)
                 : undefined;
@@ -188,7 +190,6 @@ export const sendHandlers: GatewayRequestHandlers = {
                 return { ok: false, error: sessionOwner.error, meta: { channel } };
               }
               const agentId = sessionOwner?.agentId ?? requestedAgentId;
-              const sourceReplySessionKey = trustedContext.sourceReplySessionKey;
               const sourceReplyOwner = sourceReplySessionKey
                 ? resolveRequestedSessionAgentId(cfg, sourceReplySessionKey, agentId)
                 : undefined;
@@ -299,7 +300,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                 // it resends proven-not-sent failures itself, so its gateway-owned plugin
                 // delivery must not also stay replayable (#124279). Operator, CLI, and
                 // external RPC clients carry none and keep recovery's replay (#100979).
-                deliveryRetryOwner: trustedContext.runtimeAgentId ? ("caller" as const) : undefined,
+                deliveryRetryOwner: runtimeAgentId ? ("caller" as const) : undefined,
                 ...selectMessageActionRequesterIdentity(trustedContext),
                 senderIsOwner: gatewayClientScopes.includes(ADMIN_SCOPE)
                   ? request.senderIsOwner === true
@@ -324,25 +325,24 @@ export const sendHandlers: GatewayRequestHandlers = {
                   (isSend || Boolean(trustedContext.messageActionAuthorization?.scheduled)),
               };
               let payload: unknown;
-              if (canonicalAction || assertScheduledWriteCurrent || request.channelInferred) {
+              if (canonicalAction || assertScheduledWriteCurrent) {
                 const { runMessageAction } =
                   await import("../../infra/outbound/message-action-runner.js");
-                const result = await runMessageAction({
+                ({ payload } = await runMessageAction({
                   ...actionContext,
                   gatewayOwnedDelivery: true,
                   channelInferred: request.channelInferred,
                   // The delegating client records the confirmed send in its destination.
                   callerRecordsDestinationHistory: true,
-                  actionOrigin:
-                    isSend && trustedContext.runtimeAgentId ? "message-tool" : undefined,
+                  actionOrigin: isSend && runtimeAgentId ? "message-tool" : undefined,
                   params: {
                     ...request.params,
                     channel,
                     idempotencyKey: request.idempotencyKey,
                   },
-                });
-                payload = result.payload;
+                }));
               } else {
+                await resolveMessageActionNamespace(actionContext, plugin, request.channelInferred);
                 await messageAuthority.beforeDeliveryAttempt();
                 assertDirectAdapterHandoff?.();
                 const handled = await dispatchChannelMessageAction(actionContext);

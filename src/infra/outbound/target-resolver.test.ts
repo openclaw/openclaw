@@ -216,32 +216,6 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     },
   );
 
-  it.each([true, false])(
-    "tries exact directories after a native namespace miss (found=%s)",
-    async (found) => {
-      setPlugin(
-        { targetResolver: { looksLikeId: () => true, resolveTarget: mocks.resolveTarget } },
-        directory,
-      );
-      mocks.resolveTarget.mockResolvedValue(undefined);
-      mocks.listGroups.mockResolvedValue(
-        found ? [{ kind: "group", id: "room-1", name: "richchat" }] : [],
-      );
-      mocks.listGroupsLive.mockResolvedValue([]);
-      mocks.listPeers.mockResolvedValue([]);
-      mocks.listPeersLive.mockResolvedValue([]);
-
-      const result = await resolve("richchat");
-
-      expect(result).toMatchObject(
-        found
-          ? { ok: true, target: { to: "room-1", kind: "group" } }
-          : { ok: false, error: { reasonCode: "message_target_missing" } },
-      );
-      expect(mocks.resolveTarget).toHaveBeenCalledOnce();
-    },
-  );
-
   it("does not reuse query-filtered directory misses for later target queries", async () => {
     directPlugin();
     const listMatchingPeers = vi.fn(({ query }: { query?: string }) =>
