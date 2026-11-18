@@ -796,6 +796,10 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     main();
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
+    // Identity lookups wrap the gh failure; retain its diagnostic without dumping captured stdout.
+    if (error instanceof Error && error.cause instanceof Error) {
+      console.error(`Caused by: ${error.cause.message}`);
+    }
     console.error("[release-plan-producer] FAILED (exit 1)");
     process.exitCode = 1;
   }
