@@ -3,22 +3,21 @@ import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { SessionDeliveryState } from "../../../config/sessions/types.js";
 import type { CronRuntimeAuthority } from "../../../cron/runtime-authority.js";
 import type { CronScheduledToolCallerOrigin } from "../../../cron/scheduled-tool-policy.js";
+import type { CronCreatorAuthorityCapability } from "../../../gateway/cron-creator-authority-grant.types.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
 import type { ExplicitSkillSelection } from "../../../skills/types.js";
 import type { MemoryFlushToolRunContext } from "../../agent-tools.memory-flush.types.js";
 import type { AssistantErrorTranscript } from "../../assistant-error-transcript.js";
 import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
-import type { QueuedAgentRunParams } from "../../command/queued-run-params.types.js";
 import type {
   AgentRunExecutionContext,
   AgentRunMessageContext,
   AgentRunChannelContext,
-  AgentStreamParams,
-  ClientToolDefinition,
-} from "../../command/shared-types.js";
+} from "../../command/execution-context.types.js";
+import type { QueuedAgentRunParams } from "../../command/queued-run-params.types.js";
+import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
 import type { ConversationRecallContext } from "../../conversation-recall.types.js";
-import type { CronCreatorAuthorityCapability } from "../../cron-creator-authority-context.js";
 import type {
   BlockReplyChunking,
   EmbeddedAgentEvent,
@@ -37,9 +36,9 @@ import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhaseInfo } from "../execution-phase.js";
+import type { SessionForkRequest } from "../session-fork-request.js";
 import type { BlockReplyFlushContext } from "../types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
-export type { ClientToolDefinition } from "../../command/shared-types.js";
 export type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
 
 export type RunEmbeddedAgentParams = Pick<
@@ -158,6 +157,11 @@ export type RunEmbeddedAgentParams = Pick<
   };
   /** Disable fallback from the user-selected auth profile for a verification run. */
   allowAuthProfileFallback?: boolean;
+  /**
+   * A scheduled candidate on a provider its job records no account for (a configured fallback):
+   * it selects credentials live, like an interactive run, instead of being refused as unrecorded.
+   */
+  scheduledLiveProviderAuth?: boolean;
   toolResultFormat?: ToolResultFormat;
   toolProgressDetail?: ToolProgressDetailMode;
   /** Bootstrap context mode for workspace file injection. */
@@ -166,6 +170,8 @@ export type RunEmbeddedAgentParams = Pick<
   toolsAllow?: string[];
   /** Preserve the visible tool schemas while allowing execution only for these names. */
   toolExecutionAllow?: readonly string[];
+  /** Set only by `runSessionFork`: each request replays the source session's request first. */
+  sessionForkRequest?: SessionForkRequest;
   /** Host-stamped exact-run capability for late Codex creator-authority capture. */
   cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
   /** Ephemeral reason fresh local-operator cron authority cannot survive this queued turn. */

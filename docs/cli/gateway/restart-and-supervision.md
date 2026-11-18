@@ -87,6 +87,13 @@ the last recorded shutdown reason and time for the selected state directory;
 on Linux, it also reports competing user and system service units when inspecting
 the native service. Failure outcomes keep their specific failure reason.
 
+A SIGTERM or SIGINT that arrives during startup, before the Gateway has taken
+state ownership and installed its own signal handling, stops it like any other CLI
+command: the current startup step finishes or is cancelled and releases what it
+holds, the Gateway does not take state ownership, and the process exits with status
+`143` (`130` for SIGINT). No state lock is left behind, so a replacement in another
+container starts without `openclaw gateway recover-lock`. SIGKILL still leaves locks.
+
 After a downgrade, the Gateway refuses databases whose schema is newer than the
 running build supports. The startup error and `openclaw gateway status --deep`
 report the found and supported schema versions, the writer build when recorded,
@@ -283,6 +290,15 @@ Stops and restarts record running sessions before aborting their work. Shutdown
 logs name cleanup steps that fail or exceed their bounded grace. The Gateway
 does not wait for active agent work to finish. Diagnostics do not change cleanup
 budgets or the service manager's stop deadline.
+
+The `plugin-registry` and `plugin-metadata` shutdown spans include nested process
+and database cleanup. Compare their child spans before attributing a long close
+to a plugin. A broken service-child stdin shutdown write does not fail cleanup
+when the process owner still verifies its closing receipt and descendant
+extinction. Missing receipts or unverifiable descendants remain cleanup failures.
+Completed cleanup attempts retain their failures for the originating run and scope.
+A later shutdown warns about these historical failures instead of treating them as
+active resources; failures while draining current runs still fail that shutdown.
 
 A client disconnect leaves interactive setup available for reconnect. A Gateway
 stop or restart closes setup prompts before cleanup. Settings writes already

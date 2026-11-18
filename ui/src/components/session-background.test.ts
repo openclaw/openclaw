@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { Dynamic } from "@solidjs/web";
 import { createComponent, createSignal, Show } from "solid-js";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { selectBackgroundSource } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -108,6 +108,11 @@ const themeImage = (background: HTMLElement) =>
 const createObjectUrl = vi.fn<typeof URL.createObjectURL>();
 const revokeObjectUrl = vi.fn<typeof URL.revokeObjectURL>();
 const getCanvasContext = vi.fn<typeof HTMLCanvasElement.prototype.getContext>();
+
+// The host lazy-loads its renderer; pay the cold import here, not inside the first timed wait.
+beforeAll(async () => {
+  await import("./session-background.tsx");
+});
 
 beforeEach(() => {
   profilePreferences.ready = true;
@@ -423,6 +428,26 @@ it("retires the prior client even when the profile and gateway URL are unchanged
   expect(imageSrc(background)).toBeNull();
   await waitForSolid(() => expect(imageSrc(background)).toBe("blob:background-new-client"));
   expect(fetch).toHaveBeenCalledTimes(2);
+});
+
+it("keeps a shared pane photo until its last owner leaves, including on profile retirement", async () => {
+  const { context, gateway, state } = fixture();
+  const parked = mountBackground(context);
+  await waitForSolid(() => expect(imageSrc(parked)).toBe("blob:background-a"));
+  parked.presented = false;
+  await waitForSolid(() => expect(image(parked)).toBeNull());
+  const visible = mountBackground(context);
+  await waitForSolid(() => expect(imageSrc(visible)).toBe("blob:background-a"));
+  expect(fetch).toHaveBeenCalledTimes(1);
+  visible.remove();
+  await visible.updateComplete;
+  expect(revokeObjectUrl).not.toHaveBeenCalled();
+  gateway.publish({ ...state, selfUser: null });
+  expect(revokeObjectUrl).toHaveBeenCalledExactlyOnceWith("blob:background-a");
+  parked.presented = true;
+  await parked.updateComplete;
+  expect(image(parked)).toBeNull();
+  expect(fetch).toHaveBeenCalledTimes(1);
 });
 
 it("does not let an aborted disconnected pane publish a late image", async () => {

@@ -120,6 +120,14 @@ it.each([
   [{ key: "agent:main:constructor:direct:42" }, { channelLabel: "Constructor", kind: "direct" }],
   [
     {
+      key: "agent:main:main:thread:12345:678",
+      channel: "telegram",
+      origin: { provider: "telegram", label: "Alex id:12345", threadId: 678 },
+    },
+    { channelLabel: "Telegram", kind: "topic", topicId: "678", conversation: "Alex" },
+  ],
+  [
+    {
       key: "agent:main:whatsapp:direct:15555550123",
       channel: "telegram",
       chatType: "group",

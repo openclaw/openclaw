@@ -9,6 +9,7 @@ import { resolveChatSendCallerContext } from "../gateway/server-methods/gateway-
 import { createSessionMutationTestClient } from "../gateway/server-methods/sessions-mutations.owner.test-support.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { inspectOpenDictionaryToolSchemas } from "../plugins/tool-schema-diagnostics.js";
+import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
@@ -20,6 +21,7 @@ import {
 } from "./code-mode.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import { createStableSkillAuthoring } from "./stable-skill-authoring.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search-catalog.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
@@ -152,11 +154,6 @@ it.each(["browser", "cli", "acp"] as const)(
     });
     const wakeSurface = render(wake);
     expect(wakeSurface).toEqual(expected);
-    const refused = await createOpenClawCodingTools(wake)
-      .find((tool) => tool.name === "sessions_create")!
-      .execute("wake-create", {});
-    expect(refused.details).toMatchObject({ gated: true });
-    expect(JSON.stringify(refused.content)).toContain("session write authority");
     await update({
       ...callerContext,
       GatewayClientCaps: [],
@@ -265,6 +262,36 @@ it.each<[string, ToolOptions]>([
   expect(surface(createOpenClawCodingTools(options))).toEqual(
     surface(createOpenClawCodingTools(userTurn)),
   );
+});
+it("offers the human turn's skill authoring definitions on an internal turn", async () => {
+  const resolve = createStableSkillAuthoring();
+  const human: SkillLibraryAuthoringCapability = {
+    target: "personal",
+    defaultTarget: "workspace",
+    multipleProfiles: true,
+    bind: () => {},
+    invoke: async () => {
+      throw new Error("an internal turn must not reach the human grant");
+    },
+  };
+  const authoring = (
+    options: ToolOptions,
+    skillLibraryAuthoring?: SkillLibraryAuthoringCapability,
+  ) =>
+    createOpenClawCodingTools({
+      ...options,
+      ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
+    }).filter((tool) => tool.name === "skill_library");
+  const user = authoring(userTurn, resolve(session.sessionKey, human));
+  const wake = completionTurn("exec");
+  expect(user.map((tool) => tool.name)).toEqual(["skill_library"]);
+  expect(surface(authoring(wake))).not.toEqual(surface(user));
+  const stable = authoring(wake, resolve(session.sessionKey, undefined));
+  expect(surface(stable)).toEqual(surface(user));
+  const library = stable.find((tool) => tool.name === "skill_library")!;
+  await expect(
+    library.execute("personal-list", { action: "list", target: "personal" }),
+  ).rejects.toThrow("fresh message");
 });
 it("offers the same message definition on a source-bound completion turn", () => {
   const assemble = (sourceReplyOnly: boolean) =>

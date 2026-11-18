@@ -56,8 +56,7 @@ function plan(
     ...extra,
   });
 }
-const render = (p: ReturnType<typeof plan>) =>
-  p.render({ defaultGlossary: [], glossary: [], generatedAt: "new-date", workflow: 1 });
+const render = (p: ReturnType<typeof plan>) => p.render({ generatedAt: "new-date", workflow: 1 });
 const records = (text: string): sync.TranslationMemoryEntry[] =>
   text
     .trim()
@@ -182,10 +181,7 @@ it("reuses cached copy and renders deterministic public artifacts", () => {
     },
   );
   expect(p).toMatchObject({ pending: [{ key: "pending" }], newFallbackCount: 1 });
-  const glossary = [{ source: "OpenClaw", target: "OpenClaw" }];
   const result = p.render({
-    defaultGlossary: glossary,
-    glossary: [],
     generatedAt: "new-date",
     workflow: 1,
   });
@@ -198,7 +194,6 @@ it("reuses cached copy and renders deterministic public artifacts", () => {
       translatedKeys: 2,
     }),
   );
-  expect(JSON.parse(result.glossary)).toEqual(glossary);
   expect(records(result.translationMemory)).toEqual([cached, entry("reused", "Shared", "Partage")]);
   expect(result.translationMemory + result.meta).not.toContain("private-");
 });

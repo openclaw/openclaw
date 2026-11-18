@@ -721,7 +721,7 @@ function extractJavaScriptImportSpecifiers(
                 regions.push({ ...previous, end: start });
               }
               const extensionId = /^extensions\/([a-z0-9][a-z0-9-]*)\//u.exec(marker[1] ?? "")?.[1];
-              stack.push({ start: end, extensionId, flat: marker[0].startsWith("// ") });
+              stack.push({ start: end, extensionId, flat: !marker[0].startsWith("//#region ") });
             } else if (text.trim() === "#endregion") {
               const region = stack.pop();
               if (region) {

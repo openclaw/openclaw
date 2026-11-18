@@ -257,16 +257,24 @@ it("keeps settings available after an admitted command rejects", async () => {
       return completion.promise;
     },
   });
-  const send = view.getByRole("button", { name: "Send test" });
+  const send = view.getByRole("button", { name: "Test all browsers" });
+  expect(view.container.textContent).toContain(
+    "Tests include browsers registered by other people on this Gateway.",
+  );
   send.click();
   await waitForSolid(() => expect(send.hasAttribute("disabled")).toBe(true));
   completion.reject(new Error("Example notification service is unavailable."));
   await waitForSolid(() =>
     expect(view.container.textContent).toContain("Example notification service is unavailable."),
   );
+  expect(view.container.textContent).toContain(
+    "Couldn’t complete the notification request. Try again.",
+  );
   expect(view.getByRole("button", { name: "Unsubscribe" })).toBeTruthy();
   expect(view.container.querySelectorAll(".cfg-field__error")).toHaveLength(1);
-  expect(view.getByRole("button", { name: "Send test" }).hasAttribute("disabled")).toBe(false);
+  expect(view.getByRole("button", { name: "Test all browsers" }).hasAttribute("disabled")).toBe(
+    false,
+  );
   expect(view.container.querySelector(".settings-stack")?.hasAttribute("inert")).toBe(false);
   expect(view.container.querySelector('.cfg-field__error[role="alert"]')?.textContent).toContain(
     "Example notification service is unavailable.",
@@ -300,6 +308,22 @@ function renderPreferences(
   });
   return { ...mounted, setTimeZone };
 }
+
+it("describes each agent filter without sharing its description ID", () => {
+  const { container } = renderPreferences();
+  const inputs = [
+    ...container.querySelectorAll<HTMLInputElement>('input[aria-label="Only these agents"]'),
+  ];
+  expect(inputs).toHaveLength(2);
+  const descriptions = inputs.map((input) => input.getAttribute("aria-describedby"));
+  expect(new Set(descriptions).size).toBe(2);
+  for (const id of descriptions) {
+    expect(id).toBeTruthy();
+    expect(container.querySelector(`[id="${id}"]`)?.textContent).toBe(
+      "Enter agent IDs separated by commas. Leave blank for all agents.",
+    );
+  }
+});
 
 it("preserves a saved timezone alias and saves a native selection", () => {
   const onUser = vi.fn();

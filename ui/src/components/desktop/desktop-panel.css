@@ -104,10 +104,6 @@ openclaw-desktop-panel {
   .desktop-touch-toolbar .desktop-audio-label {
     display: none;
   }
-  .desktop-fullscreen-icon > svg {
-    width: 15px;
-    height: 15px;
-  }
   .bp:fullscreen {
     inset: 0;
     width: 100%;

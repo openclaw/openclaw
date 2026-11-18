@@ -8,6 +8,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { DEFAULT_SIDEBAR_ENTRIES } from "../app-navigation.ts";
 import { t } from "../i18n/index.ts";
 import type { RuntimeConfigExternalMutationResult } from "../lib/config/config-gateway-operations.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import type { ApplicationContext } from "./context.ts";
 import { hasOperatorWriteAccess } from "./operator-access.ts";
@@ -183,10 +184,7 @@ export async function writeProfileAppearancePrefs(
     const rejected =
       error instanceof GatewayRequestError &&
       (error.gatewayCode === "INVALID_REQUEST" || error.gatewayCode === "FORBIDDEN");
-    return failure(
-      error instanceof Error ? error.message : String(error),
-      rejected ? "rejected" : "error",
-    );
+    return failure(formatUiError(error), rejected ? "rejected" : "error");
   } finally {
     if (writesTheme) {
       invalidateUserPreferences(client);

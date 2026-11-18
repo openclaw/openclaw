@@ -1,10 +1,20 @@
 import { collectErrorGraphCandidates } from "@openclaw/normalization-core/error-coercion";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { WorkerTaskError } from "@openclaw/worker-runtime";
+import { GatewayProtocolRequestError } from "../../../../packages/gateway-client/src/protocol-request.js";
+import { ErrorCodes } from "../../../../packages/gateway-protocol/src/schema/error-codes.js";
+import { isSessionWorkStartInvalidatedError } from "../../../config/sessions/work-start-error.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveDeliveryNotSentRetryability } from "../../../infra/delivery-recovery.shared.js";
 import { isPlatformMessageRejectedError } from "../../../infra/outbound/deliver-types.js";
+import {
+  findReplaySafeRunAbort,
+  isReplaySafeTranscriptConflict,
+} from "../../embedded-agent-runner/transcript-conflict.js";
+import { isSandboxProvisioningError } from "../../sandbox/provisioning-error.js";
 import { isSessionTranscriptTurnMismatchErrorMessage } from "../../sessions/transcript-turn-error.js";
+import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 
@@ -47,7 +57,22 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /forbidden: bot was kicked/i,
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
+  /Session "[^"]+" is archived\. Restore it before starting new work\./i,
 ];
+
+// The Gateway refused the request itself; resending the same handoff gets the same answer.
+const PERMANENT_GATEWAY_REQUEST_ERROR_CODES: ReadonlySet<string> = new Set([
+  ErrorCodes.INVALID_REQUEST,
+  ErrorCodes.FORBIDDEN,
+]);
+
+function isPermanentGatewayRequestRefusal(candidate: unknown): boolean {
+  return (
+    candidate instanceof GatewayProtocolRequestError &&
+    !candidate.retryable &&
+    PERMANENT_GATEWAY_REQUEST_ERROR_CODES.has(candidate.gatewayCode)
+  );
+}
 
 function hasAnnounceErrorMatch(error: unknown, matches: (candidate: unknown) => boolean): boolean {
   return collectErrorGraphCandidates(error, (candidate) => [
@@ -62,6 +87,7 @@ function hasPermanentAnnounceError(error: unknown): boolean {
     error,
     (candidate) =>
       isPlatformMessageRejectedError(candidate) ||
+      isPermanentGatewayRequestRefusal(candidate) ||
       isSessionTranscriptTurnMismatchErrorMessage(summarizeDeliveryError(candidate)) ||
       PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((pattern) =>
         pattern.test(summarizeDeliveryError(candidate)),
@@ -87,4 +113,69 @@ export function hasAnnounceSendEvidence(error: unknown): boolean {
     const record = asOptionalObjectRecord(candidate);
     return record?.sentBeforeError === true || record?.visibleReplySent === true;
   });
+}
+
+/** Classify once; retryable outcomes belong to the existing bounded delivery owner. */
+export function classifyAnnounceDeliveryError(
+  error: unknown,
+  facts: {
+    path?: "direct" | "none";
+    interruption?: "requester_aborted" | "requester_timed_out";
+    replaySafe?: boolean;
+    beforeAdmission?: boolean;
+    requesterSettle?: boolean;
+  } = {},
+): SubagentAnnounceDeliveryResult {
+  const safeAbort = findReplaySafeRunAbort(error);
+  const transcriptConflict = isReplaySafeTranscriptConflict(error);
+  const stateConflict = hasAnnounceErrorMatch(
+    error,
+    (candidate) => asOptionalObjectRecord(candidate)?.code === "item_conflict",
+  );
+  const reason =
+    facts.interruption ??
+    (safeAbort
+      ? "requester_aborted"
+      : hasAnnounceErrorMatch(error, isSessionWorkStartInvalidatedError)
+        ? "requester_preparation_changed"
+        : hasAnnounceErrorMatch(
+              error,
+              (candidate) => candidate instanceof WorkerTaskError && candidate.code === "timeout",
+            )
+          ? "requester_timed_out"
+          : transcriptConflict
+            ? "requester_transcript_conflict"
+            : stateConflict
+              ? "requester_state_conflict"
+              : undefined);
+  return {
+    delivered: false,
+    path: facts.path ?? "direct",
+    reason,
+    error:
+      error === undefined && facts.interruption
+        ? `completion agent ${facts.interruption === "requester_aborted" ? "was aborted" : "timed out"} before delivering a reply`
+        : summarizeDeliveryError(error),
+    disposition: hasAnnounceSendEvidence(error)
+      ? "ambiguous"
+      : !isPermanentAnnounceDeliveryError(error) &&
+          ((!reason && facts.requesterSettle === false) ||
+            facts.beforeAdmission ||
+            (reason && facts.replaySafe) ||
+            hasAnnounceErrorMatch(
+              error,
+              (candidate) =>
+                candidate instanceof GatewayProtocolRequestError &&
+                (candidate.retryable ||
+                  (facts.requesterSettle === true &&
+                    facts.replaySafe === true &&
+                    candidate.gatewayCode === ErrorCodes.UNAVAILABLE)),
+            ) ||
+            (facts.requesterSettle === true && isSandboxProvisioningError(error)) ||
+            safeAbort ||
+            transcriptConflict ||
+            (!facts.interruption && stateConflict))
+        ? "retryable"
+        : "permanent_failure",
+  };
 }

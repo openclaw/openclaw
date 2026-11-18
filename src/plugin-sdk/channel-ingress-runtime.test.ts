@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createInboundDebouncer } from "../auto-reply/inbound-debounce.js";
 import {
   fanInChannelIngressLifecycles,
   meetsIdentifierAuthentication,
@@ -94,12 +95,56 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
     expect(fanInChannelIngressLifecycles([]).lifecycle).toBeUndefined();
   });
 
+  it("joins failed queue drops through fan-in and debounce", async () => {
+    const gate = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    const error = new Error("drop failed");
+    const onError = vi.fn();
+    const first = { ...createLifecycle(), onDropped: vi.fn().mockRejectedValue(error) };
+    const second = {
+      ...createLifecycle(),
+      onDropped: vi.fn(() => {
+        started.resolve();
+        return gate.promise;
+      }),
+    };
+    const combined = fanInChannelIngressLifecycles([first, second]);
+    const debouncer = createInboundDebouncer({
+      debounceMs: 0,
+      buildKey: () => "room",
+      onError,
+      onFlush: (_items, createFlush) =>
+        createFlush({
+          lifecycle: combined.lifecycle,
+          dispatch: async (lifecycle) => {
+            await lifecycle.onDropped?.("queue-cap-old");
+          },
+        }),
+    });
+
+    const dropping = debouncer.enqueue({ id: "message" });
+    await started.promise;
+    const failuresBeforeSettlement = onError.mock.calls.length;
+    gate.resolve();
+    await dropping;
+    await debouncer.drain();
+    expect(failuresBeforeSettlement).toBe(0);
+    expect(onError.mock.calls).toEqual([[error, [{ id: "message" }]]]);
+    await combined.abandon();
+
+    for (const source of [first, second]) {
+      expect(source.onDropped).toHaveBeenCalledExactlyOnceWith("queue-cap-old");
+      expect(source.onAbandoned).not.toHaveBeenCalled();
+    }
+  });
+
   it("cancellation-settles every source in mixed capable and legacy fan-in", async () => {
-    const modern = createCancellableLifecycle();
+    const modern = { ...createCancellableLifecycle(), onDropped: vi.fn() };
     const legacy = { ...createLifecycle(), onFailed: vi.fn(async () => {}) };
     const combined = fanInChannelIngressLifecycles([modern, legacy]);
 
     expect(combined.lifecycle).not.toHaveProperty("onCancelled");
+    expect(combined.lifecycle).not.toHaveProperty("onDropped");
     await combined.cancel();
 
     expect(modern.onAdopted).not.toHaveBeenCalled();

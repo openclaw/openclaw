@@ -7,9 +7,9 @@ import type {
 import type { QueueMode } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionsPatchResult as ProtocolSessionsPatchResult } from "../../packages/gateway-protocol/src/sessions-patch-result.js";
-import type { StickyModelSelectionTarget } from "../agents/sticky-model-selection.js";
 import type { SessionPreviewItem } from "../config/sessions/session-history-read.types.js";
 import type { SessionEntry, SessionGoal, SessionOrigin } from "../config/sessions/types.js";
+import type { ModelSelectionScope } from "../config/types.agent-defaults.js";
 import type { PluginSessionExtensionProjection } from "../plugins/host-hooks.js";
 import type { FastModeSource } from "../shared/fast-mode.js";
 import type {
@@ -37,7 +37,7 @@ export type GatewaySessionsDefaults = {
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
-  modelSelectionTarget?: StickyModelSelectionTarget;
+  modelSelectionTarget?: ModelSelectionScope;
 };
 
 /**

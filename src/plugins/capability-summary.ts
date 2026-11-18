@@ -190,7 +190,7 @@ export function buildPluginCapabilitySummary(params: {
       hooks: {
         allowPromptInjection: buildHookGrant(
           resolvePromptInjectionAllowed(hooks),
-          hooks?.allowPromptInjection,
+          hooks?.allowPromptModification,
         ),
         allowConversationAccess: buildHookGrant(
           resolveConversationAccessAllowed(params.origin, hooks),

@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import { Session } from "node:inspector/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { transferSkillResources } from "../../src/gateway/worker-environments/skill-resource-transfer.js";
 import type { WorkerWorkspaceTunnelHandle } from "../../src/gateway/worker-environments/tunnel-contract.js";
@@ -32,6 +33,9 @@ const { values } = parseArgs({
     existing: { type: "boolean", default: false },
     functional: { type: "boolean", default: false },
     "gc-log": { type: "string" },
+    "large-catalog": { type: "boolean", default: false },
+    "source-module": { type: "string" },
+    "background-files": { type: "string", default: "0" },
   },
 });
 assert(values["state-dir"]);
@@ -47,11 +51,18 @@ const concurrency = Number(values.concurrency);
 assert(Number.isSafeInteger(operations) && operations > 0);
 assert(Number.isSafeInteger(concurrency) && concurrency > 0 && operations % concurrency === 0);
 const snapshot: SkillSnapshot = { prompt: "", skills: [], resolvedSkills: [] };
+const prepareDelivery: typeof prepareSkillResourceDelivery = values["source-module"]
+  ? (await import(pathToFileURL(path.resolve(values["source-module"])).href))
+      .prepareSkillResourceDelivery
+  : prepareSkillResourceDelivery;
 const fileSizes = new Map<string, number>();
-for (const [index, sizes] of [
-  [14411, ...supportSizes],
-  [38687, 8012],
-].entries()) {
+const trees = values["large-catalog"]
+  ? Array.from({ length: 150 }, () => [14411, 65536])
+  : [
+      [14411, ...supportSizes],
+      [38687, 8012],
+    ];
+for (const [index, sizes] of trees.entries()) {
   const name = `synthetic-${index}`;
   const baseDir = path.join(workspace, "skills", name);
   const filePath = path.join(baseDir, "SKILL.md");
@@ -91,6 +102,16 @@ for (const [index, sizes] of [
     disableModelInvocation: false,
   });
 }
+const backgroundFiles = Number(values["background-files"]);
+assert(Number.isSafeInteger(backgroundFiles) && backgroundFiles >= 0);
+if (!values.existing && backgroundFiles) {
+  const background = path.join(workspace, "project");
+  await fs.mkdir(background, { recursive: true });
+  const bytes = Buffer.alloc(18000, "x");
+  for (let index = 0; index < backgroundFiles; index++) {
+    await fs.writeFile(path.join(background, `${index}.txt`), bytes);
+  }
+}
 const remoteDirectories = await Promise.all(
   Array.from({ length: concurrency }, async (_, index) => {
     const target = path.join(directory, `remote-${index}`);
@@ -106,6 +127,8 @@ if (values["prepare-only"]) {
       directory,
       files: fileSizes.size,
       bytes: [...fileSizes.values()].reduce((a, b) => a + b, 0),
+      backgroundFiles,
+      backgroundBytes: backgroundFiles * 18000,
     }),
   );
   process.exit(0);
@@ -137,6 +160,7 @@ const tunnel: Pick<WorkerWorkspaceTunnelHandle, "runWorkspaceCommand"> = {
 type Delivery = Awaited<ReturnType<typeof prepareSkillResourceDelivery>>;
 type Transfer = Awaited<ReturnType<typeof transferSkillResources>>;
 let retained: Array<Delivery | Transfer> = [];
+let deliveryFailures = 0;
 async function batch() {
   for (const item of retained) {
     if (item && "cleanup" in item) {
@@ -154,7 +178,19 @@ async function batch() {
           assertCurrent: () => {},
         });
       }
-      return prepareSkillResourceDelivery(snapshot, () => {}, [], workspace);
+      try {
+        return await prepareDelivery(snapshot, () => {}, [], workspace);
+      } catch (error) {
+        if (
+          !values["large-catalog"] ||
+          !(error instanceof Error) ||
+          error.name !== "SkillResourceDeliveryLimitError"
+        ) {
+          throw error;
+        }
+        deliveryFailures++;
+        return undefined;
+      }
     }),
   );
 }
@@ -165,6 +201,7 @@ for (const item of retained) {
   }
 }
 retained = [];
+deliveryFailures = 0;
 if (values["gc-log"]) {
   writeGatewayGcTraceMarker("identify-start", profilePath);
 }
@@ -297,7 +334,9 @@ let payloadCharacters = 0,
   instructionBytes = 0,
   supportBytesConsumed = 0;
 for (const item of retained) {
-  assert(item);
+  if (!item) {
+    continue;
+  }
   if ("skills" in item) {
     payloadCharacters += item.skills.reduce(
       (sum, skill) => sum + skill.files.reduce((n, file) => n + file.content.length, 0),
@@ -320,6 +359,8 @@ console.log(
     content: values.content,
     operations,
     concurrency,
+    deliveryFailures,
+    backgroundFiles,
     reads,
     readBytes,
     callsPerTurn: 1,

@@ -5,7 +5,6 @@ import {
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { createMediaProviderLookup } from "../media-generation/provider-registry.js";
 import {
   getVideoGenerationProvider,
   listVideoGenerationProviders,
@@ -15,6 +14,7 @@ import {
   runMediaGenerationCandidates,
 } from "../media-generation/runtime-shared.js";
 import { withAcquiredPluginCapabilityProviders } from "../plugins/capability-provider-acquisition.js";
+import { createCapabilityProviderLookup } from "../plugins/provider-registry-shared.js";
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import {
@@ -112,7 +112,7 @@ export async function generateVideo(
   return withAcquiredPluginCapabilityProviders(
     { key: "videoGenerationProviders", cfg: params.cfg },
     (providers) => {
-      const lookup = createMediaProviderLookup(providers);
+      const lookup = createCapabilityProviderLookup(providers);
       return runVideoGeneration(params, {
         ...deps,
         getProvider: deps.getProvider ?? lookup.getProvider,

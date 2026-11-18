@@ -4,17 +4,61 @@ import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { splitNullBuffer } from "../../agents/worktrees/git-path-inventory.js";
 import { requireGitBuffer } from "../../agents/worktrees/git.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
-import type { LocalWorkspaceManifestRecord } from "./local-workspace-manifest-tree.js";
 import type {
+  LocalWorkspaceManifestRecord,
+  LocalWorkspaceManifestNode,
+} from "./local-workspace-manifest-tree.js";
+import type { LocalWorkspaceStore } from "./local-workspace-store.js";
+import type {
+  LocalWorkspaceManifestAction,
+  LocalWorkspacePreparedUpdate,
   LocalWorkspaceManifestValue,
   LocalWorkspaceProjection,
 } from "./local-workspace-store.types.js";
 import {
   serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
+  type WorkspaceManifestPathPolicy,
 } from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
+
+export function createLocalWorkspaceManifestReader(params: {
+  store: LocalWorkspaceStore;
+  current: () => LocalWorkspaceProjection;
+  canonicalRoot: string;
+  accept: (update: LocalWorkspacePreparedUpdate) => Promise<void>;
+}) {
+  const repair = async () => {
+    const replacement = await params.store.manifest(params.current(), {
+      kind: "repair",
+      canonicalRoot: params.canonicalRoot,
+    });
+    if (replacement.kind !== "replace") {
+      throw new Error("Local workspace baseline repair is missing");
+    }
+    await params.accept(replacement.update);
+  };
+  return {
+    repair,
+    read: async (action: LocalWorkspaceManifestAction) => {
+      try {
+        return await params.store.manifest(params.current(), action);
+      } catch (error) {
+        if (
+          !(error instanceof Error) ||
+          !error.message.includes("Local workspace baseline nodes are missing")
+        ) {
+          throw error;
+        }
+        // Repair older missing packs only from a verified baseline or checkpoint;
+        // divergent files must never replace the merge base.
+        await repair();
+        return await params.store.manifest(params.current(), action);
+      }
+    },
+  };
+}
 
 function decodeLocalWorkspaceGitPaths(listed: Buffer): string[] {
   if (!isUtf8(listed)) {
@@ -31,6 +75,25 @@ export function parseLocalWorkspaceSourcePaths(value: string): string[] {
     throw new Error("Invalid local workspace source admission");
   }
   return paths;
+}
+
+/** Read guest ignore files with the host's index/config, never guest Git metadata. */
+export async function readLocalWorkspaceGitExclusions(
+  root: string,
+  projection: string,
+  retainedPaths: ReadonlySet<string>,
+) {
+  const listed = await requireGitBuffer(root, [
+    `--work-tree=${projection}`,
+    "ls-files",
+    "--full-name",
+    "--others",
+    "--ignored",
+    "--exclude-standard",
+    "--directory",
+    "-z",
+  ]);
+  return { paths: new Set(decodeLocalWorkspaceGitPaths(listed)), retainedPaths };
 }
 
 /** Admit untracked source once, before any guest can change canonical ignore rules. */
@@ -51,7 +114,7 @@ export async function admitLocalWorkspaceSourcePaths(params: {
 /** Ignore changes are source edits, not authority to enroll canonical-only bytes. */
 export async function selectLocalWorkspaceCanonicalPaths(params: {
   root: string;
-  admittedPaths: string;
+  admittedPaths?: readonly string[];
   // Reuse authoritative host inputs read earlier in this operation.
   preparedPaths?: ReadonlySet<string>;
   baselinePaths?: ReadonlySet<string>;
@@ -71,8 +134,10 @@ export async function selectLocalWorkspaceCanonicalPaths(params: {
     params.assertCurrent();
     // Only the host owns this index; the guest has independent Git metadata. A
     // host can deliberately admit a new path with git add, even if it is ignored.
-    const admitted = parseLocalWorkspaceSourcePaths(params.admittedPaths);
-    paths = new Set<string>([...admitted, ...decodeLocalWorkspaceGitPaths(listed)]);
+    paths = new Set(params.admittedPaths);
+    for (const entryPath of decodeLocalWorkspaceGitPaths(listed)) {
+      paths.add(entryPath);
+    }
   }
   if (params.baselinePaths) {
     for (const entryPath of params.baselinePaths) {
@@ -103,7 +168,7 @@ export async function prepareLocalWorkspaceBuildInputs(params: {
     worktree.removedAt === undefined
       ? await selectLocalWorkspaceCanonicalPaths({
           root: worktree.path,
-          admittedPaths: projection.source_paths_json,
+          admittedPaths: admitted,
           signal,
           assertCurrent,
         })
@@ -123,11 +188,18 @@ export async function prepareLocalWorkspaceBuildInputs(params: {
       paths.add(entryPath);
     }
   }
-  const known = new Set(admitted);
-  const added = [...retained].filter((entryPath) => !known.has(entryPath));
   // Keep acquired input custody when later recovery no longer has the checkout or archive.
-  if (added.length) {
-    await params.retainSourcePaths(JSON.stringify([...admitted, ...added]));
+  if (retained.size) {
+    const admittedCount = admitted.length;
+    const known = new Set(admitted);
+    for (const entryPath of retained) {
+      if (!known.has(entryPath)) {
+        admitted.push(entryPath);
+      }
+    }
+    if (admitted.length > admittedCount) {
+      await params.retainSourcePaths(JSON.stringify(admitted));
+    }
   }
   return {
     paths,
@@ -183,8 +255,34 @@ async function selectArchiveManifest(params: ArchiveBaselineInput) {
   };
 }
 
-function archiveDocument(manifest: WorkerWorkspaceManifest) {
-  const rawManifest = serializeWorkerWorkspaceManifest(manifest);
+export function localWorkspaceManifestDocument(
+  nodes: Iterable<LocalWorkspaceManifestNode>,
+  baseCommit: string,
+  retained?: string[],
+  pathPolicy: WorkspaceManifestPathPolicy = "current",
+) {
+  const manifest: WorkerWorkspaceManifest = {
+    version: 1,
+    baseCommit,
+    entries: [],
+    directories: [],
+    ...(retained ? { buildCacheInputs: retained } : {}),
+  };
+  for (const node of nodes) {
+    if (node.type === "directory") {
+      manifest.directories!.push(node.path);
+    } else {
+      manifest.entries.push(node);
+    }
+  }
+  return archiveDocument(manifest, pathPolicy);
+}
+
+function archiveDocument(
+  manifest: WorkerWorkspaceManifest,
+  pathPolicy: WorkspaceManifestPathPolicy = "current",
+) {
+  const rawManifest = serializeWorkerWorkspaceManifest(manifest, pathPolicy);
   return {
     rawManifest,
     manifestRef: "sha256:" + createHash("sha256").update(rawManifest).digest("hex"),

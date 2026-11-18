@@ -68,6 +68,12 @@ export type ModelCatalogSnapshot = {
   nativeHostRows?: Readonly<Record<string, readonly ModelCatalogEntry[]>>;
   /** The current acquisition failed while this published inventory remained available. */
   refreshFailed?: boolean;
+  /** Failed discovery scopes, never errors, credentials, endpoints, or account/profile ids. */
+  refreshFailures?: readonly {
+    acquisition: "provider" | "native";
+    /** Omitted when the failed acquisition could not identify its provider scope. */
+    provider?: string;
+  }[];
   /** Provider discovery is in progress; existing rows remain usable. */
   pendingProviders?: readonly string[];
   /** Static provider-hook rows captured alongside the full lifecycle generation. */

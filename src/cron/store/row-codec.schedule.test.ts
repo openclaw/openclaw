@@ -70,3 +70,11 @@ it("round-trips a paced stream without aliasing input config or runtime state", 
   triggerState.items.push("second");
   expect(projected.state.triggerState).toStrictEqual(before.state.triggerState);
 });
+
+it("quarantines malformed native process authority rather than dropping its private fence", () => {
+  const native = {
+    ...makeCronJob({ schedule: structuredClone(stream) }),
+    streamOperatorSource: {},
+  };
+  expect(decode(native)).toBeNull();
+});

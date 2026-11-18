@@ -117,6 +117,8 @@ on the same branch within 24 hours and the complete input diff is unchanged.
 Skipped jobs cannot advance the comparison base. Missing proof, incomplete
 diffs, or API errors request fresh validation. Each decision reports its reason.
 Both workflows retain their PR scopes and refresh proof daily for dependency drift.
+Plugin Init Scaffold Validation uses GitHub-hosted Ubuntu 24.04 independently of
+restricted Boat admission.
 
 Sandbox Common Smoke runs daily at 05:23 UTC and retains PR and manual runs.
 Plugin NPM Release runs its nonpublishing metadata and unpublished-package pack
@@ -479,7 +481,7 @@ QA Lab has dedicated CI lanes outside the main smart-scoped workflow. Agentic pa
 
 - The `QA-Lab - All Lanes` workflow runs nightly on `main` and on manual dispatch; it fans out mock parity plus live Matrix, Telegram, Discord, WhatsApp, and Slack jobs. Live jobs use the `qa-live-shared` environment; Telegram, Discord, WhatsApp, and Slack use Convex leases, while Matrix provisions disposable local credentials.
 - Manual and scheduled aggregate runs retain the default `all` concurrency scope. Trusted release calls use separate `matrix` and `buzz` scopes so those lanes can run together for one target SHA; Matrix calls for the same SHA still serialize, while Buzz calls serialize across SHAs because they share pooled credentials.
-- Release Matrix catalog validation runs on a 16-vCPU Blacksmith runner with a 90-minute job budget. Changes to that timeout, runner size, or concurrency require a matching workflow guard and exact-candidate release proof.
+- Release Matrix catalog validation uses GitHub-hosted Ubuntu in `github` and `boat` modes and the 4-vCPU Blacksmith class otherwise, with a 90-minute job budget. Changes to that timeout, runner size, or concurrency require a matching workflow guard and exact-candidate release proof.
 - `QA Profile Evidence` balances taxonomy category groups across eight isolated jobs, keeps non-isolating live channels on one shard, then asks QA Lab to merge their validated evidence into one attested `qa-evidence.json`. A timed-out or missing shard always fails aggregation; `allow_failures` applies only when every shard completed and produced valid evidence. Direct `Maturity scorecard` dispatches default `allow_failures` on so incomplete evidence can still render a diagnostic docs artifact. A terminal result gate runs after optional generated-PR publication and fails the run when any scenario failed or remained blocked; reusable release calls remain strict by default.
 
 Scheduled, manual, and release Matrix checks use the fixed-response mock provider so the live transport contract is isolated from model latency and normal provider-plugin startup. Telegram release checks use the same fixed-response model setup. The live transport gateway disables memory search because QA parity covers memory behavior separately; provider connectivity is covered by the separate live model, native provider, and Docker provider suites.
@@ -487,6 +489,10 @@ Scheduled, manual, and release Matrix checks use the fixed-response mock provide
 `OpenClaw Release Checks` also runs the release-critical QA Lab lanes before release approval; its QA parity gate runs the candidate and baseline packs as parallel lane jobs, then downloads both artifacts into a small report job for the final parity comparison.
 
 For normal PRs, follow scoped CI/check evidence instead of treating parity as a required status.
+
+## OpenGrep
+
+OpenGrep PR-diff and manual full scans run on GitHub-hosted Ubuntu 24.04.
 
 ## CodeQL
 
@@ -712,6 +718,7 @@ Treat GitHub titles, comments, bodies, review text, branch names, and commit mes
 ### Barnacle inactivity lifecycle
 
 The `Stale` workflow runs at 03:17, 09:17, 15:17 and 21:17 UTC.
+It uses GitHub-hosted Ubuntu so scheduled runs do not depend on restricted Boat admission.
 `scripts/github/stale-lifecycle.mjs` owns issues and PRs, including manual backfills.
 It replaces the old issue action, separate bug marker, inline backfill and global
 48-hour closed-issue locker.

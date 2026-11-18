@@ -64,6 +64,7 @@ import {
   type PluginUpdateOutcome,
 } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { VERSION } from "../version.js";
 import { formatCliCommand } from "./command-format.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
@@ -515,6 +516,7 @@ async function runPluginUpdateCommandUnlocked(
                 logger,
                 onIntegrityDrift: (drift) =>
                   confirmUpdateIntegrityDrift(`"${drift.pluginId}"`, drift),
+                signal: getAsyncWorkSignal(),
               },
               deferredInstallTransactions,
               assertOwned,
@@ -558,6 +560,7 @@ async function runPluginUpdateCommandUnlocked(
                 logger,
                 onIntegrityDrift: (drift) =>
                   confirmUpdateIntegrityDrift(`hook pack "${drift.hookId}"`, drift),
+                signal: getAsyncWorkSignal(),
               },
               deferredInstallTransactions,
               assertOwned,

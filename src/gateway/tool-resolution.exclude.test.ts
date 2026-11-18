@@ -43,7 +43,7 @@ vi.mock("../agents/openclaw-tools.js", () => ({
 }));
 
 // mock-isolation: Filter synthetic mediated tools without filesystem or exec initialization.
-vi.mock("../agents/agent-tools.js", () => ({
+vi.mock("../agents/agent-tools.async.js", () => ({
   createOpenClawCodingToolsInternalAsync: async (...args: Parameters<typeof codingTools>) =>
     codingTools(...args),
 }));
@@ -52,7 +52,8 @@ vi.mock("../channels/plugins/index.js", () => ({
   getLoadedChannelPlugin: getChannelPlugin,
 }));
 
-vi.mock("../agents/lazy-exec-tool.js", () => ({
+vi.mock("../agents/lazy-exec-tool.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/lazy-exec-tool.js")>()),
   createLazyExecTool: createExec,
   resolveExecToolConfig: vi.fn(() => ({})),
 }));

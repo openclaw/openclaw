@@ -9,7 +9,8 @@ import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
 import { wasCodexAppServerThreadClosed } from "./client-thread-closure.js";
 import { CodexAppServerClient } from "./client.js";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
-import { isJsonObject } from "./protocol.js";
+import { assertCodexThreadStartResponse } from "./protocol-validators.js";
+import { isJsonObject, type JsonObject } from "./protocol.js";
 import { createCodexAppServerBindingStore } from "./session-binding.js";
 import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
 import {
@@ -33,6 +34,8 @@ import {
   runNativeTurn,
   sendNativeResponse,
 } from "./thread-native.test-support.js";
+import { retainCodexAppServerBindingSubscription } from "./thread-ownership.js";
+import { buildCodexThreadConfiguration } from "./thread-requests.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 vi.unmock("node:child_process");
@@ -58,14 +61,20 @@ it(
     vi.stubEnv("HOME", native.env.HOME);
     vi.stubEnv("CODEX_HOME", native.codexHome);
     let providerRequests = 0;
+    const captures: JsonObject[] = [];
     const port = await listenForNativeResponses(context, (request, response) => {
-      request.resume();
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk: string) => {
+        body += chunk;
+      });
       request.on("end", () => {
         if (request.method !== "POST" || request.url !== "/v1/responses") {
           response.writeHead(404).end();
           return;
         }
         providerRequests += 1;
+        captures.push(JSON.parse(body));
         sendNativeResponse(response, "handoff-response-" + providerRequests, {
           type: "message",
           role: "assistant",
@@ -119,11 +128,35 @@ it(
         userMcpServersEnabled: false,
         signal: AbortSignal.timeout(20_000),
       };
-      const target = await startOrResumeThread({ ...common, client: old });
+      // The specialized cron path retains native rendering, reproducing a legacy
+      // Plan-bearing thread before the ordinary managed continuation takes over.
+      const target = await startOrResumeThread({
+        ...common,
+        params: { ...params, trigger: "cron" },
+        client: old,
+      });
+      const modeSettings = {
+        model: params.modelId,
+        reasoning_effort: null,
+        developer_instructions: null,
+      };
       await expect(
-        runNativeTurn(old, target.threadId, "Start this conversation."),
+        runNativeTurn(old, target.threadId, "Start this conversation.", {
+          collaborationMode: { mode: "plan", settings: modeSettings },
+        }),
       ).resolves.toMatchObject({ status: "completed" });
-      const sibling = await old.request("thread/start", {});
+      const planHeading = "# Plan Mode (Conversational)";
+      expect(JSON.stringify(captures[0]?.input)).toContain(planHeading);
+      const sibling = assertCodexThreadStartResponse(
+        await old.request(
+          "thread/start",
+          buildCodexThreadConfiguration(params, {
+            appServer,
+            developerInstructions: "Native supervision proof",
+            preserveNativeCollaboration: true,
+          }),
+        ),
+      );
       const closed = createDeferred<void>();
       const stopWatching = old.addNotificationHandler((notification) => {
         if (
@@ -157,9 +190,22 @@ it(
         lifecycle: { action: "resumed" },
       });
       await expect(
-        runNativeTurn(successor, resumed.threadId, "Continue after reload."),
+        runNativeTurn(successor, resumed.threadId, "Continue after reload.", {
+          collaborationMode: { mode: "default", settings: modeSettings },
+        }),
       ).resolves.toMatchObject({ status: "completed" });
       expect(old.getCloseError()).toBeUndefined();
+
+      const resumedInput = JSON.stringify(captures[1]?.input);
+      expect(resumedInput).toContain(planHeading);
+      const handoff = "All earlier collaboration-mode instructions are withdrawn";
+      expect(resumedInput.lastIndexOf(handoff)).toBeGreaterThan(
+        resumedInput.lastIndexOf(planHeading),
+      );
+      expect(resumedInput.slice(resumedInput.lastIndexOf(handoff))).not.toContain(
+        "request_user_input",
+      );
+      expect(resumedInput).not.toContain("# Collaboration Mode: Default");
 
       // A real loaded sibling must not become eligible merely because the process retired.
       const readCompleted = createDeferred<void>();
@@ -187,7 +233,9 @@ it(
       try {
         await racePromiseWithAbortSignal(readCompleted.promise, common.signal);
         await expect(
-          runNativeTurn(old, sibling.thread.id, "Keep the sibling usable while handoff waits."),
+          runNativeTurn(old, sibling.thread.id, "Keep the sibling usable while handoff waits.", {
+            collaborationMode: { mode: "default", settings: modeSettings },
+          }),
         ).resolves.toMatchObject({ status: "completed" });
         expect(settled).toBe(false);
         const cancelled = new Error("Stop only the waiting handoff");
@@ -195,6 +243,7 @@ it(
         await expect(fenced).rejects.toBe(cancelled);
         expect(old.getCloseError()).toBeUndefined();
         expect(providerRequests).toBe(3);
+        expect(JSON.stringify(captures[2]?.input)).toContain("# Collaboration Mode: Default");
       } finally {
         stop.abort();
         await Promise.allSettled([fenced]);
@@ -205,6 +254,109 @@ it(
       expect(await successor.closeAndWait()).toMatchObject({ exited: true });
       shared.liveClients.delete(old);
       shared.entriesByClient.delete(old);
+    }
+  },
+);
+
+it(
+  "takes the writer from a live previous owner before resuming on another client",
+  { timeout: 30_000 },
+  async (context) => {
+    const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+      context.onTestFinished(async () => {
+        await closeOpenClawStateDatabaseAsync();
+        cleanup();
+      }),
+    );
+    const root = await fs.realpath(tempDirs.make("codex-handoff-live-owner-"));
+    const native = await createCodexNativeTestState(root);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    vi.stubEnv("HOME", native.env.HOME);
+    vi.stubEnv("CODEX_HOME", native.codexHome);
+    let providerRequests = 0;
+    const port = await listenForNativeResponses(context, (request, response) => {
+      request.resume();
+      request.on("end", () => {
+        if (request.method !== "POST" || request.url !== "/v1/responses") {
+          response.writeHead(404).end();
+          return;
+        }
+        providerRequests += 1;
+        sendNativeResponse(response, "live-owner-response-" + providerRequests, {
+          type: "message",
+          role: "assistant",
+          id: "live-owner-answer-" + providerRequests,
+          content: [{ type: "output_text", text: "NATIVE_HANDOFF_OK" }],
+        });
+      });
+    });
+    await fs.writeFile(
+      path.join(native.codexHome, "config.toml"),
+      nativeProviderConfig(
+        "handoff-proof",
+        port,
+        ['sandbox_mode="read-only"', "allow_login_shell=false", "thread_unload_delay_secs=0"],
+        ["shell_snapshot=false"],
+      ),
+    );
+    const appServer = { ...nativeAppServerOptions(native), sandbox: "read-only" as const };
+    const owner = await CodexAppServerClient.start(appServer.start);
+    await owner.initialize();
+    ensureCodexAppServerClientRuntime(owner, { agentDir: path.join(root, "agent") });
+    // A command connection that attached the thread stays live and keeps its subscription.
+    const shared = getSharedCodexAppServerClientState();
+    const entry = getOrCreateSharedClientEntry(shared, "native-live-owner");
+    entry.client = owner;
+    shared.liveClients.add(owner);
+    shared.entriesByClient.set(owner, entry);
+    const releaseOwner = retainSharedClientEntry(entry);
+    const successor = await createIsolatedCodexAppServerClient({
+      startOptions: appServer.start,
+      agentDir: path.join(root, "agent"),
+      authProfileId: null,
+      config: {},
+      timeoutMs: 10_000,
+    });
+    try {
+      const params = {
+        ...createParams(path.join(root, "session.jsonl"), native.cwd),
+        agentId: "main",
+        agentDir: path.join(root, "agent"),
+        modelId: "gpt-5.6-luna",
+        disableTools: false,
+      };
+      const common = {
+        bindingStore: createCodexAppServerBindingStore(createCodexTestBindingStateStore()),
+        params,
+        cwd: native.cwd,
+        dynamicTools: [],
+        appServer,
+        userMcpServersEnabled: false,
+        signal: AbortSignal.timeout(20_000),
+      };
+      const target = await startOrResumeThread({ ...common, client: owner });
+      await expect(
+        runNativeTurn(owner, target.threadId, "Start this conversation."),
+      ).resolves.toMatchObject({ status: "completed" });
+      // The finished turn hands its claim to the owner's warm retention, as `/codex resume` does.
+      await expect(
+        retainCodexAppServerBindingSubscription(owner, target.threadId, target.liveThreadOwnership),
+      ).resolves.toBe(true);
+      const resumed = await startOrResumeThread({ ...common, client: successor });
+      expect(resumed).toMatchObject({
+        threadId: target.threadId,
+        lifecycle: { action: "resumed" },
+      });
+      await expect(
+        runNativeTurn(successor, resumed.threadId, "Continue on the turn connection."),
+      ).resolves.toMatchObject({ status: "completed" });
+      expect(owner.getCloseError()).toBeUndefined();
+    } finally {
+      releaseOwner();
+      shared.liveClients.delete(owner);
+      shared.entriesByClient.delete(owner);
+      await owner.closeAndWait();
+      await successor.closeAndWait();
     }
   },
 );

@@ -12,6 +12,43 @@ const PROGRAMMING_MESSAGE = "Cannot read properties of undefined (reading 'map')
 
 describe("formatUiError", () => {
   it.each([
+    ["operator.read", "read access"],
+    ["operator.write", "write access"],
+    ["operator.admin", "admin access"],
+    ["operator.future", "the required access"],
+  ])("describes the required access without exposing the scope: %s", (scope, access) => {
+    const error = new GatewayProtocolRequestError({
+      code: "FORBIDDEN",
+      message: "permission denied",
+      details: { code: "MISSING_SCOPE", missingScope: scope, requiredScopes: [scope] },
+    });
+    expect(formatUiError(error)).toBe(
+      `Couldn’t complete this request. Ask an admin to grant ${access}.`,
+    );
+  });
+
+  it("keeps permission guidance when a denial only has the legacy message", () => {
+    const error = new GatewayProtocolRequestError({
+      code: "INVALID_REQUEST",
+      message: "missing scope: operator.write",
+    });
+
+    expect(formatUiError(error)).toBe(
+      "Couldn’t complete this request. Ask an admin to grant write access.",
+    );
+  });
+
+  it("does not turn malformed permission details into access guidance", () => {
+    const error = new GatewayProtocolRequestError({
+      code: "FORBIDDEN",
+      message: "permission denied",
+      details: { code: "MISSING_SCOPE", missingScope: "operator.read", requiredScopes: [] },
+    });
+
+    expect(formatUiError(error)).toBe("permission denied");
+  });
+
+  it.each([
     ["Camera access is blocked.", "Camera access is blocked."],
     ["OPENAI_API_KEY=sk-1234567890abcdef", "OPENAI_API_KEY=sk-123...cdef"],
   ])("keeps an explicit UI message separate from its diagnostic cause: %s", (message, expected) => {

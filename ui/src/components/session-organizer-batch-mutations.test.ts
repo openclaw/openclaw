@@ -25,6 +25,7 @@ import { sessionMenuReasons } from "./session-menu-access.ts";
 import type { SessionMenuAction } from "./session-menu-solid.tsx";
 import {
   createHarness as createBaseHarness,
+  endArchiveUndoWindow,
   sessionRow,
   sessionTarget,
 } from "./session-organizer-batch-mutations.test-support.ts";
@@ -218,7 +219,7 @@ describe("patchSessionRows", () => {
     await expect(h.patchRows(rows, { archived: false })).resolves.toBeNull();
 
     expect(h.request).not.toHaveBeenCalled();
-    expectError(h, "Session lifecycle action requires a durable session identity.");
+    expectError(h, "This action needs a saved session.");
   });
 
   it("dispatches 101 rows as ordered protocol-sized chunks and refreshes once", async () => {
@@ -457,6 +458,7 @@ function cloudWorkerRow(hasActiveRun: boolean): SidebarRecentSession {
       method: "sessions.reclaim",
       requiredScope: "operator.write",
       blocksActiveRun: true,
+      copyKey: "sessionsView.stopCloudWorker",
     },
   });
 }
@@ -514,8 +516,52 @@ describe("session organizer destructive confirmations", () => {
     response.resolve({ deleted: true, worktreePreserved: preservedWorktree("busy", "wt-busy") });
     await pending;
     expect(showToast).toHaveBeenCalledWith({
-      message: "Managed Worktrees:\nfeature — live run or cleanup active",
+      severity: undefined,
+      message: "Managed worktrees:\nfeature — live run or cleanup active",
     });
+  });
+
+  it.each([
+    {
+      name: "regular session",
+      rows: [sessionRow(0)],
+      text: "keeps an archived copy of its chat history",
+    },
+    {
+      name: "incognito flag",
+      rows: [sessionRow(0, { incognito: true })],
+      text: "without an archive",
+    },
+    {
+      name: "incognito key",
+      rows: [sessionRow(0, { key: "agent:main:dashboard:incognito-private" })],
+      text: "without an archive",
+    },
+    {
+      name: "incognito selection",
+      rows: [sessionRow(0, { incognito: true }), sessionRow(1, { incognito: true })],
+      text: "their chat history without an archive",
+    },
+    {
+      name: "mixed selection",
+      rows: [sessionRow(0), sessionRow(1, { incognito: true })],
+      text: "Regular chat history is archived; incognito chat history is deleted without an archive",
+    },
+  ])("explains transcript retention for $name before deletion", async ({ rows, text }) => {
+    const h = createHarness(destructiveHarness);
+    const pending =
+      rows.length === 1
+        ? deleteSession(h.host, rows[0]!, h.scope)
+        : deleteSessionsBatch(h.host, rows, h.scope);
+    const actions = await waitForConfirmDialogActions();
+    const message = document.body.querySelector("openclaw-modal-dialog")?.textContent;
+    expect.soft(message).toContain(text);
+    expect(h.deleteOne).not.toHaveBeenCalled();
+    expect(h.deleteMany).not.toHaveBeenCalled();
+    answerConfirmDialog(actions, "cancel");
+    await pending;
+    expect(h.deleteOne).not.toHaveBeenCalled();
+    expect(h.deleteMany).not.toHaveBeenCalled();
   });
 
   it("renders the localized batch-delete copy in-app and deletes once accepted", async () => {
@@ -534,7 +580,7 @@ describe("session organizer destructive confirmations", () => {
     const pending = deleteSessionsBatch(h.host, rows, h.scope);
     const actions = await waitForConfirmDialogActions();
     expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-      "Delete 2 sessions and their transcripts?",
+      "Delete 2 sessions?This deletes the session entries but keeps archived copies of their chat history.",
     );
     answerConfirmDialog(actions, "confirm");
     await pending;
@@ -549,7 +595,7 @@ describe("session organizer destructive confirmations", () => {
     );
     expectError(h, retryError);
     expect(alertSpy).toHaveBeenCalledWith(
-      "Managed Worktrees:\nopenclaw/busy — live run or cleanup active",
+      "Managed worktrees:\nopenclaw/busy — live run or cleanup active",
     );
     alertSpy.mockRestore();
   });
@@ -598,11 +644,12 @@ describe("session organizer destructive confirmations", () => {
 
     expectNoCalls(h.request, h.replaceCurrentSession);
     expect(showToast).toHaveBeenCalledWith({
-      message: "Managed Worktrees:\nfeature — cleanup failed",
+      severity: undefined,
+      message: "Managed worktrees:\nfeature — cleanup failed",
     });
   });
 
-  it.each(["snapshot failure", "request rejection"] as const)(
+  it.each(["snapshot failure", "preserved refusal", "request rejection"] as const)(
     "surfaces one forced worktree removal %s after confirmed session deletion",
     async (failure) => {
       const h = worktreeHarness("snapshot-failed");
@@ -611,6 +658,16 @@ describe("session organizer destructive confirmations", () => {
         h.request.mockResolvedValueOnce({
           removed: true,
           snapshotError: "nested gitlink",
+        } as never);
+      } else if (failure === "preserved refusal") {
+        h.request.mockResolvedValueOnce({
+          removed: false,
+          preserved: {
+            state: "preserved",
+            reason: "nested gitlink",
+            attempts: 1,
+            nextAttemptAt: null,
+          },
         } as never);
       } else {
         h.request.mockRejectedValueOnce(rejection);
@@ -625,9 +682,13 @@ describe("session organizer destructive confirmations", () => {
       answerConfirmDialog(worktreeActions, "confirm");
       await pending;
 
-      expect(h.request).toHaveBeenCalledWith("worktrees.remove", { id: "wt-1", force: true });
+      expect(h.request).toHaveBeenCalledWith("worktrees.remove", {
+        id: "wt-1",
+        force: true,
+        retryPreserved: true,
+      });
       expect(h.publishSessionMutationError).toHaveBeenCalledOnce();
-      expectError(h, failure === "snapshot failure" ? "nested gitlink" : rejection);
+      expectError(h, failure === "request rejection" ? rejection : "nested gitlink");
     },
   );
 
@@ -661,32 +722,48 @@ describe("session organizer destructive confirmations", () => {
     });
   });
 
-  it("warns about bound automations even after the delete confirmation opt-out", async () => {
-    patchSettings({ sessionDeleteConfirm: false });
-    const info = vi.spyOn(console, "info").mockImplementation(() => {});
-    const h = createHarness(destructiveHarness);
-    const original = h.request.getMockImplementation()!;
-    h.request.mockImplementation(async (method, params, options) =>
-      method === "cron.list"
-        ? { jobs: [{ id: "job-1", name: "Nightly digest" }], total: 1 }
-        : original(method, params, options),
-    );
-    const row = makeRow(0, { hasAutomation: true });
-    const pending = h.remove(row, { offerSkip: true });
-    const actions = await waitForConfirmDialogActions();
-    expect(document.body.textContent).toContain('Deleting "Batch 0" pauses its automations.');
-    expect(document.body.textContent).toContain("Nightly digest (job-1)");
-    expect(document.body.querySelector(".exec-approval-skip")).toBeNull();
-    expect(actions.textContent).toContain("Delete anyway");
-    answerConfirmDialog(actions, "cancel");
-    await pending;
-    expect(h.deleteOne).not.toHaveBeenCalled();
-    expect(info.mock.calls.map(([message]) => message)).toEqual([
-      "[session-automation-confirm] delete shown",
-      "[session-automation-confirm] delete cancelled",
-    ]);
-    info.mockRestore();
-  });
+  it.each([1, 2])(
+    "warns that automations can continue after deleting %i conversations",
+    async (count) => {
+      patchSettings({ sessionDeleteConfirm: false });
+      const info = vi.spyOn(console, "info").mockImplementation(() => {});
+      const h = createHarness(destructiveHarness);
+      const original = h.request.getMockImplementation()!;
+      h.request.mockImplementation(async (method, params, options) =>
+        method === "cron.list"
+          ? { jobs: [{ id: "job-1", name: "Nightly digest" }], total: 1 }
+          : original(method, params, options),
+      );
+      const rows = Array.from({ length: count }, (_, index) =>
+        makeRow(index, { hasAutomation: true }),
+      );
+      const pending =
+        count === 1
+          ? h.remove(rows[0]!, { offerSkip: true })
+          : deleteSessionsBatch(h.host, rows, h.scope);
+      const actions = await waitForConfirmDialogActions();
+      expect
+        .soft(document.body.textContent)
+        .toContain(
+          count === 1
+            ? 'Automations linked to "Batch 0" may keep running after deletion.'
+            : "Automations linked to 2 of these conversations may keep running after deletion.",
+        );
+      expect.soft(document.body.textContent).toContain("Disable or remove them separately.");
+      expect(document.body.textContent).toContain("Nightly digest (job-1)");
+      expect(document.body.querySelector(".exec-approval-skip")).toBeNull();
+      expect(actions.textContent).toContain("Delete anyway");
+      answerConfirmDialog(actions, "cancel");
+      await pending;
+      expect(h.deleteOne).not.toHaveBeenCalled();
+      expect(h.deleteMany).not.toHaveBeenCalled();
+      expect(info.mock.calls.map(([message]) => message)).toEqual([
+        "[session-automation-confirm] delete shown",
+        "[session-automation-confirm] delete cancelled",
+      ]);
+      info.mockRestore();
+    },
+  );
 
   it.each(["cloud worker stop", "preserved worktree removal"])(
     "never offers an opt-out on %s",
@@ -759,6 +836,7 @@ describe("session organizer batch archive confirmation", () => {
         }
         await pending;
         if (decision === "confirm") {
+          await endArchiveUndoWindow(h);
           expectArchive(h, rows, true);
           expect(h.finishArchive).toHaveBeenCalledTimes(rows.length);
         } else {
@@ -772,7 +850,7 @@ describe("session organizer batch archive confirmation", () => {
   );
 
   it.each([false, true])(
-    "keeps idle archive and archived=%s restore immediate",
+    "skips confirmation for idle archive and archived=%s restore",
     async (archived) => {
       const h = createHarness();
       const rows = [sessionRow(0), sessionRow(1)].map((row) =>
@@ -780,6 +858,9 @@ describe("session organizer batch archive confirmation", () => {
       );
       await h.action({ kind: "toggle-archived" }, rows, false);
       expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+      if (!archived) {
+        await endArchiveUndoWindow(h);
+      }
       expectArchive(h, rows, !archived);
     },
   );

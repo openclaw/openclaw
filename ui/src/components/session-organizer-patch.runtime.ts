@@ -1,3 +1,5 @@
+import { t } from "../i18n/index.ts";
+import { registerSessionOrganizationSharedEnglish } from "../i18n/locales/en-session-organization-shared.ts";
 import "../lib/sessions/session-mutation-operations.runtime.ts";
 import { isSessionDeferredPatch, type SessionPatchOptions } from "../lib/sessions/patch.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
@@ -9,6 +11,8 @@ import type {
 import { requireSessionMutationAccess } from "./session-organizer-batch-mutations.ts";
 import type { SessionActionHost, SessionActionRow } from "./session-organizer-batch-mutations.ts";
 import { withSessionWorkspaceRecovery } from "./session-workspace-recovery.runtime.ts";
+
+registerSessionOrganizationSharedEnglish();
 
 export async function patchSession(
   host: SessionActionHost,
@@ -40,7 +44,7 @@ export async function patchSession(
   ) {
     host.sessionData.publishSessionMutationError(
       scope,
-      "Session lifecycle action requires a durable session identity.",
+      t("sessionsView.lifecycleIdentityRequired"),
     );
     return "failed";
   }

@@ -146,11 +146,22 @@ async function evaluateVersion(
     !Number.isFinite(options.timeoutMs) ||
     options.timeoutMs <= 0 ||
     !(options.signal instanceof AbortSignal) ||
+    (options.assertCurrent !== undefined && typeof options.assertCurrent !== "function") ||
     (options.reasoning !== undefined && !["auto", "off", "on"].includes(options.reasoning))
   ) {
     throw new DecisionContractError();
   }
   options.signal.throwIfAborted();
+  const callerAuthority = options.assertCurrent;
+  callerAuthority?.();
+  // Caller authority rides the host admission predicate to physical dispatch;
+  // a throw there stays terminal rather than becoming an unavailable outcome.
+  const admissible = callerAuthority
+    ? () => {
+        callerAuthority();
+        return isAdmissible ? isAdmissible() : true;
+      }
+    : isAdmissible;
   const started = performance.now();
   const skipped = (outcome: DecisionOutcome | DecisionOutcomeV2): DecisionEvaluation => {
     logDecisionEvaluation({ options, facts: { dispatched: false }, started, outcome });
@@ -228,6 +239,7 @@ async function evaluateVersion(
       ? AbortSignal.any([options.signal, modelExecution.signal])
       : options.signal;
     const assertCurrent = () => {
+      callerAuthority?.();
       capturedOperator?.assertInvocationCurrent?.();
       modelExecution?.assertCurrent();
       modelSignal.throwIfAborted();
@@ -245,7 +257,7 @@ async function evaluateVersion(
     }
     // Admission-only preferences stop new evaluations after preparation. Do not
     // pass them to the provider: admitted work retains independent live guards.
-    if ((canDispatch && !canDispatch()) || (isAdmissible && !isAdmissible())) {
+    if ((canDispatch && !canDispatch()) || (admissible && !admissible())) {
       return skipped({ status: "unavailable", reason: "disabled" });
     }
     // Preparation consumes the caller's budget. The host still owns provider
@@ -266,7 +278,7 @@ async function evaluateVersion(
       registry,
       version,
       consumerId,
-      isAdmissible,
+      admissible,
       onPreparedBilling,
     );
     if (!rootCaller) {

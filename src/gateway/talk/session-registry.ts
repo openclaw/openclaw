@@ -25,6 +25,7 @@ type UnifiedTalkSessionRecord =
       kind: "transcription-relay";
       connId: string;
       transcriptionSessionId: string;
+      sessionTarget?: PreparedTalkSessionTarget;
     }
   | {
       kind: "managed-room";
@@ -221,10 +222,17 @@ export function getUnifiedTalkSession(sessionId: string): UnifiedTalkSessionReco
 export function resolveUnifiedTalkSessionTarget(sessionId: string, connId: string | undefined) {
   const id = sessionId.trim();
   const session = unifiedTalkSessions.get(id);
-  if (session?.kind !== "realtime-relay") {
+  if (
+    (session?.kind !== "realtime-relay" && session?.kind !== "transcription-relay") ||
+    !session.sessionTarget
+  ) {
     return undefined;
   }
-  requireUnifiedTalkSessionConn(session, connId);
+  // Target discovery runs before the request error boundary. A foreign connection
+  // has no target; the handler owns the normal denied-recording response.
+  if (!connId || session.connId !== connId) {
+    return undefined;
+  }
   const target = session.sessionTarget;
   return {
     target,

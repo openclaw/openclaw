@@ -323,6 +323,24 @@ it("filters immutable creator and effective owner separately while preserving pr
   }
 });
 
+it("serializes an owner-only row without participant metadata", async () => {
+  const store = {
+    "agent:main:owner-only": ownedSession("session-owner-only", 1, "profile-ada", {
+      participants: [profileParticipant("profile-ada")],
+      participantCount: 1,
+    }),
+  };
+  const query = queryFor("/synthetic/owner-only-wire", store);
+  const result = await listSessionFixture(query);
+  const row = findRow(result, ":owner-only");
+  expect(row?.owner?.actor.identity).toEqual({ type: "profile", id: "profile-ada" });
+  expect(row?.createdActor?.identity).toEqual(row?.owner?.actor.identity);
+  const wire = JSON.stringify(row);
+  expect(wire).not.toContain('"participants":');
+  expect(wire).not.toContain('"expandedParticipants":');
+  expect(wire).not.toContain('"participantCount":');
+});
+
 it("deduplicates participants in order, excludes the owner, and filters sessions involving the viewer", async () => {
   const store: Record<string, SessionEntry> = {
     "agent:main:owned": ownedSession("session-owned", 3, "profile-ada", {

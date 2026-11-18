@@ -6,6 +6,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/plugin-ui-capabilities.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
+import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { askBrandLabel } from "../../components/theme-brand-label.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatDateMs } from "../../lib/format.ts";
@@ -174,47 +175,38 @@ export function renderPluginPublisher(
   });
 }
 
-export function renderPluginMetadata(
-  result: PluginDiscoveryDetailResult | undefined,
-  installedVersion?: string,
-  local?: PluginsInspectResult["overview"],
-  loading = false,
-): JSX.Element {
-  const detail = result?.detail;
-  const catalog = result?.plugin.catalog;
-  const repository = pluginRepository(
-    local?.repositoryUrl ?? detail?.repositoryUrl ?? detail?.verification?.sourceRepo,
-  );
-  const documentation = pluginWebUrl(local?.documentationUrl ?? detail?.documentationUrl);
+/** The detail rail shared by plugin and Template pages: audit, release facts, then categories. */
+export function renderPackageMetadata(options: {
+  loading?: boolean;
+  security?: { verdict?: string; auditUrl?: string };
+  version?: string;
+  installed?: boolean;
+  updatedAt?: number;
+  createdAt?: number;
+  downloads?: number;
+  categories?: readonly string[];
+}): JSX.Element {
+  const date = (value: number | undefined) =>
+    value === undefined ? undefined : formatDateMs(value, { dateStyle: "medium" });
   const values: Array<[string, string | undefined]> = [
     [
-      t(installedVersion ? "pluginsPage.detailInstalledVersion" : "pluginsPage.version"),
-      installedVersion ?? catalog?.latestVersion,
+      t(options.installed ? "pluginsPage.detailInstalledVersion" : "pluginsPage.version"),
+      options.version,
     ],
-    [
-      t("pluginsPage.detailUpdated"),
-      detail?.updatedAt === undefined
-        ? undefined
-        : formatDateMs(detail.updatedAt, { dateStyle: "medium" }),
-    ],
-    [
-      t("pluginsPage.detailPublished"),
-      detail?.createdAt === undefined
-        ? undefined
-        : formatDateMs(detail.createdAt, { dateStyle: "medium" }),
-    ],
+    [t("pluginsPage.detailUpdated"), date(options.updatedAt)],
+    [t("pluginsPage.detailPublished"), date(options.createdAt)],
     [
       t("pluginsPage.catalogDownloadsColumn"),
-      catalog?.downloads === undefined ? undefined : formatCompactCount(catalog.downloads),
+      options.downloads === undefined ? undefined : formatCompactCount(options.downloads),
     ],
   ];
-  const categories = catalog?.categories ?? [];
+  const categories = options.categories ?? [];
   const placeholder = () => (
     <span class="plugin-metadata__placeholder skeleton" aria-hidden="true" />
   );
   return (
     <>
-      {loading ? (
+      {options.loading ? (
         <section
           class="plugin-metadata__loading"
           role="status"
@@ -224,12 +216,15 @@ export function renderPluginMetadata(
           {placeholder()}
         </section>
       ) : undefined}
-      {detail?.security
-        ? renderPluginSecurityAudit(detail.security.verdict ?? "unknown", detail.security.auditUrl)
+      {options.security
+        ? renderPluginSecurityAudit(
+            options.security.verdict ?? "unknown",
+            options.security.auditUrl,
+          )
         : undefined}
-      {loading || values.some(([, value]) => value !== undefined) ? (
+      {options.loading || values.some(([, value]) => value !== undefined) ? (
         <dl class="plugin-metadata__facts">
-          <For each={values.filter(([, value]) => loading || value !== undefined)}>
+          <For each={values.filter(([, value]) => options.loading || value !== undefined)}>
             {([label, value]) => (
               <div>
                 <dt>{label}</dt>
@@ -249,6 +244,34 @@ export function renderPluginMetadata(
           </div>
         </section>
       ) : undefined}
+    </>
+  );
+}
+
+export function renderPluginMetadata(
+  result: PluginDiscoveryDetailResult | undefined,
+  installedVersion?: string,
+  local?: PluginsInspectResult["overview"],
+  loading = false,
+): JSX.Element {
+  const detail = result?.detail;
+  const catalog = result?.plugin.catalog;
+  const repository = pluginRepository(
+    local?.repositoryUrl ?? detail?.repositoryUrl ?? detail?.verification?.sourceRepo,
+  );
+  const documentation = pluginWebUrl(local?.documentationUrl ?? detail?.documentationUrl);
+  return (
+    <>
+      {renderPackageMetadata({
+        loading,
+        security: detail?.security,
+        version: installedVersion ?? catalog?.latestVersion,
+        installed: Boolean(installedVersion),
+        updatedAt: detail?.updatedAt,
+        createdAt: detail?.createdAt,
+        downloads: catalog?.downloads,
+        categories: catalog?.categories,
+      })}
       {repository || documentation ? (
         <ul class="plugin-metadata__links">
           {repository ? (
@@ -408,37 +431,53 @@ function renderPluginMcpServers(
   );
 }
 
-// Runtime plumbing is intentionally absent: the overview describes user capabilities.
-const overviewContractFamilies = [
-  "speechProviders",
-  "realtimeTranscriptionProviders",
-  "realtimeVoiceProviders",
-  "mediaUnderstandingProviders",
-  "imageGenerationProviders",
-  "videoGenerationProviders",
-  "musicGenerationProviders",
-  "embeddingProviders",
-  "webSearchProviders",
-  "webFetchProviders",
-  "webContentExtractors",
-  "documentExtractors",
-  "transcriptSourceProviders",
-  "migrationProviders",
-] as const;
+// Ordered, route-local artwork describes user capabilities, not runtime plumbing.
+const pluginCapabilityPaths = {
+  speechProviders: "M3 5h8M7 5v10m-3 0h6m3-5h3l4-4v14l-4-4h-3Zm9 0v6",
+  realtimeTranscriptionProviders:
+    "M7 2za3 3 0 0 1 3 3v5a3 3 0 0 1-3 3 3 3 0 0 1-3-3V5a3 3 0 0 1 3-3m-6 8a6 6 0 0 0 12 0m-6 6v5m-3 0h6m6-15h6m-6 5h4m-4 5h6",
+  realtimeVoiceProviders:
+    "M2 10v4m4-7v10m4-7v4m4-7v10m4-7v4m4-7v10M4 3h13m-2-2 2 2-2 2m5 16H7m2-2-2 2 2 2",
+  mediaUnderstandingProviders:
+    "M8 3H4a1 1 0 0 0-1 1v4m13-5h4a1 1 0 0 1 1 1v4M3 16v4a1 1 0 0 0 1 1h4m13-5v4a1 1 0 0 1-1 1h-4M4 12s3-5 8-5 8 5 8 5-3 5-8 5-8-5-8-5m10 0a2 2 0 1 1-4 0 2 2 0 1 1 4 0",
+  imageGenerationProviders:
+    "M12 3H4a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-8M3 17l5-5 4 4 3-3 6 6M18 2l1 3 3 1-3 1-1 3-1-3-3-1 3-1ZM8.5 7.5a1 1 0 1 1-2 0 1 1 0 1 1 2 0",
+  videoGenerationProviders:
+    "M4 3h16a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2M2 7h20M2 17h20M7 3v4m5-4v4m5-4v4M7 17v4m5-4v4m5-4v4m-7-11 5 2-5 2Z",
+  musicGenerationProviders:
+    "M9 18V5l12-3v13M9 9l12-3M3 2v4M1 4h4m4 14a3.5 3 0 1 1-7 0 3.5 3 0 1 1 7 0m12-3a3.5 3 0 1 1-7 0 3.5 3 0 1 1 7 0",
+  embeddingProviders:
+    "M7 5h10M6 7l5 9m7-9-5 9M8 5a3 3 0 1 1-6 0 3 3 0 1 1 6 0m14 0a3 3 0 1 1-6 0 3 3 0 1 1 6 0m-7 14a3 3 0 1 1-6 0 3 3 0 1 1 6 0m-6-8h6",
+  webSearchProviders:
+    "M14 8a6 6 0 1 1-12 0 6 6 0 1 1 12 0Z M8 2c-3 3-3 9 0 12 3-3 3-9 0-12Z M2 8h12 M21 17.5a3.5 3.5 0 1 1-7 0 3.5 3.5 0 1 1 7 0Z M20 20l2.5 2.5",
+  webFetchProviders:
+    "M4 3h16a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2M2 8h20M6 5.5h.01M12 11v7m-3-3 3 3 3-3",
+  webContentExtractors:
+    "M11 21H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4M2 8h20M6 5.5h.01M6 12h6m-6 4h3m5 0h9m-3-3 3 3-3 3",
+  documentExtractors:
+    "M11 22H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9l5 5v4m-6-9v6h6M7 12h4m-4 4h3m4 1h9m-3-3 3 3-3 3",
+  transcriptSourceProviders:
+    "M7 2h12a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2M2 6v14a2 2 0 0 0 2 2h13M9 7h3m-3 4h8m-8 4h6",
+  migrationProviders:
+    "M4 9V4a1 1 0 0 1 1-1h13a1 1 0 0 1 1 1v5m-7-8v13m-4-4 4 4 4-4M3 12l-1 8a1 1 0 0 0 1 1h18a1 1 0 0 0 1-1l-1-8M2 16h5l2 3h6l2-3h5",
+} as const;
 
 function renderPluginDeclaredCapabilities(
   contracts: Readonly<Record<string, readonly string[]>> | undefined,
 ): JSX.Element {
   return renderPluginCapabilitySection(
     t("pluginsPage.detailCapabilities"),
-    overviewContractFamilies
-      .filter((family) => contracts?.[family]?.length)
-      .map((family) => `capabilityFamilies.${family}`)
-      .map((key) => ({
-        name: t(`pluginsPage.${key}.name`),
-        description: t(`pluginsPage.${key}.description`),
+    Object.entries(pluginCapabilityPaths)
+      .filter(([family]) => contracts?.[family]?.length)
+      .map(([family, path]) => ({
+        icon: () => (
+          <StrokeIcon aria-hidden="true">
+            <path d={path} />
+          </StrokeIcon>
+        ),
+        name: t(`pluginsPage.capabilityFamilies.${family}.name`),
+        description: t(`pluginsPage.capabilityFamilies.${family}.description`),
       })),
-    () => <Icon name="layers" />,
   );
 }
 

@@ -1,18 +1,18 @@
-import { createMemo, Errored, isPending, Loading, onSettled, Show } from "solid-js";
+import { createMemo, Errored, isPending, Loading, Show } from "solid-js";
 import type { SkillLibraryEntry } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { SkillStatusEntry } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsEmpty, SettingsGroup } from "../../components/solid/settings-ui.tsx";
 import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isPhoneLayout } from "../../lib/phone-layout.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
 import { PluginCatalogGrid } from "../plugins/catalog-grid.tsx";
 import { PluginCardSummary } from "../plugins/plugin-card.tsx";
 import { SkillStateStatus, verdictForSkill } from "./skill-status.tsx";
-import type { SkillsProps } from "./view-types.ts";
 import "../../styles/skills-discovery.css";
+import type { SkillsProps } from "./view-types.ts";
 
 registerSkillsBrowserEnglish();
 
@@ -130,7 +130,6 @@ export function SkillDiscovery(props: SkillsProps) {
   const connected = createMemo(() => props.state.connected);
   const epoch = createMemo(() => props.clawhubSearchEpoch);
   const pending = createMemo(() => isPending(props.readClawHubSearch), { loadingValue: true });
-  let input: HTMLInputElement | undefined;
   const entries = createMemo<SkillDiscoveryEntry[]>(() => {
     const skills = props.mutationSkills;
     const libraries = props.libraryEntries ?? [];
@@ -202,13 +201,6 @@ export function SkillDiscovery(props: SkillsProps) {
           .includes(filter),
     );
   });
-  // Focusing the search on a phone would open the keyboard on arrival.
-  const focusOnArrival = !isPhoneLayout();
-  onSettled(() => {
-    if (focusOnArrival && input?.isConnected) {
-      input.focus({ preventScroll: true });
-    }
-  });
   return (
     <section class="plugin-catalog-results skill-discovery" aria-label={t("skillsPage.title")}>
       <label class="plugin-catalog-search">
@@ -216,14 +208,10 @@ export function SkillDiscovery(props: SkillsProps) {
           <Icon name="search" />
         </span>
         <input
-          ref={(element) => {
-            input = element;
-          }}
           type="search"
           class="settings-input"
           name="skills-search"
           autocomplete="off"
-          autofocus={focusOnArrival}
           aria-label={t("skillDiscovery.search")}
           placeholder={t("skillDiscovery.search")}
           value={props.state.clawhubSearchQuery}
@@ -231,9 +219,9 @@ export function SkillDiscovery(props: SkillsProps) {
         />
       </label>
       {props.error && (
-        <div class="callout danger" role="alert">
+        <InlineAlert tone="danger" role="alert">
           {props.error}
-        </div>
+        </InlineAlert>
       )}
       {!props.state.connected && (
         <p role="status" class="muted">
@@ -244,7 +232,7 @@ export function SkillDiscovery(props: SkillsProps) {
         fallback={(error, reset) => (
           <Loading fallback={null}>
             <Show when={!isPending(props.readClawHubSearch)}>
-              <div class="callout danger" role="alert">
+              <InlineAlert tone="danger" role="alert">
                 {formatUiError(error())}{" "}
                 <button
                   type="button"
@@ -256,7 +244,7 @@ export function SkillDiscovery(props: SkillsProps) {
                 >
                   {t("common.retry")}
                 </button>
-              </div>
+              </InlineAlert>
             </Show>
           </Loading>
         )}
@@ -266,18 +254,11 @@ export function SkillDiscovery(props: SkillsProps) {
         </Loading>
       </Errored>
       {props.state.clawhubInstallMessage && (
-        <div
-          role={props.state.clawhubInstallMessage!.kind === "error" ? "alert" : "status"}
-          class={[
-            "callout",
-            {
-              danger: props.state.clawhubInstallMessage!.kind === "error",
-              success: props.state.clawhubInstallMessage!.kind !== "error",
-            },
-          ]}
+        <InlineAlert
+          tone={props.state.clawhubInstallMessage!.kind === "error" ? "danger" : "success"}
         >
           {props.state.clawhubInstallMessage!.text}
-        </div>
+        </InlineAlert>
       )}
       <PluginCatalogGrid items={entries()} results busy={props.loading || pending()}>
         {(entry, contentRef) => (
@@ -287,11 +268,19 @@ export function SkillDiscovery(props: SkillsProps) {
       <Errored fallback={() => null}>
         <Loading on={[query(), connected(), epoch()]} fallback={null}>
           {props.readClawHubSearch() &&
+            props.libraryEntries !== undefined &&
             entries().length === 0 &&
             !props.loading &&
+            (!props.error || props.state.skillsReport) &&
             props.state.connected && (
               <SettingsGroup>
-                <SettingsEmpty message={<span role="status">{t("skillsPage.empty")}</span>} />
+                <SettingsEmpty
+                  message={
+                    <span role="status">
+                      {t(query().trim() ? "skillsPage.noMatches" : "skillsPage.empty")}
+                    </span>
+                  }
+                />
               </SettingsGroup>
             )}
         </Loading>

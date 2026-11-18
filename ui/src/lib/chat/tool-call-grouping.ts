@@ -1,70 +1,176 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { summarizeAgentActivity } from "../../../../src/agents/agent-activity-presentation.js";
 import { t } from "../../i18n/index.ts";
 import { registerChatToolLabelsEnglish } from "../../i18n/locales/en-chat-tool-labels.ts";
-import { isAgentActivityItem } from "../protocol-validators.generated/activity.js";
+
+export { readPreparedActivity, hasVisiblePreparedActivity } from "./prepared-activity.ts";
 
 registerChatToolLabelsEnglish();
-
-export function readPreparedActivity(message: unknown): AgentActivityItem[] {
-  const activity = asOptionalRecord(message)?.activity;
-  return Array.isArray(activity) ? activity.filter(isAgentActivityItem) : [];
-}
-
-export function hasVisiblePreparedActivity(message: unknown): boolean {
-  return readPreparedActivity(message).some(
-    (activity) => !activity.hideFromChannelProgress && !activity.suppressChannelProgress,
-  );
-}
 
 type ToolGroupOptions = {
   /** Calls of launches that opened a session in its own right, not a subagent. */
   ownSessionLaunches?: ReadonlySet<string>;
+  activityKeys?: ReadonlyMap<AgentActivityItem, string>;
+  /** Exit codes or code-mode bridge dispatch receipts prove execution, not success. */
+  executedCommands?: ReadonlySet<string>;
+  /** Visible operations whose enclosing execution is still producing children. */
+  continuingExecutions?: ReadonlySet<string>;
+  /** True only when the cancellation receipt confirms that its target was cancelled. */
+  subagentCancellations?: ReadonlyMap<string, boolean>;
+  /** Cancelled run context for calls that have no result of their own. */
+  interruptedCalls?: ReadonlySet<string>;
 };
+
+const MEMORY_UPDATE_TOOLS = new Set([
+  "knowledge_remember",
+  "knowledge_edit_body",
+  "knowledge_save_page",
+  "knowledge_create_claim",
+]);
+
+// Summary categories describe work across tools. Unknown names share one fallback;
+// display names and identifiers belong to the expanded operation rows.
+const SUMMARY_TOOL_KINDS = new Map([
+  ["skills_read", "reads"],
+  ["skills_search", "searches"],
+  ["memory_search", "searches"],
+  ["knowledge_grep", "searches"],
+  ["memory_get", "memory"],
+  ["knowledge_record", "memory"],
+  ["knowledge_records", "memory"],
+  ["knowledge_lookup", "memory"],
+  ...[...MEMORY_UPDATE_TOOLS].map((name) => [name, "memory"] as const),
+  ["sessions_send", "messages"],
+  ["conversations_send", "messages"],
+  ["agents_wait", "waits"],
+  ["ask_user", "questions"],
+]);
 
 export function describeToolGroup(
   items: readonly AgentActivityItem[],
   options: ToolGroupOptions = {},
 ) {
-  const summary = summarizeAgentActivity(items, options);
-  const label = Object.entries(summary.counts)
-    .filter(([, count]) => count > 0)
-    .map(([kind, count]) =>
-      t(`chat.toolCards.activity.${kind}${count === 1 ? "One" : "Many"}`, { count: String(count) }),
-    )
-    .join(" · ");
+  const scoped = options.activityKeys
+    ? items.map((item) => {
+        const key = options.activityKeys!.get(item);
+        return key ? { ...item, itemId: key, toolCallId: key } : item;
+      })
+    : items;
+  const all = [
+    ...new Map(
+      scoped
+        .filter((item) => !item.suppressChannelProgress)
+        .map((item) => [item.toolCallId ?? item.itemId, item]),
+    ).values(),
+  ];
+  const summary = summarizeAgentActivity(all, options);
+  const groups = new Map<string, AgentActivityItem[]>(
+    [
+      "commands",
+      "reads",
+      "edits",
+      "writes",
+      "searches",
+      "fetches",
+      "memory",
+      "messages",
+      "waits",
+      "questions",
+      "cancellations",
+      "other",
+      "subagents",
+      "interrupted",
+    ].map((kind) => [kind, []]),
+  );
+  for (const item of all) {
+    const key = item.toolCallId ?? item.itemId;
+    if (options.interruptedCalls?.has(key)) {
+      groups.get("interrupted")!.push(item);
+      continue;
+    }
+    if (item.hideFromChannelProgress) {
+      continue;
+    }
+    const name = item.name?.trim().toLowerCase() ?? "";
+    const kind = options.subagentCancellations?.has(key)
+      ? "cancellations"
+      : item.commandBearing
+        ? "commands"
+        : (SUMMARY_TOOL_KINDS.get(name) ??
+          Object.entries(summarizeAgentActivity([item], options).counts).find(
+            ([, count]) => count > 0,
+          )![0]);
+    groups.get(kind)!.push(item);
+  }
+  const isRunning = (item: AgentActivityItem) =>
+    item.status === "running" || options.continuingExecutions?.has(item.toolCallId ?? item.itemId);
+  const isCompleted = (item: AgentActivityItem) =>
+    item.status === "completed" ||
+    (item.status !== "blocked" &&
+      item.status !== "skipped" &&
+      options.executedCommands?.has(item.toolCallId ?? item.itemId));
+  const label = [...groups]
+    .filter(([, actions]) => actions.length > 0)
+    .map(([kind, actions], index) => {
+      const continuation = index > 0 ? "Continuation" : "";
+      if (kind === "interrupted") {
+        return t("chat.toolCards.activity.interrupted" + continuation);
+      }
+      if (kind === "cancellations") {
+        const phase = actions.some(isRunning)
+          ? "Running"
+          : actions.some((item) =>
+                options.subagentCancellations?.get(item.toolCallId ?? item.itemId),
+              )
+            ? "Summary"
+            : "Pending";
+        return t("chat.toolCards.activity.cancellations" + phase + continuation);
+      }
+      if (kind === "memory") {
+        const reads = actions.filter(
+          (item) => !MEMORY_UPDATE_TOOLS.has(item.name?.trim().toLowerCase() ?? ""),
+        );
+        const updates = actions.filter((item) =>
+          MEMORY_UPDATE_TOOLS.has(item.name?.trim().toLowerCase() ?? ""),
+        );
+        const key = updates.some(isRunning)
+          ? "memoryUpdatesRunning"
+          : reads.some(isRunning)
+            ? "memoryReadsRunning"
+            : updates.some(isCompleted)
+              ? reads.some(isCompleted)
+                ? "memoryReadUpdatesSummary"
+                : "memoryUpdatesSummary"
+              : reads.some(isCompleted)
+                ? "memoryReadsSummary"
+                : "memoryPending";
+        return t(`chat.toolCards.activity.${key}${continuation}`);
+      }
+      const phase =
+        kind !== "subagents" && actions.some(isRunning)
+          ? "Running"
+          : actions.some(isCompleted)
+            ? "Summary"
+            : "Pending";
+      return t(`chat.toolCards.activity.${kind}${phase}${continuation}`);
+    })
+    .join(", ");
+  // Attempt outcomes remain on their rows. They do not establish the result
+  // of a whole group, nor whether another call recovered from an earlier one.
   const outcomes = Object.entries(summary.outcomes)
-    .filter(([, count]) => count > 0)
-    .map(([kind, count]) => ({
+    .filter(([kind, count]) => count > 0 && kind !== "failed" && kind !== "skipped")
+    .map(([kind]) => ({
       kind,
-      label: t(
-        kind === "skipped" ? "chat.toolCards.skippedCount" : `chat.toolCards.activity.${kind}`,
-        {
-          count: String(count),
-        },
-      ),
+      label: t(`chat.toolCards.activity.${kind}Summary`),
     }));
   return { total: summary.total, label, outcomes };
 }
 
-/**
- * Failed and skipped steps stay on their own rows: agents recover from routine
- * failures, and a run that ends in one reports it through its own error message.
- */
+/** The compact summary names the work and keeps non-success visible without counters. */
 export function summarizeToolGroup(
   items: readonly AgentActivityItem[],
   options: ToolGroupOptions = {},
 ): string {
   const summary = describeToolGroup(items, options);
-  return (
-    [
-      summary.label,
-      ...summary.outcomes
-        .filter(({ kind }) => kind !== "failed" && kind !== "skipped")
-        .map(({ label }) => label),
-    ]
-      .filter(Boolean)
-      .join(" · ") || t("chat.toolCards.rawDetails")
-  );
+  return [summary.label, ...summary.outcomes.map(({ label }) => label)].filter(Boolean).join(" · ");
 }

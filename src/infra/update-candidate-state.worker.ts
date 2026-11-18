@@ -102,6 +102,15 @@ async function inspectCandidateState(input: UpdateStateInspectionInput): Promise
     // Metadata discovery must use the same installation as the inspected databases.
     input.env = { ...input.env, OPENCLAW_STATE_DIR: input.stateDir };
   }
+  if ("config" in input && "stateDir" in input) {
+    // Released drivers serialize config read without this candidate's normalization.
+    const { normalizeLegacyWorkboardDatabaseConfig } =
+      await import("../config/legacy-workboard-database.js");
+    input.config = normalizeLegacyWorkboardDatabaseConfig(input.config, {
+      ...process.env,
+      OPENCLAW_STATE_DIR: input.stateDir,
+    });
+  }
   // Runtime retention needs no database/config inspection graph.
   const { createUpdateStateInspectionReporter } =
     await import("./update-candidate-state.diagnostics.js");
@@ -163,18 +172,32 @@ async function inspectCandidateState(input: UpdateStateInspectionInput): Promise
         includeClientCredentialStoreVersion: input.includeClientCredentialStoreVersion === true,
         onProgress: createUpdateStateInspectionReporter(!input.streamProgress),
       });
-    case "discover":
-      return discoverUpdateStateSchemaInspectionInProcess({
+    case "discover": {
+      const plan = await discoverUpdateStateSchemaInspectionInProcess({
         ...input,
         onProgress: createUpdateStateInspectionReporter(),
       });
-    case "versions":
+      const { writeUpdateStateSchemaOwnership } =
+        await import("./update-candidate-state.shared.js");
+      await writeUpdateStateSchemaOwnership(input.stagingRoot, plan.files);
+      return plan;
+    }
+    case "versions": {
+      if (input.inspectionPlan) {
+        const { rehydrateUpdateStateSchemaOwnership } =
+          await import("./update-candidate-state.shared.js");
+        input.inspectionPlan = await rehydrateUpdateStateSchemaOwnership(
+          input,
+          input.inspectionPlan,
+        );
+      }
       return readUpdateStateSchemaVersionsInProcess({
         ...input,
         includeLocalStoreVersions: input.includeLocalStoreVersions === true,
         includeClientCredentialStoreVersion: input.includeClientCredentialStoreVersion === true,
         onProgress: createUpdateStateInspectionReporter(!input.inspectionPlan),
       });
+    }
     default:
       throw new Error("Unknown update state inspection mode");
   }

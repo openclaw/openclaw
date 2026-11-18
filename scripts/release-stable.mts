@@ -209,15 +209,31 @@ export async function runReleaseStable(
       return;
     }
     if (options.watch) {
-      const ctx: ReleaseContext = {
-        options,
-        state,
-        run: createReleaseRunner(false, runner),
-        save: () => undefined,
-        log: (phase, message) => console.log(`[release-stable] ${phase}: ${message}`),
-        resume: (phase, extra) => resumeCommand(options, phase, extra),
+      const { publishRunId, dispatchedAt } = state.publish;
+      const { toolingTag, toolingSha } = state.validate;
+      if (!publishRunId || !dispatchedAt || !toolingTag || !toolingSha) {
+        throw new ReleaseRefusal("Retained state has no dispatched publication to watch.", [
+          shellCommand("pnpm", ["release:stable", state.release, "--status"]),
+        ]);
+      }
+      const target = {
+        repo: state.repo,
+        parentRunId: publishRunId,
+        label: state.release,
+        rerunCommand: shellCommand("pnpm", [
+          "release:stable",
+          state.release,
+          "--watch",
+          "--state-dir",
+          options.stateDir,
+        ]),
+        tag: state.tag,
+        toolingTag,
+        toolingSha,
+        releaseSha: state.cut.releaseSha,
+        dispatchedAt,
       };
-      const snapshot = await watchPublication(ctx, {
+      const snapshot = await watchPublication(createReleaseRunner(false, runner), target, {
         once: options.watchOnce,
         json: options.watchJson,
         pollSeconds: options.watchPollSeconds,

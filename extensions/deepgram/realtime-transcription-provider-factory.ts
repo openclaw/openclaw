@@ -1,4 +1,4 @@
-import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginCapabilityCatalogHostContext } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderPlugin,
@@ -114,9 +114,13 @@ function readErrorDetail(value: unknown): string {
 
 export function buildDeepgramRealtimeTranscriptionProvider({
   createRealtimeTranscriptionWebSocketSession,
+  isProviderAuthProfileConfiguredAsync,
+  resolveProviderAuthProfileApiKey,
 }: Pick<
-  PluginCapabilityCatalogContext,
-  "createRealtimeTranscriptionWebSocketSession"
+  PluginCapabilityCatalogHostContext,
+  | "createRealtimeTranscriptionWebSocketSession"
+  | "isProviderAuthProfileConfiguredAsync"
+  | "resolveProviderAuthProfileApiKey"
 >): RealtimeTranscriptionProviderPlugin {
   const isConfigured: NonNullable<RealtimeTranscriptionProviderPlugin["isConfigured"]> = ({
     providerConfig,
@@ -130,16 +134,22 @@ export function buildDeepgramRealtimeTranscriptionProvider({
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured,
-    isConfiguredAsync: async (ctx) => isConfigured(ctx),
+    // A key saved for Deepgram (the store voice notes read) counts when the Voice Call config
+    // and the environment have none, and only for the provider that config or the
+    // request names. Automatic selection ranks providers as it does without one.
+    isConfiguredAsync: async (ctx) =>
+      isConfigured(ctx) ||
+      (ctx.selectedExplicitly === true &&
+        (await isProviderAuthProfileConfiguredAsync({
+          provider: "deepgram",
+          cfg: ctx.cfg,
+          profileTypes: ["api_key"],
+        }))),
     createSession: (req) => {
       const normalizedConfig = normalizeProviderConfig(req.providerConfig);
-      const apiKey = normalizedConfig.apiKey || process.env.DEEPGRAM_API_KEY;
-      if (!apiKey) {
-        throw new Error("Deepgram API key missing");
-      }
+      const directApiKey = normalizedConfig.apiKey || process.env.DEEPGRAM_API_KEY;
       const config = {
         ...req,
-        apiKey,
         baseUrl: normalizeDeepgramRealtimeBaseUrl(normalizedConfig.baseUrl),
         model: normalizedConfig.model ?? DEFAULT_DEEPGRAM_AUDIO_MODEL,
         sampleRate: normalizedConfig.sampleRate ?? DEEPGRAM_REALTIME_DEFAULT_SAMPLE_RATE,
@@ -279,7 +289,20 @@ export function buildDeepgramRealtimeTranscriptionProvider({
           }
           return url.toString();
         },
-        headers: { Authorization: `Token ${config.apiKey}` },
+        // createSession stays synchronous; the saved key is read for each (re)connect.
+        headers: async () => {
+          const apiKey =
+            directApiKey ||
+            (await resolveProviderAuthProfileApiKey({
+              provider: "deepgram",
+              cfg: req.cfg,
+              profileTypes: ["api_key"],
+            }));
+          if (!apiKey) {
+            throw new Error("Deepgram API key missing");
+          }
+          return { Authorization: `Token ${apiKey}` };
+        },
         readyOnOpen: true,
         closeTimeoutMs: DEEPGRAM_REALTIME_CLOSE_TIMEOUT_MS,
         connectTimeoutMessage: "Deepgram realtime transcription connection timeout",

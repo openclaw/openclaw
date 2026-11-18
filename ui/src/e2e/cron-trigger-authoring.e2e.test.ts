@@ -4,7 +4,14 @@ import type { CronJob } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { cronJob, cronList, cronRuns } from "./cron-fixtures.test-support.ts";
+import {
+  automationRow,
+  cronJob,
+  cronList,
+  cronRuns,
+  cronSidebarFeatureMethods,
+  openAutomationActivity,
+} from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI automation condition-trigger authoring",
@@ -110,11 +117,11 @@ suite.define(() => {
   it("keeps a rejected trigger draft visible without reloading inventory", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        featureMethods: cronSidebarFeatureMethods,
         methodResponses: cronMethodResponses([scriptJob]),
       });
       await page.goto(`${suite.server.baseUrl}cron`);
-      const existingRow = page.locator('[data-test-id="cron-row-existing-script-automation"]');
-      await existingRow.waitFor();
+      const existingRow = await automationRow(page, scriptJob.id);
       await newTask(page, "Malformed condition", "Run when the condition matches");
       await advanced(page);
       await triggerToggle(page).click();
@@ -133,7 +140,7 @@ suite.define(() => {
       const message = "Condition script is invalid";
       await gateway.rejectDeferred("cron.add", { code: "INVALID_REQUEST", message });
 
-      const errorBanner = page.locator(".cron-error-banner");
+      const errorBanner = page.locator(".callout.danger");
       await errorBanner.waitFor({ state: "visible" });
       expect(await errorBanner.textContent()).toContain(message);
       expect(await triggerScript.inputValue()).toBe("const x = ;");
@@ -149,7 +156,8 @@ suite.define(() => {
       expect(await field(page, "name").inputValue()).toBe("Malformed condition");
       expect(await gateway.getRequests("cron.add")).toHaveLength(1);
 
-      await page.locator('[data-test-id="cron-back"]').click();
+      // Leaving the rejected draft keeps the sidebar's inventory without reading it again.
+      await openAutomationActivity(page);
       await existingRow.waitFor();
       expect(await gateway.getRequests("cron.list")).toHaveLength(listsBeforeSave);
     });

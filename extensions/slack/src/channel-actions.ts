@@ -302,7 +302,9 @@ export function createSlackActions(
           action: messageAction,
           channelId: resolveChannelId(),
           messageId,
-          ...(action === "reactions" ? { limit: actionParams.limit } : {}),
+          ...(action === "reactions" || action === "list-pins"
+            ? { limit: actionParams.limit }
+            : {}),
         });
       }
 

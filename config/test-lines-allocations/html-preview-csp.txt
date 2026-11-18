@@ -1,2 +1,0 @@
-# Native CSP rendering, strict compatibility, source authority and grant retirement regression proof.
-1261

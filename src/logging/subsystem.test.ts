@@ -110,6 +110,18 @@ it("does not inspect or serialize disabled runtime output as sink levels change"
   }
 });
 
+it("keeps Template Add timings out of info logs while retaining debug diagnostics", async () => {
+  const { withTemplateAddTimings } = await import("../templates/timings.js");
+  for (const level of ["info", "trace"] as const) {
+    const file = fileLogging(level);
+    await withTemplateAddTimings("synthetic-add", async () => undefined);
+    await testApi.flushFileLogQueueForTests();
+    const records = fs.existsSync(file) ? await readRecords(file) : [];
+    expect(records).toHaveLength(level === "info" ? 0 : 2);
+    expect(records.every((record) => record._meta.logLevelName === "DEBUG")).toBe(true);
+  }
+});
+
 it.each(["pretty", "compact", "json"] as const)(
   "keeps explicitly file-only diagnostics out of the %s console",
   async (consoleStyle) => {
@@ -431,6 +443,7 @@ describe("createSubsystemLogger().isEnabled", () => {
       admitted: true,
       phaseDurationsMs: { open: 3, validation: 8 },
       note: "two words",
+      peer: "a\u001b]0;x\u0007\u009b2J\u2028\u2029",
       skipped: undefined,
       error: new Error("boom"),
     });
@@ -439,7 +452,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     const warnLine = consoleLine(warn);
     expect(warnLine).toContain("slow Codex catalog list phases");
     expect(warnLine).toContain(
-      'elapsedMs=12345 admissionWaitMs=0 admitted=true phaseDurationsMs={"open":3,"validation":8} note="two words" error={"name":"Error","message":"boom"',
+      'elapsedMs=12345 admissionWaitMs=0 admitted=true phaseDurationsMs={"open":3,"validation":8} note="two words" peer="a\\u001b]0;x\\u0007\\u009b2J\\u2028\\u2029" error={"name":"Error","message":"boom"',
     );
     expect(warnLine).not.toContain("skipped=");
     expect(consoleLine(error)).toContain("catalog failed reason=timeout");

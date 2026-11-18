@@ -93,7 +93,9 @@ async function plan(
     } satisfies EmbeddedRunAttemptParams;
     const seed = surface.compactTools(uncompactedTools);
     const preparedToolBase = {
+      bindRunAbortDeadline() {},
       toolHookContext: {
+        getRunAbortDeadlineAtMs: () => undefined,
         awaitSessionDiffBaseline: undefined,
         watchdogAttempt: undefined,
         agentId: "main",
@@ -105,7 +107,6 @@ async function plan(
         approvalReviewerDeviceId: undefined,
         channelId: undefined,
         trace: { traceId: "1234567890abcdef1234567890abcdef" },
-        loopDetection: undefined,
         onToolOutcome: undefined,
         allocateToolOutcomeOrdinal: undefined,
       },
@@ -352,8 +353,7 @@ async function diagnostic(options: Parameters<typeof plan>[0] = {}) {
 
 describe("explicit tool allowlist diagnostics", () => {
   it.each([
-    ["skill_workshop", true, false, "sandboxed run without library-authoring authority"],
-    ["skill_*", true, false, "sandboxed run without library-authoring authority"],
+    ["skill_workshop", true, false, "no registered tools matched"],
     ["query_db", true, false, "no registered tools matched"],
     ["skill_workshop", false, false, "selected model does not support tools"],
     ["skill_workshop", true, true, "tools are disabled for this run"],

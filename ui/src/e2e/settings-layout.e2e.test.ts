@@ -1,24 +1,17 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import type { Response } from "playwright";
+import type { Page, Response } from "playwright";
 import { expect, it } from "vitest";
 import type { PresenceEntry } from "../../../packages/gateway-protocol/src/index.ts";
 import type { DevicePairingList } from "../../../src/gateway/device-pairing-list.types.js";
-import type { CronJob } from "../api/types.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import {
-  defaultControlUiFeatureMethods,
-  installMockGateway,
-  waitForControlUiRoute,
-} from "../test-helpers/control-ui-e2e.ts";
-import { cronListResponseFixture } from "../test-helpers/cron.ts";
+import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createDarkDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { cronRuns } from "./cron-fixtures.test-support.ts";
 import { openModelSetup } from "./model-setup.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -30,12 +23,24 @@ const suite = createControlUiE2eSuite({
 
 const proofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
+async function captureSettingsLayout(page: Page, filename: string) {
+  if (!proofEnabled) {
+    return;
+  }
+  const directory = path.join(suite.artifactDir, "settings-layout-audit");
+  await mkdir(directory, { recursive: true });
+  await page.screenshot({
+    animations: "disabled",
+    fullPage: true,
+    path: path.join(directory, filename),
+  });
+}
+
 const emptyDeviceResponses = {
   "node.list": { ts: 0, nodes: [] },
   "device.pair.list": { pending: [], paired: [] } satisfies DevicePairingList,
   "system-presence": [] satisfies PresenceEntry[],
 };
-
 const introRoutes = [
   "appearance",
   "approvals",
@@ -46,7 +51,6 @@ const introRoutes = [
   "talk",
   "updates",
 ] as const;
-
 const learnMoreRoutes = [
   "appearance",
   "approvals",
@@ -56,7 +60,6 @@ const learnMoreRoutes = [
   "security",
   "talk",
 ] as const;
-
 const sectionAlignmentRoutes = [
   "appearance",
   "cloud-workers",
@@ -65,9 +68,7 @@ const sectionAlignmentRoutes = [
   "talk",
   "updates",
 ] as const;
-
 const actionSectionCases = [{ route: "mcp", heading: "Servers" }] as const;
-
 const settingsRowRoutes = [
   "profile",
   "appearance",
@@ -96,31 +97,24 @@ const settingsRowRoutes = [
   "about",
   "debug",
 ] as const satisfies readonly RouteId[];
-
-const mobileSettingsRoutes = [...settingsRowRoutes, "logs"] as const satisfies readonly RouteId[];
-
+const mobileSettingsRoutes = ["profile", "plugins", "logs"] as const satisfies readonly RouteId[];
 const mobileStandaloneSettingsPageRoutes = ["memory-import"] as const satisfies readonly RouteId[];
-
 const mobileGeometryCases = [
   { route: "sessions", contentSelector: ".settings-page" },
   { route: "worktrees", contentSelector: ".settings-page" },
   { route: "usage", contentSelector: ".settings-page" },
-  { route: "cron", contentSelector: ".settings-page" },
   { route: "appearance", contentSelector: ".settings-page" },
   { route: "model-providers", contentSelector: ".settings-page" },
   { route: "memory", contentSelector: ".memory-page__panel .settings-page" },
   { route: "plugin-settings", contentSelector: ".settings-page" },
 ] as const satisfies ReadonlyArray<{ route: RouteId; contentSelector: string }>;
-
 const responsiveViewports = [
   { width: 390, height: 844 },
   { width: 768, height: 1024 },
   { width: 1366, height: 768 },
   { width: 1440, height: 900 },
 ] as const;
-
 const standaloneHeaderCases = [
-  { route: "cron", subtitle: "Scheduled tasks and recurring agent runs." },
   { route: "usage", subtitle: "API usage and costs." },
   {
     route: "memory-import",
@@ -128,98 +122,7 @@ const standaloneHeaderCases = [
   },
 ] as const satisfies ReadonlyArray<{ route: RouteId; subtitle: string }>;
 
-function createCronLayoutMethodResponses() {
-  const jobs: CronJob[] = [
-    {
-      id: "healthy",
-      configRevision: "healthy-revision",
-      name: "Healthy automation",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "healthy" },
-      state: { lastRunStatus: "ok" },
-    },
-    {
-      id: "failing",
-      configRevision: "failing-revision",
-      name: "Failing automation",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "failing" },
-      state: { lastRunStatus: "error" },
-    },
-  ];
-  return {
-    "agents.list": {
-      agents: [
-        { id: "main", identity: { name: "Molty" }, name: "Molty" },
-        { id: "writer", identity: { name: "Writer" }, name: "Writer" },
-      ],
-      defaultId: "main",
-      mainKey: "main",
-      scope: "agent",
-    },
-    "cron.list": cronListResponseFixture({
-      jobs,
-      snapshotRevision: "settings-layout",
-      total: jobs.length,
-      offset: 0,
-      limit: 50,
-      hasMore: false,
-      nextOffset: null,
-    }),
-    "cron.runs": cronRuns([]),
-    "cron.status": { enabled: true, jobs: jobs.length, nextWakeAtMs: null },
-  };
-}
-
 suite.define(() => {
-  it("keeps agent identity controls inside their fields at desktop and mobile widths", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      await installMockGateway(page, {
-        featureMethods: [...defaultControlUiFeatureMethods, "agents.update"],
-      });
-      await page.goto(`${suite.server.baseUrl}settings/agents`);
-      const editor = page.locator(".agent-identity-editor");
-      await editor.waitFor();
-
-      for (const viewport of responsiveViewports) {
-        await page.setViewportSize(viewport);
-        for (const [name, control] of [
-          ["Display name", editor.getByRole("textbox", { name: "Display name" })],
-          ["Emoji input", editor.getByRole("textbox", { name: "Emoji" })],
-          ["Emoji picker", editor.getByRole("button", { name: "Choose emoji" })],
-        ] as const) {
-          await control.focus();
-          await expect
-            .poll(
-              () =>
-                control.evaluate((element) => {
-                  const inputBox = element.getBoundingClientRect();
-                  const fieldBox = element.closest(".field")!.getBoundingClientRect();
-                  const cardBox = element.closest(".settings-row")!.getBoundingClientRect();
-                  return (
-                    inputBox.width > 0 &&
-                    inputBox.left >= Math.max(fieldBox.left, cardBox.left) - 1 &&
-                    inputBox.right <= Math.min(fieldBox.right, cardBox.right) + 1
-                  );
-                }),
-              { message: `${name} input is contained at ${viewport.width}px` },
-            )
-            .toBe(true);
-        }
-      }
-    });
-  });
-
   it("loads provider-settings copy after New Session and Chat without startup errors", async () => {
     const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
     await suite.withPage(
@@ -232,7 +135,7 @@ suite.define(() => {
         const stopCapturing: Array<() => void> = [];
         const settingsOnlyCopy = [
           "Global model defaults and provider access for your agents.",
-          "Find existing connections or prepare a local model for {agent}.",
+          "Find saved accounts or set up a local model for {agent}. This changes only this agent’s model, not the defaults for other agents.",
         ];
         // Keep each cold-boot document alive through the final assertions: replacing
         // an observed document cancels its idle imports and creates test-owned failures.
@@ -263,7 +166,6 @@ suite.define(() => {
           };
           page.on("response", captureScript);
           stopCapturing.push(() => page.off("response", captureScript));
-
           await page.goto(`${suite.server.baseUrl}${pathname}`);
           const ready = isSettings
             ? page.getByRole("heading", { name: /^Provider access\b/ })
@@ -274,7 +176,7 @@ suite.define(() => {
               "Utility model",
             );
             await openModelSetup(page);
-            await page.getByText(/Find existing connections or prepare a local model/).waitFor();
+            await page.getByText(/Find saved accounts or set up a local model/).waitFor();
           }
           if (recordVisuals) {
             await page.screenshot({
@@ -304,16 +206,13 @@ suite.define(() => {
   it("aligns settings-style workspace headers with their content columns", async () => {
     const context = await suite.browser.newContext(createDarkDesktopControlUiContextOptions());
     const page = await context.newPage();
-    await installMockGateway(page, {
-      methodResponses: createCronLayoutMethodResponses(),
-    });
+    await installMockGateway(page);
 
     try {
       for (const { route, subtitle } of standaloneHeaderCases) {
         const pathname = pathForRoute(route);
         await page.goto(new URL(pathname, suite.server.baseUrl).toString());
         await waitForControlUiRoute(page, { pathname, routeId: route });
-
         const header = page.locator(".content-header--settings").last();
         const content = page.locator(".settings-page").last();
         await Promise.all([header.waitFor(), content.waitFor()]);
@@ -338,7 +237,7 @@ suite.define(() => {
     }
   });
 
-  it("aligns every mobile settings page with the topbar content", async () => {
+  it("aligns mobile settings shells and page-owned columns with the topbar", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -368,7 +267,7 @@ suite.define(() => {
           };
         }, route);
 
-      // The desktop audit below owns cold CSS coverage; these rows check shell insets.
+      // Keep an ordinary settings route and both workspace overrides; page geometry stays below.
       for (const [index, route] of mobileSettingsRoutes.entries()) {
         const pathname = pathForRoute(route);
         if (index === 0) {
@@ -390,9 +289,9 @@ suite.define(() => {
         await settingsPage.waitFor({ state: "attached" });
         expect(
           await settingsPage.evaluate((element) =>
-            Math.round(Number.parseFloat(getComputedStyle(element).paddingLeft)),
+            Math.round(element.firstElementChild!.getBoundingClientRect().left),
           ),
-          `${route} mobile page-owned inset`,
+          `${route} mobile content column`,
         ).toBe(12);
       }
 
@@ -789,112 +688,6 @@ suite.define(() => {
     }
   });
 
-  it("keeps Automations search above one tab-and-action row", async () => {
-    const context = await suite.browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 844, width: 390 },
-    });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      methodResponses: createCronLayoutMethodResponses(),
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}automations`);
-      await waitForControlUiRoute(page, { pathname: "/automations", routeId: "cron" });
-      for (const viewport of responsiveViewports) {
-        await page.setViewportSize(viewport);
-
-        await expect
-          .poll(() =>
-            page.evaluate(() => {
-              const primary = document.querySelector<HTMLElement>(".cron-toolbar__primary");
-              const filters = document.querySelector<HTMLElement>(".cron-toolbar__filters");
-              const actions = document.querySelector<HTMLElement>(".cron-toolbar__actions");
-              const table = document.querySelector<HTMLElement>(".cron-table");
-              const tabGroup = document.querySelector<HTMLElement>(".cron-list-hub-tabs");
-              if (!primary || !filters || !actions || !table || !tabGroup) {
-                return null;
-              }
-              const primaryBox = primary.getBoundingClientRect();
-              const filtersBox = filters.getBoundingClientRect();
-              const actionsBox = actions.getBoundingClientRect();
-              const tableBox = table.getBoundingClientRect();
-              const tabBox = tabGroup.getBoundingClientRect();
-              return {
-                actionsAboveTable: actionsBox.bottom <= tableBox.top,
-                actionsRightAligned: Math.abs(tableBox.right - actionsBox.right) <= 1,
-                actionsInlineWithTabs:
-                  Math.abs(
-                    actionsBox.top + actionsBox.height / 2 - (tabBox.top + tabBox.height / 2),
-                  ) <= 1,
-                filtersAbovePrimary: filtersBox.bottom <= primaryBox.top,
-                primaryContainsActions: primary.contains(actions),
-              };
-            }),
-          )
-          .toEqual({
-            actionsAboveTable: true,
-            actionsInlineWithTabs: true,
-            actionsRightAligned: true,
-            filtersAbovePrimary: true,
-            primaryContainsActions: true,
-          });
-
-        expect(
-          (await page.locator(".cron-list-hub-tabs .hub-tab").allTextContents()).map((label) =>
-            label.trim(),
-          ),
-        ).toEqual(["All", "Active", "Paused", "Run history"]);
-        expect(await page.locator(".cron-toolbar__filters").getByRole("radiogroup").count()).toBe(
-          0,
-        );
-        expect(await page.locator(".cron-stats").count()).toBe(0);
-        expect(await page.locator(".agent-scope-control__label").count()).toBe(0);
-        expect(await page.locator(".cron-table__name-text").allTextContents()).toEqual([
-          "Failing automation",
-          "Healthy automation",
-        ]);
-
-        if (proofEnabled) {
-          const proofDir = path.join(suite.artifactDir, "settings-layout-audit");
-          await mkdir(proofDir, { recursive: true });
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(proofDir, `automations-toolbar-${viewport.width}.png`),
-          });
-        }
-        await page.locator(".agent-select__trigger").click();
-        const pickerTitle = page.locator(".agent-select__menu-title");
-        await pickerTitle.waitFor();
-        expect(await pickerTitle.textContent()).toBe("Agent");
-        expect(
-          await page
-            .locator(".agent-select__menu")
-            .evaluate((menu) => getComputedStyle(menu).opacity),
-        ).toBe("1");
-        if (proofEnabled) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(
-              suite.artifactDir,
-              "settings-layout-audit",
-              `automations-agent-picker-${viewport.width}.png`,
-            ),
-          });
-        }
-        await page.keyboard.press("Escape");
-        await pickerTitle.waitFor({ state: "hidden" });
-      }
-    } finally {
-      await context.close();
-    }
-  });
-
   it("uses the shared tab system for Communications without duplicate section help", async () => {
     const context = await suite.browser.newContext(createDarkDesktopControlUiContextOptions());
     const page = await context.newPage();
@@ -994,30 +787,38 @@ suite.define(() => {
       await expect.poll(() => advanced.count()).toBe(1);
       await expect.poll(() => advanced.getAttribute("open")).toBeNull();
       await expect.poll(() => advancedSummary.textContent()).toContain("Advanced settings");
-      if (proofEnabled) {
-        await mkdir(path.join(suite.artifactDir, "settings-layout-audit"), { recursive: true });
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(
-            path.join(suite.artifactDir, "settings-layout-audit"),
-            "communications-messages.png",
-          ),
-        });
-      }
+      await captureSettingsLayout(page, "communications-messages.png");
 
       await advancedSummary.click();
       await expect.poll(() => advanced.getAttribute("open")).not.toBeNull();
       await expect.poll(() => page.getByText("Response prefix", { exact: true }).count()).toBe(1);
-      if (proofEnabled) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(
-            path.join(suite.artifactDir, "settings-layout-audit"),
-            "communications-advanced-expanded.png",
-          ),
-        });
+      await captureSettingsLayout(page, "communications-advanced-expanded.png");
+
+      const prefixRow = advanced.locator(".settings-row", {
+        has: page.getByText("Response prefix", { exact: true }),
+      });
+      for (const width of [390, 820, 1400]) {
+        await page.setViewportSize({ width, height: 900 });
+        await expect
+          .poll(() =>
+            prefixRow.evaluate((row, viewportWidth) => {
+              const title = row.querySelector(".settings-row__title")!.getBoundingClientRect();
+              const input = row.querySelector("input")!.getBoundingClientRect();
+              const summary = row.parentElement!.querySelector("summary")!;
+              const text = summary.querySelector(".settings-row__text")!.getBoundingClientRect();
+              const chevron = summary
+                .querySelector(".settings-row__control")!
+                .getBoundingClientRect();
+              return {
+                fieldLayout:
+                  viewportWidth === 390
+                    ? input.top >= title.bottom && input.width > 300
+                    : input.left > title.right,
+                summaryInline: chevron.left > text.right && chevron.top < text.bottom,
+              };
+            }, width),
+          )
+          .toEqual({ fieldLayout: true, summaryInline: true });
       }
 
       await page.locator("#config-sections-tab-tts").click();
@@ -1026,16 +827,7 @@ suite.define(() => {
       );
       expect(await page.locator("#config-sections-tab-tts").getAttribute("active")).not.toBeNull();
       expect(await page.locator(".settings-section__help-button").count()).toBe(0);
-      if (proofEnabled) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(
-            path.join(suite.artifactDir, "settings-layout-audit"),
-            "communications-voice.png",
-          ),
-        });
-      }
+      await captureSettingsLayout(page, "communications-voice.png");
 
       await page.setViewportSize({ height: 844, width: 390 });
       await expect

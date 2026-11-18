@@ -1,0 +1,3 @@
+# Initial-binding fix: real Gateway tool-flow proof plus source custody, failure-cleanup,
+# off-thread inspection, and consumer-accounting regressions exceed the 400-line allowance.
+142

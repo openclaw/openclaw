@@ -73,7 +73,7 @@ describe("in-process Gateway original execution ownership", () => {
         await fixture.configure();
         kernel = await fixture.open({ sidecarStartup: undefined });
         kernel.kernel.setDispatchReady(true);
-        kernel.kernel.unlockStartupMethods();
+        await kernel.kernel.unlockStartupMethods();
         kernel.kernel.markSidecarsReady();
         const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.admin"] });
         const methodRegistry = createGatewayMethodRegistry([

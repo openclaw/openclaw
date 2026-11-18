@@ -21,7 +21,7 @@ We use [team.openclaw.ai](https://team.openclaw.ai) as a multiplayer claw and sh
 workspace for OpenClaw itself. Maintainers and agents work through repository
 changes in the same conversations:
 
-1. **Start a repository task.** Choose the OpenClaw project in **New conversation**
+1. **Start a repository task.** Choose the OpenClaw project in **New session**
    and select **Worktree** for a [managed branch and checkout](/concepts/managed-worktrees).
    Give the agent a concrete change and the checks that demonstrate it works.
 2. **Work together.** Teammates with access can open the session, add context,
@@ -472,7 +472,7 @@ Visitor Access requires `gateway.roles.default` to be a restricted guest role:
 default: "guest",
 definitions: {
   guest: {
-    sessions: { others: "view" },
+    sessions: { others: "invited" },
     agents: ["assistant"],
     scopes: ["operator.sessions.write"],
     sandbox: "required",
@@ -489,6 +489,13 @@ then asks the agent to call `visitor_invite` with a GitHub login or email and an
 optional note, such as a session link to start from. The result includes short
 invitation text to hand to the guest: who invited them, the sign-in address from
 `gateway.publicOrigin`, the identity to sign in with, the expiry, and the note.
+
+This role sees its own sessions and sessions where it is a member. The session
+creator or an administrator can invite a guest with a selected human @mention.
+Access starts when the message is committed, not when it enters the send queue.
+Remove the guest from session members to revoke access. Explicit public links
+still expose only the sanitized transcript. The session-only scope permits
+changes to the guest's own sessions, not to sessions they were invited to read.
 
 Guests can create sandboxed sessions on the listed agents and publish open or
 explicitly requested draft pull requests from their own sessions through the
@@ -558,9 +565,12 @@ take effect before their normal expiry.
 #### Configure GitHub access for repository work
 
 Install `gh` for the Gateway service account. In **Settings → Profile → GitHub
-connections**, an administrator chooses **For the system** to connect the shared
-publication account. An agent can have an administrative override under
-**Agents → Tools**. Verify the selected account before publishing.
+accounts**, an administrator changes the **Shared agent account**, used by
+every agent without its own account for its commands, dashboard data, and
+**Publish PR** unless you choose My GitHub. To give one agent a different account, such
+as a token limited to a fork, choose **Give its own account** on that agent's row;
+the shared account and other agents stay unchanged. Verify the account before
+publishing.
 
 **My GitHub** is a separate personal connection for explicitly selected
 publication. It does not change the shared shell account or establish verified

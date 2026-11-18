@@ -572,13 +572,22 @@ export function normalizeClawRouterResolvedModel(
 }
 
 export function prepareClawRouterRequestModel(model: ProviderRuntimeModel): ProviderRuntimeModel {
-  const route = readRouteMetadata(model.params);
+  // OpenAI Responses treats omitted tool strictness as strict, so every optional tool input
+  // becomes required. Configured and catalog rows both dispatch here; declaring support makes
+  // the compatible-route policy send explicit strict=false.
+  const prepared =
+    model.api === "openai-responses" &&
+    model.id.startsWith("openai/") &&
+    model.compat?.supportsStrictMode === undefined
+      ? { ...model, compat: { ...model.compat, supportsStrictMode: true } }
+      : model;
+  const route = readRouteMetadata(prepared.params);
   if (!route) {
-    return model;
+    return prepared;
   }
   return {
-    ...model,
-    params: stripRouteMetadata(model.params),
+    ...prepared,
+    params: stripRouteMetadata(prepared.params),
     ...(route.upstreamModel && route.upstreamModel !== model.id ? { id: route.upstreamModel } : {}),
   };
 }

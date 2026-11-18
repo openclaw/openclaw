@@ -222,7 +222,7 @@ it.each(["hide", "remove"] as const)(
     try {
       const { modal } = await renderModal();
       // Keep the toast active through the cold lazy import.
-      showToast({ message: "Saved", durationMs: 60_000 });
+      showToast({ severity: "success", message: "Saved", durationMs: 60_000 });
       await commit(appHost);
       await vi.dynamicImportSettled();
       flush();
