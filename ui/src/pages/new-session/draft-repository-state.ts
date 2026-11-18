@@ -118,7 +118,7 @@ export class DraftRepositoryStateOwner {
           (typeof options === "object" &&
             options.refreshing === true &&
             this.checkoutSubmissionBlocked)
-      : this.repositoryValue.kind === "checking";
+      : this.repositoryValue.kind === "checking" && !this.worktree;
   }
 
   private selectionRevision = 0;

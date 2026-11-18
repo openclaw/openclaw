@@ -6,6 +6,7 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
+import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import * as catalog from "./catalog-target.ts";
 import { CheckoutChip } from "./checkout-chip.tsx";
@@ -19,6 +20,39 @@ import { draftWhereChipParams, resolveWhereChip } from "./where-chip.ts";
 import { WhereChip } from "./where-chip.tsx";
 
 registerNewSessionSetupEnglish();
+
+function CheckoutLoadingRow() {
+  const stacked = createMediaQuery("(max-width: 768px)");
+  const motion = createMediaQuery("(prefers-reduced-motion: no-preference)");
+  return (
+    <>
+      {stacked() ? (
+        <span class="new-session-page__select">
+          <span
+            class="new-session-page__trigger new-session-page__checkout-skeleton"
+            role="status"
+            aria-label={t("common.loading")}
+            style={{ "pointer-events": "none" }}
+          >
+            <span class="new-session-page__target-icon" aria-hidden="true">
+              <Icon name="gitBranch" />
+            </span>
+            <span
+              class="new-session-page__skeleton-bar"
+              aria-hidden="true"
+              style={{
+                width: "80px",
+                animation: motion()
+                  ? "new-session-placeholder-pulse 1.4s ease-in-out infinite"
+                  : undefined,
+              }}
+            />
+          </span>
+        </span>
+      ) : undefined}
+    </>
+  );
+}
 
 export function AgentSelect(props: {
   params: AgentSelectOptions;
@@ -220,20 +254,7 @@ export function NewSessionPlaceControls(props: {
             {props.params.place.checkoutVisible &&
             !(view().nativeTerminal && props.params.place.terminalOnNode) ? (
               props.params.place.repositoryState.checkoutPending ? (
-                <span
-                  class="new-session-page__checkout-skeleton"
-                  role="status"
-                  aria-label={t("common.loading")}
-                >
-                  <span class="new-session-page__target-icon" aria-hidden="true">
-                    <Icon name="gitBranch" />
-                  </span>
-                  <span
-                    class="new-session-page__skeleton-bar"
-                    aria-hidden="true"
-                    style={{ width: "80px" }}
-                  />
-                </span>
+                <CheckoutLoadingRow />
               ) : (
                 <CheckoutChip params={props.params} folderLabel={view().projectState.label} />
               )
