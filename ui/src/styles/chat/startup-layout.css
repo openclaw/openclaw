@@ -894,8 +894,6 @@ div.chat-thread:where(.chat-thread--annotations) {
   width: 14px;
   height: 14px;
   flex: 0 0 auto;
-  border-radius: 2px;
-  object-fit: contain;
 }
 
 .chat-pane__workspace-chip > .oc-menu-item__label > span {
