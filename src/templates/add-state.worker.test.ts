@@ -1,9 +1,13 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
+import {
+  mergeWorkspaceSetupState,
+  readWorkspaceStateSnapshot,
+  replaceWorkspaceAttestation,
+} from "../agents/workspace-state-store.js";
 import { withExistingOpenClawStateSchema } from "../state/openclaw-state-db-schema-policy.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -15,7 +19,10 @@ import { withOpenClawStateLeaseAsync } from "../state/openclaw-state-lease.js";
 import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import { mergeWorkspaceBootstrapSetupStateForAdd } from "./add-state-write.js";
+import {
+  mergeWorkspaceBootstrapSetupStateForAdd,
+  rollbackWorkspaceBootstrapSeedForAdd,
+} from "./add-state-write.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -23,6 +30,7 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
+afterEach(() => vi.unstubAllEnvs());
 const bootstrapSeededAt = "2026-10-28T03:00:00.000Z";
 const nowMs = Date.parse(bootstrapSeededAt);
 
@@ -42,6 +50,8 @@ async function withAddLeases(run: (fixture: Fixture) => Promise<void>) {
     OPENCLAW_STATE_DIR: path.join(root, "state"),
     OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
   };
+  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", env.OPENCLAW_CONFIG_PATH);
   const database = openOpenClawStateDatabase({ env });
   await withExistingOpenClawStateSchema({ path: database.path }, async () => {
     const context = captureOpenClawStateWorkerContext({ env });
@@ -93,6 +103,47 @@ it("persists bootstrap setup through the real worker under both live Add leases"
   });
 });
 
+it.each(["owned", "different", "completed"] as const)(
+  "rolls back only the owned seed while preserving workspace attestation (%s)",
+  async (mode) => {
+    await withAddLeases(async (fixture) => {
+      const options = { stateMode: "worker" as const, leaseSet: fixture };
+      await mergeWorkspaceBootstrapSetupStateForAdd(
+        fixture.workspaceDir,
+        bootstrapSeededAt,
+        nowMs,
+        options,
+      );
+      await replaceWorkspaceAttestation({
+        workspaceDir: fixture.workspaceDir,
+        attestedAtMs: nowMs,
+        generatedHashes: new Map(),
+        nowMs,
+      });
+      if (mode === "completed") {
+        await mergeWorkspaceSetupState(
+          fixture.workspaceDir,
+          { setupCompletedAt: bootstrapSeededAt },
+          nowMs,
+        );
+      }
+      await rm(fixture.workspaceDir, { recursive: true });
+      await rollbackWorkspaceBootstrapSeedForAdd(
+        fixture.workspaceDir,
+        mode === "different" ? new Date(nowMs - 1).toISOString() : bootstrapSeededAt,
+        options,
+      );
+      const snapshot = await fixture.read();
+      expect(snapshot.attestation).toEqual({ attestedAtMs: nowMs, generatedHashes: new Map() });
+      expect(snapshot.setup).toEqual({
+        version: 1,
+        ...(mode !== "owned" ? { bootstrapSeededAt } : {}),
+        ...(mode === "completed" ? { setupCompletedAt: bootstrapSeededAt } : {}),
+      });
+    });
+  },
+);
+
 it.each(["missing", "mismatched", "duplicate", "stale"] as const)(
   "refuses %s lease facts without publishing bootstrap setup",
   async (mode) => {
@@ -132,32 +183,55 @@ it.each(["missing", "mismatched", "duplicate", "stale"] as const)(
   },
 );
 
-it("rolls back bootstrap setup when the original caller is revoked at native commit", async () => {
-  await withAddLeases(async (fixture) => {
-    let current = true;
-    const revoked = new Error("Template Add authority retired before commit");
-    await expect(
-      runWithOpenClawStateLeasesWorker(
-        fixture.leases,
-        fixture.context,
-        (scope, leases) =>
-          scope.execute({
-            type: "templates.add.mergeBootstrapSetupState",
-            input: { workspaceDir: fixture.workspaceDir, bootstrapSeededAt, nowMs, leases },
-          }),
-        {
-          assertCurrent: () => {
-            if (!current) {
-              throw revoked;
-            }
+it.each(["seed", "rollback"] as const)(
+  "refuses %s when the original caller is revoked at native commit",
+  async (mode) => {
+    await withAddLeases(async (fixture) => {
+      if (mode === "rollback") {
+        await mergeWorkspaceBootstrapSetupStateForAdd(
+          fixture.workspaceDir,
+          bootstrapSeededAt,
+          nowMs,
+          {
+            stateMode: "worker",
+            leaseSet: fixture,
           },
-          beforeCommit: () => {
-            current = false;
+        );
+      }
+      let current = true;
+      const revoked = new Error("Template Add authority retired before commit");
+      await expect(
+        runWithOpenClawStateLeasesWorker(
+          fixture.leases,
+          fixture.context,
+          (scope, leases) =>
+            scope.execute(
+              mode === "seed"
+                ? {
+                    type: "templates.add.mergeBootstrapSetupState",
+                    input: { workspaceDir: fixture.workspaceDir, bootstrapSeededAt, nowMs, leases },
+                  }
+                : {
+                    type: "templates.add.rollbackBootstrapSeed",
+                    input: { workspaceDir: fixture.workspaceDir, bootstrapSeededAt, leases },
+                  },
+            ),
+          {
+            assertCurrent: () => {
+              if (!current) {
+                throw revoked;
+              }
+            },
+            beforeCommit: () => {
+              current = false;
+            },
           },
-        },
-      ),
-    ).rejects.toThrow(revoked.message);
-    expect(current).toBe(false);
-    expect(await fixture.read()).toMatchObject({ setupExists: false });
-  });
-});
+        ),
+      ).rejects.toThrow(revoked.message);
+      expect(current).toBe(false);
+      expect(await fixture.read()).toMatchObject(
+        mode === "seed" ? { setupExists: false } : { setup: { version: 1, bootstrapSeededAt } },
+      );
+    });
+  },
+);

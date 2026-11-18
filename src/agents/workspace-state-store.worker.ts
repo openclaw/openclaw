@@ -139,6 +139,29 @@ export function mergeWorkspaceSetupStateInDatabase(
   return merged;
 }
 
+export function rollbackWorkspaceBootstrapSeedInDatabase(
+  database: WorkspaceStateDatabaseHandle,
+  workspaceDir: string,
+  bootstrapSeededAt: string,
+): void {
+  assertCanonicalTimestamp(bootstrapSeededAt, "bootstrap rollback");
+  const { identity } = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
+  const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
+  if (snapshot.setup.bootstrapSeededAt !== bootstrapSeededAt || snapshot.setup.setupCompletedAt) {
+    return;
+  }
+  executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<WorkspaceStateDatabase>(database.db)
+      .updateTable("workspace_setup_state")
+      .set({ bootstrap_seeded_at: null })
+      .where("workspace_key", "=", identity.workspaceKey),
+  );
+  workspaceStatePublication.stagePostimages(database.db, [
+    { ...snapshot, setup: { version: WORKSPACE_SETUP_STATE_VERSION } },
+  ]);
+}
+
 function expire(
   database: WorkspaceStateDatabaseHandle,
   workspaceDir: string,
@@ -264,6 +287,22 @@ export const workspaceStateOperations = {
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
         assertAgentDeletionRecoveryHoldPredicate(writer, input.recoveryHoldPredicate);
         return result;
+      }),
+    ),
+  "workspace.rollbackBootstrapSeed": (
+    input: WorkspaceStateWorkerOperations["workspace.rollbackBootstrapSeed"]["input"],
+    context: WorkerWriteOperationContext,
+  ) =>
+    context.write((writer) =>
+      captureWorkspaceStateReceipt(writer.db, () => {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+        rollbackWorkspaceBootstrapSeedInDatabase(
+          writer,
+          input.workspaceDir,
+          input.bootstrapSeededAt,
+        );
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+        assertAgentDeletionRecoveryHoldPredicate(writer, input.recoveryHoldPredicate);
       }),
     ),
   "workspace.expire": (
