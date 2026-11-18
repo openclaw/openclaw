@@ -37,7 +37,7 @@ import {
 } from "openclaw/plugin-sdk/provider-usage";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { isOpenRouterDecisionModel } from "./decision-codec.js";
 import { buildOpenRouterDecisionProvider } from "./decision-provider.js";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
@@ -459,9 +459,31 @@ export default defineSingleProviderPluginEntry({
       normalizeConfig: ({ providerConfig }) => normalizeRouterBaseUrl(providerConfig),
       normalizeResolvedModel: ({ model }) => normalizeOpenRouterResolvedModel(model),
       normalizeTransport: ({ api, baseUrl }) => normalizeRouterBaseUrl({ api, baseUrl }),
-      classifyFailoverReason: ({ provider, errorMessage }) => {
+      classifyFailoverReason: ({ provider, errorMessage, status }) => {
         if (provider?.trim().toLowerCase() !== PROVIDER_ID) {
           return undefined;
+        }
+        if (status === 403) {
+          // OpenRouter spending caps are 403s too; other guardrail denials are not billing.
+          const body = readRecord(safeParseJson<unknown>(errorMessage));
+          const error = readRecord(body?.error) ?? body;
+          const limitSource = readRecord(error?.metadata)?.limit_source;
+          if (
+            limitSource === "openrouter_guardrail_budget" ||
+            limitSource === "openrouter_workspace_budget" ||
+            limitSource === "openrouter_key_limit"
+          ) {
+            return "billing";
+          }
+          // Documented text-only responses and clipped bodies still retain their message.
+          const message = typeof error?.message === "string" ? error.message : errorMessage;
+          if (
+            /^(?:(?:HTTP\s+)?403[:\s]+)*(?:(?:Org member )?budget limit exceeded\b|workspace (?:daily|weekly|monthly|lifetime) budget of \$[\d,.]+ exceeded\b)/i.test(
+              message.trim(),
+            )
+          ) {
+            return "billing";
+          }
         }
         if (
           /\b(?:api\s+key\s+budget|key)\s+limit\s*(?:exceeded|reached|hit)\b/i.test(errorMessage)
