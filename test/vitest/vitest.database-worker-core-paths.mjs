@@ -1270,6 +1270,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/tts/tts-summary.selection.test.ts",
   "src/agents/prepared-model-catalog.resources.test.ts",
   "src/agents/embedded-agent-runner/compaction-runtime-admission.test.ts",
+  "src/media-understanding/image.auth-routing.test.ts",
   "src/media-understanding/image.resources.test.ts",
   "src/tts/tts-summary.resources.test.ts",
   "src/agents/simple-completion-runtime.plugin-scope.test.ts",
