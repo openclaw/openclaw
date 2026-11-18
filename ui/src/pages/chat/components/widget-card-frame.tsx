@@ -16,7 +16,7 @@ import { showToast } from "../../../lib/toast.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import type { WidgetAnnotationCapture } from "./widget-annotation.tsx";
 import { WidgetCardMenu, type WidgetRawDetailsLabel } from "./widget-card-menu.tsx";
-import type { WidgetCardOptions, WidgetExportSource } from "./widget-card-view.tsx";
+import type { WidgetCardOptions, WidgetExportSource } from "./widget-card.types.ts";
 import { captureWidget, exportWidget } from "./widget-export.ts";
 import { WidgetPinButton, type WidgetPinTarget } from "./widget-pin-button.tsx";
 import { isManagedCanvasDocumentPreview } from "./widget-preview-layout.ts";
@@ -37,7 +37,14 @@ export function WidgetCardFrame(props: {
   surface: string;
   options?: WidgetCardOptions;
 }) {
-  const [annotation, setAnnotation] = createSignal<WidgetAnnotationCapture>();
+  const policy = createMemo(() => props.sandbox);
+  const [captureState, setCaptureState] = createSignal<{
+    policy: string;
+    capture?: WidgetAnnotationCapture;
+  }>(() => ({ policy: policy() }));
+  const annotation = () => captureState().capture;
+  const setAnnotation = (capture: WidgetAnnotationCapture | undefined) =>
+    setCaptureState({ policy: policy(), capture });
   const [capturing, setCapturing] = createSignal(false);
   let previewElement!: HTMLDivElement;
   let annotationButton: HTMLButtonElement | undefined;
@@ -90,6 +97,7 @@ export function WidgetCardFrame(props: {
       const capture = { ...captured, image };
       if (
         previewElement.isConnected &&
+        frame.isConnected &&
         props.source === source &&
         props.options?.sessionKey === sessionKey &&
         canAnnotate()

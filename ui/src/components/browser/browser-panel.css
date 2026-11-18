@@ -284,16 +284,6 @@ openclaw-browser-panel {
     user-select: none;
     -webkit-user-drag: none;
   }
-  .bp-overlay {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    touch-action: none;
-  }
-  .bp-overlay--annotate {
-    cursor: crosshair;
-  }
   .bp-input {
     box-sizing: border-box;
     margin: 0;

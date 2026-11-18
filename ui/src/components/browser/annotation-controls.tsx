@@ -1,9 +1,10 @@
-import { For, Show } from "solid-js";
+import { For, onSettled, Show } from "solid-js";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { Icon } from "../solid/icon.tsx";
+import { retainShadowStyles } from "../solid/shadow-styles.ts";
 import type { BrowserInspectedNode } from "./browser-client.ts";
-import "./annotation-controls.css";
+import annotationStyles from "./annotation-controls.css?inline";
 
 registerEnglishCatalog(registerBrowserEnglish);
 
@@ -15,6 +16,7 @@ export function AnnotationBar(props: {
   onExit: () => void;
   onAdd: () => void;
 }) {
+  onSettled(() => retainShadowStyles(document, [annotationStyles]));
   return (
     <div class="bp-annotatebar">
       <span class="bp-annotatebar__hint">{t("browser.annotateHint")}</span>
@@ -55,6 +57,7 @@ export function AnnotationTooltip(props: {
   node: BrowserInspectedNode | null;
   pointer: { x: number; y: number } | null;
 }) {
+  onSettled(() => retainShadowStyles(document, [annotationStyles]));
   return (
     <Show when={props.node && props.pointer}>
       <div

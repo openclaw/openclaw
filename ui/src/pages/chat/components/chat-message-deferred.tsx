@@ -93,8 +93,9 @@ export function ToolPreview(
               <div
                 class="chat-tool-card__preview"
                 aria-hidden="true"
+                data-content-kind={preview().mcpApp ? "mcp-app" : "canvas-html"}
                 style={{
-                  "min-height": `${widgetPreviewHeight(preview(), props.options?.widgetLayout)}px`,
+                  "min-height": `calc(${widgetPreviewHeight(preview(), props.options?.widgetLayout)}px + var(--widget-header-height) + ${preview().mcpApp ? 0 : 2}px)`,
                 }}
               />
             )}

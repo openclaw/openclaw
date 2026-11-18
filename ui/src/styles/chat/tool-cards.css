@@ -797,6 +797,7 @@
 }
 
 .chat-tool-card__preview {
+  --widget-header-height: 45px;
   position: relative;
   width: 100%;
   max-width: 100%;
@@ -808,7 +809,6 @@
 
 .chat-tool-card__preview[data-content-kind="canvas-html"] {
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
 }
 
 /* MCP Apps are responsive documents, so give them the assistant column instead
@@ -819,6 +819,7 @@
 }
 
 .widget-header {
+  min-height: var(--widget-header-height);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -856,12 +857,8 @@
 
 .widget-header__control {
   display: flex;
-  align-items: center;
-  gap: 8px;
   min-width: 0;
   max-width: 100%;
-  color: var(--muted);
-  font-size: 12px;
 }
 
 .widget-header__control .settings-segmented {
@@ -886,15 +883,6 @@
   height: auto;
   user-select: none;
   -webkit-user-drag: none;
-}
-
-.widget-annotation .bp-overlay {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  touch-action: none;
-  cursor: crosshair;
 }
 
 .widget-annotation .bp-annotatebar {

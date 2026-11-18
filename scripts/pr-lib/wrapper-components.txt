@@ -3025,6 +3025,7 @@ src/canvas/wrap.ts
 src/plugin-sdk/widget-html.ts
 src/shared/html-escape.ts
 src/shared/widget-media.ts
+src/shared/widget-preview-controls.ts
 src/shared/worker-desktop-descriptor.ts
 src/gateway/worker-environments/local-workspace-cas.ts
 src/gateway/worker-environments/local-workspace-cas.kernel.ts

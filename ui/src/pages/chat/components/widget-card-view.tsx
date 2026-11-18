@@ -11,19 +11,16 @@ import {
   useContext,
 } from "solid-js";
 import type { WidgetPreviewControl } from "../../../../../src/shared/widget-preview-controls.ts";
-import type { OpenClawCanvasWidgetView } from "../../../components/canvas-widget-view.tsx";
 import { dispatchWidgetPrompt } from "../../../components/mcp-app-security.ts";
 import type { McpAppViewProps } from "../../../components/mcp-app-view-types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerChatToolWidgetsEnglish } from "../../../i18n/locales/en-chat-tool-widgets.ts";
 import { registerMcpAppEnglish } from "../../../i18n/locales/en-mcp-app.ts";
-import type { BoardProvider } from "../../../lib/board/provider.ts";
 import {
   isInternalCanvasEntryUrl,
   resolveCanvasIframeUrl,
   resolveEmbedSandbox,
-  type EmbedSandboxMode,
 } from "../../../lib/chat/canvas-embed-policy.ts";
 import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
@@ -39,6 +36,7 @@ import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { RawOutputToggle } from "./chat-tool-content.solid.tsx";
 import { TranscriptRowKeyContext } from "./chat-transcript-layout.ts";
 import { WidgetCardFrame } from "./widget-card-frame.tsx";
+import type { WidgetCardOptions, WidgetExportSource } from "./widget-card.types.ts";
 import {
   isManagedCanvasDocumentPreview,
   widgetPreviewHeight,
@@ -79,21 +77,6 @@ function McpAppHost(
     />
   );
 }
-
-export type WidgetCardOptions = {
-  rawText?: string | null;
-  toggleRawDetails?: () => boolean;
-  canvasPluginSurfaceUrl?: string | null;
-  mediaReadAllowed?: boolean;
-  embedSandboxMode?: EmbedSandboxMode;
-  allowExternalEmbedUrls?: boolean;
-  sessionKey?: string;
-  messageTimestamp?: number;
-  boardProvider?: BoardProvider;
-  widgetLayout?: import("../session-message-cache.ts").ChatWidgetLayout;
-};
-
-export type WidgetExportSource = HTMLIFrameElement | OpenClawCanvasWidgetView | undefined;
 
 // Sandboxed widget documents report their content height via postMessage so the
 // preview iframe can fit short/tall widgets. The event source must be one of our
@@ -459,10 +442,7 @@ function CanvasPreview(props: {
   const sandbox = () =>
     resolveEmbedSandbox(props.options?.embedSandboxMode ?? "scripts", props.preview.sandbox);
   return (
-    <Show
-      when={`${props.options?.sessionKey ?? ""}\0${props.preview.viewId ?? ""}\0${sandbox()}`}
-      keyed
-    >
+    <Show when={`${props.options?.sessionKey ?? ""}\0${props.preview.viewId ?? ""}`} keyed>
       {(_identity) => (
         <WidgetCardFrame
           preview={props.preview}

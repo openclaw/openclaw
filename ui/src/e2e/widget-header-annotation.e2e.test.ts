@@ -24,7 +24,7 @@ suite.define(() => {
   it("stages widget feedback in the existing composer without sending or losing local state", async () => {
     const html = buildWidgetDocument(
       title,
-      `<section style="padding:20px"><p id="status">Running</p><label>Local note <input aria-label="Local note"></label><script>if(openclaw.preview)openclaw.preview.setControls([{id:"phase",label:"Phase",value:"running",options:[{value:"running",label:"Running"},{value:"completed",label:"Completed"}]}],({id,value})=>{document.getElementById("status").textContent=value==="running"?"Running":"Completed";});</script></section>`,
+      `<section style="padding:20px"><div id="status-wrapper" style="width:200px;height:40px"><button id="status" style="display:block;width:100%;height:100%;border:0;padding:0">Running</button></div><label>Local note <input aria-label="Local note"></label><script>if(openclaw.preview)openclaw.preview.setControls([{id:"phase",label:"Phase",value:"running",options:[{value:"running",label:"Running"},{value:"completed",label:"Completed"}]}],({id,value})=>{document.getElementById("status").textContent=value==="running"?"Running":"Completed";});</script></section>`,
     );
     const metadata = sandbox(html);
     await suite.withPage(
@@ -68,7 +68,9 @@ suite.define(() => {
         const overlay = preview.locator(".bp-overlay--annotate");
         await overlay.waitFor();
         const bounds = await overlay.boundingBox();
-        if (!bounds) throw new Error("Annotation surface missing");
+        if (!bounds) {
+          throw new Error("Annotation surface missing");
+        }
         await page.mouse.move(bounds.x + 50, bounds.y + 24);
         await page.mouse.down();
         await page.mouse.move(bounds.x + 180, bounds.y + 36, { steps: 8 });
@@ -90,11 +92,13 @@ suite.define(() => {
         await preview.getByRole("button", { name: "Annotate widget", exact: true }).click();
         await overlay.waitFor();
         const selected = await overlay.boundingBox();
-        if (!selected) throw new Error("Selection surface missing");
+        if (!selected) {
+          throw new Error("Selection surface missing");
+        }
         await page.mouse.move(selected.x + 45, selected.y + 27);
         await preview
           .locator(".bp-tooltip__selector")
-          .getByText("p#status", { exact: true })
+          .getByText("button#status", { exact: true })
           .waitFor();
         await page.mouse.click(selected.x + 45, selected.y + 27);
         await add.click();

@@ -86,8 +86,8 @@ export function WidgetAnnotation(props: {
         const point = browserPanelNormalizedPoint(stage, event);
         state.pointer = point;
         const metrics = view().metrics!;
-        // The map and image come from the same snapshot. Pick the deepest (smallest)
-        // visible box, so moving widgets cannot change what a frozen mark refers to.
+        // The map and image come from the same snapshot. Prefer the smallest box;
+        // equal-area descendants follow their ancestors in document order.
         state.hover = point
           ? (elements()
               .filter(
@@ -97,6 +97,7 @@ export function WidgetAnnotation(props: {
                   point.y * metrics.cssHeight >= rect.y &&
                   point.y * metrics.cssHeight <= rect.y + rect.height,
               )
+              .toReversed()
               .toSorted((a, b) => a.rect.width * a.rect.height - b.rect.width * b.rect.height)[0] ??
             null)
           : null;
