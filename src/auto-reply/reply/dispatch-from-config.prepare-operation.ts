@@ -21,7 +21,6 @@ import { resolveCommandAuthorizationAsync } from "../command-auth.js";
 import { isNativeCommandTurn } from "../command-turn-context.js";
 import { waitForReplyDispatcherSettlement } from "../dispatch-dispatcher.js";
 import { markCommandReplyForDelivery, type ReplyPayload } from "../reply-payload.js";
-import type { FastAbortResult } from "./abort.types.js";
 import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
@@ -218,46 +217,42 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       result: attachSourceReplyDeliveryMode({ queuedFinal, counts }),
     };
   };
-  // Stop cancels this message's own unclaimed source with the pending input it selects.
-  // Holding that source until the Stop reply settles keeps a later turn from being
-  // admitted, and persisting its user row, before the Stop's exchange is recorded.
+  // Stop retains its own source until its exchange is recorded, so later input persists after it.
   const stopReplySettled = createDeferredCore<unknown>();
-  let fastAbort: FastAbortResult | undefined;
-  try {
-    fastAbort = await fastAbortResolver({
-      ctx,
-      cfg,
-      isCommandTargetCurrent: params.replyOptions?.isCommandTargetCurrent,
-      onAbortRequest: () => state.trackDispatchLifecycleWork(stopReplySettled.promise, "delivery"),
-    });
-    if (fastAbort.handled) {
-      if (fastAbort.aborted || (fastAbort.stoppedSubagents ?? 0) > 0) {
-        state.markInboundDedupeReplayUnsafe();
-      }
-      return await finishFastCommand({
-        payload: {
-          text: formatAbortReplyTextResolver(
-            fastAbort.stoppedSubagents,
-            fastAbort.rejectionReason,
-            fastAbort.failedSubagents,
-            fastAbort.localModelMayStillBeFinishing,
-          ),
-        },
-        reason: "fast_abort",
-        logKind: "fast_abort",
-      });
+  const fastAbort = await fastAbortResolver({
+    ctx,
+    cfg,
+    isCommandTargetCurrent: params.replyOptions?.isCommandTargetCurrent,
+    onAbortRequest: () => state.trackDispatchLifecycleWork(stopReplySettled.promise, "delivery"),
+  }).catch((error: unknown) => {
+    stopReplySettled.resolve(undefined);
+    throw error;
+  });
+  if (fastAbort.handled) {
+    if (fastAbort.aborted || (fastAbort.stoppedSubagents ?? 0) > 0) {
+      state.markInboundDedupeReplayUnsafe();
     }
-  } finally {
-    // Direct replies record the exchange at dispatcher settlement, after this returns.
-    stopReplySettled.resolve(
-      fastAbort?.handled
-        ? waitForReplyBarrierSettlement(
-            waitForReplyDispatcherSettlement(dispatcher),
-            dispatcher.resolveFollowupAdmissionBarrierTimeoutPolicy?.(),
-          )
-        : undefined,
-    );
+    return await finishFastCommand({
+      payload: {
+        text: formatAbortReplyTextResolver(
+          fastAbort.stoppedSubagents,
+          fastAbort.rejectionReason,
+          fastAbort.failedSubagents,
+          fastAbort.localModelMayStillBeFinishing,
+        ),
+      },
+      reason: "fast_abort",
+      logKind: "fast_abort",
+    }).finally(() => {
+      stopReplySettled.resolve(
+        waitForReplyBarrierSettlement(
+          waitForReplyDispatcherSettlement(dispatcher),
+          dispatcher.resolveFollowupAdmissionBarrierTimeoutPolicy?.(),
+        ),
+      );
+    });
   }
+  stopReplySettled.resolve(undefined);
   if (/^\s*\/approve(?:@[^\s]+)?(?:\s|$)/i.test(ctx.commandText)) {
     const fastApprove = await (
       await loadFastApproveRuntime()

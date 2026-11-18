@@ -875,7 +875,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/attempt-phase-lifecycle.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-phase.admission.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-replay.steering.test.ts",
-  "src/agents/embedded-agent-runner/run/attempt-session-replay.stop-delivery.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-replay-cohort.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-tool-call-persistence.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-recovery.test.ts",
