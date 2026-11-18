@@ -1506,6 +1506,7 @@ AFTER_CD
       ["docs/old.md", "docs/plugins/plugin-inventory.md", "true", "true"],
       ["src/old.ts", "src/new.ts", "false", "false"],
       ["test/fixtures/old.md", "docs/new.md", "true", "false"],
+      ["docs/reference/templates/AGENTS.md", "docs/reference/templates/AGENTS.md", "true", "false"],
       ["docs/removed.md", null, "true", "true"],
       ["VISION.md", "AGENTS.md", "true", "true"],
       ["docs/old.md", "VISION.md", "true", "true"],
@@ -1653,6 +1654,40 @@ AFTER_CD
       preflight.steps.find((step: WorkflowStep) => step.id === "manifest").env
         .OPENCLAW_CI_DOCS_ROOT_PROSE_ONLY,
     ).toBe("${{ steps.docs_scope.outputs.root_prose_only }}");
+  });
+
+  it("runs formatting once across lint and docs for current targets", () => {
+    const workflow = readCiWorkflow();
+    const lint = requiredWorkflowStep(workflow.jobs["check-shard"].steps, "Run check shard");
+    const docs = workflow.jobs["check-docs"];
+    const format = requiredWorkflowStep(docs.steps, "Check formatting");
+    for (const enabled of [false, true]) {
+      for (const docsSelected of [false, true]) {
+        for (const frozen of [false, true]) {
+          const context = {
+            eventName: "pull_request" as const,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            preflightOutputs: {
+              run_format_check: String(enabled),
+              run_check_docs: String(docsSelected),
+              frozen_target: String(frozen),
+            },
+            steps: {
+              node_setup: { outcome: "success" as const, outputs: {} },
+              bun_setup: { outcome: "success" as const, outputs: {} },
+            },
+          };
+          const lintRuns = evaluateWorkflowExpression(lint.env.FORMAT_CHECK, context);
+          const docsRuns =
+            evaluateWorkflowCondition(docs.if, context) &&
+            evaluateWorkflowCondition(format.if, context);
+          expect(Number(lintRuns === true || lintRuns === "true") + Number(docsRuns)).toBe(
+            enabled ? (frozen && docsSelected ? 2 : 1) : 0,
+          );
+        }
+      }
+    }
   });
 
   it("bounds matrix fan-out for runner-registration pressure", () => {
@@ -2690,7 +2725,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     {
       file: "openclaw-npm-preflight.yml",
       runner: "blacksmith-8vcpu-ubuntu-2404",
-      job: "check_openclaw_npm",
+      job: "check_openclaw_npm_stage",
     },
   ])("honors the global hosted runner override for $file/$job", ({ file, runner, job }) => {
     const workflow = readWorkflow(`.github/workflows/${file}`);
@@ -3051,7 +3086,15 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     const check = () =>
       runWorkflowShellScript(expectDefined(budget.run, "budget script"), {
         cwd: selected,
-        env: { ...process.env, BASE_SHA: base },
+        env: {
+          ...process.env,
+          BASE_SHA: base,
+          OPENCLAW_RELEASE_CONTEXT_REF: "",
+          GITHUB_ACTIONS: "true",
+          GITHUB_EVENT_NAME: "pull_request",
+          GITHUB_BASE_REF: "main",
+          GITHUB_REF: "refs/pull/1/merge",
+        },
       });
     const unallocated = check();
     expect(unallocated.status, unallocated.stdout + unallocated.stderr).toBe(1);
@@ -6858,6 +6901,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBeUndefined();
     expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_TARGETS_JSON).toBe("${{ toJson(matrix.targets) }}");
+    expect(runStep.env.OPENCLAW_NODE_TEST_TARGET_VOLUMES_GZIP_BASE64).toBe(
+      "${{ matrix.target_volumes_gzip_base64 || '' }}",
+    );
     expect(runStep.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64).toBe(
       "${{ matrix.groups_pool && steps.node-test-groups.outputs.groups_gzip_base64 || matrix.groups_gzip_base64 || '' }}",
     );

@@ -152,9 +152,12 @@ const ANDROID_SCREENSHOT_SCRIPT_SCOPE_RE =
 // Native bundling owns Mermaid assets and their shared coercion dependency.
 const MERMAID_ASSET_INPUT_RE =
   /^packages\/(?:mermaid-renderer\/|normalization-core\/(?:package\.json|src\/record-coerce\.ts)$)/;
-const ANDROID_TALK_CONTRACT_FIXTURE_RE = /^test\/fixtures\/talk-config-contract\.json$/;
+const ANDROID_TALK_CONTRACT_FIXTURE_RE =
+  /^test\/fixtures\/talk-(?:config|realtime-relay)-contract\.json$/;
 const NODE_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;
+// Packaged workspace templates ship with the runtime, so they keep Node lanes.
+const WORKSPACE_TEMPLATE_SCOPE_RE = /^docs\/reference\/templates\//u;
 const WINDOWS_SQLITE_SCOPE_RE = /^src\/(?:state\/|.*sqlite.*\.ts$)/;
 // Windows process-start identity: the owner, the Windows probe it falls back to,
 // and every consumer that admits or recovers work from that identity. The
@@ -166,7 +169,7 @@ const WINDOWS_PROCESS_IDENTITY_SCOPE_RE =
 const WINDOWS_FILE_URL_SCOPE_RE =
   /^(?:src\/agents\/tools\/(?:media-tool-file-url\.windows\.test|media-tool-shared(?:\.test)?|pdf-tool(?:\.test)?)|src\/auto-reply\/(?:reply\/stage-sandbox-media|reply\.triggers\.trigger-handling\.stages-inbound-media-into-sandbox-workspace\.test)|src\/media\/(?:local-media-path(?:\.windows\.test)?|local-roots(?:\.test)?|web-media(?:\.file-url\.windows\.test)?)|src\/channels\/inbound-event\/media(?:\.test)?|src\/gateway\/managed-image-attachments(?:\.test)?|extensions\/msteams\/src\/(?:media-helpers|messenger)(?:\.test)?)\.ts$/;
 const WINDOWS_SCOPE_RE =
-  /^(src\/cli\/completion-runtime\.ts$|extensions\/canvas\/scripts\/pnpm-runner\.(?:mjs|test\.ts)$|extensions\/mxc\/|src\/agents\/(?:bash-tools\.exec-script-(?:preflight|target)|bash-tools\.exec\.script-preflight\.test)\.ts$|src\/config\/sessions\/(?:session-accessor\.sqlite-archive(?:\.worker(?:\.test)?)?|store\.session-lifecycle-mutation\.test)\.ts$|src\/process\/|src\/infra\/(?:(?:exec-allowlist-pattern|fs-safe-remove)(?:\.windows)?(?:\.test)?|ports(?:-inspect|\.test)|ssh-client(?:\.windows\.test)?|update-managed-service-handoff(?:-(?:command|lifecycle)\.test)?|windows-install-roots)\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|src\/test-utils\/openclaw-test-state(?:\.test)?\.ts$|scripts\/(?:android-(?:app-i18n|pin-version)\.ts|(?:check-deadcode-unused-files|deadcode-knip-runner)\.mts|ci-run-timings\.mjs|e2e\/lib\/package-compat\.mjs|generate-bundled-channel-config-metadata\.ts|(?:install|windows-testbox-openssh)\.ps1|openclaw-cross-os-release-checks\.ts|plan-release-workflow-matrix\.mjs|run-additional-boundary-checks\.mts|verify-docker-attestations\.mjs|github\/run-openclaw-cross-os-release-checks\.sh|tsx\.mjs|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|mts|js)|lib\/(?:direct-run\.(?:mjs|mts)|format-generated-module\.mts|tsx-cli-shim\.mjs|cross-os-release-checks\/[^/]+\.ts))$|test\/scripts\/(?:direct-run-entrypoints|format-generated-module|install-ps1|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$|\.github\/workflows\/(?:ci|openclaw-cross-os-release-checks-reusable|windows-testbox-probe|windows-blacksmith-testbox)\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
+  /^(src\/cli\/completion-runtime\.ts$|extensions\/canvas\/scripts\/pnpm-runner\.(?:mjs|test\.ts)$|extensions\/mxc\/|src\/agents\/bash-tools\.exec\.script-preflight\.test\.ts$|src\/config\/sessions\/(?:session-accessor\.sqlite-archive(?:\.worker(?:\.test)?)?|store\.session-lifecycle-mutation\.test)\.ts$|src\/process\/|src\/infra\/(?:(?:exec-allowlist-pattern|fs-safe-remove)(?:\.windows)?(?:\.test)?|ports(?:-inspect|\.test)|ssh-client(?:\.windows\.test)?|update-managed-service-handoff(?:-(?:command|lifecycle)\.test)?|windows-install-roots)\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|src\/test-utils\/openclaw-test-state(?:\.test)?\.ts$|scripts\/(?:android-(?:app-i18n|pin-version)\.ts|(?:check-deadcode-unused-files|deadcode-knip-runner)\.mts|ci-run-timings\.mjs|e2e\/lib\/package-compat\.mjs|generate-bundled-channel-config-metadata\.ts|(?:install|windows-testbox-openssh)\.ps1|openclaw-cross-os-release-checks\.ts|plan-release-workflow-matrix\.mjs|run-additional-boundary-checks\.mts|verify-docker-attestations\.mjs|github\/run-openclaw-cross-os-release-checks\.sh|tsx\.mjs|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|mts|js)|lib\/(?:direct-run\.(?:mjs|mts)|format-generated-module\.mts|tsx-cli-shim\.mjs|cross-os-release-checks\/[^/]+\.ts))$|test\/scripts\/(?:direct-run-entrypoints|format-generated-module|install-ps1|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$|\.github\/workflows\/(?:ci|openclaw-cross-os-release-checks-reusable|windows-testbox-probe|windows-blacksmith-testbox)\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
 const WINDOWS_LAN_ADVERTISEMENT_SCOPE_RE =
   /^src\/infra\/advertised-lan-host(?:\.windows)?(?:\.test)?\.ts$/;
 const WINDOWS_SECRETREF_SCOPE_RE =
@@ -300,7 +303,7 @@ export function detectChangedScope(changedPaths) {
     const isAppleBuildInput = isAppleSharedBuildInput(path);
     const hasNativeProtocolInput = isNativeProtocolInput(path);
 
-    if (facts.surface === "docs") {
+    if (facts.surface === "docs" && !WORKSPACE_TEMPLATE_SCOPE_RE.test(path)) {
       continue;
     }
 
@@ -685,7 +688,7 @@ export function detectNodeFastScope(changedPaths) {
   for (const rawPath of changedPaths) {
     const facts = getChangedPathFacts(rawPath);
     const { path } = facts;
-    if (!path || facts.surface === "docs") {
+    if (!path || (facts.surface === "docs" && !WORKSPACE_TEMPLATE_SCOPE_RE.test(path))) {
       continue;
     }
 

@@ -76,6 +76,7 @@ function completedResult(id: string, name: string, title: string, text: string, 
       {
         itemId: `tool:${id}`,
         toolCallId: id,
+        name,
         kind: "tool",
         phase: "end",
         status: "completed",
@@ -295,7 +296,7 @@ suite.define(() => {
     });
     const activity = page.locator(".chat-group--activity .chat-activity-group__summary");
     await activity.waitFor();
-    expect(await activity.textContent()).toContain("2 other operations");
+    expect((await activity.textContent())?.trim()).toBe("Read files, changed files");
     const activityGeometry = await activity.evaluate((node) => {
       const container = node.closest<HTMLElement>(".chat-activity-group");
       const label = node.querySelector<HTMLElement>(".chat-activity-group__label");
@@ -409,7 +410,7 @@ suite.define(() => {
     await expect
       .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
       .toBe("dark");
-    expect(await summary.textContent()).toContain("2 other operations");
+    expect((await summary.textContent())?.trim()).toBe("Ran commands, changed files");
     expect(await patchRow.locator(".chat-tool-row__verb").textContent()).toBe("Changed");
     await context.close();
   });
@@ -489,7 +490,7 @@ suite.define(() => {
           toolCallId: id,
           name: "exec",
           phase: "start",
-          args: { command: "true", title },
+          args: { code: "return null;", title },
         });
         return;
       }
@@ -510,7 +511,6 @@ suite.define(() => {
       );
 
     await progress("first", "Search sessions for release notes", "running");
-    await page.locator(".chat-tool-row--running .chat-tool-row__title").waitFor();
     await expect.poll(shimmering).toEqual(["Search sessions for release notes"]);
 
     await progress("first", "Search sessions for release notes", "completed");
@@ -520,10 +520,10 @@ suite.define(() => {
     await page.locator(".chat-activity-group__label--running").waitFor();
     await expect
       .poll(() => page.locator(".chat-activity-group__label--running").textContent())
-      .toBe("Read the matching notes…");
-    await expect.poll(shimmering).toEqual(["Read the matching notes…"]);
+      .toBe("Read the matching notes");
+    await expect.poll(shimmering).toEqual(["Read the matching notes"]);
     await page.locator(".chat-activity-group__summary").click();
-    await expect.poll(shimmering).toEqual(["Read the matching notes…", "Read the matching notes"]);
+    await expect.poll(shimmering).toEqual(["Read the matching notes"]);
 
     await progress("second", "Read the matching notes", "completed");
     await expect.poll(shimmering).toEqual([]);
@@ -569,6 +569,7 @@ suite.define(() => {
     });
     await page.locator(".chat-thread-inner").getByText("Working on it.").waitFor();
 
+    await page.locator('.chat-activity-group__summary[aria-expanded="false"]').click();
     const runningRow = page.locator(".chat-tool-row--running");
     await runningRow.waitFor();
     // Visual-regression guard for the active-task text wave: the running

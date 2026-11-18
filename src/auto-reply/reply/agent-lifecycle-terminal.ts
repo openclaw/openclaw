@@ -1,11 +1,16 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { classifyOAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { resolveCompactionRecoveryLifecycleError } from "../../agents/compaction-recovery-lifecycle-error.js";
 import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { renderStorageFailureSummary } from "../../agents/failover/assistant-request-failure-copy.js";
 import { getFailoverErrorCode } from "../../agents/failover/error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
-import { AgentHarnessModelRequestPolicyError } from "../../agents/harness/errors.js";
+import {
+  AgentHarnessModelRequestPolicyError,
+  AgentHarnessRuntimeUpdateRequiredError,
+} from "../../agents/harness/errors.js";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
@@ -62,6 +67,22 @@ export function resolveAgentLifecycleTerminalMetadata(meta: unknown): Record<str
     }
   }
   return metadata;
+}
+
+/** The deferred terminal error and metadata to publish once the run result is known. */
+export function resolveDeferredLifecycleTerminal(
+  result: Pick<EmbeddedAgentRunResult, "meta">,
+  deferredError: string | undefined,
+  metadata: Record<string, unknown> = resolveAgentLifecycleTerminalMetadata(result.meta),
+): { error: string | undefined; metadata: Record<string, unknown> } {
+  const recoveryError = resolveCompactionRecoveryLifecycleError(result, deferredError);
+  return recoveryError
+    ? // The precheck's overflow observation no longer describes this failure.
+      {
+        error: recoveryError,
+        metadata: { ...metadata, errorNotice: recoveryError, errorObservation: undefined },
+      }
+    : { error: deferredError, metadata };
 }
 
 export function createAgentLifecycleTerminalBackstop(params: {
@@ -150,6 +171,11 @@ export function createAgentLifecycleTerminalBackstop(params: {
           ...(isRecord(data.errorObservation) ? data.errorObservation : {}),
           providerErrorCode: terminalValue.code,
           httpStatus: terminalValue.status,
+        };
+      } else if (terminalValue instanceof AgentHarnessRuntimeUpdateRequiredError) {
+        data.errorObservation = {
+          ...(isRecord(data.errorObservation) ? data.errorObservation : {}),
+          providerErrorCode: terminalValue.code,
         };
       }
       Object.assign(data, terminationFields);

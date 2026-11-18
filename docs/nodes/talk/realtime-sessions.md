@@ -128,7 +128,11 @@ and does not prevent the agent from adopting that consult's recorded input.
 Completed agent answers and newly admitted tasks still close the older input;
 speech records do not reopen it.
 
-Gateway-controlled native WebRTC calls receive shared-session history as quoted
+Fresh Gateway-relay calls, including Android Talk, load the selected session's
+recent history at startup, just as voice replacements do. Starting with an empty
+session adds no history.
+
+Gateway-relay and Gateway-controlled native WebRTC calls receive shared-session history as quoted
 historical background in their instructions, not as the new call's own user or
 assistant messages. This background can include prior calls and backing-agent
 answers; it does not establish the current call's live task state. It retains
@@ -137,12 +141,14 @@ bytes including labels and quoting. This changes neither saved transcripts nor
 chat display. Native calls without negotiated host input control and direct
 WebSocket conversation seeds keep their existing representation.
 
-Generated agent-consult prompts are internal input, not spoken user turns. New
-consult records are hidden from chat and excluded from later model context, while
-the active consult still receives the full question, context, and response style.
-Raw archives and [session exports](/tools/slash-commands) remain lossless. Existing
-consult records without the exclusion flag are not rewritten and remain eligible
-for model context.
+Generated agent-consult prompts are internal input, not spoken user turns. Native
+provider-owned consultations hide these records from chat but retain them in model
+history so later requests preserve the already-dispatched prefix. Reconnecting
+native calls can include these records in their bounded, quoted historical
+background. Other consult paths continue to exclude new generated records from
+later model context while providing the active consult with the full question,
+context, and response style. Raw archives and [session exports](/tools/slash-commands)
+remain lossless; existing records are not rewritten.
 
 Chat-backed Talk stores the spoken answer without a second copy of the
 successful consult answer in visible history; the internal answer remains in the
@@ -210,6 +216,13 @@ microphone stream granted after cancellation.
 Browser Talk acquires the microphone before creating the provider session, so
 time spent granting permission does not consume a short-lived connection token.
 If session creation fails, Talk releases the microphone before reporting the error.
+
+Composer dictation does the opposite: it creates its Gateway transcription
+session first and opens the microphone only after the Gateway accepts it.
+Stopped recordings keep their sessions until their text arrives, and each
+connection has two. When both are still transcribing, a new recording shows
+"Dictation is busy" without opening the microphone; try again once the earlier
+text appears.
 
 If OpenAI cannot transcribe an utterance, browser Talk shows the provider's error
 without ending the call or inventing a transcript. You can speak again; audio

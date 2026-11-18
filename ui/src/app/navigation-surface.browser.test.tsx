@@ -74,7 +74,7 @@ describe.skipIf(!hasBrowserLayout)("navigation surface browser layout", () => {
       expect(bounds.width).toBeGreaterThan(0);
       expect(overlaps(cardBounds, bounds)).toBe(false);
     }
-    // The notice floats at the bottom-left, below the collapsed chrome cluster.
+    // The notice floats at the bottom of the content, below the collapsed chrome cluster.
     expect(
       cardBounds.top - Math.max(...buttonBounds.map((bounds) => bounds.bottom)),
     ).toBeGreaterThanOrEqual(8);

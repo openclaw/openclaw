@@ -33,12 +33,16 @@ function ok(result: AuthorityResult) {
   return result;
 }
 
-async function macWorld() {
+async function macWorld(expiresAt: number | null = null) {
   const world = await buildWorld();
   const mac = await worldKey("mac");
   const nodeKey = formatIrohEndpointKey((await worldKey("mac-node")).signer.publicKey);
   const node: OwnerDeviceNode = { peer_key: nodeKey, label: "Josh’s Mac Studio", description };
-  const cert = await signStatement("OwnerDeviceCert", certBody(mac), world.device1.signer);
+  const cert = await signStatement(
+    "OwnerDeviceCert",
+    { ...certBody(mac), expires_at: expiresAt },
+    world.device1.signer,
+  );
   const change = await signChange(world.state, world.device1.signer, {
     op: "add_owner_device",
     cert,
@@ -48,6 +52,33 @@ async function macWorld() {
 }
 
 describe("owner device with a node", () => {
+  it("expires the bound node with its device, keeping independently approved descendants", async () => {
+    const expiresAt = WORLD_NOW + 60;
+    const { world, mac, nodeKey, change } = await macWorld(expiresAt);
+    let state = ok(await submitStatement(world.state, change, tunnel)).state;
+    const child = await worldKey("child-app");
+    const childNode = (await worldKey("child-node")).peer;
+    state = ok(
+      await submitStatement(
+        state,
+        await signChange(state, mac.signer, {
+          op: "add_owner_device",
+          cert: await signStatement("OwnerDeviceCert", certBody(child), mac.signer),
+          node: { peer_key: childNode, label: "Child app", description },
+        }),
+        tunnel,
+      ),
+    ).state;
+
+    expect(isAdmitted(state, mac.peer, expiresAt - 1)).toBe(true);
+    expect(isAdmitted(state, nodeKey, expiresAt - 1)).toBe(true);
+    expect(isAdmitted(state, mac.peer, expiresAt)).toBe(false);
+    expect(isAdmitted(state, nodeKey, expiresAt)).toBe(false);
+    expect(snapshotBody(state, 1, expiresAt).node_peer_keys).toEqual([childNode]);
+    expect(isAdmitted(state, child.peer, expiresAt)).toBe(true);
+    expect(isAdmitted(state, childNode, expiresAt)).toBe(true);
+  });
+
   it("lists the node bound to the device in the same approval, as a node only", async () => {
     const { world, mac, nodeKey, change, fp } = await macWorld();
     expect(parseStatement(change, "MembershipChange").ok).toBe(true);

@@ -1,4 +1,5 @@
 /** Builds model-catalog worker pools that report their first close to the pool owner. */
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveStateDir } from "../config/state-dir.js";
 import {
   getDatabaseEngineSelection,
@@ -6,10 +7,13 @@ import {
 } from "../infra/database-engine/context.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import { resolveWorkerPoolSize } from "../infra/worker-pool-sizing.js";
-import { WorkerTaskPool } from "../infra/worker-task-pool.js";
+import { WorkerTaskPool, WorkerTaskError } from "../infra/worker-task-pool.js";
+import type { WorkerTaskInput, WorkerTaskOptions } from "../infra/worker-task-pool.types.js";
+import { createPluginCaptureOwner } from "../plugins/plugin-capture-native-resource.client.js";
 import { createPluginSourceAdmissionPublisher } from "../plugins/plugin-source-admission-store.js";
-import { createPluginSourceCaptureRoot } from "../plugins/plugin-source-capture-directory.js";
+import type { PluginCaptureResourceRoot } from "../plugins/plugin-capture-native-resource.types.js";
 
 export type PreparedModelCatalogWorkerData = {
   databaseEngineSelection?: DatabaseEngineSelection;
@@ -28,8 +32,14 @@ const CATALOG_WORKER_HEAP_LIMITS = { maxOldGenerationSizeMb: 512, maxYoungGenera
 export class CatalogWorkerTaskPool<Input, Output> extends WorkerTaskPool<Input, Output> {
   readonly publishSourceAdmission: ReturnType<typeof createPluginSourceAdmissionPublisher>;
 
+  private captures?: Awaited<ReturnType<typeof createPluginCaptureOwner>>;
+  private preparingRoot?: Promise<void>;
+  private releasingRoot?: Promise<void>;
+  // The pool's input factory settles before prepareWorker consumes this owned root.
+  private sourceCapture!: PluginCaptureResourceRoot;
+
   constructor(
-    env: NodeJS.ProcessEnv,
+    private readonly env: NodeJS.ProcessEnv,
     validateResult: (result: Output) => void,
     assertCurrent?: () => void,
     private readonly onClose?: (error?: Error) => void,
@@ -44,12 +54,9 @@ export class CatalogWorkerTaskPool<Input, Output> extends WorkerTaskPool<Input, 
       restartOnError: false,
       prepareWorker: () => {
         assertCurrent?.();
-        const capture = createPluginSourceCaptureRoot(
-          resolveStateDir(env),
-          "openclaw-model-catalog-",
-        );
+        const capture = this.sourceCapture;
         return {
-          releaseResources: capture.release,
+          releaseResources: () => this.releaseRoot(),
           options: {
             workerData: {
               databaseEngineSelection: getDatabaseEngineSelection(),
@@ -67,12 +74,51 @@ export class CatalogWorkerTaskPool<Input, Output> extends WorkerTaskPool<Input, 
     this.publishSourceAdmission = createPluginSourceAdmissionPublisher({ env });
   }
 
+  override run(input: WorkerTaskInput<Input>, options: WorkerTaskOptions<Input>): Promise<Output> {
+    return super.run(async () => {
+      await (this.preparingRoot ??= (async () => {
+        this.captures = await createPluginCaptureOwner(
+          captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }),
+          {
+            native() {
+              throw new Error("Catalog execution owns its native captures locally");
+            },
+          },
+        );
+        this.sourceCapture = await this.captures.createSource(
+          0,
+          { stateDir: resolveStateDir(this.env), placement: "state" },
+          "openclaw-model-catalog-",
+        );
+      })().catch((error: unknown) => {
+        const failure = toErrorObject(error, "Catalog capture preparation failed");
+        // Closing joins this input preparation; report construction failure without self-await.
+        void this.close(failure).catch(() => undefined);
+        throw failure;
+      }));
+      if (this.isClosed) {
+        throw new WorkerTaskError("worker task pool closed", "unavailable");
+      }
+      // SAFETY: WorkerTaskInput defines callable inputs as factories.
+      return typeof input === "function" ? (input as () => Input | Promise<Input>)() : input;
+    }, options);
+  }
+
+  private releaseRoot(): Promise<void> {
+    return (this.releasingRoot ??= (async () => {
+      await this.captures?.releaseSource(0);
+    })());
+  }
+
   override close(error?: Error): Promise<void> {
     const first = !this.isClosed;
     const closed = super.close(error);
     if (first) {
       this.onClose?.(error);
     }
-    return closed;
+    return closed.then(async () => {
+      await this.releaseRoot();
+      await this.captures?.close();
+    });
   }
 }

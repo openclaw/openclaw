@@ -197,7 +197,7 @@ suite.define(() => {
     await expect.poll(async () => (await gateway.getRequests("connect")).length).toBe(2);
     await gateway.rejectDeferred("connect", {
       code: "UNAVAILABLE",
-      message: "protocol mismatch: Control UI updated; reload this page to continue",
+      message: "protocol mismatch: OpenClaw updated; reload this page to continue",
       details: {
         code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
         gatewayBuildId: "replacement-build",
@@ -213,7 +213,7 @@ suite.define(() => {
         }),
       )
       .toBe("reload-required");
-    await page.getByRole("button", { name: /Server updated/u }).waitFor();
+    await page.getByRole("button", { name: /OpenClaw was updated/u }).waitFor();
     expect(await page.locator("openclaw-login-gate").count()).toBe(0);
   });
 

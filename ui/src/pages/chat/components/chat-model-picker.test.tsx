@@ -35,11 +35,15 @@ function keydown(input: HTMLInputElement, key: string) {
   flush();
 }
 
-function accountSection(onSelect = vi.fn(), open = false) {
+function accountSection(
+  onSelect = vi.fn(),
+  open = false,
+  selectionKind: "automatic" | "personal" = "automatic",
+) {
   return {
     onClose() {},
     viewProps: (startIndex: number) => ({
-      selectionKind: "automatic" as const,
+      selectionKind,
       disabled: false,
       selectedIdentity: "Current account",
       options: [{ value: "current", label: "Needle account" }],
@@ -53,12 +57,38 @@ function accountSection(onSelect = vi.fn(), open = false) {
   };
 }
 
+it.each(
+  [3, 9, 10].flatMap((count) => [false, true].map((recommended) => ({ count, recommended }))),
+)(
+  "shows short provider lists without disclosure (count=$count, recommended=$recommended)",
+  async ({ count, recommended }) => {
+    const { container } = mountPicker({
+      open: true,
+      selectedModelValue: "fixture/model-0",
+      modelOptions: [
+        ...Array.from({ length: count }, (_, index) =>
+          option("fixture", "model-" + index, { recommended: recommended && index === 0 }),
+        ),
+        ...Array.from({ length: 20 }, (_, index) => option("other", "model-" + index)),
+      ],
+    });
+    await waitForMenu(container);
+    expect(Boolean(control(container, "more-toggle"))).toBe(count >= 10);
+    if (count < 10) {
+      expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(count);
+    }
+  },
+);
+
 it("forgets disclosure for removed providers", async () => {
   const params = pickerProps({
     open: true,
     modelOptions: [
       option("selected", "current"),
       option("other", "lead", { recommended: true }),
+      ...Array.from({ length: 8 }, (_, index) =>
+        option("other", "recommended-" + index, { recommended: true }),
+      ),
       option("other", "rest"),
     ],
     selectedModelValue: "selected/current",
@@ -139,6 +169,9 @@ it.each([false, true])(
     const { container } = mountPicker({
       modelOptions: [
         option("fixture", "lead", { recommended: true }),
+        ...Array.from({ length: 8 }, (_, index) =>
+          option("fixture", "recommended-" + index, { recommended: true }),
+        ),
         option("fixture", "rest", { disabled: restDisabled }),
         option("other", "model"),
       ],
@@ -238,7 +271,7 @@ it("keeps search live while targets load, then ranks model, target, and account 
     container.querySelector(
       '[data-chat-model-target-group] [data-chat-model-catalog-state="loading"]',
     ),
-  ).not.toBeNull();
+  ).toBeNull();
   search.focus();
   searchFor(search, "needle");
   const model = control(container, "option", "fixture/model")!;
@@ -275,11 +308,8 @@ it("keeps search live while targets load, then ranks model, target, and account 
   expect(findMenuShortcut(details, "4")).toBeUndefined();
   expect(model.hasAttribute("data-chat-model-highlighted")).toBe(true);
   expect(search.getAttribute("aria-activedescendant")).toBe(model.id);
-  expect(
-    model
-      .querySelector("[data-chat-model-shortcut]")
-      ?.getAttribute("data-chat-model-shortcut-number"),
-  ).toBe("1");
+  expect(model.getAttribute("aria-keyshortcuts")).toBe("1");
+  expect(model.querySelector("kbd")).toBeNull();
   keydown(search, "ArrowDown");
   const target = ranked()[2]!;
   expect(search.getAttribute("aria-activedescendant")).toBe(target.id);
@@ -293,13 +323,149 @@ it("keeps search live while targets load, then ranks model, target, and account 
   expect(selectAccount).not.toHaveBeenCalled();
 });
 
-it("keeps account recovery searchable with an empty catalog", async () => {
+it("keeps picker shortcuts scoped to unmodified keys outside search and nested menus", async () => {
+  const select = vi.fn();
+  const { container } = mountPicker({
+    open: true,
+    modelOptions: [option("fixture", "current"), option("fixture", "other")],
+    onModelSelect: select,
+  });
+  await waitForMenu(container);
+  const trigger = control(container, "select")!;
+  const search = container.querySelector<HTMLInputElement>(modelControlSelector("search"))!;
+  const press = (target: HTMLElement, key: string, init: KeyboardEventInit = {}) => {
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
+    target.dispatchEvent(event);
+    flush();
+    return event.defaultPrevented;
+  };
+  for (const init of [
+    { ctrlKey: true },
+    { altKey: true },
+    { metaKey: true },
+    { isComposing: true },
+  ]) {
+    expect(press(trigger, "2", init)).toBe(false);
+  }
+  expect(press(search, "2")).toBe(false);
+  const nestedMenu = document.createElement("div");
+  nestedMenu.setAttribute("role", "menu");
+  nestedMenu.setAttribute("popover", "auto");
+  trigger.closest("details")!.append(nestedMenu);
+  expect(press(nestedMenu, "2")).toBe(false);
+  nestedMenu.remove();
+  expect(select).not.toHaveBeenCalled();
+  expect(press(trigger, "/")).toBe(true);
+  expect(document.activeElement).toBe(search);
+  expect(press(trigger, "2")).toBe(true);
+  expect(select).toHaveBeenCalledWith("fixture/other", "main", undefined);
+});
+
+it("uses the displayed model for trigger metadata and distinguishes an unset override from an empty one", () => {
+  const params = pickerProps({
+    modelOptions: [
+      option("openai", "default", { isDefault: true, supportsTools: false }),
+      option("fixture", "other", { supportsTools: true }),
+    ],
+    selectedModelValue: "",
+  });
+  const { container, update } = mountPicker(params);
+  const trigger = control(container, "select")!;
+  const icon = () => trigger.querySelector(".chat-controls__trigger-provider-icon");
+  expect(trigger.getAttribute("aria-label")).toBe("Chat model: Current · No tools");
+  expect(icon()).not.toBeNull();
+  update({ ...params, triggerModelValue: "fixture/other" });
+  expect(control(container, "select")).toBe(trigger);
+  expect(trigger.getAttribute("aria-label")).toBe("Chat model: Current");
+  expect(icon()).toBeNull();
+  update({ ...params, triggerModelValue: "" });
+  expect(trigger.getAttribute("aria-label")).toBe("Chat model: Current");
+  update(params);
+  expect(trigger.getAttribute("aria-label")).toBe("Chat model: Current · No tools");
+  expect(icon()).not.toBeNull();
+  update({ ...params, triggerStatusLabel: "Loading" });
+  expect(icon()).toBeNull();
+});
+
+it("shows a context badge only for a known non-default selection", () => {
+  const params = pickerProps({ modelOptions: [option("fixture", "current")] });
+  const { container, update } = mountPicker(params);
+  const badge = () => control(container, "context-badge");
+  expect(badge()).toBeNull();
+  const contextWindow = {
+    options: [
+      { id: "standard", label: "272k", contextWindow: 272000 },
+      { id: "extended", label: "1M", contextWindow: 1000000 },
+    ],
+    selected: "standard",
+    defaultId: "standard",
+    disabled: false,
+    onSelect: vi.fn(async () => {}),
+  };
+  update({ ...params, contextWindow });
+  expect(badge()).toBeNull();
+  update({ ...params, contextWindow: { ...contextWindow, selected: "extended" } });
+  expect(badge()?.textContent).toBe("1M");
+  update({ ...params, contextWindow: { ...contextWindow, selected: "missing" } });
+  expect(badge()).toBeNull();
+  update({ ...params, contextWindow: { ...contextWindow, defaultId: undefined } });
+  expect(badge()?.textContent).toBe("272k");
+  update(params);
+  expect(badge()).toBeNull();
+});
+
+it("opens setup directly for a settled empty catalog and restores the picker when models arrive", async () => {
+  const onModelSetup = vi.fn();
+  const params = pickerProps({
+    modelOptions: [],
+    modelCatalogState: { hasSnapshot: true, status: "ready" },
+    onModelSetup,
+  });
+  const view = mountPicker(params);
+  const setup = view.container.querySelector<HTMLButtonElement>("button[data-chat-model-setup]");
+  expect(setup?.textContent).toBe("Set up a model");
+  expect(view.container.querySelector("details")).toBeNull();
+  view.update({ ...params, disabled: true });
+  expect(setup?.disabled).toBe(true);
+  setup!.click();
+  expect(onModelSetup).not.toHaveBeenCalled();
+  view.update(params);
+  setup!.click();
+  expect(onModelSetup).toHaveBeenCalledOnce();
+  const replacementSetup = vi.fn();
+  view.update({ ...params, onModelSetup: replacementSetup });
+  expect(control(view.container, "setup")).toBe(setup);
+  setup!.click();
+  expect(replacementSetup).toHaveBeenCalledOnce();
+  expect(onModelSetup).toHaveBeenCalledOnce();
+  view.update({ ...params, modelOptions: [option("fixture", "current")], open: true });
+  await waitForMenu(view.container);
+  expect(control(view.container, "option", "fixture/current")).not.toBeNull();
+  view.update({ ...params, accountSection: accountSection() });
+  expect(view.container.querySelector("details")).toBeNull();
+  expect(view.container.querySelector("button[data-chat-model-setup]")).not.toBeNull();
+});
+
+it.each(["loading", "error", "offline"] as const)(
+  "does not replace an empty %s catalog with setup",
+  (status) => {
+    const { container } = mountPicker({
+      modelCatalogState: { hasSnapshot: true, status },
+      onModelSetup: vi.fn(),
+    });
+    expect(container.querySelector("details")).not.toBeNull();
+    expect(control(container, "setup")).toBeNull();
+  },
+);
+
+it("keeps personal account recovery searchable with an empty catalog", async () => {
   const selectAccount = vi.fn();
   const { container } = mountPicker({
     open: true,
     modelOptions: [],
     modelCatalogState: { hasSnapshot: true, status: "ready" },
-    accountSection: accountSection(selectAccount),
+    accountSection: accountSection(selectAccount, false, "personal"),
+    onModelSetup: vi.fn(),
   });
   await waitForMenu(container);
   const search = container.querySelector<HTMLInputElement>(modelControlSelector("search"));

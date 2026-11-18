@@ -4,6 +4,7 @@ import type {
   WorkboardDiagnostic,
   WorkboardEvent,
   WorkboardLaunchState,
+  WorkboardResultEvidence,
   WorkboardWorkspace,
   WorkboardWorkspaceAccess,
 } from "@openclaw/workboard-contract";
@@ -43,9 +44,12 @@ export type WorkboardCardPatch = WorkboardCardInput;
 /** Internal builders carry launch state separately from untrusted metadata. */
 export type WorkboardOwnedCardPatch = WorkboardCardPatch & {
   ownedLaunch?: WorkboardLaunchState;
+  ownedEvidence?: WorkboardResultEvidence[];
 };
 export type WorkboardUpdateCardOptions = {
   automationLaunch?: WorkboardLaunchState;
+  /** Replaces automation.evidence; built only by Workboard's evidence writers. */
+  automationEvidence?: WorkboardResultEvidence[];
   allowMetadataDependencyLinks?: boolean;
   enforceStatusHolds?: boolean;
   event?: Omit<WorkboardEvent, "id" | "at">;
@@ -119,6 +123,18 @@ export type WorkboardCompleteInput = WorkboardMutationScope & {
   proofId?: unknown;
   artifacts?: unknown;
   createdCardIds?: unknown;
+  /** Optional worker claims; never required and never checked before completion. */
+  claims?: unknown;
+};
+export type WorkboardVerifyInput = {
+  scope?: unknown;
+  outcome?: unknown;
+  claimId?: unknown;
+  proofId?: unknown;
+  artifactId?: unknown;
+  runId?: unknown;
+  note?: unknown;
+  url?: unknown;
 };
 export type WorkboardBlockInput = WorkboardMutationScope & {
   reason?: unknown;
@@ -190,6 +206,8 @@ export type WorkboardNotificationEventsInput = WorkboardNotificationListOptions 
 export type WorkboardMutationScope = {
   ownerId?: unknown;
   token?: unknown;
+  /** Host run id of the calling agent turn; refuses writes from a superseded attempt. */
+  runId?: unknown;
 };
 
 export type WorkboardDiagnosticsResult = {

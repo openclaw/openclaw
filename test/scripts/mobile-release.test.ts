@@ -3,7 +3,6 @@ import { generateKeyPairSync } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { renderAndroidVersionProperties } from "../../scripts/lib/android-version.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { commit, git, write } from "./mobile-release-git.test-support.js";
 
@@ -201,8 +200,8 @@ if (process.argv[2] === "build") {
       firebasePreload,
       String.raw`
 import fs from "node:fs";
-import { registerHooks } from "node:module";
-registerHooks({ resolve(specifier, context, nextResolve) {
+import nodeModule from "node:module";
+nodeModule.registerHooks({ resolve(specifier, context, nextResolve) {
   return specifier === "undici" ? { url: import.meta.url, shortCircuit: true } : nextResolve(specifier, context);
 } });
 export class Agent { async close() {} }
@@ -237,7 +236,6 @@ export const fetch = async (url, options = {}) => {
 `,
     );
     copyFiles(root, [
-      "scripts/android-sync-versioning.ts",
       "scripts/android-version.ts",
       "scripts/lib/android-version.ts",
       "scripts/lib/mobile-changelog.ts",
@@ -249,11 +247,6 @@ export const fetch = async (url, options = {}) => {
       "scripts/android-release-upload.sh",
     ]);
     writeFiles(root, {
-      "apps/android/version.json": '{"version":"2026.8.2","versionCode":2026080201}\n',
-      "apps/android/Config/Version.properties": renderAndroidVersionProperties({
-        canonicalVersion: "2026.8.2",
-        versionCode: 2026080201,
-      }),
       "apps/android/CHANGELOG.md":
         "## Unreleased\n\nFuture manual notes.\n\n## 2026.8.2\n\nPrevious APK notes.\n",
       "apps/android/fastlane/metadata/android/en-US/release_notes.txt": "Previous APK notes.\n",
@@ -399,15 +392,11 @@ describe("mobile release CLI", () => {
     { destination: "play-store", event: "schedule" },
     { destination: "internal", event: "schedule" },
   ])(
-    "builds Android $destination on $event from the saved plan without changing Git or pinned metadata",
+    "builds Android $destination on $event from the saved plan without changing Git or manual release notes",
     ({ destination, event }) => {
       const f = fixture("android");
-      const pinned = [
-        "apps/android/version.json",
-        "apps/android/Config/Version.properties",
-        "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
-      ];
-      const original = pinned.map((file) => read(f.root, file));
+      const manualNotes = ["apps/android/fastlane/metadata/android/en-US/release_notes.txt"];
+      const original = manualNotes.map((file) => read(f.root, file));
       const ci = workflowEnv(f.base);
       if (destination === "internal") {
         const rejected = f.invoke("run", ["--destination", destination], {
@@ -470,7 +459,7 @@ describe("mobile release CLI", () => {
         f.ref("refs/openclaw/mobile-releases/android/v2/2026.9.2/0/1/2026090250-2026090251"),
       ).toBe(f.base);
       expect(f.ref("main")).toBe(f.base);
-      expect(pinned.map((file) => read(f.root, file))).toEqual(original);
+      expect(manualNotes.map((file) => read(f.root, file))).toEqual(original);
       const rebuilt = spawnSync(
         process.execPath,
         ["--import", "tsx", "apps/android/scripts/build-release-artifacts.ts", "--dry-run"],

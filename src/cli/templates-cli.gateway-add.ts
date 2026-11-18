@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import path from "node:path";
 import type {
   TemplateLifecyclePlanResult,
   TemplatePluginAcknowledgement,
@@ -8,7 +9,7 @@ import type {
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
-import type { GatewayTemplateAddApplyResult } from "../templates/gateway-add-apply.js";
+import type { GatewayTemplateAddApplyResult } from "../templates/gateway-add-result.js";
 import {
   clawHubTemplateRef,
   isCanonicalClawHubPackageName,
@@ -20,43 +21,45 @@ import { promptYesNo } from "./prompt.js";
 import { emitTemplateFailure } from "./templates-cli-output.js";
 import type { TemplatesAddOptions } from "./templates-cli.js";
 
-/** The running owner resolves, reviews and installs registry sources; it never reads CLI paths. */
+/** The running owner reviews and installs the selected source, retaining its consent contract. */
 export async function runTemplatesAddThroughOwner(
   sourcePath: string,
   opts: TemplatesAddOptions,
   requestOwner: OwnerRequest,
 ): Promise<void> {
-  if (existsSync(sourcePath) || !isCanonicalClawHubPackageName(sourcePath)) {
-    throw new Error(
-      "Local Template files require exclusive offline state ownership; stop the Gateway before Add, or preview with --dry-run. Add a published ClawHub package by name to use the running Gateway.",
-    );
-  }
+  const local = existsSync(sourcePath) || !isCanonicalClawHubPackageName(sourcePath);
   if (opts.workspace !== undefined) {
     throw new Error(
       "The running Gateway chooses the new Template workspace. Omit --workspace to Add this ClawHub package, or use --dry-run to preview a local workspace override.",
     );
   }
-  const catalog = await requestOwner<TemplatesCatalogSearchResult>("templates.catalog.search", {
-    query: sourcePath,
-    limit: 100,
-  });
-  // An exact package name wins; `@publisher/slug` also names that publisher's unscoped package.
-  const exact = catalog.entries.filter((entry) => entry.packageName === sourcePath);
-  const matches =
-    exact.length > 0
-      ? exact
-      : catalog.entries.filter(
-          (entry) => clawHubTemplateRef(entry.packageName, entry.ownerHandle) === sourcePath,
-        );
-  const match = matches.length === 1 ? matches[0] : undefined;
-  const version = match?.latestVersion;
-  if (!match || !version || !isExactSemVer(version)) {
-    throw new Error(
-      "ClawHub did not identify one exact published Template version. Search the catalog and retry.",
-    );
-  }
+  const resolveSource = async () => {
+    if (local) {
+      return { kind: "local" as const, path: path.resolve(sourcePath) };
+    }
+    const catalog = await requestOwner<TemplatesCatalogSearchResult>("templates.catalog.search", {
+      query: sourcePath,
+      limit: 100,
+    });
+    // An exact package name wins; `@publisher/slug` also names that publisher's unscoped package.
+    const exact = catalog.entries.filter((entry) => entry.packageName === sourcePath);
+    const matches =
+      exact.length > 0
+        ? exact
+        : catalog.entries.filter(
+            (entry) => clawHubTemplateRef(entry.packageName, entry.ownerHandle) === sourcePath,
+          );
+    const match = matches.length === 1 ? matches[0] : undefined;
+    const version = match?.latestVersion;
+    if (!match || !version || !isExactSemVer(version)) {
+      throw new Error(
+        "ClawHub did not identify one exact published Template version. Search the catalog and retry.",
+      );
+    }
+    return { packageName: match.packageName, version };
+  };
   const input = {
-    source: { packageName: match.packageName, version },
+    source: await resolveSource(),
     ...(opts.agentId !== undefined ? { agentId: opts.agentId } : {}),
   };
   const plan = await requestOwner<TemplateLifecyclePlanResult>("templates.add.plan", input);
@@ -178,10 +181,13 @@ export async function runTemplatesAddThroughOwner(
   if (opts.json) {
     writeRuntimeJson(runtime, result);
   } else {
+    const agentId = sanitizeTerminalText(result.agentId);
     runtime.log(
       result.status === "complete"
-        ? `Added agent: ${sanitizeTerminalText(result.agentId)}`
-        : `Template Add partial for agent ${sanitizeTerminalText(result.agentId)}. Inspect reported Gateway state before retrying.`,
+        ? `Added agent: ${agentId}`
+        : result.initializationPending
+          ? `Template Add partial for agent ${agentId}. Rerun with --agent-id ${agentId} to continue its setup.`
+          : `Template Add partial for agent ${agentId}. Inspect reported Gateway state before retrying.`,
     );
     if (result.error) {
       runtime.error(redactSensitiveText(sanitizeTerminalText(result.error.message)));

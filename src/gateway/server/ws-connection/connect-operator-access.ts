@@ -11,6 +11,7 @@ import {
   hasGatewayOperatorAccessPolicies,
   resolveGatewayOperatorAccessAuthority,
 } from "../../operator-access-policy.js";
+import { PUBLICATION_READ_SCOPE } from "../../operator-scopes.js";
 import { invalidateGatewayPolicyClient } from "../ws-policy-close.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import type {
@@ -24,11 +25,12 @@ export function prepareGatewayConnectOperatorAccess(client: GatewayWsClient): vo
   }
   const profile = client.authenticatedUserProfile;
   const config = getRuntimeConfig();
-  if (hasGatewayOperatorAccessPolicies(config) && !profile) {
+  const source = { openclawIdPrincipal: client.internal?.openclawIdPrincipal };
+  if (hasGatewayOperatorAccessPolicies(config, source) && !profile) {
     throw new GatewayOperatorAccessDeniedError("profile-invalidated");
   }
   const operatorAccessAuthority = profile
-    ? resolveGatewayOperatorAccessAuthority(profile.profileId, config)
+    ? resolveGatewayOperatorAccessAuthority(profile.profileId, config, source)
     : undefined;
   if (operatorAccessAuthority !== undefined) {
     client.internal = { ...client.internal, operatorAccessAuthority };
@@ -104,12 +106,24 @@ export async function prepareGatewayConnectOperatorDeviceSource(
           context.connectParams.auth?.deviceToken ?? context.connectParams.auth?.token,
         )
       : deviceToken?.token;
-  const identity =
+  const paired =
     device && devicePublicKey && token
-      ? resolveAuthenticatedDeviceTokenIdentity(
-          await loadPairedDevicePairingStoreRecordReadOnly(device.id),
-          { role: "operator", publicKey: devicePublicKey, token, scopes },
-        )
+      ? await loadPairedDevicePairingStoreRecordReadOnly(device.id)
+      : null;
+  // Recheck the whole stored grant at the final handshake boundary. An earlier
+  // classification cannot accept a grant broadened while admission was awaiting.
+  const tokenScopes = paired?.tokens?.operator?.scopes;
+  const exactReader =
+    !state.publicationReader ||
+    (tokenScopes?.length === 1 && tokenScopes[0] === PUBLICATION_READ_SCOPE);
+  const identity =
+    device && devicePublicKey && token && exactReader
+      ? resolveAuthenticatedDeviceTokenIdentity(paired, {
+          role: "operator",
+          publicKey: devicePublicKey,
+          token,
+          scopes,
+        })
       : null;
   // Shared/proxy identity can be tokenless. A token-bearing handshake cannot
   // bind to a replacement credential discovered while preparation yielded.

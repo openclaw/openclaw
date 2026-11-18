@@ -150,6 +150,7 @@ it.each([
       fast: "false",
       context: "Context window: 64K",
     };
+    await waitForSolid(() => expect(controlValues()).toEqual(initialValues));
     expect(effort?.dataset).toMatchObject({
       chatThinkingValue: initialThinking,
       chatThinkingDisabled: "false",
@@ -202,7 +203,7 @@ it.each([
       await expect(operation).resolves.toBe(false);
     }
     draw();
-    expect(controlValues()).toEqual(initialValues);
+    await waitForSolid(() => expect(controlValues()).toEqual(initialValues));
     expect(pane.state.chatError).toEqual(
       returnToInitial
         ? null

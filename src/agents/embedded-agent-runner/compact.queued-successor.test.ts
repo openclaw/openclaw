@@ -20,7 +20,9 @@ import {
 import type { QueuedCompactionHostOptions } from "./compact.types.js";
 import type { AcceptedCompactionSuccessor } from "./compaction-successor.js";
 
-const { compactEmbeddedAgentSession: compact } = await loadCompactHooksHarness();
+const { compactEmbeddedAgentSession: compact } = await loadCompactHooksHarness({
+  durableSession: true,
+});
 // The harness resets modules. Load every real owner afterward so the manager
 // and queued compaction share the same private write context and database lifetime.
 const [

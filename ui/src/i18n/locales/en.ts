@@ -247,7 +247,7 @@ type EnglishCatalog = TranslationMap & {
     failureGuidance: TranslationMap;
   };
   newSession: TranslationMap &
-    Record<"title" | "hint" | "placementReloadBlocked" | "discardUnsavedAndReload", string>;
+    Record<"title" | "placementReloadBlocked" | "discardUnsavedAndReload", string>;
   commandPalette: TranslationMap;
   palette: TranslationMap & {
     placeholder: string;
@@ -356,7 +356,7 @@ type EnglishCatalog = TranslationMap & {
 const startupEnglish = {
   runtimeErrors: {
     socketInsecure:
-      "Browser refused the Gateway WebSocket for security reasons. Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789.",
+      "Browser refused the Gateway WebSocket for security reasons. Use wss:// when OpenClaw is served over HTTPS/Tailscale Serve, or open it on loopback at http://127.0.0.1:18789.",
     socketRefused:
       "Browser refused the Gateway WebSocket for security reasons. Check the Gateway WebSocket URL and browser security policy.",
     socketCreateFailed:
@@ -482,7 +482,7 @@ const startupEnglish = {
     showAdvanced: "Show Advanced",
     hideAdvanced: "Hide Advanced",
     unsavedChanges: "You have unsaved changes",
-    working: "Working…",
+    working: "Working",
     showQr: "Show QR",
     relink: "Relink",
     waitForScan: "Wait for scan",
@@ -498,11 +498,11 @@ const startupEnglish = {
     skip: "Skip for now",
   },
   nativeConversation: {
-    openDashboardFailed: "Couldn't open that page in the Dashboard",
+    openDashboardFailed: "Couldn't open that page",
   },
   nativeLinkMenu: {},
   browserLinkPreferences: {
-    openInControlUi: "Open links in Control UI browser",
+    openInControlUi: "Open links in the built-in browser",
   },
   filePreview: {
     bundle: {},
@@ -631,7 +631,7 @@ const startupEnglish = {
       buildFailed: "Couldn’t build the update. Fix the build error and retry.",
       buildDirty:
         "The selected revision's build changed checkout files. Retry with a revision that includes its generated artifacts.",
-      uiBuildFailed: "Couldn’t rebuild the Control UI. Fix the UI build error and retry.",
+      uiBuildFailed: "Couldn’t rebuild the web app. Fix the build error and retry.",
       globalInstallFailed:
         "The global package install did not verify on disk. Retry or reinstall from the CLI.",
       restartDisabled:
@@ -639,7 +639,7 @@ const startupEnglish = {
       restartUnavailable:
         "This global install cannot be safely replaced while restarts are disabled and no supervisor is present.",
       externalSupervisorUpdateRequired:
-        "This Gateway is managed by an external supervisor. Use your server or deployment's update workflow to update OpenClaw and restart the Gateway. The Control UI and `openclaw update` cannot update this installation. No package changes or Gateway restart were attempted.",
+        "This Gateway is managed by an external supervisor. Use your server or deployment's update workflow to update OpenClaw and restart the Gateway. The OpenClaw app and `openclaw update` cannot update this installation. No package changes or Gateway restart were attempted.",
       restartUnhealthy:
         "The replacement process never became healthy. The previous process stayed up so you can recover.",
       restartRevisionMismatch:
@@ -682,7 +682,6 @@ const startupEnglish = {
   agentScope: agentEn.agentScope,
   newSession: {
     title: "New session",
-    hint: "Pick where this session works, then say what to do.",
     placementReloadBlocked: "Recovery needs a reload. Unsaved starts will be lost.",
     discardUnsavedAndReload: "Discard unsaved starts and reload",
   },
@@ -794,6 +793,7 @@ const startupEnglish = {
     deleteSessionsStale: {},
     groupMenu: "Group options for {group}",
     groupOptions: "Group options",
+    openSessionsPage: "Open Sessions",
     newSessionInGroup: "New session in {group}",
     groupDefaultsStale: "Gateway connection replaced before the defaults were saved. Try again.",
     moveToTopLevel: "Move to top level",
@@ -820,6 +820,7 @@ const startupEnglish = {
       notSet: {},
       inheritDefault: {},
       inheritDefaultModel: {},
+      inheritDefaultThinking: {},
       fallbacks: {},
       addFallback: {},
     },
@@ -895,7 +896,7 @@ const startupEnglish = {
       externalPost: "Posts externally to {target}",
     },
 
-    reviewOnly: "You need approval access to approve.",
+    reviewOnly: "You can review this request, but you don’t have permission to approve or deny it.",
 
     labels: {},
   },
@@ -945,6 +946,7 @@ const startupEnglish = {
     pin: "Pin",
     unpin: "Unpin",
     customize: "Edit pinned items",
+    installedPlugins: "Installed",
   },
   terminal: {
     title: "Terminal",
@@ -1024,6 +1026,7 @@ const startupEnglish = {
     cron: "Automations",
     skills: "Skills",
     plugins: "Plugins",
+    customize: "Customize",
     skillWorkshop: "Skill workshop",
     devices: "Devices",
     templates: "Templates",
@@ -1177,7 +1180,7 @@ const startupEnglish = {
     workerDesktop: {},
   },
   aboutPage: {
-    artifactDetails: "Control UI build details",
+    artifactDetails: "Web app build details",
     commit: "Commit",
     built: "Built",
     unavailable: "Unavailable",
@@ -1194,6 +1197,7 @@ const startupEnglish = {
     },
     rosterTitle: "Online",
     usersTitle: "Users",
+    peopleTitle: "People",
     allUsers: "All users",
     directoryFailed: "Could not load all users. Retry",
     filters: {
@@ -1323,7 +1327,7 @@ const startupEnglish = {
     restoring: "Restoring…",
     "reload-required": "Refresh required",
     offline: "Disconnected",
-    reconnecting: "Reconnecting…",
+    reconnecting: "Reconnecting",
     interruptedRetrying: "Disconnected. Reconnecting automatically. (WebSocket {code})",
     interrupted: "Disconnected. Check your connection and reconnect. (WebSocket {code})",
     restarting: "Restarting…",
@@ -1411,7 +1415,7 @@ const startupEnglish = {
     // Footer key hint: "Tab compose" switches to the other mode.
     modeSwitch: { search: "search", compose: "compose" },
     searchPlaceholder: "Search…",
-    composePlaceholder: "Write a message…",
+    composePlaceholder: "Ask me anything, or hand me something to do",
     attachmentPrompt: "What would you like to do with these files?",
     categories: { navigation: "Navigation" },
   },
@@ -1421,21 +1425,13 @@ const startupEnglish = {
   usage: {
     common: {
       emptyValue: "—",
-      unknown: "unknown",
     },
-    loading: {
-      badge: "Loading usage…",
-    },
-    metrics: {
-      tokens: "Tokens",
-      cost: "Cost",
-    },
+    loading: {},
+    metrics: {},
+    // Settings search uses these headings before the Usage route loads.
     heatmap: {
       title: "Token activity",
       subtitle: "Daily token intensity in this range, up to one year.",
-      cellTokens: "{tokens} tokens",
-      less: "Less",
-      more: "More",
     },
     providerUsage: {},
     presets: {},
@@ -1452,9 +1448,6 @@ const startupEnglish = {
       input: "Input",
       cacheWrite: "Cache write",
       cacheRead: "Cache read",
-      total: "Total",
-      tokensByType: "Tokens by type",
-      costByType: "Cost by type",
     },
     overview: {
       title: "Usage overview",
@@ -1536,7 +1529,8 @@ const startupEnglish = {
     clawhub: {},
     modelAccounts: {
       section: "Account",
-      automatic: "Automatic (new-chat default)",
+      automatic: "Automatic",
+      automaticTrigger: "Account: Auto",
       manage: "Manage saved accounts…",
     },
     mentions: {},
@@ -1548,15 +1542,18 @@ const startupEnglish = {
     historyUnavailableTitle: "Couldn’t load this conversation",
     historyUnavailableBody: "Try again to load its messages.",
     recovery: {
-      retrying: "Retrying…",
+      retrying: "Retrying",
       retryingIn: "Retrying in {seconds}s",
-      tryingFallback: "Trying fallback model…",
+      tryingFallback: "Trying fallback model",
       failedTitle: "Couldn’t finish this reply",
       credentialsRejected: "{provider} didn’t accept the saved credentials",
       billingProblem: "{provider} reports a billing problem",
       openModels: "Open Models",
       failedRepeatCount: "{count} times",
       tryAgain: "Try again",
+      startNewSession: "Start a new session",
+      harnessUpdatePrompt:
+        "My last message in another session failed with this error:\n\n{summary}\n\nDo the update it asks for on this machine, confirm the installed version, and tell me if I still need to restart the OpenClaw Gateway.",
       continuePrompt:
         "Continue from where you stopped. Check which actions already completed before retrying anything.",
     },
@@ -1574,7 +1571,7 @@ const startupEnglish = {
     diskSpace: {},
     workerRuntimeInstall: {},
     sendErrors: {},
-    waitingForApproval: "Waiting for approval…",
+    waitingForApproval: "Waiting for approval",
     waitingOnSubagents: "Waiting on subagents",
     waitingForMessage: "Waiting for a message",
     waitingOnSubagent: "Waiting on {name}",
@@ -1585,11 +1582,17 @@ const startupEnglish = {
     sessionPausedNote: "{name} is paused",
     sessionsPausedNote: "{count} sessions are paused",
     handoffResumed: "Resumed · {duration} later",
+    continuationSource: {
+      exec: "Background command finished",
+      restart: "Gateway restarted",
+      subagent: "Agent finished",
+    },
     handoffSessionsOne: "1 session",
     handoffSessions: "{count} sessions",
     handoffSessionStatus: {
       attention: "Needs your input",
       paused: "Paused",
+      background: "Running in background",
       running: "Running",
       failed: "Failed",
       stopped: "Stopped",
@@ -1598,21 +1601,21 @@ const startupEnglish = {
     subagentsRunning: "{count} subagents running",
     subagentsRunningOne: "1 subagent running",
     startupStatus: {
-      preparingWorkspace: "Preparing workspace…",
-      namingWorktree: "Naming worktree…",
-      updatingRepository: "Updating repository…",
-      creatingWorktree: "Creating worktree…",
-      runningSetup: "Running setup…",
-      provisioningEnvironment: "Provisioning environment…",
-      startingFromSnapshot: "Starting from snapshot…",
-      preparingCloudEnvironment: "Preparing cloud environment…",
-      savingSnapshot: "Saving snapshot…",
-      preparingContext: "Preparing reply…",
-      memoryFlushing: "Saving conversation memory…",
+      preparingWorkspace: "Preparing workspace",
+      namingWorktree: "Naming worktree",
+      updatingRepository: "Updating repository",
+      creatingWorktree: "Creating worktree",
+      runningSetup: "Running setup",
+      provisioningEnvironment: "Provisioning environment",
+      startingFromSnapshot: "Starting from snapshot",
+      preparingCloudEnvironment: "Preparing cloud environment",
+      savingSnapshot: "Saving snapshot",
+      preparingContext: "Preparing reply",
+      memoryFlushing: "Saving conversation memory",
       startingModel: "Waiting for a response",
       waitingForLocalModel: "Waiting for the local model to respond",
       waitingForModelSlot: "Waiting for a free model slot",
-      waitingForState: "Temporarily busy—retrying…",
+      waitingForState: "Temporarily busy—retrying",
     },
     archivedSessionDisabled: "This session is archived. Unarchive it to continue the conversation.",
     subagentViewOnly: "View-only subagent",
@@ -1626,7 +1629,7 @@ const startupEnglish = {
     commandResults: {
       emptyExport: "No messages to export yet.",
       exportPathUnsupported:
-        "Control UI exports Markdown through your browser. Run /export without a file path.",
+        "The web app exports Markdown through your browser. Run /export without a file path.",
       help: {},
       compaction: {},
       model: {},
@@ -1785,6 +1788,7 @@ const startupEnglish = {
       menuDisplay: "Display",
       sortSessions: "Filter & sort",
       sessionSources: "Session sources",
+      viewAllSessions: "View all sessions",
       noActiveSessionsForFilter: "No active sessions match this filter",
       sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
@@ -1938,8 +1942,6 @@ const startupEnglish = {
     workRun: {
       workedFor: "Worked for {duration}",
       worked: "Worked",
-      toolCallsOne: "1 tool call",
-      toolCallsMany: "{count} tool calls",
     },
     sessionDiff: {
       title: "Changes",

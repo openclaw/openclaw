@@ -143,6 +143,21 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     return { result, typing, storePath: resolvedConfig.session?.store };
   }
 
+  it.each(["[example] /help", "Ada: /help"])(
+    "does not admit wrapped canonical text to the native fast path: %j",
+    async (body) => {
+      handleCommandsMock.mockResolvedValue({ shouldContinue: false, reply: { text: "help" } });
+      const result = await runTestNativeSlashFastReply({
+        ctx: buildNativeCommandCtx(body, { SenderName: "Ada" }),
+        cfg: markCompleteReplyConfig({
+          session: { store: path.join(tempDirs.make("openclaw-wrapped-native-"), "sessions.json") },
+        }),
+      });
+      expect(result).toEqual({ handled: false });
+      expect(handleCommandsMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("persists a native exec node selection before model dispatch", async () => {
     const { result, storePath } = await resolveNativeDirectiveCommand(
       "/exec host=node node=worker-1",

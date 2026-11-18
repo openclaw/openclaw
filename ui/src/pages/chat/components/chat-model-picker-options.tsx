@@ -10,8 +10,6 @@ import { formatDurationHuman } from "../../../lib/format-duration.ts";
 import "../../../components/tooltip.ts";
 import { formatModelRuntimeLabel } from "../../../lib/model-runtime-label.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { keyboardHintsVisible } from "../../../lib/reactive/keyboard-hints.ts";
-import { createMediaQuery } from "../../../lib/reactive/platform.ts";
 import { readVisibleTime } from "../../../lib/reactive/visible-clock.ts";
 import { ChatContextWindowControl } from "./chat-context-window-control.tsx";
 import { ChatModelCatalogState } from "./chat-model-catalog-state.tsx";
@@ -69,21 +67,6 @@ export function ChatModelCooldown(props: { until: number }) {
 }
 
 registerEnglishCatalog(registerModelFavoritesEnglish);
-
-function ModelShortcut(props: { rowKey: string }) {
-  const search = useContext(ChatModelSearchContext);
-  const number = createMemo(() => search?.row(props.rowKey)?.shortcut);
-  return (
-    <kbd
-      class="shortcut-kbd"
-      aria-hidden="true"
-      hidden={number() === undefined || !keyboardHintsVisible()}
-      data-chat-model-shortcut="true"
-      data-shortcut={number()}
-      data-chat-model-shortcut-number={number()}
-    />
-  );
-}
 
 export function ChatModelProviderIcon(props: {
   provider: string;
@@ -224,15 +207,17 @@ function ModelOptionButton(
     props.entry.isDefault ? t("chat.modelControls.default") : "",
   );
   const key = createMemo(() => props.rowKey ?? modelPickerOptionKey(props.entry));
+  const modelName = createMemo(() => formatModelLabel(props.entry).toLocaleLowerCase());
   // Query changes should reach only rows whose displayed search facts changed.
   const rank = createMemo(() => search?.row(key())?.rank);
   const hidden = createMemo(() => search?.row(key())?.hidden ?? false);
   const highlighted = createMemo(() => search?.isHighlighted(key()));
-  const phone = createMediaQuery("(max-width: 640px)");
   const blocked = () =>
     props.disabled ||
     props.presentation.blocked ||
     Boolean(props.entry.disabled && !props.presentation.resetsPin);
+  const reorderingEnabled = () => props.reorder && !props.reorder.disabled;
+  let pressedButton = false;
   function FavoriteButton() {
     const [popped, setPopped] = createSignal(false);
     return (
@@ -255,7 +240,7 @@ function ModelOptionButton(
         disabled={props.favorite?.disabled}
         onKeyDown={(event) => {
           // The star is independent of model selection and picker shortcuts.
-          if (event.key !== "Escape" && event.key !== "Tab") {
+          if (event.key !== "Escape" && event.key !== "Tab" && event.key !== "/") {
             event.stopPropagation();
           }
         }}
@@ -276,11 +261,28 @@ function ModelOptionButton(
       id={search?.optionId(key())}
       class={[
         "chat-controls__inline-select-option chat-controls__model-option",
+        props.reorder?.indicator ? `reorder-drop-${props.reorder.indicator}` : undefined,
         {
+          "reorder-dragging": props.reorder?.dragging,
           "chat-controls__inline-select-option--selected":
             props.presentation.selected && !props.presentation.blocked,
         },
       ]}
+      draggable={reorderingEnabled() ? "true" : undefined}
+      onPointerDown={(event) => {
+        pressedButton = event.target instanceof Element && Boolean(event.target.closest("button"));
+      }}
+      onDragStart={(event) => {
+        if (pressedButton) {
+          event.preventDefault();
+        } else {
+          props.reorder?.onDragStart(event);
+        }
+      }}
+      onDragEnd={() => props.reorder?.onDragEnd()}
+      onDragOver={(event) => props.reorder?.onDragOver(event)}
+      onDragLeave={(event) => props.reorder?.onDragLeave(event)}
+      onDrop={(event) => props.reorder?.onDrop(event)}
       data-chat-model-option={props.entry.value}
       data-chat-model-key={key()}
       data-chat-model-rank={rank()}
@@ -297,11 +299,19 @@ function ModelOptionButton(
         .filter(Boolean)
         .join(" ")
         .toLocaleLowerCase()}
-      data-chat-model-name={props.presentation.modelLabel.toLocaleLowerCase()}
+      data-chat-model-name={modelName()}
       data-chat-model-provider-label={providerDisplayLabel(
         props.entry.provider,
       ).toLocaleLowerCase()}
       role="option"
+      aria-keyshortcuts={
+        [
+          search?.row(key())?.shortcut,
+          reorderingEnabled() ? "Alt+ArrowUp Alt+ArrowDown" : undefined,
+        ]
+          .filter(Boolean)
+          .join(" ") || undefined
+      }
       aria-posinset={search?.row(key())?.position}
       aria-setsize={search?.row(key())?.size}
       hidden={hidden()}
@@ -319,7 +329,18 @@ function ModelOptionButton(
       data-chat-model-auth-blocked={props.presentation.needsAuth ? "" : undefined}
       data-chat-model-cooldown={props.presentation.coolingDown ? "" : undefined}
       onKeyDown={(event) => {
-        if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
+        if (event.target !== event.currentTarget) {
+          return;
+        }
+        if (
+          reorderingEnabled() &&
+          event.altKey &&
+          (event.key === "ArrowUp" || event.key === "ArrowDown")
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          props.reorder?.onMove(event.key === "ArrowUp" ? -1 : 1);
+        } else if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           if (!blocked()) {
             event.currentTarget.click();
@@ -351,9 +372,6 @@ function ModelOptionButton(
               <Icon name="info" />
             </span>
           </Show>
-          <Show when={props.favorite && !phone()}>
-            <FavoriteButton />
-          </Show>
           <Show when={props.presentation.modelMeta || props.presentation.cooldownUntil}>
             <span
               class={[
@@ -371,18 +389,16 @@ function ModelOptionButton(
           </Show>
         </span>
       </span>
-      <span class="chat-controls__model-option-action">
-        <Show when={!props.presentation.blocked}>
-          <Show when={props.presentation.selected} fallback={<ModelShortcut rowKey={key()} />}>
-            <span class="chat-controls__inline-select-check" aria-hidden="true">
-              <Icon name="check" />
-            </span>
-          </Show>
+      <span class="chat-controls__model-favorite-slot">
+        <Show when={!props.presentation.blocked && props.presentation.selected}>
+          <span class="chat-controls__inline-select-check" aria-hidden="true">
+            <Icon name="check" />
+          </span>
+        </Show>
+        <Show when={props.favorite}>
+          <FavoriteButton />
         </Show>
       </span>
-      <Show when={props.favorite && phone()}>
-        <FavoriteButton />
-      </Show>
     </div>
   );
 }
@@ -413,7 +429,7 @@ export function ChatModelPickerOption(props: ChatModelPickerOptionProps) {
   );
 }
 
-export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionProps) {
+function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionProps) {
   const search = useContext(ChatModelSearchContext);
   const key = createMemo(() => `target:${props.groupId}:${props.entry.value}`);
   const rank = createMemo(() => search?.row(key())?.rank);
@@ -435,6 +451,7 @@ export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionPr
       data-chat-model-name={props.entry.label.toLocaleLowerCase()}
       data-chat-model-provider-label={props.groupLabel.toLocaleLowerCase()}
       role="option"
+      aria-keyshortcuts={search?.row(key())?.shortcut?.toString()}
       aria-posinset={search?.row(key())?.position}
       aria-setsize={search?.row(key())?.size}
       aria-selected="false"
@@ -452,9 +469,6 @@ export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionPr
         <span class="chat-controls__model-option-title">
           <span class="chat-controls__model-option-name">{props.entry.label}</span>
         </span>
-      </span>
-      <span class="chat-controls__model-option-action">
-        <ModelShortcut rowKey={key()} />
       </span>
     </button>
   );

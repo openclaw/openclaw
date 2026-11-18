@@ -32,9 +32,9 @@ export type LinkStepMessages = {
 };
 
 /** How often the relay step reads the claw's relay connection while the dialog is open. */
-export const RELAY_CHECK_INTERVAL_MS = 2_000;
+const RELAY_CHECK_INTERVAL_MS = 2_000;
 /** How long the relay step shows progress before it warns that the relay isn't up yet. */
-export const RELAY_GRACE_MS = 30_000;
+const RELAY_GRACE_MS = 30_000;
 
 /** What the relay step needs; injected so the watch is testable without a Gateway or timers. */
 export type RelayWatch = {

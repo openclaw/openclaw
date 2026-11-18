@@ -18,6 +18,7 @@ import {
   sessionManagerReadTranscriptBranch,
 } from "../../sessions/session-manager-view-types.js";
 import { resolveToolSearchConfig } from "../../tool-search-config.js";
+import { applyUsageRankedMcpToolSearchDirectory } from "../../tool-search.js";
 import {
   readToolUsageRankingSnapshot,
   type ToolUsageRankingSnapshot,
@@ -30,6 +31,7 @@ import {
   declarePromptToolPin,
 } from "../prompt-cache-observability.js";
 import { getProviderPromptState } from "../provider-prompt-state.js";
+import { listSessionForkTools } from "../session-fork-request.js";
 import {
   retainEmbeddedSessionPromptState,
   beginSessionSystemPrompt,
@@ -171,8 +173,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     api: attempt.model.api,
     baseUrl: attempt.model.baseUrl,
     inHistorySystemUpdates: transcriptPolicy.inHistorySystemUpdates === true,
-    // Personal bootstrap follows the session's selected human, not only the session ID.
-    personalProfile: attempt.bootstrapUserProfileId,
+    // The session's selected human, never the current turn's sender classification.
+    personalProfile: attempt.sessionUserProfileId,
     harness: attempt.agentHarnessRuntimeOverride ?? attempt.agentHarnessId ?? "openclaw",
     surface: codeModeControlsEnabledForRun
       ? "code-mode"
@@ -203,10 +205,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
       entries: sessionManager[sessionManagerReadTranscriptBranch](),
       historyBoundaryCount: sessionManager.getBoundaryCount(),
       enabled: rankingEnabled,
-      catalogIds:
-        toolSearchCatalogRef?.current?.entries
-          .filter((entry) => entry.source !== "mcp")
-          .map((entry) => entry.id) ?? [],
+      catalogIds: toolSearchCatalogRef?.current?.entries.map((entry) => entry.id) ?? [],
       inherited: inheritedRanking,
       now,
       readRankedIds: async () => {
@@ -283,13 +282,31 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   const effectiveToolCount = effectiveTools.length;
   let freshSystemPrompt = systemPromptText;
   let projectedSystemPrompt: string | undefined;
+  // Assigned once the session exists; earlier prompt preparations keep their ranking.
+  const sessionTools: { refresh?: () => void } = {};
+  // A session fork sends its source's pinned prompt and tool list unchanged.
+  const forkPin = attempt.sessionForkRequest?.pin;
   const prepareSystemPromptUpdate: SystemPromptUpdatePreparation | undefined =
     usesSystemPromptSeries
       ? async (nextPrompt: string, freshlyRendered = false) => {
+          if (forkPin) {
+            return {
+              systemPrompt: forkPin.prefix,
+              update: undefined,
+              restart: false,
+              seriesStatus: "pinned" as const,
+              commit: () => {},
+            };
+          }
           let preparedPrompt = nextPrompt;
           let wasFreshlyRendered = freshlyRendered;
           const previousRanking = usageRanking;
           await prepareUsageRanking();
+          if (usageRanking !== previousRanking) {
+            // A refreshed snapshot starts a new series: re-pin the tool definitions, including
+            // the ranked MCP directory, before the first request that uses it.
+            sessionTools.refresh?.();
+          }
           if (usageRanking !== previousRanking && systemPrompt.prepareToolPrompt) {
             const refresh = await systemPrompt.prepareToolPrompt(
               resources.session?.agent.state.tools ?? effectiveTools,
@@ -335,6 +352,9 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   // policy change starts a new pin, so configured removals leave the provider request.
   const pinTools = usesSystemPromptSeries
     ? (tools: AnyAgentTool[]) => {
+        if (forkPin) {
+          return listSessionForkTools(forkPin, tools);
+        }
         const pending = sessionPromptState.pendingToolSurface;
         const pinned = prepareSessionToolSurface({
           state: sessionPromptState,
@@ -342,7 +362,12 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           toolPolicy: toolPolicyDigest,
           entries: sessionManager[sessionManagerReadTranscriptBranch](),
           historyBoundaryCount: sessionManager.getBoundaryCount(),
-          tools,
+          // The pin freezes this description with the series, like the ranking itself.
+          tools: applyUsageRankedMcpToolSearchDirectory(
+            tools,
+            toolSearchCatalogRef?.current,
+            usageRanking,
+          ),
         });
         if (sessionPromptState.pendingToolSurface !== pending) {
           declarePromptToolPin(attempt);
@@ -402,6 +427,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
       ),
   );
   const { activeSession, setActiveSessionSystemPrompt, settingsManager } = preparedAgentSession;
+  sessionTools.refresh = preparedAgentSession.refreshTools;
   const recordCurrentTurnImageFailure = (count: number) => {
     state.currentTurnImageFailureCount = Math.max(state.currentTurnImageFailureCount, count);
   };

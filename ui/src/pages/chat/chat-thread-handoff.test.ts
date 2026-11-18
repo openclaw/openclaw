@@ -74,30 +74,57 @@ describe("the working status after a handoff", () => {
 });
 
 describe("opened tool rows across a handoff", () => {
-  it("carries what the reader opened to the stored rows that replace live ones", () => {
-    resetChatThreadState();
-    const sessionKey = "handoff-swaps-live-rows";
-    const group = (key: string, id: string) =>
-      preparedGroup(key, {
-        role: "assistant",
-        content: [{ type: "toolcall", id, name: "browser.open" }],
-      });
-    const live = [group("live-row", "call-1")];
-    syncToolCardExpansionState(sessionKey, live, false);
-    const expanded = getExpandedToolCards(sessionKey);
-    setExpansionState(expanded, "live-row:toolcard:0", true);
-    setExpansionState(expanded, `activity:${live[0]!.key}`, true);
+  it.each(["browser.open", "sessions_spawn", "view_image"] as const)(
+    "carries opened %s disclosures to the stored rows that replace live ones",
+    (name) => {
+      resetChatThreadState();
+      const sessionKey = "handoff-swaps-live-rows";
+      const lifecycle = name === "sessions_spawn";
+      const image = name === "view_image";
+      const group = (key: string) => {
+        const stored = key === "stored-row";
+        return preparedGroup(key, {
+          role: image && stored ? "toolResult" : "assistant",
+          ...(image ? { toolCallId: "call-1" } : {}),
+          content: [
+            {
+              type: "toolcall",
+              id: "call-1",
+              name,
+              arguments: image ? { path: "/tmp/preview.png" } : { label: "Cinder", task: "Work" },
+            },
+            ...(image
+              ? [{ type: "tool_result", id: "call-1", name, text: "Loaded image for inspection." }]
+              : []),
+            // The stored row publishes the image as its own message.
+            ...(image && stored
+              ? [{ type: "image", mimeType: "image/png", omitted: true, artifactId: "preview" }]
+              : []),
+          ],
+        });
+      };
+      const card = (key: string) =>
+        image && key === "stored-row" ? "toolmsg:stored-row" : `${key}:toolcard:0`;
+      // The disclosure around the row: its activity group, or the lifecycle row it joins.
+      const outer = (key: string, current: MessageGroup) =>
+        lifecycle ? `lifecycle:${key}:toolcard:0` : image ? card(key) : `activity:${current.key}`;
+      const live = [group("live-row")];
+      syncToolCardExpansionState(sessionKey, live, lifecycle, false, undefined, live);
+      const expanded = getExpandedToolCards(sessionKey);
+      setExpansionState(expanded, "live-row:toolcard:0", !lifecycle);
+      setExpansionState(expanded, outer("live-row", live[0]!), true);
 
-    // A handoff reloads the same call under another message key.
-    const stored = [group("stored-row", "call-1")];
-    syncToolCardExpansionState(sessionKey, stored, false);
+      // A handoff reloads the same call under another message key.
+      const stored = [group("stored-row")];
+      syncToolCardExpansionState(sessionKey, stored, false, false, undefined, stored);
 
-    expect(expanded.get("stored-row:toolcard:0")).toBe(true);
-    expect(expanded.get(`activity:${stored[0]!.key}`)).toBe(true);
-    // Another pane can still hold the live history window.
-    expect(expanded.get("live-row:toolcard:0")).toBe(true);
-    expect(expanded.get(`activity:${live[0]!.key}`)).toBe(true);
-  });
+      expect(expanded.get(card("stored-row"))).toBe(!lifecycle);
+      expect(expanded.get(outer("stored-row", stored[0]!))).toBe(true);
+      // Another pane can still hold the live history window.
+      expect(expanded.get("live-row:toolcard:0")).toBe(!lifecycle);
+      expect(expanded.get(outer("live-row", live[0]!))).toBe(true);
+    },
+  );
 
   it("does not carry an opened row between messages that reuse one call id", () => {
     resetChatThreadState();

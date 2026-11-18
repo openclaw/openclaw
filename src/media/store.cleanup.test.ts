@@ -1,5 +1,6 @@
 // Media cleanup must respect ownership boundaries between transient staging,
 // replayable inbound media, playback cache, and SQLite-managed outgoing media.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -9,6 +10,7 @@ import {
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
 } from "../gateway/managed-image-record-store.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -16,21 +18,34 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { markTrustedGeneratedHtmlPath } from "./web-media.js";
 
 describe("cleanOldMedia managed-subtree retention", () => {
   let store: typeof import("./store.js");
   let tempHome: TempHomeEnv;
+  let owner: ReturnType<typeof acquireGatewayStateOwner>;
 
   beforeAll(async () => {
     tempHome = await createTempHomeEnv("openclaw-test-home-");
     store = await import("./store.js");
+    const { path: databasePath } = openOpenClawStateDatabase();
+    owner = acquireGatewayStateOwner({
+      databasePath,
+      payload: {
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath: path.join(tempHome.home, ".openclaw", "openclaw.json"),
+        role: "gateway",
+      },
+    });
   });
 
   afterAll(async () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    owner.release();
     await tempHome.restore();
   });
 
@@ -138,7 +153,11 @@ describe("cleanOldMedia managed-subtree retention", () => {
       ),
     );
 
-    await store.pruneOutboundMedia();
+    {
+      using observer = observeMainThreadFs();
+      await store.pruneOutboundMedia();
+      expect(observer.calls(), JSON.stringify(observer.stacks())).toEqual({});
+    }
 
     await expect(fs.stat(staleOutbound.path)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(staleInbound.path)).resolves.toMatchObject({ size: staleInbound.size });

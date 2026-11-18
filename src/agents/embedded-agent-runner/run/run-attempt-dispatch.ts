@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import * as sourceTurn from "../../../auto-reply/reply/source-turn-id.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
@@ -17,6 +16,7 @@ import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.j
 import { resolveReplyExpectation } from "../../reply-completion.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
 import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
+import { createStableSkillAuthoring } from "../../stable-skill-authoring.js";
 import { resolveLiveToolResultMaxChars } from "../../tool-result-limits.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
 import { preparePluginHarnessWorkspace, resolveHarnessWorkspace } from "../../workspace-sandbox.js";
@@ -43,6 +43,9 @@ import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparatio
 import { projectEmbeddedMessageContext } from "./shared-run-context.js";
 import { MAX_BEFORE_AGENT_FINALIZE_REVISIONS } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+
+// Internal turns publish the session's last human skill authoring shape with an expired grant.
+const resolveStableEmbeddedSkillAuthoring = createStableSkillAuthoring();
 
 /** Prepares the selected runtime and dispatches an attempt under its admitted lifecycle. */
 export async function prepareAndDispatchEmbeddedRunAttempt(
@@ -94,7 +97,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
 
   params.assertModelInput?.(effectiveModel);
 
-  await fs.mkdir(workspaceDir, { recursive: true });
   if (!input.startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.workspace);
   }
@@ -414,6 +416,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     messageProvider: params.messageProvider,
     clientCaps: params.clientCaps,
     bootstrapUserProfileId: params.bootstrapUserProfileId,
+    sessionUserProfileId: params.sessionUserProfileId,
     gatewayUiCommandTarget: params.gatewayUiCommandTarget,
     pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
     toolBindings: params.toolBindings,
@@ -477,6 +480,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     // the accepted candidate boundary to that owner.
     onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     skipPreparedUserTurnMessage,
+    replayCurrentTranscript: sessionPromptState.activePrompt.replayCurrentTranscript,
     currentInboundEventKind: params.currentInboundEventKind,
     currentInboundContext: params.currentInboundContext,
     explicitSkillSelections: params.explicitSkillSelections?.map((selection) =>
@@ -618,7 +622,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     streamParams: params.streamParams,
     modelRun: params.modelRun,
     disableTrajectory: params.disableTrajectory,
-    skillLibraryAuthoring: params.skillLibraryAuthoring,
+    skillLibraryAuthoring: resolveStableEmbeddedSkillAuthoring(
+      params.sessionKey,
+      params.skillLibraryAuthoring,
+    ),
     promptMode: params.promptMode,
     ownerNumbers: params.ownerNumbers,
     enforceFinalTag: params.enforceFinalTag,
@@ -631,6 +638,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     scheduledRuntimeAuthorityRecoveryRequired: params.scheduledRuntimeAuthorityRecoveryRequired,
     toolsAllow: params.toolsAllow,
     toolExecutionAllow: params.toolExecutionAllow,
+    sessionForkRequest: params.sessionForkRequest,
     // Authorized prompt enrichment needs the exact prepared turn policy identity.
     toolAuthorityFingerprint: params.toolAuthorityFingerprint,
     sessionPersistence: params.sessionPersistence,
@@ -678,8 +686,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
       placement?.assertCurrent();
       return runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime, params.media);
     });
-  } catch (err) {
-    throw input.getPostCompactionAbortError() ?? err;
   } finally {
     attemptControls.close();
     try {
@@ -698,10 +704,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     }
   }
 
-  const postCompactionAbortError = input.getPostCompactionAbortError();
-  if (postCompactionAbortError) {
-    throw postCompactionAbortError;
-  }
   if (pluginWorkspace?.sandboxRuntime) {
     rawAttempt.sandboxRuntime = pluginWorkspace.sandboxRuntime;
   }

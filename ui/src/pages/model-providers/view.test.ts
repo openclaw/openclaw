@@ -217,10 +217,9 @@ describe("renderModelProviders", () => {
   });
 
   it("surfaces a provider-usage failure on the provider list", () => {
-    const container = document.createElement("div");
-    mount(props({ providerUsageFailed: true }), container);
-
+    const container = mount(props({ cards: [], providerUsageFailed: true }));
     expect(container.textContent).toContain("Couldn’t load provider usage. Refresh to try again.");
+    expect(container.textContent).toContain(t("modelProviders.emptyTitle"));
   });
 
   it.each([
@@ -244,9 +243,7 @@ describe("renderModelProviders", () => {
     const container = mount(
       props({ catalogDiscovering: true, catalogDiscoveryError: "A provider failed discovery." }),
     );
-    expect(
-      container.querySelector('.model-providers__catalog-progress[role="status"]'),
-    ).not.toBeNull();
+    expect(container.querySelector('.model-providers__catalog-progress[role="status"]')).toBeNull();
     await waitForFast(() =>
       expect(
         container.querySelector('.model-providers__catalog-progress[role="alert"] span')

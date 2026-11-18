@@ -19,7 +19,6 @@ import {
   NODE_WORKSPACE_EMPTY_MANIFEST_REF,
   NodeWorkerPublicationConflictError,
 } from "../worker/node-workspace-transfer-protocol.js";
-import { mergeNodeRepositoryPublication } from "./node-worker-publication-merge.js";
 import { runNodeWorkerWorkspaceTransfer } from "./node-worker-transfer-client.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
@@ -86,27 +85,14 @@ it("restores exact retained ancestry through transfer without changing later edi
   await write("fix.txt", "later unstaged work\n");
   const index = await fs.readFile(path.join(workspace, ".git", "index"));
   const input = {
-    workspaceDir: workspace,
-    inputRoot,
-    inputDigest: snapshotDigest,
-    outputRoot: path.join(root, "negative"),
+    snapshotRoot: inputRoot,
+    snapshotDigest,
     sourceUrl: pathToFileURL(workspace).href,
     targetUrl: pathToFileURL(workspace).href,
     targetCommit,
     token: "synthetic-token",
+    assertCurrent: () => {},
   };
-  // Without its real parent, the normalized checkpoint falsely conflicts with later upstream edits.
-  await expect(mergeNodeRepositoryPublication(input)).rejects.toBeInstanceOf(
-    NodeWorkerPublicationConflictError,
-  );
-  await fs.copyFile(gitPackPath, path.join(inputRoot, "history.pack"));
-  await expect(
-    mergeNodeRepositoryPublication({
-      ...input,
-      gitHistory: { baseCommit, headCommit: parent, descendsFromBase: true },
-    }),
-  ).rejects.toBeInstanceOf(NodeWorkerPublicationConflictError);
-  await fs.rm(path.join(inputRoot, "history.pack"));
   const service = createNodeWorkspaceTransferService({
     temporaryRoot: path.join(root, "transfers"),
     getOwner: () => transferOwner("session"),
@@ -131,47 +117,53 @@ it("restores exact retained ancestry through transfer without changing later edi
     await server.close();
   });
   const signal = new AbortController().signal;
-  const transfer = createNodeWorkspaceTransferCommand(async (command) => {
-    if (!command.transfer) {
-      throw new Error("Expected a publication transfer");
-    }
-    const stdout = await runNodeWorkerWorkspaceTransfer({
-      gatewayUrl: server.gatewayUrl,
-      environmentId: "environment",
-      workspaceDir: workspace,
-      manifestHome: root,
-      transfer: command.transfer,
-      signal,
+  const createTransfer = (workspaceDir: string) =>
+    createNodeWorkspaceTransferCommand(async (command) => {
+      if (!command.transfer) {
+        throw new Error("Expected a publication transfer");
+      }
+      const stdout = await runNodeWorkerWorkspaceTransfer({
+        gatewayUrl: server.gatewayUrl,
+        environmentId: "environment",
+        workspaceDir,
+        manifestHome: root,
+        transfer: command.transfer,
+        signal,
+      });
+      return {
+        code: 0,
+        termination: "exit",
+        signal: null,
+        killed: false,
+        stdout,
+        stderr: "",
+        workspaceDir,
+      };
     });
-    return {
-      code: 0,
-      termination: "exit",
-      signal: null,
-      killed: false,
-      stdout,
-      stderr: "",
-      workspaceDir: workspace,
-    };
-  });
-  const integrated = await prepareNodeWorkerPublicationIntegration(
-    {
-      environmentId: "environment",
-      signal,
-      workspaceTransfer: service,
-      supportsIntegration: async () => true,
-      transfer,
-    },
-    {
-      snapshotRoot: inputRoot,
-      snapshotDigest,
-      sourceUrl: input.sourceUrl,
-      targetUrl: input.targetUrl,
-      targetCommit,
-      token: "synthetic-token",
-      assertCurrent: () => {},
-      history: { gitPackPath, gitHistory: { baseCommit, headCommit, descendsFromBase: true } },
-    },
+  const context = {
+    environmentId: "environment",
+    signal,
+    workspaceTransfer: service,
+    supportsIntegration: async () => true,
+    transfer: createTransfer(workspace),
+  };
+  // Without its real parent, the normalized checkpoint falsely conflicts with later upstream edits.
+  await expect(prepareNodeWorkerPublicationIntegration(context, input)).rejects.toBeInstanceOf(
+    NodeWorkerPublicationConflictError,
   );
+  await expect(
+    prepareNodeWorkerPublicationIntegration(context, {
+      ...input,
+      history: {
+        gitPackPath,
+        gitHistory: { baseCommit, headCommit: parent, descendsFromBase: true },
+      },
+    }),
+  ).rejects.toBeInstanceOf(NodeWorkerPublicationConflictError);
+  const integrated = await prepareNodeWorkerPublicationIntegration(context, {
+    ...input,
+    history: { gitPackPath, gitHistory: { baseCommit, headCommit, descendsFromBase: true } },
+  });
   try {
     expect(integrated.snapshot.baseCommit).toBe(targetCommit);
     expect(integrated.snapshot.entries.map((entry) => entry.path)).toEqual(["fix.txt"]);
@@ -188,12 +180,18 @@ it("restores exact retained ancestry through transfer without changing later edi
   await fs.mkdir(emptyWorkspace);
   execFileSync("git", ["init", "--bare", "--quiet"], { cwd: emptyWorkspace, env });
   await expect(
-    mergeNodeRepositoryPublication({
-      ...input,
-      workspaceDir: emptyWorkspace,
-      sourceUrl: pathToFileURL(path.join(root, "missing-source")).href,
-    }),
-  ).rejects.toThrow("fetch=source-base");
+    prepareNodeWorkerPublicationIntegration(
+      { ...context, transfer: createTransfer(emptyWorkspace) },
+      {
+        ...input,
+        sourceUrl: pathToFileURL(path.join(root, "missing-source")).href,
+      },
+    ),
+  ).rejects.toMatchObject({
+    name: "NodeWorkerWorkspaceTransferError",
+    operation: "publication",
+    cause: expect.objectContaining({ message: expect.stringContaining("fetch=source-base") }),
+  });
   expect(service.getSnapshot("environment", editingSnapshot.manifestRef)).toBeDefined();
   expect(git("rev-parse", "HEAD")).toBe(targetCommit);
   expect(git("symbolic-ref", "--short", "HEAD")).toBe("main");

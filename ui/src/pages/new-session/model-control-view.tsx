@@ -27,6 +27,7 @@ function ModelCatalogStatus(props: {
 export function NewSessionModelControlView(props: {
   control: NewSessionModelControl;
   options: NewSessionModelRenderOptions;
+  showEffort?: boolean;
 }) {
   // Draft revisions replace options, but text is not an input to model controls.
   const control = createMemo(() => props.control);
@@ -85,9 +86,27 @@ export function NewSessionModelControlView(props: {
       sending: sending(),
     });
   });
+  const initialDefaultsPending = createMemo(() => {
+    const { connected, modelCatalogState } = controls();
+    if (props.showEffort === false || !connected) {
+      return false;
+    }
+    const roster = context()?.agents.state;
+    // The agent can land before the first catalog read. Keep unknown labels
+    // reserved through that handoff, but never mask a retained or retired catalog.
+    return (
+      (roster?.agentsLoading && !roster.agentsList) ||
+      (agent() &&
+        !modelCatalogState.hasSnapshot &&
+        !modelCatalogState.retired &&
+        (modelCatalogState.status === "idle" || modelCatalogState.status === "loading"))
+    );
+  });
   return (
     <ChatModelControls
       {...controls()}
+      showEffort={props.showEffort}
+      initialDefaultsPending={Boolean(initialDefaultsPending())}
       renderModelCatalogStatus={(render) => (
         <ModelCatalogStatus read={metadata} identity={read()}>
           {render}

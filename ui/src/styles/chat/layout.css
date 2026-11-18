@@ -560,11 +560,11 @@ openclaw-pending-session-create {
 .chat-virtual-sizer,
 .chat-virtual-block {
   transition-property: none;
+  width: 100%;
 }
 
 .chat-virtual-sizer {
   position: relative;
-  width: 100%;
 }
 
 .chat-thread-inner--virtual {
@@ -579,7 +579,6 @@ openclaw-pending-session-create {
   position: absolute;
   top: 0;
   left: 0;
-  width: 100%;
 }
 
 /* Browser flow preserves adjacency even when smooth scrolling skips a row's
@@ -592,18 +591,26 @@ openclaw-pending-session-create {
   display: flow-root;
   width: 100%;
   contain: content;
-}
 
-/* Small notice rows must enter at their real height, not the virtual estimate. */
-.chat-virtual-row:has(> .chat-notice) {
-  content-visibility: visible;
-  contain: none;
-}
+  /* WebKit restyles hidden parked subtrees that retain layout boxes.
+     Chromium needs those boxes for timely forecast paint. */
+  @supports (-webkit-nbsp-mode: space) {
+    &[data-prepared-row]:not([data-preparing-row]) {
+      display: none;
+    }
+  }
 
-.chat-virtual-row:focus-within {
-  /* Footer controls use a -4px block margin. Paint containment must clear
-     that overhang plus the 2px focus outline and its 3px offset. */
-  overflow-clip-margin: 10px;
+  /* Small notice rows must enter at their real height, not the virtual estimate. */
+  &:has(> .chat-notice) {
+    content-visibility: visible;
+    contain: none;
+  }
+
+  &:focus-within {
+    /* Footer controls use a -4px block margin. Paint containment must clear
+       that overhang plus the 2px focus outline and its 3px offset. */
+    overflow-clip-margin: 10px;
+  }
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
@@ -957,8 +964,7 @@ openclaw-pending-session-create {
 }
 
 .context-usage__header,
-.context-usage__actions,
-.context-usage__latest {
+.context-usage__actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1035,37 +1041,34 @@ openclaw-pending-session-create {
   margin: 10px 0;
   background: var(--details-separator);
 }
-.context-usage__latest {
-  flex-wrap: wrap;
-  gap: 4px 8px;
-  min-height: 26px;
+/* Usage table: label, then right-aligned Cache and Cost columns shared by every row. */
+.context-usage__usage {
+  display: grid;
+  gap: 4px 16px;
+  align-items: baseline;
   color: var(--muted);
   font-size: 12px;
+  white-space: nowrap;
 }
-.context-usage__stats {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  margin: 0 0 0 auto;
-  font-size: 12px;
-  div {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 3px;
+.context-usage__usage-row {
+  display: contents;
+  > :not(:first-child) {
+    text-align: right;
   }
-  div:not(:last-child)::after {
-    margin: 0 6px;
-    color: color-mix(in srgb, var(--muted) 50%, transparent);
-    content: "·";
-  }
-  dt {
-    color: var(--muted);
-  }
-  dd {
-    margin: 0;
+  b {
     color: var(--text);
     font-weight: 650;
   }
+}
+.context-usage__usage-head > * {
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.context-usage__stats {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
 }
 .context-usage__tray {
   --tray: color-mix(in oklab, var(--text) 3.5%, var(--bg-elevated));
@@ -2519,6 +2522,7 @@ openclaw-chat-ci-details {
 .chat-pr__create {
   display: inline-flex;
   align-items: center;
+  gap: 6px;
   min-height: 24px;
   padding: 1px 10px;
   border: 0;
@@ -2530,7 +2534,7 @@ openclaw-chat-ci-details {
   white-space: nowrap;
 }
 
-.chat-pr__create:hover {
+.chat-pr__create:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--text);
 }

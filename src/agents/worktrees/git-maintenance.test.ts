@@ -2,7 +2,7 @@ import { createCipheriv, createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { deflateSync } from "node:zlib";
-import { afterAll, afterEach, beforeEach, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -75,6 +75,9 @@ it.each([false, true])(
     };
     const before = await packedBytes();
     const progress = new WorktreeGcProgress();
+    // Retirement deadlines are covered in service.gc-performance.test.ts.
+    using clock = vi.spyOn(performance, "now");
+    clock.mockReturnValue(0);
     await createWorktreeGitMaintenance(env)({ progress });
     expect(progress.result.gitMaintenance?.stage).toBe("completed");
     expect(await packedBytes()).toBeLessThan(before / 3);

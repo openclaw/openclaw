@@ -119,7 +119,6 @@ describeBrowserLayout.concurrent("chat run spacing", () => {
           return {
             intraTurn: gap('[data-run-block="text"]', '[data-run-block="detail"]'),
             textToTool: gap('[data-run-block="detail"]', '[data-run-block="tool"]'),
-            toolToList: gap('[data-run-block="tool"]', '[data-run-block="list"]'),
             listToReply: gap('[data-run-block="list"]', '[data-run-block="activity-reply"]'),
             replyToWork: gap('[data-run-block="activity-reply"]', '[data-run-block="work"]'),
             workToReply: gap('[data-run-block="work"]', '[data-run-block="reply"]'),
@@ -143,7 +142,6 @@ describeBrowserLayout.concurrent("chat run spacing", () => {
         expect(gaps).toEqual({
           intraTurn: 2,
           textToTool: 8,
-          toolToList: 8,
           listToReply: 8,
           replyToWork: 8,
           workToReply: 4,

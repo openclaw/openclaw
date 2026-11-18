@@ -49,7 +49,12 @@ export async function inviteFixture(role: MemberRole = "operator") {
   };
   const redemption = await signStatement(
     "InviteRedemption",
-    { ...parts, proof: await computeRedemptionProof(proofKey, parts), requested_at: WORLD_NOW },
+    {
+      ...parts,
+      label: "Bob browser",
+      proof: await computeRedemptionProof(proofKey, parts),
+      requested_at: WORLD_NOW,
+    },
     world.invitee.signer,
   );
   const identity: AssertedIdentity = { account_id: "acct_bob", email: "bob@example.com" };

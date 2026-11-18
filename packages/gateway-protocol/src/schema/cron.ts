@@ -14,6 +14,7 @@ import {
 import { FailoverReasonSchema } from "./failover-reason.js";
 import { ChatHistoryActivitySchema } from "./logs-chat.js";
 import { NonEmptyString } from "./primitives.js";
+import { CyberAccessProgramSchema } from "./sessions-row.js";
 // Gateway Protocol schema module defines protocol validation shapes.
 import { stringLiteralUnion } from "./string-literal-union.js";
 
@@ -530,10 +531,13 @@ export const CronJobSchema = closedObject({
   updatedAtMs: CronDateTimestampMsSchema,
   /** Opaque Gateway-computed token for the job definition, excluding scheduler state. */
   configRevision: Type.Optional(CronConfigRevisionSchema),
+  /** Gateway-computed: the account-scoped tool cap cannot resolve its creator channel. */
+  reauthorizationRequired: Type.Optional(Type.Boolean()),
   schedule: CronScheduleSchema,
   pacing: Type.Optional(CronPacingSchema),
   activeHours: Type.Optional(CronActiveHoursSchema),
   idleOnly: Type.Optional(Type.Boolean()),
+  cyberAccessProgram: Type.Optional(CyberAccessProgramSchema),
   trigger: Type.Optional(CronTriggerSchema),
   sessionTarget: CronSessionTargetSchema,
   wakeMode: CronWakeModeSchema,
@@ -622,6 +626,7 @@ export const CronAddParamsSchema = closedObject({
   pacing: Type.Optional(CronPacingSchema),
   activeHours: Type.Optional(CronActiveHoursSchema),
   idleOnly: Type.Optional(Type.Boolean()),
+  cyberAccessProgram: Type.Optional(CyberAccessProgramSchema),
   trigger: Type.Optional(CronTriggerSchema),
   sessionTarget: CronSessionTargetSchema,
   wakeMode: CronWakeModeSchema,
@@ -668,6 +673,7 @@ const CronJobPatchSchema = closedObject({
   pacing: Type.Optional(Type.Union([CronPacingSchema, Type.Null()])),
   activeHours: Type.Optional(Type.Union([CronActiveHoursSchema, Type.Null()])),
   idleOnly: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+  cyberAccessProgram: Type.Optional(Type.Union([CyberAccessProgramSchema, Type.Null()])),
   trigger: Type.Optional(Type.Union([CronTriggerSchema, Type.Null()])),
   sessionTarget: Type.Optional(CronSessionTargetSchema),
   wakeMode: Type.Optional(CronWakeModeSchema),

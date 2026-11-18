@@ -26,6 +26,7 @@ import {
   needsAuthAttention,
   renderMutationMessage,
   renderProviderStatus,
+  probeStatus,
 } from "./view-status.tsx";
 import type { ModelProvidersViewProps } from "./view-types.ts";
 
@@ -134,6 +135,8 @@ function ProviderCredentials(props: ProviderRowProps) {
         <ProviderProfiles
           {...props}
           canMutate={props.canMutate && !props.configBusy}
+          canSignInAgain={() => props.canConnect(props.card)}
+          onSignInAgain={() => props.onConnect(props.card)}
           keyAction={keySource(props.card) === undefined ? keyAction : undefined}
         />
       </Show>
@@ -154,20 +157,10 @@ function renderProbeResult(result: ModelsProbeResult | undefined) {
   if (!result) {
     return undefined;
   }
-  const hasWarnings =
-    result.status === "ok" && result.results.some((target) => target.status !== "ok");
-  const kind = hasWarnings ? "warn" : result.status === "ok" ? "ok" : "danger";
   return (
     <div class="model-providers__probe" role="status">
       <div class="model-providers__probe-summary">
-        <SettingsStatus
-          kind={kind}
-          label={
-            hasWarnings
-              ? t("modelProviders.probe.status.partial")
-              : t(`modelProviders.probe.status.${result.status}`)
-          }
-        />
+        <SettingsStatus {...probeStatus(result)} />
       </div>
       {result.error ? <div>{formatUiExternalText(result.error)}</div> : undefined}
       <For each={result.results}>
@@ -547,7 +540,9 @@ export function ProviderRow(props: ProviderRowProps) {
             <span class="provider-row__meta-part">{modelsText(card())}</span>
           </span>
         </span>
-        <span class="provider-row__status">{renderProviderStatus(card())}</span>
+        <span class="provider-row__status">
+          {renderProviderStatus(card(), props.probeResults[card().id])}
+        </span>
         <Icon name="chevronDown" class="provider-row__chevron" />
       </button>
       <Show when={open()}>

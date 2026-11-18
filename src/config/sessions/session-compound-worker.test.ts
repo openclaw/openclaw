@@ -166,7 +166,7 @@ it("rolls back the turn and its pending-input custody after an idempotency confl
       expect(f.read()).toEqual(before);
       expect(f.events()).toEqual([]);
     } finally {
-      pending!.finish("interrupted");
+      pending!.finish("interrupted", "failed");
     }
   });
 });
@@ -242,7 +242,7 @@ it.each([
         expect(f.read()).toEqual(before);
         expect(f.events()).toEqual([]);
       } finally {
-        pending?.finish("interrupted");
+        pending?.finish("interrupted", "failed");
       }
     });
   },
@@ -536,7 +536,7 @@ it("preserves worker custody refusal identity so callers cannot fall back to ano
       expect(pending!.state).toBe("queued");
       expect(f.events()).toEqual([]);
     } finally {
-      pending!.finish("interrupted");
+      pending!.finish("interrupted", "failed");
     }
   });
 });
@@ -595,7 +595,7 @@ it("commits a pending-input turn with zero host SQL", async () => {
     } finally {
       sql.restore();
       stopRows();
-      pending!.finish("interrupted");
+      pending!.finish("interrupted", "failed");
     }
     expect(f.read()?.sessionId).toBe("original");
     expect(f.events()).toContainEqual(
@@ -683,7 +683,7 @@ it("replays an exactly consumed input after its live custody has finished", asyn
     try {
       await pending!.run(() => append(pending!.message));
       expect(pending!.state).toBe("consumed");
-      pending!.finish("cancelled");
+      pending!.finish("cancelled", "failed");
       const result = await withSessionPendingInputPersistence(pending!, () =>
         append(pending!.message),
       );
@@ -698,7 +698,7 @@ it("replays an exactly consumed input after its live custody has finished", asyn
         { id: pending!.inputId, message: pending!.message },
       ]);
     } finally {
-      pending!.finish("cancelled");
+      pending!.finish("cancelled", "failed");
     }
   });
 });

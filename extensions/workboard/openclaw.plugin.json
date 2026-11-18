@@ -77,7 +77,8 @@
   "description": "Dashboard workboard for agent-owned issues and sessions.",
   "catalog": {
     "featured": true,
-    "order": 10
+    "order": 10,
+    "sidebar": true
   },
   "contracts": {
     "tools": [
@@ -115,6 +116,7 @@
       "workboard_release",
       "workboard_comment",
       "workboard_proof",
+      "workboard_verify",
       "workboard_worker_log",
       "workboard_protocol_violation",
       "workboard_unblock",
@@ -218,6 +220,9 @@
       "optional": true
     },
     "workboard_proof": {
+      "optional": true
+    },
+    "workboard_verify": {
       "optional": true
     },
     "workboard_worker_log": {

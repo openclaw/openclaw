@@ -127,7 +127,12 @@ Publication may wait until the requesting turn finishes and its workspace is acc
 
 Use `github_publish` with `action: "inspect_pr"` and `pullRequestUrl` to inspect
 an existing PR authored by a currently verified GitHub account linked to the
-requesting person. The URL must name a PR on the configured GitHub host. Copied
+requesting person. A linked account can also continue a PR authored by the currently
+selected shared publisher when GitHub identifies that account as an author,
+coauthor or committer on a commit in the PR. This works across conversations.
+Contribution is checked against numeric GitHub account IDs on the current PR head,
+not names, PR-body credit or unpublished local commit trailers.
+The URL must name a PR on the configured GitHub host. Copied
 Files, Commits and Checks links, query strings and comment or review anchors
 resolve to the same canonical PR. The Gateway checks numeric account identity, current session access and the selected
 shared publisher. A private repository also requires current repository access
@@ -152,8 +157,10 @@ A PR authored by that publisher is not necessarily authored by an account linked
 to the requesting person. For the current conversation's existing publication,
 read metadata with `edit` without a title or body. For new work, use `publish`;
 it checks the selected publisher at the publication boundary. A bot-authored PR
-from another conversation is not eligible for own-PR import just because the
-publisher created it; guests continue in its original publication conversation.
+from another conversation is not eligible for import just because the publisher
+created it; a guest needs the verified contribution described above. Without that
+credit, continue in the original publication conversation or ask a full-write
+maintainer to assist.
 
 For an open PR prepared or originally published from this conversation, `refresh_base`
 selects its current GitHub destination before integrating the base into the
@@ -188,7 +195,7 @@ To import your own existing PR into a local conversation, use `github_publish` w
 sessions with a writable managed sandbox or an ordinary local Docker or Podman
 sandbox; sessions that run directly on the host do not see it. A separate
 inspection call is
-optional: preparation verifies the current linked author, repository access,
+optional: preparation verifies current linked authorship or publisher-PR contribution, repository access,
 original head and publisher write eligibility again. A current full-write
 maintainer can also prepare or continue the target PR in another person's
 conversation without being its creator or the PR author. This uses the same
@@ -288,7 +295,7 @@ After preparation, ordinary shared publication appends changes to the original
 PR's head repository and branch. It preserves the PR number, author, existing
 commits, discussion and draft state, including an update that reverts the original
 contribution completely. The Gateway rechecks current requester eligibility,
-including linked authorship for guests, repository access, publisher permission
+including linked authorship or publisher-PR contribution for guests, repository access, publisher permission
 and remote head before pushing. A fork
 can use GitHub's maintainer-edit permission without granting the publisher direct
 write access to the fork. Publisher credentials remain outside the sandbox.
@@ -317,7 +324,7 @@ result includes `pullRequest` (URL, repository and branch), rather than claiming
 that preparation produced a `publication` receipt. For these imported actions,
 send the observed `expectedHeadCommit` without `requestId`; receipt-backed actions
 still require their publication's `requestId`. Every guest action rechecks the
-current linked author and private repository access. Writes also recheck current
+current linked authorship or publisher-PR contribution and private repository access. Writes also recheck current
 head and publisher eligibility; a changed target or authority refuses the action.
 
 Full-write operators can inspect, close or merge the bound original PR through
@@ -347,8 +354,9 @@ To edit an existing PR without importing its source, include `pullRequestUrl` wi
 explicit URL. This target takes precedence over any PR already associated with
 the conversation and returns `pullRequest`, not a publication receipt.
 
-The Gateway verifies the current requester's linked authorship or authorized
-maintainer access, repository identity and private repository access. An
+The Gateway verifies the current requester's linked authorship, publisher-PR
+contribution or authorized maintainer access, repository identity and private
+repository access. An
 inspection does not grant later authority. GitHub must permit the metadata write;
 source branch push permission and branch protection do not govern this operation.
 The conversation keeps its current workspace and PR association. After an
@@ -375,8 +383,8 @@ To request another ClawSweeper review, use `github_publish` with
 `action: "request_review"`. Read the PR with `edit` first, then pass its observed
 `headCommit` as `expectedHeadCommit` and any publication `requestId`. To select an
 explicitly identified PR, supply the same `pullRequestUrl` on both calls and omit
-`requestId`. The Gateway verifies the current requester's linked authorship or
-maintainer authority and repository access. This works without importing source,
+`requestId`. The Gateway verifies the current requester's linked authorship,
+publisher-PR contribution or maintainer authority and repository access. This works without importing source,
 binding a workspace, or publishing from the conversation; an explicit URL takes
 precedence over its existing PR.
 
@@ -413,6 +421,8 @@ If upload authority changes after the request begins, the denial also warns that
 an attachment may already exist.
 
 A person with full operator write access can request landing in the same conversation, including a guest-created sandboxed session. The agent uses `github_publish` with `action: "inspect"` to read the session's completed shared publication and its current GitHub state. After review and required checks, `action: "ready"` marks its draft ready and `action: "merge"` merges it. To close the PR without merging, use `action: "close"` after inspection. All three writes require the inspected `expectedHeadCommit` and, for a publication receipt, its `requestId`; merge also requires an explicit `mergeMethod` (`merge`, `squash`, or `rebase`). GitHub still enforces repository permissions and merge requirements. These operations do not enable auto-merge or delete the branch, workspace, or conversation.
+
+To land a PR that this conversation did not publish, such as one from another session or opened outside OpenClaw, pass its `pullRequestUrl` on each `inspect`, `ready`, `merge`, or `close` call, without `requestId` or `publishingSessionKey`. The same full operator write requirement applies, and the conversation's workspace and any bound PR stay unchanged. The action runs through the shared publisher, so full operator write on the Gateway is the trust boundary: grant it only to people who may merge the repositories that account can merge.
 
 Squash landing uses the current PR title read by the merge action as the commit subject, including for a one-commit PR whose original subject differs. Contributor trailers remain in the commit body. Merge and rebase methods retain GitHub's existing commit-message behavior.
 

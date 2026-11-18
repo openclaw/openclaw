@@ -151,10 +151,14 @@ model still updates the preference.
 
 The Gateway prepares one model catalog for the CLI, `/models`, the Control UI,
 and native apps. Chat and session metadata read published rows without starting
-provider discovery. Ordinary `models.list` requests reuse the published catalog;
-provider response-cache expiry alone does not rebuild it. Startup, changed
-configuration or credentials, plugin and hosted metadata updates, and explicit
-**Refresh** own provider catalog acquisition. Startup discovers provider inventory
+provider discovery. Ordinary `models.list` requests return the published catalog
+immediately. When a provider's live model list is older than 15 minutes and its
+response cache has expired, the request also lists that provider again in the
+background without marking it pending, so pickers show no loading state; newly
+launched provider models appear without a restart, and open pickers update when
+the new list is published. A provider that caches its list
+for longer than 15 minutes keeps that longer lifetime. Startup, changed configuration or credentials, plugin and hosted metadata
+updates, and explicit **Refresh** also acquire the provider catalog. Startup discovers provider inventory
 in the background; a later configuration or credential change rediscovers only
 the affected providers. Native harnesses such as Codex discover models and account
 readiness on demand for the selected agent: opening its model picker or catalog,
@@ -196,9 +200,10 @@ a background refresh. Hover, focus, or tap it to see which providers are refresh
 existing models stay usable, and the open picker updates when discovery completes.
 An empty picker shows “Loading models…” until its first models arrive.
 Gateway startup and credential changes
-also refresh the affected catalog. Use **Refresh** in Models or
-`openclaw models list --refresh` to request another refresh, including newly
-released models. **Retry** requests discovery again after a failure.
+also refresh the affected catalog, and opening a picker relists any provider list
+older than 15 minutes whose response cache has expired. Use **Refresh** in Models or
+`openclaw models list --refresh` to request a refresh right away. **Retry**
+requests discovery again after a failure.
 
 If a credential refresh loses its plugin generation, OpenClaw retries publication
 once against current plugins. If a newer publication supersedes that refresh,
@@ -529,6 +534,10 @@ without waiting for a new OpenClaw release. The Gateway makes one background
 JSON `GET` at startup and then checks at most every six hours. The request sends
 no prompts, credentials, model usage, or configuration payload beyond the
 normal HTTP user agent and conditional cache headers.
+
+On memory-constrained hosts, automatic checks wait while available memory is at
+or below 20% of the process limit and retry after one minute. The current catalog
+stays available; manual `openclaw models refresh` remains immediate.
 
 The downloaded bundle is stored in the shared SQLite state database. The Gateway
 prepares a new catalog generation in the background, including each agent's

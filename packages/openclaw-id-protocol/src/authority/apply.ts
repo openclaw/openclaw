@@ -21,17 +21,21 @@ import { parseStatement } from "../statements/validate.js";
 import { verifyOwnerStatement, type Authority, type VerifyOptions } from "../statements/verify.js";
 import {
   approvalDescendants,
+  memberDeviceDescendants,
   ownerDeviceListedSeq,
   peerKeyListedSeq,
   withoutMemberPeerKeys,
 } from "./allowlist.js";
 import { inviteLifetimeError, withoutSpentInvites } from "./invite-retention.js";
+import { addMemberDevice, deviceSigningKeyListed, setMemberRecoveryKit } from "./member-devices.js";
 import { addNode, bindOwnerDeviceNode, nodeRemovalEvents, withoutNodes } from "./nodes.js";
 import { applyRevocation } from "./revocation.js";
 import {
   applied,
   certificateWindowError,
   ownerLookup,
+  memberLookup,
+  isMemberRecoveryKey,
   proofKeyHex,
   refuse,
   type AuthorityEvent,
@@ -47,13 +51,20 @@ import {
 export type WriteContext = { channel: Channel; now: UnixSeconds };
 
 function verifyOptions(state: AuthorityState, now: UnixSeconds): VerifyOptions {
-  return { now, owners: ownerLookup(state, now) };
+  return { now, owners: ownerLookup(state, now), members: memberLookup(state) };
 }
 
 // Mailbox policy (spec sections 6 and 7): through Discovery, only root-signed statements,
-// revocations and redemption requests. Device-signed approvals must arrive directly.
+// revocations, redemption requests and recovery-only member approvals. Browser approvals are direct.
 function mailboxAllows(statement: SignedStatement, authority: Authority): boolean {
-  return statement.type === "Revocation" || authority.kind === "root";
+  return (
+    statement.type === "Revocation" ||
+    authority.kind === "root" ||
+    (authority.kind === "member_recovery_kit" &&
+      statement.type === "MembershipChange" &&
+      // SAFETY: parseStatement validated the body for the checked MembershipChange type.
+      (statement as SignedStatement<"MembershipChange">).body.target.op === "add_member_device")
+  );
 }
 
 /**
@@ -102,7 +113,14 @@ async function applyOwnerStatement(
   if (!verified.ok) {
     return refuse(state, verified.code, verified.detail);
   }
-  if (context.channel === "mailbox" && !mailboxAllows(statement, verified.authority)) {
+  if (
+    context.channel === "mailbox" &&
+    (!mailboxAllows(statement, verified.authority) ||
+      (statement.type === "MembershipChange" &&
+        // SAFETY: parseStatement validated the body for the checked MembershipChange type.
+        (statement as SignedStatement<"MembershipChange">).body.target.op ===
+          "set_member_recovery_kit"))
+  ) {
     return refuse(
       state,
       "not_direct",
@@ -135,18 +153,23 @@ async function applyMembershipChange(
   if (body.seq !== state.seq + 1) {
     return refuse(state, "seq_conflict", `expected seq ${state.seq + 1}`);
   }
-  const result = await applyTarget({ ...state, seq: body.seq }, body.target, authority, context);
+  const result = await applyTarget({ ...state, seq: body.seq }, body, authority, context);
   return result.ok ? result : { ...result, state };
 }
 
 // Dispatches a MembershipChange target. `state` already carries the new seq.
 async function applyTarget(
   state: AuthorityState,
-  target: SignedStatement<"MembershipChange">["body"]["target"],
+  body: SignedStatement<"MembershipChange">["body"],
   authority: Authority,
   context: WriteContext,
 ): Promise<AuthorityResult> {
+  const target = body.target;
   switch (target.op) {
+    case "set_member_recovery_kit":
+      return setMemberRecoveryKit(state, target, authority, body.issued_at);
+    case "add_member_device":
+      return addMemberDevice(state, target, authority, context.now);
     case "add_node":
       if (authority.kind !== "root" && authority.kind !== "owner_device") {
         return refuse(state, "not_an_owner", "only an owner can add a node");
@@ -188,7 +211,18 @@ async function applyTarget(
       );
     }
     case "revoke_device":
-      return applyRemovalOfPeer(state, target.peer_key);
+      if (
+        authority.kind === "member_device" &&
+        (target.peer_key === authority.peer_key ||
+          !state.members[authority.account_id]?.peer_keys.includes(target.peer_key))
+      ) {
+        return refuse(
+          state,
+          "target_mismatch",
+          "a member may revoke only another device of their own account",
+        );
+      }
+      return applyRemovalOfPeer(state, target.peer_key, authority);
     case "add_owner_device":
       return addOwnerDevice(state, target, authority, context);
     case "deny_invite": {
@@ -236,23 +270,58 @@ async function applyTarget(
   }
 }
 
-// Removes one member browser (peer key); the member stays listed.
-function applyRemovalOfPeer(state: AuthorityState, peer: IrohEndpointKey): AuthorityResult {
-  return applied(withoutMemberPeerKeys(state, [peer]), [
-    { type: "disconnect", peer_keys: [peer] },
-    { type: "invalidate_tokens", peer_keys: [peer] },
+// Removes the member device and its approval descendants; the account stays listed.
+async function applyRemovalOfPeer(
+  state: AuthorityState,
+  peer: IrohEndpointKey,
+  authority: Authority,
+): Promise<AuthorityResult> {
+  const peers = [
+    ...new Set(
+      (
+        await Promise.all(
+          Object.values(state.members).map((member) => memberDeviceDescendants(member, peer)),
+        )
+      ).flat(),
+    ),
+  ];
+  if (authority.kind === "member_device") {
+    if (peers.includes(authority.peer_key)) {
+      return refuse(
+        state,
+        "target_mismatch",
+        "a member cannot revoke the signing device through its approver",
+      );
+    }
+    if (
+      Object.entries(state.members).some(
+        ([account, member]) =>
+          account !== authority.account_id && member.peer_keys.some((key) => peers.includes(key)),
+      ) ||
+      Object.values(state.owner_devices).some((owner) =>
+        owner.cert.body.peer_keys.some((key) => peers.includes(key)),
+      )
+    ) {
+      return refuse(
+        state,
+        "target_mismatch",
+        "a member cannot revoke keys shared with another account or owner",
+      );
+    }
+  }
+  return applied(withoutMemberPeerKeys(state, peers), [
+    { type: "disconnect", peer_keys: peers },
+    { type: "invalidate_tokens", peer_keys: peers },
     { type: "publish_snapshot" },
   ]);
 }
 
-// Adds a member directly, or approves a pending redemption when `invite_id` is set.
-// The caps hold: at most MAX_MEMBERS members and MAX_MEMBER_PEER_KEYS browsers each.
 function addMember(
   state: AuthorityState,
   target: Extract<SignedStatement<"MembershipChange">["body"]["target"], { op: "add" }>,
   now: UnixSeconds,
 ): AuthorityResult {
-  if (target.peer_keys.some((key) => state.nodes[key])) {
+  if (target.peer_keys.some((key) => state.nodes[key] || isMemberRecoveryKey(state, key))) {
     return refuse(state, "target_mismatch", "a node key cannot be a member key");
   }
   const existing = state.members[target.account_id];
@@ -275,6 +344,7 @@ function addMember(
   // this change's seq.
   const listedSeq = peerKeys.map((key) => peerKeyListedSeq(state, key) ?? state.seq);
   const member: MemberRecord = {
+    ...existing,
     role: target.role,
     peer_keys: peerKeys,
     last_seen: lastSeen,
@@ -296,13 +366,39 @@ function addMember(
   if (target.role !== invite.cap.role) {
     return refuse(state, "target_mismatch", "approval's role differs from the invite's");
   }
+  if (peerKeyListedSeq(state, pending.peer_key) !== undefined) {
+    return refuse(state, "target_mismatch", "redemption peer key is already listed");
+  }
+  if (
+    deviceSigningKeyListed(state, pending.device_pub) ||
+    isMemberRecoveryKey(state, pending.device_pub)
+  ) {
+    return refuse(state, "target_mismatch", "device signing key is already listed");
+  }
+  member.devices = {
+    ...member.devices,
+    [pending.peer_key]: {
+      device_pub: pending.device_pub,
+      label: pending.label,
+      approved_by: { kind: "invite", invite_id: target.invite_id },
+    },
+  };
   return applied(
     {
       ...state,
       members: { ...state.members, [target.account_id]: member },
       invites: {
         ...state.invites,
-        [target.invite_id]: { ...invite, status: "consumed", pending: null },
+        [target.invite_id]: {
+          ...invite,
+          status: "consumed",
+          pending: null,
+          approved: {
+            account_id: pending.account_id,
+            device_pub: pending.device_pub,
+            peer_key: pending.peer_key,
+          },
+        },
       },
     },
     [
@@ -396,7 +492,7 @@ async function addOwnerDevice(
   }
   if (
     [formatIrohEndpointKey(rawPublicKey(cert.body.device_pub)), ...cert.body.peer_keys].some(
-      (key) => state.nodes[key],
+      (key) => state.nodes[key] || isMemberRecoveryKey(state, key),
     )
   ) {
     return refuse(state, "target_mismatch", "a node key cannot be an owner device key");
@@ -547,8 +643,24 @@ export async function submitRedemption(
   if (!invite) {
     return refuse(state, "invite_unknown", "no such invite");
   }
+  const body = parsed.statement.body;
   if (invite.status !== "open") {
-    return refuse(state, "invite_used", "invite already redeemed");
+    const member = state.members[identity.account_id];
+    const keysMatch =
+      invite.approved?.device_pub === body.device_pub && invite.approved.peer_key === body.peer_key;
+    if (
+      invite.status !== "consumed" ||
+      invite.approved?.account_id !== body.account_id ||
+      identity.account_id !== body.account_id ||
+      !keysMatch ||
+      !member?.peer_keys.includes(body.peer_key)
+    ) {
+      return refuse(
+        state,
+        "invite_used",
+        `invite already redeemed: invite_id=${body.invite_id} already_member=${Boolean(member)} keys_match=${keysMatch}`,
+      );
+    }
   }
   const verified = await verifyInviteRedemption(
     parsed.statement,
@@ -560,13 +672,16 @@ export async function submitRedemption(
   if (!verified.ok) {
     return refuse(state, verified.code, verified.detail);
   }
-  const body = parsed.statement.body;
+  if (invite.status === "consumed") {
+    return applied(state, []);
+  }
   const record = {
     ...invite,
     status: "pending" as const,
     pending: {
       account_id: body.account_id,
       device_pub: body.device_pub,
+      label: body.label,
       peer_key: body.peer_key,
       requested_at: now,
     },

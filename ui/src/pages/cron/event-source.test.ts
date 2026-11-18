@@ -4,7 +4,7 @@ import { buildCronSchedule, hasUnchangedCronSchedule } from "../../lib/cron/form
 import { validateCronForm } from "../../lib/cron/form.ts";
 import { createInitialCronState, startCronEdit } from "../../lib/cron/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { attribute, fillInput, testId } from "./cron-assertions.test-support.ts";
+import { attribute, fillInput } from "./cron-assertions.test-support.ts";
 import * as events from "./event-source.ts";
 import { createCronViewJob, renderCronView, scheduledJob } from "./view.test-support.ts";
 
@@ -33,6 +33,7 @@ const source = {
   error: null,
   events: [definition],
   servers: ["deployments"],
+  serversError: null,
   subscriptions: [],
   statusError: null,
   onRefresh: vi.fn(),
@@ -166,8 +167,7 @@ it("renders the real event editor, schema error, and subscription replay gap", a
   expect(onFormChange).toHaveBeenCalledWith({ eventArguments: args.value });
   expect(container.textContent).toContain("Replay gap:");
   expect(container.querySelector("#cron-cron-expr")).toBeNull();
-  expect(container.querySelector(testId("cron-submit-run"))).toBeNull();
-  expect(container.textContent).not.toContain("Delete after run");
+  expect(container.textContent).not.toContain("Delete after it runs");
   for (const field of ["eventServer", "eventName"]) {
     expect(container.querySelector(`#cron-error-${field}`)).not.toBeNull();
   }

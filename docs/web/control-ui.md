@@ -38,7 +38,13 @@ without known dimensions keep a 3:2 frame while displayed, with the full image
 fitted inside it. Previously learned dimensions size the next preview without
 moving the surrounding messages when the image decodes.
 
-Opening a transcript image or video shows a shared viewer for supported media in
+Uploaded videos show a thumbnail or a compact Play card in chat. Choose **Play**
+to load the player in place; scrolling past a video does not prepare or convert
+it for playback. The player’s expand action opens the larger media viewer and
+pauses inline playback. Leaving the conversation releases the player. If your
+browser blocks automatic playback after conversion, use the player’s Play control.
+
+Opening a transcript image or expanding a video shows a shared viewer for supported media in
 the loaded thread, including inline Markdown images, your own attachments, and
 earlier response turns.
 When more than one item is available, use the visible previous/next buttons,
@@ -55,6 +61,11 @@ access. The Gateway continues to authorize every request.
 configuration separately. Binding controls keep their own loading and error
 state until configuration is available; a slow configuration read does not
 hold the inventory page open.
+
+Device and command-approval panels build their contents when first opened, then
+keep them mounted when closed so drafts survive reopening. Summary rows continue
+to update while closed. Browser find-in-page searches panel contents only after
+you have opened that panel.
 
 Connections without general read access also skip CLI session catalogs, plugin
 tool artwork, detailed usage reads, and the separate command catalog. Slash-command
@@ -95,6 +106,12 @@ credentials, or private URLs, and the links suppress the browser referrer. Revie
 anything you add before submitting publicly. Use [official support](https://community.openclaw.ai/)
 for setup help and [private security reporting](https://github.com/openclaw/openclaw/security/policy) for security concerns.
 
+## Answer an agent question
+
+Agent questions appear above the message box. You can keep writing or queue a
+follow-up while the question is expanded; sending a chat message does not answer
+the question. Use its choices and **Submit**, or **Skip**, to resolve it.
+
 ## Edit a failed message
 
 If a model rejects a message (for example, because it contains too many images),
@@ -107,7 +124,15 @@ Send or clear any existing composer draft first; recovery never replaces it.
 Editing requires permission to rewind the conversation and is unavailable while
 a run is active. **Try again** still continues the existing conversation without
 replaying the original message, because earlier actions may already have run.
-Rewinding does not undo external actions.
+Rewinding does not undo external actions. Rewinding and switching branches keep
+the existing conversation and move only its active branch, so neither copies the
+transcript. Both still read its history navigation, and a selection far from the
+current branch is republished by background reconciliation, so their cost follows
+the shape and size of that navigation rather than the stored message bytes.
+Forking a conversation copies its history incrementally. If the selected message,
+an individual event, or the history navigation metadata exceeds the safe memory
+budget, that rewind or fork fails without changing the conversation; other
+sessions remain available. Export the transcript to inspect it.
 
 ## Command palette file attachments
 
@@ -116,8 +141,11 @@ along its bottom edge or with **Tab** from its main input, without losing text.
 Search finds commands and sessions; Compose prepares a new background session.
 While you are in Search, text of 60 characters or more, a second line, or a file
 moves the palette to Compose; emptying that draft returns it to Search. Choosing
-Search again keeps it for the current draft. Reopening the palette in the same
-app window returns to the mode you last chose, not to an automatic switch.
+Search again keeps it for the current draft. Reopening the palette returns to the
+mode you last chose, not to an automatic switch. That choice is remembered in this
+browser, including after a reload, when browser storage is available.
+**Cmd/Ctrl+Enter** starts a new background session from either mode using the
+current text and attachments; plain **Enter** still selects a search result.
 **Shift+Tab** keeps normal focus navigation to the mode switch and session controls.
 
 Open the command palette with **Cmd+K** on macOS or **Ctrl+K** elsewhere. Drop
@@ -126,8 +154,10 @@ new background session without changing your current conversation or composer.
 
 Each newly added attachment switches the palette to **Compose**, including after
 you return to Search with an attachment still in the draft.
-Add optional instructions, choose the agent, folder, and worktree, then send
-or press **Cmd/Ctrl+Enter**. Dropping a file does not start the session by itself.
+Add optional instructions, then send or press **Cmd/Ctrl+Enter**. The settings
+button at the left of the composer opens **New session settings** for the agent,
+folder, worktree, and **Remember settings**; the model picker sits beside Send.
+Dropping a file does not start the session by itself.
 Files remain visible while preparing. If a file is rejected, an error toast
 explains the failure and only that file is removed. You can manually start a
 session with the remaining text and files; a rejected file cancels a pending
@@ -144,6 +174,10 @@ Open **Workspace** on New session to choose a saved project, a recent folder, or
 a repository URL. Long lists show the search field immediately; search remains
 available from the magnifying-glass button on shorter lists and stays visible
 while you scroll.
+
+For a new worktree, type part of a branch name in **From** to filter the loaded
+repository branches. The menu shows up to eight matches; you can still enter a
+custom branch, tag, or commit, or leave it blank for the Gateway default.
 
 Saved repositories show a repository icon and their `org/repo` identity when the
 Gateway provides it. Search matches both that identity and the project display
@@ -242,10 +276,9 @@ page in your default browser. Update the browser or operating system if that
 browser also shows the update screen.
 
 In **Settings → Appearance → Browser tab icon**, choose **Agent avatar** to use
-the selected agent’s image. The **Shape** row offers **Square**, **Rounded corners**,
-and **Circle**. Square preserves the full image; rounded and circular icons use a
-centered crop. The choice is saved with your tab-icon preference, and activity
-badges remain visible on every shape.
+the selected agent’s image with a centered circular crop. Activity badges remain
+visible. Earlier saved square or rounded-avatar choices now use the same circle;
+you do not need to reset your preference.
 
 After a Gateway restart, an agent may need a few minutes to prepare its database. The chat view shows "Starting up" and the sidebar stays quiet while preparation is pending. Both reload automatically when the agent is ready; an actual preparation failure still shows its diagnostic and repair instructions.
 

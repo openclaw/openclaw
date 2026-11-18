@@ -455,6 +455,18 @@ describe("main failure attribution", () => {
 });
 
 describe("known hourly main failures", () => {
+  it.each([
+    ["[test] inner parallelism 1", 1],
+    ["[test] inner parallelism unknown", 0],
+    ["Error: worker failed", 0],
+  ])("checks pre-invocation telemetry without hiding errors: %s", (telemetry, count) => {
+    const log = report().replace(
+      "[shard:gateway] begin",
+      `[shard:gateway] ${telemetry}\n[shard:gateway] begin`,
+    );
+    expect(parseNodeFailureReport(log, true)).toHaveLength(count);
+  });
+
   it.each(["", ":42", ":42:3"])(
     "keeps replayed failure attribution with location %j",
     (location) => {

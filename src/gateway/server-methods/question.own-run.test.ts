@@ -6,7 +6,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
-import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -401,8 +401,8 @@ describe("own-run question admission", () => {
         retainedReads += 1;
         assertCurrent(read);
       });
-      const run = projectionLane.pool.run.bind(projectionLane.pool);
-      vi.spyOn(projectionLane.pool, "run").mockImplementation((...args) => {
+      const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
+      vi.spyOn(sessionStoreLane.pool, "run").mockImplementation((...args) => {
         retainedReads += 1;
         return run(...args);
       });
@@ -515,37 +515,37 @@ describe("own-run question admission", () => {
     });
   });
 
-  it.each(["source revoked", "exact run closed"] as const)(
-    "settles the original question when its %s",
-    async (cause) => {
-      await withOwnRunQuestion(async (f) => {
-        const id = await f.request();
-        const waiting = await f.beginWait(id);
-        if (cause === "source revoked") {
-          setUserProfileRole(f.profile.id, "suspended");
-          invalidateOperatorRolePolicy(f.profile.id);
-          expect(f.source.authority.signal?.aborted).toBe(true);
-        } else {
-          releaseAgentRunDelegatedAuthority(f.authority);
-        }
-        const system = createSyntheticPluginRuntimeClient({
-          operatorRoleActor: { kind: "system" },
-          scopes: ["operator.questions"],
-        });
-        expect((await f.call("question.get", { id }, system))[1]).toMatchObject({
-          question: { id, status: "cancelled" },
-        });
-        const response = await waiting.result;
-        if (cause === "source revoked") {
-          expect(response[0]).toBe(false);
-        } else {
-          expect(response).toEqual([true, { status: "cancelled" }, undefined]);
-        }
-        expect((await f.call("question.resolve", { id, answers }))[0]).toBe(false);
-        expect(manager.get(id)).not.toHaveProperty("answers");
+  it("keeps producer authority and run-close cancellation while native waiters recheck roles", async () => {
+    await withOwnRunQuestion(async (f) => {
+      const id = await f.request();
+      const waiting = await f.beginWait(id);
+      setUserProfileRole(f.profile.id, "suspended");
+      invalidateOperatorRolePolicy(f.profile.id);
+      expect(f.source.authority.signal?.aborted).toBe(false);
+      expect(f.source.authority.assertCurrent).not.toThrow();
+      expect(manager.get(id)?.status).toBe("pending");
+      releaseAgentRunDelegatedAuthority(f.authority);
+      const system = createSyntheticPluginRuntimeClient({
+        operatorRoleActor: { kind: "system" },
+        scopes: ["operator.questions"],
       });
-    },
-  );
+      expect((await f.call("question.get", { id }, system))[1]).toMatchObject({
+        question: { id, status: "cancelled" },
+      });
+      // Retained source limitation: the native waiter still uses the router's
+      // captureGatewayRequestOperatorGuard at settlement, unlike the admitted producer.
+      expect(await waiting.result).toEqual([
+        false,
+        undefined,
+        {
+          code: "FORBIDDEN",
+          message: "Your operator role changed; reconnect before continuing.",
+        },
+      ]);
+      expect((await f.call("question.resolve", { id, answers }))[0]).toBe(false);
+      expect(manager.get(id)).not.toHaveProperty("answers");
+    });
+  });
 
   it.each(["source revocation", "transient worker failure"] as const)(
     "preserves the question's authority outcome across %s during a read",
@@ -568,14 +568,30 @@ describe("own-run question admission", () => {
           storePath: resolveOpenClawAgentSqlitePath(sessionScope),
           factsInvalidated: true,
         });
-        const run = projectionLane.pool.run.bind(projectionLane.pool);
-        const spy = vi.spyOn(projectionLane.pool, "run").mockImplementationOnce(async (...args) => {
-          if (cause === "transient worker failure") {
-            throw failure;
+        // Background membership refresh shares this lane; fault only the question's row read.
+        const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
+        let injected = false;
+        const spy = vi.spyOn(sessionStoreLane.pool, "run").mockImplementation(async (...args) => {
+          let selected = false;
+          const result = await run(async () => {
+            const input = typeof args[0] === "function" ? await args[0]() : args[0];
+            if (
+              !injected &&
+              input.kind === "session-exact-entries" &&
+              input.sessionKeys?.includes(sessionScope.sessionKey)
+            ) {
+              injected = true;
+              selected = true;
+              if (cause === "transient worker failure") {
+                throw failure;
+              }
+            }
+            return input;
+          }, args[1]);
+          if (selected) {
+            entered.resolve();
+            await release.promise;
           }
-          const result = await run(...args);
-          entered.resolve();
-          await release.promise;
           return result;
         });
         const request = f.call(

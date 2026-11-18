@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
+import { isConstrainedProcessLowOnMemory } from "../infra/host-memory.js";
 import { normalizeDatabasePath } from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -30,6 +31,17 @@ let unsubscribeHistoryChanges: (() => void) | undefined;
 let unsubscribeDatabaseLifecycle: (() => void) | undefined;
 
 async function sweep(signal: AbortSignal, getCronStorePath: () => string) {
+  if (isConstrainedProcessLowOnMemory()) {
+    // Retention is best effort; leave scarce memory to requests before opening its workers.
+    const now = scope?.now() ?? Date.now();
+    if (nextHistorySweepAtMs <= now) {
+      nextHistorySweepAtMs = now + 60_000;
+    }
+    if (nextRegistrySweepAtMs <= now) {
+      nextRegistrySweepAtMs = now + 60_000;
+    }
+    return;
+  }
   let admitted = false;
   try {
     await runWithGatewayIndependentRootWorkAdmission(

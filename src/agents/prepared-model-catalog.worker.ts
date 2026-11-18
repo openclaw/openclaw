@@ -13,19 +13,18 @@ import {
   captureRemoteModelCatalogStartupSnapshot,
   withRemoteModelCatalogSnapshot,
 } from "../model-catalog/remote-overlay.js";
-import { withHandedOffCodexClientVersion } from "../plugin-sdk/codex-client-version-handoff.internal.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { getPluginCache } from "../plugins/plugin-cache.js";
-import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { settlePluginNativeAdmissions } from "../plugins/plugin-native-admission-state.js";
+import { withPluginSourceAdmissionPublisher } from "../plugins/plugin-source-admission-context.js";
+import type { PluginSourceAdmissionPublication } from "../plugins/plugin-source-admission.types.js";
+import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   nativeReferenceProgress,
   type NativeReferenceProgress,
 } from "../plugins/plugin-native-reference.js";
 import { withPluginSourceCaptureDirectory } from "../plugins/plugin-package-metadata-capture.js";
-import { withPluginSourceAdmissionPublisher } from "../plugins/plugin-source-admission-context.js";
-import type { PluginSourceAdmissionPublication } from "../plugins/plugin-source-admission.types.js";
 import { planRuntimePluginDiscovery } from "../plugins/provider-discovery.js";
 import { getLiveCatalogRetainedData } from "../plugins/provider-live-catalog-cache.js";
 import { restorePreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
@@ -631,96 +630,93 @@ if (parentPort) {
       // The publisher validates this JSON; the private transport only clones its data.
       const pendingCatalog = withPluginSourceAdmissionPublisher(publishSourceAdmission, () =>
         withRemoteModelCatalogSnapshot(freezeTrustedJsonSnapshot(value.remoteCatalog), () =>
-          withPluginSourceCaptureDirectory(
-            data.sourceCaptureDirectory,
-            async () => {
-              const { result: outcome, receipts: authCredentials } =
-                await captureAuthProfileCredentialCommits(async () => {
-                  const { workspaceDir, fingerprint, registrationFingerprint } = context;
-                  let previous = contexts.get(workspaceDir);
-                  const config =
-                    previous?.registrationFingerprint === registrationFingerprint
-                      ? previous.prepared.config
-                      : freezeTrustedJsonSnapshot({
-                          // Freeze decoded inputs at admission; a fingerprint cannot protect mutable roots.
-                          runtime: value.input.config,
-                          source: value.sourceConfigForSecrets,
-                        });
-                  let attempted: WorkerGeneration | undefined;
-                  let replacing = false;
-                  try {
-                    const work = new AsyncWorkScope();
-                    const result = await withWorkerAuthProfileWrites(value.input.env, work, () =>
-                      withTemplateInstallSchemaVersionFacts(
-                        request.templateInstallSchemaVersions,
-                        () =>
-                          // Never select a Codex binary here; report the parent's decision.
-                          withHandedOffCodexClientVersion(request.codexClientVersion, () =>
-                            work.run(() =>
-                              runCatalogRequest(
+        withPluginSourceCaptureDirectory(
+          data.sourceCaptureDirectory,
+          async () => {
+            const { result: outcome, receipts: authCredentials } =
+              await captureAuthProfileCredentialCommits(async () => {
+                const { workspaceDir, fingerprint, registrationFingerprint } = context;
+                let previous = contexts.get(workspaceDir);
+                const config =
+                  previous?.registrationFingerprint === registrationFingerprint
+                    ? previous.prepared.config
+                    : freezeTrustedJsonSnapshot({
+                        // Freeze decoded inputs at admission; a fingerprint cannot protect mutable roots.
+                        runtime: value.input.config,
+                        source: value.sourceConfigForSecrets,
+                      });
+                let attempted: WorkerGeneration | undefined;
+                let replacing = false;
+                try {
+                  const work = new AsyncWorkScope();
+                  const result = await withWorkerAuthProfileWrites(value.input.env, work, () =>
+                    withTemplateInstallSchemaVersionFacts(
+                      request.templateInstallSchemaVersions,
+                      () =>
+                        work.run(() =>
+                          runCatalogRequest(
+                            value,
+                            config,
+                            request,
+                            work,
+                            async () => {
+                              if (previous?.fingerprint === fingerprint) {
+                                return previous.prepared;
+                              }
+                              replacing =
+                                previous?.registrationFingerprint !== registrationFingerprint;
+                              return (attempted = await prepareWorkerGeneration(
                                 value,
                                 config,
-                                request,
-                                work,
-                                async () => {
-                                  if (previous?.fingerprint === fingerprint) {
-                                    return previous.prepared;
-                                  }
-                                  replacing =
-                                    previous?.registrationFingerprint !== registrationFingerprint;
-                                  return (attempted = await prepareWorkerGeneration(
-                                    value,
-                                    config,
-                                    replacing ? undefined : previous?.prepared,
-                                  ));
-                                },
-                                async () => {
-                                  // Admission can outlast a refresh on slow filesystems; only completed
-                                  // generation preparation starts the provider-discovery deadline.
-                                  stopProgress();
-                                  if (!(await requestHost(null))) {
-                                    throw new Error(
-                                      "prepared model catalog request retired before discovery",
-                                    );
-                                  }
-                                },
-                              ),
-                            ),
+                                replacing ? undefined : previous?.prepared,
+                              ));
+                            },
+                            async () => {
+                              // Admission can outlast a refresh on slow filesystems; only completed
+                              // generation preparation starts the provider-discovery deadline.
+                              stopProgress();
+                              if (!(await requestHost(null))) {
+                                throw new Error(
+                                  "prepared model catalog request retired before discovery",
+                                );
+                              }
+                            },
                           ),
-                      ),
-                    );
-                    if (attempted && result.status === "ok") {
-                      contexts.set(workspaceDir, {
-                        fingerprint,
-                        registrationFingerprint,
-                        prepared: attempted,
-                      });
-                      attempted = undefined;
-                      replacing = false;
-                      // Acquire the replacement before releasing shared source registrations.
-                      await previous?.prepared.release();
-                      // Registry custody can retain this request's async context until retirement.
-                      // Drop the settled predecessor instead of retaining its callbacks through that scope.
-                      previous = undefined;
-                    }
-                    return result;
-                  } finally {
-                    try {
-                      if (replacing) {
-                        // Registration can replace module-level API handles before a refresh fails.
-                        // Re-register the requested config next time instead of reusing that context.
-                        contexts.delete(workspaceDir);
-                        await previous?.prepared.release();
-                      }
-                    } finally {
-                      await attempted?.release();
-                    }
+                        ),
+                    ),
+                  );
+                  if (attempted && result.status === "ok") {
+                    contexts.set(workspaceDir, {
+                      fingerprint,
+                      registrationFingerprint,
+                      prepared: attempted,
+                    });
+                    attempted = undefined;
+                    replacing = false;
+                    // Acquire the replacement before releasing shared source registrations.
+                    await previous?.prepared.release();
+                    // Registry custody can retain this request's async context until retirement.
+                    // Drop the settled predecessor instead of retaining its callbacks through that scope.
+                    previous = undefined;
                   }
-                });
-              return { ...outcome, authCredentials };
-            },
-            data.sourceCaptureManagedRoot,
-          ),
+                  return result;
+                } finally {
+                  try {
+                    if (replacing) {
+                      // Registration can replace module-level API handles before a refresh fails.
+                      // Re-register the requested config next time instead of reusing that context.
+                      contexts.delete(workspaceDir);
+                      await previous?.prepared.release();
+                    }
+                  } finally {
+                    await attempted?.release();
+                  }
+                }
+              });
+            return { ...outcome, authCredentials };
+          },
+          data.sourceCaptureManagedRoot,
+        ),
         ),
       );
       try {

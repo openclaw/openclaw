@@ -3,6 +3,7 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -16,6 +17,7 @@ import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js
 import type { SqliteWorkerAdmissionRequest } from "../infra/sqlite-worker-operation-admission.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
   readOpenClawAgentDatabaseRegistryToken,
@@ -34,12 +36,103 @@ import {
   createAgentCreationWitnessSource as source,
   createAliasedAgentCreationWitnessFixture as aliasedFixture,
 } from "./openclaw-agent-execution.creation-fixture.test-support.js";
-import { captureOpenClawAgentDatabaseExecution as capture } from "./openclaw-agent-execution.js";
+import {
+  captureOpenClawAgentDatabaseExecution as capture,
+  captureOpenClawAgentDatabaseExecutionAsync,
+  prepareOpenClawAgentDatabaseExecution,
+} from "./openclaw-agent-execution.js";
+import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
 type Execution = ReturnType<typeof capture>;
 type Options = ReturnType<typeof fixture>;
+
+it("prepares an agent database while its original creation witness is retained", async ({
+  signal,
+}) => {
+  const options = fixture();
+  const creator = await captureOpenClawAgentDatabaseExecutionAsync(options, {}, "observed-absence");
+  await using _ = onExit(() => creator.release());
+  expect(fs.existsSync(options.path)).toBe(false);
+  await withinTest(
+    prepareOpenClawAgentDatabaseExecution(options, () => {}, signal),
+    signal,
+  );
+  expect(creator.fileIdentity).toMatchObject({ kind: "file" });
+  await expect(
+    withinTest(
+      creator.runExisting(source(), (scope) =>
+        scope.execute({
+          type: "session.entry.read",
+          input: { sessionKeys: ["agent:main:missing"] },
+        }),
+      ),
+      signal,
+    ),
+  ).resolves.toMatchObject({ entries: [] });
+});
+
+it.for(["cancelled", "revoked"] as const)(
+  "does not create a database after queued preparation is %s",
+  async (outcome, { signal }) => {
+    const options = fixture();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const controller = new AbortController();
+    const refusal = new Error("Queued preparation lost its caller");
+    let revoked = false;
+    const held = runOpenClawAgentWorkerWrite(options, async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    let preparing: Promise<void> | undefined;
+    try {
+      await withinTest(entered.promise, signal);
+      const turns = resolveGlobalSingleton<{ pending: Map<string, Promise<void>> }>(
+        Symbol.for("openclaw.sqliteDatabaseAdmissionTurns"),
+        () => {
+          throw new Error("Expected the real cold database admission queue");
+        },
+      );
+      const key = `path:${options.path}`;
+      const heldTurn = turns.pending.get(key);
+      assert(heldTurn);
+      preparing = prepareOpenClawAgentDatabaseExecution(
+        options,
+        () => {
+          if (revoked) {
+            throw refusal;
+          }
+        },
+        controller.signal,
+      );
+      const result = preparing.catch((error: unknown) => error);
+      // Cold native admission precedes the store writer queue in this forked suite.
+      await vi.waitFor(() => expect(turns.pending.get(key)).not.toBe(heldTurn));
+      if (outcome === "cancelled") {
+        controller.abort(refusal);
+        expect(await withinTest(result, signal)).toBe(refusal);
+      } else {
+        revoked = true;
+      }
+      release.resolve();
+      await withinTest(held, signal);
+      expect(await withinTest(result, signal)).toBe(refusal);
+      expect(fs.existsSync(options.path)).toBe(false);
+
+      // A refused preparer must not leave a creation reference behind for its successor.
+      const next = capture(options);
+      await using _ = onExit(() => next.release());
+      await withinTest(next.prepare(source(), signal), signal);
+      expect(next.fileIdentity).toMatchObject({ kind: "file" });
+    } finally {
+      controller.abort(refusal);
+      release.resolve();
+      await Promise.allSettled([held, preparing]);
+    }
+  },
+);
 
 function onExit(cleanup: () => Promise<unknown>) {
   return {
@@ -561,6 +654,34 @@ it.each([
     );
     assert(read);
     expect(read.entries).toEqual([{ sessionKey, entry: written }]);
+  },
+);
+
+it.each(["released", "retained"] as const)(
+  "allows the first session after a %s missing-store reader",
+  async (lifetime) => {
+    const options = fixture();
+    const reader = capture(options);
+    let following: Execution | undefined = undefined;
+    await using _ = onExit(() => releaseAll(reader, following));
+    await expect(reader.runExisting(source(), async () => "unexpected")).resolves.toBeUndefined();
+    expect(fs.existsSync(options.path)).toBe(false);
+    if (lifetime === "released") {
+      await reader.release();
+    }
+
+    const sessionKey = "agent:main:after-missing-read";
+    const entry = { sessionId: "first-session", updatedAt: 1 };
+    const written = await upsertSessionEntryCore(
+      { agentId: options.agentId, env: options.env, storePath: options.path, sessionKey },
+      entry,
+    );
+    expect(written).toMatchObject({ sessionId: entry.sessionId });
+    following = lifetime === "retained" ? reader : capture(options);
+    const read = await following.runExisting(source(), (scope) =>
+      scope.execute({ type: "session.entry.read", input: { sessionKeys: [sessionKey] } }),
+    );
+    expect(read).toMatchObject({ entries: [{ sessionKey, entry: written }] });
   },
 );
 

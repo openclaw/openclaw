@@ -319,6 +319,8 @@ export type ChannelThreadingAdapter = {
    * target lookup.
    */
   threadAddressing?: "address" | "message";
+  /** True only if omitting this thread id sends to the exact same transport destination. */
+  isThreadAddressedByTarget?: (params: { to: string; threadId: string | number }) => boolean;
   matchesToolContextTarget?: (params: {
     target: string;
     toolContext: ChannelThreadingToolContext;
@@ -474,7 +476,10 @@ export type ChannelMessagingAdapter = {
   directTargetStyle?: "user-prefixed";
   /** Equality rule for ids carried by prefixed outbound targets. */
   targetIdComparison?: "case-sensitive" | "lowercase";
-  /** Bare numeric conversation/topic shorthand is valid for this channel. */
+  /**
+   * Bare numeric `<chat>:<topic>` shorthand is valid for this channel.
+   * @deprecated Implement `resolveSessionConversation`; core honors this only when that hook is absent.
+   */
   numericTopicShorthand?: true;
   normalizeTarget?: (raw: string) => string | undefined;
   defaultMarkdownTableMode?: MarkdownTableMode;

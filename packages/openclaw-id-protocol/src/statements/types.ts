@@ -109,6 +109,8 @@ export const MEMBERSHIP_OPS = [
   "set_role",
   "revoke_device",
   "add_owner_device",
+  "add_member_device",
+  "set_member_recovery_kit",
   "deny_invite",
   "add_node",
   "remove_node",
@@ -125,6 +127,14 @@ export type MembershipTarget =
       peer_keys: IrohEndpointKey[];
       invite_id: string | null;
     }
+  | {
+      op: "add_member_device";
+      account_id: string;
+      peer_key: IrohEndpointKey;
+      device_pub: Ed25519PublicKey;
+      label: string;
+    }
+  | { op: "set_member_recovery_kit"; account_id: string; device_pub: Ed25519PublicKey | null }
   | { op: "add_node"; peer_key: IrohEndpointKey; label: string; invite_id: string }
   | { op: "remove_node"; peer_key: IrohEndpointKey }
   | { op: "remove"; account_id: string }
@@ -221,6 +231,7 @@ export type MembershipSnapshotBody = {
 
 /** An invitee's request to redeem an invite; signed by the invitee's new device key D_I. */
 export type InviteRedemptionBody = {
+  label: string;
   claw_id: string;
   invite_id: string;
   account_id: string;

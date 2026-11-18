@@ -1,6 +1,10 @@
+import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { completeSessionControllerSourceLifecycle } from "../../../sessions/session-controller.mailbox-source.js";
-import { submitSessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
+import {
+  retireSessionControllerInput,
+  submitSessionControllerInput,
+} from "../../../sessions/session-controller.mailbox.js";
 import type { FollowupQueueDisposition } from "../../get-reply-options.types.js";
 import type { ReplyOperationRunState } from "../reply-operation-run-state.js";
 import {
@@ -153,6 +157,25 @@ export async function admitFollowupRunLifecycle(
     throw new Error("Input completed before source adoption");
   }
   const admission = Promise.resolve().then(async () => {
+    if (state.enqueued) {
+      try {
+        run.operatorAuthority?.reauthorize?.();
+      } catch (error) {
+        const input = run.controllerInput;
+        if (input && !isOperatorAuthorityUnavailable(error)) {
+          state.failure = error;
+          const recorder = run.userTurnTranscriptRecorder;
+          try {
+            recorder?.markBlocked();
+            recorder?.finishPendingInput?.("cancelled", "policy-refused");
+            await recorder?.waitForPendingInputSettlement?.();
+          } finally {
+            retireSessionControllerInput(input);
+          }
+        }
+        throw error;
+      }
+    }
     await run.turnAdoptionLifecycle?.onAdopted();
     // A successful custody callback commits before the post-await authority check.
     state.adopted = true;
@@ -195,7 +218,7 @@ export async function refuseCollaborativeSteering(
   const recorder = run.userTurnTranscriptRecorder;
   recorder?.markBlocked();
   try {
-    recorder?.finishPendingInput?.("cancelled");
+    recorder?.finishPendingInput?.("cancelled", "policy-refused");
     await recorder?.waitForPendingInputSettlement?.();
     await admitFollowupRunLifecycle(run);
   } finally {

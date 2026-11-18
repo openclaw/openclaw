@@ -65,26 +65,24 @@ export function createAdmittedRunOperatorAuthority(
   source: AdmittedRunOperatorAuthority,
 ): AdmittedRunOperatorAuthority {
   const check = source.assertCurrent;
-  const signal = source.signal;
-  let revoked = false;
-  let revocationReason: unknown;
+  const revocation = new AbortController();
+  const signal = source.signal
+    ? AbortSignal.any([source.signal, revocation.signal])
+    : revocation.signal;
   const assertCurrent = composeSessionSourceAssertion(
     [check],
     scopeOperatorAccessDecisions((assertSource: () => void) => {
-      if (revoked) {
-        throw revocationReason;
-      }
+      signal.throwIfAborted();
       try {
-        signal?.throwIfAborted();
         assertSource();
       } catch (error) {
         if (!isOperatorAuthorityUnavailable(error)) {
-          revoked = true;
-          revocationReason = error;
+          revocation.abort(error);
         }
         throw error;
       }
     }),
+    { synchronousCheck: true },
   );
   const readRoleFacts = source.readCurrentRoleFacts;
   const authority = Object.freeze({
@@ -95,6 +93,7 @@ export function createAdmittedRunOperatorAuthority(
     recoverySnapshot: source.recoverySnapshot
       ? freezeJsonSnapshot(structuredClone(source.recoverySnapshot))
       : undefined,
+    recoverySnapshotUnavailableReason: source.recoverySnapshotUnavailableReason,
     channelRecoverySource: source.channelRecoverySource
       ? Object.freeze({
           reference: Object.freeze({ ...source.channelRecoverySource.reference }),
@@ -109,6 +108,7 @@ export function createAdmittedRunOperatorAuthority(
     invocation: source.invocation,
     signal,
     retain: source.retain,
+    reauthorize: source.reauthorize,
     onModelPolicyChanged: source.onModelPolicyChanged,
     get modelPolicy() {
       return source.modelPolicy;
@@ -431,6 +431,7 @@ export function captureAdmittedRunActiveAssertion(
     composeSessionSourceAssertion(
       [source.assertCurrent],
       scopeOperatorAccessDecisions(assertLocalCurrent),
+      { synchronousCheck: true },
     ),
     {
       assertScopeCurrent: () => assertLocalCurrent(source.assertBinding),
@@ -560,6 +561,7 @@ export function prepareAgentRunAdmission(params: {
           throw error;
         }
       }),
+      { synchronousCheck: true },
     );
   let admittedRuntimeKind: ExecutionIdentityAdmissionFacts["runtime"]["kind"] | undefined;
   let admittedRuntimeInstanceId: string | undefined;
@@ -571,10 +573,14 @@ export function prepareAgentRunAdmission(params: {
       throw new Error("prepared execution context is already closed");
     }
   };
-  const scopedSource = composeSessionSourceAssertion([assertSourceCurrent], (assertSource) => {
-    assertPreparationOpen();
-    assertSource();
-  });
+  const scopedSource = composeSessionSourceAssertion(
+    [assertSourceCurrent],
+    (assertSource) => {
+      assertPreparationOpen();
+      assertSource();
+    },
+    { synchronousCheck: true },
+  );
   const prepared: PreparedAgentRunAdmission = Object.freeze({
     operationalRunInstance,
     assertCurrent: () => {
@@ -590,13 +596,16 @@ export function prepareAgentRunAdmission(params: {
       }
       assertActive.assertScopeCurrent();
     },
-    assertSourceCurrent: Object.assign(composeSessionSourceAssertion([assertSourceCurrent]), {
-      assertScopeCurrent: assertPreparationOpen,
-      prepareSessionSourceScope: () => {
-        assertPreparationOpen();
-        return prepareSessionSourceScope(scopedSource);
+    assertSourceCurrent: Object.assign(
+      composeSessionSourceAssertion([assertSourceCurrent], undefined, { synchronousCheck: true }),
+      {
+        assertScopeCurrent: assertPreparationOpen,
+        prepareSessionSourceScope: () => {
+          assertPreparationOpen();
+          return prepareSessionSourceScope(scopedSource);
+        },
       },
-    }),
+    ),
     readOperatorAuthority: () => {
       if (operatorAuthority) {
         if (closed) {

@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  RELAY_CHECK_INTERVAL_MS,
-  RELAY_GRACE_MS,
-  runLinkSteps,
-  watchRelay,
-  type LinkStep,
-  type LinkStepState,
-} from "./link-steps.ts";
+import { runLinkSteps, watchRelay, type LinkStep, type LinkStepState } from "./link-steps.ts";
 
 const messages = {
   notPublished: (publication: Parameters<Parameters<typeof runLinkSteps>[1]["notPublished"]>[0]) =>
@@ -101,11 +94,11 @@ describe("Make reachable relay step", () => {
   it("keeps running, without warning, until a relay that comes up later is online", async () => {
     const { states, sleeps } = await watch([false, false, false, false, true]);
     expect(states).toEqual([{ state: "running" }, { state: "done" }]);
-    expect(sleeps).toEqual(Array(4).fill(RELAY_CHECK_INTERVAL_MS));
+    expect(sleeps).toEqual([2_000, 2_000, 2_000, 2_000]);
   });
 
   it("warns after the grace period, then turns done once the relay connects", async () => {
-    const checksBeforeWarning = RELAY_GRACE_MS / RELAY_CHECK_INTERVAL_MS;
+    const checksBeforeWarning = 30_000 / 2_000;
     const { states } = await watch([...Array(checksBeforeWarning + 3).fill(false), true]);
     expect(states).toEqual([
       { state: "running" },

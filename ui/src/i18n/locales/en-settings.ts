@@ -1,6 +1,7 @@
 import activeMemoryPresentation from "../../../../extensions/active-memory/control-ui.presentation.json" with { type: "json" };
 import memoryWikiPresentation from "../../../../extensions/memory-wiki/control-ui.presentation.json" with { type: "json" };
 import type { TranslationMap } from "../lib/types.ts";
+import { registerModelProviderAuthEnglish } from "./en-model-provider-auth.ts";
 import { registerPreferencesEnglish } from "./en-preferences.ts";
 import { registerSettingsSidebarEnglish } from "./en-settings-sidebar.ts";
 import { en } from "./en.ts";
@@ -133,6 +134,7 @@ const enSettings = {
       utilityModelInheritAutomatic: "Automatic",
       utilityModelDisabled: "Disabled for this agent",
       utilityModelFallbacks: "This agent's utility fallbacks: {models}",
+      inheritDefaultThinking: "Inherit default ({level})",
       fallbacks: "Fallbacks",
       addFallback: "Add fallback…",
     },
@@ -234,7 +236,7 @@ const enSettings = {
       editFile: "Edit file",
       closePreview: "Close preview",
       coreFilesTitle: "Core files",
-      coreFilesSubtitle: "Bootstrap persona, identity, and tool guidance.",
+      coreFilesSubtitle: "Instructions for this agent’s behavior, identity, and tools.",
       workspace: "Workspace",
       loadHint: "Load the agent workspace files to edit core instructions.",
       empty: "No files yet.",
@@ -261,7 +263,7 @@ const enSettings = {
     lastError: "Last error",
     refreshingStaleSnapshot: "Refreshing channel status… Showing the last available status.",
     hub: {
-      connectedTitle: "Connected channels",
+      connectedTitle: "Your channels",
       addTitle: "Add a channel",
       addSubtitle: "Choose a messaging app to set up.",
       updatedAgo: "Updated {ago}",
@@ -272,7 +274,7 @@ const enSettings = {
       stateAttention: "Needs attention",
       stateNotConfigured: "Not configured",
       details: "Details",
-      setUp: "Set up",
+      setUp: registerModelProviderAuthEnglish.catalog.channels.hub.setUp,
       guidedSetup: "Guided step-by-step setup",
       openDetails: "Open details",
       lastMessageAgo: "Last message {ago}",
@@ -513,6 +515,7 @@ const enSettings = {
     schemaUnavailable: "Schema unavailable.",
     unsupportedSchema: "Unsupported schema. Use Raw.",
     unsupportedNode: "Unsupported schema node. Use Raw mode.",
+    editInAdvancedRaw: "Edit this setting in the Raw tab of Advanced settings.",
     noSettingsMatch: "No settings match your search.",
     noSettingsInSection: "No settings in this section.",
     sections: {
@@ -586,7 +589,7 @@ const enSettings = {
       },
       bindings: {
         label: "Bindings",
-        description: "Key bindings and shortcuts",
+        description: "Route conversations to agents and bind persistent ACP sessions.",
       },
       broadcast: {
         label: "Broadcast",
@@ -630,7 +633,7 @@ const enSettings = {
       },
       acp: {
         label: "ACP",
-        description: "Agent Communication Protocol runtime and streaming settings",
+        description: "Agent Client Protocol (ACP) runtime and streaming settings",
       },
       mcp: {
         label: "MCP",
@@ -999,7 +1002,8 @@ const enSettings = {
       providerDefault: "Provider default",
       machineClass: "Device class",
       machineClassHelp:
-        "Enter a class accepted by the selected Crabbox backend and binary. The provider determines its effective sizing.",
+        "Choose an advertised class when available, or enter a custom class. The provider determines its effective sizing.",
+      customMachineClass: "Custom device class…",
       ttl: "Max lifetime",
       ttlHelp: "Use a positive Go duration such as 8h or 90m.",
       ttlPlaceholder: "8h",
@@ -1117,10 +1121,10 @@ const enSettings = {
       expiring: "Expiring",
       expired: "Expired",
       missing: "Not signed in",
-      apiKey: "API key",
+      apiKey: registerModelProviderAuthEnglish.catalog.modelProviders.status.apiKey,
       denied: "Credentials rejected",
-      signInAgain: "Sign in again",
-      signInUnavailable: "Sign-in unavailable",
+      signInExpired: "Sign-in expired",
+      refreshing: "Refreshing",
       managedExternally: "Managed externally",
       configured: "Account added",
       modelsUnavailable: "Models unavailable",
@@ -1180,6 +1184,8 @@ const enSettings = {
       resetOrder: "Clear custom order",
       resetOrderHint: "Use the default account order for this agent. Accounts stay connected.",
       addAccount: "Add account",
+      signInAgain: "Sign in again",
+      signInAgainFor: "Sign in again as {account}",
       lastUsed: "Last used {time} ago",
       sourceConfig: "Provider config",
       sourceExternal: "External CLI",
@@ -1198,6 +1204,8 @@ const enSettings = {
       checking: "Checking…",
       checkFailed:
         "API key saved, but the provider didn’t accept it. {reason} Enter a different key.",
+      checkBillingFailed:
+        "API key saved, but the account couldn’t be used. {reason} Check the provider’s billing or quota, then use Test access to try again.",
       checkInconclusive:
         "API key saved, but the check didn’t finish. {reason} Use Test access to try again.",
       checkUnavailable:
@@ -1265,6 +1273,8 @@ const enSettings = {
       saved: "Added {provider}",
       verified: "Added {provider}. Access verified.",
       ready: "Added {provider}. {model} is ready to chat.",
+      billingFailed:
+        "API key saved, but the account couldn’t be used. {reason} Check the provider’s billing or quota, then save again.",
     },
     defaults: {
       title: "Defaults for all agents",
@@ -1331,7 +1341,7 @@ const enSettings = {
       check: "Check again",
       checking: "Checking…",
       empty: "No supported coding apps yet.",
-      note: "Update installed agents from Control UI",
+      note: "Update installed agents from the OpenClaw app",
       enabled: "{name} is enabled.",
       sessionExpired:
         "This setup session ended. Close this dialog and check the installed agent status.",
@@ -1341,7 +1351,7 @@ const enSettings = {
       adminRequired: "You can view Models, but only admins can change them.",
     },
     notes: {
-      defaultModel: "Update defaults from Control UI",
+      defaultModel: "Update defaults from the OpenClaw app",
     },
   },
   updates: {
@@ -1367,7 +1377,7 @@ const enSettings = {
     page: {
       buildTitle: "Current build",
       gatewayVersion: "Gateway version",
-      controlUiCommit: "Control UI commit",
+      controlUiCommit: "Web app commit",
       builtAt: "Built",
       installedAt: "Installed",
       installedAtUnknown: "Unknown",
@@ -1664,7 +1674,9 @@ const enSettings = {
       locationHint: "Allow agents to use device location when a tool asks for it.",
       locationModes: { off: "Off", whileUsing: "While using", always: "Always" },
       preciseLocation: "Precise location",
-      preciseLocationHint: "Always may require System Settings to approve background location.",
+      locationAlwaysHint: "Always may require System Settings to approve background location.",
+      preciseLocationHint:
+        "Allow the Gateway to request this Mac’s precise location when location access is enabled.",
       preciseLocationReadOnlyHint: "Manage precise location access in Settings.",
       preciseLocationStatuses: { enabled: "Enabled", disabled: "Disabled" },
       privacy: "Privacy",
@@ -1845,6 +1857,8 @@ const enSettings = {
       status: "Status",
       unsubscribe: "Unsubscribe",
       sendTest: "Send test",
+      testAllBrowsers: "Test all browsers",
+      testAllBrowsersHint: "Tests include browsers registered by other people on this Gateway.",
       sendingTest: "Sending test…",
       updateFailed: "Couldn’t complete the notification request. Try again.",
       testError: "Not sent",
@@ -1860,7 +1874,7 @@ const enSettings = {
       accountDefaults: "Account defaults",
       installedApp: "This browser or app",
       deliverDevice: "Deliver to this browser or app",
-      notificationLabel: "Notification label",
+      notificationLabel: "Notification title prefix",
       approvalRequested: "Approval requested",
       agentFinished: "Agent finished",
       agentQuestion: "Agent question",
@@ -1876,11 +1890,24 @@ const enSettings = {
       quietHoursStart: "Quiet hours start",
       quietHoursEnd: "Quiet hours end",
       timeZone: "Time zone",
-      onlyAgents: "Only these agents",
+      agents: "Agents",
+      chooseAgents: "Choose notification agents",
+      agentScope: "Notify for",
+      allAgents: "All agents",
+      allAgentsHint: "Includes agents added in the future.",
+      specificAgents: "Specific agents",
+      inheritAgents: "Account default: {agents}",
+      inheritAgentsHint: "Follows your account defaults, including later changes.",
+      searchAgents: "Search agents",
+      savedAgentUnavailable: "Saved selection · not in the current list",
+      agentsLoadFailed: "Couldn’t load available agents. Saved selections are kept.",
+      noMatchingAgents: "No matching agents",
+      noAgents: "No agents available",
+      agentsSelected: "{count} selected",
+      selectAgentRequired: "Choose at least one agent, or switch to All agents.",
       inherit: "Use account default",
       inheritDetail: "Use account detail level",
       inheritQuietHours: "Use account quiet hours",
-      overrideAgents: "Override for this device",
     },
     appearance: {
       customTheme: "Custom",
@@ -2008,9 +2035,6 @@ const enSettings = {
         title: "Browser tab icon",
         default: "Default",
         agent: "Agent avatar",
-        square: "Square",
-        rounded: "Rounded corners",
-        circle: "Circle",
         lobsterdex: "Lobsterdex",
         lobster: "Lobster",
         empty: "No lobsters unlocked in this browser yet.",
@@ -2024,7 +2048,7 @@ const enSettings = {
       devices: "Microphone and camera",
       messageWidth: "Message width",
       messageWidthHint:
-        "Optional CSS width for the centered transcript, such as 960px, 82%, or min(1280px, 82%).",
+        "Optional CSS width for the centered chat, such as 960px, 82%, or min(1280px, 82%).",
       messageWidthInvalid:
         "Enter a CSS width such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem).",
       showTaskProgress: "Show task progress cards",
@@ -2046,7 +2070,7 @@ const enSettings = {
       title: "Session observer",
       scope: "Applies to everyone on this Gateway.",
       toggle: "Session observer",
-      toggleHint: "Generate live status digests for subscribed Control UI sessions.",
+      toggleHint: "Generate live status digests for sessions that are open in the app.",
       resolvedModel: "Resolved small model",
       modelAuto: "auto ({model})",
       modelConfigured: "configured ({model})",
@@ -2058,7 +2082,7 @@ const enSettings = {
       modelCatalogUnavailable: "Explicit model catalog unavailable",
       auto: "Auto (provider default)",
       disabled: "Disabled",
-      toggleNote: "Update the Control UI session observer",
+      toggleNote: "Update the session observer",
       modelNote: "Update the default utility model",
     },
     connection: {
@@ -2101,7 +2125,7 @@ const enSettings = {
     rawDraftBlocksFormEdit: en.configView.rawDraftBlocksFormEdit,
     rawDraftUnverified: en.configView.rawDraftUnverified,
     invalidConfig: "Your configuration is invalid. Some settings may not work as expected.",
-    dismissWarning: "Don’t remind me again",
+    dismissWarning: "Dismiss warning",
     viewPendingChangesRaw: "View pending changes",
     hideEnvValues: "Hide environment values",
     revealEnvValues: "Reveal environment values",
@@ -2145,8 +2169,8 @@ const enSettings = {
     },
     sessionStorage: {
       title: "Session storage",
-      description: "Transcript counts and disk usage across agent databases.",
-      transcripts: "Transcripts",
+      description: "Chat counts and disk usage across agent databases.",
+      transcripts: "Chats",
       transcriptCounts: "{hot} uncompressed · {cold} archived",
       database: "Databases",
       walSize: "Write-ahead logs: {size}",
@@ -2158,29 +2182,28 @@ const enSettings = {
       agentCounts:
         "{hot} uncompressed · {cold} archived · Database {database} · WAL {wal} · Archive files {archives} · Compressed in database {embedded}",
       worker: "Background maintenance",
-      completed: "Last completed {time} · {count} transcripts archived",
+      completed: "Last completed {time} · {count} chats archived",
       notRun: "No maintenance batches completed yet.",
       running: "Running",
-      runningProgress: "{archived} transcripts archived · {externalized} archives moved to files",
+      runningProgress: "{archived} chats archived · {externalized} archives moved to files",
       externalized: "{count} compressed archives moved from the database to files.",
       idle: "Idle",
       failed: "Needs attention",
       adminRequired: "You need admin access to inspect session storage.",
       disconnected: "Reconnect to inspect session storage.",
       automatic: "Automatic archival",
-      enabled: "Archive older transcripts",
+      enabled: "Archive older chats",
       enabledHint:
-        "Inactive transcripts move into compressed JSONL files. Active sessions stay in the database; archived history is restored before use.",
+        "Inactive chats move into compressed JSONL files. Active sessions stay in the database; archived history is restored before use.",
       afterDays: "Archive after (days)",
-      afterDaysHint:
-        "Days since the transcript last changed. Changes apply without a Gateway restart.",
+      afterDaysHint: "Days since the chat last changed. Changes apply without a Gateway restart.",
       backupHint:
         "OpenClaw backups capture archived history with the database. Direct database copies also need the archive files. Missing or damaged archives require recovery from a backup.",
       advanced: "Advanced session settings",
       runNow: "Run now",
       runHint: "Start one maintenance batch using the saved, applied policy.",
       runStarted: "Maintenance batch started. You can leave this page while it runs.",
-      runCompleted: "Maintenance batch completed. {count} transcripts archived.",
+      runCompleted: "Maintenance batch completed. {count} chats archived.",
     },
   },
   memoryPage: {

@@ -181,7 +181,7 @@ export class DraftPlaceState {
     );
     this.modelControl = new NewSessionModelControl(
       callbacks.changed,
-      (selection) => this.persistPreference(selection),
+      (selection) => void this.gateway.persistModelPreference(this.agentIdValue, selection),
       (catalogId) =>
         this.read().context?.navigate("new-session", {
           search: newSessionSearch(this.agentIdValue, { catalogId }),
@@ -241,8 +241,7 @@ export class DraftPlaceState {
       !this.deviceFolder &&
       !this.hostedEnvironment &&
       !this.freshWorkspace &&
-      (this.repository.kind !== "direct" || Boolean(this.browser.projectId)) &&
-      (this.repositoryState.checkoutVisible || Boolean(this.browser.projectId))
+      this.repositoryState.checkoutVisible(Boolean(this.browser.projectId))
     );
   }
 

@@ -725,7 +725,6 @@ it.each([
           });
           expect(submits).toBe(0);
         } else if (scenario === "ambiguous") {
-          const rejection = expect(pending).rejects.toThrow();
           await Promise.race([
             entered.promise,
             pending.then(() => {
@@ -734,7 +733,7 @@ it.each([
           ]);
           await services?.stop({ strict: true });
           release.resolve();
-          await rejection;
+          await expect(pending).rejects.toThrow();
         } else {
           const first = await pending;
           expect(first.details).toMatchObject({ state: "paused" });

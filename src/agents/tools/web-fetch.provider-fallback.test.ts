@@ -8,6 +8,7 @@ import {
   listenLoopback,
 } from "../../../test/helpers/gateway-integration-fixtures.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import * as contentExtractors from "../../plugins/web-content-extractors.runtime.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
@@ -458,6 +459,64 @@ describe("web_fetch", () => {
       await closeHttpServer(server);
     }
   });
+
+  it.each(["abort", "timeout"])(
+    "discards late extraction after %s without fallback or cache publication",
+    async (stop) => {
+      const controller = new AbortController();
+      const started = Promise.withResolvers<void>();
+      const late = Promise.withResolvers<{ text: string }>();
+      const extract = vi
+        .fn()
+        .mockImplementationOnce(() => {
+          started.resolve();
+          return late.promise;
+        })
+        .mockResolvedValue({ text: "fresh extraction" });
+      vi.spyOn(contentExtractors, "resolvePluginWebContentExtractors").mockReturnValue([
+        { id: "synthetic", pluginId: "synthetic", label: "Synthetic", extract },
+      ]);
+      const provider = vi.fn(async () => ({ text: "unexpected fallback" }));
+      setProvider(provider);
+      const server = createServer((_request, response) => {
+        response.writeHead(200, { "content-type": "text/html" });
+        response.end("<article><p>Synthetic article</p></article>");
+      });
+      try {
+        const url = `${await listenLoopback(server)}/extraction-${stop}`;
+        // Fake only the deadline clock; real HTTP and dispatcher cleanup still run.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const tool = fallbackTool({
+          cacheTtlMinutes: 1,
+          timeoutSeconds: 1,
+          ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
+        })!;
+        const pending = tool.execute("cancel-extraction", { url }, controller.signal);
+        const rejected = expect(pending).rejects.toThrow(
+          stop === "abort" ? "caller stopped" : "request timed out",
+        );
+        await started.promise;
+        if (stop === "abort") {
+          controller.abort(new Error("caller stopped"));
+        } else {
+          await vi.advanceTimersByTimeAsync(1_000);
+        }
+        await rejected;
+        late.resolve({ text: "discarded late extraction" });
+        await nextTurn();
+        vi.useRealTimers();
+        const fresh = requireDetails(await tool.execute("fresh-extraction", { url }));
+        expect(fresh.text).toContain("fresh extraction");
+        expect(fresh.cached).toBeUndefined();
+        expect(extract).toHaveBeenCalledTimes(2);
+        expect(provider).not.toHaveBeenCalled();
+      } finally {
+        late.resolve({ text: "discarded late extraction" });
+        vi.useRealTimers();
+        await closeHttpServer(server);
+      }
+    },
+  );
 
   it.each([0, 15])("honors zero TTL after starting with TTL %i", async (initialTtl) => {
     let body = "original body";

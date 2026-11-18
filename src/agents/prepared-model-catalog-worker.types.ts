@@ -65,8 +65,6 @@ export type PreparedModelWorkerRequest = PreparedModelWorkerCommand &
   Readonly<{
     syntheticAuth: PreparedSyntheticAuthFacts;
     templateInstallSchemaVersions: ReturnType<typeof captureTemplateInstallSchemaVersionFacts>;
-    /** Codex client version decided by the parent; absent means the bundled pin. */
-    codexClientVersion?: string;
   }>;
 
 export type PreparedModelWorkerResult = PreparedModelWorkerOutcome &

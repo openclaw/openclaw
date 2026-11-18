@@ -103,17 +103,6 @@ export function setManagedCodexPluginRoot(pluginRoot: string | undefined): void 
 }
 
 /**
- * Version that managed starts with this command order report to ChatGPT model
- * discovery: the selected installed Codex, otherwise the bundled pin.
- */
-export async function resolveManagedCodexClientVersion(
-  order: CodexManagedCommandOrder,
-  options: Pick<ResolveManagedCodexAppServerOptions, "platform" | "selectionTimeoutMs"> = {},
-): Promise<string> {
-  return (await resolveInstalledCodexForOrder(order, options))?.version ?? CODEX_APP_SERVER_VERSION;
-}
-
-/**
  * Desktop-first starts that find a macOS desktop app run it with the bundled
  * package as fallback; they never wait on, start, or report a PATH Codex.
  */
