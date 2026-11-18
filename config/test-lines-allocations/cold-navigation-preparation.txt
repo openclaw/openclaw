@@ -1,2 +1,2 @@
-# Separate regressions cover update deferral, exact restore, corrupt-archive progress, off-writer preparation, atomic rollback/cancellation, and caller-owned maintenance lifetime. The foreground cleanup isolation regression and existing lane-retirement coverage bring the change to 435 net test lines; 35 exceed the 400-line allowance.
-35
+# Separate regressions cover update deferral, exact restore, corrupt-archive progress, off-writer preparation, atomic rollback/cancellation, caller-owned maintenance lifetime and foreground cleanup isolation (435 net lines). The 142-line workload regression covers read-only real-entrypoint preflight and prevents falsely qualifying foreground traffic after backfill finished during warmup: 577 net test lines, 177 above the 400-line allowance.
+177

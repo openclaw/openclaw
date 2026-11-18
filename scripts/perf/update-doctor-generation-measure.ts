@@ -177,6 +177,11 @@ async function prepareColdNavigationFixture() {
 
 const label = process.argv[2] ?? "sample";
 assert.match(label, /^[a-zA-Z0-9-]+$/u);
+if (process.argv[3] === "cold-navigation-runtime") {
+  const { coldNavigationRuntime } = await import("./update-cold-navigation-runtime.ts");
+  await coldNavigationRuntime(label, process.argv[4], process.argv[5]);
+  process.exit(process.exitCode ?? 0);
+}
 const generationOnly = process.argv[3] === "generations-only";
 const samples = Number(process.argv[4] ?? 5);
 assert.ok(Number.isSafeInteger(samples) && samples > 0);
