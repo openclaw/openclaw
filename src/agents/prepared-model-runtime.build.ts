@@ -540,7 +540,115 @@ export function startSerializedSnapshotBuildBatch(
         registryResources,
         catalogMode,
         pluginMetadataSnapshot,
-        onBuildStats,
+        qualification
+          ? (stats) => {
+              // Preserve the existing observer; only forward already-computed numeric metrics.
+              onBuildStats?.(stats);
+              qualification("build-stat-agentCount", "mark", stats.agentCount);
+              qualification("build-stat-workspaceGroupCount", "mark", stats.workspaceGroupCount);
+              qualification(
+                "build-stat-configuredFactsGroupCount",
+                "mark",
+                stats.configuredFactsGroupCount,
+              );
+              qualification("build-stat-catalogSourceCount", "mark", stats.catalogSourceCount);
+              qualification("build-stat-credentialGroupCount", "mark", stats.credentialGroupCount);
+              qualification("build-stat-catalogGroupCount", "mark", stats.catalogGroupCount);
+              qualification("build-stat-runtimeRegistryCount", "mark", stats.runtimeRegistryCount);
+              qualification(
+                "build-stat-configuredRuntimeModelCount",
+                "mark",
+                stats.configuredRuntimeModelCount,
+              );
+              qualification(
+                "build-stat-generatedCatalogPluginCount",
+                "mark",
+                stats.generatedCatalogPluginCount,
+              );
+              qualification(
+                "build-stat-generatedCatalogReadCount",
+                "mark",
+                stats.generatedCatalogReadCount,
+              );
+              qualification("build-stat-workspaceFactsMs", "mark", stats.workspaceFactsMs);
+              qualification("build-stat-runtimePluginMs", "mark", stats.runtimePluginMs);
+              qualification("build-stat-pluginMetadataMs", "mark", stats.pluginMetadataMs);
+              qualification(
+                "build-stat-staticProviderCatalogMs",
+                "mark",
+                stats.staticProviderCatalogMs,
+              );
+              qualification("build-stat-ambientCredentialsMs", "mark", stats.ambientCredentialsMs);
+              qualification("build-stat-agentFactsMs", "mark", stats.agentFactsMs);
+              qualification(
+                "build-stat-configuredProjectionMs",
+                "mark",
+                stats.configuredProjectionMs,
+              );
+              qualification("build-stat-catalogSourceMs", "mark", stats.catalogSourceMs);
+              qualification("build-stat-registryMs", "mark", stats.registryMs);
+              qualification(
+                "build-stat-sourceConcurrencyLimit",
+                "mark",
+                stats.sourceConcurrencyLimit,
+              );
+              qualification(
+                "build-stat-fullCatalogConcurrencyLimit",
+                "mark",
+                stats.fullCatalogConcurrencyLimit,
+              );
+              if (stats.pluginPreparation) {
+                qualification("build-plugin-captures", "mark", stats.pluginPreparation.captures);
+                qualification(
+                  "build-plugin-captureReuse",
+                  "mark",
+                  stats.pluginPreparation.captureReuse,
+                );
+                qualification(
+                  "build-plugin-packageFiles",
+                  "mark",
+                  stats.pluginPreparation.packageFiles,
+                );
+                qualification(
+                  "build-plugin-dependencyFiles",
+                  "mark",
+                  stats.pluginPreparation.dependencyFiles,
+                );
+                qualification(
+                  "build-plugin-originalBytes",
+                  "mark",
+                  stats.pluginPreparation.originalBytes,
+                );
+                qualification(
+                  "build-plugin-copiedBytes",
+                  "mark",
+                  stats.pluginPreparation.copiedBytes,
+                );
+                qualification(
+                  "build-plugin-receiptPasses",
+                  "mark",
+                  stats.pluginPreparation.receiptPasses,
+                );
+                qualification(
+                  "build-plugin-receiptFileReads",
+                  "mark",
+                  stats.pluginPreparation.receiptFileReads,
+                );
+                qualification(
+                  "build-plugin-receiptReadBytes",
+                  "mark",
+                  stats.pluginPreparation.receiptReadBytes,
+                );
+                qualification(
+                  "build-plugin-hashReadBytes",
+                  "mark",
+                  stats.pluginPreparation.hashReadBytes,
+                );
+                qualification("build-plugin-workerMs", "mark", stats.pluginPreparation.workerMs);
+                qualification("build-plugin-hostMs", "mark", stats.pluginPreparation.hostMs);
+              }
+            }
+          : onBuildStats,
         includeCredentialProviders,
         (nextStage) => {
           stage = nextStage;
