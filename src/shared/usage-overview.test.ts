@@ -493,7 +493,7 @@ it("retains creator daily amounts and counts each multi-day session once", () =>
     activityDates: [dates[1], dates[0], dates[1]],
     dailyBreakdown: dates.slice(0, 2).map((date, index) => {
       const input = (index + 1) * 10;
-      return { ...daily(date, input), input };
+      return Object.assign(daily(date, input), { input });
     }),
     dailyMessageCounts: [{ ...zeroMessages, date: dates[2], total: 1, user: 1 }],
   });
