@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   applyLocalSetupWorkspaceConfig,
   applySkipBootstrapConfig,
+  describeSetupToolProfile,
   resolveOnboardingWorkspaceConflict,
 } from "./onboard-config.js";
 
@@ -53,6 +54,33 @@ it("defaults to full tools and preserves independent policies on rerun", () => {
   expect(result.tools).toEqual({ ...baseConfig.tools, profile: "full" });
   expect(result.agents).toEqual(baseConfig.agents);
 });
+
+it.each([
+  [
+    "an agent profile outranks the full default",
+    { agents: { entries: { main: { tools: { profile: "minimal" } } } } },
+    'Tool profile: minimal (agents.entries.main.tools.profile). This profile only lets the agent check its status: no files, commands, web or messages. To add one tool, list it in agents.entries.main.tools.alsoAllow, or set agents.entries.main.tools.profile to "full".',
+  ],
+  [
+    "kept allow, deny and provider policies change the full default",
+    {
+      tools: { deny: ["exec"], byProvider: { openai: { deny: ["browser"] } } },
+      agents: { entries: { main: { tools: { allow: ["read"] } } } },
+    },
+    "Tool profile: full (tools.profile). This profile allows every tool, including files, commands, the web and plugins. These settings also change which tools the agent gets: tools.deny, tools.byProvider, agents.entries.main.tools.allow.",
+  ],
+  [
+    "a kept alsoAllow widens a kept messaging profile",
+    { tools: { profile: "messaging", alsoAllow: ["exec"] } },
+    'Tool profile: messaging (tools.profile). This profile allows chat, messages and sessions, but not files, commands or the web. These settings also change which tools the agent gets: tools.alsoAllow. To widen it, set tools.profile to "full".',
+  ],
+] satisfies Array<[string, OpenClawConfig, string]>)(
+  "names the tool profile setup leaves when %s",
+  (_case, base, line) => {
+    const config = applyLocalSetupWorkspaceConfig(base, "/tmp/workspace");
+    expect(describeSetupToolProfile(config, "main")).toBe(line);
+  },
+);
 
 it.each([false, true])("moves a roster workspace only with confirmation (%s)", (confirmed) => {
   const baseConfig: OpenClawConfig = {
