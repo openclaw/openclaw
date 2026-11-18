@@ -8,6 +8,7 @@ export async function resolveMcpAuthProfileBearerToken(params: {
   profileId: string;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  signal?: AbortSignal;
 }): Promise<string> {
   const store = await loadAuthProfileStoreForRuntimeAsync(params.agentDir, {
     config: params.cfg,
@@ -31,6 +32,7 @@ export async function resolveMcpAuthProfileBearerToken(params: {
     store,
     profileId: params.profileId,
     agentDir: params.agentDir,
+    signal: params.signal,
   });
   if (!resolved || resolved.profileType !== "oauth" || !resolved.apiKey) {
     throw new Error(

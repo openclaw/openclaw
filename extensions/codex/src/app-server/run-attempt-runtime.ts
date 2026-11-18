@@ -2,6 +2,7 @@ import {
   assertContextEngineHostSupport,
   CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
   embeddedAgentLog,
+  formatErrorMessage,
   loadCodexBundleMcpThreadConfig,
   supportsModelTools,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
@@ -220,6 +221,14 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
   const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
     workspaceDir: effectiveWorkspace,
     agentId: sessionAgentId,
+    agentDir,
+    allowLiteralOAuthProjection: appServer.connectionClass !== "remote",
+    signal: runAbortController.signal,
+    onServerUnavailable: (serverName, error) =>
+      embeddedAgentLog.warn("skipping unavailable MCP OAuth server", {
+        serverName,
+        error: formatErrorMessage(error),
+      }),
     cfg: params.config,
     toolsEnabled: usesSupervisionConnection || supportsModelTools(params.model),
     disableTools: params.disableTools || params.requireWorkspaceOnly === true,

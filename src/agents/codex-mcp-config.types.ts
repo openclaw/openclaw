@@ -22,6 +22,12 @@ export type CodexBundleMcpThreadConfig = {
 export type LoadCodexBundleMcpThreadConfigParams = {
   workspaceDir: string;
   agentId?: string;
+  agentDir?: string;
+  /** False for remote app servers, which must not receive OpenClaw-managed MCP bearers. */
+  allowLiteralOAuthProjection?: boolean;
+  onServerUnavailable?: (serverName: string, error: unknown) => void;
+  /** Cancels OAuth bearer resolution; an abort rejects instead of omitting the server. */
+  signal?: AbortSignal;
   /** Read-only initialization cannot provision data directories or requester transports. */
   preparationOnly?: true;
   cfg?: OpenClawConfig;

@@ -1,4 +1,8 @@
-import { loadCodexBundleMcpThreadConfig } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  formatErrorMessage,
+  loadCodexBundleMcpThreadConfig,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   type AgentHarnessSessionPreparationV1,
   buildCodexUserMcpServersThreadConfigPatchForRuntime,
@@ -179,6 +183,14 @@ export async function prepareCodexMcpAppSession(params: {
         const bundle = await loadCodexBundleMcpThreadConfig({
           workspaceDir: input.workspaceDir,
           agentId: input.agentId,
+          agentDir: input.agentDir,
+          allowLiteralOAuthProjection: appServer.connectionClass !== "remote",
+          signal: input.abortSignal,
+          onServerUnavailable: (serverName, error) =>
+            embeddedAgentLog.warn("skipping unavailable MCP OAuth server", {
+              serverName,
+              error: formatErrorMessage(error),
+            }),
           cfg: input.config,
           toolOverrides: input.toolOverrides,
         });
