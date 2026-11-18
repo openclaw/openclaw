@@ -42,6 +42,40 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.execRequestContext"), 
 const EVENT_OWNERS = Symbol.for("openclaw.execRequestEventOwners");
 type OwnedEvent = { [EVENT_OWNERS]?: readonly ExecRequestOwner[] };
 
+/** Public projection of an exec request's starting turn. */
+export type ExecRequestOwnerRef = Readonly<{
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  ownerDeviceId?: string;
+}>;
+
+/**
+ * Starting turns of the commands the current run continues, such as a background exec
+ * completion. Owners the run created for its own request are excluded.
+ */
+export function readInheritedExecRequestOwners(
+  runId: string | undefined,
+): readonly ExecRequestOwnerRef[] | undefined {
+  const turn = state.context.getStore();
+  if (!runId || turn?.identity.runId !== runId) {
+    return undefined;
+  }
+  const refs = turn.owners.flatMap(({ identity }) =>
+    identity.runId && identity.runId !== runId
+      ? [
+          Object.freeze({
+            runId: identity.runId,
+            ...(identity.sessionKey ? { sessionKey: identity.sessionKey } : {}),
+            ...(identity.sessionId ? { sessionId: identity.sessionId } : {}),
+            ...(identity.ownerDeviceId ? { ownerDeviceId: identity.ownerDeviceId } : {}),
+          }),
+        ]
+      : [],
+  );
+  return refs.length ? Object.freeze(refs) : undefined;
+}
+
 /** Opaque request ancestry retained by work admitted through a host capability. */
 export type ExecRequestCustody = Readonly<OwnedEvent>;
 

@@ -1,6 +1,7 @@
 import {
   bootstrapHarnessContextEngine,
   buildAgentHookContextChannelFields,
+  buildAgentHookContextExecRequestFields,
   buildHarnessContextEngineRuntimeContext,
   CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
   embeddedAgentLog,
@@ -116,6 +117,7 @@ export async function prepareCodexAttemptContext(
     trigger: params.trigger,
     inputProvenance: params.inputProvenance,
     requesterDeviceId: params.approvalReviewerDeviceId,
+    ...buildAgentHookContextExecRequestFields(params.runId),
     ...buildAgentHookContextChannelFields({
       sessionKey: contextSessionKey,
       messageChannel: params.messageChannel,

@@ -1,7 +1,13 @@
 /** Verifies hook callbacks receive agent context and scoped plugin metadata. */
 import { describe, expect, it } from "vitest";
 import {
+  captureExecRequestOwners,
+  type ExecRequestOwner,
+  withExecRequestTurn,
+} from "../infra/exec-request-context.js";
+import {
   buildAgentHookContextChannelFields,
+  buildAgentHookContextExecRequestFields,
   buildAgentHookContextIdentityFields,
 } from "./hook-agent-context.js";
 
@@ -103,5 +109,101 @@ describe("buildAgentHookContextIdentityFields", () => {
         chatId: "chat-1",
       }),
     ).toEqual({});
+  });
+});
+
+describe("buildAgentHookContextExecRequestFields", () => {
+  const start = (runId: string, ownerDeviceId?: string) =>
+    withExecRequestTurn(
+      {
+        identity: {
+          runId,
+          sessionKey: "agent:main:main",
+          sessionId: "session-1",
+          ...(ownerDeviceId ? { ownerDeviceId } : {}),
+        },
+      },
+      async () => ({
+        owners: captureExecRequestOwners({ runId, sessionId: "session-1" }) ?? [],
+        own: buildAgentHookContextExecRequestFields(runId),
+      }),
+    );
+  const complete = (runId: string, owners: readonly ExecRequestOwner[]) =>
+    withExecRequestTurn(
+      { identity: { runId, sessionKey: "agent:main:main", sessionId: "session-1" }, owners },
+      async () => buildAgentHookContextExecRequestFields(runId),
+    );
+
+  it("names the starting turn on an idle session's completion run", async () => {
+    const a = await start("run-a", "device-a");
+    expect(a.own).toEqual({});
+    const fields = await complete("run-completion", a.owners);
+    expect(fields).toEqual({
+      execRequestOwners: [
+        {
+          runId: "run-a",
+          sessionKey: "agent:main:main",
+          sessionId: "session-1",
+          ownerDeviceId: "device-a",
+        },
+      ],
+    });
+    expect(Object.isFrozen(fields.execRequestOwners)).toBe(true);
+    expect(Object.isFrozen(fields.execRequestOwners?.[0])).toBe(true);
+    // The completion is recorded as a continuation alias; the original run stays the owner.
+    expect(a.owners[0]?.turnRunIds.has("run-completion")).toBe(true);
+  });
+
+  it("lists every starter when one completion drains overlapping execs", async () => {
+    const a = await start("run-a", "device-a");
+    const b = await start("run-b");
+    const fields = await complete("run-completion", [...a.owners, ...b.owners]);
+    expect(fields.execRequestOwners?.map((owner) => owner.runId)).toEqual(["run-a", "run-b"]);
+    expect(fields.execRequestOwners?.[1]).not.toHaveProperty("ownerDeviceId");
+  });
+
+  it("names the starter, not the running turn, when the completion drains inside a busy turn", async () => {
+    const a = await start("run-a", "device-a");
+    const seen = await withExecRequestTurn(
+      { identity: { runId: "run-busy", sessionKey: "agent:main:main", sessionId: "session-1" } },
+      async () => {
+        const before = buildAgentHookContextExecRequestFields("run-busy");
+        const completion = await complete("run-completion", a.owners);
+        return {
+          before,
+          completion,
+          after: buildAgentHookContextExecRequestFields("run-busy"),
+          staleRunId: buildAgentHookContextExecRequestFields("run-completion"),
+        };
+      },
+    );
+    expect(seen.before).toEqual({});
+    expect(seen.after).toEqual({});
+    expect(seen.staleRunId).toEqual({});
+    expect(seen.completion.execRequestOwners?.map((owner) => owner.runId)).toEqual(["run-a"]);
+  });
+
+  it("reaches every agent hook context through the identity fields, whatever the trigger", async () => {
+    const a = await start("run-a", "device-a");
+    const fields = await withExecRequestTurn(
+      { identity: { runId: "run-completion", sessionId: "session-1" }, owners: a.owners },
+      async () =>
+        buildAgentHookContextIdentityFields({ runId: "run-completion", trigger: "event" }),
+    );
+    expect(fields).toEqual({
+      execRequestOwners: [
+        {
+          runId: "run-a",
+          sessionKey: "agent:main:main",
+          sessionId: "session-1",
+          ownerDeviceId: "device-a",
+        },
+      ],
+    });
+  });
+
+  it("is absent outside a run and for a run id that is not the current one", async () => {
+    expect(buildAgentHookContextExecRequestFields("run-a")).toEqual({});
+    expect(buildAgentHookContextExecRequestFields(undefined)).toEqual({});
   });
 });
