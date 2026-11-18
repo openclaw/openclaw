@@ -5,6 +5,8 @@ import {
 import { resumeSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
 import { owesRequesterCompletion } from "../agents/subagents/registry/subagent-requester-settle-identity.js";
 import { isYieldedSubagentRun } from "../agents/subagents/registry/subagent-run-liveness.js";
+import { readSessionSubmittedInput } from "../config/sessions/session-pending-input-source.js";
+import type { PendingInputScope } from "../config/sessions/session-pending-input-store.js";
 import {
   acquireTranscriptLease,
   type TranscriptLease,
@@ -31,6 +33,25 @@ import type {
   RestartResumeParams,
 } from "./session-restart-resume-discovery.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
+
+/** A consumed settle input transfers interrupted-turn recovery to the Gateway. */
+export async function hasInterruptedCommittedRequesterSettleInput(
+  scope: PendingInputScope,
+  entry: Pick<InternalSessionEntry, "lifecycleRunId" | "lastRunId" | "status" | "endedAt">,
+): Promise<boolean> {
+  // An ended execution without a terminal status retains its deliberately yielded wait.
+  if (entry.status === undefined && Number.isFinite(entry.endedAt)) {
+    return false;
+  }
+  const runId = entry.lifecycleRunId ?? entry.lastRunId;
+  if (!runId?.startsWith("announce:requester-settle:")) {
+    return false;
+  }
+  const input = await readSessionSubmittedInput(scope, `${runId}:user`, { includeSource: true });
+  return (
+    input?.source === "transcript" && input.message.provenance?.sourceTool === "subagent_settle"
+  );
+}
 
 /** Admit retained obligations before classifying nested waits in this store. */
 export async function prepareRestartCompletionCustody(

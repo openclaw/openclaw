@@ -5,6 +5,7 @@ import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { appendTranscriptMessage } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
@@ -16,6 +17,7 @@ import {
 
 it.for([
   "message",
+  "committed-interrupted",
   "retired-message",
   "nested-message",
   "nested-retired-message",
@@ -34,7 +36,10 @@ it.for([
       sessionKey: "agent:main:dashboard:parked-root",
       sessionId: "parked-root",
     };
-    const runId = "parked-root-run";
+    const runId =
+      source === "message" || source === "committed-interrupted"
+        ? `announce:requester-settle:main:${target.sessionKey}:parked-child-run`
+        : "parked-root-run";
     const lifecycleRevision = "parked-root-revision";
     replaceSessionEntrySync(target, {
       sessionId: target.sessionId,
@@ -42,17 +47,32 @@ it.for([
       activeWriterRunId: runId,
       updatedAt: 100,
     });
+    if (source === "message" || source === "committed-interrupted") {
+      await appendTranscriptMessage(target, {
+        message: {
+          role: "user",
+          content: "Captured child result",
+          timestamp: 90,
+          idempotencyKey: `${runId}:user`,
+          provenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+        },
+      });
+    }
     for (const event of [
       { ts: 100, data: { phase: "start", startedAt: 100 } },
-      {
-        ts: 120,
-        data: {
-          phase: "end",
-          yielded: true,
-          livenessState: "paused",
-          stopReason: "end_turn",
-        },
-      },
+      ...(source === "committed-interrupted"
+        ? []
+        : [
+            {
+              ts: 120,
+              data: {
+                phase: "end",
+                yielded: true,
+                livenessState: "paused",
+                stopReason: "end_turn",
+              },
+            },
+          ]),
     ]) {
       await persistGatewaySessionLifecycleEvent({
         sessionKey: target.sessionKey,
@@ -64,6 +84,7 @@ it.for([
     const childSessionId = "parked-child";
     const childRevision = "parked-child-revision";
     const recovery = [
+      "committed-interrupted",
       "retired-completed",
       "retired-message",
       "nested-retired-message",
@@ -89,7 +110,12 @@ it.for([
         completed || source === "stopped" || source === "interrupted"
           ? undefined
           : "sessions_yield",
-      waitForMessage: ["message", "retired-message", "stale-requester"].includes(source)
+      waitForMessage: [
+        "message",
+        "committed-interrupted",
+        "retired-message",
+        "stale-requester",
+      ].includes(source)
         ? true
         : undefined,
       requesterSettleWake: {
