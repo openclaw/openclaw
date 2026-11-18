@@ -144,13 +144,13 @@ it.each([
 });
 
 it("formats disclosed poll results with vote totals", () => {
-  const text = formatPollResultsAsText({
+  const formatted = formatPollResultsAsText({
     ...parsedPoll,
     entries: parsedPoll.answers.map(({ id, text }, index) => ({ id, text, votes: 1 - index })),
     totalVotes: 1,
     closed: false,
   });
 
-  expect(text).toContain("1. Pizza (1 vote)");
-  expect(text).toContain("Total voters: 1");
+  expect(formatted).toContain("1. Pizza (1 vote)");
+  expect(formatted).toContain("Total voters: 1");
 });
