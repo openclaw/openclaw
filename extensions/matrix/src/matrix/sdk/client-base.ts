@@ -562,6 +562,10 @@ export abstract class MatrixClientBase {
         await this.startupPromise?.catch(noop);
         await this.cryptoInitializationGate.pending?.catch(noop);
         await Promise.allSettled(this.liveRoomReadinessOperations);
+        // initRustCrypto starts backup discovery in the background. Join its
+        // in-flight Rust work before stopClient closes the OlmMachine. Requests
+        // are already aborted, so a completed check cannot start new network work.
+        await this.client.getCrypto()?.checkKeyBackupAndEnable().catch(noop);
         clearInterval(this.idbPersistTimer ?? undefined);
         this.idbPersistTimer = null;
         this.idbPersistAbortController?.abort();

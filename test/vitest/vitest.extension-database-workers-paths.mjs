@@ -405,6 +405,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/matrix/doctor-contract-api.import.test.ts",
   "extensions/matrix/doctor-contract-api.test.ts",
   "extensions/matrix/src/approval-config.storage.test.ts",
+  "extensions/matrix/src/matrix/sdk/client-backup-lifecycle.test.ts",
   "extensions/matrix/src/matrix/sdk/client-startup-recovery.test.ts",
   "extensions/matrix/src/matrix/sdk/crypto-store-ownership.process.test.ts",
   "extensions/matrix/src/matrix/monitor/index.credentials.test.ts",

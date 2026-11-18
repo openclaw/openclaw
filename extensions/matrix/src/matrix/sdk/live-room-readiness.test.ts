@@ -51,6 +51,7 @@ vi.mock("matrix-js-sdk/lib/matrix.js", async (importOriginal) => {
       // Mock only readiness; uploads retain the real SDK transport.
       vi.mocked(vi.spyOn(client, "getCrypto"), { partial: true }).mockReturnValue({
         isEncryptionEnabledInRoom: fixture.probe,
+        checkKeyBackupAndEnable: async () => null,
       });
       vi.spyOn(client, "getRoom").mockImplementation(() => fixture.room ?? null);
       vi.spyOn(client, "getRooms").mockReturnValue([]);
