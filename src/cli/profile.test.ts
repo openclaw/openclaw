@@ -50,6 +50,36 @@ describe("parseCliProfileArgs", () => {
     },
   );
 
+  it.each<[string, string | null]>([
+    ["pair work:ABCD-EFGH", "work"],
+    ["pair --yes work:abcdefgh", "work"],
+    ["--profile work pair work:ABCD-EFGH", "work"],
+    ["pair -- work:ABCD-EFGH", "work"],
+    ["pair --timeout 5000 work:ABCD-EFGH", "work"],
+    ["pair ABCD-EFGH", null],
+    ["status work:ABCD-EFGH", null],
+    // The CLI inside the container receives the code and routes it there.
+    ["--container demo pair work:ABCD-EFGH", null],
+  ])("routes a pairing code to the profile it names: %s", (args, profile) => {
+    expect(parseCliProfileArgs(argv(args))).toMatchObject({ ok: true, profile });
+  });
+
+  it("leaves a pairing code to the container a caller already selected", () => {
+    expect(parseCliProfileArgs(argv("pair work:ABCD-EFGH"), "demo")).toMatchObject({
+      ok: true,
+      profile: null,
+    });
+  });
+
+  it.each([
+    "pair ../x:ABCD-EFGH",
+    "pair :ABCD-EFGH",
+    "--profile home pair work:ABCD-EFGH",
+    "--profile home pair -- work:ABCD-EFGH",
+  ])("rejects a pairing code whose profile is invalid or contradicts --profile: %s", (args) => {
+    expect(parseCliProfileArgs(argv(args)).ok).toBe(false);
+  });
+
   it.each(["--profile", "--dev --profile work status", "--profile work --dev status"])(
     "rejects invalid profile options: %s",
     (args) => {

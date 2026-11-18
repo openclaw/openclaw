@@ -404,32 +404,13 @@ async function capacityFixture(mebibytes: number | null, worker = false) {
   const before = await hashes();
   return {
     ...f,
-    assess: () =>
-      assessInitialUpdateSnapshotCapacity({ config: {}, stateDir: f.stateDir, env: {} }),
     prepare: (options: Partial<Parameters<typeof prepareUpdateCandidateRehearsal>[0]> = {}) =>
       prepare(f, options),
     unchanged: async () => expect(await hashes()).toEqual(before),
   };
 }
 
-it.each([
-  { space: 100, exitCode: 0, diagnostic: "" },
-  { space: 70, exitCode: 1, diagnostic: "snapshot-capacity-insufficient" },
-  { space: null, exitCode: 0, diagnostic: "free space unknown" },
-])(
-  "preflights one generation with $space MiB free (exit=$exitCode)",
-  async ({ space, exitCode, diagnostic }) => {
-    const f = await capacityFixture(space);
-    const result = await f.assess();
-    expect(result.exitCode, result.stderrTail ?? undefined).toBe(exitCode);
-    if (diagnostic) {
-      expect(result.stderrTail ?? result.diagnostics?.join("\n")).toContain(diagnostic);
-    }
-    await f.unchanged();
-  },
-);
-
-it("preflights activation backup separately from candidate copy capacity", async () => {
+it("preflights activation database backup space before the update changes anything", async () => {
   const f = await fixture(0, ["main", "second"], false);
   // Admission measures family lengths; sparse tails avoid writing payloads this check never reads.
   for (const file of f.files) {

@@ -1,2 +1,0 @@
-# Executes the canonical manifest for Python ownership and shared/deleted/full fallbacks.
-36

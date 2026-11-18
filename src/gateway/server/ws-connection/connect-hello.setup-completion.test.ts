@@ -110,6 +110,7 @@ function createFailedHelloContext(
     handler: {
       getClient: () => null,
       connId: "conn-setup",
+      ingressAttribution: { kind: "direct-local" },
       gatewayMethods: [],
       events: [],
       buildRequestContext: () => ({ broadcast, publishPresence: vi.fn() }),

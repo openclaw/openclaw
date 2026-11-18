@@ -47,10 +47,6 @@ export function isSessionRunActiveForKey(sessionKey: string): boolean {
   );
 }
 
-export function listActiveReplyRunSessionKeys(): string[] {
-  return [...activeSessionOperations()].map((operation) => operation.key);
-}
-
 /** Resolves a single active physical owner, rejecting ambiguous current identities. */
 export function resolveActiveReplyOperationForSessionId(
   sessionId: string,

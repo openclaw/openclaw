@@ -211,6 +211,7 @@ describe("SQLite integrity child", () => {
     const { source } = fixture("progress");
     progress.mockClear();
     const worker = createIntegrityChild();
+    const send = vi.spyOn(worker, "send");
     worker.kill = vi.fn(() => {
       queueMicrotask(() => worker.emit("close", null, "SIGKILL"));
       return true;
@@ -220,7 +221,7 @@ describe("SQLite integrity child", () => {
     vi.useFakeTimers();
     try {
       const check = inScope(() => inspect(source, controller.signal));
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
       worker.emit("message", { type: "phase", phase: "checking" });
       await vi.advanceTimersByTimeAsync(30_000);
       expect(progress).toHaveBeenCalledTimes(3);
@@ -255,6 +256,7 @@ describe("SQLite integrity child", () => {
     fs.writeFileSync(source, bytes);
     const timing: SqliteIntegrityCheckTiming = {};
     vi.mocked(fork).mockClear();
+    const stat = vi.spyOn(fs, "statSync");
     const check = inScope(() => inspect(source, undefined, timing));
     await expect(check).rejects.toMatchObject({
       name: "SqliteIntegrityError",
@@ -263,6 +265,7 @@ describe("SQLite integrity child", () => {
       ),
     });
     expectForksClosed();
+    expect(stat.mock.calls.filter(([pathname]) => pathname === source)).toHaveLength(0);
   });
 
   it("reports a SIGTERM close without an integrity verdict as an interruption", async () => {

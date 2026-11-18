@@ -1,13 +1,113 @@
+import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { createChangedNodeTestShards } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { routeBoatNodeTestJobs } from "../../scripts/lib/ci-node-test-capacity.mts";
+import { nodeTestVolumeEnvironment } from "../../scripts/lib/ci-node-test-groups-codec.mts";
+import * as inventoryOwner from "../../scripts/lib/ci-node-test-inventory.mts";
 import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
+  isRuntimeTestFileIncluded,
+  type NodeTestVolumeContext,
   type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { parseCompactSplitTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
+
+it("retains the original eligible denominator across selected subsets and runtime copies", () => {
+  const config = "test/vitest/vitest.gateway-database-workers.config.ts";
+  const files = [
+    "src/gateway/session-message-events.history-worker.test.ts",
+    "src/gateway/board-http.test.ts",
+  ];
+  const siblingConfig = "test/vitest/vitest.gateway-server-isolated.config.ts";
+  const sibling = "src/gateway/gateway.prompt-cache.test.ts";
+  const volumeContext: NodeTestVolumeContext = {
+    revision: "a".repeat(40),
+    runtimePolicy: "dual-all" as const,
+    eligibility: {
+      changedPaths: [...files, sibling],
+      includeReleaseOnlyRuntimeTests: false,
+      includePrExemptRuntimeTests: false,
+    },
+    fullPlan: () =>
+      createNodeTestShardBundles({
+        ...volumeContext.eligibility,
+        runnerBackend: "hybrid",
+        compactMode: "pull-request",
+        includeReleaseOnlyPluginShards: false,
+        includeReleaseOnlyToolingShards: false,
+        includeProofTests: false,
+      }),
+  };
+  const eligible = (name: string) =>
+    inventoryOwner
+      .listNodeTestConfigFiles(name)!
+      .filter((file) => isRuntimeTestFileIncluded(file, volumeContext.eligibility));
+  expect(eligible(config)).not.toContain("src/gateway/gateway-auth-recovery.test.ts");
+  const volumes = files.map((file) => {
+    const jobs = createSelectedNodeTestShardBundles([file, sibling], {
+      runnerBackend: "hybrid",
+      // Execution has already admitted these targets. Metadata must not use these flags.
+      includeReleaseOnlyRuntimeTests: true,
+      includePrExemptRuntimeTests: true,
+      volumeContext,
+    })!;
+    expect(jobs.flatMap(planFiles).toSorted()).toEqual([file, sibling].toSorted());
+    const entries = jobs.flatMap((job) =>
+      job.groups.flatMap((group) => group.volume?.entries ?? []),
+    );
+    expect(
+      entries.filter((entry) => entry.config === siblingConfig).map((entry) => entry.full?.count),
+    ).toEqual([eligible(siblingConfig).length, eligible(siblingConfig).length]);
+    return entries.filter((entry) => entry.config === config);
+  });
+  for (const entries of volumes) {
+    expect(entries.map((entry) => entry.runtime).toSorted()).toEqual(["bun", "node"]);
+    for (const entry of entries) {
+      const expected = eligible(config).filter(
+        (file) =>
+          entry.runtime === "node" || file !== "src/gateway/session-database-retention.test.ts",
+      );
+      expect(entry.full).toMatchObject({
+        count: expected.length,
+        digest: createHash("sha256").update(JSON.stringify(expected.toSorted())).digest("hex"),
+      });
+      expect(entry.selected?.count).toBe(1);
+    }
+  }
+  for (const runtime of ["node", "bun"]) {
+    expect(volumes[0]!.find((entry) => entry.runtime === runtime)!.full!.id).toBe(
+      volumes[1]!.find((entry) => entry.runtime === runtime)!.full!.id,
+    );
+  }
+  expect(volumes[0]![0]!.full!.id).not.toBe(volumes[0]![1]!.full!.id);
+});
+
+it("separates scenario identity from worker-only split profiles", () => {
+  const first = nodeTestVolumeEnvironment({ OPENCLAW_VITEST_MAX_WORKERS: "8", SCENARIO: "a" }, [
+    "SCENARIO",
+  ]);
+  const split = nodeTestVolumeEnvironment({ OPENCLAW_VITEST_MAX_WORKERS: "2", SCENARIO: "a" }, [
+    "SCENARIO",
+  ]);
+  const other = nodeTestVolumeEnvironment({ OPENCLAW_VITEST_MAX_WORKERS: "2", SCENARIO: "b" }, [
+    "SCENARIO",
+  ]);
+  expect(first.semantic).toBe(split.semantic);
+  expect(first.admitted).not.toBe(split.admitted);
+  expect(split.semantic).not.toBe(other.semantic);
+  const scenarioOptions = '--conditions="scenario  --max-old-space-size=1234" --trace-warnings';
+  const withHeap =
+    '--conditions="scenario  --max-old-space-size=1234" --max-old-space-size=8192 --trace-warnings';
+  const original = nodeTestVolumeEnvironment({ NODE_OPTIONS: scenarioOptions });
+  const resources = nodeTestVolumeEnvironment({
+    NODE_OPTIONS: withHeap,
+    OPENCLAW_VITEST_WORKER_CACHE: "1",
+  });
+  expect(resources.semantic).toBe(original.semantic);
+  expect(resources.admitted).not.toBe(original.admitted);
+});
 
 const preparedWorkspace = "src/node-host/node-worker-prepared-workspace.test.ts";
 const preparedCompanion = "src/cli/update-cli/update-repair-cancellation.test.ts";
@@ -314,6 +414,11 @@ it("shares selected serial setup within the shortest contributing timeout", () =
     planConcurrency: 1,
   });
   expect(serial.timeoutMinutes ?? 60).toBe(60);
+  for (const group of serial.groups) {
+    expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe(
+      group.configs.includes("test/vitest/vitest.gateway-methods.config.ts") ? "4" : "2",
+    );
+  }
   expect(
     selected
       .flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? []))

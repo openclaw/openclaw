@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, expect, it, vi } from "vitest";
 import {
+  validateUsersSelfResult,
   validateUsersSetAvatarResult,
   validateUsersSetDisplayNameResult,
   validateUsersSetRoleResult,
@@ -18,6 +19,7 @@ const setCanonicalUserProfileDisplayName = vi.hoisted(() => vi.fn());
 const setUserProfileRole = vi.hoisted(() => vi.fn());
 const invalidateOperatorRolePolicy = vi.hoisted(() => vi.fn());
 const ensureProfileIdForEmail = vi.hoisted(() => vi.fn());
+const prepareUserProfileGitHubAttribution = vi.hoisted(() => vi.fn());
 let disclosedProfile: unknown;
 let authorityCurrent = true;
 const prepareUserProfileRoleAuthority = vi.hoisted(() => vi.fn());
@@ -34,6 +36,11 @@ vi.mock("../../state/user-channel-identity-operations.js", () => ({
 vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
   readResidentUserProfileRevision,
+}));
+
+vi.mock("../../state/user-profile-github-identity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-github-identity.js")>()),
+  prepareUserProfileGitHubAttribution,
 }));
 
 vi.mock("../../state/user-profile-writes.js", () => ({
@@ -177,9 +184,12 @@ const profileBinding = {
 const avatarParams = { profileId: profile.id, mime: "image/png", avatarBase64: "AQ==" };
 const nameParams = { profileId: profile.id, displayName: "Ada" };
 const roleConfig = {
-  getRuntimeConfig: () => ({ gateway: { roles: { definitions: { guest: {} } } } }),
+  getRuntimeConfig: () => ({
+    gateway: { roles: { default: "guest", definitions: { guest: {} } } },
+  }),
 };
 const effects = [
+  prepareUserProfileGitHubAttribution,
   ensureProfileIdForEmail,
   prepareUserProfileRoleAuthority,
   linkEmail,
@@ -203,6 +213,10 @@ beforeEach(() => {
   }));
   authorityCurrent = true;
   disclosedProfile = profile;
+  prepareUserProfileGitHubAttribution.mockResolvedValue({
+    identities: new Map(),
+    isCurrent: () => true,
+  });
   readResidentUserProfileRevision.mockReturnValue(residentProfile);
 });
 
@@ -271,6 +285,53 @@ it.each<InvalidRequest>([
   },
 );
 
+it.each(["github.com", "ghe.example.test"])(
+  "projects only public GitHub commit details in users.self (host=%s)",
+  async (host) => {
+    prepareUserProfileGitHubAttribution.mockResolvedValue({
+      identities: new Map([
+        [
+          profile.id,
+          {
+            accountId: 101,
+            login: "verified-ada",
+            ...(host === "github.com"
+              ? {}
+              : { host, verifiedEmail: "private@enterprise.example.test" }),
+          },
+        ],
+      ]),
+      isCurrent: () => true,
+    });
+    const respond = await runUsersHandler(
+      "users.self",
+      {},
+      {
+        ...selfClient,
+        authenticatedUserProfile: { ...profileBinding },
+      },
+      { getRuntimeConfig: () => ({ gateway: { github: { host } } }) },
+    );
+    const result = respond.mock.calls[0]?.[1];
+    expect(result).toEqual({
+      profile: {
+        ...profile,
+        gitCoauthorAvailable: true,
+        ...(host === "github.com"
+          ? {
+              gitCoauthorIdentity: {
+                name: "verified-ada",
+                email: "101+verified-ada@users.noreply.github.com",
+              },
+            }
+          : {}),
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("private@enterprise.example.test");
+    expect(validateUsersSelfResult(result)).toBe(true);
+  },
+);
+
 it("keeps unresolved users.self unavailable and retryable when GitHub lookup fails", async () => {
   const providerClient: Record<string, unknown> = {
     authenticatedUserId: "ada@github",
@@ -291,7 +352,7 @@ it("keeps unresolved users.self unavailable and retryable when GitHub lookup fai
     details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
   });
   expect(await runUsersHandler("users.self", {}, providerClient)).toHaveBeenCalledWith(true, {
-    profile,
+    profile: { ...profile, gitCoauthorAvailable: false },
   });
   expect(authenticatedGitHubIdentitySync).toHaveBeenCalledTimes(2);
 });
@@ -438,7 +499,8 @@ it.each(["guest", null])("sets role %s and invalidates policy before responding"
     onCommitted: expect.any(Function),
   });
   for (const publish of [invalidateOperatorRolePolicy, ...(role ? [disconnect] : [])]) {
-    expect(publish).toHaveBeenCalledWith(profile.id);
+    // A role assignment is role-only: linked owner devices keep their certificate authority.
+    expect(publish).toHaveBeenCalledWith(profile.id, { roleOnly: true });
     expect(publish.mock.invocationCallOrder[0]).toBeLessThan(
       respond.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
@@ -623,4 +685,45 @@ it.each(
     expectFailure(respond);
     expectUntouched(refresh);
   }
+});
+
+it("requires gateway.roles.default to assign a named role from definitions alone", async () => {
+  setUserProfileRole.mockReturnValue({ ...profile, role: "guest" });
+  const respond = await runUsersHandler(
+    "users.setRole",
+    { profileId: profile.id, role: "guest" },
+    adminClient,
+    {
+      getRuntimeConfig: () => ({ gateway: { roles: { definitions: { guest: {} } } } }),
+    },
+  );
+  expectError(respond, {
+    code: "INVALID_REQUEST",
+    message: expect.stringContaining("gateway.roles.default"),
+  });
+  expect(setUserProfileRole).not.toHaveBeenCalled();
+});
+
+it("refuses assigning a member profile's role outside Access but permits clearing", async () => {
+  const prepareMemberProfileCheck = vi.fn(async () => () => true);
+  const context = { ...roleConfig, openclawIdService: { prepareMemberProfileCheck } };
+  const refused = await runUsersHandler(
+    "users.setRole",
+    { profileId: profile.id, role: "guest" },
+    adminClient,
+    context,
+  );
+  expectError(refused, {
+    code: "INVALID_REQUEST",
+    message: expect.stringContaining("Access page"),
+  });
+  expect(setUserProfileRole).not.toHaveBeenCalled();
+  setUserProfileRole.mockReturnValue({ ...profile, role: null });
+  const cleared = await runUsersHandler(
+    "users.setRole",
+    { profileId: profile.id, role: null },
+    adminClient,
+    context,
+  );
+  expect(cleared).toHaveBeenCalledWith(true, { profile: { ...profile, role: null } });
 });

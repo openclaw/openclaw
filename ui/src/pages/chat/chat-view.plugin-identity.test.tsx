@@ -6,6 +6,7 @@ import type {
   ControlUiSurface,
   ControlUiViewContext,
 } from "../../../../src/plugin-sdk/control-ui.js";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { prepareChatMessageRender } from "../../lib/chat/message-display.ts";
 import { createInertViewHost } from "../../plugins/control-ui-view.test-support.ts";
@@ -46,6 +47,7 @@ it("passes the pane's raw global owner to transcript and tool replacements", asy
   const reportError = vi.fn();
   const context = {
     gateway: createApplicationGateway().gateway,
+    chatSubmissions: createChatSubmissions(),
     agentSelection: { state: { selectedId: "main" }, subscribe: () => () => undefined },
     plugins: {
       registrations: () => [],

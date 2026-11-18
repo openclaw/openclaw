@@ -327,6 +327,26 @@ while a surviving Doctor process finishes; retry when that process exits. Run
 `openclaw update status`, then `openclaw update repair` for any recovery that
 remains pending.
 
+The next `openclaw update` settles the plugin recovery a killed command-line
+update reserved, and continues without a repair. On a source checkout this
+needs the checkout unchanged since that update installed its build: the same
+commit, no local changes, and the same build. When the killed update had
+replaced the installed version without confirming it, had begun rolling back on
+it, or left the Gateway stopped, the update first finishes that version the way
+`openclaw update repair` does: Doctor, plugin convergence, and a Gateway restart.
+That work is recorded on its own repair run, and the update's history names it.
+A stopped Gateway is restarted only when the update would restart it anyway.
+The update refuses and names the command to run, in most cases
+`openclaw update repair`, when the update ran with `--no-restart` and the
+Gateway is still stopped, when finishing the installed version fails, when the
+Gateway started that update, when an update may still be running, or when the
+update lease store no longer holds that update's lease. After a restart cleared
+that store, the update still settles the recovery on Linux and macOS hosts when
+the killed update recorded that it ran in an earlier boot of the same machine.
+Windows, containers, and updates killed while running an older version keep
+the refusal. See
+[how updates run](/cli/update/how-updates-run#replacing-the-package-directory).
+
 ### Interrupted state restore
 
 Update commands, including `update repair`, refuse with
@@ -354,7 +374,9 @@ beside the installation or in the system temporary directory. The updater settle
 its workers after success, failure, an exception, or `SIGINT`/`SIGTERM`, including
 failures while reporting the outcome. Complete projections record
 `Runtime retained at <path>: <reason>` for the next eligible update or Doctor
-cleanup, so recursive deletion does not delay command exit. Incomplete preparation
+cleanup, so recursive deletion does not delay command exit. Run
+`openclaw doctor --fix` before uninstalling; manual removal on Windows needs the
+extended-length path prefix ([Uninstall](/install/uninstall#remove-the-cli)). Incomplete preparation
 keeps immediate best-effort cleanup. Unsettled workers retain their runtime with
 the failure reason. A cleanup warning does not replace the original update
 outcome. An earlier nonzero exit remains nonzero while workers are draining.
@@ -467,9 +489,11 @@ checkout before settling that recovery. A changed link or occupied path keeps
 recovery intact; this path does not reclaim cancelled update custody through
 the link.
 
-For private retained package trees, recovery ignores widened group/other permission
-bits while verifying the package, then restores owner-only access and reports one
-warning. This includes POSIX ACL access masks introduced by recursive `setfacl`.
+For retained package contents, recovery ignores group/other permission drift
+while verifying the package. It clears group/other write access, including
+POSIX ACL write masks, but preserves read/execute access so a non-root service
+can still run a root-owned global npm installation after rollback. Private
+activation anchors, controls, helpers, and journals remain owner-only.
 File contents, ownership, identity, owner permissions, and symlink targets must
 still match. If the filesystem prevents tightening permissions, recovery warns
 and continues with the verified package. Older fingerprints that included public
@@ -602,6 +626,13 @@ process arguments and working directories. On macOS it does not read process
 environments, which some macOS releases report without a bounded end; a process
 whose arguments cannot be read still leaves the census incomplete. Processes
 started by the repair itself are never handoff work, so they do not block it.
+
+When a package journal pins an existing historical lease store, repair checks
+that store before settling publication, even if the current per-user store is
+empty. Publication settlement and finalization reuse the admitted repair claim.
+If recovery refuses, repair preserves the evidence and reports the specific
+ownership, descendant, history, grace, or restoration reason. The repairing CLI
+must contain this fix; an older blocked CLI cannot obtain it from a candidate.
 
 Repair also checks legacy update child-lineage leases left after a manual
 installation hop, even when the installation-root lease is absent. Dead PIDs
@@ -1106,6 +1137,15 @@ retirement after it records success. A failed update that never reached repair o
 activation attempts the same retirement after its failure is recorded, including
 its own capture.
 
+External supervisors using `update migrate` and `update finish` attempt the same
+cleanup when they finish an accepted update, after retiring their rollback journal.
+The recorded migration start time keeps that update's own migration originals
+protected until a later accepted update supersedes them. This includes verified
+originals produced by standalone Doctor or startup migration. `update finish`
+returns the cleanup summary in `diagnostics` and any cleanup warning without
+changing the accepted update's outcome. Receipts without a migration start time
+cannot establish this ordering and do not trigger automatic cleanup.
+
 Once the update's Gateway health verification is recorded (service running, version
 match, readiness, settled channels, and no plugin errors), that update retires its
 own original-state capture and the Doctor migration originals it produced. Without that
@@ -1263,6 +1303,11 @@ Releases it swaps without `update migrate` are not recorded. Changed backups rem
 explicitly selected as described below; cleanup never infers permission
 to delete from their filenames. Keep these files with your pre-upgrade backups
 while you still need to restore the matching database generation.
+`openclaw backup create` includes them by default; `--exclude-migration-backups`
+omits them from that archive without removing them. The same flag also omits
+Doctor's PostgreSQL backup directories (`.pre-startup-migration-<id>.postgres.bak`)
+and restart-recovery originals (`.pre-startup-migration-restart-recovery-<id>.bak`);
+see [`openclaw backup`](/cli/backup).
 Private package, command-shim, and Git runtime backups remain owned by the update
 transaction and are outside this migration cleanup. An interrupted entry in update
 history does not block cleanup of otherwise eligible migration archives.

@@ -569,7 +569,19 @@ async function planCliHistoryBoundary(
     assertCurrent();
     // Bookkeeping is not a conversation. Retained reset rows, summaries, custom
     // context, missing anchors and bounded cuts must never look like a fresh start.
-    allowed = !truncated && buildSessionContext(branch).messages.length === 0;
+    // The bounded read keeps the newest rows. When it holds a row before the latest
+    // boundary and that boundary is a reset that keeps nothing, every row it cut
+    // precedes that reset, so `/new` on a long session is still an empty start.
+    const boundaryIndex = branch.findLastIndex(
+      (entry) => entry.type === "reset" || entry.type === "compaction",
+    );
+    const latestBoundary = branch[boundaryIndex];
+    const cutPrecedesEmptyReset =
+      boundaryIndex > 0 &&
+      latestBoundary?.type === "reset" &&
+      latestBoundary.firstKeptEntryId === undefined;
+    allowed =
+      (!truncated || cutPrecedesEmptyReset) && buildSessionContext(branch).messages.length === 0;
   }
   allowed &&= watermark.maxSeq === null || typeof watermark.generation === "string";
   if (!allowed && !stored) {

@@ -21,6 +21,7 @@ import {
   resolveTalkRealtimeSelection,
   talkProviderRejectsTransport,
 } from "./talk-schema.ts";
+import { TalkTranscriptionSection } from "./talk-transcription.tsx";
 import {
   effectiveTalkValues,
   Talk,
@@ -416,6 +417,7 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
         ready: result.realtime.ready === true,
         activeProvider: result.realtime.activeProvider ?? null,
         providers: result.realtime.providers,
+        transcription: result.transcription,
       };
     })();
     catalogState.read = read;
@@ -648,10 +650,23 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
   };
 }
 
+function transcriptionCatalog(catalog: TalkCatalogState) {
+  return catalog.kind === "ready"
+    ? (catalog.transcription ?? "unavailable")
+    : catalog.kind === "failed"
+      ? { failed: catalog.error }
+      : catalog.kind;
+}
+
 export function TalkSettingsPage(props: TalkSettingsPageProps) {
   const context = useApplication();
   const settings = createTalkSettings(context, props);
   const runtime = projectRuntimeConfig(context.runtimeConfig);
+  const configBusy = () =>
+    props.mutationDisabled ||
+    runtime.read().state.configLoading ||
+    runtime.read().state.configSaving ||
+    runtime.read().state.configApplying;
   const voiceWake = voiceWakeOwner(context.gateway);
   const voiceWakeState = projectOwner(voiceWake, (owner) => owner);
   // Only a new read receipt starts async work; draft and write updates stay synchronous.
@@ -706,15 +721,17 @@ export function TalkSettingsPage(props: TalkSettingsPageProps) {
         catalog={settings.catalog()}
         catalogScope={settings.catalogScope()}
         modelDefaultPending={settings.modelDefaultResetIntent() !== null}
-        configBusy={
-          props.mutationDisabled ||
-          runtime.read().state.configLoading ||
-          runtime.read().state.configSaving ||
-          runtime.read().state.configApplying
-        }
+        configBusy={configBusy()}
         onProviderChange={(providerId) => settings.changeProvider(providerId)}
         onModelChange={(model) => settings.changeModel(model)}
         onVoiceChange={(voice) => settings.changeVoice(voice)}
+        transcription={(catalog) => (
+          <TalkTranscriptionSection
+            configObject={props.configObject ?? {}}
+            catalog={transcriptionCatalog(catalog())}
+            configBusy={configBusy()}
+          />
+        )}
         editor={props.buildEditor?.()}
       />
     </openclaw-talk-settings>

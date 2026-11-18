@@ -99,7 +99,10 @@ describe("standalone backup database completeness", () => {
         target,
         localCompanion: true,
       }),
-    ).rejects.toThrow("requires a local-companion checkpoint");
+    ).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message: expect.stringContaining("requires a local-companion checkpoint"),
+    });
     await expect(fs.stat(target)).rejects.toMatchObject({ code: "ENOENT" });
     const manifest = await readManifest(fixture.root, fixture.archiveRoot);
     manifest.profile = "local-companion";

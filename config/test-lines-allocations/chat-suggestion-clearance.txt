@@ -1,2 +1,0 @@
-# Two real-browser regressions protect failure details, expanded task actions, and draft retention on constrained panes.
-77

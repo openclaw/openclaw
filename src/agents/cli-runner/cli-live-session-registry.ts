@@ -472,13 +472,15 @@ export function createCliLiveSessionCapability(params: {
       record.cleanupPromise = Promise.resolve()
         .then(() => handle.waitForExit())
         .then(() => record.cleanup?.())
-        .then(() => {
+        .finally(() => {
+          // A failed cleanup fails the turns that join it, not every later turn. Process owners
+          // reject only after their own hard deadline; a retained rejection can never settle.
           retiringSessionHandles.delete(handle);
           if (retiredSessionCleanup.get(ownerKey) === record.cleanupPromise) {
             retiredSessionCleanup.delete(ownerKey);
           }
         });
-      // A fresh prepared context must still join the retired owner after a timeout.
+      // A fresh prepared context must still join the retired owner while cleanup is pending.
       retiredSessionCleanup.set(ownerKey, record.cleanupPromise);
       void record.cleanupPromise.catch((error: unknown) => {
         cliBackendLog.warn(`cli live session cleanup failed: ${String(error)}`);

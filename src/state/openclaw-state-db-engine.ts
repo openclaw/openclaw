@@ -11,10 +11,6 @@ import {
   postgresIndexOrderingMigration,
   withLegacyPostgresIndexOrdering,
 } from "../infra/database-engine/postgres-index-ordering.js";
-import {
-  isPostgresAdditiveColumnFact,
-  missingPostgresAdditiveColumns,
-} from "../infra/database-engine/postgres-schema.js";
 import { isPostgresSqlConnection, type PostgresSqlConnection } from "../infra/sql-connection.js";
 import {
   invalidateLocalSqliteSchemaAdmissions,
@@ -51,8 +47,11 @@ import {
 import { withLegacyWorkerResourceReceipts } from "./openclaw-state-db-schema-v37-resource-receipts.js";
 import { withLegacyRepositoryDiskAuthority } from "./openclaw-state-db-schema-v38-repository-disk.js";
 import { withLegacyWorkerRetention } from "./openclaw-state-db-schema-v39-worker-retention.js";
+import { withLegacyWorkspaceBootstrapDeferred } from "./openclaw-state-db-schema-v40-lazy-additions.js";
+import { withLegacyWorkerProvisionSource } from "./openclaw-state-db-schema-v40-worker-provision-source.js";
 import {
   admitStateSchemaFacts,
+  parseStateSchemaContentVersion,
   PostgresSchemaAdmissionUnavailableError,
 } from "./openclaw-state-db-schema-version.js";
 import { withPostgresSchemaAdmissionRetry } from "./openclaw-state-postgres-admission.js";
@@ -104,19 +103,13 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
       fragment.tables.some((table) => tables.has(table)) ? [] : fragment.tables,
     ),
   );
-  // Inspection retains a predecessor without the additive columns its seal already proved.
-  const predecessorColumns = missingPostgresAdditiveColumns(statePostgresSchema, facts.catalog);
   // Older inspection schemas are checked against their migration's exact source DDL.
   if (facts.version === OPENCLAW_STATE_SCHEMA_VERSION) {
     assertPostgresCatalog(
       facts.catalog.filter(
         (fact) => !fact.kind.endsWith("Definition") && fact.table !== "openclaw_schema_meta",
       ),
-      runtime.expectedCatalog.filter(
-        (fact) =>
-          !absent.has(fact.table) &&
-          !predecessorColumns.some((additive) => isPostgresAdditiveColumnFact(fact, additive)),
-      ),
+      runtime.expectedCatalog.filter((fact) => !absent.has(fact.table)),
     );
   }
   if (fresh) {
@@ -137,12 +130,22 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
       "SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
     )
     .get();
+  let contentVersion: number;
+  try {
+    const marker = content?.value_json;
+    if (marker !== undefined && marker !== null && typeof marker !== "string") {
+      throw new Error("Invalid PostgreSQL state content marker");
+    }
+    contentVersion = parseStateSchemaContentVersion(marker);
+  } catch {
+    throw new Error(`PostgreSQL state metadata mismatch. ${recovery}`);
+  }
   // SQLite may publish the current header without a redundant content-version row.
   if (
     meta?.schema_version !== facts.version ||
     meta.role !== "global" ||
     meta.agent_id !== null ||
-    (content !== undefined && content.value_json !== String(facts.version))
+    contentVersion > facts.version
   ) {
     throw new Error(`PostgreSQL state metadata mismatch. ${recovery}`);
   }
@@ -152,25 +155,6 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
   });
   publishStateRuntimeSchemaAdmission(db, true);
 }
-
-const statePostgresSchema = {
-  postgres: runtime.eagerSql,
-  // #196392 added this first-use SQLite column to schema 39's eager PostgreSQL DDL.
-  postgresAdditiveColumns: [{ table: "workspace_setup_state", column: "bootstrap_deferred" }],
-  postgresFragments: runtime.fragments.map((fragment): PostgresSchemaFragment => {
-    const { activation } = fragment;
-    if (activation !== "first-use" && activation !== "version-additive") {
-      throw new Error(`Unknown PostgreSQL state fragment activation: ${activation}`);
-    }
-    return {
-      id: fragment.id,
-      tables: fragment.tables,
-      sql: fragment.sql,
-      dependencies: fragment.dependencies,
-      activation,
-    };
-  }),
-};
 
 function statePostgresVersionSql(version: number): string {
   return `UPDATE schema_meta
@@ -186,9 +170,25 @@ function statePostgresVersionSql(version: number): string {
 }
 
 function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
+  const statePostgresSchema = {
+    postgres: stateEngineSchema.postgres,
+    postgresFragments: stateEngineSchema.postgresFragments,
+  };
+  const v39Postgres = withLegacyWorkerProvisionSource(statePostgresSchema.postgres);
+  const v39WithoutBootstrapDeferred = withLegacyWorkspaceBootstrapDeferred(v39Postgres);
+  const statePostgresSchemaV39 = {
+    ...statePostgresSchema,
+    postgres: v39Postgres,
+    // Main builds used both shapes while the numeric state version was 39.
+    postgresWithoutOptionalColumn: {
+      table: "workspace_setup_state",
+      column: "bootstrap_deferred",
+      sql: v39WithoutBootstrapDeferred,
+    },
+  };
   const statePostgresSchemaV38 = {
     ...statePostgresSchema,
-    postgres: withLegacyWorkerRetention(statePostgresSchema.postgres),
+    postgres: withLegacyWorkerRetention(v39WithoutBootstrapDeferred),
   };
   const statePostgresSchemaV37 = {
     postgres: withLegacyRepositoryDiskAuthority(statePostgresSchemaV38.postgres),
@@ -399,18 +399,65 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     {
       version: 39,
       fromSchema: statePostgresSchemaV38,
-      schema: statePostgresSchema,
+      schema: statePostgresSchemaV39,
       sql: `ALTER TABLE worker_environments ADD COLUMN retention_json text COLLATE "C";
         ${statePostgresVersionSql(39)}`,
+    },
+    {
+      version: 40,
+      fromSchema: statePostgresSchemaV39,
+      schema: statePostgresSchema,
+      sql: `ALTER TABLE workspace_setup_state ADD COLUMN IF NOT EXISTS bootstrap_deferred bigint;
+        ALTER TABLE worker_environments ADD COLUMN provision_source_json text COLLATE "C";
+        UPDATE worker_environments
+        SET provision_source_json = '{"kind":"unavailable"}'
+        WHERE (state IN ('requested', 'provisioning') AND lease_id IS NULL
+          OR state = 'bootstrapping' AND owner_epoch = 0)
+          AND provision_source_json IS NULL;
+        ${statePostgresVersionSql(40)}`,
     },
   ];
 }
 
-export const stateEngineSchema: StoreSchema = {
+export const stateEngineSchema: StoreSchema & {
+  postgres: string;
+  postgresFragments: PostgresSchemaFragment[];
+} = {
   id: "state",
   version: OPENCLAW_STATE_SCHEMA_VERSION,
   sqlite: "",
-  ...statePostgresSchema,
+  get postgres() {
+    const value = runtime.eagerSql;
+    Object.defineProperty(this, "postgres", {
+      value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    return value;
+  },
+  get postgresFragments() {
+    const value = runtime.fragments.map((fragment): PostgresSchemaFragment => {
+      const { activation } = fragment;
+      if (activation !== "first-use" && activation !== "version-additive") {
+        throw new Error(`Unknown PostgreSQL state fragment activation: ${activation}`);
+      }
+      return {
+        id: fragment.id,
+        tables: fragment.tables,
+        sql: fragment.sql,
+        dependencies: fragment.dependencies,
+        activation,
+      };
+    });
+    Object.defineProperty(this, "postgresFragments", {
+      value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    return value;
+  },
   get postgresMigrations() {
     // SQLite workers never need historical PostgreSQL schemas. Materialize once on first use.
     const value = createStatePostgresMigrations();

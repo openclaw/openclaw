@@ -5,7 +5,7 @@ import { createQueuedDiagnosticPhaseEmitter } from "../../infra/diagnostic-event
 import { recordDiagnosticsTimelineDuration } from "../../infra/diagnostics-timeline.js";
 import type { ProvisionCopyDetails } from "../../infra/fs-safe-copy-worker-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { LocalWorkspacePausePhase } from "../sandbox/local-workspace-quiescence.js";
+import type { LocalWorkspacePausePhase } from "../sandbox/types.js";
 
 type PreparationPhase =
   | `reuse.${LocalWorkspacePausePhase | "probeCanonical" | "probeProjection" | "capturePreparation"}`
@@ -75,6 +75,9 @@ type TemplateDetails = {
   requestedSourceCommit?: string;
   backend?: string;
   cloneBytes?: number;
+  nativeCloneCount?: number;
+  nativeCloneWriteBytes?: number;
+  nativeCloneUnmeasuredCount?: number;
   errorCode?: string;
 };
 type PreparationTimingState = {
@@ -126,6 +129,18 @@ export function setWorktreePreparationCopyDetails(details: ProvisionCopyDetails)
   const current = preparation.getStore();
   if (current) {
     current.copyDetails = details;
+  }
+}
+
+export function recordWorktreeNativeClone(writeBytes: number | undefined) {
+  const details = preparation.getStore()?.templateDetails;
+  if (details) {
+    details.nativeCloneCount = (details.nativeCloneCount ?? 0) + 1;
+    if (writeBytes === undefined) {
+      details.nativeCloneUnmeasuredCount = (details.nativeCloneUnmeasuredCount ?? 0) + 1;
+    } else {
+      details.nativeCloneWriteBytes = (details.nativeCloneWriteBytes ?? 0) + writeBytes;
+    }
   }
 }
 

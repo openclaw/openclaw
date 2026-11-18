@@ -67,7 +67,7 @@ import {
   readSessionManagerModelContextAsync,
 } from "./session-manager-incognito.js";
 import { receiveSessionManagerCommit } from "./session-manager-persistence-error.js";
-import { openSessionManagerBoundedView } from "./session-manager-reload.js";
+import * as reload from "./session-manager-reload.js";
 import type {
   SessionLeafControl,
   AppendPersistenceOptions,
@@ -97,8 +97,8 @@ export {
   buildSessionContext,
   getLatestCompactionEntry,
   migrateSessionEntries,
-  parseSessionEntries,
 } from "./session-manager-codec.js";
+export { parseSessionEntries } from "./session-manager-jsonl.js";
 export type {
   BranchSummaryEntry,
   CompactionEntry,
@@ -509,6 +509,10 @@ export class SessionManager extends SessionManagerBranching {
     };
   }
 
+  static [reload.adoptPreparedCompaction] = reload.createPreparedCompactionAdopter(
+    (...args) => new SessionManager(...args),
+  );
+
   /** @deprecated Await openAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   static open(
     target: SessionTranscriptRuntimeTarget,
@@ -570,7 +574,7 @@ export class SessionManager extends SessionManagerBranching {
       ...prepared: Parameters<SessionManagerTranscriptCohort["consume"]>
     ) => void,
   ): Promise<SessionManager> {
-    return openSessionManagerBoundedView(
+    return reload.openSessionManagerBoundedView(
       target,
       options,
       (cwd, captured, context, limits) => {
@@ -604,7 +608,7 @@ export class SessionManager extends SessionManagerBranching {
       signal?: AbortSignal;
     },
   ): Promise<SessionManager> {
-    return openSessionManagerBoundedView(
+    return reload.openSessionManagerBoundedView(
       target,
       options,
       (cwd, captured, context, limits) =>
@@ -669,11 +673,6 @@ export class SessionManager extends SessionManagerBranching {
     return readSessionManagerModelContextAsync(target, options, (context) =>
       SessionManager.fromSelectedEntries(context.events, options.cwd, context.version),
     );
-  }
-
-  /** The source snapshot's version, including writes beyond a selected admission prefix. */
-  getTranscriptSnapshotVersion(): Readonly<SessionTranscriptContextVersion> | undefined {
-    return this.transcriptVersion;
   }
 
   private static fromSelectedEntries(

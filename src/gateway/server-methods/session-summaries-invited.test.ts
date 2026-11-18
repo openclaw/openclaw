@@ -40,7 +40,6 @@ it.for(methods)("%s follows invited membership and drops a revoked source", asyn
               guest: {
                 agents: "*",
                 scopes: ["operator.read", "operator.write"],
-                // @ts-expect-error Runtime invitation policy precedes config enum activation in step 13.
                 sessions: { others: "invited" },
               },
             },

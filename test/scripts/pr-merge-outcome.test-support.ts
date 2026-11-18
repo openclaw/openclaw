@@ -627,7 +627,7 @@ else if(args[0]==="api"&&args.includes("repos/fixture/repo/pulls/123")) {
     merge_commit_sha:s.pr.mergeCommit?.oid??null,draft:s.pr.isDraft,stack:s.stack,
     auto_merge:s.pr.autoMergeRequest?{merge_method:s.pr.autoMergeRequest.mergeMethod.toLowerCase()}:null,
     head:{sha:s.pr.headRefOid,ref:s.pr.headRefName,repo:s.priorCi.enabled?{...s.repoAuthority,...s.priorCi.sourceRepository}:s.repoAuthority},base:{ref:s.pr.baseRefName,sha:main(),repo:s.repoAuthority},
-    user:{id:1001,login:s.pr.author.login,type:s.pr.author.__typename},created_at:"2026-09-20T00:00:00Z",
+    user:{id:1001,login:s.pr.author.login,type:s.pr.author.__typename},created_at:"2026-09-20T00:00:00Z",changed_files:securityFiles().length,
     mergeable:pendingDispatchProjection?null:s.pr.mergeable==="UNKNOWN"?null:s.pr.mergeable==="MERGEABLE",
     mergeable_state:pendingDispatchProjection?"unknown":s.pooledMergeBlocked&&!args.includes("--include")?"blocked":s.pr.mergeStateStatus.toLowerCase()};
   if(s.restMergeCommit==="missing") delete record.merge_commit_sha;
@@ -1009,10 +1009,12 @@ if [ "$FIXTURE_WORKFLOW_BINDING" = true ]; then
   if [ "\${14:-false}" = true ]; then
     PR_WORKFLOW_RECOVERY_OUTCOME="$2"
     PR_WORKFLOW_RECOVERY_HEAD="$3"
+    PR_WORKFLOW_RECOVERY_ACTION=merge
+    [ "$7" != true ] || PR_WORKFLOW_RECOVERY_ACTION=cancel-auto
     PR_WORKFLOW_ADMISSION=0
     selection_mode=workflow-recovery-select
     if [ -z "$2" ]; then PR_WORKFLOW_ADMISSION=1; selection_mode=workflow-admission-select; fi
-    binding=$(pr_batch_wrapper_git "$selection_mode" "$canonical_repo_root" 123 "$2" "$3")
+    binding=$(pr_batch_wrapper_git "$selection_mode" "$canonical_repo_root" 123 "$2" "$3" refs/remotes/origin/main "" "$PR_WORKFLOW_RECOVERY_ACTION")
     IFS=$'\\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION <<< "$binding"
     PR_WORKFLOW_BOOTSTRAP=0
     PR_WORKFLOW_TRUST_ANCHOR=refs/remotes/origin/main
@@ -1020,7 +1022,7 @@ if [ "$FIXTURE_WORKFLOW_BINDING" = true ]; then
     script_parent_dir="$FIXTURE_WORKFLOW_DIRECTORY/scripts"
     hold_pr_workflow_selection "$PR_WORKFLOW_SOURCE_REVISION" "$FIXTURE_WORKFLOW_DIRECTORY"
     [ -z "\${FIXTURE_WORKFLOW_AFTER_HOLD:-}" ] || source "$FIXTURE_WORKFLOW_AFTER_HOLD"
-    pr_batch_wrapper_git workflow-context-read "$canonical_repo_root" 123 "$$" "$PPID" "$2" "$3" "$PR_WORKFLOW_ADMISSION" >/dev/null
+    pr_batch_wrapper_git workflow-context-read "$canonical_repo_root" 123 "$$" "$PPID" "$2" "$3" "$PR_WORKFLOW_ADMISSION" "" "$PR_WORKFLOW_RECOVERY_ACTION" >/dev/null
     admit_pr_workflow_binding 123
     script_parent_dir="$original_scripts"
   fi

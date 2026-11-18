@@ -3,11 +3,9 @@ import { localeLowercasePreservingWhitespace } from "@openclaw/normalization-cor
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { capCompactionSummary } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+import type { Model } from "../../llm/types.js";
 import { extractKeywords, isQueryStopWordToken } from "../../memory-host-sdk/query.js";
-import type {
-  CompactionSummarizationInstructions,
-  summarizeCompactionHistory,
-} from "../compaction.js";
+import type { CompactionSummarizationInstructions } from "../compaction-summary.types.js";
 import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 
 const MAX_EXTRACTED_IDENTIFIERS = 12;
@@ -43,10 +41,7 @@ export function resolveQualityGuardMaxRetries(value: number | undefined): number
   );
 }
 
-export function resolveSummaryReserveTokens(
-  requestedReserveTokens: number,
-  model: NonNullable<Parameters<typeof summarizeCompactionHistory>[0]["model"]>,
-): number {
+export function resolveSummaryReserveTokens(requestedReserveTokens: number, model: Model): number {
   // Safeguard owns retained-summary policy, so its summary requests reserve at most 20k output
   // tokens; generic callers own their output budget.
   const requested = Math.max(1, Math.min(Math.floor(requestedReserveTokens), 20_000));

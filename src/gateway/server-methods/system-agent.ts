@@ -28,9 +28,13 @@ import {
   loadSystemAgentGreetingFacts,
   resolveSystemAgentGreeting,
 } from "../../system-agent/greeting.js";
-import { isSystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
+import {
+  isSystemAgentInferenceUnavailableError,
+  SystemAgentInferenceUnavailableError,
+} from "../../system-agent/inference-error.js";
 import { buildNewAgentWelcome } from "../../system-agent/new-agent-welcome.js";
 import { buildOnboardingWelcome } from "../../system-agent/onboarding-welcome.js";
+import { parseSystemAgentConfigCommand } from "../../system-agent/operations-parse.js";
 import {
   createSystemAgentTranscriptStore,
   readTranscriptTailAsync,
@@ -69,6 +73,7 @@ import {
 } from "./system-agent-execution.js";
 import { resolveSystemAgentSessionOwnerKey } from "./system-agent-session-owner.js";
 import { startSetupActivationWizard } from "./system-agent-setup-wizard.js";
+import { withSystemAgentTemplateRequests } from "./system-agent-templates.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
@@ -77,8 +82,8 @@ export type { SystemAgentChatSession };
 /**
  * `openclaw.chat` lets clients (macOS app onboarding, future UIs) run the
  * same conversational setup as `openclaw setup`. Structured setup owns
- * the pre-inference phase; a new chat session starts only after a live model
- * turn succeeds.
+ * the pre-inference phase. Exact config commands use the existing executor and
+ * approval owner without inference; conversational work still needs a live model.
  *
  * The bounded session map owns only in-flight wizard and approval state. The
  * sanitized conversation is a durable machine-wide logbook; `reset: true`
@@ -350,7 +355,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       }
     },
   ),
-  "openclaw.chat": async (options) => {
+  "openclaw.chat": withSystemAgentTemplateRequests(async (options) => {
     const { params: rawParams, respond, client, context } = options;
     const reject = (error: ReturnType<typeof errorShape>) => respond(false, undefined, error);
     const authority = readGatewayRequestMutationAuthority(options);
@@ -449,11 +454,15 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       if (!session) {
         const { verifySystemAgentInferenceWithFallback } =
           await import("../../system-agent/inference-fallback.js");
-        const inference = await verifySystemAgentInferenceWithFallback({
-          ...(params.delegation ? { requestingAgentId: params.delegation.agentId } : {}),
-          runtime: defaultRuntime,
-        });
-        if (!inference.ok) {
+        const verifyInference = () =>
+          verifySystemAgentInferenceWithFallback({
+            ...(params.delegation ? { requestingAgentId: params.delegation.agentId } : {}),
+            runtime: defaultRuntime,
+          });
+        const exactConfig =
+          params.message !== undefined && parseSystemAgentConfigCommand(params.message) !== null;
+        const inference = exactConfig ? undefined : await verifyInference();
+        if (inference && !inference.ok) {
           reject(
             errorShape(
               ErrorCodes.UNAVAILABLE,
@@ -471,11 +480,23 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             gatewayHostLifecycle: context.hostLifecycle,
             applyPluginRuntime: context.applyPluginLifecycleChange,
           },
-          verifiedInference: inference.binding,
+          ...(inference?.ok
+            ? { verifiedInference: inference.binding }
+            : {
+                prepareInference: async () => {
+                  const prepared = await verifyInference();
+                  if (!prepared.ok) {
+                    throw new SystemAgentInferenceUnavailableError("conversation", [
+                      prepared.error,
+                    ]);
+                  }
+                  return prepared.binding;
+                },
+              }),
           operatorApprovalOnly: params.delegation !== undefined,
           ...(params.delegation?.agentId ? { requesterAgentId: params.delegation.agentId } : {}),
         });
-        let persistWelcome = !welcomeOnly;
+        let persistWelcome = !exactConfig && !welcomeOnly;
         let welcome: string;
         let welcomeQuestion: SystemAgentChatQuestion | undefined;
         try {
@@ -487,7 +508,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             engine.seedHistory(turns.map(({ role, text }) => ({ role, text })));
           }
           const welcomeHistoryStart = engine.historyLength();
-          if (params.welcomeVariant === "onboarding") {
+          if (exactConfig) {
+            welcome =
+              "Ready for exact config commands. Natural-language setup requires working inference.";
+          } else if (params.welcomeVariant === "onboarding") {
             const onboardingWelcome = await buildOnboardingWelcome({
               engine,
               locale: client?.connect.locale,
@@ -533,7 +557,9 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           engine,
           welcome,
           optionalWelcome: params.welcomeVariant === undefined && !persistWelcome,
-          ...(params.welcomeVariant === "new-agent" ? { newAgentWelcome: welcome } : {}),
+          ...(!exactConfig && params.welcomeVariant === "new-agent"
+            ? { newAgentWelcome: welcome }
+            : {}),
           ...(welcomeQuestion ? { welcomeQuestion } : {}),
           ...(greetingAuditSequence !== undefined
             ? { welcomeAuditSequence: greetingAuditSequence }
@@ -675,5 +701,5 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       assertCurrent();
       respond(true, buildSystemAgentChatResult({ sessionId: params.sessionId, reply }), undefined);
     }
-  },
+  }),
 };

@@ -1,6 +1,7 @@
 ---
 summary: "Tool Search: compact large OpenClaw tool catalogs behind search, describe, and call"
 title: "Tool Search"
+doc-schema-version: 1
 read_when:
   - You want OpenClaw agents to use a large tool catalog without adding every tool schema to the prompt
   - You want OpenClaw tools, MCP tools, and client tools exposed through one compact runtime surface
@@ -51,6 +52,13 @@ the target tool executes.
 If a call mistakes an admitted skill name for a tool ID, the error points back
 to the skill’s complete instructions instead of sending the model through tool search.
 
+The optional [usage-ranked tool index](/concepts/experimental-features#usage-ranked-tool-index)
+can prioritize frequently and recently used tools in the embedded runtime’s
+deferred-schema directory and [MCP tool directory](#mcp-tool-directory). It is
+off by default and keeps the existing budgets, reserves room for newcomers, and
+freezes the selection preference for the prompt series. It does not rank search
+results, change permissions, or affect Codex-native surfaces.
+
 The deferred directory omits tools already exposed directly. They remain searchable,
 so discovery can still return their complete schemas without duplicating native guidance.
 
@@ -88,8 +96,9 @@ run:
 5. Apply optional include/exclude selectors to the eligible catalog. Keep
    unselected and excluded tools, core coding primitives, and direct-only tools
    model-visible; index compact descriptors for selected eligible tools.
-6. Add a size-limited capability directory selected by fixed rules and filtered by policy to the
-   cache-stable system-prompt prefix.
+6. Add a size-limited capability directory filtered by policy to the cache-stable
+   system-prompt prefix. Selection uses fixed rules unless the usage-ranked
+   tool index lab is enabled.
 7. In `tools` mode, add a bounded directory of the deferred MCP tools to the
    `tool_search` description.
 8. Expose the structured search, describe, and call tools or the compact
@@ -275,8 +284,18 @@ If even count lines do not fit, the remaining servers are counted in one
 final line. A server is never omitted silently, and a closing line points to
 `tool_search` whenever names are omitted.
 
+With the [usage-ranked tool index](/concepts/experimental-features#usage-ranked-tool-index)
+enabled and learned usage available, the same budget keeps descriptions for the
+highest-scored tools first when not every description fits. When names do not
+fit, the highest-scored names survive and the rest of each server becomes a
+count line such as `- github server: 38 more tools, names omitted`. Unscored
+names still favor smaller servers. Rows stay sorted by server and name, keep the
+same sanitization, and use exact catalog IDs. The ranking freezes with the prompt
+series, so these bytes change only at the boundaries the lab describes. With the
+lab off, the directory is unchanged.
+
 The directory is sorted by server and name, contains no timestamps or session
-identifiers, and is cached for each catalog snapshot. Its bytes change only
+identifiers, and is cached for each catalog snapshot and frozen ranking. Its bytes change only
 when the MCP tool inventory changes, such as when you add or remove a server or
 a server changes its tool list. The next request then misses the provider's
 cached tool and prompt prefix once. Without deferred MCP tools, the

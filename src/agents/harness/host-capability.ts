@@ -34,7 +34,6 @@ import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
 import { createCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
-import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { isToolExecutionAllowed } from "../tool-policy-shared.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import {
@@ -94,13 +93,10 @@ export function createAgentHarnessHostCapabilities(params: {
   requiredNodeCommands?: readonly string[];
   nativeModelPolicySupport?: "exact";
   toolCalls?: "deny";
-}): {
-  capabilities: AgentHarnessHostCapabilities;
-  close: () => void;
-  setInputAttachmentReadAllowed: (allowed: boolean) => void;
-  runWithScope: <T>(run: () => Promise<T>) => Promise<T>;
-} {
+}) {
   const attempt = params.attempt;
+  // Set by host policy preparation; a plugin cannot widen continuation lifetime through options.
+  let toolPolicyScope: "conversation" | "turn" | undefined;
   const prepareContinuationRetryCount = attempt.prepareContinuationRetryCount;
   const requestCustody = captureExecRequestCustody(attempt);
   // Capture authority by value before any plugin handoff can mutate the attempt.
@@ -285,12 +281,6 @@ export function createAgentHarnessHostCapabilities(params: {
           }),
         }
       : {}),
-    loopDetection: cloneSnapshot(
-      resolveToolLoopDetectionConfig({
-        cfg: config,
-        agentId: attempt.agentId,
-      }),
-    ),
     trigger: attempt.trigger,
     approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
     turnSourceChannel: attempt.messageChannel ?? attempt.messageProvider,
@@ -415,10 +405,13 @@ export function createAgentHarnessHostCapabilities(params: {
         ...effectiveOptions,
         // Availability belongs to this prepared host, not mutable plugin inputs.
         githubPublicationAvailable,
+        // Native harnesses own creation-time listings and have no embedded prompt pin.
+        githubPublicationConfigurationAware: undefined,
         // One host owns selection and launch. A plugin's mutable config or exec
         // overrides cannot replace the identity captured before its handoff.
         exec: { ...effectiveOptions.exec, preparedRunEnvironment },
         runtimePluginToolGrant,
+        toolPolicyScope,
         skillsSnapshot: options?.skillsSnapshot ?? skillsSnapshot,
         installedSkills: getInstalledSkills(
           effectiveOptions.sandbox,
@@ -690,7 +683,10 @@ export function createAgentHarnessHostCapabilities(params: {
   return {
     capabilities,
     setInputAttachmentReadAllowed: media.setInputAttachmentReadAllowed,
-    runWithScope: async (run) => {
+    setToolPolicyScope: (scope: "conversation" | "turn" | undefined) => {
+      toolPolicyScope = scope;
+    },
+    runWithScope: async <T>(run: () => Promise<T>) => {
       const preparedCaller = getGatewayToolCallerIdentity();
       if (preparedCaller?.operationalRunInstance === operationalRunInstance) {
         personalToolParticipants ??= preparedCaller.personalToolParticipants;

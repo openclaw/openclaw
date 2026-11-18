@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createCapturedPluginRegistration } from "../plugins/captured-registration.js";
+import { isPluginJsonValue } from "../plugins/host-hooks.js";
 import type {
   PluginCommandContext,
   OpenClawPluginCommandDefinition,
@@ -9,7 +10,11 @@ import type {
 import { startPluginServices } from "../plugins/services.test-support.js";
 import type { OpenClawPluginToolFactory } from "../plugins/tool-types.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { defineFeatureContract } from "./feature-contract.js";
+import {
+  createFeatureClient,
+  defineFeatureContract,
+  type FeatureOperation,
+} from "./feature-contract.js";
 import {
   defineFeaturePlugin,
   type DefineFeaturePluginOptions,
@@ -134,6 +139,77 @@ describe("typed feature plugins", () => {
       { source: "command", command: commandContext, api: captured.api },
     ]);
     expect(contexts[1]?.source === "tool" && contexts[1].tool).toBe(toolContext);
+  });
+
+  it("invokes large UI contracts while exposing only explicitly declared tools", async () => {
+    const operations = Object.fromEntries(
+      Array.from({ length: 80 }, (_, index) => [
+        `operation-${index}`,
+        {
+          ...baseOperation,
+          kind: index % 2 === 0 ? "query" : "action",
+          ...(index < 30 ? { tool: { name: `feature_tool_${index}` } } : {}),
+        } satisfies FeatureOperation,
+      ]),
+    );
+    const largeContract = defineFeatureContract({
+      pluginId: contract.pluginId,
+      operations,
+      events: {},
+    });
+    const { config, registry } = createPluginRegistryFixture();
+    const entry = defineFeaturePlugin({
+      ...definition,
+      contract: largeContract,
+      setup: () =>
+        Object.fromEntries(
+          Object.keys(operations).map((id) => [id, (input: { value: string }) => input]),
+        ),
+    });
+    registerVirtualTestPlugin({
+      registry,
+      config,
+      id: contract.pluginId,
+      name: definition.name,
+      register: entry.register,
+      contracts: { tools: Array.from({ length: 30 }, (_, index) => `feature_tool_${index}`) },
+    });
+    expect(registry.registry.sessionActions).toHaveLength(80);
+    expect(registry.registry.tools).toHaveLength(30);
+    expect(getToolPluginMetadata(entry)?.tools).toHaveLength(30);
+    const client = createFeatureClient(largeContract, {
+      pluginId: contract.pluginId,
+      signal: new AbortController().signal,
+      connection: { connected: true },
+      async request<T>(_method: string, params?: Record<string, unknown>): Promise<T> {
+        const action = expectDefined(
+          registry.registry.sessionActions.find(
+            (registered) => registered.action.id === params?.actionId,
+          )?.action,
+          "registered UI operation",
+        );
+        expect(action.requiredScopes).toEqual([
+          params?.actionId === "operation-78" ? "operator.read" : "operator.write",
+        ]);
+        const payload = params?.payload;
+        if (!isPluginJsonValue(payload)) {
+          throw new Error("Expected JSON feature input");
+        }
+        return (await action.handler({
+          pluginId: contract.pluginId,
+          actionId: String(params?.actionId),
+          payload,
+        })) as T;
+      },
+      onEvent: () => () => {},
+      subscribe: () => () => {},
+    });
+    await expect(client.invoke("operation-78", { value: "query" })).resolves.toEqual({
+      value: "query",
+    });
+    await expect(client.invoke("operation-79", { value: "action" })).resolves.toEqual({
+      value: "action",
+    });
   });
 
   it("rejects invalid inputs before execution and invalid outputs before returning success", async () => {

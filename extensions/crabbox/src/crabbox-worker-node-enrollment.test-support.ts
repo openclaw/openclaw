@@ -1,6 +1,5 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -288,19 +287,20 @@ export async function expectResumePublicationFailures({
     fs.unlinkSync(runtimeLink);
     fs.symlinkSync(savedRuntime, runtimeLink);
   }
-  const childExitFile = path.join(home, "resume-child-exited");
-  const childPidFile = path.join(home, "resume-child-pid");
   for (const failure of ["killed", "write-failed"]) {
+    const childExitFile = path.join(home, `resume-child-exited-${failure}`);
+    const childPidFile = path.join(home, `resume-child-pid-${failure}`);
     const preload = path.join(home, `resume-launch-loss-${failure}.cjs`);
-    fs.rmSync(childPidFile, { force: true });
-    fs.writeFileSync(childExitFile, "");
     fs.writeFileSync(
       preload,
       `
 const fs = require("node:fs");
 const write = fs.writeFileSync;
 if (process.argv.includes("--openclaw-node-host-resume-child")) {
-  process.on("exit", () => write(${JSON.stringify(childExitFile)}, String(process.pid)));
+  process.on("exit", () => {
+    write(${JSON.stringify(childExitFile + ".tmp")}, String(process.pid));
+    fs.renameSync(${JSON.stringify(childExitFile + ".tmp")}, ${JSON.stringify(childExitFile)});
+  });
 }
 fs.writeFileSync = (file, data, ...rest) => {
   if (typeof file === "string" && (file === ${JSON.stringify(pidFile)} || file.startsWith(${JSON.stringify(pidFile + ".")}))) {
@@ -313,8 +313,14 @@ fs.writeFileSync = (file, data, ...rest) => {
 };
 `,
     );
-    const watch = fs.watch(childExitFile);
-    const exited = once(watch, "change");
+    // A temporary-file change is not completion; only the published entry contains the whole PID.
+    const exited = Promise.withResolvers<void>();
+    const watch = fs.watch(home, (_event, filename) => {
+      if (filename === path.basename(childExitFile)) {
+        exited.resolve();
+      }
+    });
+    watch.once("error", exited.reject);
     let interruptedPid: number | undefined;
     try {
       const result = resume({ NODE_OPTIONS: `--require=${preload}` });
@@ -322,7 +328,7 @@ fs.writeFileSync = (file, data, ...rest) => {
       interruptedPid = Number(readText(childPidFile));
       const outcome = await withinTest(
         Promise.race([
-          exited.then(() => "stopped"),
+          exited.promise.then(() => "stopped"),
           receipts.waitFor(stateDir, `launched:${interruptedPid}:ready`).then(() => "escaped"),
         ]),
         signal,

@@ -1,2 +1,0 @@
-# Canonical snapshot digest schema preserves inert prototype-like plugin identifiers and rejects malformed maps.
-23

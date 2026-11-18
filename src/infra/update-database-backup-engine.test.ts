@@ -69,6 +69,55 @@ async function fixture() {
   };
 }
 
+it("reads stopped backup inventory from its captured image without another snapshot", async () => {
+  const f = await fixture();
+  const backup = await f.capture({ stopped: true });
+  expect(f.generationImages).not.toHaveBeenCalled();
+  expect(backup.databases).toHaveLength(1);
+  using db = new DatabaseSync(backup.databases[0]!.snapshotPath, { readOnly: true });
+  expect(db.prepare("SELECT value FROM payload").get()?.value).toBe("retained");
+});
+
+it.each(["valid", "invalid", "reader"] as const)(
+  "captures committed WAL rows without weakening verification (%s)",
+  async (condition) => {
+    const f = await fixture();
+    const source = path.join(f.root, "wal-source.sqlite");
+    const agent = path.join(f.root, "agent.sqlite");
+    {
+      using db = new DatabaseSync(source);
+      db.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; PRAGMA foreign_keys=OFF;");
+      db.exec(
+        "CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE payload(value TEXT, parent_id INTEGER REFERENCES parent(id));",
+      );
+      db.prepare("INSERT INTO payload VALUES ('committed in WAL', ?)").run(
+        condition === "invalid" ? 1 : null,
+      );
+      for (const suffix of ["", "-wal", "-shm"]) {
+        fs.copyFileSync(source + suffix, agent + suffix);
+      }
+    }
+    expect(fs.statSync(`${agent}-wal`).size).toBeGreaterThan(0);
+    using reader = condition === "reader" ? new DatabaseSync(agent, { readOnly: true }) : undefined;
+    reader?.exec("BEGIN; SELECT * FROM payload;");
+    const capture = f.capture({ stopped: true, additionalPaths: [agent] });
+    if (condition === "invalid") {
+      await expect(capture).rejects.toThrow(/foreign_key_check/);
+      return;
+    }
+    const backup = await capture;
+    if (!reader) {
+      expect(f.generationImages).not.toHaveBeenCalled();
+    }
+    const captured = backup.databases.find((entry) => entry.path === agent)!;
+    using db = new DatabaseSync(captured.snapshotPath, { readOnly: true });
+    expect(db.prepare("SELECT value FROM payload").get()?.value).toBe("committed in WAL");
+    if (!reader) {
+      expect(fs.statSync(`${agent}-wal`, { throwIfNoEntry: false })?.size ?? 0).toBe(0);
+    }
+  },
+);
+
 it.each(["auto", "off"] as const)(
   "does not recapture verified generation bytes with native copying %s",
   async (mode) => {

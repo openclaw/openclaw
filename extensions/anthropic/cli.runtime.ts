@@ -14,6 +14,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasClaudeRawToolInvocation } from "./cli-output.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { prepareClaudeCliTransportArgs } from "./cli-runtime-args.js";
+import * as promptHooks from "./cli-runtime-prompt-context.js";
 import { createClaudeTurnStatus } from "./cli-runtime-status.js";
 import * as tasks from "./cli-runtime-tasks.js";
 import { createClaudeCliTransport } from "./cli-transport.js";
@@ -116,7 +117,7 @@ function privateInputHolds(turn: ClaudeCliTurn): boolean {
 
 function carriesTurnContext(request: Record<string, unknown>, response: unknown): boolean {
   return (
-    request.callback_id === "UserPromptSubmit" &&
+    promptHooks.promptContextHookSlot(request.callback_id) >= 0 &&
     isRecord(response) &&
     isRecord(response.hookSpecificOutput) &&
     response.hookSpecificOutput.additionalContext !== undefined
@@ -196,15 +197,14 @@ async function handleRequest(
   }
   const input = request.input;
   const turn = activeTurn(session);
-  if (request.callback_id === "UserPromptSubmit" && input.hook_event_name === "UserPromptSubmit") {
+  const slot = promptHooks.promptContextHookSlot(request.callback_id);
+  if (slot >= 0 && input.hook_event_name === "UserPromptSubmit") {
     if (!turn || signal.aborted) {
       return {};
     }
     turn.promptSubmitted = true;
     const promptContext = resolvePromptContext(turn, input.prompt);
-    const additionalContext = [promptContext?.prependContext, promptContext?.appendContext]
-      .filter(Boolean)
-      .join("\n\n");
+    const additionalContext = promptHooks.promptContextHookValue(promptContext, slot);
     // Native can rewrite the prompt and rerun hooks; only its final pass is persisted.
     return additionalContext
       ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext } }
@@ -653,12 +653,14 @@ export async function* executeClaudeCli(
           secretInput,
           currentContext: () => session.currentTurn?.context,
           initialize: {
-            appendSystemPrompt: context.systemPrompt,
+            // Replace Claude Code's default prompt rather than appending to it, so the
+            // agent does not run under Claude Code's identity and coding-CLI guidance.
+            systemPrompt: context.systemPrompt,
             // Native snapshots must not override the host's refreshed prompt on resume.
             systemPromptSnapshot: false,
             excludeDynamicSections,
             hooks: {
-              UserPromptSubmit: [{ hookCallbackIds: ["UserPromptSubmit"] }],
+              UserPromptSubmit: [{ hookCallbackIds: promptHooks.PROMPT_CONTEXT_HOOK_IDS }],
               PreToolUse: [{ hookCallbackIds: ["PreToolUse"] }],
             },
           },
@@ -724,7 +726,7 @@ export async function* executeClaudeCli(
             throw new Error("The Claude CLI turn is no longer active.");
           }
           turn.interrupted = true;
-          // The host requests this only after consuming a successful yield tool result.
+          // The host requests this only after a consumed yield or final source-reply result.
           // Native interrupt would persist a false user stop in the resumable transcript.
           turn.sawTerminalResult = true;
           // Native output owns the session ID; the input ID may still name a fork's parent.

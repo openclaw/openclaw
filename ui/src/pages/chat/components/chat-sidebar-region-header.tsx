@@ -651,7 +651,6 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
               <button
                 type="button"
                 class="oc-icon-button oc-icon-button--28 rail-header__action tabstrip-new"
-                title={t("browser.newTab")}
                 aria-label={t("browser.newTab")}
                 disabled={closing()}
                 onClick={() => props.callbacks?.newTab?.open()}
@@ -670,7 +669,6 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
               <button
                 type="button"
                 class="oc-icon-button oc-icon-button--28 rail-header__action tabstrip-new"
-                title={t("browser.newTab")}
                 aria-label={t("browser.newTab")}
                 onClick={() => props.onOpenMobileLauncher?.()}
               >

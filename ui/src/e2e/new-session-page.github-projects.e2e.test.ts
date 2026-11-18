@@ -33,7 +33,6 @@ const localRepository = {
 async function selectRemoteProject(page: Page, query: string, name: RegExp) {
   await page.locator("#new-session-project-trigger").click();
   const picker = page.locator(".oc-popover.new-session-page__project-popover");
-  await picker.locator(".header-search__toggle").click();
   await picker.getByRole("searchbox", { name: "Search projects or paste a Git URL" }).fill(query);
   await picker.getByRole("button", { name }).click();
 }
@@ -167,7 +166,6 @@ suite.define(() => {
       const project = page.locator("#new-session-project-trigger");
       await project.click();
       const picker = page.locator(".oc-popover.new-session-page__project-popover");
-      await picker.locator(".header-search__toggle").click();
       await picker
         .getByRole("searchbox", { name: "Search projects or paste a Git URL" })
         .fill(cloneUrl);
@@ -342,7 +340,6 @@ suite.define(() => {
       const trigger = page.locator("#new-session-project-trigger");
       const place = page.locator(".oc-popover.new-session-page__project-popover");
       await trigger.click();
-      await place.locator(".header-search__toggle").click();
       const search = place.getByRole("searchbox", {
         name: "Search projects or paste a Git URL",
       });
@@ -352,7 +349,7 @@ suite.define(() => {
       expect(searchRequest.params).toEqual({ query: "openclaw" });
       await place
         .getByText(
-          "No GitHub account is configured for the Control UI or Gateway. Only public GitHub results are shown.",
+          "No GitHub account is configured for the web app or Gateway. Only public GitHub results are shown.",
         )
         .waitFor();
       await place.getByRole("button", { name: /openclaw\/openclaw/u }).click();
@@ -372,7 +369,7 @@ suite.define(() => {
         await checkoutTrigger.click();
         await page
           .locator(".oc-popover.new-session-page__checkout-popover")
-          .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
+          .getByRole("button", { name: "New worktree", exact: true })
           .click();
         await pollAttribute(checkoutTrigger, "data-worktree").toBe("true");
         if (missingCheckout) {
@@ -434,7 +431,7 @@ suite.define(() => {
 
       await gateway.resolveDeferred("chat.startup");
       const working = page.locator('.chat-working-indicator[role="status"]');
-      await pollLocatorText(working).toContain("Preparing workspace…");
+      await pollLocatorText(working).toContain("Preparing workspace");
       await pollCount(page.locator(".chat-group.user")).toBe(1);
       await pollLocatorText(page.locator(".chat-group.user")).toContain(message);
       expect(await page.locator(".chat-notice").count()).toBe(0);
@@ -444,9 +441,9 @@ suite.define(() => {
       if (worktree) {
         let seq = 1;
         for (const [phase, label] of [
-          ["naming_worktree", "Naming worktree…"],
-          ["creating_worktree", "Creating worktree…"],
-          ["running_setup", "Running setup…"],
+          ["naming_worktree", "Naming worktree"],
+          ["creating_worktree", "Creating worktree"],
+          ["running_setup", "Running setup"],
         ] as const) {
           await gateway.emitGatewayEvent("chat", {
             runId,

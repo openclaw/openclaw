@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
+import { fork, type ChildProcess } from "node:child_process";
 // Keep network/package-manager admission outside this database recovery regression.
 import "./update-command-execution.test-support.js";
-import { fork, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -13,6 +13,7 @@ import { createConfigIO } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as serviceMembership from "../../daemon/service-process-membership.js";
 import { buildBackupArchivePath } from "../../infra/backup-archive-path-policy.js";
+import * as gitReleasePaths from "../../infra/git-release-paths.js";
 import { capturePackageActivationRuntime } from "../../infra/package-update-activation-paths.js";
 import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
@@ -47,7 +48,8 @@ import {
   prepareRollbackRuntime,
   readDatabase,
   readVersion,
-  resolveRollbackWorkerInputs,
+  buildRollbackPackageSource,
+  failActivatedBootAfterWrite,
 } from "./update-command-database-rollback.test-support.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 
@@ -132,9 +134,10 @@ const readiness = await import("./update-command-readiness.js");
 const { runUpdateFinalizationDoctorInFreshProcess } =
   await import("./update-command-fresh-doctor.js");
 const { withOwnedManagedUpdateEnv } = await import("./update-command-service-env.js");
-const { gatewayLockUrl, databaseGenerationsUrl, sourceLoader } = resolveRollbackWorkerInputs();
 
 beforeEach(() => {
+  // These cases cover the in-place Git runner Windows checkouts and package-to-Git switches use.
+  vi.spyOn(gitReleasePaths, "usesGitReleases").mockReturnValue(false);
   vi.spyOn(stateMetadata, "readUpdateStateDatabaseSizes").mockImplementation((files, { signal }) =>
     stateMetadata.readUpdateStateDatabaseSizesInProcess(files, signal),
   );
@@ -189,6 +192,8 @@ it.each([
   "git",
   "git-edited",
   "verification",
+  "newer-schema",
+  "activated-boot",
   "convergence",
   "started",
   "unsettled",
@@ -203,7 +208,9 @@ it.each([
   "restores pre-migration databases only before settled activation: %s",
   async (scenario) => {
     const independentPlugin = scenario.startsWith("independent-");
-    const sharedVersion = independentPlugin ? OPENCLAW_STATE_SCHEMA_VERSION : 15;
+    // newer-schema: Doctor commits a schema this (previous) build cannot open, then fails.
+    const newerSchema = scenario === "newer-schema";
+    const sharedVersion = independentPlugin || newerSchema ? OPENCLAW_STATE_SCHEMA_VERSION : 15;
     const gitInstall = scenario === "git" || scenario === "git-edited";
     const outsideWrite = [
       "git-edited",
@@ -215,11 +222,25 @@ it.each([
     const candidateSchemas =
       scenario === "schema-neutral-write"
         ? { state: 15, agent: 21 }
-        : { state: independentPlugin ? OPENCLAW_STATE_SCHEMA_VERSION : 18, agent: 23 };
+        : {
+            state: newerSchema
+              ? OPENCLAW_STATE_SCHEMA_VERSION + 1
+              : independentPlugin
+                ? OPENCLAW_STATE_SCHEMA_VERSION
+                : 18,
+            agent: 23,
+          };
     const migratedVersions = [candidateSchemas.state, candidateSchemas.agent];
-    const initialFailure = !["convergence", "started", "unsettled"].includes(scenario);
+    // The activated release boots after a successful Doctor, writes state, then fails.
+    const activatedBoot = scenario === "activated-boot";
+    const doctorSucceeds = scenario === "verification" || activatedBoot;
+    const initialFailure = !["convergence", "started", "unsettled", "activated-boot"].includes(
+      scenario,
+    );
     const restores =
-      scenario !== "serving" && !outsideWrite && (initialFailure || scenario === "convergence");
+      scenario !== "serving" &&
+      !outsideWrite &&
+      (initialFailure || scenario === "convergence" || activatedBoot);
     const base = await fs.realpath(dirs.make("update-database-rollback-"));
     // Candidate code moves between stage/live; its qualified test dependencies
     // stay in their common ancestor, outside each retained package identity.
@@ -287,81 +308,18 @@ it.each([
     const doctorEvidence = path.join(base, "doctor-observed.json");
     const initialDoctor = path.join(base, "initial-doctor.json");
     // Model package IPC with real fingerprints and physical maintenance custody.
-    const source = `
-    import assert from 'node:assert/strict';
-    import fs from 'node:fs';
-    import http from 'node:http';
-    import { DatabaseSync } from 'node:sqlite';
-    import { isDeepStrictEqual } from 'node:util';
-    const files = ${JSON.stringify([shared, agent])};
-    const manifest=JSON.parse(fs.readFileSync(new URL('../package.json',import.meta.url),'utf8'));
-    const acquireCustody = async (role, port) => {
-      ${sourceLoader}
-      const {acquireGatewayLock}=await import(${JSON.stringify(gatewayLockUrl.href)});
-      const owner=await acquireGatewayLock({env:process.env,role,port,allowInTests:true,timeoutMs:0});
-      assert(owner);
-      return owner;
-    };
-    const read = file => {
-      const db = new DatabaseSync(file, {readOnly:true});
-      try { return { version:db.prepare('PRAGMA user_version').get().user_version, rows:db.prepare('SELECT rowid,value FROM payload ORDER BY rowid').all() }; }
-      finally { db.close(); }
-    };
-    if (process.argv[2] === '--check') {
-      process.stdout.write(JSON.stringify({...manifest.openclaw.schemaVersions,doctorConfigWrites:'pid-start-v1'}));
-    } else if (process.argv[2] === '--doctor') {
-      assert.equal(process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION,'0');
-      const input=JSON.parse(fs.readFileSync(0,'utf8'));
-      assert(input.executor && input.runId && input.root);
-      assert.equal(fs.realpathSync(input.root),fs.realpathSync(new URL('../',import.meta.url)));
-      ${sourceLoader}
-      const {readUpdatePhysicalDatabaseGenerations}=await import(${JSON.stringify(databaseGenerationsUrl.href)});
-      const custody=await acquireCustody('sqlite-maintenance');
-      try {
-        const expected=input.databaseGenerations;
-        const fromGenerations=expected && await readUpdatePhysicalDatabaseGenerations(Object.keys(expected));
-        const unchanged=expected && isDeepStrictEqual(fromGenerations,expected);
-        let result;
-        if (${!initialFailure} && !fs.existsSync(${JSON.stringify(initialDoctor)})) {
-          fs.writeFileSync(${JSON.stringify(initialDoctor)},'completed without migration');
-          result={status:'ok'};
-        } else {
-          for (const [index,file] of files.entries()) {
-            const db = new DatabaseSync(file);
-            try { db.exec("BEGIN; ALTER TABLE payload ADD COLUMN migrated TEXT; UPDATE payload SET value='candidate' WHERE rowid IN (7,42); PRAGMA user_version=" + ${JSON.stringify(migratedVersions)}[index] + ';');
-              if(index===0) db.prepare("UPDATE schema_meta SET schema_version=? WHERE meta_key='primary'").run(${JSON.stringify(migratedVersions)}[index]);
-              db.exec('COMMIT;'); }
-            finally { db.close(); }
-          }
-          if (${scenario !== "schema-neutral-write"}) {
-            fs.mkdirSync(${JSON.stringify(path.dirname(missing))},{recursive:true});
-            const created = new DatabaseSync(${JSON.stringify(missing)});
-            created.exec('PRAGMA user_version=23'); created.close();
-          }
-          fs.writeFileSync(${JSON.stringify(doctorEvidence)},JSON.stringify(files.map(read)));
-          result=${JSON.stringify(scenario === "verification" ? { status: "ok" } : { status: "error", maintenanceRefusal: { kind: "data-at-risk", reason: "incomplete-migration" } })};
-          process.exitCode=${scenario === "verification" ? 0 : 1};
-        }
-        if(expected) result.databaseWrites={unchanged,fromGenerations,generations:await readUpdatePhysicalDatabaseGenerations(Object.keys(expected))};
-        fs.writeFileSync(process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH,JSON.stringify(result));
-      } finally {
-        await custody.release();
-      }
-    } else {
-      const {version}=manifest;
-      assert(version==='1.0.0'||${preservesMigrated},'only the compatible candidate may serve preserved writes');
-      const custody=await acquireCustody('gateway',Number(process.argv[3]));
-      assert.deepEqual(files.map(file=>read(file).version),version==='1.0.0'?${JSON.stringify([sharedVersion, 21])}:${JSON.stringify(migratedVersions)},'runtime must match the retained state');
-      const server=http.createServer((request,response)=>{
-        if(request.url==='/commit') for(const file of files) {const db=new DatabaseSync(file);db.exec("INSERT INTO payload(rowid,value) VALUES(99,'after-capture')");db.close();}
-        response.setHeader('content-type','application/json');response.end(JSON.stringify({version,databases:files.map(read)}));
-      });
-      server.listen(Number(process.argv[3]),'127.0.0.1',()=>process.send(server.address().port));
-      const shutdown=()=>server.close(async()=>{await custody.release();process.exit(0);});
-      process.on('SIGTERM',shutdown);
-      process.on('disconnect',shutdown);
-    }
-  `;
+    const source = buildRollbackPackageSource({
+      files,
+      firstDoctorSkipsMigration: !initialFailure && !activatedBoot,
+      initialDoctor,
+      migratedVersions,
+      createsMissing: scenario !== "schema-neutral-write",
+      missing,
+      doctorEvidence,
+      doctorSucceeds,
+      preservesMigrated,
+      sharedVersion,
+    });
     for (const [root, version, versions] of [
       [packageRoot, "1.0.0", { state: sharedVersion, agent: 21 }],
       [swapFixture.params.stage.packageRoot, "2.0.0", candidateSchemas],
@@ -491,6 +449,12 @@ it.each([
       return response.json();
     };
     const servedBefore = await readServing();
+    if (activatedBoot) {
+      // Nothing serves the state, so the update boots the activated release itself.
+      assert(service);
+      await stopChildProcess(service, 5_000);
+      service = undefined;
+    }
     const context = {
       env: serviceEnv,
       readEnv: serviceEnv,
@@ -505,16 +469,16 @@ it.each([
       executor.assertCurrent();
       return true;
     });
-    mocks.validateCanary.mockResolvedValue({
+    mocks.checkCandidate.mockResolvedValue({
       status: "ok",
-      phase: "readiness",
       steps: [],
-      durationMs: 0,
-      logTail: [],
       candidateSchemaVersions: candidateSchemas,
       doctorConfigWrites: true,
     });
     vi.spyOn(readiness, "verifyPreviousGatewayForUpdate").mockImplementation(async () => {
+      if (activatedBoot) {
+        return true;
+      }
       expect(await readServing()).toEqual(servedBefore);
       return true;
     });
@@ -639,7 +603,13 @@ it.each([
         }),
       );
     const unsettled = new CommandProcessCleanupError();
+    mocks.activatedCheck.mockImplementation(async ({ result }) =>
+      activatedBoot ? failActivatedBootAfterWrite(result, files, packageRoot) : result,
+    );
     convergence.mockImplementation(async (params) => {
+      if (activatedBoot) {
+        throw new Error("A failed activated boot must not reach convergence");
+      }
       if (scenario === "started") {
         return { resultWithPostUpdate: params.result, postUpdateConfigSnapshot: configSnapshot };
       }
@@ -729,7 +699,7 @@ it.each([
                 packageUpdateNodeRunner: "node",
                 packageActivationRuntime: capturePackageActivationRuntime("node", process.execPath),
               }),
-              shouldRestart: scenario !== "serving",
+              shouldRestart: scenario !== "serving" && !activatedBoot,
             };
             const execution = await executeMutableUpdate(await bindExecutionGuards(params));
             assert(execution);
@@ -761,9 +731,11 @@ it.each([
               ? "state-migrated-no-rollback"
               : scenario === "verification"
                 ? "runtime-verification-failed"
-                : initialFailure
-                  ? "doctor-failed"
-                  : undefined;
+                : activatedBoot
+                  ? "activated-gateway-startup-failed"
+                  : initialFailure
+                    ? "doctor-failed"
+                    : undefined;
             expect(execution.result.reason, JSON.stringify(execution.result.steps)).toBe(
               expectedReason,
             );
@@ -893,7 +865,7 @@ it.each([
               JSON.parse(await fs.readFile(doctorEvidence, "utf8")).map(
                 (entry: { version: number }) => entry.version,
               ),
-            ).toEqual([18, 23]);
+            ).toEqual(migratedVersions);
             if (scenario === "config-refused") {
               assert(finishFailure instanceof UpdateCommandFailure);
               expect(finishFailure.result.reason).toBe("state-migrated-no-rollback");
@@ -908,7 +880,7 @@ it.each([
               expect(readState()).toEqual(before);
               expect(
                 files.map((file) => readDatabase(`${file}.migrated-${run.runId}`).version),
-              ).toEqual([18, 23]);
+              ).toEqual(migratedVersions);
               expect(
                 JSON.parse(await fs.readFile(serviceEnv.OPENCLAW_CONFIG_PATH!, "utf8")),
               ).toEqual({
@@ -935,7 +907,7 @@ it.each([
               }
               expect(starts).toEqual(["1.0.0"]);
               for (const [file, version] of [
-                [shared, 18],
+                [shared, migratedVersions[0]],
                 [agent, 23],
               ] as const) {
                 expect(readDatabase(file).version).toBe(version);
@@ -958,9 +930,21 @@ it.each([
                 steps: execution.result.steps,
               }),
             ).toBeInstanceOf(UpdateCommandFailure);
-            expect(restart).toHaveBeenCalledOnce();
-            expect(observedStart).toHaveBeenCalledOnce();
-            expect(starts).toEqual(["1.0.0", "1.0.0"]);
+            if (activatedBoot) {
+              // The Gateway was stopped before the update and stays stopped on the restored release.
+              expect(execution.result.steps).toEqual(
+                expect.arrayContaining([
+                  expect.objectContaining({ name: "activated-gateway-startup", exitCode: 1 }),
+                  expect.objectContaining({ name: "database rollback", exitCode: 0 }),
+                ]),
+              );
+              expect(restart).not.toHaveBeenCalled();
+              expect(starts).toEqual(["1.0.0"]);
+            } else {
+              expect(restart).toHaveBeenCalledOnce();
+              expect(observedStart).toHaveBeenCalledOnce();
+              expect(starts).toEqual(["1.0.0", "1.0.0"]);
+            }
             expect(
               loadPluginCohortRecovery(run.runId, { env: serviceEnv, allowNativeRead: true }),
             ).toBeUndefined();
@@ -970,10 +954,25 @@ it.each([
             }
             verifySettledHistory = () => {
               const record = getUpdateRun(run.runId, { env });
-              expect(record).toMatchObject({
-                status: "rolled-back",
-                verification: { serviceRunning: true, runningVersion: "1.0.0", versionMatch: true },
-              });
+              expect(record).toMatchObject(
+                activatedBoot
+                  ? {
+                      // No Gateway was running to verify; the restored package is recorded.
+                      status: "failed",
+                      verification: {
+                        recovery: { packageRollbackVerified: true },
+                        rollbackOutcome: { status: "succeeded" },
+                      },
+                    }
+                  : {
+                      status: "rolled-back",
+                      verification: {
+                        serviceRunning: true,
+                        runningVersion: "1.0.0",
+                        versionMatch: true,
+                      },
+                    },
+              );
               assert(record);
               const report = renderUpdateRunReport(record).lines.join("\n");
               expect(report).toContain("Databases snapshotted at");
@@ -985,7 +984,11 @@ it.each([
                 readOnly: true,
               });
               expect(readSqliteUserVersion(retained)).toBe(
-                entry.path === shared ? 18 : entry.path === agent ? 23 : entry.userVersion,
+                entry.path === shared
+                  ? migratedVersions[0]
+                  : entry.path === agent
+                    ? 23
+                    : entry.userVersion,
               );
             }
           });

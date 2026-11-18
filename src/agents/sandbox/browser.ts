@@ -21,6 +21,7 @@ import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { defaultRuntime } from "../../runtime.js";
 import { monotonicNow } from "../../shared/monotonic-time.js";
 import { sleep } from "../../utils/sleep.js";
+import type { WorkspaceStateGuard } from "../workspace-state-store.worker-contract.js";
 import {
   BROWSER_BRIDGES,
   stopCachedBrowserBridge,
@@ -149,7 +150,11 @@ async function ensureSandboxBrowserImage(image: string) {
 
 async function ensureDockerNetwork(
   network: string,
-  opts?: { allowContainerNamespaceJoin?: boolean; assertCurrent?: () => void },
+  opts?: {
+    allowContainerNamespaceJoin?: boolean;
+    assertCurrent?: () => void;
+    prepareCurrent?: () => Promise<void>;
+  },
 ) {
   validateNetworkMode(network, {
     allowContainerNamespaceJoin: opts?.allowContainerNamespaceJoin === true,
@@ -164,12 +169,16 @@ async function ensureDockerNetwork(
       return;
     }
     opts?.assertCurrent?.();
-    await execDocker(["network", "create", "--driver", "bridge", network]);
+    await execDocker(["network", "create", "--driver", "bridge", network], {
+      assertCurrent: opts?.assertCurrent,
+      prepareCurrent: opts?.prepareCurrent,
+    });
   });
 }
 
 type EnsureSandboxBrowserParams = {
   assertCurrent?: () => void;
+  guard?: WorkspaceStateGuard;
   scopeKey: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
@@ -232,6 +241,11 @@ async function ensureSandboxBrowserContainer(
   params: EnsureSandboxBrowserParams,
   containerName: string,
 ): Promise<SandboxBrowserContext> {
+  const engine = { ...DOCKER_SANDBOX_ENGINE, stateGuard: params.guard };
+  const commandGuard = {
+    assertCurrent: params.assertCurrent,
+    prepareCurrent: params.guard?.prepareHost,
+  };
   let existing = BROWSER_BRIDGES.get(params.scopeKey);
   const state = await dockerContainerState(containerName);
   params.assertCurrent?.();
@@ -242,7 +256,7 @@ async function ensureSandboxBrowserContainer(
     browser: { ...params.cfg.browser, image: browserImage },
   });
   const mountPlan = await prepareSandboxMountPlan({
-    engine: DOCKER_SANDBOX_ENGINE,
+    engine,
     workspaceDir: params.workspaceDir,
     ...(params.withWorkspace ? { workspaceSource: "managed-worktree" as const } : {}),
     assertCurrent: params.assertCurrent,
@@ -287,7 +301,10 @@ async function ensureSandboxBrowserContainer(
     await stopCachedBrowserBridgesForContainer(containerName, params.assertCurrent);
     existing = BROWSER_BRIDGES.get(params.scopeKey);
     params.assertCurrent?.();
-    await execDocker(["rm", "-f", containerName], { allowFailure: true });
+    await execDocker(["rm", "-f", containerName], {
+      allowFailure: true,
+      ...commandGuard,
+    });
     hasContainer = false;
     running = false;
   };
@@ -324,7 +341,7 @@ async function ensureSandboxBrowserContainer(
         running && (typeof lastUsedAtMs !== "number" || now - lastUsedAtMs < HOT_BROWSER_WINDOW_MS);
       if (isHot) {
         const mounts = await compareSandboxMountPlan({
-          engine: DOCKER_SANDBOX_ENGINE,
+          engine,
           containerName,
           plan: mountPlan,
         });
@@ -355,7 +372,11 @@ async function ensureSandboxBrowserContainer(
     // Reserve the mount before allocation; a bridge/port failure must not hide
     // an already-running writer from reconciliation or lifecycle cleanup.
     params.assertCurrent?.();
-    await updateBrowserRegistry({ ...registryEntry, cdpPort: 0 }, params.assertCurrent);
+    await updateBrowserRegistry(
+      { ...registryEntry, cdpPort: 0 },
+      params.assertCurrent,
+      params.guard,
+    );
     params.assertCurrent?.();
   }
 
@@ -366,6 +387,7 @@ async function ensureSandboxBrowserContainer(
     cdpAuthToken = crypto.randomBytes(24).toString("hex");
     await ensureDockerNetwork(browserDockerCfg.network, {
       assertCurrent: params.assertCurrent,
+      prepareCurrent: params.guard?.prepareHost,
       allowContainerNamespaceJoin: browserDockerCfg.dangerouslyAllowContainerNamespaceJoin === true,
     });
     await ensureSandboxBrowserImage(browserImage);
@@ -413,12 +435,12 @@ async function ensureSandboxBrowserContainer(
     await withContainerEnvFile(env, async (envFile) => {
       args.push("--env-file", envFile, browserImage);
       params.assertCurrent?.();
-      await execDocker(args, { assertCurrent: params.assertCurrent });
+      await execDocker(args, commandGuard);
     });
   }
   if (!hasContainer || !running) {
     params.assertCurrent?.();
-    await execDocker(["start", containerName], { assertCurrent: params.assertCurrent });
+    await execDocker(["start", containerName], commandGuard);
   }
 
   const mappedCdp = await readDockerPort(containerName, params.cfg.browser.cdpPort);
@@ -481,7 +503,7 @@ async function ensureSandboxBrowserContainer(
         params.assertCurrent?.();
         if (currentState.exists && !currentState.running) {
           params.assertCurrent?.();
-          await execDocker(["start", containerName], { assertCurrent: params.assertCurrent });
+          await execDocker(["start", containerName], commandGuard);
         }
         const ok = await waitForSandboxCdp({
           cdpPort: mappedCdp,
@@ -490,7 +512,10 @@ async function ensureSandboxBrowserContainer(
         });
         params.assertCurrent?.();
         if (!ok) {
-          await execDocker(["rm", "-f", containerName], { allowFailure: true });
+          await execDocker(["rm", "-f", containerName], {
+            allowFailure: true,
+            ...commandGuard,
+          });
           throw new Error(
             `Sandbox browser CDP did not become reachable on 127.0.0.1:${mappedCdp} within ${params.cfg.browser.autoStartTimeoutMs}ms. The hung container has been forcefully removed.`,
           );
@@ -544,6 +569,8 @@ async function ensureSandboxBrowserContainer(
         },
         ssrfPolicy,
       };
+      await params.guard?.prepareHost?.();
+      params.assertCurrent?.();
       bridge = await startBrowserBridgeServer({
         resolved,
         authToken: desiredAuthToken,
@@ -568,6 +595,7 @@ async function ensureSandboxBrowserContainer(
         noVncPort: mappedNoVnc ?? undefined,
       },
       params.assertCurrent,
+      params.guard,
     );
     params.assertCurrent?.();
 

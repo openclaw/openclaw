@@ -48,6 +48,7 @@ import { bindTalkRealtimeRelayAgentConsult } from "./agent-consult.js";
 import {
   createIdleRelayProvider,
   createRelayAgentConfig,
+  createRelayEventRecorder,
   ensureActiveRelayTurnId,
   makeRelayTransport,
   observeRelayTranscriptFailures,
@@ -491,37 +492,19 @@ describe("talk realtime gateway relay", () => {
     },
   );
 
-  function createRelayEventRecorder() {
-    const events: Array<{
-      event: string;
-      payload: unknown;
-      connIds: string[];
-      opts?: { dropIfSlow?: boolean };
-    }> = [];
-    const context = {
-      broadcastToConnIds: (
-        event: string,
-        payload: unknown,
-        connIds: ReadonlySet<string>,
-        opts?: { dropIfSlow?: boolean },
-      ) => events.push({ event, payload, connIds: [...connIds], opts }),
-    } as never;
-    return { events, context };
-  }
-
   async function createEventRelay(
     bridge: RealtimeVoiceBridge = makeRelayTransport(),
     options: Omit<Parameters<typeof createRelay>[0], "provider" | "context"> = {},
   ) {
     const captured = captureProvider(() => bridge);
-    const { events, context } = createRelayEventRecorder();
+    const { events, context, closed } = createRelayEventRecorder();
     const session = await createRelay({
       context,
       provider: captured.provider,
       ...options,
     });
     await Promise.resolve();
-    return { session, captured, events, bridge };
+    return { session, captured, events, bridge, closed };
   }
 
   async function createMockRelay(
@@ -758,7 +741,7 @@ describe("talk realtime gateway relay", () => {
         { sessionId: "relay-voice-overflow-session", updatedAt: Date.now() },
       );
       const bridge = makeRelayTransport();
-      const { session, captured, events } = await createEventRelay(bridge);
+      const { session, captured, events, closed } = await createEventRelay(bridge);
       const relay = relaySessions.get(session.relaySessionId);
       if (!relay) {
         throw new Error("expected active relay");
@@ -770,15 +753,15 @@ describe("talk realtime gateway relay", () => {
       }
 
       const errorPayloads = eventPayloads(events, "error");
-      const closePayloads = eventPayloads(events, "close");
       expect(errorPayloads).toMatchObject([
         { message: expect.stringContaining("persistence could not keep up") },
       ]);
       expect(errorPayloads[0]).not.toHaveProperty("code");
-      expect(closePayloads).toMatchObject([{ reason: "error" }]);
       expect(bridge.close).toHaveBeenCalledOnce();
       expect(relaySessions.has(session.relaySessionId)).toBe(false);
       expect(drainingRelaySessions.has(relay)).toBe(true);
+      await closed;
+      expect(eventPayloads(events, "close")).toMatchObject([{ reason: "error" }]);
 
       const createAnother = () =>
         createRelay({
@@ -791,7 +774,7 @@ describe("talk realtime gateway relay", () => {
       );
 
       releaseQueue();
-      await relay.voiceSessionClose;
+      await expectDefined(relay.closing, "relay close").completion;
       expect(drainingRelaySessions.has(relay)).toBe(false);
       expect(voiceRecord(session)?.status).toBe("closed");
     } finally {
@@ -1414,7 +1397,7 @@ describe("talk realtime gateway relay", () => {
     void submitResult(session, "call-1", { ok: true });
     acknowledgeTalkRealtimeRelayMark({ ...relayTarget(session), markName: "mark-1" });
     void cancelTurn(session, ensureActiveRelayTurnId(session.relaySessionId), "barge-in");
-    void stopRelay(relayTarget(session));
+    const stopped = stopRelay(relayTarget(session));
     expect(bridge.sendAudio).toHaveBeenCalledWith(Buffer.from("audio-in"));
     expect(bridge.setMediaTimestamp).toHaveBeenCalledWith(123);
     expect(bridge.acknowledgeMark).toHaveBeenCalledWith("mark-1");
@@ -1429,6 +1412,7 @@ describe("talk realtime gateway relay", () => {
     expect(event("clear")).toMatchObject({
       talkEvent: { type: "turn.cancelled", payload: { reason: "barge-in" }, final: true },
     });
+    await stopped;
     expect(event("close")).toMatchObject({
       reason: "completed",
       talkEvent: { type: "session.closed", final: true },
@@ -1486,6 +1470,7 @@ describe("talk realtime gateway relay", () => {
       };
       const { events, context } = createRelayEventRecorder();
       const session = await createRelay({ context, provider, providerConfig: { model }, model });
+      const retainedSession = relaySessions.get(session.relaySessionId);
       if (failure === "connect") {
         await Promise.resolve();
       } else {
@@ -1520,6 +1505,8 @@ describe("talk realtime gateway relay", () => {
         });
       }
       if (failure === "close-before-ready") {
+        expect(relaySessions.has(session.relaySessionId)).toBe(false);
+        await expectDefined(retainedSession?.closing, "relay close").completion;
         expect(findEventPayload(events, "close").reason).toBe("error");
       }
       if (failure === "error-before-close") {
@@ -2979,7 +2966,6 @@ describe("talk realtime gateway relay", () => {
     expect(toolCallEventCount()).toBe(MAX_RELAY_TOOL_CALL_IDENTITIES);
     expect(submitToolResult).not.toHaveBeenCalled();
     expect(mockEventPayloads(broadcastToConnIds, "error")).toHaveLength(1);
-    expect(mockEventPayloads(broadcastToConnIds, "close")).toHaveLength(1);
 
     toolCall(captured.request, "item-late", "call-late", "lookup");
     expect(close).toHaveBeenCalledOnce();
@@ -2987,6 +2973,8 @@ describe("talk realtime gateway relay", () => {
     expect(retainedSession?.toolCalls.has("call-late")).toBe(false);
     expect(toolCallEventCount()).toBe(MAX_RELAY_TOOL_CALL_IDENTITIES);
     expect(submitToolResult).not.toHaveBeenCalled();
+    await expectDefined(retainedSession?.closing, "relay close").completion;
+    expect(mockEventPayloads(broadcastToConnIds, "close")).toHaveLength(1);
   });
 
   it("does not emit continuity events after tool-call overflow closes the relay", async () => {
@@ -3006,6 +2994,9 @@ describe("talk realtime gateway relay", () => {
 
     resetContinuity(captured.request);
 
+    expect(close).toHaveBeenCalledOnce();
+    expect(relaySessions.has(session.relaySessionId)).toBe(false);
+    await expectDefined(retainedSession?.closing, "relay close").completion;
     const terminalTypes = broadcastToConnIds.mock.calls
       .map(([, payload]) =>
         typeof payload === "object" && payload !== null
@@ -3014,8 +3005,6 @@ describe("talk realtime gateway relay", () => {
       )
       .filter((type) => type === "error" || type === "close" || type === "clear");
     expect(terminalTypes).toEqual(["error", "close"]);
-    expect(close).toHaveBeenCalledOnce();
-    expect(relaySessions.has(session.relaySessionId)).toBe(false);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

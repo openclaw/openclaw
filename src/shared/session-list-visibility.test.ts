@@ -57,6 +57,23 @@ describe("session display visibility", () => {
         false,
       ],
       [{ key: "agent:main:main", classification: "main" }, false],
+      [
+        {
+          key: "agent:main:dashboard:incognito-random",
+          createdSurface: "github-publication",
+          label: "Renamed task",
+        },
+        true,
+      ],
+      [
+        {
+          key: "agent:main:dashboard:github-00000000-0000-8000-8000-000000000001",
+          classification: "github-publication",
+          createdVia: "spawn",
+          createdActor: { type: "human" },
+        },
+        true,
+      ],
     ];
     for (const [row, expected] of cases) {
       expect(isSystemCreatedSessionRow(row), row.key).toBe(expected);

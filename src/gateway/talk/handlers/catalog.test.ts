@@ -111,7 +111,8 @@ describe("talk.catalog handler", () => {
 
     expectRespondError(respond, {
       code: ErrorCodes.INVALID_REQUEST,
-      message: expect.stringContaining("Talk session ownership has no explicit owner"),
+      message:
+        "Multiple agents are configured, but Talk session ownership has no explicit owner. Set talk.agentId to the agent that owns unscoped Talk sessions.",
     });
     expect(mocks.canonicalizeSpeechProviderId).not.toHaveBeenCalled();
     expect(mocks.listRealtimeTranscriptionProviders).not.toHaveBeenCalled();
