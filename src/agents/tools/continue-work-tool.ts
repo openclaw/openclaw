@@ -40,6 +40,10 @@ export function createContinueWorkTool(opts: ContinueWorkToolOpts): AnyAgentTool
   return {
     label: "Continuation",
     name: "continue_work",
+    // Turn-lifecycle choice, like sessions_yield: the model must know it can arm
+    // its own next turn without discovering the tool first, so Tool Search and
+    // Code Mode never catalog it. Availability stays with the continuation gates.
+    catalogMode: "direct-only",
     description: [
       "Need to come back and do a specific next step after this reply? Call continue_work now to arrange your own next turn in this same session; you do not need another message from the user.",
       "For example, after starting an external build, schedule a turn to inspect its final receipt. Put the action you will take in reason, not just 'check later'; the turn starts after this one ends, or delaySeconds later.",

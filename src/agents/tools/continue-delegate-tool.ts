@@ -260,6 +260,9 @@ export function createContinueDelegateTool(opts: {
   return {
     label: "Continuation",
     name: "continue_delegate",
+    // Turn-lifecycle choice, like continue_work and sessions_yield: kept direct so
+    // Tool Search and Code Mode never hide it behind a catalog.
+    catalogMode: "direct-only",
     description: [
       "Have a bounded, independent piece of work that can run while you do something else, or after this reply? Call continue_delegate now; the gateway starts it after this response, after delaySeconds, or at compaction, without another user message.",
       'Need to act on its result? Choose mode="silent-wake": the delegate works separately, then its completion wakes a new turn for you to verify the result and take the next step. Call it several times to parallelize independent pieces while this session stays free.',
