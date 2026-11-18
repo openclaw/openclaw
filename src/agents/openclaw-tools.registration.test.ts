@@ -216,6 +216,7 @@ describe("openclaw-tools progress_card gating", () => {
   it("keeps message tool in embedded message-tool-only completions", () => {
     setEmbeddedMode(true);
     const tools = createTestOpenClawTools({
+      agentChannel: "webchat",
       disablePluginTools: true,
       wrapBeforeToolCallHook: false,
       sourceReplyDeliveryMode: "message_tool_only",
@@ -290,16 +291,19 @@ describe("openclaw-tools progress_card gating", () => {
   it("keeps explicitly allowed message tool in embedded completions", () => {
     setEmbeddedMode(true);
     const fromRuntimeAllowlist = createTestOpenClawTools({
+      agentChannel: "webchat",
       disablePluginTools: true,
       pluginToolAllowlist: ["message"],
       wrapBeforeToolCallHook: false,
     });
     const fromGlobalAlsoAllow = createTestOpenClawTools({
       config: { tools: { profile: "minimal", alsoAllow: ["message"] } } as OpenClawConfig,
+      agentChannel: "webchat",
       disablePluginTools: true,
       wrapBeforeToolCallHook: false,
     });
     const denied = createTestOpenClawTools({
+      agentChannel: "webchat",
       disablePluginTools: true,
       pluginToolAllowlist: ["message"],
       pluginToolDenylist: ["message"],

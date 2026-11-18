@@ -220,7 +220,7 @@ function awaitsStoppedPauseRetirement(entry: SubagentRunRecord): boolean {
 }
 
 /** One in-flight evaluation per owed continuation; members of one cohort share it. */
-export function requesterSettleWakeScope(entry: SubagentRunRecord): string {
+function requesterSettleWakeScope(entry: SubagentRunRecord): string {
   const wake = entry.requesterSettleWake;
   const owner = `${entry.requesterStorePath ?? ""}\0${entry.requesterAgentId ?? ""}\0${entry.requesterSessionKey}`;
   if (entry.pauseReason === "sessions_yield" && wake?.pauseNotice) {

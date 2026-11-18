@@ -2,7 +2,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PluginLogger } from "./types.js";
 
 /** One metric family a plugin declares up front; label names cannot change later. */
-export type PluginMetricFamilyDeclaration =
+type PluginMetricFamilyDeclaration =
   | { name: string; type: "counter" | "gauge"; help: string; labels?: readonly string[] }
   | {
       name: string;
@@ -13,10 +13,10 @@ export type PluginMetricFamilyDeclaration =
       buckets: readonly number[];
     };
 
-export type PluginMetricLabels = Readonly<Record<string, string>>;
+type PluginMetricLabels = Readonly<Record<string, string>>;
 
 /** Recorders for the families from one `register()` call. */
-export type PluginMetrics = {
+type PluginMetrics = {
   counter: (name: string) => { inc: (labels?: PluginMetricLabels, amount?: number) => void };
   gauge: (name: string) => { set: (labels: PluginMetricLabels, value: number) => void };
   histogram: (name: string) => { observe: (labels: PluginMetricLabels, value: number) => void };
@@ -29,7 +29,7 @@ export type PluginMetricsApi = {
 };
 
 /** Host-admitted family as exporters see it. */
-export type PluginMetricFamily = Readonly<{
+type PluginMetricFamily = Readonly<{
   /** Full exported name, including the host-owned plugin prefix. */
   name: string;
   type: "counter" | "gauge" | "histogram";

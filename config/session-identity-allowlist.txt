@@ -472,7 +472,7 @@ src/agents/subagents/registry/subagent-registry-lifecycle-finalize-cleanup.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle-persistence.ts	3
 src/agents/subagents/registry/subagent-registry-lifecycle-wake.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle.ts	5
-src/agents/subagents/registry/subagent-registry-memory.ts	16
+src/agents/subagents/registry/subagent-registry-memory.ts	13
 src/agents/subagents/registry/subagent-registry-persistence.ts	2
 src/agents/subagents/registry/subagent-registry-public-api.ts	3
 src/agents/subagents/registry/subagent-registry-queries.ts	4

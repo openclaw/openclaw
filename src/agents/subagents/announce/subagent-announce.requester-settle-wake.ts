@@ -1,7 +1,6 @@
 import { withGoalContinuationSettlement } from "../../../auto-reply/reply/goal-continuation-return.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
-import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import { getSharedGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   retireSessionControllerInput,
@@ -265,26 +264,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   }
   const waitForDescendants = (facts: NonNullable<typeof initialDescendants>) =>
     !pauseNotice && waitForRequesterDescendants(facts, frozen, params.onDescendantsPending);
-  const isStoreCurrent = () =>
-    settledBatch.every((entry) =>
-      isSystemEventStoreCurrent(requesterSessionKey, entry.requesterStorePath, requesterAgentId),
-    );
-  const retireReplacedStore = async (): Promise<boolean> => {
-    if (isStoreCurrent()) {
-      return false;
-    }
-    await completeBatch(settledBatch, selectedState, {
-      delivered: false,
-      path: "none",
-      error: "store replaced",
-      storeReplaced: true,
-      disposition: "intentional_non_delivery",
-    });
-    return true;
-  };
-  if (await retireReplacedStore()) {
-    return false;
-  }
   const followup = pauseNotice ? undefined : getFollowupForCohort(settledBatch);
   const getRequesterRun = () =>
     followup
@@ -373,9 +352,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     const preparedFindings = pauseNotice
       ? { text: pauseNotice.acknowledgment, isCurrent: () => true }
       : await readChildCompletionFindings(completionRows.filter(needsRequesterSettleFindings));
-    if (await retireReplacedStore()) {
-      return false;
-    }
     // Recheck owned descendants after loading findings and before dispatch.
     const currentDescendants = await readRequesterDescendants();
     if (
@@ -401,11 +377,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     const directIdempotencyKey = identity.runId;
     const sourceReceiptAdmission = createRequesterSettleReceiptAdmission({
       requester,
-      storeSessionKey: requesterSessionKey,
-      storeAgentId: requesterAgentId,
-      storePaths: () => settledBatch.map((entry) => entry.requesterStorePath),
       readCurrent: requesterCurrent.readCurrent,
-      isStoreCurrent,
     });
     const isRequesterCurrent = () => {
       if (!sourceReceiptAdmission.isRequesterCurrent()) {
@@ -433,7 +405,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     const isSourceSessionEffectsAllowed = () =>
       !params.signal?.aborted &&
       params.isSourceCurrent() &&
-      sourceReceiptAdmission.isStoreCurrent() &&
       preparedFindings.isCurrent() &&
       !isGatewayClosed() &&
       areCompletionRowsCurrent() &&
@@ -512,8 +483,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
         params.signal?.aborted ||
         isAgentRunRestartAbortReason(controllerInput?.abortSignal.reason) ||
         isGatewayClosed() ||
-        !isBatchCurrent() ||
-        (await retireReplacedStore())
+        !isBatchCurrent()
       ) {
         return true;
       }

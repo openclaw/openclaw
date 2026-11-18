@@ -669,10 +669,11 @@ review_guard() {
     },
   );
 
-  itPosix("keeps the admitted workflow after a failed command and main advances", () => {
+  itPosix("keeps the admitted workflow across main advances with collection deferred", () => {
     const fixture = workflowFixture();
     const { source, reviewPath } = fixture;
-    const first = fixture.run("1");
+    const env = { ...fixture.env, OPENCLAW_PR_DEFER_CACHE_COLLECTION: "1" };
+    const first = fixture.run("1", env);
     expect(first.status, first.stderr).toBe(1);
     expect(first.stdout).toContain(`admitted workflow ${source}`);
     const ref = "refs/openclaw/pr-workflow-bindings/123";
@@ -683,7 +684,7 @@ review_guard() {
     );
     fixture.commit(["scripts/pr-lib/review.sh"], true);
 
-    const resumed = fixture.run();
+    const resumed = fixture.run("0", env);
     expect(resumed.status, resumed.stderr).toBe(0);
     expect(resumed.stdout).toContain(`admitted workflow ${source}`);
     expect(resumed.stdout).not.toContain("new workflow");
@@ -714,7 +715,7 @@ esac
 exit "$status"
 `,
     );
-    const raced = fixture.run();
+    const raced = fixture.run("0", env);
     expect(raced.status, raced.stderr).toBe(1);
     expect(raced.stderr).toContain("Workflow selection changed across handoff");
     expect(raced.stdout).not.toContain("admitted workflow");
