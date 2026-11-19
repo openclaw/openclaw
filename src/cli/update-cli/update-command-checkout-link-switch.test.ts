@@ -61,6 +61,7 @@ const inspect = (overrides: Partial<Parameters<typeof inspectCheckoutLinkPackage
     installTarget: pnpmTarget(),
     serviceRunsCheckout: true,
     targetSpec: `openclaw@${TARGET}`,
+    targetSchemaVersions: CURRENT_SCHEMA_VERSIONS,
     storedChannel: "beta",
     requestedChannel: "beta",
     ...overrides,
@@ -139,6 +140,24 @@ it("names Bun's installer and a channel change when the stored channel differs",
   expect(refusal?.message).toContain(
     "run `openclaw config set update.channel beta`, then `openclaw update`.",
   );
+});
+
+it("names no manual install for a package older than the checkout's databases", async () => {
+  await fs.writeFile(
+    path.join(checkout, "package.json"),
+    JSON.stringify({
+      name: "openclaw",
+      version: "2026.11.5",
+      openclaw: { schemaVersions: CURRENT_SCHEMA_VERSIONS },
+    }),
+  );
+  const older = { state: CURRENT_SCHEMA_VERSIONS.state - 1, agent: CURRENT_SCHEMA_VERSIONS.agent };
+  const refusal = await inspect({ targetSchemaVersions: older });
+  // A manual install would bypass the updater's schema guard and strand the Gateway.
+  expect(refusal?.recoverySteps).toEqual([]);
+  expect(refusal?.message).toContain(`supports database schemas up to state ${older.state}`);
+  expect(refusal?.message).not.toContain("pnpm add -g");
+  expect(refusal?.message).toContain("run `openclaw update`.");
 });
 
 it.each([
