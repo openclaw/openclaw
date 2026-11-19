@@ -24,6 +24,16 @@ import type { OpenClawConfig } from "./types.js";
 
 afterEach(() => resetConfigRuntimeState());
 
+it("follows the live owner captured before delayed reader construction", () => {
+  const initial: OpenClawConfig = { gateway: { port: 19001 } };
+  setSnapshot(initial);
+  const captured = capture(initial);
+  const replacement: OpenClawConfig = { gateway: { port: 19002 } };
+  setSnapshot(replacement);
+  expect(createReader(captured)()).toBe(replacement);
+  expect(captured).toEqual(initial);
+});
+
 const tokenPath = "gateway.auth.token";
 const tokenRef = new Map([[tokenPath, "GATEWAY_TOKEN"]]);
 

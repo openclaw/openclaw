@@ -1,10 +1,12 @@
 import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { cloneConfigWithResolutionFacts, getConfigResolutionFacts } from "./resolution-facts.js";
+import { runtimeConfigPublication } from "./runtime-config-publication.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 type RuntimeConfigCapture = Readonly<{
   source: OpenClawConfig;
   origin: OpenClawConfig;
+  runtimeOwned: boolean;
 }>;
 
 const captures = new WeakMap<OpenClawConfig, RuntimeConfigCapture>();
@@ -40,11 +42,16 @@ export function getPublishedRuntimeConfigSource(
 export function captureRuntimeConfigWithSource(
   config: OpenClawConfig,
   source: OpenClawConfig,
+  runtimeOwned = config === runtimeConfigPublication.current?.config,
 ): OpenClawConfig {
   // Only a source-free immutable input has no mutable publication context to capture.
   const reusable = config === source && isDeeplyFrozenPlainData(config);
   const previous = reusable ? immutableCaptures.get(config) : undefined;
-  if (previous && getConfigResolutionFacts(previous) === getConfigResolutionFacts(config)) {
+  if (
+    previous &&
+    getConfigResolutionFacts(previous) === getConfigResolutionFacts(config) &&
+    getRuntimeConfigCapture(previous)?.runtimeOwned === runtimeOwned
+  ) {
     return previous;
   }
   const clone = (value: OpenClawConfig) =>
@@ -54,11 +61,13 @@ export function captureRuntimeConfigWithSource(
   captures.set(captured, {
     source: capturedSource,
     origin: config,
+    runtimeOwned,
   });
   if (capturedSource !== captured) {
     captures.set(capturedSource, {
       source: capturedSource,
       origin: source,
+      runtimeOwned: source === runtimeConfigPublication.current?.config,
     });
   }
   if (reusable) {

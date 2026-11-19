@@ -240,7 +240,7 @@ function publishRuntimeConfigSnapshot(
   // SDK setters also accept opaque values; only proven plain revisions capture eagerly.
   const captured =
     configFact.value && sourceFact.value
-      ? captureRuntimeConfigWithSource(config, sourceConfig ?? config)
+      ? captureRuntimeConfigWithSource(config, sourceConfig ?? config, true)
       : null;
   prepareRuntimePluginsConfig(config);
   clearExecutablePathCache();
@@ -462,8 +462,10 @@ export function selectLiveRuntimeConfig(inputConfig?: OpenClawConfig): OpenClawC
 
 /** Bind a retained consumer to its current runtime owner while preserving scoped configs. */
 export function createRuntimeConfigReader(inputConfig: OpenClawConfig): () => OpenClawConfig {
-  const origin = getRuntimeConfigCapture(inputConfig)?.origin ?? inputConfig;
+  const captured = getRuntimeConfigCapture(inputConfig);
+  const origin = captured?.origin ?? inputConfig;
   const followsRuntimeConfig =
+    captured?.runtimeOwned === true ||
     runtimeConfigSnapshot === origin ||
     (runtimeConfigSourceSnapshot !== null &&
       configSnapshotsMatch(inputConfig, runtimeConfigSourceSnapshot)) ||
