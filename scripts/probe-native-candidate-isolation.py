@@ -12,11 +12,12 @@ import threading
 
 
 def child(uid, profile, root, allowed, denied, parent):
-    os.setgroups([])
+    # Darwin requires a primary group entry; retain only the isolated, nontrusted GID.
+    os.setgroups([uid])
     os.setgid(uid)
     os.setuid(uid)
     assert os.getuid() == os.geteuid() == uid
-    assert os.getgid() == os.getegid() == uid and not os.getgroups()
+    assert os.getgid() == os.getegid() == uid and os.getgroups() == [uid]
     os.chdir(root + "/candidate")
     # Establish the canary after sudo filtering, immediately before the allowlisted exec.
     os.environ["ISOLATION_SECRET_CANARY"] = "must-not-cross"
@@ -121,7 +122,7 @@ def main():
         if result.returncode:
             raise RuntimeError('Sandbox launch failed: ' + result.stderr)
         facts = json.loads(result.stdout)
-        assert facts['uid'] == uid and facts['groups'] == [], facts
+        assert facts['uid'] == uid and facts['groups'] == [uid], facts
         for key in ('qualification_read', 'qualification_write', 'actions_read', 'actions_write',
                     'parent_signal', 'unrelated_local_service'):
             assert facts[key] == 'denied', facts
