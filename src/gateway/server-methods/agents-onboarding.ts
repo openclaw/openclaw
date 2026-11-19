@@ -49,9 +49,6 @@ import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.j
 import { createSystemAgentGatewayRuntime } from "./system-agent-execution.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-/** The hidden Template setup turn only; later turns keep the session's own level. */
-const TEMPLATE_SETUP_THINKING_LEVEL = "low";
-
 function creationLocale({ params, client }: GatewayRequestHandlerOptions) {
   return resolveNavigatorLocale(
     typeof params.locale === "string" ? params.locale : (client?.connect.locale ?? ""),
@@ -405,8 +402,6 @@ export async function startAgentOnboardingConversation(
                   ].join("\n\n"),
             idempotencyKey: runId,
             deliver: false,
-            // Setup is a scripted checklist: the greeting should not wait on extended reasoning.
-            ...(setup ? { thinking: TEMPLATE_SETUP_THINKING_LEVEL } : {}),
             suppressCommandInterpretation: true,
             systemInputProvenance: {
               kind: "internal_system",
