@@ -434,7 +434,10 @@ async function resumeRestartStore(
             const skip = restartResumeSkipReason(
               sessionKey,
               selected,
-              child !== null && hasSubagentRunEnded(child) && !isYieldedSubagentRun(child),
+              child !== null &&
+                child.runId === selected.lifecycleRunId &&
+                hasSubagentRunEnded(child) &&
+                !isYieldedSubagentRun(child),
             );
             const sameRun = selected.lifecycleRunId === snapshotEntry.lifecycleRunId;
             const resolved = resolveStartupRestartMarker(selected, sameRun, {
@@ -494,9 +497,7 @@ async function resumeRestartStore(
         let admissionStage = "principal";
         if (skip) {
           summary.record(agentId, sessionKey, skip);
-          log.warn(
-            `Skipped restart resume for ${sessionKey}: session is archived or has another execution owner`,
-          );
+          log.warn(`Skipped restart resume for ${sessionKey}: ${skip}`);
           continue;
         }
         if (parked === "waiting") {
