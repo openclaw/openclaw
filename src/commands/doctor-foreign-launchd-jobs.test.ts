@@ -108,6 +108,47 @@ describe("Doctor foreign launchd jobs", () => {
     expect(mocks.repair).not.toHaveBeenCalled();
   });
 
+  it("recommends --fix only when this invocation can repair", async () => {
+    await run({});
+
+    const report = String(mocks.note.mock.calls[0]?.[0] ?? "");
+    expect(report).toContain("openclaw doctor --fix");
+  });
+
+  it.each([
+    {
+      reason: "non-default install identity",
+      env: {},
+      defaultIdentity: false,
+      expected: "not the default install identity",
+    },
+    {
+      reason: "external service policy",
+      env: { OPENCLAW_SERVICE_REPAIR_POLICY: "external" },
+      expected: "managed externally",
+    },
+    {
+      reason: "active update",
+      env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+      expected: "update is in progress",
+    },
+    {
+      reason: "another supervisor",
+      env: {},
+      manageService: false,
+      expected: "Another supervisor owns",
+    },
+  ])("does not suggest --fix when $reason", async (testCase) => {
+    mocks.defaultIdentity.mockReturnValue(testCase.defaultIdentity ?? true);
+    mocks.manageService.mockResolvedValue(testCase.manageService ?? true);
+
+    await run({}, testCase.env);
+
+    const report = String(mocks.note.mock.calls[0]?.[0] ?? "");
+    expect(report).toContain(testCase.expected);
+    expect(report).not.toContain("openclaw doctor --fix");
+  });
+
   it.each([
     { reason: "external service policy", env: { OPENCLAW_SERVICE_REPAIR_POLICY: "external" } },
     { reason: "active update", env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" } },

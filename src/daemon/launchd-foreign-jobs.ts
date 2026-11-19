@@ -345,14 +345,21 @@ export async function findForeignLaunchdJobs(
   return jobs;
 }
 
-export function formatForeignLaunchdJobs(jobs: ForeignLaunchdJob[]): string {
+export function formatForeignLaunchdJobs(
+  jobs: ForeignLaunchdJob[],
+  options: { repairAvailable?: boolean } = {},
+): string {
+  // Only claim a `--fix` removal when the reporting invocation may actually
+  // repair; otherwise point at manual or owner-side removal.
+  const removableHint =
+    options.repairAvailable === false
+      ? "  Not removable by this invocation; remove it manually or from the owning install."
+      : "  Removable with openclaw doctor --fix.";
   return jobs
     .map((job) =>
       [
         terminalText`${job.label}: program=${job.program}, keepalive=${job.keepAlive}, Gateway lifecycle=${job.gatewayActions.join("|") || "not verified"}`,
-        job.safeToRemove
-          ? "  Removable with openclaw doctor --fix."
-          : "  Report only; left unchanged.",
+        job.safeToRemove ? removableHint : "  Report only; left unchanged.",
         ...(job.diagnostic ? [terminalText`  ${job.diagnostic}`] : []),
       ].join("\n"),
     )
