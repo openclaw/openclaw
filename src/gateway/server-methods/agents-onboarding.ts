@@ -374,7 +374,6 @@ export async function startAgentOnboardingConversation(
         }
       })
     : undefined;
-  using _modelRequestWatch = { [Symbol.dispose]: () => stopModelRequestWatch?.() };
   try {
     await runOutsideAsyncWorkScope(() =>
       handleTrustedInternalChatSend(
@@ -454,6 +453,8 @@ export async function startAgentOnboardingConversation(
     options.context.logGateway.warn(
       `could not start onboarding for agent ${agentId}: ${formatErrorMessage(error)}`,
     );
+  } finally {
+    stopModelRequestWatch?.();
   }
 }
 
