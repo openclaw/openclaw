@@ -142,9 +142,14 @@ export function buildStatusCommandOverviewRows(params: {
     params.summary.queuedSystemEvents.length > 0
       ? `${params.summary.queuedSystemEvents.length} queued`
       : "none";
+  const startupPhase = params.surface.gatewayProbe?.startupPhase;
+  const startupDeferredValue =
+    params.opts.deep && startupPhase
+      ? theme.muted(`not checked (gateway still starting; phase ${startupPhase})`)
+      : undefined;
   const probesValue = params.health
     ? theme.success("enabled")
-    : theme.muted("skipped (use --deep)");
+    : (startupDeferredValue ?? theme.muted("skipped (use --deep)"));
   const heartbeatParts = params.summary.heartbeat.agents.map((agent) => {
     if (!agent.enabled) {
       return `disabled (${agent.agentId})`;
@@ -159,10 +164,8 @@ export function buildStatusCommandOverviewRows(params: {
   if (!params.opts.deep) {
     // Fast status omits the row entirely instead of implying heartbeat is missing.
     lastHeartbeatValue = null;
-  } else if (params.surface.gatewayProbe?.startupPhase) {
-    lastHeartbeatValue = theme.muted(
-      `not checked (gateway still starting; phase ${params.surface.gatewayProbe.startupPhase})`,
-    );
+  } else if (startupDeferredValue) {
+    lastHeartbeatValue = startupDeferredValue;
   } else if (!params.surface.gatewayReachable) {
     lastHeartbeatValue = theme.warn("unavailable");
   } else if (!params.lastHeartbeat) {
