@@ -7,6 +7,7 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { readActiveTranscriptEntryAnchor, replaceSessionEntry } from "./session-accessor.js";
 import { readTranscriptExportSnapshotReadOnlySync } from "./session-accessor.sqlite-export-read.js";
+import { TRANSCRIPT_PAYLOAD_SLICE_ROWS } from "./session-accessor.sqlite-export-slices.js";
 import { readTranscriptStatsSync } from "./session-accessor.sqlite-read.js";
 import {
   resolveSqliteTranscriptReadScope,
@@ -251,6 +252,25 @@ describe("SQLite transcript readers release the read snapshot before parsing", (
     for (const id of ["entry-0", "entry-2", ...unicode.map((event) => event.id)]) {
       expect(entries[entries.indexOf(`parse ${id}`) + 1]).toBe("transaction");
     }
+  });
+
+  // Small rows never fill the byte budget; the row bound must still page the export, since
+  // PostgreSQL buffers a whole query result before iteration could stop it (#201571).
+  it("pages slices by row count when rows stay under the byte budget", async () => {
+    const { events: seeded, scope } = await seedSession();
+    const rows = Array.from({ length: 2 * TRANSCRIPT_PAYLOAD_SLICE_ROWS + 84 }, (_, index) => ({
+      type: "message",
+      id: `small-${index}`,
+      parentId: index === 0 ? "entry-3" : `small-${index - 1}`,
+      timestamp: "2026-04-01T05:46:41.000Z",
+      message: userMessage(`small ${index}`),
+    }));
+    const events = [...seeded, ...rows];
+    await replaceTranscriptEvents(scope, events);
+    expect(events.length).toBe(2 * TRANSCRIPT_PAYLOAD_SLICE_ROWS + 89);
+    expect(readEvents(scope)).toEqual(events);
+    // Two full pages, then a short page that ends the export.
+    expect(transactionLog.entries).toEqual(["transaction", "transaction", "transaction"]);
   });
 
   it("continues an incremental export after the previous projection in slices", async () => {
