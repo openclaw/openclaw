@@ -26,6 +26,7 @@ import {
   fetchClawHubPackageVersion,
   fetchClawHubPackageSecurity,
 } from "../../infra/clawhub-packages.js";
+import { readPersonalTemplateClawHubToken } from "../../secrets/store/secret-store-clawhub-template.js";
 import { templateDraftPrompt } from "../../templates/draft-prompt.js";
 import {
   prepareTemplateDraft,
@@ -48,7 +49,6 @@ import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import {
   createTemplateClawHubSignIn,
-  readPersonalTemplateClawHubToken,
   readTemplateClawHubPublisher,
 } from "../template-clawhub-sign-in.js";
 import { hasCurrentPersonalGatewaySource } from "./gateway-personal-caller.js";
@@ -74,13 +74,17 @@ function personalClawHubTarget(options: GatewayRequestHandlerOptions) {
   return { profileId, baseUrl: resolveClawHubBaseUrl() };
 }
 
-async function templateClawHubConnection(options: GatewayRequestHandlerOptions) {
+async function templateClawHubConnection(
+  options: GatewayRequestHandlerOptions,
+  assertCurrent: () => void,
+) {
   const target = personalClawHubTarget(options);
   // The legacy environment/CLI credential belongs to the Gateway owner, never
   // to another administrator who happens to connect to the same Gateway.
   const token =
     (await readPersonalTemplateClawHubToken(target)) ??
     (target.profileId === GATEWAY_OWNER_PROFILE_ID ? await resolveClawHubAuthToken() : undefined);
+  assertCurrent();
   return { token, baseUrl: target.baseUrl };
 }
 
@@ -555,7 +559,7 @@ export const templatesDraftsHandlers: GatewayRequestHandlers = {
         }
         if (params.action === "status") {
           await readTemplateDraft(authority.workspaceDir, params.draftId);
-          const connection = await templateClawHubConnection(options);
+          const connection = await templateClawHubConnection(options, target.assertCurrent);
           const publisher = connection.token
             ? await readTemplateClawHubPublisher(connection.baseUrl, connection.token)
             : null;
@@ -595,7 +599,7 @@ export const templatesDraftsHandlers: GatewayRequestHandlers = {
           reviewToken: params.reviewToken,
           attemptId: params.attemptId,
         },
-        await templateClawHubConnection(options),
+        await templateClawHubConnection(options, authority.assertCurrent),
       );
       authority.assertCurrent();
       options.respond(true, review);
@@ -621,7 +625,7 @@ export const templatesDraftsHandlers: GatewayRequestHandlers = {
           () => {
             publicationStarted = true;
           },
-          await templateClawHubConnection(options),
+          await templateClawHubConnection(options, authority.assertCurrent),
         );
         authority.assertCurrent();
         options.respond(true, result);

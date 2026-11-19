@@ -1,10 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import { secretStoreWriteAdmission as admission } from "./secret-store-admission.js";
 import { observeSecretStoreMutation } from "./secret-store-changes.js";
 import { assertSecretStoreValue } from "./secret-store-validation.js";
 import type {
@@ -20,19 +19,6 @@ type WorkerWriteOptions = {
 };
 export type SecretStoreWriteParams = Omit<KernelWriteParams, "database"> & WorkerWriteOptions;
 export type SecretStoreBatchWriteParams = Omit<KernelBatchParams, "database"> & WorkerWriteOptions;
-
-function admission(context: OpenClawStateWorkerContext, assertCallerCurrent?: () => void) {
-  const assertCurrent = () => {
-    context.admission.assertCurrent();
-    assertCallerCurrent?.();
-  };
-  return {
-    assertCurrent,
-    createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-      context.admission.databasePath,
-    ]),
-  };
-}
 
 function write(params: SecretStoreBatchWriteParams, capturePrevious: boolean) {
   const context = captureOpenClawStateWorkerContext(params.database);
