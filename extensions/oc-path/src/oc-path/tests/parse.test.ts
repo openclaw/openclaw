@@ -56,6 +56,21 @@ hint: 'quoted'
   });
 });
 
+it.each([
+  ["count:", "  00123", "00123"],
+  ["flag:", "  false", "false"],
+  ["empty:", "  null", "null"],
+  ["count: 42 # note", "", "42"],
+  ["tags: [alpha,", "  beta] # note", "[alpha,\n  beta]"],
+  ["map: {alpha: one,", "  beta: two}", "{alpha: one,\n  beta: two}"],
+])("preserves complete frontmatter %s", (key, continuation, value) => {
+  const raw = ["---", key, continuation, "---", "## Body", ""].join("\n");
+  const ast = parseMd(raw);
+  expect(ast.frontmatter[0]?.value).toBe(value);
+  expect(ast.frontmatter[0]?.line).toBe(2);
+  expect(ast.raw).toBe(raw);
+});
+
 describe("parseMd — byte-fidelity", () => {
   it("derives the same slug for mixed underscores, punctuation, and hyphens", () => {
     const raw = "## Alpha_ ?_-Beta\u00a0__Gamma\n";
