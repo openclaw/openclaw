@@ -218,12 +218,13 @@ export function unknownChange(
   return change;
 }
 
-// Accepted on main (closed https://github.com/openclaw/openclaw/pull/201654: no production impact
-// on our hosts): a silent reply is dropped from replay, so the user turns around it merge into one
-// message. Bedrock merges every adjacent user pair. Chat Completions keeps a Gateway turn with a
-// runtime-context block apart and merges only user turns without that carrier: here the
-// "System prompt update" notes after a skill or workspace edit, exec-wake and other host system
-// turns, and the inter-session and subagent-completion inputs.
+// A silent reply is dropped from replay, so the user turns around it merge into one message.
+// - Chat Completions merges only user turns without a runtime-context carrier: here the "System
+//   prompt update" notes after a skill or workspace edit, exec-wake and other host system turns,
+//   and the inter-session and subagent-completion inputs. Owner:
+//   https://github.com/openclaw/openclaw/pull/201843
+// - Bedrock merges every adjacent user pair. Accepted gap (closed
+//   https://github.com/openclaw/openclaw/pull/201654: no production impact on our hosts).
 const SILENT_MERGE_APIS = new Set<Api>(["bedrock-converse-stream", "openai-completions"]);
 
 /**
