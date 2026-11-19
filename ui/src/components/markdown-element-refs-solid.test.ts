@@ -2,12 +2,76 @@
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../lib/presentation.ts";
+import { collectGarbageForTest } from "../test-helpers/garbage-collection.ts";
 import { mockDocumentVisibility, restoreMocksAndGlobals } from "../test-helpers/mock-cleanup.ts";
 import { renderSolidRef } from "../test-helpers/render-solid-ref.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
+import { MarkdownBlocks } from "./markdown-blocks-owner.ts";
 import { markdownBlocksRef } from "./markdown-element-refs-solid.ts";
 
 afterEach(restoreMocksAndGlobals);
+
+it("collects retired Markdown roots while the document and another reader remain live", async () => {
+  const show = mockDocumentVisibility("visible");
+  // oxlint-disable-next-line typescript/unbound-method -- forwarded with the original receiver below.
+  const update = MarkdownBlocks.prototype.update;
+  let updates = 0;
+  MarkdownBlocks.prototype.update = function (presented: boolean) {
+    updates += 1;
+    update.call(this, presented);
+  };
+  const mountReader = async () => {
+    const root = document.createElement("section");
+    root.className = "chat-text";
+    root.innerHTML = `<div class="code-block-wrapper">
+      <pre class="code-block-viewport"><code>const answer = 42;</code></pre>
+      <button class="code-block-expand"></button>
+    </div>`;
+    const view = renderSolidRef(() => markdownBlocksRef(() => true), { targetElement: root });
+    try {
+      await waitForSolid(() => {
+        expect(root.isConnected).toBe(true);
+        const viewport = root.querySelector(".code-block-viewport")!;
+        expect(viewport.id).not.toBe("");
+        expect(root.querySelector("button")!.getAttribute("aria-controls")).toBe(viewport.id);
+      });
+      return { root, unmount: view.unmount };
+    } catch (error) {
+      view.unmount();
+      throw error;
+    }
+  };
+  const retireReader = async () => {
+    const reader = await mountReader();
+    const root = new WeakRef(reader.root);
+    reader.unmount();
+    flush();
+    await Promise.resolve();
+    return root;
+  };
+  let survivor: Awaited<ReturnType<typeof mountReader>> | undefined;
+  try {
+    survivor = await mountReader();
+    const retired = await retireReader();
+    const unowned = new WeakRef({});
+    // jsdom's shared selector engine retains its last query context.
+    expect(survivor.root.querySelector("code")).not.toBeNull();
+    // No mock call histories or retired view handles may keep the DOM alive.
+    await collectGarbageForTest();
+    expect(unowned.deref()).toBeUndefined();
+    expect(retired.deref()).toBeUndefined();
+    expect(survivor.root.isConnected).toBe(true);
+
+    const before = updates;
+    show("hidden");
+    expect(updates).toBe(before + 1);
+    show("visible");
+    expect(updates).toBe(before + 2);
+  } finally {
+    survivor?.unmount();
+    MarkdownBlocks.prototype.update = update;
+  }
+});
 
 it("parks native thread work on hide and releases replaced roots and unmounted owners", async () => {
   const observers: Set<Element>[] = [];

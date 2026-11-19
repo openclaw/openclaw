@@ -107,6 +107,7 @@ export function respondChatHistoryUnavailable(
   );
 }
 
+/** Only known read availability failures become retryable responses; other errors still escape. */
 export function respondChatHistoryReadError(
   method: ChatHistoryMethod,
   respond: RespondFn,

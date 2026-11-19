@@ -30,9 +30,15 @@ suite.define(() => {
     const runId = "observed-workspace-run";
     const prompt = "Check the workspace and summarize the results.";
     const progress = "The checks passed. I am preparing the final summary.";
+    const promptMessage = {
+      role: "user",
+      content: prompt,
+      timestamp: Date.now() - 1_000,
+      __openclaw: { id: "workspace-prompt", seq: 1 },
+    };
     const gateway = await installMockGateway(page, {
       sessionKey,
-      historyMessages: [{ role: "user", content: prompt, timestamp: Date.now() - 1_000 }],
+      historyMessages: [promptMessage],
     });
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -84,7 +90,7 @@ suite.define(() => {
       };
       const historyReads = (await gateway.getRequests("chat.history")).length;
       await gateway.setMethodResponse("chat.history", {
-        messages: [{ role: "user", content: prompt }, persistedProgress],
+        messages: [promptMessage, persistedProgress],
         sessionId: `session:${sessionKey}`,
         sessionInfo: {
           key: sessionKey,

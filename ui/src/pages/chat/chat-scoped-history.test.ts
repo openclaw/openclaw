@@ -107,11 +107,13 @@ it.each([
         modelProvider: "test",
         modelSelectionTarget: "agent",
       },
-      messages: [{ role: "assistant", content: "History really applied" }],
+      messages: [{ role: "assistant", content: "History really applied", __openclaw: { seq: 1 } }],
       sessionInfo: historyRow,
     });
     await refresh;
-    expect(state.chatMessages).toEqual([{ role: "assistant", content: "History really applied" }]);
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: "History really applied", __openclaw: { seq: 1 } },
+    ]);
     expect(state.sessionsResultAgentId).toBe("work");
     if (moveRoster) {
       expect(sessions.state.result?.sessions[0]).toEqual(mainRow);

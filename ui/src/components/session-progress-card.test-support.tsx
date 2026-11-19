@@ -30,6 +30,7 @@ export function observeTranscript(container: HTMLElement, cleanups: Array<() => 
     endAnchor: new TranscriptEndAnchor(() => {}),
     canFollowEnd: () => true,
     isProgrammaticScroll: () => false,
+    isMaintenanceScroll: () => false,
     cancelScroll() {
       state.scrollCommand = null;
       state.pendingScrollOffset = null;

@@ -5,30 +5,68 @@ import { PanelEmptyState } from "./solid/panel-empty-state.tsx";
 import type { PanelLoadingSkeletonVariant } from "./solid/panel-loading-skeleton.tsx";
 import { PanelLoadingSkeleton } from "./solid/panel-loading-skeleton.tsx";
 
+const variants = [
+  "board",
+  "browser",
+  "browser-viewport",
+  "chat",
+  "desktop",
+  "discussion",
+  "document",
+  "file-list",
+  "files",
+  "review",
+  "terminal",
+] satisfies PanelLoadingSkeletonVariant[];
+
 describe("panel presentations", () => {
-  it.each([
-    "board",
-    "browser",
-    "chat",
-    "discussion",
-    "document",
-    "file-list",
-    "files",
-    "review",
-    "terminal",
-  ] satisfies PanelLoadingSkeletonVariant[])(
-    "renders an accessible light-DOM %s placeholder",
-    async (variant) => {
-      const { container: owner } = mountSolid(PanelLoadingSkeleton, {
-        variant,
-        label: `Loading ${variant}`,
-      });
-      const skeleton = owner.querySelector<HTMLElement>("openclaw-panel-loading-skeleton")!;
-      expect(skeleton.getAttribute("aria-label")).toBe(`Loading ${variant}`);
-      expect(skeleton.getAttribute("aria-busy")).toBe("true");
-      expect(skeleton.querySelector(".skeleton")).not.toBeNull();
-    },
-  );
+  it.each(variants)("renders an accessible light-DOM %s placeholder", async (variant) => {
+    const { container: owner } = mountSolid(PanelLoadingSkeleton, {
+      variant,
+      label: `Loading ${variant}`,
+    });
+    const skeleton = owner.querySelector<HTMLElement>("openclaw-panel-loading-skeleton")!;
+    expect(skeleton.getAttribute("aria-label")).toBe(`Loading ${variant}`);
+    expect(skeleton.getAttribute("aria-busy")).toBe("true");
+    expect(getByRole(owner, "status", { name: `Loading ${variant}` })).toBe(skeleton);
+    expect(
+      skeleton.querySelector(variant === "desktop" ? ".desktop-spinner" : ".skeleton"),
+    ).not.toBeNull();
+  });
+
+  it.each(variants)("keeps concurrent %s placeholders independent and stable", (variant) => {
+    const props = { variant, label: `Loading ${variant}` };
+    const first = mountSolid(PanelLoadingSkeleton, props);
+    const owner = document.body.appendChild(document.createElement("div"));
+    onTestFinished(() => owner.remove());
+    const second = mountSolid(PanelLoadingSkeleton, props, owner);
+    const content = (view: typeof first) =>
+      view.container.querySelector<HTMLElement>(".panel-loading-content")!;
+    const original = content(first).firstElementChild;
+    const sibling = content(second).firstElementChild;
+    expect(original).not.toBeNull();
+    expect(sibling).not.toBe(original);
+    expect(content(first).innerHTML).toBe(content(second).innerHTML);
+    if (variant === "board") {
+      expect(
+        [...content(first).querySelectorAll<HTMLElement>(".widget")].map((widget) => [
+          widget.style.gridColumn,
+          widget.style.gridRow,
+        ]),
+      ).toEqual([
+        ["span 6", "span 4"],
+        ["span 6", "span 4"],
+        ["span 4", "span 3"],
+        ["span 8", "span 3"],
+      ]);
+    }
+    first.update({ ...props, label: "Reconnecting" });
+    expect(content(first).firstElementChild).toBe(original);
+    expect(content(second).firstElementChild).toBe(sibling);
+    first.dispose();
+    expect(sibling?.isConnected).toBe(true);
+    expect(getByRole(second.container, "status", { name: props.label })).not.toBeNull();
+  });
 
   it("updates compact/overlay attributes without replacing unchanged contents", async () => {
     const view = mountSolid<Parameters<typeof PanelLoadingSkeleton>[0]>(PanelLoadingSkeleton, {

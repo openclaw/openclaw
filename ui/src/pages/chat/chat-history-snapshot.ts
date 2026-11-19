@@ -3,23 +3,19 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChatInputReceipts,
+  ChatHistoryParams,
   ChatPendingInputsPage,
   ChatHistoryActivity,
   ChatHistoryDeltaResult as ProtocolChatHistoryDeltaResult,
   ChatHistoryResetResult,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { GatewaySessionRow, GatewaySessionsDefaults } from "../../api/types.ts";
-import { t } from "../../i18n/index.ts";
 import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-cache.ts";
-import {
-  nativeHistoryMessageSourceIdentity,
-  oldestNativeHistoryMessage,
-} from "../../lib/chat/history-message-identity.ts";
 import {
   isUiSelectedGlobalSessionKey,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
-import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
+import type { ChatHistoryPagination, ChatHistorySegment } from "./chat-history-pagination.ts";
 import { projectChatSessionStateSnapshot } from "./chat-session-state-snapshot.ts";
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
@@ -34,16 +30,20 @@ import {
 import type { AgentEventPayload } from "./tool-stream-contract.ts";
 
 export type ChatHistoryResult = {
+  // Prepared locally by the response owner, never reconstructed from warm rows.
+  packet?: ChatHistorySegment;
   stateRevision?: ChatHistoryState["stateRevision"];
   activity?: ChatHistoryActivity[];
   pendingInputs?: ChatPendingInputsPage;
   inputReceipts?: ChatInputReceipts;
   deltaCursor?: string;
+  continuity?: NonNullable<ChatHistoryParams["continuity"]> & { accepted: boolean };
   windowReset?: boolean;
   messages?: Array<unknown>;
   offset?: number;
   nextOffset?: number;
   olderCursor?: string;
+  newerCursor?: string;
   hasMore?: boolean;
   totalMessages?: number;
   completeSnapshot?: boolean;
@@ -133,9 +133,12 @@ export function resolveChatHistoryPagination(
   const validTotal = asSafeIntegerInRange(result?.totalMessages ?? totalMessages, { min: 0 });
   const nextOffset = asSafeIntegerInRange(result?.nextOffset, { min: 1 });
   const olderCursor = normalizeNullableString(result?.olderCursor);
+  const newerCursor = normalizeNullableString(result?.newerCursor);
+  const newer = newerCursor ? { newerCursor, hasNewer: true as const } : {};
   if (result?.hasMore === true || olderCursor) {
     return {
       hasMore: true,
+      ...newer,
       ...(olderCursor ? { olderCursor } : {}),
       ...(nextOffset !== undefined ? { nextOffset } : {}),
       ...(validTotal !== undefined ? { totalMessages: validTotal } : {}),
@@ -143,6 +146,7 @@ export function resolveChatHistoryPagination(
   }
   return {
     hasMore: false,
+    ...newer,
     ...(validTotal !== undefined ? { totalMessages: validTotal } : {}),
     ...(result?.completeSnapshot === true ? { completeSnapshot: true as const } : {}),
   };
@@ -153,20 +157,6 @@ export function historySessionId(result: ChatHistoryResult): string | null {
     normalizeNullableString(result.sessionInfo?.sessionId) ??
     normalizeNullableString(result.sessionId)
   );
-}
-
-export function reopenChatHistoryBoundary(
-  state: ChatState,
-  boundary: string,
-  pagination: ChatHistoryPagination,
-): void {
-  if (
-    nativeHistoryMessageSourceIdentity(oldestNativeHistoryMessage(state.chatMessages)) !== boundary
-  ) {
-    throw new Error(t("chat.thread.earlierInterrupted"));
-  }
-  state.chatHistoryPagination = pagination;
-  commitCurrentChatHistorySnapshot(state);
 }
 
 export function commitCurrentChatHistorySnapshot(

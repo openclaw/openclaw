@@ -1,7 +1,7 @@
 import type { ModelCatalogEntry } from "../../../api/types.ts";
 import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
 import type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts";
-import type { ChatComposerSnapshot } from "../session-message-cache.ts";
+import type { ChatComposerSnapshot } from "../session-snapshot-contract.ts";
 
 const CHAT_MODEL_PROVIDER_GROUP_ALIASES: Readonly<Record<string, string>> = {
   "google-gemini-cli": "google",

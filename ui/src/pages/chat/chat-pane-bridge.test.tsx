@@ -320,7 +320,7 @@ it.each([
         sessionKey: key,
         sessionId: "snapshot-session",
         snapshot: {
-          messages: [{ role: "assistant", content: "Stored conversation" }],
+          messages: [{ role: "assistant", content: "Stored conversation", __openclaw: { seq: 1 } }],
           pagination: { hasMore: false, completeSnapshot: true },
           sessionId: "snapshot-session",
           sessionState: {

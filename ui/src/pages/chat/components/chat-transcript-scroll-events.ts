@@ -8,6 +8,14 @@ export function readTranscriptViewport(element: HTMLElement) {
   };
 }
 
+/** Native event facts must survive callbacks that remap the resident coordinate range. */
+export type TranscriptNativeScroll = Readonly<{
+  viewport: Readonly<TranscriptViewportMeasurement>;
+  delta: number;
+  programmatic: boolean;
+  maintenance: boolean;
+}>;
+
 export type TranscriptScrollObservation =
   | { type: "composer-input" }
   | { type: "composer-layout"; changed: boolean }

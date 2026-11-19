@@ -1,5 +1,5 @@
 import { activeChatReasoning } from "./chat-reasoning.ts";
-import type { BuildChatItemsProps } from "./chat-thread-build.ts";
+import type { BuildChatItemsProps } from "./chat-thread-contract.ts";
 
 export function sameEntries<T>(previous?: readonly T[], next?: readonly T[]): boolean {
   return (

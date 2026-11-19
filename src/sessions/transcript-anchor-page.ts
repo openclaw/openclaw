@@ -6,7 +6,16 @@ export type TranscriptRecentReadLimits = {
   maxBytes: number;
 };
 
+export type TranscriptReadContinuity = {
+  cursor: string;
+  activeLeafEntryId: string;
+};
+
+/** A verdict belongs to this exact prior cursor/leaf, independently of page visibility. */
+export type TranscriptReadContinuityResult = TranscriptReadContinuity & { accepted: boolean };
+
 export type TranscriptAnchorPageOptions = {
+  continuity?: TranscriptReadContinuity;
   messageId: string;
   /** Reopen the interval before a closing reset anchor, excluding that reset marker. */
   closedResetInterval?: boolean;

@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { getInitialHistoryRequests } from "./chat-initial-history.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -28,7 +29,9 @@ const history = {
   sessionKey,
   sessionId,
   sessionInfo: row,
-  messages: [{ role: "assistant", content: [{ type: "text", text: transcript }] }],
+  messages: prepareChatHistoryFixture([
+    { role: "assistant", content: [{ type: "text", text: transcript }] },
+  ]).messages,
 };
 
 suite.define(() => {

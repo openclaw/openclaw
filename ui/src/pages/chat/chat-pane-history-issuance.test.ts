@@ -12,7 +12,7 @@ import {
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { requestCalls } from "./chat-host.test-support.ts";
-import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { createTestChatPane, nativeHistoryMessage } from "./chat-pane.test-support.ts";
 
 const agentsList = makeBootRoster();
 
@@ -21,7 +21,13 @@ function createCanonicalRoutePane(
   fallback: () => unknown = () => ({}),
 ) {
   const request = vi.fn((method: string, params: Record<string, unknown>) =>
-    Promise.resolve(method === "agents.list" ? agentsList : (handlers[method] ?? fallback)(params)),
+    Promise.resolve(
+      method === "agents.list"
+        ? agentsList
+        : method === "models.list"
+          ? { models: [] }
+          : (handlers[method] ?? fallback)(params),
+    ),
   );
   const client = { request } as unknown as GatewayBrowserClient;
   const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
@@ -52,7 +58,7 @@ function createCanonicalRoutePane(
 }
 
 function assistantHistory(text: string) {
-  return { messages: [{ role: "assistant", content: [{ type: "text", text }] }] };
+  return { messages: [nativeHistoryMessage(2, text)] };
 }
 
 async function expectRecoveredHistory(

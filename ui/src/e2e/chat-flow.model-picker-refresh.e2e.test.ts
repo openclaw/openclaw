@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { sanitizeChatHistoryMessages } from "../../../src/gateway/chat-display-projection.sanitize.ts";
+import { createMockHistoryMaterializer } from "../test-helpers/control-ui-mock-scenario.ts";
 import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   newChatPage,
@@ -59,10 +60,10 @@ suite.define(() => {
       hasTouch: true,
     });
     const session = sessionInfo("model-target-proof", "demo-a");
-    const history = [
+    const history = createMockHistoryMaterializer()([
       { role: "user", content: "Plan a small herb garden.", timestamp: 1 },
       { role: "assistant", content: "Start with basil, mint, and parsley.", timestamp: 2 },
-    ];
+    ]);
     const gateway = await installMockGateway(page, {
       sessionKey: session.key,
       historyMessages: history,

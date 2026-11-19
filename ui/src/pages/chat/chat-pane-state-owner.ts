@@ -2,9 +2,6 @@ import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/
 import type {
   SessionCatalogHost,
   SessionCatalogSession,
-  SessionSharingRole,
-  MessageReactionSummary,
-  SessionSuggestion,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -51,25 +48,25 @@ import { createChatPaneDiscussionState } from "./chat-pane-discussion-state.ts";
 import { createChatPanePresence } from "./chat-pane-presence.ts";
 import type { PendingSessionPanelToggle } from "./chat-pane-session-panel-toggle.ts";
 import type { ChatPaneConnectionScope, PaneSessionChangeOptions } from "./chat-pane-shared.ts";
-import { SessionParticipationTracker } from "./chat-pane-state.ts";
+import {
+  createChatPaneCollaborationState,
+  SessionParticipationTracker,
+} from "./chat-pane-state.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import type {
-  ChatTypingActorState,
-  ChatTypingActorView,
-  ChatTypingOverflow,
-} from "./chat-typing-presence.ts";
+import type { ChatTypingActorState } from "./chat-typing-presence.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.types.ts";
-import type { ChatSessionSharingState } from "./components/chat-session-sharing-shared.tsx";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { createChatTranscript } from "./components/chat-transcript-controller.ts";
 import type { ComposerActivityLayout } from "./components/chat-transcript-layout-owner.ts";
+import type { TranscriptNativeScroll } from "./components/chat-transcript-scroll-events.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import {
   canAutoFollowChat,
+  type ChatReadingBookmark,
   handleChatScrollTakeover,
   hasPendingManualChatScroll,
 } from "./scroll.ts";
@@ -437,7 +434,11 @@ export abstract class ChatPaneStateOwner {
         this.composerCapabilities?.props(this.context, state, selectedSession, currentAgentId),
     };
   }
+  protected transcriptReadAbortController = new AbortController();
   readonly transcript = createChatTranscript(() => this.paneId, {
+    getSessionId: () => (this.state?.chatLoading ? null : (this.state?.currentSessionId ?? null)),
+    canRestoreBookmark: () => this.presented && this.presentation.documentVisible,
+    restoreBookmark: (bookmark, isCurrent) => this.restoreTranscriptBookmark(bookmark, isCurrent),
     geometryEventTarget: this.element,
     getComposerFloat: () => (this.usesMobileHost ? this.composerFloat : null),
     getComposerActivityLayout: () => (this.usesMobileHost ? this.composerActivityLayout : null),
@@ -445,9 +446,11 @@ export abstract class ChatPaneStateOwner {
     canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),
     hasPendingScrollCommand: () =>
       this.state !== undefined && hasPendingManualChatScroll(this.state),
-    onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
+    onNativeScroll: (scroll) => this.handleTranscriptScroll(scroll),
+    onHistoryIntent: (event) => this.handleTranscriptHistoryIntent(event),
+    onReaderScroll: (towardEnd, source) =>
+      this.state && handleChatScrollTakeover(this.state, towardEnd, source),
     onRequestEnd: () => this.state?.scrollToBottom({ smooth: true }),
-    onNativeScroll: (event) => this.handleTranscriptScroll(event),
   });
   protected get progressCards() {
     return sessionProgressCardsForGateway(this.context.gateway);
@@ -583,27 +586,7 @@ export abstract class ChatPaneStateOwner {
       selfInstanceId: snapshot?.client?.instanceId,
     };
   });
-  readonly collaboration: {
-    sharingStates: Map<string, ChatSessionSharingState>;
-    suggestions: SessionSuggestion[];
-    role: SessionSharingRole | undefined;
-    busyIds: Set<string>;
-    addOperation: symbol | undefined;
-    editOperation: symbol | undefined;
-    typingViews: ChatTypingActorView[];
-    typingOverflow: ChatTypingOverflow | undefined;
-    reactions: Map<string, MessageReactionSummary[]>;
-  } = {
-    sharingStates: new Map(),
-    suggestions: [],
-    role: undefined,
-    busyIds: new Set(),
-    addOperation: undefined,
-    editOperation: undefined,
-    typingViews: [],
-    typingOverflow: undefined,
-    reactions: new Map(),
-  };
+  readonly collaboration = createChatPaneCollaborationState();
   protected readonly sessionSharingHydrationTargets = new Map<string, string>();
   protected readonly sessionParticipationTracker = new SessionParticipationTracker();
   readonly resetConfirmation: {
@@ -692,7 +675,6 @@ export abstract class ChatPaneStateOwner {
   protected historyObserverArmed = false;
   protected historyAutoLoadBlocked = false;
   protected historyIntentTimer: number | null = null;
-  protected transcriptScrollTop: number | null = null;
   // Older cursors already requested this session. A provider that cycles cursors
   // (c1 -> c2 -> c1) on empty/duplicate pages would otherwise loop forever, since
   // the sentinel never scrolls out of view when nothing new renders.
@@ -754,7 +736,12 @@ export abstract class ChatPaneStateOwner {
   protected abstract applyApplicationConfig(config: ApplicationContext["config"]["current"]): void;
   protected abstract cancelHeaderRename(): void;
   protected abstract handleArchiveSessionShortcut(event: KeyboardEvent): boolean;
+  protected abstract restoreTranscriptBookmark(
+    bookmark: ChatReadingBookmark,
+    isCurrent: () => boolean,
+  ): Promise<boolean | undefined>;
   protected abstract resetOlderMessagesViewport(): void;
-  protected abstract handleTranscriptScroll(event: Event): void;
+  protected abstract handleTranscriptScroll(scroll: TranscriptNativeScroll): void;
+  protected abstract handleTranscriptHistoryIntent(event: Event): void;
   protected abstract syncQueuedEditRetention(): void;
 }

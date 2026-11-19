@@ -202,10 +202,25 @@ function selectSessionTranscriptProjection(
           offset: 0,
           totalMessages: page.totalMessages,
           transcriptPath: sessionFile,
+          ...(page.continuity
+            ? {
+                continuity: page.continuity,
+                activeLeafEntryId: page.activeLeafEntryId,
+                deltaCursor: page.deltaCursor,
+                displaySource: page.displaySource,
+              }
+            : {}),
         };
       }
       const events = capAnchorEventsByBytes(page.events, selection.options);
       return {
+        ...(page.continuity
+          ? {
+              continuity: page.continuity,
+              activeLeafEntryId: page.activeLeafEntryId,
+              deltaCursor: page.deltaCursor,
+            }
+          : {}),
         found: true,
         ...(page.windowReset ? { windowReset: true } : {}),
         ...(page.readWindow ? { readWindow: page.readWindow } : {}),
@@ -559,7 +574,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
         : target.sessionFile;
     const page = await readSnapshotIfPresent(target, { kind: "around-id", options: opts }, opts);
     if (!page?.found) {
-      if (opts.allowResetArchiveFallback === true) {
+      if (!opts.continuity && opts.allowResetArchiveFallback === true) {
         return await new ArchivedTranscriptReader({
           agentId: target.agentId,
           sessionFile,
@@ -574,6 +589,14 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
         offset: 0,
         totalMessages: page?.totalMessages ?? 0,
         transcriptPath: target.sessionFile,
+        ...(page?.continuity
+          ? {
+              continuity: page.continuity,
+              activeLeafEntryId: page.activeLeafEntryId,
+              deltaCursor: page.deltaCursor,
+              displaySource: page.displaySource,
+            }
+          : {}),
       };
     }
     return page;

@@ -1,17 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
-import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
-import { nativeMessage } from "./chat-thread-fixtures.test-support.ts";
+import { buildChatItems } from "./chat-thread-build.ts";
+import type { BuildChatItemsProps } from "./chat-thread-contract.ts";
+import {
+  nativeMessage as makeMessage,
+  pendingText as acceptedInput,
+} from "./chat-thread-fixtures.test-support.ts";
 import { createProps } from "./chat-thread.test-support.ts";
 import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
 import * as causalBoundary from "./stream-causal-boundary.ts";
-
-type PendingInput = NonNullable<BuildChatItemsProps["pendingInputs"]>[number];
-
-function makeMessage(role: string, content: string, timestamp: number, metadata: object) {
-  return { role, content, timestamp, __openclaw: metadata };
-}
 
 function queuedInput(
   text: string,
@@ -25,25 +23,6 @@ function queuedInput(
     sendRunId: text,
     sendState,
     sendAttempts: 1,
-  };
-}
-
-function acceptedInput(
-  text: string,
-  acceptedAt: number,
-  state: PendingInput["state"] = "queued",
-): PendingInput {
-  return {
-    id: text,
-    runId: text,
-    acceptedAt,
-    state,
-    message: {
-      role: "user",
-      content: text,
-      timestamp: acceptedAt,
-      __openclaw: { id: `pending:${text}` },
-    },
   };
 }
 
@@ -387,7 +366,10 @@ describe("transcript input order", () => {
     const [firstRow, steerA] = rows();
     expect([firstRow, steerA].map((row) => row?.split("@")[0])).toEqual(["Original", "Steer A"]);
     // The Gateway accepts A while it waits for a tool; B arrives optimistically after it.
-    const accepted = acceptedInput("Steer A", 10_000);
+    const accepted: NonNullable<BuildChatItemsProps["pendingInputs"]>[number] = acceptedInput(
+      "Steer A",
+      10_000,
+    );
     accepted.steerNow = { status: "blocked", tools: ["exec"] };
     props.pendingInputs = [accepted];
     props.queue = [];
@@ -456,8 +438,8 @@ describe("transcript input order", () => {
       expect(
         visibleRows({
           pendingInputs: [
-            acceptedInput("First accepted input", timestamps[0], state),
-            acceptedInput("Second accepted input", timestamps[1], state),
+            acceptedInput("First accepted input", timestamps[0], { state }),
+            acceptedInput("Second accepted input", timestamps[1], { state }),
           ],
         }),
       ).toEqual(["Existing conversation", ...expectedInputs]);
@@ -519,7 +501,7 @@ describe("transcript input order", () => {
   it("reuses loaded history when a render rebuilds its pending input list", () => {
     let messageReads = 0;
     const loaded = new Proxy(
-      nativeMessage("assistant", "Loaded history", 1, { id: "loaded", seq: 1 }),
+      makeMessage("assistant", "Loaded history", 1, { id: "loaded", seq: 1 }),
       {
         get(target, key, receiver) {
           messageReads += 1;

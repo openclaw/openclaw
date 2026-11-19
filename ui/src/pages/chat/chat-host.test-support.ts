@@ -147,6 +147,7 @@ function composerDefaults(chatMessage = "", chatAttachments: ChatAttachment[] = 
     sessionKey: "agent:main",
     chatLoading: false,
     chatMessage,
+    chatHistoryPagination: { hasMore: false as const },
     chatMessages: [],
     chatMessagesBySession,
     chatLocalInputHistoryBySession: {},

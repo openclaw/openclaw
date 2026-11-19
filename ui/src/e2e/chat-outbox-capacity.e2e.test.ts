@@ -231,7 +231,8 @@ suite.define(() => {
             await expectRequestCountStable(gateway, "chat.send", 1);
             const sent = sends[0];
             assert(sent, "Expected the observed chat.send before emitting its terminal");
-            await gateway.resolveDeferred("chat.send");
+            // Hold persistence past delivery; a default ACK would retire pending image custody.
+            await gateway.resolveDeferred("chat.send", { runId: sent.runId, status: "started" });
             await stop.waitFor();
             await gateway.deferNext("chat.history");
             await gateway.emitChatFinal({

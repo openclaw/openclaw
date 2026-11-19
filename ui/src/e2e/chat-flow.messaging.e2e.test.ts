@@ -67,10 +67,12 @@ suite.define(() => {
     const runId = "pending-steer";
     const prompt = "Use the shorter approach.";
     const message = persistedText("user", prompt, {
+      id: "pending-steer-source",
       idempotencyKey: `${runId}:user`,
       steerTargetRunId: "active-run",
     });
     const secondMessage = persistedText("user", "Also keep the examples.", {
+      id: "pending-steer-2-source",
       idempotencyKey: "pending-steer-2:user",
       steerTargetRunId: "active-run",
     });

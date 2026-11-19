@@ -32,8 +32,8 @@ const transcriptShape = (surface: Locator) =>
           time: footer?.querySelector("time.chat-group-timestamp")?.textContent ?? null,
           actions: [...(footer?.querySelectorAll(".chat-group-footer-actions button") ?? [])]
             .map((button) => button.getAttribute("aria-label"))
-            // Side chat exchanges have no reply target; every other footer part is shared.
-            .filter((label) => label !== "Reply to message"),
+            // Reply and rewind require a persisted transcript target, which side exchanges lack.
+            .filter((label) => label !== "Reply to message" && label !== "Rewind"),
         };
       }),
       gaps: groups
@@ -88,6 +88,9 @@ suite.define(() => {
             "assistant",
           ]);
           expect(mainShape.footers.every(({ time }) => Boolean(time))).toBe(true);
+          const users = main.locator(".chat-group.user");
+          expect(await users.getByRole("button", { name: "Rewind", exact: true }).count()).toBe(2);
+          expect(await side.getByRole("button", { name: "Rewind", exact: true }).count()).toBe(0);
           expect(await transcriptShape(side)).toEqual({ ...mainShape, dividers: 0 });
           expect(await side.getByText(/^as of /).count()).toBe(0);
           // The panel has no avatar gutter: answers start at the exchange edge.

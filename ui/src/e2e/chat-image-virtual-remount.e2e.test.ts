@@ -40,17 +40,23 @@ async function scrollToBottom(thread: Locator) {
 
 suite.define(() => {
   it.each(["sharing", "role assignment", "role definition"] as const)(
-    "reuses remounted images; invalidates on %s",
+    "reuses scoped thumbnails without new reads after %s",
     async (change) => {
       const page = await newChatPage(suite);
       const source = "media://inbound/virtual-remount.png";
-      const requests = { metadata: 0, image: 0 };
+      const requests = { metadata: 0, image: 0, cacheFetch: 0 };
       let revoked = false;
       await page.route("**/__openclaw__/assistant-media?**", async (route) => {
         const url = new URL(route.request().url());
         expect(url.searchParams.get("source")).toBe(source);
         const meta = url.searchParams.get("meta") === "1";
-        requests[meta ? "metadata" : "image"] += 1;
+        // Snapshot capture uses Fetch, separately from a native image read.
+        const kind = meta
+          ? "metadata"
+          : route.request().resourceType() === "fetch"
+            ? "cacheFetch"
+            : "image";
+        requests[kind] += 1;
         if (meta && revoked) {
           await route.fulfill({ status: 403, json: { error: "Access revoked" } });
           return;
@@ -95,6 +101,9 @@ suite.define(() => {
           .toBeGreaterThan(0);
       await waitForLoadedImage();
       await waitForChatScrollIdle(page);
+      expect(requests.metadata).toBe(1);
+      expect(requests.image).toBe(1);
+      const beforeRemount = { ...requests };
       const row = await image.evaluateHandle((element) => element.closest(".chat-virtual-row")!);
       const thread = page.locator(".chat-thread");
       const trace = await observeAppearance(thread, '.chat-image-frame[aria-busy="true"]', true);
@@ -106,14 +115,25 @@ suite.define(() => {
       await waitForLoadedImage();
       await waitForChatScrollIdle(page);
       expect(await trace.evaluate((stop) => stop())).toBe(false);
-      expect(requests).toEqual({ metadata: 1, image: 1 });
+      expect(requests).toEqual(beforeRemount);
       await scrollToBottom(thread);
       await expect.poll(() => image.count()).toBe(0);
       await waitForChatScrollIdle(page);
-      const withdrawn = await observeAppearance(thread, 'img[alt="Remounted image"]');
+      const invalidationMethod =
+        change === "sharing"
+          ? "sessions.list"
+          : change === "role definition"
+            ? "config.get"
+            : "users.self";
+      const beforeInvalidation = (await gateway.getRequests(invalidationMethod)).length;
+      const withdrawn = await observeAppearance(
+        thread,
+        'img[alt="Remounted image"]:not([src^="blob:"])',
+        true,
+      );
       revoked = true;
       if (change === "sharing") {
-        // Revoked readers receive the redacted catalog invalidation, not a private row.
+        // Sharing changes invalidate policy without publishing a private row.
         await gateway.emitGatewayEvent("sessions.changed", { reason: "sharing" });
       } else if (change === "role definition") {
         await gateway.emitGatewayEvent("config.changed", {});
@@ -124,12 +144,13 @@ suite.define(() => {
         await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(sockets);
         await page.getByText("History 79", { exact: false }).waitFor();
       }
+      await gateway.waitForRequest(invalidationMethod, { after: beforeInvalidation });
       await scrollChatThreadToTop(page);
-      await page.locator(".chat-image-frame--compact").waitFor();
-      expect(await image.count()).toBe(0);
+      await waitForLoadedImage();
+      // Scoped display bytes remain owned after policy invalidation; they authorize no new read.
+      expect(await image.getAttribute("src")).toMatch(/^blob:/u);
       expect(await withdrawn.evaluate((stop) => stop())).toBe(false);
-      expect(requests.metadata).toBeGreaterThanOrEqual(2);
-      expect(requests.image).toBe(1);
+      expect(requests).toEqual(beforeRemount);
     },
   );
 });

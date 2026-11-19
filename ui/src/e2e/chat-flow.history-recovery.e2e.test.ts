@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { sessionRow } from "./chat-flow-fixtures.test-support.ts";
 import {
@@ -39,9 +40,14 @@ async function expectVisiblePair(page: Page, userIndex: number) {
     .toBe(true);
 }
 
-const historyCase = (sessionKey: string, messages: unknown[], sessionId: string, extra = {}) => ({
+const historyCase = (
+  sessionKey: string,
+  messages: Record<string, unknown>[],
+  sessionId: string,
+  extra = {},
+) => ({
   match: { sessionKey },
-  response: { messages, sessionId, ...extra },
+  response: { messages: prepareChatHistoryFixture(messages).messages, sessionId, ...extra },
 });
 type FrameWindow = typeof globalThis & { chatSessionReturnSamples: FrameSample[] };
 const sessionLink = (page: Page, key: string) =>

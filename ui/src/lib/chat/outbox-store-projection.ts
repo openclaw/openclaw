@@ -207,7 +207,11 @@ export function createStoredChatOutboxReader() {
 
 function listStoredComposerRows(
   state: ChatComposerScope,
+  receipt?: { available: boolean },
 ): Array<{ scope: StoredChatOutboxScope; session: StoredComposerSession }> {
+  if (receipt) {
+    receipt.available = false;
+  }
   const storage = getSafeSessionStorage();
   if (!storage) {
     return [];
@@ -222,7 +226,7 @@ function listStoredComposerRows(
         // Readable pending records remain intact if quota blocks their transfer.
       }
     }
-    return Object.entries(store.sessions).flatMap(([key, session]) => {
+    const rows = Object.entries(store.sessions).flatMap(([key, session]) => {
       const scope = parseStoredChatOutboxScope(key);
       return scope
         ? [
@@ -236,13 +240,22 @@ function listStoredComposerRows(
           ]
         : [];
     });
+    // Best-effort list callers tolerate unreadable storage; absence-sensitive
+    // placement must distinguish that fallback from a successful empty read.
+    if (receipt) {
+      receipt.available = true;
+    }
+    return rows;
   } catch {
     return [];
   }
 }
 
-export function listStoredChatOutboxes(state: ChatComposerScope): StoredChatOutbox[] {
-  return listStoredComposerRows(state)
+export function listStoredChatOutboxes(
+  state: ChatComposerScope,
+  receipt?: { available: boolean },
+): StoredChatOutbox[] {
+  return listStoredComposerRows(state, receipt)
     .flatMap(({ scope, session }) =>
       session.queue?.length
         ? [
@@ -264,8 +277,9 @@ export function listStoredChatOutboxes(state: ChatComposerScope): StoredChatOutb
 export function readStoredChatOutbox(
   state: ChatComposerScope,
   scope: StoredChatOutboxScope,
+  receipt?: { available: boolean },
 ): StoredChatOutbox | undefined {
-  return listStoredChatOutboxes(state).find(
+  return listStoredChatOutboxes(state, receipt).find(
     (outbox) => outbox.sessionKey === scope.sessionKey && outbox.agentId === scope.agentId,
   );
 }

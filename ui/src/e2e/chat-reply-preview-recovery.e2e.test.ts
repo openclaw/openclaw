@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
 import {
+  CHAT_HISTORY_REQUEST_MAX_BYTES,
+  CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
+} from "../pages/chat/chat-history-request-params.ts";
+import {
   createChatFlowE2eSuite,
   controlUiSessionUrl,
   installMockGateway,
@@ -72,7 +76,7 @@ suite.define(() => {
       const historyPages = (pageMessages: unknown[]) => ({
         cases: [
           {
-            match: { cursor: "older-reply" },
+            match: { messageId: "reconnect-source", sessionId: "reply-preview-history", limit: 1 },
             response: {
               messages: [source],
               hasMore: false,
@@ -107,7 +111,16 @@ suite.define(() => {
       await expect.poll(() => preview.getByRole("button").count()).toBe(1);
       expect(await gateway.getRequests("chat.message.get")).toHaveLength(0);
       await preview.getByRole("button").click();
-      await waitForRequests(gateway, "chat.history", 1, { cursor: "older-reply" });
+      const navigation = await gateway.waitForRequest("chat.history", {
+        match: { messageId: "reconnect-source", sessionId: "reply-preview-history", limit: 1 },
+      });
+      expect(navigation.params).toMatchObject({
+        maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES,
+        toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
+      });
+      expect(navigation.params).not.toHaveProperty("cursor");
+      expect(navigation.params).not.toHaveProperty("offset");
+      expect(await gateway.getRequests("chat.message.get")).toHaveLength(0);
       await pane
         .locator(".chat-text")
         .getByText("The current original answer.", { exact: true })

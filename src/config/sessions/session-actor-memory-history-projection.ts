@@ -45,6 +45,7 @@ import {
   encodeRawTranscriptCursor,
   normalizeRawDeltaLimits,
   parseRawTranscriptCursor,
+  isTranscriptReadContinuous,
 } from "./session-transcript-raw-cursor.js";
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
 import { readRecentTranscriptConversationText } from "./transcript-recent-text.js";
@@ -397,9 +398,32 @@ export function readSessionActorMemoryProjection(
       };
     case "around-id": {
       const options = selection.options;
+      const currentRead = options.continuity
+        ? {
+            activeLeafEntryId: tree.leafId,
+            deltaCursor,
+            displaySource,
+            continuity: {
+              ...options.continuity,
+              accepted: isTranscriptReadContinuous(options.continuity.cursor, {
+                agentId: scope.agentId,
+                sessionId,
+                generation: generation ?? undefined,
+                frontier: window.events.at(-1)?.rawSeq ?? -1,
+                latestResetRawSeq: navigation.latestResetRawSeq,
+                previousLeafActive:
+                  tree.leafId === options.continuity.activeLeafEntryId ||
+                  active.some(
+                    (row) =>
+                      isRecord(row.event) && row.event.id === options.continuity?.activeLeafEntryId,
+                  ),
+              }),
+            },
+          }
+        : {};
       const row = find(options.messageId);
       const changed = change(options.expectedReadWindow);
-      if (changed && (!row || !history.includes(row))) {
+      if (!options.continuity && changed && (!row || !history.includes(row))) {
         return {
           ...readPage({
             offset: 0,
@@ -413,8 +437,9 @@ export function readSessionActorMemoryProjection(
           offset: 0,
         };
       }
-      if (!row) {
+      if (!row || (options.continuity && !history.includes(row))) {
         return {
+          ...currentRead,
           found: false,
           messages: [],
           totalMessages: history.length,
@@ -423,6 +448,7 @@ export function readSessionActorMemoryProjection(
         };
       }
       const closed =
+        !options.continuity &&
         options.closedResetInterval === true &&
         options.direction === "older" &&
         isRecord(row.event) &&
@@ -430,6 +456,7 @@ export function readSessionActorMemoryProjection(
       let rows = closed || !history.includes(row) ? closedHistory(row) : history;
       if (!rows) {
         return {
+          ...currentRead,
           found: false,
           messages: [],
           totalMessages: history.length,
@@ -461,6 +488,7 @@ export function readSessionActorMemoryProjection(
       );
       const selected = rows.slice(start, endExclusive);
       return {
+        ...currentRead,
         found: true,
         messages: messages(selected, start),
         totalMessages: rows.length,

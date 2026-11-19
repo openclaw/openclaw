@@ -40,6 +40,7 @@ import { createPageState } from "./chat-state-page.ts";
 import type { ChatTypingActorState } from "./chat-typing-presence.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
+import type { TranscriptNativeScroll } from "./components/chat-transcript-scroll-events.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 
 type PaneHeaderWorkspace = ReturnType<typeof createChatPaneRails>["sessionWorkspace"];
@@ -143,15 +144,19 @@ export type TestChatPane = HTMLElement &
     resolveCurrentSessionSuggestion: ChatPaneRuntime["resolveCurrentSessionSuggestion"];
     deferSessionHydrationUntilTranscript: ChatPaneRuntime["deferSessionHydrationUntilTranscript"];
     catalogItemMessage: ChatPaneRuntime["catalogItemMessage"];
-    handleTranscriptScroll: (event: Event) => void;
+    handleTranscriptScroll: (scroll: TranscriptNativeScroll) => void;
     handleTranscriptHistoryIntent: (event: Event) => void;
     historyAutoLoadBlocked: boolean;
     historyObserverArmed: boolean;
-    transcriptScrollTop: number | null;
     syncHistoryObserver: () => void;
     loadCatalogSession: ChatPaneRuntime["loadCatalogSession"];
     prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
     loadOlderMessages: (readerIntent?: boolean) => Promise<boolean>;
+    readTranscriptReaderSnapshot: () =>
+      | import("./chat-history-pagination.ts").ChatTranscriptReaderSnapshot
+      | null;
+    retireTranscriptMessageSources: (messages: readonly unknown[]) => void;
+    retireTranscriptReads: (keepLiveTools?: boolean) => void;
     resetOlderMessagesViewport: () => void;
     readReplyMessage: (messageId: string) => unknown;
     hasOlderMessages: () => boolean;
@@ -240,6 +245,11 @@ export function createTestChatPane(
   };
   state.updateSidebarActivePanel = () => {};
   pane.state = state;
+  // This lightweight host skips start(); bind the same transcript custody
+  // callbacks so page adoption exercises the real pane lifetime owners.
+  state.readTranscriptReaderSnapshot = () => pane.readTranscriptReaderSnapshot();
+  state.transcriptMessagesRetired = (messages) => pane.retireTranscriptMessageSources(messages);
+  state.beforeHistoryTailRestore = () => pane.retireTranscriptReads();
   pane.chatState.attach(state);
   pane.connectedClient = client;
   pane.connectionGeneration = 4;
@@ -345,6 +355,7 @@ class RenderTestChatPane extends ChatPaneRuntime {
         dispatchEvent: (event) => this.element.dispatchEvent(event),
       },
     );
+    this.bindTranscriptViewport(this.state);
     return this.state;
   }
 
@@ -364,4 +375,21 @@ class RenderTestChatPane extends ChatPaneRuntime {
 
 export function createRenderTestChatPane() {
   return createPaneTestHost("openclaw-chat-render-regression", RenderTestChatPane);
+}
+
+export function transcriptScrollFact(
+  pane: TestChatPane,
+  thread: HTMLElement,
+  delta: number,
+): TranscriptNativeScroll {
+  return {
+    viewport: {
+      scrollTop: thread.scrollTop,
+      scrollHeight: thread.scrollHeight,
+      clientHeight: thread.clientHeight,
+    },
+    delta,
+    programmatic: pane.transcript.isProgrammaticScroll,
+    maintenance: pane.transcript.isMaintenanceScroll,
+  };
 }

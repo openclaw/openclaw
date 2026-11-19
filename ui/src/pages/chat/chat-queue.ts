@@ -1,6 +1,9 @@
 import { compareChatQueueOrder, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
+import {
+  listStoredChatOutboxes,
+  readStoredChatOutbox,
+} from "../../lib/chat/outbox-store-projection.ts";
 import {
   type StoredChatOutboxScope,
   storedChatOutboxScopeKey,
@@ -88,9 +91,13 @@ export function readChatQueueForScope(
   host: ChatQueueScopedSessionHost,
   sessionKey: string,
   agentId?: string,
+  receipt?: { available: boolean },
 ): ChatQueueItem[] {
   const scope = resolveUiConversationIdentity(host, sessionKey, agentId);
-  return chatOutboxOwner(host).snapshot(host, scope);
+  const owner = chatOutboxOwner(host);
+  // Binding can adopt queued custody. Read absence only after those callbacks settle.
+  const durable = receipt ? (readStoredChatOutbox(host, scope, receipt)?.queue ?? []) : undefined;
+  return owner.snapshot(host, scope, durable);
 }
 
 export function readQueuedMessageById(

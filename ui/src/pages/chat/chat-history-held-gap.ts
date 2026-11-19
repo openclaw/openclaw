@@ -1,173 +1,121 @@
-import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SessionProjectionScope } from "@openclaw/gateway-client/browser";
+import { t } from "../../i18n/index.ts";
 import {
-  readTranscriptDisplayPosition,
-  type TranscriptDisplayPosition,
-} from "../../../../src/chat/transcript-display-position.ts";
-import {
-  nativeHistoryMessageIdentity,
-  nativeHistoryMessageSourceIdentity,
   nativeHistoryMessageSourceId,
-  prependUniqueNativeMessages,
+  nativeHistoryMessageSourceIdentity,
 } from "../../lib/chat/history-message-identity.ts";
-import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
+import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import {
-  CHAT_HISTORY_OLDER_PAGE_LIMIT,
-  requestOlderChatHistoryPage,
-} from "./chat-history-request.ts";
+  prepareChatHistoryPages,
+  nativeHistoryMessagePosition,
+  oldestPositionedHistoryMessage,
+} from "./chat-history-page-preparation.ts";
+import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
+import { CHAT_HISTORY_REQUEST_LIMIT } from "./chat-history-request-params.ts";
+import { requestOlderChatHistoryPage } from "./chat-history-request.ts";
 import {
   type ChatHistoryResult,
+  type ObservedChatHistoryResult,
   historySessionId,
   resolveChatHistoryPagination,
 } from "./chat-history-snapshot.ts";
+import { MAX_RESIDENT_SEGMENTS, prepareChatHistoryPacket } from "./chat-history-window.ts";
 import type { ChatState } from "./chat-state-contract.ts";
+import {
+  getChatSessionProjection,
+  ownsChatSessionProjectionScope,
+  readChatLocalOutputEntries,
+  readChatSessionProjectionScope,
+} from "./history-merge.ts";
+import { hasPendingManualChatScroll } from "./scroll.ts";
 
-function nativeHistoryMessagePosition(message: unknown) {
-  return readTranscriptDisplayPosition(
-    asNullableRecord(asNullableRecord(message)?.["__openclaw"])?.transcriptPosition,
+type HeldHistoryContinuity = {
+  scope: SessionProjectionScope & { sessionId: string; activeLeafEntryId: string };
+  cursor: string;
+  source: string;
+  messageId: string;
+};
+
+/** Capture only the accepted scope and native reader identity, never held bodies. */
+export function captureHeldHistoryContinuity(
+  state: ChatState,
+  cursor: string,
+): HeldHistoryContinuity | undefined {
+  const source = state.readTranscriptReaderSnapshot?.()?.anchor;
+  if (!state.chatHistoryPagination.hasNewer || !source || hasPendingManualChatScroll(state)) {
+    return undefined;
+  }
+  const messageId = nativeHistoryMessageSourceId(
+    state.chatMessages.find((message) => nativeHistoryMessageSourceIdentity(message) === source),
   );
+  const scope = getChatSessionProjection(state).scope;
+  const { sessionId, activeLeafEntryId } = scope;
+  return messageId && sessionId && activeLeafEntryId
+    ? { scope: { ...scope, sessionId, activeLeafEntryId }, cursor, source, messageId }
+    : undefined;
 }
 
-/** Display order can relocate activity; cursor coverage follows physical rows. */
-function oldestPositionedHistoryMessage(messages: unknown[]) {
-  let oldest: { message: unknown; position: TranscriptDisplayPosition } | undefined;
-  for (const message of messages) {
-    const position = nativeHistoryMessagePosition(message);
-    if (
-      position &&
-      (!oldest ||
-        (position.source === oldest.position.source && position.rawSeq < oldest.position.rawSeq))
-    ) {
-      oldest = { message, position };
-    }
+/** Only a fresh selected packet may replace a detached window after Stop. */
+export async function readContinuousHeldHistory(
+  state: ChatState,
+  client: NonNullable<ChatState["client"]>,
+  sessionKey: string,
+  requestAgentId: string | undefined,
+  predecessor: HeldHistoryContinuity,
+  observation: ObservedChatHistoryResult["observation"],
+  isCurrent: () => boolean,
+  signal: AbortSignal,
+) {
+  const ownsReader = () =>
+    isCurrent() &&
+    !hasPendingManualChatScroll(state) &&
+    state.readTranscriptReaderSnapshot?.()?.anchor === predecessor.source &&
+    ownsChatSessionProjectionScope(state, predecessor.scope);
+  if (!ownsReader()) {
+    return undefined;
   }
-  return oldest;
-}
-
-function retainedRawHistoryStart(pagination: ChatHistoryPagination): number | null {
-  const totalMessages = asSafeIntegerInRange(pagination.totalMessages, { min: 0 });
-  if (totalMessages === undefined) {
-    return null;
+  const continuity = {
+    cursor: predecessor.cursor,
+    activeLeafEntryId: predecessor.scope.activeLeafEntryId,
+  };
+  const page = await requestOlderChatHistoryPage(
+    client,
+    sessionKey,
+    requestAgentId,
+    { messageId: predecessor.messageId, sessionId: predecessor.scope.sessionId, continuity },
+    ownsReader,
+    signal,
+  );
+  if (!ownsReader()) {
+    return undefined;
   }
-  const retainedDepth = pagination.hasMore ? pagination.nextOffset : totalMessages;
-  if (retainedDepth === undefined) {
-    return null;
-  }
-  const start = totalMessages - retainedDepth + 1;
-  return asSafeIntegerInRange(start, { min: 1 }) ?? null;
-}
-
-export function reconcileHistoryTail(options: {
-  sameLeaf: boolean;
-  nextMessages: unknown[];
-  nextPagination: ChatHistoryPagination;
-  nextSessionId: string | null;
-  previousMessages: unknown[];
-  previousPagination: ChatHistoryPagination;
-  previousSessionId: string | null;
-}): { messages: unknown[]; pagination: ChatHistoryPagination } | null {
-  if (!options.previousSessionId || options.previousSessionId !== options.nextSessionId) {
-    return null;
-  }
-  // Pending/live rows without a native anchor remain owned by their reducer.
-  const previousMessages = options.sameLeaf
-    ? options.previousMessages
-    : options.previousMessages.filter(nativeHistoryMessageSourceId);
-  const previousByIdentity = new Map<string, unknown[]>();
-  for (const message of previousMessages) {
-    const identity = nativeHistoryMessageIdentity(message);
-    if (identity) {
-      const matches = previousByIdentity.get(identity) ?? [];
-      matches.push(message);
-      previousByIdentity.set(identity, matches);
-    }
-  }
-  // Identical history rows keep their render identity, including projected siblings.
-  const messages = options.nextMessages.map((message) => {
-    const identity = nativeHistoryMessageIdentity(message);
-    return (identity ? previousByIdentity.get(identity)?.shift() : undefined) ?? message;
-  });
-  const reconciled = { messages, pagination: options.nextPagination };
-  const edge = oldestPositionedHistoryMessage(messages);
-  const previousEdge = oldestPositionedHistoryMessage(previousMessages);
   if (
-    !options.nextPagination.hasMore ||
-    (!options.sameLeaf && !edge) ||
-    (edge && previousEdge && edge.position.source !== previousEdge.position.source)
+    page.windowReset ||
+    historySessionId(page) !== predecessor.scope.sessionId ||
+    page.continuity?.cursor !== continuity.cursor ||
+    page.continuity.activeLeafEntryId !== continuity.activeLeafEntryId ||
+    !page.continuity.accepted ||
+    !page.deltaCursor ||
+    !Object.hasOwn(page.sessionInfo ?? {}, "activeLeafEntryId") ||
+    !page.messages?.some(
+      (message) => nativeHistoryMessageSourceIdentity(message) === predecessor.source,
+    )
   ) {
-    return reconciled;
+    // A later around read cannot validate the earlier tail's bodies. Keep the
+    // failed held view visible; Latest owns an explicit fresh-window recovery.
+    throw new Error(t("chat.messages.originalUnavailable"));
   }
-  const previousTotal = options.previousPagination.totalMessages;
-  const nextTotal = options.nextPagination.totalMessages;
-  if (previousTotal !== undefined && nextTotal !== undefined && nextTotal < previousTotal) {
-    return reconciled;
-  }
-  const nextStart = retainedRawHistoryStart(options.nextPagination);
-  const edgeMessage = edge?.message ?? messages[0];
-  const firstSource = nativeHistoryMessageSourceIdentity(edgeMessage);
-  const overlap = firstSource
-    ? previousMessages.findIndex((message) => {
-        const position = nativeHistoryMessagePosition(message);
-        return (
-          nativeHistoryMessageSourceIdentity(message) === firstSource &&
-          (!edge ||
-            (position?.source === edge.position.source && position.rawSeq === edge.position.rawSeq))
-        );
-      })
-    : previousMessages.indexOf(edgeMessage);
-  // Matching source IDs prove overlap without interpreting native sequences as
-  // CLI ordinals. An empty visible window needs authoritative raw coverage;
-  // a hidden page still advances the admitted oldest edge.
-  const adjoining =
-    options.sameLeaf &&
-    typeof previousTotal === "number" &&
-    nextStart !== null &&
-    (previousMessages.length === 0
-      ? nextStart <= previousTotal + 1
-      : nextStart === previousTotal + 1);
-  if (overlap < 0 && !adjoining) {
-    return reconciled;
-  }
-  // Shared ancestry ends at the physical anchor, not its relocated display index.
-  const prefix = edge
-    ? previousMessages.filter((message) => {
-        const position = nativeHistoryMessagePosition(message);
-        return position?.source === edge.position.source && position.rawSeq < edge.position.rawSeq;
-      })
-    : overlap >= 0
-      ? previousMessages.slice(0, overlap)
-      : previousMessages;
-  const unavailable =
-    options.previousPagination.hasMore &&
-    !options.previousPagination.olderCursor &&
-    !options.previousPagination.needsBoundary;
-  // A missing edge never certified traversal. A fresh edge covers this tail
-  // only; any older held prefix must reopen its own source boundary.
-  if (unavailable && prefix.length === 0) {
-    return reconciled;
-  }
-  const previousStart = retainedRawHistoryStart(options.previousPagination);
-  const nextOffset =
-    previousStart !== null && typeof nextTotal === "number"
-      ? nextTotal - previousStart + 1
-      : undefined;
   return {
-    messages: [...prefix, ...messages],
-    pagination: {
-      ...options.previousPagination,
-      ...(unavailable ? { needsBoundary: true as const } : {}),
-      ...(nextTotal !== undefined ? { totalMessages: nextTotal } : {}),
-      ...(options.previousPagination.hasMore && nextOffset !== undefined ? { nextOffset } : {}),
-    },
+    result: { ...page, observation },
+    scope: predecessor.scope,
+    ownsReader,
+    // Carry only the loaded function; hydration rechecks current custody at publication.
+    preparePages: prepareChatHistoryPages,
   };
 }
 
-/**
- * Older cursor for the rows between the pane's held oldest edge
- * and a bounded tail that no longer reaches it. The older page and the tail are
- * both server rows, so filling the gap never trusts held live rows. Gaps larger
- * than one older page keep the lazy boundary.
- */
+/** A Stop reset may cut a transcript held from its start. Only fresh server
+ * packets can refill it; larger gaps keep their lazy, authoritative boundary. */
 function heldHistoryGapCursor(options: {
   result: ChatHistoryResult;
   previousMessages: unknown[];
@@ -181,6 +129,7 @@ function heldHistoryGapCursor(options: {
     next.nextOffset === undefined ||
     next.totalMessages === undefined ||
     options.result.windowReset === true ||
+    options.previousPagination.hasNewer ||
     options.previousMessages.length === 0 ||
     !options.previousSessionId ||
     options.previousSessionId !== historySessionId(options.result)
@@ -212,17 +161,13 @@ function heldHistoryGapCursor(options: {
   const gap =
     omittedPrefix === undefined ? undefined : next.totalMessages - next.nextOffset - omittedPrefix;
   // Raw counts bound one authoritative read, never certify the held ancestry.
-  return gap !== undefined && gap >= 0 && gap <= CHAT_HISTORY_OLDER_PAGE_LIMIT
+  return gap !== undefined && gap >= 0 && gap <= CHAT_HISTORY_REQUEST_LIMIT * MAX_RESIDENT_SEGMENTS
     ? next.olderCursor
     : null;
 }
 
-/**
- * Compaction and Stop can reset a delta cursor to a bounded tail.
- * Read the gap to the oldest edge this pane already shows before publishing,
- * so held rows never become earlier history. A failed read keeps the tail and
- * its retryable boundary.
- */
+/** Reuse hydration's request claim and the resident admission budget. Coverage
+ * stays separate: concatenated rows must never earn one wire-packet certificate. */
 export async function fillHeldHistoryGap<Tail extends ChatHistoryResult>(
   state: ChatState,
   client: NonNullable<ChatState["client"]>,
@@ -231,31 +176,104 @@ export async function fillHeldHistoryGap<Tail extends ChatHistoryResult>(
   tail: Tail,
   isCurrent: () => boolean,
   signal: AbortSignal,
-): Promise<Tail> {
-  const cursor = heldHistoryGapCursor({
+): Promise<{ result: Tail; pagination?: ChatHistoryPagination }> {
+  let cursor = heldHistoryGapCursor({
     result: tail,
     previousMessages: state.chatMessages,
     previousPagination: state.chatHistoryPagination,
     previousSessionId: state.currentSessionId ?? null,
   });
-  const older = cursor
-    ? await requestOlderChatHistoryPage(
-        client,
-        sessionKey,
-        requestAgentId,
-        { cursor },
-        isCurrent,
-        signal,
-      ).catch(() => undefined)
-    : undefined;
-  if (!older || older.windowReset || historySessionId(older) !== historySessionId(tail)) {
-    return tail;
+  if (!cursor) {
+    return { result: tail };
   }
-  return {
-    ...tail,
-    messages: prependUniqueNativeMessages(older.messages ?? [], tail.messages ?? []),
-    hasMore: older.hasMore,
-    olderCursor: older.olderCursor,
-    nextOffset: older.nextOffset,
-  };
+  const scope = readChatSessionProjectionScope(state, {
+    sessionKey,
+    agentId: requestAgentId,
+    sessionId: historySessionId(tail),
+    ...(Object.hasOwn(tail.sessionInfo ?? {}, "activeLeafEntryId")
+      ? { activeLeafEntryId: tail.sessionInfo?.activeLeafEntryId?.trim() || null }
+      : {}),
+  });
+  const messages = visibleChatHistoryMessages(tail.messages ?? []);
+  const pagination = resolveChatHistoryPagination(tail);
+  // The old displayed viewport cannot constrain a fresh tail refill. Its
+  // already accepted sources are protected explicitly throughout this chain.
+  let prepared = prepareChatHistoryPages(
+    state,
+    [
+      {
+        ...tail,
+        messages,
+        packet: prepareChatHistoryPacket(messages, pagination, tail.newerCursor),
+      },
+    ],
+    "around",
+    readChatLocalOutputEntries(state),
+    { messages: [], pagination: { hasMore: false }, reader: null, scope },
+  );
+  let result = tail;
+  if (!prepared.fits) {
+    return { result };
+  }
+  const heldOldest = oldestPositionedHistoryMessage(state.chatMessages);
+  for (let attempt = 0; cursor && attempt < MAX_RESIDENT_SEGMENTS; attempt++) {
+    const older = await requestOlderChatHistoryPage(
+      client,
+      sessionKey,
+      requestAgentId,
+      { cursor },
+      isCurrent,
+      signal,
+    ).catch(() => undefined);
+    if (
+      !isCurrent() ||
+      signal.aborted ||
+      !older ||
+      older.windowReset ||
+      historySessionId(older) !== historySessionId(tail)
+    ) {
+      break;
+    }
+    const next = prepareChatHistoryPages(
+      state,
+      [older],
+      "older",
+      readChatLocalOutputEntries(state),
+      { messages: prepared.messages, pagination: prepared.pagination, reader: null, scope },
+    );
+    const retained = new Set(next.pagination.segments?.flatMap((segment) => segment.sources));
+    // Refilling cannot evict its fresh tail or an already accepted gap packet.
+    // A non-fitting next packet leaves the last accepted edge available lazily.
+    if (
+      !next.fits ||
+      prepared.pagination.segments?.some((segment) =>
+        segment.sources.some((source) => !retained.has(source)),
+      ) ||
+      (next.pagination.hasMore && next.pagination.olderCursor === cursor)
+    ) {
+      break;
+    }
+    prepared = next;
+    result = {
+      ...tail,
+      messages: next.messages,
+      packet: undefined,
+      hasMore: next.pagination.hasMore,
+      olderCursor: next.pagination.hasMore ? next.pagination.olderCursor : undefined,
+      nextOffset: next.pagination.hasMore ? next.pagination.nextOffset : undefined,
+    };
+    const freshOldest = oldestPositionedHistoryMessage(next.messages);
+    // Stop at the held physical edge; equal ordinals from a rewritten source
+    // cannot certify continuity. Missing positions retain the bounded fallback.
+    if (
+      heldOldest &&
+      freshOldest &&
+      heldOldest.position.source === freshOldest.position.source &&
+      freshOldest.position.rawSeq <= heldOldest.position.rawSeq
+    ) {
+      break;
+    }
+    cursor = next.pagination.hasMore ? (next.pagination.olderCursor ?? null) : null;
+  }
+  return result === tail ? { result } : { result, pagination: prepared.pagination };
 }

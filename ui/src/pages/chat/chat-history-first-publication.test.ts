@@ -22,7 +22,11 @@ it("retires a kept first read when a stronger change follows an append", async (
     kind: "direct",
     updatedAt: 1,
   };
-  const text = (value: string) => ({ role: "assistant", content: value });
+  const text = (value: string, seq: number) => ({
+    role: "assistant",
+    content: value,
+    __openclaw: { id: `message-${seq}`, seq },
+  });
   const reads: Array<ReturnType<typeof createDeferred<ChatHistoryResult>>> = [];
   const history = vi.fn<GatewayRequestHandler>(() => {
     const read = createDeferred<ChatHistoryResult>();
@@ -42,7 +46,7 @@ it("retires a kept first read when a stronger change follows an append", async (
   void loadChatHistory(pane.state, { supersedeInFlight: "append", deferBranches: true });
   void loadChatHistory(pane.state, { supersedeInFlight: true, deferBranches: true });
   reads[0]!.resolve({
-    messages: [text("Before the reset")],
+    messages: [text("Before the reset", 1)],
     sessionId: row.sessionId,
     sessionInfo: row,
   });
@@ -50,10 +54,10 @@ it("retires a kept first read when a stronger change follows an append", async (
   expect(pane.state.chatMessages).toEqual([]);
 
   reads[1]!.resolve({
-    messages: [text("After the reset")],
+    messages: [text("After the reset", 2)],
     sessionId: row.sessionId,
     sessionInfo: row,
   });
   await first;
-  expect(pane.state.chatMessages).toEqual([text("After the reset")]);
+  expect(pane.state.chatMessages).toEqual([text("After the reset", 2)]);
 });

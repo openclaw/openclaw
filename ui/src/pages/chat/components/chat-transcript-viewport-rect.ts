@@ -24,6 +24,21 @@ function sameDimension(previous: number | null | undefined, next: number): boole
 
 /** Delivers each viewport geometry once, including pane and sidebar pre-measurement. */
 export class TranscriptViewportRect {
+  // The caller can insert this root after its first native commit. Resolve the
+  // scroll parent lazily or a stable ref can permanently capture null.
+  static resolveScrollElement(
+    content: HTMLDivElement | null,
+    connected: boolean,
+  ): HTMLDivElement | null {
+    const parent = content?.parentElement;
+    const viewport = parent?.classList.contains("chat-thread-content")
+      ? parent.parentElement
+      : parent;
+    return connected && viewport instanceof HTMLDivElement && viewport.isConnected
+      ? viewport
+      : null;
+  }
+
   private observedWidth: number | null = null;
   private observedHeight: number | null = null;
   private syncRect: (() => void) | null = null;

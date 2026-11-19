@@ -10,6 +10,7 @@ import type {
   SessionRecentConversationTurn,
 } from "../config/sessions/transcript-recent-text.js";
 import type {
+  TranscriptReadContinuityResult,
   TranscriptAnchorPageOptions,
   TranscriptRecentReadLimits,
 } from "../sessions/transcript-anchor-page.js";
@@ -46,6 +47,7 @@ export type ReadRecentSessionMessagesResult = {
   omittedOversized?: boolean;
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
+  continuity?: TranscriptReadContinuityResult;
   displaySource?: string;
   readWindow?: TranscriptReadWindow;
   windowReset?: boolean;

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -25,14 +26,15 @@ suite.define(() => {
       },
       async ({ page }) => {
         await page.clock.install();
+        const { messages } = prepareChatHistoryFixture([
+          { role: "user", content: "Add up these task estimates." },
+          { role: "assistant", content: answer },
+        ]);
         const gateway = await installMockGateway(page, {
           awaitInitialRoster: false,
           sessionKey: key,
           operatorScopes: ["operator.sessions.read", "operator.sessions.write"],
-          historyMessages: [
-            { role: "user", content: "Add up these task estimates." },
-            { role: "assistant", content: answer },
-          ],
+          historyMessages: messages,
           sessions: [{ key, label: "Task estimates", status: "done", hasActiveRun: false }],
           methodResponses: {
             "sessions.messages.subscribe": {
@@ -57,6 +59,7 @@ suite.define(() => {
           key,
           agentId: "main",
           subscribed: true,
+          initialHistory: { ok: true, payload: { messages } },
         });
         await page.clock.runFor(1_500);
         await page.screenshot({ path: path.join(suite.artifactDir, "subscription-recovery.png") });

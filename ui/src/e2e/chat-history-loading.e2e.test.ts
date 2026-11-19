@@ -6,6 +6,7 @@ import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-scr
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { newChatPage } from "./chat-flow.test-support.ts";
 import { expectHistoryBoundaryState } from "./chat-history-boundary.test-support.ts";
+import { historyMessageCount } from "./chat-history-pagination-probe.test-support.ts";
 import { expectTranscriptLayoutCommitted } from "./claude-sessions.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { captureFrame } from "./sidebar-assertions.test-support.ts";
@@ -23,7 +24,6 @@ function historyPage(messages: unknown[], hasMore: boolean, nextOffset?: number)
     hasMore,
     ...(hasMore && nextOffset !== undefined ? { olderCursor: `older-${nextOffset}` } : {}),
     nextOffset,
-    totalMessages: 22,
     sessionId: "native-underfill-pagination",
     thinkingLevel: null,
   };
@@ -103,6 +103,7 @@ suite.define(() => {
           [
             {
               role: "assistant",
+              __openclaw: { seq: 1 },
               content: [
                 {
                   type: "toolCall",
@@ -114,6 +115,7 @@ suite.define(() => {
             },
             {
               role: "toolResult",
+              __openclaw: { seq: 2 },
               toolName: "read",
               toolCallId: "read-1",
               content: "Synthetic tool result",
@@ -140,7 +142,7 @@ suite.define(() => {
 
   it("shows an inline retry after earlier history fails on mobile and recovers in place", async () => {
     await suite.withPage(
-      { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
+      { viewport: { width: 320, height: 844 }, isMobile: true, hasTouch: true },
       async ({ page }) => {
         const recent = {
           role: "assistant",
@@ -167,13 +169,32 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
         await gateway.waitForRequest("chat.history");
+        const failure =
+          "The connection was interrupted. " +
+          "Additional diagnostic context. ".repeat(80) +
+          "Try again.";
         await gateway.rejectDeferred(
           "chat.history",
-          { code: "UNAVAILABLE", message: "The connection was interrupted. Try again." },
+          { code: "UNAVAILABLE", message: failure },
           { match: { cursor: "older-1" } },
         );
         const retry = pane.getByRole("button", { name: "Retry earlier messages", exact: true });
         await expect.poll(() => retry.count()).toBe(1);
+        expect(await retry.getByRole("alert").textContent()).toContain(failure);
+        const boundary = await pane.locator(".chat-history-boundary").boundingBox();
+        const action = await retry.boundingBox();
+        expect(boundary).not.toBeNull();
+        expect(action).not.toBeNull();
+        expect(boundary!.height).toBe(44);
+        expect(action!.height).toBe(44);
+        expect(action!.x).toBeGreaterThanOrEqual(boundary!.x);
+        expect(action!.x + action!.width).toBeLessThanOrEqual(boundary!.x + boundary!.width);
+        expect(
+          await retry.getByRole("alert").evaluate((element) => ({
+            clipped: element.scrollWidth > element.clientWidth,
+            overflow: getComputedStyle(element).textOverflow,
+          })),
+        ).toEqual({ clipped: true, overflow: "ellipsis" });
         await retry.click();
         await pane
           .getByText("Please check the report and compare the available options.", { exact: true })
@@ -191,7 +212,7 @@ suite.define(() => {
   it("keeps keyboard focus on the earlier-history action while older history loads", async () => {
     const page = await newChatPage(suite);
     const message = (seq: number) => ({
-      __openclaw: { seq },
+      __openclaw: { id: `focus-${seq}`, seq },
       role: seq % 2 ? "user" : "assistant",
       content: [{ type: "text", text: `Conversation message ${seq}` }],
       timestamp: 1_800_000_000_000 + seq,
@@ -200,16 +221,18 @@ suite.define(() => {
       Array.from({ length: count }, (_, index) => message(first + index));
     const gateway = await installMockGateway(page, {
       deferredRequests: [{ method: "chat.history", match: { cursor: "older-40" } }],
-      // A landed page stages the next one in the background; holding it keeps
-      // the post-load boundary state independent of that prefetch.
-      heldRequests: [{ method: "chat.history", match: { cursor: "older-60" } }],
+      // Both replies fit their adaptive request envelopes and leave older data.
+      // The bounded action must finish without disabling the focused control.
       featureMethods: ["chat.metadata", "chat.startup"],
       methodResponses: {
-        "chat.startup": historyPage(messages(41, 40), true, 40),
+        "chat.startup": historyPage(messages(441, 40), true, 40),
         "chat.history": {
           cases: [
-            { match: { cursor: "older-40" }, response: historyPage(messages(21, 20), true, 60) },
-            { match: { cursor: "older-60" }, response: historyPage(messages(1, 20), false) },
+            {
+              match: { cursor: "older-40" },
+              response: historyPage(messages(361, 80), true, 60),
+            },
+            { match: { cursor: "older-60" }, response: historyPage(messages(121, 240), true, 360) },
           ],
         },
       },
@@ -220,7 +243,7 @@ suite.define(() => {
       );
     await page.goto(`${suite.server.baseUrl}chat`);
     const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-    await page.getByText("Conversation message 80", { exact: true }).waitFor();
+    await page.getByText("Conversation message 480", { exact: true }).waitFor();
     await expectHistoryBoundaryState(pane, false);
     const action = pane.locator(".chat-history-boundary__action");
     // Chromium keeps reporting a control that turns disabled as focused until its
@@ -247,8 +270,10 @@ suite.define(() => {
 
     await gateway.resolveDeferred("chat.history", undefined, { match: { cursor: "older-40" } });
     await expect.poll(cursors).toEqual(["older-40", "older-60"]);
+    await expect.poll(() => action.getAttribute("aria-busy")).toBe("false");
     await expectHistoryBoundaryState(pane, false);
     expect(await actionFocused()).toBe(true);
+    expect(await historyMessageCount(pane)).toBe(360);
     await page.close();
   });
 

@@ -1,26 +1,16 @@
 /* @vitest-environment jsdom */
 import { expect, type TestAPI } from "vitest";
-import type { MockGatewayWindow } from "./control-ui-e2e-contract.ts";
-import {
-  createControlUiMockGatewayInitScript,
-  type ControlUiMockGatewayScenario,
-} from "./control-ui-e2e.ts";
-import { flushMockTimers, mockGatewayTest as it } from "./mock-gateway-page.test-support.ts";
+import type { ControlUiMockGatewayScenario } from "./control-ui-e2e.ts";
+import { connectMockGateway, mockGatewayTest as it } from "./mock-gateway-page.test-support.ts";
 
 type GatewayPage = typeof it extends TestAPI<{ gatewayPage: infer Page }> ? Page : never;
 const sessionKey = "agent:main:main";
 const input = (id: string) => ({ sessionKey, message: id, idempotencyKey: id });
 async function connect(page: GatewayPage, scenario: ControlUiMockGatewayScenario = {}) {
-  page.execute(createControlUiMockGatewayInitScript(scenario));
-  const socket = page.connect();
-  await flushMockTimers();
-  const gateway = (page.window as MockGatewayWindow).openclawControlUiE2eGateway;
-  if (!gateway) {
-    throw new Error("Mock Gateway was not installed");
-  }
+  const socket = await connectMockGateway(page, scenario);
   const readHistory = (id: string, inputRunIds?: string[], key = sessionKey) =>
     socket.request(id, "chat.history", { sessionKey: key, inputRunIds });
-  return { ...socket, gateway, readHistory };
+  return { ...socket, readHistory };
 }
 
 it.for([false, true])(

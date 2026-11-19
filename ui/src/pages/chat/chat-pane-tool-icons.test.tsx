@@ -36,6 +36,7 @@ it("renders plugin artwork for accepted history absent from the capped session l
       {
         role: "assistant",
         timestamp: 1,
+        __openclaw: { seq: 1 },
         content: [{ type: "toolCall", id: "example-call", name: "example_tool", arguments: {} }],
       },
     ],

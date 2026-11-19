@@ -37,11 +37,8 @@ import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
-import {
-  cacheChatSessionSnapshot,
-  readChatSessionSnapshot,
-  type ChatSessionSnapshot,
-} from "./session-message-cache.ts";
+import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 
 function createLiveSessionContext(client: GatewayBrowserClient, sessions?: SessionCapability) {
   const initial = createInitializationContext();

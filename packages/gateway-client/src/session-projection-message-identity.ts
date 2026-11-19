@@ -187,6 +187,10 @@ export function sameTranscriptIdentity(
 export type SessionProjectionEntry = {
   message: unknown;
   identity: SessionMessageIdentity | null;
+  /** Client-owned output is transient presentation, never transcript or run custody. */
+  localOutput?: true;
+  /** Explicit source admission placed this transient output before any durable history. */
+  atHistoryStart?: true;
   afterSequence?: number | null;
   live: boolean;
   pending: boolean;
@@ -221,4 +225,29 @@ export function createSessionProjectionEntry(
     pending: pendingRunId !== null,
     pendingRunId,
   };
+}
+
+export function createSessionProjectionEntries(
+  messages: readonly unknown[],
+): SessionProjectionEntry[] {
+  let pendingUserRunId: string | null = null;
+  return messages.map((message) => {
+    const entry = createSessionProjectionEntry(message);
+    if (entry.identity?.role === "user") {
+      pendingUserRunId = entry.pending ? entry.pendingRunId : null;
+      return entry;
+    }
+    if (
+      pendingUserRunId &&
+      entry.identity?.role === "assistant" &&
+      !entry.pending &&
+      isLocallyOptimisticSessionMessage(message)
+    ) {
+      return createSessionProjectionEntry(message, { pendingRunId: pendingUserRunId });
+    }
+    if (!isLocallyOptimisticSessionMessage(message)) {
+      pendingUserRunId = null;
+    }
+    return entry;
+  });
 }

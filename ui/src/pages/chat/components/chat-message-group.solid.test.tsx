@@ -347,7 +347,6 @@ it("keeps frame stream options narrow and live through replacement and first-bub
       const currentStreamOptions = streamOptions();
       return {
         streamOptions: currentStreamOptions,
-        workPreviews: new Map(),
         partDependencies: (part) => [part, currentStreamOptions],
         renderGroupOptions: () => ({ showReasoning: false }),
         isWorkExpanded: () => false,

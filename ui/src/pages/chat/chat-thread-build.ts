@@ -2,17 +2,14 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
 import { readModelFallbackNotice } from "../../../../src/shared/model-fallback-notice.js";
-import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { t } from "../../i18n/index.ts";
 import {
-  type ChatGuardianNotice,
   type ChatItem,
   type MessageGroup,
   accumulatedStreamText,
   advanceAccumulatedStreamText,
   streamSegmentHasItemId,
   trimAccumulatedStreamPrefix,
-  type ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
 import { stripHeartbeatTokenForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
@@ -45,21 +42,14 @@ import {
   collectCanvasTurns,
   reconcileLiveCanvasPreviews,
 } from "./chat-thread-canvas.ts";
-import {
-  groupChatDisplayItems,
-  prepareChatStreamOnset,
-  type ChatThreadDisplayProps,
-} from "./chat-thread-display.ts";
+import type { BuildChatItemsProps } from "./chat-thread-contract.ts";
+import { groupChatDisplayItems, prepareChatStreamOnset } from "./chat-thread-display.ts";
 import {
   displayChatHistory,
   isHiddenChatCommentary,
   type ChatItemsFacts,
 } from "./chat-thread-facts.ts";
-import {
-  placeChatInputs,
-  type ChatInputOrderState,
-  type ChatInputPlacementProps,
-} from "./chat-thread-inputs.ts";
+import { placeChatInputs, type ChatInputOrderState } from "./chat-thread-inputs.ts";
 import {
   appendCanvasBlockToAssistantMessage,
   appendActiveRunItem,
@@ -94,31 +84,6 @@ import {
   createStreamSegmentProjector,
 } from "./chat-thread-stream-projection.ts";
 import { readProjectedContinuation, safeNormalizeMessage } from "./chat-turn-boundary.ts";
-import type { CompactionStatus } from "./tool-stream-contract.ts";
-
-export type BuildChatItemsProps = ChatInputPlacementProps &
-  ChatThreadDisplayProps & {
-    paneId: string;
-    sessionKey: string;
-    archiveNotice?: Extract<ChatItem, { kind: "notice" }>;
-    compactionStatus?: CompactionStatus | null;
-    /** Invalidates cached display copy when the active UI language changes. */
-    locale?: string;
-    messages: unknown[];
-    toolMessages: unknown[];
-    guardianNotices?: ChatGuardianNotice[];
-    streamSegments: ChatStreamSegment[];
-    persistCommentary?: boolean;
-    /** The answer is visible or the runtime only owns background settlement. */
-    runFinalizing?: boolean;
-    /** True while the current session has an abortable live run. */
-    runActive?: boolean;
-    /** Set while a run that handed off is idle and its subagents are still running. */
-    subagentWait?: { startedAt: number; runId: string };
-    questionPrompts?: readonly QuestionPrompt[];
-    /** True while chat history is loading (initial load or background reload). */
-    loading?: boolean;
-  };
 
 export function buildChatItems(
   props: BuildChatItemsProps,

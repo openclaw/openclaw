@@ -27,8 +27,13 @@ it.each<[string, boolean]>([
   if (retry) {
     useFakeClock();
   }
-  const cached = retry ? [{ role: "assistant", content: "Cached conversation" }] : [];
-  const completed = [...cached, { role: "assistant", content: "Completed before admission." }];
+  const cached = retry
+    ? [{ role: "assistant", content: "Cached conversation", __openclaw: { seq: 1 } }]
+    : [];
+  const completed = [
+    ...cached,
+    { role: "assistant", content: "Completed before admission.", __openclaw: { seq: 2 } },
+  ];
   const key = "agent:main:selected";
   const rpc = "sessions.messages.subscribe";
   const failure = "Live stream subscription failed";

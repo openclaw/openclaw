@@ -1,3 +1,4 @@
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
 import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
 import {
@@ -24,20 +25,31 @@ import {
 import { resetWorkingProgress } from "./chat-progress.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
 import type { SystemEventRenderItem } from "./chat-system-event-grouping.ts";
-import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
+import { buildChatItems } from "./chat-thread-build.ts";
 import { collectOwnedCanvasPreviews, stripOwnedCanvasShortcodes } from "./chat-thread-canvas.ts";
-import type { ChatItemsFacts } from "./chat-thread-facts.ts";
+import type { BuildChatItemsProps } from "./chat-thread-contract.ts";
+import {
+  CHAT_ITEM_FIELDS,
+  sameChatItem,
+  sameFields,
+  type ChatItemsFacts,
+} from "./chat-thread-facts.ts";
+import { retireChatGroupingSources } from "./chat-thread-grouping-data.ts";
 import { sameChatItemsStructuralInput, sameEntries } from "./chat-thread-input-match.ts";
 import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
 import { sanitizeStreamText } from "./chat-thread-items.ts";
 import type { PrependFacts } from "./chat-thread-prepend.ts";
-import { carryMovedDisclosures } from "./chat-tool-activity-coalesce.ts";
+import {
+  carryMovedDisclosures,
+  retireCoalescedMessageSources,
+} from "./chat-tool-activity-coalesce.ts";
 import { activityDisclosureCalls } from "./components/chat-activity-projection.ts";
 import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
 type CachedChatItems = {
   generation: number;
   input: BuildChatItemsProps | null;
+  sources: WeakSet<object>;
   items: ReturnType<typeof buildChatItems>;
   liveStream: {
     index: number;
@@ -104,7 +116,90 @@ const expansionMapVersions = new WeakMap<ReadonlyMap<string, unknown>, number>()
 const expansionListeners = new WeakMap<ReadonlyMap<string, unknown>, Set<() => void>>();
 const explicitToolExpansions = new WeakMap<ReadonlyMap<string, unknown>, Set<string>>();
 
-export function resetChatThreadState(paneId?: string): void {
+/** Release retired dependencies without throwing away independent survivor rows. */
+export function retireChatThreadSources(paneId: string, messages: readonly unknown[]): void {
+  const sources = new Set(messages);
+  for (const projections of chatItemsByPane.get(paneId)?.values() ?? []) {
+    for (const view of ["visible", "unfiltered"] as const) {
+      const cached = projections[view];
+      if (!cached) {
+        continue;
+      }
+      // Hidden panes may retire repeatedly without another build. Keep only weak
+      // raw-source membership, never old inputs or prepend facts that retain bodies.
+      cached.input = null;
+      cached.liveStream = null;
+      cached.facts = undefined;
+      for (const value of messages) {
+        const source = asRecord(value);
+        if (source) {
+          cached.sources.delete(source);
+        }
+      }
+      const retained = (value: unknown) => {
+        const source = asRecord(value);
+        return (
+          source !== null &&
+          cached.sources.has(source) &&
+          source["__openclawToolStreamLive"] !== true
+        );
+      };
+      cached.items = cached.items.filter((item) => {
+        const dependencies =
+          item.kind === "group"
+            ? [
+                ...item.messages.map((entry) => entry.message),
+                ...[item.replyToMessage, item.replyTurnSource, item.replyCurrentSource].flatMap(
+                  (entry) => (entry ? [entry.message] : []),
+                ),
+              ]
+            : item.kind === "message"
+              ? [item.message]
+              : item.kind === "stream" && item.replyToMessage
+                ? [item.replyToMessage.message]
+                : [];
+        const keep =
+          (item.kind === "message" || (item.kind === "group" && !item.isStreaming)) &&
+          dependencies.every(retained);
+        if (!keep) {
+          // Synthetic Canvas/tool rows can key shared memos through a surviving
+          // raw neighbor. Retire those derived owners, not certified raw survivors.
+          for (const value of dependencies) {
+            const source = asRecord(value);
+            if (source && !cached.sources.has(source)) {
+              sources.add(source);
+            }
+          }
+        }
+        return keep;
+      });
+    }
+  }
+  const retired = [...sources];
+  retireChatGroupingSources([...retired, ...retireCoalescedMessageSources(retired)]);
+}
+
+export function resetChatThreadState(
+  paneId?: string,
+  retiredMessages: readonly unknown[] = [],
+): void {
+  const sources = [...retiredMessages];
+  const panes = paneId ? [chatItemsByPane.get(paneId)] : [...chatItemsByPane.values()];
+  for (const sessions of panes) {
+    for (const projections of sessions?.values() ?? []) {
+      for (const view of ["visible", "unfiltered"] as const) {
+        for (const item of projections[view]?.items ?? []) {
+          if (item.kind === "message") {
+            sources.push(item.message);
+          } else if (item.kind === "group") {
+            sources.push(...item.messages.map((entry) => entry.message));
+          }
+        }
+      }
+    }
+  }
+  // Coalesced and Canvas projections can own grouping keys distinct from raw rows.
+  retireChatGroupingSources([...sources, ...retireCoalescedMessageSources(sources)]);
   if (paneId) {
     chatItemsByPane.delete(paneId);
     return;
@@ -113,126 +208,6 @@ export function resetChatThreadState(paneId?: string): void {
   resetWorkingProgress();
   toolCardStateBySession.clear();
   expandedUserMessagesBySession.clear();
-}
-
-type ReplySource = MessageGroup["replyToMessage"];
-
-function sameReplySource(previous: ReplySource, next: ReplySource): boolean {
-  return previous?.key === next?.key && previous?.message === next?.message;
-}
-
-function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
-  // Source message identity owns the row timestamp too: normalization supplies
-  // Date.now() for missing timestamps, which must not churn stable rows.
-  return (
-    previous.role === next.role &&
-    previous.senderLabel === next.senderLabel &&
-    sameFields(previous.senderSession, next.senderSession, CHAT_ITEM_FIELDS.senderSession) &&
-    messageClientSourcesKey(previous.sourceClients ?? []) ===
-      messageClientSourcesKey(next.sourceClients ?? []) &&
-    JSON.stringify(previous.sender) === JSON.stringify(next.sender) &&
-    JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
-    sameReplySource(previous.replyToMessage, next.replyToMessage) &&
-    previous.replyPreviousMessageId === next.replyPreviousMessageId &&
-    previous.replyShared === next.replyShared &&
-    sameReplySource(previous.replyTurnSource, next.replyTurnSource) &&
-    sameReplySource(previous.replyCurrentSource, next.replyCurrentSource) &&
-    previous.isStreaming === next.isStreaming &&
-    previous.visibleContent === next.visibleContent &&
-    previous.startsActivityGroup === next.startsActivityGroup &&
-    previous.runId === next.runId &&
-    previous.messages.length === next.messages.length &&
-    previous.messages.every((entry, index) => {
-      const candidate = next.messages[index];
-      return (
-        candidate !== undefined &&
-        entry.key === candidate.key &&
-        entry.message === candidate.message &&
-        JSON.stringify(entry.replyTarget) === JSON.stringify(candidate.replyTarget) &&
-        entry.hasVisibleContent === candidate.hasVisibleContent
-      );
-    })
-  );
-}
-
-const CHAT_ITEM_FIELDS = {
-  message: ["message"],
-  notice: [
-    "text",
-    "label",
-    "handoffBoundary",
-    "activityBoundary",
-    "startsTurn",
-    "boundaryId",
-    "timestamp",
-    "systemEvent",
-    "repeatCount",
-  ],
-  divider: [
-    "compaction",
-    "compactionId",
-    "label",
-    "metric",
-    "description",
-    "timestamp",
-    "systemEvent",
-  ],
-  question: ["questionId", "startedAt"],
-  senderSession: ["sessionKey", "agentId", "label"],
-} as const;
-
-function sameFields<T extends object>(
-  previous: T | null | undefined,
-  next: T | null | undefined,
-  fields: readonly (keyof T)[],
-): boolean {
-  return fields.every((field) => previous?.[field] === next?.[field]);
-}
-
-function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
-  if (previous.kind !== next.kind || previous.key !== next.key) {
-    return false;
-  }
-  switch (next.kind) {
-    case "group":
-      return previous.kind === "group" && sameMessageGroup(previous, next);
-    case "message":
-      return previous.kind === "message" && sameFields(previous, next, CHAT_ITEM_FIELDS.message);
-    case "notice":
-      return (
-        previous.kind === "notice" &&
-        sameFields(previous, next, CHAT_ITEM_FIELDS.notice) &&
-        sameFields(previous.modelChange, next.modelChange, ["from", "to"])
-      );
-    case "divider":
-      return previous.kind === "divider" && sameFields(previous, next, CHAT_ITEM_FIELDS.divider);
-    case "stream":
-      return (
-        previous.kind === "stream" &&
-        previous.text === next.text &&
-        previous.thinking === next.thinking &&
-        previous.startedAt === next.startedAt &&
-        previous.isStreaming === next.isStreaming &&
-        JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
-        sameReplySource(previous.replyToMessage, next.replyToMessage) &&
-        previous.replyPreviousMessageId === next.replyPreviousMessageId &&
-        previous.runId === next.runId &&
-        previous.boundaryId === next.boundaryId
-      );
-    case "reading-indicator":
-      return (
-        previous.kind === "reading-indicator" &&
-        previous.startedAt === next.startedAt &&
-        previous.waitingOn === next.waitingOn &&
-        previous.request?.askedAt === next.request?.askedAt &&
-        previous.request?.runIds.join("\n") === next.request?.runIds.join("\n") &&
-        previous.runId === next.runId &&
-        previous.boundaryId === next.boundaryId
-      );
-    case "question":
-      return previous.kind === "question" && sameFields(previous, next, CHAT_ITEM_FIELDS.question);
-  }
-  return false;
 }
 
 function stabilizeChatItems(
@@ -402,6 +377,7 @@ export function buildCachedChatItems(
   const cached = (projections[projection] ??= {
     generation: 0,
     input: null,
+    sources: new WeakSet<object>(),
     items: [],
     liveStream: null,
   });
@@ -435,6 +411,13 @@ export function buildCachedChatItems(
     if (updateCachedLiveStream(cached, input)) {
       cached.input = input;
       return cached.items;
+    }
+  }
+  cached.sources = new WeakSet();
+  for (const value of [...input.messages, ...input.toolMessages]) {
+    const source = asRecord(value);
+    if (source) {
+      cached.sources.add(source);
     }
   }
   const previous = cached.input;

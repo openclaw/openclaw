@@ -245,7 +245,9 @@ async function main() {
       selected.map(([name, schema]) => ({
         name: `is${name}`,
         schema:
-          name === "ChatHistoryState" || name === "ChatTranscriptMetadata"
+          name === "ChatHistoryState" ||
+          name === "ChatTranscriptMetadata" ||
+          name === "BoardSnapshot"
             ? Intern(schema)
             : schema,
       })),

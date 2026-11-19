@@ -2,6 +2,11 @@
 
 import { expect, it, vi } from "vitest";
 import {
+  CHAT_HISTORY_REQUEST_LIMIT,
+  CHAT_HISTORY_REQUEST_MAX_BYTES,
+  CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
+} from "./chat-history-request-params.ts";
+import {
   createNativeShowEarlierPane,
   nativeHistoryMessage,
   nativeHistorySeq,
@@ -36,7 +41,13 @@ it("bounds recall by users and refreshes only after leaving a round", async () =
   expect(state.chatMessage).toBe("message 203");
   await pane.loadOlderMessages();
   expect(state.chatMessages.map(nativeHistorySeq)).toEqual(seqs);
-  const pageRequest = { sessionKey: state.sessionKey, limit: 1000, cursor: "older-2" };
+  const pageRequest = {
+    sessionKey: state.sessionKey,
+    limit: CHAT_HISTORY_REQUEST_LIMIT,
+    maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES,
+    toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
+    cursor: "older-2",
+  };
   expect(request).toHaveBeenCalledExactlyOnceWith(
     "chat.history",
     expect.objectContaining(pageRequest),

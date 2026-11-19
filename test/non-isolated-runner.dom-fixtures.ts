@@ -34,6 +34,8 @@ it("registers live source and external dependency DOM resources", async () => {
   vi.unstubAllGlobals();
   const observer = new MutationObserver(() => document.body.dataset.repoMutation = "observed");
   observer.observe(document, { childList: true, subtree: true });
+  observer.disconnect();
+  observer.observe(document, { childList: true, subtree: true });
   document.dispatchEvent(new Event("repo-event"));
   document.body.append(document.createElement("div"));
   await new Promise<void>(queueMicrotask);
@@ -50,6 +52,19 @@ it("registers live source and external dependency DOM resources", async () => {
   }
   const removed = registerAndRemove();
   await expectCollected(removed);
+  class RemovedObserverPayload { value = "retained"; }
+  function releaseObserver(observe: boolean) {
+    const payload = new RemovedObserverPayload();
+    const observer = new MutationObserver(() => document.body.dataset.removedMutation = payload.value);
+    if (observe) {
+      observer.observe(document, { childList: true });
+      observer.disconnect();
+    }
+    return new WeakRef(payload);
+  }
+  const unobserved = releaseObserver(false);
+  const disconnected = releaseObserver(true);
+  await expectCollected(unobserved, disconnected);
   document.dispatchEvent(new Event("removed-event"));
   expect(document.body.dataset.removedEvent).toBeUndefined();
   document.body.dataset.repoEvent = "";

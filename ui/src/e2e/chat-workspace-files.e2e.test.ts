@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
+import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { openChatPanels, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -90,7 +91,7 @@ suite.define(() => {
   it("keeps transcript attachment icons compact beside project files", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installMockGateway(page, {
-        historyMessages: [
+        historyMessages: prepareChatHistoryFixture([
           {
             role: "assistant",
             content: [
@@ -110,7 +111,7 @@ suite.define(() => {
               },
             ],
           },
-        ],
+        ]).messages,
         methodResponses: {
           "artifacts.list": { artifacts: [] },
           "sessions.files.list": {

@@ -16,6 +16,74 @@ function makeError(overrides: Partial<p.ValidationError>): p.ValidationError {
 }
 
 describe("precompiled protocol validators", () => {
+  it("keeps bounded application context through the public chat-send validator", () => {
+    const request = { sessionKey: "agent:main:main", message: "hello", idempotencyKey: "send" };
+    const entry = {
+      title: "t".repeat(200),
+      uri: "u".repeat(2048),
+      icon: "i".repeat(8192),
+      description: "d".repeat(4096),
+    };
+    expect(
+      p.validateChatSendParams({
+        ...request,
+        appContext: Array.from({ length: 16 }, () => ({ ...entry })),
+      }),
+    ).toBe(true);
+    for (const appContext of [
+      [],
+      Array.from({ length: 17 }, () => ({ ...entry })),
+      [{}],
+      [{ ...entry, title: "" }],
+      [{ ...entry, title: "t".repeat(201) }],
+      [{ ...entry, uri: "u".repeat(2049) }],
+      [{ ...entry, icon: "i".repeat(8193) }],
+      [{ ...entry, description: "d".repeat(4097) }],
+      [{ ...entry, extra: true }],
+    ]) {
+      expect(p.validateChatSendParams({ ...request, appContext })).toBe(false);
+    }
+  });
+
+  it("keeps bounded history continuity in the session-key startup branch", () => {
+    const request = {
+      sessionKey: "agent:main:main",
+      continuity: { cursor: "c".repeat(4096), activeLeafEntryId: "l".repeat(1024) },
+    };
+    for (const validate of [p.validateChatHistoryParams, p.validateChatStartupParams]) {
+      expect(validate(request)).toBe(true);
+      for (const continuity of [
+        { ...request.continuity, cursor: "" },
+        { ...request.continuity, cursor: "c".repeat(4097) },
+        { ...request.continuity, activeLeafEntryId: "" },
+        { ...request.continuity, activeLeafEntryId: "l".repeat(1025) },
+        { ...request.continuity, extra: true },
+      ]) {
+        expect(validate({ ...request, continuity })).toBe(false);
+      }
+    }
+    expect(
+      p.validateChatStartupParams({
+        shortId: "short-link",
+        agentId: "main",
+        continuity: request.continuity,
+      }),
+    ).toBe(false);
+  });
+
+  it("validates exact steer-now custody through the public export", () => {
+    const steer = validation(p.validateChatSteerNowParams);
+    const request = { sessionKey: "agent:main:main", sessionId: "session", runId: "r".repeat(256) };
+    steer.accepts(request, { ...request, agentId: "main" });
+    steer.rejects(
+      { sessionKey: request.sessionKey, runId: request.runId },
+      { sessionKey: request.sessionKey, sessionId: request.sessionId },
+      { ...request, runId: "" },
+      { ...request, runId: "r".repeat(257) },
+      { ...request, extra: true },
+    );
+  });
+
   it("validates every self-service channel identity action through the public export", () => {
     const target = { channelId: "discord", accountId: "default" };
     const start = {

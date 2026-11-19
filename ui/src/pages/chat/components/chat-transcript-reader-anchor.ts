@@ -1,5 +1,5 @@
 import type { Virtualizer, VirtualItem } from "@tanstack/virtual-core";
-import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
+import { maxTranscriptScrollOffset, readTranscriptRowHeight } from "./chat-transcript-geometry.ts";
 import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import type { ChatTranscriptRenderer } from "./chat-transcript-layout-solid.tsx";
 import type { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
@@ -134,6 +134,13 @@ export class TranscriptReaderAnchor {
     this.observer?.unobserve(row);
   }
 
+  /** Only actual native measurements covered by positioning belong to that owner. */
+  readonly recordOwnedMeasurement = (row: HTMLElement, height: number): void => {
+    if (this.positionOwned()) {
+      this.heights.set(row, height);
+    }
+  };
+
   /** Native writes can stop a gesture; hold the correction in the column until it ends. */
   private holdsNativeOffset(): boolean {
     return (
@@ -159,16 +166,22 @@ export class TranscriptReaderAnchor {
     const readerTop = element.getBoundingClientRect().top;
     const compensating = !this.positionOwned();
     // Earlier rows in this delivery push later ones; recover each row's pre-change top.
-    const rows: { entry: ResizeObserverEntry; row: HTMLElement; top: number }[] = [];
+    const rows: { row: HTMLElement; top: number; height: number }[] = [];
     for (const entry of entries) {
       const row = entry.target;
       if (
-        row instanceof HTMLElement &&
-        row.isConnected &&
-        (row.dataset.preparedRow !== "true" || row.dataset.preparingRow === "true") &&
-        element.contains(row)
+        !(row instanceof HTMLElement) ||
+        !row.isConnected ||
+        (row.dataset.preparedRow === "true" && row.dataset.preparingRow !== "true") ||
+        !element.contains(row)
       ) {
-        rows.push({ entry, row, top: row.getBoundingClientRect().top });
+        continue;
+      }
+      const rect = row.getBoundingClientRect();
+      // Observer boxes can predate foreground layout. Read current geometry, including
+      // visibility, so a stale hidden/short box cannot poison the next delivery's baseline.
+      if (rect.width) {
+        rows.push({ row, top: rect.top, height: readTranscriptRowHeight(row) });
       }
     }
     rows.sort((left, right) => left.top - right.top);
@@ -188,12 +201,9 @@ export class TranscriptReaderAnchor {
         : undefined;
     let moved = 0;
     let correction = 0;
-    for (const { entry, row, top } of rows) {
+    for (const { row, top, height } of rows) {
       const key = row.dataset.virtualRowKey;
-      const box = entry.borderBoxSize?.[0];
-      const height = box?.blockSize ?? row.offsetHeight;
-      // A hidden row reports no width; it keeps its last laid-out height.
-      if (!key || (box ? !box.inlineSize : !row.offsetWidth)) {
+      if (!key) {
         continue;
       }
       const first = !this.heights.has(row);
@@ -421,13 +431,6 @@ export class TranscriptReaderAnchor {
     instance: TranscriptVirtualizer,
   ): boolean => {
     const owned = this.positionOwned();
-    if (owned) {
-      const row = instance.elementsCache.get(item.key);
-      if (row) {
-        // Restoration accounts for this measurement, not other rows in its later delivery.
-        this.heights.set(row, (instance.itemSizeCache.get(item.key) ?? item.size) + delta);
-      }
-    }
     // An estimated initial end is not a native scroll target.
     if (this.host.initialRange.pending) {
       return false;

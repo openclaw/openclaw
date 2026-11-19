@@ -10,11 +10,8 @@ import { chatHistoryRequests } from "./chat-history-state.ts";
 import { projectChatMobilePeople, type ChatMobilePeopleMention } from "./chat-mobile-people.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import {
-  cacheChatSessionSnapshot,
-  readChatSessionSnapshot,
-  type ChatSessionSnapshot,
-} from "./session-message-cache.ts";
+import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 
 /** Retain each people projection independently of unrelated header updates. */
 export class ChatPaneHeaderPeople {

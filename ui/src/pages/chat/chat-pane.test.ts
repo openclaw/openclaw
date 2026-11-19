@@ -35,6 +35,7 @@ import { subscribeChatPaneSnapshotInvalidation } from "./chat-pane-startup-subsc
 import {
   runPaneHeaderAction,
   createTestChatPane,
+  transcriptScrollFact,
   createPaneTestHost,
   getPaneTestRuntime,
   connectPaneTestView,
@@ -498,6 +499,9 @@ describe("chat pane initialization", () => {
         hasMore: true,
         nextOffset: 1,
         totalMessages: 2,
+        needsBoundary: undefined,
+        olderCursor: undefined,
+        segments: [{ sources: ["seq:1"], hasOlder: true, hasNewer: false }],
       });
       expect(attachedState?.currentSessionId).toBe("split-session");
     } finally {
@@ -885,16 +889,13 @@ describe("chat pane history pagination intent", () => {
     const fixture = createPaneWithRequest(vi.fn());
     const { pane, state } = fixture;
     state.handleChatScroll = vi.fn();
-    pane.transcriptScrollTop = 100;
     pane.syncHistoryObserver = vi.fn();
     const thread = document.createElement("div");
     Object.defineProperties(thread, {
       scrollHeight: { value: 1000 },
       clientHeight: { value: 500 },
     });
-    const event = new Event("scroll");
-    Object.defineProperty(event, "target", { value: thread });
-    return { ...fixture, thread, event };
+    return { ...fixture, thread };
   }
 
   function blockedIntentFixture() {
@@ -913,26 +914,27 @@ describe("chat pane history pagination intent", () => {
   }
 
   it("re-arms a failed older-page load only after another user scroll", () => {
-    const { pane, state, thread, event } = scrollFixture();
+    const { pane, state, thread } = scrollFixture();
+    state.chatHistoryPagination = { hasMore: true, olderCursor: "older-intent" };
     pane.historyAutoLoadBlocked = true;
     vi.spyOn(pane.transcript, "isPositionSettled", "get").mockReturnValue(true);
     thread.scrollTop = 80;
 
-    pane.handleTranscriptScroll(event);
+    pane.handleTranscriptScroll(transcriptScrollFact(pane, thread, -20));
 
     expect(pane.historyAutoLoadBlocked).toBe(false);
     expect(pane.syncHistoryObserver).toHaveBeenCalledOnce();
-    expect(state.handleChatScroll).toHaveBeenCalledWith(event);
+    expect(state.handleChatScroll).toHaveBeenCalledWith(transcriptScrollFact(pane, thread, -20));
   });
 
   it("does not arm older history on downward or in-flight scroll movement", () => {
-    const { pane, state, thread, event } = scrollFixture();
+    const { pane, state, thread } = scrollFixture();
 
     thread.scrollTop = 120;
-    pane.handleTranscriptScroll(event);
+    pane.handleTranscriptScroll(transcriptScrollFact(pane, thread, 20));
     pane.history.loadingOlder = true;
     thread.scrollTop = 80;
-    pane.handleTranscriptScroll(event);
+    pane.handleTranscriptScroll(transcriptScrollFact(pane, thread, -40));
 
     expect(pane.syncHistoryObserver).not.toHaveBeenCalled();
     expect(state.handleChatScroll).toHaveBeenCalledTimes(2);

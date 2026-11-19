@@ -12,10 +12,7 @@ import {
 } from "./chat-thread-grouping-data.ts";
 import type { ChatReasoning } from "./tool-stream-contract.ts";
 
-export type {
-  ReplyAttributionContext,
-  ReplyAttributionFacts,
-} from "./chat-thread-grouping-data.ts";
+export type { ReplyAttributionContext } from "./chat-thread-grouping-data.ts";
 
 // The data algorithm receives presentation policy; importing it never loads the UI.
 const preparation = {

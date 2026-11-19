@@ -16,10 +16,11 @@ const page = (seq: number, nextOffset: number, hasMore = true): ChatHistoryResul
 
 function setup(notifyOnObserve = false) {
   const request = vi.fn(async (_method: string, { cursor }: { cursor: string }) =>
-    page(-Number(cursor.replace("older-", "")), Number(cursor.replace("older-", "")) + 1),
+    page(4 - Number(cursor.replace("older-", "")), Number(cursor.replace("older-", "")) + 1),
   );
   const fixture = createNativeShowEarlierPane(request);
   const { pane, thread } = fixture;
+  const loads = vi.spyOn(pane, "loadOlderMessages");
   const sentinel = thread.appendChild(document.createElement("div"));
   sentinel.className = "chat-history-sentinel";
   pane.historySentinel = sentinel;
@@ -49,9 +50,11 @@ function setup(notifyOnObserve = false) {
     intersect: async () => {
       pane.syncHistoryObserver();
       notify?.();
-      // Join the production load rather than waiting on timers.
-      if (pane.history.loadingOlder) {
-        await pane.loadOlderMessages();
+      // Boundary autofill can settle without showing a spinner. Join its actual
+      // entry promise before delivering the next reader intent.
+      const load = loads.mock.results.at(-1);
+      if (load?.type === "return") {
+        await load.value;
       }
     },
   };
@@ -67,14 +70,14 @@ it("fills one page until reopened, without filling the prefetch margin", async (
   for (let index = 0; index < 5; index += 1) {
     await intersect();
   }
-  expect(state.chatMessages.map(nativeHistorySeq)).toEqual([-2, 3, 4]);
+  expect(state.chatMessages.map(nativeHistorySeq)).toEqual([2, 3, 4]);
   for (const height of [900, 1800]) {
     setHeight(height);
     await intersect();
-    expect(state.chatMessages.map(nativeHistorySeq)).toEqual([-2, 3, 4]);
+    expect(state.chatMessages.map(nativeHistorySeq)).toEqual([2, 3, 4]);
   }
   expect(request.mock.calls.map(([, params]) => params.cursor)).toEqual(["older-2"]);
-  expect(pane.stagedOlder).toMatchObject({ page: null, load: null });
+  expect(pane.stagedHistory).toMatchObject({ page: null, load: null });
   pane.resetOlderMessagesViewport();
   setHeight(400);
   await intersect();
@@ -137,9 +140,10 @@ it("reopens a trimmed cache boundary before its single automatic fill", async ()
   expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 3, 4]);
   expect(request.mock.calls.map(([, params]) => params)).toMatchObject([
     { messageId: "source-3", sessionId: "current", limit: 1 },
-    { cursor: "older-2", limit: 1000 },
+    { cursor: "older-2", limit: 80, maxBytes: 256 * 1024 },
   ]);
-  expect(pane.stagedOlder).toMatchObject({ page: null, load: null });
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(pane.stagedHistory).toMatchObject({ page: null, load: null });
 });
 
 it("reserves an overflowing first page for reader intent", async () => {

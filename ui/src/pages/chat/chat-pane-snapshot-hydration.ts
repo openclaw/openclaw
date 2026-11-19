@@ -1,18 +1,35 @@
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { mergeStoredChatSessionSnapshot } from "./chat-board-snapshot.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
+import type { ChatTranscriptReaderSnapshot } from "./chat-history-pagination.ts";
 import { chatHistoryRequests, type InitialChatSnapshotHydration } from "./chat-history-state.ts";
 import { ChatPaneReplyNavigation } from "./chat-pane-reply-navigation.ts";
+import {
+  retireChatTranscriptSources,
+  readChatTranscriptReaderSnapshot,
+} from "./chat-pane-transcript-residency.ts";
 import {
   applyChatCacheSnapshot,
   cacheChatSessionSnapshot,
   readChatSessionSnapshot,
   resolveChatSnapshotKey,
-  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 import { snapshotStoreGeneration } from "./session-snapshot-invalidation-events.ts";
 
 export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation {
+  protected retireTranscriptMessageSources(messages: readonly unknown[]): void {
+    this.retireReplyMessages();
+    // Rendering and disposal key caches by presentation, not physical placement;
+    // using the placement id would leave retired bodies cached.
+    retireChatTranscriptSources(this.presentationId, this.transcript, this.state, messages);
+  }
+  protected readTranscriptReaderSnapshot(): ChatTranscriptReaderSnapshot | null {
+    return this.visuallyPresented
+      ? readChatTranscriptReaderSnapshot(this.state, this.transcript)
+      : null;
+  }
+
   protected hydrateStoredChatSnapshot(
     state: NonNullable<ChatPaneSnapshotHydration["state"]>,
     sessionKey: string,

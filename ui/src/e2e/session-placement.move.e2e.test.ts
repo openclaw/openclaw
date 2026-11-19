@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { SessionMoveTarget } from "../../../packages/gateway-protocol/src/index.js";
+import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
@@ -465,9 +466,9 @@ suite.define(() => {
       };
       const available = { ...runnerSession("available"), parentSessionKey: parent.key };
       const offline = { ...runnerSession("offline"), parentSessionKey: parent.key };
-      const historyMessages = [
+      const { messages: historyMessages } = prepareChatHistoryFixture([
         { role: "assistant", content: "Deferred available startup transcript settled." },
-      ];
+      ]);
       const models = [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }];
       const staleStartup = {
         sessionId: available.sessionId,
