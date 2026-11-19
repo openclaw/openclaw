@@ -160,6 +160,12 @@ commands before building. Discovered macOS LaunchDaemons are inspected in the
 `system` domain; global LaunchAgents remain in the invoking user’s GUI domain.
 This observation does not grant the updater control of a system LaunchDaemon.
 
+When asking an agent to update the Gateway, the installation serving the running
+service determines the method, not another checkout or CLI on the same host.
+An update request does not authorize moving a directly served checkout to a
+managed release launcher, or switching between a package and a checkout.
+You do not need to supply a commit or tag to update an existing checkout.
+
 Teams running a gateway directly from a git checkout on a server can update it
 with `scripts/update-gateway.sh` from inside that checkout. It is the reference
 for a source-server update: it refuses tracked local changes, including build

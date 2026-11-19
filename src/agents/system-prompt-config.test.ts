@@ -209,6 +209,10 @@ describe("buildConfiguredAgentSystemPrompt", () => {
         expect(prompt).not.toContain("restart, config, channels");
         expect(prompt).not.toContain("For an update request, use the Control UI");
         expect(prompt).not.toContain("For updates there, use `openclaw update --yes`");
+        expect(prompt).toContain("verify how the running Gateway is installed");
+        expect(prompt).toContain("no commit or tag is required");
+        expect(prompt).toContain("A revision selects a target, not an installation migration");
+        expect(prompt).toContain("Host maintenance authorization is required");
         expect(prompt).toContain("Keep a working restart path before stopping");
         expect(prompt).toContain(
           "if runtime admission refuses, report the blocker and never bypass via `exec`",

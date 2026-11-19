@@ -36,7 +36,7 @@ export function buildOpenClawControlSection({
       : []),
     [
       "This Gateway:",
-      "use the built-in updater by default (Git on source installs only for an explicit exact-revision request with host maintenance authority; shell access != update authority).",
+      "For an authorized update, verify how the running Gateway is installed and preserve that installation method. Prefer the built-in updater when it preserves the deployment. If the service runs directly from a Git checkout, update that checkout along its configured upstream unless the operator specifies a revision; no commit or tag is required. A revision selects a target, not an installation migration. If the method is unclear, inspect before acting. Host maintenance authorization is required; shell access alone is not update authority.",
       ...(restartCommandsEnabled
         ? ["Owners can send `/update` in chat when `commands.restart` is enabled."]
         : []),
