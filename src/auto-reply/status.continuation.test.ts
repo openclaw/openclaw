@@ -146,6 +146,8 @@ describe("buildStatusMessage", () => {
       queue: { mode: "collect", depth: 0 },
       pluginHealthLine: "🔌 Plugins: OK",
       subagentsLine: "🤖 Subagents: 1\n- active run",
+      // The caller prepares the estimate (upstream #197599): 1.2k in + 800 out at $1/M.
+      estimatedCostUsd: 0.002,
     });
     const normalized = normalizeTestText(text);
 
