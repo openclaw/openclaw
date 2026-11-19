@@ -1,4 +1,7 @@
 import { expect, it } from "vitest";
+import { makeCronJob } from "../../cron/delivery.test-helpers.js";
+import { importLegacyCronMemberSources } from "../../cron/store/member-source-role-import.js";
+import { makeCronStreamSandboxTarget } from "../../cron/stream-sandbox.test-support.js";
 import type { QueuedOperatorRecoverySource } from "../operator-run-recovery-source.codec.js";
 import {
   importLegacyMemberQueuedSource,
@@ -58,4 +61,28 @@ it("does not turn a profile import into reauthorization of mismatched or broader
   expect(importLegacyMemberQueuedSource(channel, memberRoleImport)).toBe(channel);
   const unavailable: QueuedOperatorRecoverySource = { kind: "unavailable", reason: "no-source" };
   expect(importLegacyMemberQueuedSource(unavailable, memberRoleImport)).toBe(unavailable);
+});
+
+it("does not rewrite sandbox targets with different subjects, explicit assignments or broader scopes", () => {
+  const snapshot = legacyMemberSnapshot();
+  const operator = {
+    profileId: snapshot.profileId,
+    openclawIdPrincipal: snapshot.openclawIdPrincipal,
+    scopes: snapshot.scopes,
+    assignedRole: null,
+    githubLogin: null,
+    gatewayAccessGrant: snapshot.grant,
+  };
+  for (const patch of [
+    { profileId: "other" },
+    { assignedRole: "viewer" },
+    { scopes: ["operator.admin"] },
+    { openclawIdPrincipal: undefined },
+  ]) {
+    const job = {
+      ...makeCronJob({ schedule: { kind: "stream", command: ["watch-source"] } }),
+      streamSandbox: makeCronStreamSandboxTarget({ operator: { ...operator, ...patch } }),
+    };
+    expect(importLegacyCronMemberSources(job, memberRoleImport)).toBe(job);
+  }
 });

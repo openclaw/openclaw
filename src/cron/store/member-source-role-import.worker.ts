@@ -67,7 +67,8 @@ function importSources(
     }
     if (
       !previous ||
-      !isDeepStrictEqual(definition.streamOperatorSource, previous.streamOperatorSource)
+      !isDeepStrictEqual(definition.streamOperatorSource, previous.streamOperatorSource) ||
+      !isDeepStrictEqual(definition.streamSandbox, previous.streamSandbox)
     ) {
       continue;
     }
@@ -107,6 +108,9 @@ function importSources(
               : {}),
             ...(next.streamOperatorSource !== previous.streamOperatorSource
               ? { streamOperatorSource: next.streamOperatorSource }
+              : {}),
+            ...(next.streamSandbox !== previous.streamSandbox
+              ? { streamSandbox: next.streamSandbox }
               : {}),
           }),
           ...(validProjection

@@ -103,10 +103,10 @@ const ownerTools = "owner-only tools such as sessions, portal, nodes, gateway an
 it.each([
   ["owner", null, {}, false],
   [
-    "catalog-only owner",
+    "catalog-only member",
     "contractor",
     { gateway: { roles: { definitions: roleConfig.gateway!.roles!.definitions } } },
-    false,
+    true,
   ],
   ["member", null, roleConfig, true],
   ["removed", undefined, {}, true],
@@ -182,7 +182,7 @@ it.each([
   [
     "catalog only",
     { gateway: { roles: { definitions: roleConfig.gateway!.roles!.definitions } } },
-    false,
+    true,
   ],
   ["enforced roles", roleConfig, true],
   [

@@ -7,9 +7,12 @@ import {
   decodeGatewayOperatorRecoverySource,
   normalizeGatewayOperatorRecoverySnapshot,
 } from "../../gateway/operator-run-recovery-source.codec.js";
+import { resolveMissingOperatorScope } from "../../shared/operator-scope-compat.js";
+import { resolveCronOperatorExecutionRevision } from "../service/jobs-tool-policy.js";
+import { parseCronStreamSandboxTarget } from "../stream-sandbox-target.js";
 import type { CronStoredJob } from "../types.js";
 
-/** The payload and native stream sources are independent captured grants. */
+/** Payload, native stream, and sandbox targets retain independent captured grants. */
 export function importLegacyCronMemberSources(
   job: CronStoredJob,
   input: LegacyOpenClawIdMemberRoleImport,
@@ -40,6 +43,38 @@ export function importLegacyCronMemberSources(
     if (snapshot !== job.streamOperatorSource) {
       next = { ...next, streamOperatorSource: snapshot };
     }
+  }
+  const target = parseCronStreamSandboxTarget(job.streamSandbox);
+  const operator = target?.operator;
+  const principal = operator?.openclawIdPrincipal;
+  if (
+    target &&
+    isDeepStrictEqual(target, job.streamSandbox) &&
+    operator?.profileId === input.profileId &&
+    operator.assignedRole === null &&
+    principal?.kind === "member" &&
+    principal.accountId === input.accountId &&
+    principal.role === input.role &&
+    resolveMissingOperatorScope(operator.scopes, input.policy.scopes) === null
+  ) {
+    // Targets capture the member's assignment, scopes and grant, not a role-policy snapshot.
+    next = {
+      ...next,
+      streamSandbox: { ...target, operator: { ...operator, assignedRole: input.role } },
+    };
+  }
+  if (
+    next.streamSandbox !== job.streamSandbox &&
+    next.operatorSource &&
+    job.operatorSource?.executionRevision === resolveCronOperatorExecutionRevision(job)
+  ) {
+    next = {
+      ...next,
+      operatorSource: {
+        ...next.operatorSource,
+        executionRevision: resolveCronOperatorExecutionRevision(next),
+      },
+    };
   }
   return next;
 }

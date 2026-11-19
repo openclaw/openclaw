@@ -13,5 +13,7 @@
 # Persisted pre-upgrade cron, stream, queued, restart, environment and standing-grant
 # sources retain only matching captured policy; mismatches and stale commits refuse.
 # Individual admitted requests finish while retained runs, queues and children stop.
-# Measured against the merged PR base: 2206 net test lines; 400 ordinary + 1806 allocated.
-1806
+# Sandbox stream migration survives database reopen without changing target or grant;
+# payload execution bindings migrate only when valid, and stale bindings remain stale.
+# Measured against the merged PR base: 2302 net test lines; 400 ordinary + 1902 allocated.
+1902

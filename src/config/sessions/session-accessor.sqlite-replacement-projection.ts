@@ -348,6 +348,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
       };
       const useWorker =
         creation !== undefined ||
+        params.memberSourceRoleImport !== undefined ||
         (isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions));
       const readNative = () =>
         withSqliteSessionDatabase(databaseOptions, (database) => ({

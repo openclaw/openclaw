@@ -16,6 +16,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
+import { loadCronJobsStore, saveCronJobsStore } from "../cron/store.js";
 import { parseCronStreamSandboxTarget } from "../cron/stream-sandbox-target.js";
 import { makeCronStreamSandboxTarget } from "../cron/stream-sandbox.test-support.js";
 import type { CronStoredJob } from "../cron/types.js";
@@ -26,6 +27,7 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { commitBackgroundResultToSession } from "../sessions/background-session-result.js";
 import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
   linkCanonicalUserProfileEmail,
   setCanonicalUserProfileRole,
@@ -34,6 +36,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareCronStreamSandboxAuthority } from "./cron-stream-sandbox-authority.js";
 import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
+import { migrateSharedOpenClawIdMemberSources } from "./openclaw-id/member-source-role-import-shared.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
@@ -158,6 +161,7 @@ function sandboxFixture(
 async function withAuthorityFixture(
   run: (fixture: {
     job: CronStoredJob;
+    storePath: string;
     config: OpenClawConfig;
     profileId: string;
     grant: AbortController;
@@ -224,6 +228,7 @@ async function withAuthorityFixture(
     try {
       await run({
         job,
+        storePath: state.statePath("cron", "jobs.json"),
         config,
         profileId: profile.id,
         grant,
@@ -573,7 +578,7 @@ it.each(["grant revocation", "target replacement"] as const)(
   },
 );
 
-it.each(["member", "owner", "definition"] as const)(
+it.each(["member", "owner", "definition", "legacy member"] as const)(
   "restores a serialized OCID %s sandbox stream with its original peer dependency",
   async (scenario) => {
     const kind = scenario === "owner" ? "owner" : "member";
@@ -593,7 +598,9 @@ it.each(["member", "owner", "definition"] as const)(
       fixture.target.operator!.openclawIdPrincipal = principal;
       if (kind === "member") {
         await setCanonicalUserProfileRole(fixture.profileId, "operator");
-        fixture.target.operator!.assignedRole = "operator";
+        if (scenario !== "legacy member") {
+          fixture.target.operator!.assignedRole = "operator";
+        }
         fixture.config.gateway = {
           roles: {
             default: "reader",
@@ -605,10 +612,31 @@ it.each(["member", "owner", "definition"] as const)(
         };
       }
       setRuntimeConfigSnapshot(fixture.config);
+      if (scenario === "legacy member") {
+        await saveCronJobsStore(fixture.storePath, { version: 1, jobs: [fixture.job] });
+        await migrateSharedOpenClawIdMemberSources(
+          {
+            profileId: fixture.profileId,
+            accountId: "stream-member",
+            role: "operator",
+            policy: MEMBER_ROLE_PRESETS.operator,
+          },
+          () => {},
+        );
+        await closeOpenClawStateDatabaseAsync();
+        const restored = (await loadCronJobsStore(fixture.storePath)).jobs[0]!;
+        expect(restored.streamSandbox).toEqual({
+          ...fixture.target,
+          operator: { ...fixture.target.operator, assignedRole: "operator" },
+        });
+        Object.assign(fixture.job, restored);
+      }
       const savedTarget = JSON.stringify(fixture.target);
       const serialized = JSON.parse(savedTarget);
       expect(parseCronStreamSandboxTarget(serialized)).toEqual(fixture.target);
-      fixture.job.streamSandbox = serialized;
+      if (scenario !== "legacy member") {
+        fixture.job.streamSandbox = serialized;
+      }
       setOpenClawIdTunnelPrincipalLookup(() => principal);
       try {
         const retained = await fixture.prepare();
