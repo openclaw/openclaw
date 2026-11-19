@@ -523,7 +523,9 @@ canonical-main admission, protected environments, commands, and 120-minute deadl
 ### Hourly plugin routing
 
 Plugin Prerelease prepares hourly extension jobs for the repository-wide Boat
-backend. Its manifest translates the resolved physical two-CPU Blacksmith class
+backend. Only file-bounded extension shards qualify for Boat. Mixed extension
+batches retain Blacksmith after observed Boat RAM and swap exhaustion; their
+parallelism and file inventory are unchanged. The manifest translates the resolved physical two-CPU Blacksmith class
 to `boat` (four CPUs, 8 GiB) and the four-CPU class to `boat-large` (eight CPUs,
 16 GiB). Canonical scheduled first attempts use the same account start budget
 as ordinary CI: at most 20 jobs per run, with daily, hourly, and minute headroom.
