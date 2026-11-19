@@ -20,6 +20,7 @@ describe("openai gpt-live model detection", () => {
   it("distinguishes released routes from unlisted family members", () => {
     expect(isSupportedOpenAIGptLiveModel("gpt-live-1")).toBe(true);
     expect(isSupportedOpenAIGptLiveModel(" GPT-Live-1 ")).toBe(true);
+    expect(isSupportedOpenAIGptLiveModel("gpt-live-1.1")).toBe(true);
     expect(isSupportedOpenAIGptLiveModel("gpt-live-1-codex")).toBe(true);
     expect(isSupportedOpenAIGptLiveModel(" GPT-Live-1-Codex ")).toBe(true);
     expect(isSupportedOpenAIGptLiveModel("gpt-live-test-canary")).toBe(false);
