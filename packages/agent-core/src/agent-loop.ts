@@ -1039,7 +1039,7 @@ async function validateToolCallForBatchAdmission(
   }
   const tool = resolution.tool;
   if (!tool) {
-    return immediateToolCallError(`Tool ${toolCall.name} not found`);
+    return immediateToolCallError(`Tool ${toolCall.name} not found`, "unknown-tool");
   }
 
   let preparedToolCall: AgentToolCall;

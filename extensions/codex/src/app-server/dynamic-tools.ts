@@ -330,7 +330,7 @@ export function createCodexDynamicToolBridge(params: {
         notifyAgentToolResult(options?.onAgentToolResult, call.tool, result, true);
         return createFailedDynamicToolResponse(message, {
           executedArguments,
-          executionStarted: false,
+          unknownTool: true,
         });
       }
       const { tool, name: toolName } = toolEntry;

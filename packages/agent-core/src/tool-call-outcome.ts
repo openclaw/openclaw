@@ -28,6 +28,7 @@ import type {
   ToolLoopWarning,
   ToolLoopIntervention,
   ToolResultContentSource,
+  ToolPreExecutionErrorKind,
 } from "./types.js";
 
 type ToolOutcomeContext = {
@@ -69,7 +70,7 @@ export type FinalizedToolCallOutcome = {
   result: AgentToolResult<unknown>;
   isError: boolean;
   executionStarted: boolean;
-  errorKind?: "argument-validation";
+  errorKind?: ToolPreExecutionErrorKind;
   hideFromChannelProgress?: boolean;
   resultContentSource?: ToolResultContentSource;
 };
@@ -216,18 +217,23 @@ export type ImmediateToolCallOutcome = {
   kind: "immediate";
   result: AgentToolResult<unknown>;
   isError: boolean;
-  errorKind?: "argument-validation";
+  errorKind?: ToolPreExecutionErrorKind;
 };
 
-export function immediateToolCallError(message: string): ImmediateToolCallOutcome {
-  return { kind: "immediate", result: createErrorToolResult(message), isError: true };
+export function immediateToolCallError(
+  message: string,
+  errorKind?: ToolPreExecutionErrorKind,
+): ImmediateToolCallOutcome {
+  return {
+    kind: "immediate",
+    result: createErrorToolResult(message),
+    isError: true,
+    ...(errorKind ? { errorKind } : {}),
+  };
 }
 
 export function immediateToolArgumentValidationError(error: unknown): ImmediateToolCallOutcome {
-  return {
-    ...immediateToolCallError(coerceErrorMessage(error)),
-    errorKind: "argument-validation",
-  };
+  return immediateToolCallError(coerceErrorMessage(error), "argument-validation");
 }
 
 /** Classify only preparation rejections, not generic or execution failures. */

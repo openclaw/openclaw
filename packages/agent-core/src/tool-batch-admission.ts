@@ -1,9 +1,10 @@
-import type { AgentTool, AgentToolCall, AgentToolResult, InternalToolBatchCall } from "./types.js";
+import type { FinalizedToolCallOutcome, ImmediateToolCallOutcome } from "./tool-call-outcome.js";
+import type { AgentTool, AgentToolCall, InternalToolBatchCall } from "./types.js";
 
-/** Validation outcomes read by whole-batch admission; agent-loop owns the full shapes. */
+/** Validation outcomes read by whole-batch admission; outcome producers own failure provenance. */
 type ToolBatchValidation =
   | { kind: "prepared"; args: unknown; tool: AgentTool }
-  | { kind: "immediate"; result: AgentToolResult<unknown>; errorKind?: "argument-validation" };
+  | Pick<ImmediateToolCallOutcome, "kind" | "result" | "errorKind">;
 
 /** Map validated calls to admission candidates in assistant order. */
 export function toToolBatchCalls(
@@ -22,10 +23,8 @@ export function toToolBatchCalls(
   });
 }
 
-type ToolBatchEntry = {
+type ToolBatchEntry = Pick<FinalizedToolCallOutcome, "toolCall" | "errorKind"> & {
   kind?: "prepared";
-  toolCall: AgentToolCall;
-  errorKind?: "argument-validation";
 };
 
 /** Admitted calls, prepared or rejected, whose admission a skipped batch must release. */
