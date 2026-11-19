@@ -21,7 +21,6 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel-normalize.js";
-import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import type { CronAuthenticatedChannelRequester } from "./cron-creator-authority-grant.types.js";
 
 const DEFAULT_TTL_MS = 15 * 60_000;
@@ -390,7 +389,13 @@ export function resolveMessageActionTurnCapability(
   return copyMessageActionTurnContext(capability);
 }
 
-export function isMessageActionTurnCurrent(identity: AgentRuntimeIdentity): boolean {
+/** The caller's minted turn is still live; this checks no run authority. */
+export function isMessageActionTurnCurrent(identity: {
+  agentId: string;
+  sessionKey: string;
+  operationalRunInstance: { runId: string };
+  messageActionContext?: AgentRuntimeMessageActionContext;
+}): boolean {
   const messageActionContext = identity.messageActionContext;
   if (!messageActionContext) {
     return true;

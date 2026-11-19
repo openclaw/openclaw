@@ -16,12 +16,12 @@ import {
   parseAgentSessionKey,
 } from "../../sessions/session-key-utils.js";
 import {
-  isMessageActionTurnCurrent,
   readMessageActionInvocationConfig,
   resolveMessageActionTurnAuthorization,
   selectMessageActionRequesterIdentity,
   type MessageActionAuthorization,
 } from "../message-action-turn-capability.js";
+import { captureAgentRuntimeTurnAssertion } from "./agent-runtime-authority.js";
 import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
 
 /** Redeem host-only message authority from a trusted local agent runtime. */
@@ -66,14 +66,7 @@ export function createMessageActionRuntimeAuthority(
     assertClientUploadAllowed?: () => void;
   },
 ) {
-  const identity = params.client?.internal?.agentRuntimeIdentity;
-  const assertTurnCurrent = identity?.messageActionContext
-    ? () => {
-        if (!isMessageActionTurnCurrent(identity)) {
-          throw new Error("message action authority is no longer active");
-        }
-      }
-    : undefined;
+  const assertTurnCurrent = captureAgentRuntimeTurnAssertion(params.client);
   const assertScheduledSourceCurrent =
     params.authorization?.scheduled?.assertSourceCurrent ??
     params.authorization?.scheduled?.assertCurrent;
