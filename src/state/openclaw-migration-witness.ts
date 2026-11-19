@@ -40,9 +40,9 @@ import {
   witnessSchema,
 } from "./openclaw-migration-witness.schema.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import { assertCurrentStateRuntimeSchema } from "./openclaw-state-db-fast-path.js";
 import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import { resolveOpenClawRegisteredAgentDatabasePath } from "./openclaw-state-db.paths.js";
+import { assertCurrentStateRuntimeSchema } from "./openclaw-state-schema-inspection.js";
 
 type OpenClawMigrationWitnessOwner = { role: "agent"; agentId: string } | { role: "global" };
 

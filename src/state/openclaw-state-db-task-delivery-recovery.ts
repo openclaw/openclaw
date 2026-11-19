@@ -14,7 +14,6 @@ import {
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,
 } from "../infra/sqlite-snapshot-source.js";
-import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
 import {
   applyOrphanTaskDeliveryRecovery,
   assertKnownOrphanTaskDeliveryIntegrity,
@@ -22,6 +21,7 @@ import {
   hasOrphanTaskDeliveryRows,
   preserveOrphanTaskDeliveryRecoveryInProcess,
 } from "./openclaw-state-db-task-delivery-recovery-preservation.js";
+import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-schema-inspection.js";
 
 function recoveryFailure(error: unknown, recoveryDirectory?: string): Error {
   return new Error(

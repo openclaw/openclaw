@@ -2,12 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { extractSqliteTableSchema, quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
-import {
-  canRepairLegacyAuditEventsSchema,
-  hasCanonicalAuditEventsSchema,
-} from "./openclaw-state-db-audit-migration.js";
 import {
   CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
   OPENCLAW_STATE_STRICT_SCHEMA_VERSION,
@@ -15,13 +10,7 @@ import {
   type OpenClawStateDatabaseSchemaMigration,
 } from "./openclaw-state-db-contract.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
-import {
-  ensureColumn,
-  tableExists,
-  tableHasColumn,
-  tablePrimaryKeyColumns,
-} from "./openclaw-state-db-schema-helpers.js";
-import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
+import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { FOLDED_SINGLETON_STATE_TABLES_V12 } from "./openclaw-state-db-schema-v12-foldin.js";
 import { STATE_CURSOR_TABLES_V22 } from "./openclaw-state-db-schema-v22-columns.js";
 import { needsPublicationDraftMigration } from "./openclaw-state-db-schema-v28-publication.js";
@@ -38,6 +27,10 @@ import {
   resolveOpenClawAgentDatabaseStoredPath,
   resolveOpenClawStateDirForDatabasePath,
 } from "./openclaw-state-db.paths.js";
+import {
+  assertCanonicalAgentDatabasesPrimaryKey,
+  hasCanonicalAuditEventsSchema,
+} from "./openclaw-state-schema-inspection.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 type StateMigrationKind = OpenClawStateDatabaseSchemaMigration["kind"];
@@ -325,18 +318,6 @@ export function migrateAgentDatabaseRelativePaths(
   };
 }
 
-export function assertCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync, pathname: string): void {
-  if (!tableExists(db, "agent_databases")) {
-    return;
-  }
-  const primaryKey = tablePrimaryKeyColumns(db, "agent_databases");
-  if (primaryKey.length !== 2 || primaryKey[0] !== "agent_id" || primaryKey[1] !== "path") {
-    throw new SqliteSchemaMismatchError(
-      `OpenClaw state database ${pathname} has an unsupported agent database registry schema. Upgrades from pre-July-2026 state are no longer migrated; restore a backup produced by a July 2026 or newer release before retrying.`,
-    );
-  }
-}
-
 export function repairLegacyGatewayRestartHandoffsForStrictMigration(db: DatabaseSync): void {
   if (!tableExists(db, "gateway_restart_handoff")) {
     return;
@@ -360,19 +341,6 @@ export function repairLegacyGatewayRestartHandoffsForStrictMigration(db: Databas
     WHERE typeof(restart_trace_started_at) = 'real'
        OR typeof(restart_trace_last_at) = 'real';
   `);
-}
-
-export function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: string): void {
-  operatorApprovalMigration.assertCanonicalOperatorApprovalKinds(db, pathname);
-  assertCanonicalAgentDatabasesPrimaryKey(db, pathname);
-  if (!hasCanonicalAuditEventsSchema(db)) {
-    if (canRepairLegacyAuditEventsSchema(db)) {
-      throw new OpenClawStateDatabaseSchemaMigrationRequiredError("audit-events-v2", pathname);
-    }
-    throw new SqliteSchemaMismatchError(
-      `OpenClaw state database ${pathname} has a noncanonical audit event schema that cannot be repaired automatically; restore the canonical audit_events shape before retrying.`,
-    );
-  }
 }
 
 /**

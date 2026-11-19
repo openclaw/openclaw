@@ -58,11 +58,9 @@ import {
   OPENCLAW_STATE_STRICT_SCHEMA_VERSION,
 } from "./openclaw-state-db-contract.js";
 import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
-import { assertCurrentStateRuntimeSchema } from "./openclaw-state-db-fast-path.js";
 import { migrateHistoricalStateImports } from "./openclaw-state-db-historical-imports.js";
 import {
   assertMigratedStateTableIntegrity,
-  assertOpenClawStateDatabaseOwner,
   markCurrentStateSchemaVersion,
   migrateBoundedStateSchema,
   openClawStateMigrationAssertions,
@@ -80,8 +78,6 @@ import {
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { assertOpenClawStateSchemaRepairAllowed } from "./openclaw-state-db-schema-policy.js";
 import {
-  assertCanonicalAgentDatabasesPrimaryKey,
-  assertCanonicalStateSchemaShape,
   dropLegacyStateTables,
   migrateAgentDatabaseRelativePaths as migrateAgentPaths,
   migrateWorkerPlacementExecutionModeSchema,
@@ -101,7 +97,13 @@ import {
 } from "./openclaw-state-db-task-delivery-recovery.js";
 import { resolveDatabasePath, describeAgentPathMigration } from "./openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
-import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
+import {
+  assertCurrentStateRuntimeSchema,
+  assertOpenClawStateDatabaseOwner,
+  assertCanonicalAgentDatabasesPrimaryKey,
+  assertCanonicalStateSchemaShape,
+} from "./openclaw-state-schema-inspection.js";
+import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { UpdateSchemaRefusalError } from "./openclaw-update-schema-refusal.js";
 import { resolveSchemaMigrationIntegrityCheck } from "./schema-migration-backup-scope.js";

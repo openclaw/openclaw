@@ -14,10 +14,10 @@ import {
   openOpenClawAgentDatabase,
 } from "../../src/state/openclaw-agent-db.js";
 import {
-  assertOpenClawStateDatabaseForMaintenance,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../src/state/openclaw-state-db.js";
+import { assertOpenClawStateDatabaseForMaintenance } from "../../src/state/openclaw-state-schema-inspection.js";
 import { runVacuumInterruptionProof } from "./sqlite-reliability-compaction.js";
 import {
   assertSameReliabilityState,

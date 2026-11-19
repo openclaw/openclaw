@@ -9,13 +9,13 @@ import { recordAgentProvenance } from "../../state/agent-provenance.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../../state/openclaw-state-db-readonly.js";
 import {
-  assertOpenClawStateDatabaseForMaintenance,
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { assertOpenClawStateDatabaseForMaintenance } from "../../state/openclaw-state-schema-inspection.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import type { QueuedOperatorRecoverySource } from "../operator-run-recovery-source.codec.js";
 import { hashWorkerCredential } from "./credential.js";

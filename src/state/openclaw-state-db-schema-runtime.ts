@@ -27,17 +27,12 @@ import {
   resolveCronIdentityMigrationDefaultStoreKey,
 } from "./openclaw-state-db-cron-identity-migration.js";
 import { assertExistingOpenClawStateRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
-import {
-  assertCurrentStateRuntimeSchema,
-  assertNoLegacyStateRuntimeRepair,
-  isOpenClawStateSchemaFastPathEligible,
-} from "./openclaw-state-db-fast-path.js";
+import { isOpenClawStateSchemaFastPathEligible } from "./openclaw-state-db-fast-path.js";
 import { migrateHistoricalStateImports } from "./openclaw-state-db-historical-imports.js";
 import type { StateDatabaseInitialization } from "./openclaw-state-db-initialization.js";
 import { assertStateDatabaseIntegrityOnce } from "./openclaw-state-db-integrity-admission.js";
 import {
   assertMigratedStateTableIntegrity,
-  assertOpenClawStateDatabaseForMaintenance,
   executeCanonicalStateSchema,
   migrateBoundedStateSchema,
   openClawStateMigrationAssertions,
@@ -52,7 +47,6 @@ import {
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import {
-  assertCanonicalStateSchemaShape,
   dropLegacyStateTables,
   migrateAgentDatabaseRelativePaths,
   migrateWorkerPlacementExecutionModeSchema,
@@ -73,7 +67,13 @@ import * as retirements from "./openclaw-state-db-table-retirements.js";
 import { describeAgentPathMigration, warnAgentPathMigration } from "./openclaw-state-db.paths.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-maintenance-context.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
-import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
+import {
+  assertCurrentStateRuntimeSchema,
+  assertNoLegacyStateRuntimeRepair,
+  assertOpenClawStateDatabaseForMaintenance,
+  assertCanonicalStateSchemaShape,
+} from "./openclaw-state-schema-inspection.js";
+import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { assertGatewayServiceSchemaMigrationAllowed } from "./openclaw-state-service-installation.js";
 import { resolveSchemaMigrationIntegrityCheck } from "./schema-migration-backup-scope.js";

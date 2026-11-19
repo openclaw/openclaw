@@ -28,13 +28,13 @@ import type { OpenClawRegisteredAgentDatabase } from "../state/openclaw-agent-db
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import { inspectOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry-listing.js";
 import { readOpenClawAgentDatabaseRegistryRows } from "../state/openclaw-agent-db-registry.read.js";
-import { assertOpenClawStateDatabaseOwner } from "../state/openclaw-state-db-maintenance.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   resolveOpenClawRegisteredAgentDatabasePath,
   resolveOpenClawStateSqlitePath,
   resolveQuarantineStorePath,
 } from "../state/openclaw-state-db.paths.js";
+import { assertOpenClawStateDatabaseOwner } from "../state/openclaw-state-schema-inspection.js";
 import {
   sanitizeOpenClawGlobalStateSnapshot,
   sanitizeOpenClawStateLeaseRows,

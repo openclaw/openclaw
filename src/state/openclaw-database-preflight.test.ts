@@ -55,8 +55,8 @@ import { TEMPLATE_STATE_TABLE_RENAMES } from "./openclaw-state-db-schema-v36-tem
 import {
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseAsync,
-  assertOpenClawStateDatabaseForMaintenance,
 } from "./openclaw-state-db.js";
+import { assertOpenClawStateDatabaseForMaintenance } from "./openclaw-state-schema-inspection.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
   withStateMigrationBackupForTest,

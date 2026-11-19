@@ -9,12 +9,12 @@ import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { readMainTableList } from "../infra/sqlite-strict.js";
 import { readActiveUpdateRun } from "../infra/update-run-read.kernel.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
-import { assertOpenClawStateDatabaseForMaintenance } from "./openclaw-state-db-maintenance.js";
 import type { AgentDatabases, DB } from "./openclaw-state-db.generated.js";
 import {
   resolveOpenClawAgentDatabaseStoredPath,
   resolveOpenClawRegisteredAgentDatabasePath,
 } from "./openclaw-state-db.paths.js";
+import { assertOpenClawStateDatabaseForMaintenance } from "./openclaw-state-schema-inspection.js";
 
 /** The caller retains shared-state write admission through this synchronous repair. */
 export function repairOpenClawAgentDatabasePaths(

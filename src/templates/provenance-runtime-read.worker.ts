@@ -1,8 +1,8 @@
-import { assertOpenClawStateDatabaseOwner } from "../state/openclaw-state-db-maintenance.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../state/openclaw-state-db-readonly.js";
+import { assertOpenClawStateDatabaseOwner } from "../state/openclaw-state-schema-inspection.js";
 import type { WorkerOperationContext } from "../state/worker-operation-registry.js";
 import { readTemplateInstallSchemaVersionRows } from "./provenance-runtime-read.kernel.js";
 

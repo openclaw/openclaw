@@ -13,11 +13,11 @@ import {
   assertOpenClawAgentDatabaseOwner,
 } from "../state/openclaw-agent-db-maintenance.js";
 import { assertSupportedAgentSchemaVersion } from "../state/openclaw-agent-db-schema-read.js";
+import { assertSupportedStateSchemaVersion } from "../state/openclaw-state-db-schema-version.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
   assertOpenClawStateDatabaseOwner,
-} from "../state/openclaw-state-db-maintenance.js";
-import { assertSupportedStateSchemaVersion } from "../state/openclaw-state-db-schema-version.js";
+} from "../state/openclaw-state-schema-inspection.js";
 import {
   sanitizeOpenClawGlobalStateSnapshot,
   sanitizeOpenClawStateLeaseRows,

@@ -27,10 +27,8 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { createOpenClawStateSchemaEnsurer } from "./openclaw-state-feature-schema-ensure.js";
-import {
-  getOpenClawStateRuntimeSchema,
-  OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
-} from "./openclaw-state-schema-compatibility.js";
+import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "./openclaw-state-schema-compatibility.js";
+import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {

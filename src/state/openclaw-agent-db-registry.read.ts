@@ -19,12 +19,12 @@ import type { OpenClawRegisteredAgentDatabase } from "./openclaw-agent-db-contra
 import { getStateRuntimeSchemaAdmission } from "./openclaw-state-db-admission.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
-  assertCanonicalAgentDatabasesPrimaryKey,
   detectOpenClawStateDatabaseSchemaMigrationsFromDatabase,
   STATE_SCHEMA_MIGRATION_READ_TABLES,
 } from "./openclaw-state-db-schema-repair.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { resolveOpenClawRegisteredAgentDatabasePath } from "./openclaw-state-db.paths.js";
+import { assertCanonicalAgentDatabasesPrimaryKey } from "./openclaw-state-schema-inspection.js";
 
 type OpenClawAgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases"> & {
   sqlite_master: { name: string; type: string };

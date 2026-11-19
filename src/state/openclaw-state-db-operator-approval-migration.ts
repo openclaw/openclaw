@@ -1,9 +1,11 @@
 // Doctor-only repair for the operator approval kind constraint.
 import type { DatabaseSync } from "node:sqlite";
-import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
-import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import {
+  hasCanonicalOperatorApprovalKinds,
+  readOperatorApprovalTableSql,
+} from "./openclaw-state-schema-inspection.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const COLUMNS = [
@@ -92,34 +94,6 @@ const LEGACY_OPERATOR_APPROVAL_CREATE_SQL = `CREATE TABLE operator_approvals (
   )
 ) STRICT;`;
 
-function tableSql(db: DatabaseSync): string | undefined {
-  const schema = getAdmittedSqliteSchemaFacts(db);
-  if (schema) {
-    return schema.tableSql.get("operator_approvals") ?? undefined;
-  }
-  const row = db
-    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'operator_approvals'")
-    .get();
-  return typeof row?.sql === "string" ? row.sql : undefined;
-}
-
-function hasCanonicalOperatorApprovalKinds(db: DatabaseSync): boolean {
-  if (!tableExists(db, "operator_approvals")) {
-    return true;
-  }
-  return /kind\s+text\s+not\s+null\s+check\s*\(\s*kind\s+in\s*\(\s*'exec'\s*,\s*'plugin'\s*,\s*'system-agent'\s*\)\s*\)/.test(
-    tableSql(db)?.toLowerCase() ?? "",
-  );
-}
-
-export function assertCanonicalOperatorApprovalKinds(db: DatabaseSync, pathname: string): void {
-  if (!hasCanonicalOperatorApprovalKinds(db)) {
-    throw new SqliteSchemaMismatchError(
-      `OpenClaw state database ${pathname} has a legacy operator approval schema; run openclaw doctor --fix to migrate it.`,
-    );
-  }
-}
-
 export function isCanonicalOperatorApprovalKind(
   value: unknown,
 ): value is "exec" | "plugin" | "system-agent" {
@@ -167,7 +141,7 @@ function alterAppendedResolutionRefCreateSql(sql: string): string {
 // but different constraints/defaults/types would get its rows copied under a
 // schema that silently discards those semantics.
 function hasExactLegacyOperatorApprovalSchema(db: DatabaseSync): boolean {
-  const live = tableSql(db);
+  const live = readOperatorApprovalTableSql(db);
   if (!live) {
     return false;
   }

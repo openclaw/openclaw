@@ -21,7 +21,6 @@ import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.j
 import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
-import { assertOpenClawStateDatabaseForMaintenance } from "./openclaw-state-db-maintenance.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -36,6 +35,7 @@ import {
   STATE_SUPERVISION_KEY,
   type OpenClawExternalStateOwnership,
 } from "./openclaw-state-ownership.js";
+import { assertOpenClawStateDatabaseForMaintenance } from "./openclaw-state-schema-inspection.js";
 
 type OpenClawStateOwnershipOptions = Omit<OpenClawStateDatabaseOptions, "database" | "readOnly">;
 type OwnershipDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;

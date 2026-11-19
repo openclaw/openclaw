@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
-import { assertOpenClawStateDatabaseForMaintenance } from "../../state/openclaw-state-db-maintenance.js";
 import { readStateSchemaContentVersion } from "../../state/openclaw-state-db-schema-version.js";
+import { assertOpenClawStateDatabaseForMaintenance } from "../../state/openclaw-state-schema-inspection.js";
 import { readGatewayOwnerLeaseFromDatabase } from "../gateway-owner-lease.read.js";
 import type { GatewayOwnerLeaseIdentity } from "../gateway-owner-lease.types.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";

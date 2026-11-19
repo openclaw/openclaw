@@ -111,6 +111,8 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-state-db-operator-approval-migration.ts",
     "src/state/openclaw-state-db-schema-additive.ts",
     "src/state/openclaw-state-db-schema-helpers.ts",
+    // Shared runtime and Doctor inspection owns only schema/ownership reads.
+    "src/state/openclaw-state-schema-inspection.ts",
     "src/state/openclaw-state-db-schema-repair.ts",
     "src/state/openclaw-state-db-schema-v12-foldin.ts",
     "src/state/openclaw-state-db-schema-v13-widerow.ts",

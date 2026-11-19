@@ -2,13 +2,13 @@ import fs from "node:fs";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { clearOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
 import {
-  assertOpenClawStateDatabaseForMaintenance,
   clearOpenClawStateDatabaseOpenFailure,
   ensureOpenClawStatePermissions,
   isOpenClawStateDatabaseOpen,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownership.js";
+import { assertOpenClawStateDatabaseForMaintenance } from "../state/openclaw-state-schema-inspection.js";
 import { compactDoctorSqliteFile } from "./doctor-sqlite-compact.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 

@@ -4,10 +4,8 @@ import { describe, expect, it } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
-import {
-  assertCanonicalOperatorApprovalKinds,
-  repairOperatorApprovalSchema,
-} from "./openclaw-state-db-operator-approval-migration.js";
+import { repairOperatorApprovalSchema } from "./openclaw-state-db-operator-approval-migration.js";
+import { assertCanonicalOperatorApprovalKinds } from "./openclaw-state-schema-inspection.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { LEGACY_TWO_KIND_CREATE_SQL } from "./operator-approval-schema.test-support.js";
 
