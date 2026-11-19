@@ -6,6 +6,7 @@ export * from "./system-agent-error-details.js";
 export {
   ErrorCodes,
   GatewayErrorDetailCodes,
+  isDevicePairGatewayLoopbackOnlyError,
   isMcpAppViewExpiredError,
   readCronJobNotFoundError,
   readClawHubRiskAcknowledgementRequiredError,

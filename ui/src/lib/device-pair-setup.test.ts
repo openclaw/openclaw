@@ -249,6 +249,24 @@ describe("device pairing setup state", () => {
     expect(state.devicePairSetupExpiryTimer).toBeNull();
   });
 
+  it("asks for secure access when the Gateway only listens on this computer", async () => {
+    const request = vi.fn().mockRejectedValue(
+      Object.assign(new Error("Gateway is only bound to loopback."), {
+        details: { code: "DEVICE_PAIR_GATEWAY_LOOPBACK_ONLY" },
+      }),
+    );
+    const state = stateWithClient({ request } as unknown as DevicePairSetupState["client"]);
+
+    await refreshDevicePairSetup(state);
+
+    expect(state.devicePairSetupLifecycle).toEqual({
+      phase: "secure-access-required",
+      access: "full",
+    });
+    await setDevicePairSetupAccess(state, "limited");
+    expect(state.devicePairSetupLifecycle).toEqual({ phase: "selection", access: "limited" });
+  });
+
   it("fails visibly when an older gateway omits lifecycle metadata", async () => {
     const request = vi.fn().mockResolvedValue({
       setupCode: "LEGACY",

@@ -183,7 +183,7 @@
   font-size: var(--control-ui-text-sm);
 }
 
-.device-pair-setup__code > .device-pair-setup__fallback > summary {
+.device-pair-setup__fallback > summary {
   display: flex;
   align-items: center;
   gap: var(--space-1);

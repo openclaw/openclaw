@@ -23,6 +23,10 @@ registerEnglishCatalog(registerDevicesEnglish);
 const MOBILE_PAIRING_DOCS_URL =
   "https://docs.openclaw.ai/channels/pairing#pair-from-the-control-ui-recommended";
 const NODE_PAIRING_DOCS_URL = "https://docs.openclaw.ai/gateway/pairing#one-paste-node-pairing";
+const TAILSCALE_DOCS_URL = "https://docs.openclaw.ai/gateway/tailscale";
+const TAILSCALE_SERVE_COMMAND = "openclaw config set gateway.tailscale.mode serve";
+const LAN_BIND_COMMAND = "openclaw config set gateway.bind lan";
+const LOOPBACK_BIND_COMMAND = "openclaw config set gateway.bind loopback";
 const PAIRING_ACCESS_OPTIONS = [
   ["full", "devices.pairing.fullAccess", "devices.pairing.fullAccessHint"],
   ["limited", "devices.pairing.limitedAccess", "devices.pairing.limitedAccessHint"],
@@ -45,6 +49,51 @@ type PairingOutcomeLifecycle = Extract<
   DevicePairSetupLifecycle,
   { phase: "success" | "delivery-uncertain" | "expired" }
 >;
+
+// Loopback stays the default; the owner chooses and applies a route on the Gateway host.
+function SecureAccessSetup() {
+  return (
+    <div class="device-pair-setup__command device-pair-setup__secure-access" role="status">
+      <strong>{t("devices.pairing.secureAccess.title")}</strong>
+      <p>{t("devices.pairing.secureAccess.intro")}</p>
+      <section class="device-pair-setup__command">
+        <strong>{t("devices.pairing.secureAccess.tailscaleTitle")}</strong>
+        <p>{t("devices.pairing.secureAccess.tailscaleSteps")}</p>
+        <div class="login-gate__command">
+          <code>{TAILSCALE_SERVE_COMMAND}</code>
+          <CopyButton text={TAILSCALE_SERVE_COMMAND} idleLabel={t("connection.help.copyCommand")} />
+        </div>
+        <a
+          class="device-pair-setup__link"
+          href={TAILSCALE_DOCS_URL}
+          target={EXTERNAL_LINK_TARGET}
+          rel={buildExternalLinkRel()}
+        >
+          {t("devices.pairing.secureAccess.tailscaleGuide")}
+        </a>
+      </section>
+      <details class="device-pair-setup__fallback">
+        <summary>
+          <Icon name="chevronRight" />
+          {t("devices.pairing.secureAccess.lanTitle")}
+        </summary>
+        <p>{t("devices.pairing.secureAccess.lanWarning")}</p>
+        <div class="login-gate__command">
+          <code>{LAN_BIND_COMMAND}</code>
+          <CopyButton text={LAN_BIND_COMMAND} idleLabel={t("connection.help.copyCommand")} />
+        </div>
+        <p>{t("devices.pairing.secureAccess.lanUndo", { command: LOOPBACK_BIND_COMMAND })}</p>
+      </details>
+      <details class="device-pair-setup__fallback">
+        <summary>
+          <Icon name="chevronRight" />
+          {t("devices.pairing.secureAccess.publicTitle")}
+        </summary>
+        <p>{t("devices.pairing.secureAccess.publicHint")}</p>
+      </details>
+    </div>
+  );
+}
 
 function accessSummaryKey(access: DevicePairSetupAccess) {
   return access === "limited"
@@ -149,10 +198,10 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
     );
   const isNodeSetup = () => props.lifecycle.access === "node";
   // A code is minted for one access level, so the choice only shows while it can still change.
+  const needsSecureAccess = () => props.lifecycle.phase === "secure-access-required";
   const showAccessChoices = () =>
-    props.lifecycle.phase === "selection" || error()?.source === "create";
-  const canSelectAccess = () =>
-    !refreshing() && (props.lifecycle.phase === "selection" || error()?.source === "create");
+    props.lifecycle.phase === "selection" || needsSecureAccess() || error()?.source === "create";
+  const canSelectAccess = () => !refreshing() && showAccessChoices();
   const copyLabel = () => t("devices.pairing.copySetupCode");
   return (
     <Show when={props.open}>
@@ -242,6 +291,9 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                   <span>{failure().message}</span>
                 </InlineAlert>
               )}
+            </Show>
+            <Show when={needsSecureAccess()}>
+              <SecureAccessSetup />
             </Show>
             <Show when={setup()}>
               {(current) => {
@@ -390,14 +442,14 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                 {t("devices.pairing.generateCode")}
               </button>
             </Show>
-            <Show when={error()}>
+            <Show when={error() || needsSecureAccess()}>
               <button
                 class="btn primary"
                 type="button"
                 disabled={refreshing()}
                 onClick={() => void refresh()}
               >
-                <Icon name="refresh" /> {t("common.reload")}
+                <Icon name="refresh" /> {t(needsSecureAccess() ? "common.retry" : "common.reload")}
               </button>
             </Show>
             <Show when={setup()}>
