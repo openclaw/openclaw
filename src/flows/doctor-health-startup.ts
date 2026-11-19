@@ -340,7 +340,19 @@ export async function prepareDoctorRuntimeChecks(
   const { noteStartupOptimizationHints } = await import("../commands/doctor-platform-notes.js");
   await measure("UI protocol", () => maybeRepairUiProtocolFreshness(runtime, prompter));
   await measure("Source install", () => noteSourceInstallIssues(root));
-  await measure("CLI launcher", () => noteBunCliLauncherIssues({ root, prompter }));
+  await measure("CLI launcher", async () => {
+    await noteBunCliLauncherIssues({ root, prompter });
+    // Earlier updaters can publish a pnpm launcher that still names their removed stage.
+    // The repair touches only this installation's launcher and is verified before it lands.
+    if (root) {
+      const { repairPublishedPnpmLaunchers } = await import("../infra/update-launcher-repair.js");
+      for (const repair of await repairPublishedPnpmLaunchers({ root }).catch(() => [])) {
+        runtime.log(
+          `Repaired the openclaw launcher ${repair.file}: it still pointed at the removed update stage ${repair.stage}.`,
+        );
+      }
+    }
+  });
   await measure("Plugin runtime links", () => noteStalePluginRuntimeSymlinks(root));
   noteStartupOptimizationHints();
   return { schemas, nocowPaths: nocow.paths, warnings: deletionJournal.warnings };

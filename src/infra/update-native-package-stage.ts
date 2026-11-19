@@ -299,6 +299,18 @@ export async function finalizeNativePackageStage(
       await relocateRuntimeSymlink(file, file, destinationFile, relocations);
     } else if (entry.isFile()) {
       await relocateRuntimeLauncher(file, file, destinationFile, relocations);
+    } else {
+      continue;
+    }
+    // Activation moves the stage away; a launcher still naming it would leave no CLI.
+    // Refuse here, while the previous Gateway and launchers are untouched.
+    const published = entry.isSymbolicLink()
+      ? await fs.readlink(file)
+      : await fs.readFile(file, "utf8");
+    if (published.includes(path.basename(stage.projectRoot))) {
+      throw new Error(
+        `The staged ${entry.name} launcher still points into the update stage after relocation; the installation was left unchanged.`,
+      );
     }
   }
   // Candidate installation rewrites shared locks and pnpm group links. Capture their
