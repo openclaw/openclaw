@@ -1289,7 +1289,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/prepared-model-catalog-worker.workspace-heap.integration.test.ts",
   "src/agents/prepared-model-runtime.published-resources.test.ts",
   "src/agents/prepared-model-runtime.remote-inference.integration.test.ts",
-  "src/agents/prepared-model-runtime.remote-retention.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.pool.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.retirement.integration.test.ts",
   "src/agents/prepared-model-runtime-config-stamp.test.ts",
