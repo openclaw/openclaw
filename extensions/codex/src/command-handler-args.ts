@@ -156,7 +156,11 @@ export function splitArgs(value: string | undefined): string[] {
   return splitArgsWithTail(value).args;
 }
 
-export function splitArgsWithTail(value: string | undefined): { args: string[]; tail: string } {
+export function splitArgsWithTail(value: string | undefined): {
+  args: string[];
+  tail: string;
+  hasUnclosedQuote: boolean;
+} {
   const input = value ?? "";
   const args: string[] = [];
   let tail = "";
@@ -201,28 +205,31 @@ export function splitArgsWithTail(value: string | undefined): { args: string[]; 
   if (tokenStarted) {
     args.push(current);
   }
-  return { args, tail };
+  return { args, tail, hasUnclosedQuote: quote !== undefined };
 }
 
 export function parseReviewArgs(
   args: readonly string[],
   tail: string,
+  hasUnclosedQuote: boolean,
 ): CodexReviewTarget | undefined {
   if (args.length === 0) {
     return { type: "uncommittedChanges" };
   }
-  const option = args[0];
-  if (option === "--base" || option === "--commit") {
-    const value = args.length === 2 ? readRequiredOptionValue(args, 0) : undefined;
+  // A quoted flag is prose, not an explicit target selector.
+  const selector = /^\s*(--base|--commit)(?:\s|$)/u.exec(tail)?.[1];
+  if (selector) {
+    const value =
+      !hasUnclosedQuote && args.length === 2 ? readRequiredOptionValue(args, 0) : undefined;
     if (!value) {
       return undefined;
     }
-    if (option === "--base") {
+    if (selector === "--base") {
       return { type: "baseBranch", branch: value };
     }
     return /^[a-f0-9]{7,40}$/i.test(value) ? { type: "commit", sha: value } : undefined;
   }
-  if (args.some((arg) => arg.startsWith("-")) || args.every((arg) => !arg.trim())) {
+  if (args.every((arg) => !arg.trim())) {
     return undefined;
   }
   return { type: "custom", instructions: tail };

@@ -295,7 +295,7 @@ export function buildHelp(): string {
     "- /codex permissions [default|yolo|status]",
     "- /codex detach",
     "- /codex compact",
-    `- ${CODEX_REVIEW_USAGE}`,
+    `- ${CODEX_REVIEW_USAGE} (only a leading unquoted --base or --commit selects a Git target)`,
     "- /codex diagnostics [note]",
     "- /codex computer-use [status|install]",
     "- /codex account",

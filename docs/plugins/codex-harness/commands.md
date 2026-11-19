@@ -55,6 +55,11 @@ Common forms:
     Use a full or abbreviated SHA of 7–40 hexadecimal characters.
   - `/codex review <instructions>` starts a review with free-text instructions.
 
+  Only a leading unquoted `--base` or `--commit` selects a Git target. Other
+  text, including a leading `--force` or flags later in a sentence, is sent as
+  custom instructions. Ref values can use balanced quotes, for example
+  `--base "rachel's-fix"`.
+
   Codex resolves branch and commit targets in the attached thread's checkout,
   which can differ from the Gateway's workspace. The chat reply confirms that
   the review started; it does not include the findings.

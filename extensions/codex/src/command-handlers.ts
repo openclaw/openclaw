@@ -84,7 +84,7 @@ export async function handleCodexSubcommand(
   options: { pluginConfig?: unknown; deps: CodexCommandDeps },
 ): Promise<PluginCommandResult> {
   const { deps } = options;
-  const { args, tail } = splitArgsWithTail(inputCtx.args);
+  const { args, tail, hasUnclosedQuote } = splitArgsWithTail(inputCtx.args);
   if (args.length === 0) {
     return buildCodexSubcommandPickerReply();
   }
@@ -96,7 +96,8 @@ export async function handleCodexSubcommand(
   if (CODEX_HOST_INSPECTION_SUBCOMMANDS.has(normalized) && !canMutateCodexHost(inputCtx)) {
     return { text: CODEX_HOST_INSPECTION_AUTH_ERROR };
   }
-  const reviewTarget = normalized === "review" ? parseReviewArgs(rest, tail) : undefined;
+  const reviewTarget =
+    normalized === "review" ? parseReviewArgs(rest, tail, hasUnclosedQuote) : undefined;
   const skipsNativeExecution =
     returnsBeforeNativeCodexExecution(normalized, rest, reviewTarget) ||
     isReadOnlyCodexGoalCommand(normalized, rest);
