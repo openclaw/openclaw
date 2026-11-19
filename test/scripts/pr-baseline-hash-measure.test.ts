@@ -1,27 +1,21 @@
-// Production-shaped differential workload (normal tests use a small fixture):
+// Opt-in production-shaped differential workload; regressions live in the owner suites.
 // OPENCLAW_PR_HASH_MEASURE=/absolute/new-directory OPENCLAW_PR_HASH_BASE=<commit> \
 //   node scripts/run-vitest.mjs test/scripts/pr-baseline-hash-measure.test.ts --testTimeout 900000
 // Retains synthetic fixtures/results for cross-platform replay with measure.py.
 import { execFileSync, spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { afterAll, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { expect, it } from "vitest";
 import { createBaselineFixture } from "./pr-baseline-native.test-support.js";
 
 const output = process.env.OPENCLAW_PR_HASH_MEASURE;
-const dirs = useAutoCleanupTempDirTracker(afterAll);
-it.skipIf(process.platform === "win32")(
+it.skipIf(!output || process.platform === "win32")(
   "validates retained evidence without temporary hash writes",
   () => {
-    const root = output ? resolve(output) : dirs.make("pr-hash-validator-");
-    if (output) {
-      mkdirSync(root);
-    }
-    const files = Number(process.env.OPENCLAW_PR_HASH_FILES ?? (output ? 62000 : 0));
-    const logBytes = Number(
-      process.env.OPENCLAW_PR_HASH_LOG_BYTES ?? (output ? 128 * 1024 * 1024 : 128 * 1024),
-    );
+    const root = resolve(output!);
+    mkdirSync(root);
+    const files = Number(process.env.OPENCLAW_PR_HASH_FILES ?? 62000);
+    const logBytes = Number(process.env.OPENCLAW_PR_HASH_LOG_BYTES ?? 128 * 1024 * 1024);
     const bytes = Buffer.alloc(18000, 0xa5);
     const f = createBaselineFixture(root, 2, "IMPORTANT", (repo) => {
       for (let i = 0; i < files; i++) {
@@ -51,7 +45,7 @@ it.skipIf(process.platform === "win32")(
       value("PREP_BASELINE_REFRESH_HEAD"),
       value("PREP_BASELINE_REFRESH_OID"),
     ];
-    for (const arm of output ? ["base", "candidate"] : ["candidate"]) {
+    for (const arm of ["base", "candidate"]) {
       const source = join(root, arm);
       mkdirSync(source);
       for (const directory of ["pr-lib", "lib"]) {
@@ -78,7 +72,6 @@ it.skipIf(process.platform === "win32")(
         files,
         payloadBytes: files * bytes.length,
         logBytes,
-        benchmark: Boolean(output),
       }),
     );
     writeFileSync(
@@ -137,7 +130,7 @@ env={**os.environ,**work['env']}
 # Native platform tools, never the fixture's host PATH.
 env['PATH']=os.environ['PATH']
 results=[]
-for i,arm in enumerate(['base','base','base']+['base','candidate']*5 if work['benchmark'] else ['candidate']):
+for i,arm in enumerate(['base','base','base']+['base','candidate']*5):
  result=root/('sample-%d.json'%i)
  before=resource.getrusage(resource.RUSAGE_CHILDREN)
  start=time.monotonic(); load=os.getloadavg()
@@ -155,13 +148,11 @@ for i,arm in enumerate(['base','base','base']+['base','candidate']*5 if work['be
  assert sample['stdout'] == results[0]['stdout']
  assert sample['temporaryBytes'] == (0 if arm=='candidate' else results[0]['temporaryBytes'])
 (root/'results.json').write_text(json.dumps(results,indent=2))
-if work['benchmark']: assert results[0]['temporaryBytes'] >= work['logBytes']
+assert results[0]['temporaryBytes'] >= work['logBytes']
 `,
     );
     const result = spawnSync("python3", [join(root, "measure.py")], { encoding: "utf8" });
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    if (output) {
-      console.log(result.stdout);
-    }
+    console.log(result.stdout);
   },
 );
