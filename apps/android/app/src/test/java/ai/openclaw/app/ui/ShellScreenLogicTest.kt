@@ -429,6 +429,21 @@ class ShellScreenLogicTest {
   }
 
   @Test
+  fun overviewRecentSessionsLeaveChildSessionsUnderTheirParent() {
+    val sessions =
+      listOf(
+        ChatSessionEntry(key = "agent:main:dashboard:parent", updatedAtMs = 1),
+        ChatSessionEntry(key = "agent:main:subagent:child", updatedAtMs = 3, parentSessionKey = "agent:main:dashboard:parent"),
+        ChatSessionEntry(key = "agent:main:subagent:orphan", updatedAtMs = 2, parentSessionKey = "agent:main:dashboard:unloaded"),
+      )
+
+    assertEquals(
+      listOf("agent:main:subagent:orphan", "agent:main:dashboard:parent"),
+      overviewRecentSessions(sessions).map { session -> session.key },
+    )
+  }
+
+  @Test
   fun overviewRecentSessionsUseStableKeyOrderWhenTimestampsMatch() {
     assertEquals(
       listOf("cron", "main", "telegram"),

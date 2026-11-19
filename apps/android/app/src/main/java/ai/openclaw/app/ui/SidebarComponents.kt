@@ -354,6 +354,17 @@ internal fun SidebarSessionActivityIndicator(
   }
 }
 
+/** Disclosure for a session row that owns nested child sessions. */
+internal data class SidebarSessionChildren(
+  val count: Int,
+  val expanded: Boolean,
+  /** Work hidden inside a collapsed parent, so it stays visible without expanding. */
+  val collapsedActivity: SidebarSessionActivity?,
+  val onToggle: () -> Unit,
+)
+
+private val sidebarChildIndent = 16.dp
+
 @Composable
 internal fun SidebarSessionRow(
   session: ChatSessionEntry,
@@ -363,6 +374,8 @@ internal fun SidebarSessionRow(
   onDragCommit: ((Int) -> Unit)? = null,
   onDragActiveChange: (Boolean) -> Unit = {},
   attention: SidebarAttention? = null,
+  depth: Int = 0,
+  children: SidebarSessionChildren? = null,
 ) {
   val activity =
     sidebarSessionActivity(
@@ -388,6 +401,7 @@ internal fun SidebarSessionRow(
     dragKey = session.key,
     onDragCommit = onDragCommit,
     onDragActiveChange = onDragActiveChange,
+    contentPadding = PaddingValues(start = 12.dp + sidebarChildIndent * depth, end = 12.dp, top = 8.dp, bottom = 8.dp),
   ) {
     Column(modifier = Modifier.weight(1f)) {
       Text(
@@ -418,6 +432,42 @@ internal fun SidebarSessionRow(
         tint = palette.muted,
       )
     }
+    children?.let { SidebarSessionChildrenToggle(it, palette) }
+  }
+}
+
+@Composable
+private fun SidebarSessionChildrenToggle(
+  children: SidebarSessionChildren,
+  palette: SidebarPalette,
+) {
+  // The toggle merges the count and chevron into one control, read as "3, Expand child sessions".
+  Row(
+    modifier =
+      Modifier
+        .heightIn(min = 48.dp)
+        .clip(RoundedCornerShape(10.dp))
+        .clickable(role = Role.Button, onClick = children.onToggle)
+        .testTag("sidebar-session-children-toggle")
+        .padding(horizontal = 6.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
+    if (!children.expanded) {
+      children.collapsedActivity?.let { SidebarSessionActivityIndicator(activity = it, palette = palette) }
+    }
+    Text(text = children.count.toString(), style = ClawTheme.type.caption, color = palette.muted)
+    Icon(
+      imageVector = if (children.expanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+      contentDescription =
+        if (children.expanded) {
+          nativeString("Collapse child sessions")
+        } else {
+          nativeString("Expand child sessions")
+        },
+      tint = palette.muted,
+      modifier = Modifier.size(18.dp),
+    )
   }
 }
 

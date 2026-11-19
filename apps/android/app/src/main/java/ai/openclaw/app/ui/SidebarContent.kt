@@ -12,6 +12,7 @@ import ai.openclaw.app.chat.ChatSessionPatch
 import ai.openclaw.app.chat.SIDEBAR_SESSION_PAGE_SIZE
 import ai.openclaw.app.chat.SIDEBAR_SESSION_SEE_LESS_THRESHOLD
 import ai.openclaw.app.chat.SessionSnooze
+import ai.openclaw.app.chat.isSessionRunActive
 import ai.openclaw.app.chat.normalizeSidebarSectionOrder
 import ai.openclaw.app.defaultSidebarPageOrder
 import ai.openclaw.app.defaultSidebarVisiblePages
@@ -194,7 +195,54 @@ internal data class SidebarSessionPresentation(
   /** Uncategorized channel group chats (gateway kind "group"), not catalog folders. */
   val chatGroups: List<ChatSessionEntry>,
   val recent: List<ChatSessionEntry>,
+  /** Child-to-parent links for rows shown under a listed parent rather than in a section. */
+  val parentByKey: Map<String, String> = emptyMap(),
+  /** Nested children by parent key, in the same recency order as the sections. */
+  val childrenByParent: Map<String, List<ChatSessionEntry>> = emptyMap(),
 )
+
+/** The top-level row that contains [key], so a nested active session keeps its parent on screen. */
+internal fun SidebarSessionPresentation.rootKeyOf(key: String): String {
+  var current = key
+  val seen = mutableSetOf(current)
+  while (true) {
+    val parent = parentByKey[current] ?: return current
+    if (!seen.add(parent)) return current
+    current = parent
+  }
+}
+
+/** [entries] plus their nested descendants, so a collapsed section still reports hidden attention. */
+internal fun SidebarSessionPresentation.withDescendants(entries: List<ChatSessionEntry>): List<ChatSessionEntry> = entries.flatMap { entry -> listOf(entry) + descendantsOf(entry.key) }
+
+/** Every nested descendant of [key], depth first. */
+internal fun SidebarSessionPresentation.descendantsOf(key: String): List<ChatSessionEntry> = childrenByParent[key].orEmpty().flatMap { child -> listOf(child) + descendantsOf(child.key) }
+
+/**
+ * A collapsed parent shows work hidden in its children. Failures stay on the child row, matching
+ * the web sidebar, so a finished failure does not keep flagging the parent.
+ */
+internal fun SidebarSessionPresentation.collapsedChildActivity(key: String): SidebarSessionActivity? {
+  val descendants = descendantsOf(key)
+  return when {
+    descendants.any { isSessionRunActive(it.hasActiveRun, it.status?.trim()?.lowercase()) } -> SidebarSessionActivity.Running
+    descendants.any { it.unread == true } -> SidebarSessionActivity.Unread
+    else -> null
+  }
+}
+
+/**
+ * Parents start collapsed. One that contains the open session starts expanded so the selection
+ * stays visible, unless the user collapsed it.
+ */
+internal fun SidebarSessionPresentation.childrenExpanded(
+  key: String,
+  activeSessionKey: String,
+  expandedKeys: Collection<String>,
+  collapsedKeys: Collection<String>,
+): Boolean =
+  key in expandedKeys ||
+    (key !in collapsedKeys && descendantsOf(key).any { it.key == activeSessionKey })
 
 internal fun sidebarRecentSessions(
   sessions: List<ChatSessionEntry>,
@@ -247,11 +295,13 @@ internal fun sidebarSessionPresentation(
   nowMs: Long = System.currentTimeMillis(),
 ): SidebarSessionPresentation {
   val activeSessions = sidebarRecentSessions(sessions, currentSessionKey, nowMs)
-  val pinned = activeSessions.filter { it.pinned == true }
-  val navigable =
-    activeSessions.filter { session ->
-      session.pinned != true && session.key !in excludedSessionKeys
-    }
+  // Catalog sections own their rows, so those rows neither nest here nor hold children here.
+  val listed = activeSessions.filter { it.pinned == true || it.key !in excludedSessionKeys }
+  val parentByKey = sessionParentLinks(listed)
+  val childrenByParent = listed.filter { it.key in parentByKey }.groupBy { parentByKey.getValue(it.key) }
+  val roots = listed.filter { it.key !in parentByKey }
+  val pinned = roots.filter { it.pinned == true }
+  val navigable = roots.filter { it.pinned != true }
   val grouped = navigable.filter { !it.category.isNullOrBlank() }
   val ungrouped = navigable.filter { it.category.isNullOrBlank() }
   // An explicit category wins, matching web/Mac. Groups is only kind=="group".
@@ -263,6 +313,8 @@ internal fun sidebarSessionPresentation(
     groups = sidebarSessionGroupSections(grouped, knownGroups),
     chatGroups = chatGroups,
     recent = recent,
+    parentByKey = parentByKey,
+    childrenByParent = childrenByParent,
   )
 }
 
@@ -516,6 +568,8 @@ internal fun OpenClawSidebar(
   var pagesMenuMode by rememberSaveable { mutableStateOf(SidebarPagesMenuMode.Closed) }
   val visibleLimits = remember(gatewayStableId, selectedAgentId) { mutableStateMapOf<String, Int>() }
   var collapsedGroups by rememberSaveable(gatewayStableId, selectedAgentId) { mutableStateOf(emptyList<String>()) }
+  var expandedParentKeys by rememberSaveable(gatewayStableId, selectedAgentId) { mutableStateOf(emptyList<String>()) }
+  var collapsedParentKeys by rememberSaveable(gatewayStableId, selectedAgentId) { mutableStateOf(emptyList<String>()) }
   var chatGroupsExpanded by rememberSaveable(gatewayStableId, selectedAgentId) { mutableStateOf(true) }
   var expandedCatalogIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
   var pinnedExpanded by rememberSaveable { mutableStateOf(false) }
@@ -582,28 +636,59 @@ internal fun OpenClawSidebar(
       viewModel.patchChatSession(ChatSessionPatch(key = key, ownerAgentId = ownerAgentId, pinned = pinned))
     }
   }
+
+  @Composable
+  fun SessionNode(
+    session: ChatSessionEntry,
+    depth: Int,
+    dragSource: SidebarSessionDragSource?,
+  ) {
+    val children = recentPresentation.childrenByParent[session.key].orEmpty()
+    val expanded =
+      children.isNotEmpty() &&
+        recentPresentation.childrenExpanded(session.key, activeSessionKey, expandedParentKeys, collapsedParentKeys)
+    SidebarSessionRow(
+      session = session,
+      attention = attentionFor(listOf(sidebarAttentionSessionKey(session.key, session.ownerAgentId ?: selectedAgentId ?: defaultAgentId))),
+      selected = session.key == activeSessionKey,
+      palette = palette,
+      onClick = { onSelectSession(session) },
+      onDragCommit =
+        if (canMutateSessions && dragSource != null) {
+          { direction ->
+            sidebarSessionPinnedAfterDrag(dragSource, direction)?.let { pinned ->
+              setSessionPinned(session.key, session.ownerAgentId, pinned)
+            }
+          }
+        } else {
+          null
+        },
+      onDragActiveChange = if (dragSource == null) ({}) else onDragActiveChange,
+      depth = depth,
+      children =
+        children.takeIf { it.isNotEmpty() }?.let {
+          SidebarSessionChildren(
+            count = it.size,
+            expanded = expanded,
+            collapsedActivity = recentPresentation.collapsedChildActivity(session.key),
+            onToggle = {
+              if (expanded) {
+                expandedParentKeys = expandedParentKeys - session.key
+                collapsedParentKeys = collapsedParentKeys + session.key
+              } else {
+                collapsedParentKeys = collapsedParentKeys - session.key
+                expandedParentKeys = expandedParentKeys + session.key
+              }
+            },
+          )
+        },
+    )
+    // Child rows are reached through their parent; pinning by drag stays a top-level gesture.
+    if (expanded) children.forEach { child -> SessionNode(child, depth + 1, dragSource = null) }
+  }
   val sessionRows: @Composable (List<ChatSessionEntry>, SidebarSessionDragSource?) -> Unit = { entries, dragSource ->
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-      entries.forEach { session ->
-        SidebarSessionRow(
-          session = session,
-          attention = attentionFor(listOf(sidebarAttentionSessionKey(session.key, session.ownerAgentId ?: selectedAgentId ?: defaultAgentId))),
-          selected = session.key == activeSessionKey,
-          palette = palette,
-          onClick = { onSelectSession(session) },
-          onDragCommit =
-            if (canMutateSessions && dragSource != null) {
-              { direction ->
-                sidebarSessionPinnedAfterDrag(dragSource, direction)?.let { pinned ->
-                  setSessionPinned(session.key, session.ownerAgentId, pinned)
-                }
-              }
-            } else {
-              null
-            },
-          onDragActiveChange = if (dragSource == null) ({}) else onDragActiveChange,
-        )
-      }
+      entries.forEach { session -> SessionNode(session, depth = 0, dragSource = dragSource) }
     }
   }
   LaunchedEffect(connection.isConnected, gatewayStableId, selectedAgentId, visible) {
@@ -613,7 +698,7 @@ internal fun OpenClawSidebar(
     }
   }
   val sectionRows: @Composable (String, List<ChatSessionEntry>) -> Unit = { token, entries ->
-    val window = sidebarSectionWindow(entries, visibleLimits[token] ?: SIDEBAR_SESSION_PAGE_SIZE, activeSessionKey)
+    val window = sidebarSectionWindow(entries, visibleLimits[token] ?: SIDEBAR_SESSION_PAGE_SIZE, recentPresentation.rootKeyOf(activeSessionKey))
     sessionRows(window.rows, SidebarSessionDragSource.Recent)
     if (window.canShowMore) {
       SidebarActionRow(nativeString("Show more"), Icons.Default.KeyboardArrowDown, palette, onClick = {
@@ -841,7 +926,7 @@ internal fun OpenClawSidebar(
           }
           SidebarCollapsibleHeader(
             label = nativeString("Pinned"),
-            attention = if (pinnedExpanded) null else attentionFor(pinnedSessions.map { sidebarAttentionSessionKey(it.key, it.ownerAgentId ?: selectedAgentId ?: defaultAgentId) }),
+            attention = if (pinnedExpanded) null else attentionFor(recentPresentation.withDescendants(pinnedSessions).map { sidebarAttentionSessionKey(it.key, it.ownerAgentId ?: selectedAgentId ?: defaultAgentId) }),
             expanded = pinnedExpanded,
             palette = palette,
             onClick = { pinnedExpanded = !pinnedExpanded },
@@ -933,7 +1018,7 @@ internal fun OpenClawSidebar(
                 val expanded = group.name !in collapsedGroups
                 SidebarCollapsibleHeader(
                   label = group.name,
-                  attention = if (expanded) null else attentionFor(group.entries.map { it.key }),
+                  attention = if (expanded) null else attentionFor(recentPresentation.withDescendants(group.entries).map { it.key }),
                   expanded = expanded,
                   palette = palette,
                   iconContent = { Icon(Icons.Outlined.Folder, contentDescription = null, modifier = Modifier.size(18.dp)) },
@@ -945,7 +1030,7 @@ internal fun OpenClawSidebar(
               token == "groups" && recentPresentation.chatGroups.isNotEmpty() -> {
                 SidebarCollapsibleHeader(
                   label = nativeString("Groups"),
-                  attention = if (chatGroupsExpanded) null else attentionFor(recentPresentation.chatGroups.map { it.key }),
+                  attention = if (chatGroupsExpanded) null else attentionFor(recentPresentation.withDescendants(recentPresentation.chatGroups).map { it.key }),
                   expanded = chatGroupsExpanded,
                   palette = palette,
                   onClick = { chatGroupsExpanded = !chatGroupsExpanded },
@@ -956,7 +1041,7 @@ internal fun OpenClawSidebar(
               token == "ungrouped" -> {
                 SidebarCollapsibleHeader(
                   label = nativeString("Recent"),
-                  attention = if (recentExpanded) null else attentionFor(recentRows.map { it.key }),
+                  attention = if (recentExpanded) null else attentionFor(recentPresentation.withDescendants(recentRows).map { it.key }),
                   expanded = recentExpanded,
                   palette = palette,
                   onClick = { recentExpanded = !recentExpanded },

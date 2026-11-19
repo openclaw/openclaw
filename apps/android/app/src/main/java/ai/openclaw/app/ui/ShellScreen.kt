@@ -861,11 +861,15 @@ internal fun overviewHeaderState(
 
 internal fun overviewHeaderRoute(attentionRows: List<HomeAttentionRow>): SettingsRoute = attentionRows.firstOrNull()?.settingsRoute ?: SettingsRoute.Gateway
 
-internal fun overviewRecentSessions(sessions: List<ChatSessionEntry>): List<ChatSessionEntry> =
-  sessions
+/** Top-level sessions only; child sessions are reached through their parent. */
+internal fun overviewRecentSessions(sessions: List<ChatSessionEntry>): List<ChatSessionEntry> {
+  val nested = sessionParentLinks(sessions).keys
+  return sessions
+    .filter { it.key !in nested }
     .sortedWith(compareByDescending<ChatSessionEntry> { it.lastActivityAt ?: it.updatedAtMs ?: Long.MIN_VALUE }.thenBy { it.key })
     .distinctBy(ChatSessionEntry::key)
     .take(overviewRecentSessionLimit)
+}
 
 internal data class OverviewMetricCardSpec(
   val title: String,
