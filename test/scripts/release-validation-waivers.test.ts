@@ -134,14 +134,17 @@ describe("2026.11.6 observed OpenCode Go availability failure", () => {
     jobs: [leaf, aggregate],
   };
 
-  it("accepts only the exact candidate and observed execution without rewriting failure", () => {
-    expect(terminalPolicyPass(observed, "2026.11.6", candidateSha)).toBe(true);
+  it("accepts only the exact candidate across runs and attempts without rewriting failure", () => {
+    for (const execution of [
+      observed,
+      { ...observed, runAttempt: 2 },
+      { ...observed, runId: "44494417450" },
+    ]) {
+      expect(terminalPolicyPass(execution, "2026.11.6", candidateSha)).toBe(true);
+    }
     expect(observed.conclusion).toBe("failure");
     expect(observed.jobs.every((job) => job.conclusion === "failure")).toBe(true);
     for (const rejected of [
-      { ...observed, runAttempt: 2 },
-      { ...observed, runId: "44494417450" },
-      { ...observed, runId: undefined },
       { ...observed, key: "releaseChecksCandidate" },
       { ...observed, jobs: [] },
       { ...observed, jobs: [aggregate] },

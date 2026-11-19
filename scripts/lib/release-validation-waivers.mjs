@@ -90,7 +90,6 @@ const RELEASE_VALIDATION_WAIVERS = [
     childRole: "releaseChecksIndependent",
     jobName:
       "Run repo/live E2E validation / Native live suites (Native live gateway profiles OpenCode Go smoke)",
-    evidence: { runId: "44494417449", runAttempt: 1 },
     reason:
       "Dallin Romney authorized this exact external availability gap on 2026-11-19 at 11:04 UTC. " +
       "FRV 44493699274/1, child 44494417449/1, job 135459584818 failed before inference because " +
@@ -98,8 +97,8 @@ const RELEASE_VALIDATION_WAIVERS = [
       "read-only account model listing returned HTTP 200 with glm-5.3 and flash present but " +
       "glm-5.2 absent; no inference was performed. This does not establish CI account entitlement, " +
       "global retirement, deprecation, or a runtime fix; official docs still list glm-5.2. " +
-      "Accept only this named failed job on this candidate and original execution. Preserve raw " +
-      "failure and required execution. Other jobs, candidates, attempts, missing/cancelled/incomplete " +
+      "Accept only this named failed job on this candidate across runs and attempts. Preserve raw " +
+      "failure and required execution. Other jobs, candidates, missing/cancelled/incomplete " +
       "evidence, integrity, install/update and publication gates remain blocking.",
   },
   {
