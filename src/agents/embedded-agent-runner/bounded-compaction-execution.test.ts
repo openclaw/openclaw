@@ -1,5 +1,8 @@
 import { createApiRegistry, createLlmRuntime } from "@openclaw/ai";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
+import { testing } from "../../sessions/session-controller.test-support.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { SettingsManager } from "../sessions/settings-manager.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
@@ -24,20 +27,6 @@ vi.mock("../provider-stream.js", () => ({
 // mock-isolation: supply an admitted registry runtime without building a full agent.
 vi.mock("../sessions/model-registry-runtime.js", () => ({
   getModelRegistryRuntime: mocks.registryRuntime,
-}));
-// mock-isolation: no active host controller or watchdog is needed for this retry.
-vi.mock("../../sessions/session-controller.lifecycle.js", () => ({
-  getCurrentSessionControllerOwner: () => undefined,
-}));
-// mock-isolation: the fixture has no controller; do not load controller storage.
-vi.mock("../../sessions/session-controller.state.js", () => ({
-  assertSessionControllerOperation: vi.fn(),
-}));
-// mock-isolation: diagnostic persistence is outside the transport ownership contract.
-vi.mock("../../logging/diagnostic-run-activity.js", () => ({
-  createDiagnosticEmbeddedRunOwner: () => ({ generation: 1 }),
-  markDiagnosticEmbeddedRunStarted: vi.fn(),
-  closeDiagnosticEmbeddedRunOwner: vi.fn(),
 }));
 // mock-isolation: preserve the transport while excluding diagnostic event storage.
 vi.mock("./run/attempt.model-diagnostic-events.js", () => ({
@@ -79,9 +68,11 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+afterEach(() => testing.resetSessionControllerForTest());
+
 describe("executeBoundedCompactionSession", () => {
   it.each(["provider", "runtime"] as const)(
-    "retains a lifecycle-owned %s stream when retrying unsupported thinking",
+    "preserves the foreground watchdog and %s stream across a thinking retry",
     async (transport) => {
       const apiRegistry = createApiRegistry();
       const llmRuntime = createLlmRuntime(apiRegistry);
@@ -90,6 +81,16 @@ describe("executeBoundedCompactionSession", () => {
       mocks.registerProviderStream.mockReturnValue(
         transport === "provider" ? providerStream : undefined,
       );
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:test",
+        sessionId: "session",
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+      const foreground = operation.watchdog.attachAttempt({ assertCurrent() {} });
+      const deadline = Date.now() + 60 * 60_000;
+      foreground.setExecutionDeadline(deadline);
+      const wait = foreground.beginWait({ kind: "runtime_owned", isCurrent: () => true });
       const execute = vi
         .fn<(options: ExecuteOptions) => Promise<unknown>>()
         .mockRejectedValueOnce(new Error("thinking level high is not supported"))
@@ -149,15 +150,24 @@ describe("executeBoundedCompactionSession", () => {
         sessionKey: "agent:main:test",
         storePath: "/synthetic/sessions/store.sqlite",
       };
-      const result = await executeBoundedCompactionSession(
-        runtime,
-        target,
-        {} as SettingsManager,
-        () => {},
-        vi.fn(),
-        undefined,
-        { agent: { streamFn: llmRuntime.streamSimple }, replayEnabled: false },
+      const result = await withSessionControllerOwner(operation, () =>
+        executeBoundedCompactionSession(
+          runtime,
+          target,
+          {} as SettingsManager,
+          () => {},
+          vi.fn(),
+          undefined,
+          { agent: { streamFn: llmRuntime.streamSimple }, replayEnabled: false },
+        ),
       );
+
+      expect(foreground.isCurrent()).toBe(true);
+      expect(operation.watchdog.snapshot().waits).toEqual([{ kind: "runtime_owned" }]);
+      expect(operation.watchdog.snapshot().executionDeadlineAtMs).toBe(deadline);
+      expect(foreground.progressModel("resumed after compaction")).toBe(true);
+      wait.close();
+      operation.complete();
 
       expect(result).toMatchObject({
         ok: true,

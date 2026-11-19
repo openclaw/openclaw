@@ -102,6 +102,7 @@ export async function executeBoundedCompactionSession(
       owner = createDiagnosticEmbeddedRunOwner({
         watchdogAttempt: operation
           ? operation.watchdog.attachAttempt({
+              nested: true,
               assertCurrent: () => {
                 params.abortSignal?.throwIfAborted();
                 assertSessionControllerOperation(operation);
