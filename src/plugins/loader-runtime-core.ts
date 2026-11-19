@@ -258,9 +258,9 @@ export function* loadOpenClawPluginsSteps(
   let registryBuilder: ReturnType<typeof createPluginRegistry> | undefined;
   try {
     let sourcePreparationConcurrency = 1;
-    let pending: Awaited<ReturnType<typeof readPluginStateMigrationReadinessAsync>> | undefined;
+    let pending = options.pendingStateMigrations;
     yield async () => {
-      pending = await readPluginStateMigrationReadinessAsync({ env: context.env });
+      pending ??= await readPluginStateMigrationReadinessAsync({ env: context.env });
       sourcePreparationConcurrency = Math.min(4, availableParallelism());
     };
     pending ??= readPluginStateMigrationReadiness({ env: context.env });

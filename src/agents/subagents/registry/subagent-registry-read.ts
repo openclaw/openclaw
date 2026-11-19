@@ -289,10 +289,26 @@ export function resolveSessionYieldWait(
   ) {
     return undefined;
   }
-  return (
-    resolveYieldWaitingChild(sessionKey, agentId, session.lifecycleRunId, new Set()) ??
-    "unreachable"
-  );
+  const source = resolveYieldWaitingChild(sessionKey, agentId, session.lifecycleRunId, new Set());
+  if (source) {
+    return source;
+  }
+  // A child whose continuation was lost still owes its requester a registry
+  // settlement. That completion, not a second root recovery input, owns the wake.
+  for (const child of getSubagentRunsForRequesterSession(sessionKey)) {
+    if (
+      resolveRecordedRequester(child) === agentId &&
+      (child.requesterSettleWake ||
+        (owesRequesterCompletion(child) &&
+          (child.execution.status !== "terminal" ||
+            isYieldedSubagentRun(child) ||
+            child.delivery?.status === "pending" ||
+            child.delivery?.status === "in_progress")))
+    ) {
+      return "waiting";
+    }
+  }
+  return "unreachable";
 }
 
 /** Resolve live owners through the existing aliases without scanning retained history. */
