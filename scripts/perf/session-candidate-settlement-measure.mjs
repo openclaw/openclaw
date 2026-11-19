@@ -322,6 +322,20 @@ try {
         setTimeout(resolve, 250);
       });
     }
+    // Owned directory observations reconcile on 30-second wall-clock boundaries.
+    // Join the next validation so both arms measure the same part of that cycle.
+    const recoveryChargeStart = chargeOperations.length;
+    await new Promise((resolve) => {
+      setTimeout(resolve, 30000 - (Date.now() % 30000) + 50);
+    });
+    do {
+      await read();
+      assert(performance.now() - settling < 180000, "Synthetic path recovery did not complete");
+    } while (
+      !chargeOperations
+        .slice(recoveryChargeStart)
+        .some((charge) => charge.operation === "session-target-prepare")
+    );
     settleMs = performance.now() - settling;
   }
   for (let i = 0; i < 10; i++) {
