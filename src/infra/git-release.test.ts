@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
 import { writeGitReleaseLauncher } from "./git-release-launcher.js";
 import {
   GIT_RELEASE_TRIAL,
@@ -14,6 +15,7 @@ import {
   usesGitReleases,
 } from "./git-release-paths.js";
 import { createGitReleaseDirs, publishGitRelease, settleGitReleaseTrial } from "./git-release.js";
+import { listPackageReleases } from "./package-release-retention.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -47,6 +49,52 @@ const startGateway = (prefix: string, env: NodeJS.ProcessEnv = {}) =>
 describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
   "git releases",
   () => {
+    it("loads a bundled plugin's source contract from the selected release (#201874)", async () => {
+      const { prefix } = await setup();
+      const root = (await createGitReleaseDirs(prefix)).releaseRoot;
+      // A release is a worktree of the checkout: bundled plugins keep their TypeScript sources.
+      await fs.cp(
+        fileURLToPath(new URL("../../extensions/deepseek", import.meta.url)),
+        path.join(root, "extensions", "deepseek"),
+        { recursive: true, filter: (source) => path.basename(source) !== "node_modules" },
+      );
+      await publishGitRelease({ prefix, releaseRoot: root, trial: false });
+
+      // The Gateway names its root by the release link, as the MCP web-search request does.
+      const contract = loadPluginPublicArtifactModuleSync<{
+        createDeepSeekWebSearchProvider: unknown;
+      }>({
+        pluginRoot: path.join(gitReleaseSlot(prefix), "extensions", "deepseek"),
+        artifactBasename: "web-search-contract-api.js",
+        origin: "bundled",
+      });
+      expect(contract.createDeepSeekWebSearchProvider).toBeTypeOf("function");
+    });
+
+    it("keeps listing releases built under node_modules after the link moves out", async () => {
+      const { prefix } = await setup();
+      // A release built before #201874 keeps its package at lib/node_modules/openclaw.
+      const old = path.join(prefix, "releases", "git-old", "lib", "node_modules", "openclaw");
+      await fs.mkdir(old, { recursive: true });
+      await fs.writeFile(
+        path.join(old, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+      );
+      await publishGitRelease({
+        prefix,
+        releaseRoot: await release(prefix, "2.0.0", ""),
+        trial: false,
+      });
+
+      const releases = await listPackageReleases(gitReleaseSlot(prefix));
+      expect(releases.map(({ id, version, selected }) => ({ id, version, selected }))).toEqual(
+        expect.arrayContaining([
+          { id: "git-old", version: "1.0.0", selected: false },
+          expect.objectContaining({ version: "2.0.0", selected: true }),
+        ]),
+      );
+    });
+
     it("switches back and restores upgraded state after two failed trial starts", async () => {
       const { stateDir, prefix } = await setup();
       const good = await release(prefix, "1.0.0", 'console.log("old " + process.argv[1]);\n');

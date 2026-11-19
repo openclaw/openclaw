@@ -1124,19 +1124,13 @@ async function authenticateClawHubParentRequest({
   let expectedRelease;
   const revalidateAuthority = async (selectedManifest) => {
     if (!authenticated) {
-      const { createReleaseEvidenceClient, loadPublicationParentEvidence } =
-        await import("./release-ci-summary.mjs");
+      const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
       const { authenticateFullReleaseValidationEvidence } =
         await import("./validate-full-release-validation-evidence.mjs");
       const client = evidenceClient ?? createReleaseEvidenceClient(REPOSITORY);
       const runId = inputs.full_release_validation_run_id;
       const runAttempt = Number(inputs.full_release_validation_run_attempt);
-      const { manifestJson: manifest } = await loadPublicationParentEvidence({
-        client,
-        repository: REPOSITORY,
-        runId,
-        expectedRunAttempts: new Map([[runId, runAttempt]]),
-      });
+      const { manifest } = client.loadManifest(runId, runAttempt);
       authenticated = await authenticateFullReleaseValidationEvidence(
         {
           run: client.getRunAttempt(runId, runAttempt),

@@ -33,10 +33,8 @@ import type {
 import type {
   SessionActorAuthority,
   SessionActorAuthorityFacts,
-  SessionActorPhaseResults,
 } from "./session-actor-contract.js";
 import type { SessionActorMemoryTurnReads } from "./session-actor-memory-turn-contract.js";
-import { runSessionActorCommand } from "./session-actor-scope.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import { getSessionInputActor, throwSessionInputActorFailure } from "./session-input-actor.js";
 import { prepareSessionInputFromReplica } from "./session-input-preparation.js";
@@ -50,7 +48,6 @@ import {
   type SessionSourceValidation,
 } from "./session-source-authority.js";
 import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
-import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import { restoreSessionTurnColdTranscript } from "./session-turn-cold.js";
 import {
   acceptSessionTurnFreshAuthority,
@@ -169,7 +166,6 @@ export async function appendSessionTurnInWorker(
     plan.sessionKey = selected.sessionKey;
     plan.options = { ...plan.options, ...selection };
   };
-  let inputExpectedState = options.expectedSessionState;
   const fixedMessages =
     !actor &&
     !memory &&
@@ -315,9 +311,6 @@ export async function appendSessionTurnInWorker(
           }
           if (ownerSource) {
             acceptSessionSourceValidation(ownerSource, prepared.ownerSourceValidation);
-          }
-          if (actor) {
-            inputExpectedState ??= prepared.expectedSessionState;
           }
           return prepared;
         };
@@ -566,65 +559,48 @@ export async function appendSessionTurnInWorker(
             );
           },
           async () => {
-            let expectedState = inputExpectedState;
+            inputActor.assertCurrent();
             let candidate: SessionTurnCommitted | undefined;
-            const actorOutcome = await runSessionActorCommand<
-              SessionActorPhaseResults["acceptInput" | "adoptRun"]
-            >(
-              { ...actor, snapshot: (current) => inputActor.snapshot(current) },
-              authority,
-              async (snapshot) => {
-                // Metadata may advance; the writer checks the captured lifecycle at commit.
-                if (snapshot) {
-                  expectedState ??= buildSessionTranscriptTurnExpectedState(
-                    snapshot.entry ?? { sessionId: options.expectedSessionId, updatedAt: 0 },
+            const record = (turn: SessionTurnCommitted | undefined) => {
+              if (!turn) {
+                throw new Error("Input actor omitted its committed turn");
+              }
+              candidate = turn;
+              try {
+                operation.onAcknowledged(turn);
+              } finally {
+                if (!memory && turn.result.sessionEntry && inputActor.target.readSource) {
+                  publishCommittedSessionIdentity(
+                    scope.agentId,
+                    inputActor.target.readSource.databaseIdentity,
+                    new Map(previousEntry ? [[scope.sessionKey, previousEntry]] : []),
+                    new Map([[scope.sessionKey, turn.result.sessionEntry]]),
                   );
                 }
-                if (!expectedState) {
-                  throw new Error("Input preparation omitted its lifecycle expectation");
-                }
-                const record = (turn: SessionTurnCommitted | undefined) => {
-                  if (!turn) {
-                    throw new Error("Input actor omitted its committed turn");
-                  }
-                  candidate = turn;
-                  try {
-                    operation.onAcknowledged(turn);
-                  } finally {
-                    if (!memory && turn.result.sessionEntry && inputActor.target.readSource) {
-                      publishCommittedSessionIdentity(
-                        scope.agentId,
-                        inputActor.target.readSource.databaseIdentity,
-                        new Map(previousEntry ? [[scope.sessionKey, previousEntry]] : []),
-                        new Map([[scope.sessionKey, turn.result.sessionEntry]]),
-                      );
-                    }
-                  }
-                };
-                const phase = options.initialSessionEntry ? "acceptInput" : inputActor.phase;
-                const command = {
-                  commandId: randomUUID(),
-                  phaseId: `${phase}:${options.expectedSessionId}`,
-                  expectedState,
-                  lifecycle: {},
-                  turn: plan,
-                };
-                return phase === "acceptInput"
-                  ? actor.acceptInput(command, authority, {
-                      committed: (commit) => record(commit.value.turn),
-                    })
-                  : actor.adoptRun(
-                      {
-                        ...command,
-                        sessionId: options.expectedSessionId,
-                      },
-                      authority,
-                      {
-                        committed: (commit) => record(commit.value),
-                      },
-                    );
-              },
-            );
+              }
+            };
+            const phase = options.initialSessionEntry ? "acceptInput" : inputActor.phase;
+            const command = {
+              commandId: randomUUID(),
+              phaseId: `${phase}:${options.expectedSessionId}`,
+              expectedState: options.expectedSessionState,
+              lifecycle: {},
+              turn: plan,
+            };
+            const actorOutcome = await (phase === "acceptInput"
+              ? actor.acceptInput(command, authority, {
+                  committed: (commit) => record(commit.value.turn),
+                })
+              : actor.adoptRun(
+                  {
+                    ...command,
+                    sessionId: options.expectedSessionId,
+                  },
+                  authority,
+                  {
+                    committed: (commit) => record(commit.value),
+                  },
+                ));
             if (actorOutcome.kind !== "committed") {
               throwSessionInputActorFailure(actorOutcome, authorityFailure);
             }

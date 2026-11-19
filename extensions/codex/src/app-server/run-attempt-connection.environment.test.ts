@@ -1,5 +1,9 @@
+import fs from "node:fs/promises";
 import path from "node:path";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createAdmittedHostCapabilityTestFixture,
+  createPluginRuntimeMock,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { useCodexWorkerProvisioningFixture } from "../node-app-server-command.test-support.js";
 import { codexAppServerStartOptionsKey } from "./config-options.js";
@@ -116,9 +120,19 @@ describe("Codex local tool environment placement", () => {
     },
   );
 
-  it.each(["local", "unconfigured-local", "unix", "proxy", "remote-root", "sandbox"])(
+  it.for(["local", "unconfigured-local", "unix", "proxy", "remote-root", "sandbox"])(
     "places the prepared environment only on owned local execution: %s",
-    async (placement) => {
+    async (placement, context) => {
+      const host = await createAdmittedHostCapabilityTestFixture({
+        runId: `scratch-${placement}`,
+        agentId: "main",
+        sessionKey: `agent:main:${placement}`,
+        config: {},
+      });
+      context.onTestFinished(() => {
+        host.closeHost();
+        host.closeAdmission();
+      });
       vi.stubEnv("GIT_CONFIG_PARAMETERS", "'user.name=Ambient'");
       const params = createParams(
         path.join(tempDir, `path-${placement}.jsonl`),
@@ -127,6 +141,7 @@ describe("Codex local tool environment placement", () => {
       const localToolEnv = { PATH: ["/fixture/tools", "/fixture/system"].join(path.delimiter) };
       params.hostCapabilities = {
         ...params.hostCapabilities,
+        prepareLocalExecScratch: host.hostCapabilities.prepareLocalExecScratch,
         preparedEnvironment: () => ({
           credentialScrubEnv: {},
           localIdentityEnv: {},
@@ -163,9 +178,12 @@ describe("Codex local tool environment placement", () => {
       using _ = { [Symbol.dispose]: connection.releaseBindingAuthority };
       try {
         const expected = placement === "local" ? localToolEnv : undefined;
-        expect(connection.shellEnvironment).toEqual(expected);
-        expect(connection.shellPathPrepend).toEqual(expected ? ["/fixture/tools"] : undefined);
         const ownedLocal = placement === "local" || placement === "unconfigured-local";
+        const scratch = path.join(await fs.realpath(params.workspaceDir), ".openclaw", "tmp");
+        expect(connection.shellEnvironment).toEqual(
+          ownedLocal ? { ...expected, TMPDIR: scratch, TMP: scratch, TEMP: scratch } : expected,
+        );
+        expect(connection.shellPathPrepend).toEqual(expected ? ["/fixture/tools"] : undefined);
         const parameters = "'maintenance.auto=false' 'gc.auto=0'";
         expect(connection.shellGitConfigParameters).toBe(ownedLocal ? parameters : undefined);
         expect(connection.appServer.start.env?.PATH).toBe(expected?.PATH);

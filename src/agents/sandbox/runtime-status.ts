@@ -118,20 +118,20 @@ export function resolvePreparedSandboxRuntimeStatus(
   return resolveSandboxRuntimeStatusForClassification(params);
 }
 
-/** Projection topology already owns this physical row, including unqualified legacy keys. */
-export function resolveOwnedSessionSandboxRuntimeStatus(params: {
+/** Projection owns this row; workspace classification does not need a tool policy. */
+export function isOwnedSessionSandboxed(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
   preparedSessionEntry: SandboxSessionEntry;
 }) {
-  return resolveSandboxRuntimeStatusForClassification(
-    params,
+  return isSandboxed(
     resolveOwnedSandboxClassification({
       ...params,
       classificationAgentId: params.agentId,
       classificationSessionKey: params.sessionKey,
     }),
+    params.preparedSessionEntry,
   );
 }
 
@@ -608,12 +608,6 @@ function resolveSandboxRuntimeStatusForClassification(
         workspaceAccess: sandboxCfg.workspaceAccess === "rw" ? "ro" : sandboxCfg.workspaceAccess,
       }
     : { sandboxRequired: false };
-  const sandboxed =
-    Boolean(classificationSessionKey) &&
-    (sandboxRequired ||
-      (session?.existing?.sandboxMode !== "off" &&
-        sandboxCfg.mode !== "off" &&
-        (sandboxCfg.mode === "all" || comparableSessionKey.trim() !== mainSessionKey.trim())));
   return {
     agentId,
     sessionKey,
@@ -622,9 +616,27 @@ function resolveSandboxRuntimeStatusForClassification(
     mainSessionKey,
     mode: sandboxCfg.mode,
     ...isolation,
-    sandboxed,
+    sandboxed: isSandboxed(classification, session?.existing),
     toolPolicy: resolveSandboxToolPolicyForAgent(cfg, classificationAgentId),
   };
+}
+
+function isSandboxed(
+  {
+    classificationSessionKey,
+    comparableSessionKey,
+    mainSessionKey,
+    sandboxCfg,
+  }: ReturnType<typeof resolveSandboxClassification>,
+  entry: SandboxSessionEntry | undefined,
+): boolean {
+  return (
+    Boolean(classificationSessionKey) &&
+    (entry?.sandbox === "required" ||
+      (entry?.sandboxMode !== "off" &&
+        sandboxCfg.mode !== "off" &&
+        (sandboxCfg.mode === "all" || comparableSessionKey.trim() !== mainSessionKey.trim())))
+  );
 }
 
 function redactSessionKey(value: string): string {

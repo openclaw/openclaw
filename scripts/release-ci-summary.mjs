@@ -60,13 +60,6 @@ import {
   inspectActionsArtifactZip,
 } from "./lib/actions-artifact-archive.mjs";
 import { compareAscii, sortJsonValueKeys } from "./lib/canonical-json.mjs";
-import {
-  FRV18_PUBLICATION_EXCEPTION,
-  isFrv18Parent,
-  isFrv18PublicationManifest,
-  validateFrv18Plan,
-  projectFrv18Publication,
-} from "./lib/frv18-publication-exception.mjs";
 import { validateReusableReleaseChild } from "./lib/full-release-child-reuse.mjs";
 import {
   accountGithubRequest,
@@ -85,15 +78,11 @@ import {
   resolveVerifierIdentity,
   verifyReceiptRecoveryAuthority,
 } from "./lib/release-evidence-identity.mjs";
-import {
-  createReleasePublishInputs,
-  resolveReleasePublishInputs,
-} from "./lib/release-publish-inputs.mjs";
+import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
   evaluateReleaseChildPolicy,
   validateReleaseWaiverAggregates,
 } from "./lib/release-validation-waivers.mjs";
-import { downloadFullReleaseNpmPreflight } from "./npm-preflight-tooling-identity.mjs";
 import {
   revalidateQualificationAdmissionAuthority,
   verifyQualificationAdmission,
@@ -1335,10 +1324,7 @@ export function validateParentManifest(value, expected) {
       "Runtime waiver inputs are no longer accepted; run Full Release Validation under checked-in release-tooling policy.",
     );
   }
-  const advisoryJobs =
-    expected.qualificationException && isFrv18PublicationManifest(value)
-      ? (value.advisoryJobs ?? [])
-      : validateReleaseManifestAdvisoryJobs(value);
+  const advisoryJobs = validateReleaseManifestAdvisoryJobs(value);
   const childRuns = value.childRuns;
   if (!childRuns || typeof childRuns !== "object" || Array.isArray(childRuns)) {
     throw new Error("release validation manifest childRuns is invalid");
@@ -2309,77 +2295,6 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
         url: run.html_url,
       };
     },
-    loadPlanPublicationContext(plan) {
-      return projectFrv18Publication(plan, this);
-    },
-    async loadPlanPublishInputs(manifest) {
-      const directory = mkdtempSync(join(tmpdir(), "openclaw-frv18-preflight-"));
-      try {
-        await downloadFullReleaseNpmPreflight({
-          manifest,
-          repository: normalizedRepository,
-          runId: manifest.runId,
-          runAttempt: manifest.runAttempt,
-          sourceSha: manifest.targetSha,
-          toolingSha: manifest.workflowSha,
-          outputDir: directory,
-          token: process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN,
-        });
-        return await createReleasePublishInputs({
-          manifest,
-          npmManifest: JSON.parse(readFileSync(join(directory, "preflight-manifest.json"), "utf8")),
-        });
-      } finally {
-        rmSync(directory, { recursive: true, force: true });
-      }
-    },
-    loadPinnedJsonArtifact(expected) {
-      const artifact = readEvidenceJson(
-        "actions/artifacts/" + expected.id,
-        normalizedRepository,
-        immutableReads,
-      );
-      if (
-        String(artifact.id) !== expected.id ||
-        artifact.digest !== expected.digest ||
-        artifact.name !== expected.name ||
-        artifact.expired !== false ||
-        !Number.isSafeInteger(artifact.size_in_bytes) ||
-        artifact.size_in_bytes <= 0 ||
-        artifact.size_in_bytes > MAX_MANIFEST_ARTIFACT_ZIP_BYTES ||
-        String(artifact.workflow_run?.id) !== expected.runId ||
-        artifact.workflow_run?.head_sha !== FRV18_PUBLICATION_EXCEPTION.candidateSha
-      ) {
-        throw new Error("FRV18 pinned artifact identity mismatch: " + expected.id);
-      }
-      const directory = mkdtempSync(join(tmpdir(), "openclaw-frv18-artifact-"));
-      try {
-        const path = join(directory, "artifact.zip");
-        downloadArtifactZip(
-          expected.id,
-          path,
-          artifact.size_in_bytes,
-          normalizedRepository,
-          immutableReads,
-        );
-        const archive = readFileSync(path);
-        if (
-          archive.length !== artifact.size_in_bytes ||
-          "sha256:" + createHash("sha256").update(archive).digest("hex") !== expected.digest
-        ) {
-          throw new Error("FRV18 pinned artifact digest mismatch: " + expected.id);
-        }
-        const files = inspectActionsArtifactZip(archive, [expected.entry], {
-          maxArchiveBytes: MAX_MANIFEST_ARTIFACT_ZIP_BYTES,
-          maxCompressedEntryBytes: MAX_MANIFEST_ARTIFACT_ZIP_BYTES,
-          maxEntryBytes: MAX_RELEASE_ARTIFACT_BYTES,
-          maxExpandedBytes: MAX_RELEASE_ARTIFACT_BYTES,
-        });
-        return JSON.parse(files.get(expected.entry).toString("utf8"));
-      } finally {
-        rmSync(directory, { recursive: true, force: true });
-      }
-    },
     loadManifest(runId, runAttempt, manifestPath) {
       return downloadParentManifestEvidence(
         runId,
@@ -2402,17 +2317,7 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
   };
 }
 
-/**
- * @param {{
- *   client: ReturnType<typeof createReleaseEvidenceClient>,
- *   preloadedRun?: Record<string, unknown>,
- *   expectedRunAttempts?: Map<string, number>,
- *   manifestPath?: string,
- *   repository: string,
- *   runId: string,
- * }} options
- */
-export async function loadPublicationParentEvidence({
+async function loadValidatedParentEvidence({
   client,
   preloadedRun,
   expectedRunAttempts,
@@ -2427,44 +2332,6 @@ export async function loadPublicationParentEvidence({
     `full release parent ${runId} run attempt`,
   );
   consumeExpectedRunAttempt(expectedRunAttempts, runId, parentRunAttempt, "parent");
-  if (isFrv18Parent(parentRun, repository)) {
-    validateParentRunBinding(parentView, parentRun, runId);
-    let rawManifest;
-    let artifact;
-    if (runId === FRV18_PUBLICATION_EXCEPTION.parentRunId && parentRunAttempt === 1) {
-      const { plan: rawPlan, artifact: planArtifact } = client.loadExecutionPlanEvidence(runId);
-      const plan = validateFrv18Plan(rawPlan, planArtifact);
-      ({ manifest: rawManifest } = await client.loadPlanPublicationContext(plan));
-    } else {
-      const original = client.loadManifest(runId, parentRunAttempt, manifestPath);
-      if (!original) {
-        throw new Error("Publication artifact manifest is missing");
-      }
-      rawManifest = original.manifest;
-      artifact = original.artifact;
-    }
-    const manifest = validateParentManifest(rawManifest, {
-      runId,
-      runAttempt: parentRunAttempt,
-      workflowRef: parentRun.head_branch,
-      workflowSha: parentRun.head_sha,
-      qualificationException: true,
-    });
-    if (!isFrv18PublicationManifest(manifest)) {
-      throw new Error("Qualification exception requires exact version and candidate");
-    }
-    if (artifact) {
-      validateManifestArtifactBinding(artifact, manifest, parentRun, runId);
-    }
-    return {
-      artifact,
-      manifest,
-      manifestJson: sortReleaseJsonValueKeys(rawManifest),
-      parentRun,
-      parentView,
-      publicationException: { disposition: "qualification-waived" },
-    };
-  }
   const recovery =
     workflowPath(parentRun) === ".github/workflows/full-release-receipt-recovery.yml";
   validateCompletedParentRun(
@@ -2505,12 +2372,7 @@ export async function loadPublicationParentEvidence({
 function normalizedParentTuple(evidence, identity) {
   const { manifest, parentRun } = evidence;
   return {
-    artifact: evidence.artifact
-      ? normalizedManifestArtifact(evidence.artifact, manifest.runAttempt)
-      : null,
-    ...(evidence.publicationException
-      ? { publicationException: evidence.publicationException }
-      : {}),
+    artifact: normalizedManifestArtifact(evidence.artifact, manifest.runAttempt),
     conclusion: parentRun.conclusion,
     manifest: evidence.manifestJson,
     manifestVersion: manifest.version,
@@ -2899,7 +2761,7 @@ export async function validateReleaseRunEvidence(
     });
     return { ...evidence, qualification: qualificationFacts(evidence) };
   }
-  const currentEvidence = await loadPublicationParentEvidence({
+  const currentEvidence = await loadValidatedParentEvidence({
     client: evidenceClient,
     preloadedRun: selectedRun,
     expectedRunAttempts: remainingExpectedRunAttempts,
@@ -2915,14 +2777,6 @@ export async function validateReleaseRunEvidence(
     expectedSelectedRunId,
     expectedTargetSha,
   };
-  if (
-    currentEvidence.publicationException &&
-    (reuseRequest !== undefined ||
-      hasRequestedEvidenceReuse(requestedReuse) ||
-      qualificationReuse !== undefined)
-  ) {
-    throw new Error("The FRV18 publication exception cannot qualify reuse or another candidate");
-  }
   let requestedReuseDelta;
   if (reuseRequest !== undefined) {
     // Reject mismatched searches before fetching root/child evidence. Matching
@@ -3108,7 +2962,7 @@ export async function validateReleaseRunEvidence(
   let selectedEvidence = currentEvidence;
   const reuse = currentEvidence.manifest.evidenceReuse;
   if (reuse) {
-    rootEvidence = await loadPublicationParentEvidence({
+    rootEvidence = await loadValidatedParentEvidence({
       client: evidenceClient,
       expectedRunAttempts: remainingExpectedRunAttempts,
       repository: normalizedRepository,
@@ -3117,15 +2971,12 @@ export async function validateReleaseRunEvidence(
     selectedEvidence =
       reuse.selectedRunId === reuse.runId
         ? rootEvidence
-        : await loadPublicationParentEvidence({
+        : await loadValidatedParentEvidence({
             client: evidenceClient,
             expectedRunAttempts: remainingExpectedRunAttempts,
             repository: normalizedRepository,
             runId: reuse.selectedRunId,
           });
-    if (rootEvidence.publicationException || selectedEvidence.publicationException) {
-      throw new Error("The FRV18 publication exception cannot be reused by another parent");
-    }
     validateEvidenceReuseChain(
       currentEvidence.manifest,
       selectedEvidence.manifest,
@@ -3252,42 +3103,6 @@ export async function validateReleaseRunEvidence(
     ) {
       throw new Error("Reused publication artifacts differ from their authenticated root");
     }
-  }
-  if (currentEvidence.publicationException) {
-    if (remainingExpectedRunAttempts?.size) {
-      throw new Error("Qualification exception only accepts the selected parent attempt");
-    }
-    const current = normalizedParentTuple(
-      currentEvidence,
-      producerIdentities.get(currentEvidence.manifest.runId),
-    );
-    const evidence = {
-      schema: PHASED_RELEASE_EVIDENCE_SCHEMA,
-      valid: true,
-      repository: normalizedRepository,
-      current,
-      root: current,
-      directRoot: true,
-      evidenceReuse: null,
-      manifest: currentEvidence.manifestJson,
-      children: [],
-      waivers: [],
-      conclusions: { current: current.conclusion, root: current.conclusion, children: {} },
-      controls: currentEvidence.manifest.controls,
-      qualificationAdmission: currentQualification,
-      trustedWorkflowFullRef: trustedIdentity.fullRef,
-      trustedWorkflowRef: normalizedTrustedWorkflowRef,
-      verifier,
-      releaseProfile: currentEvidence.manifest.releaseProfile,
-      rerunGroup: currentEvidence.manifest.rerunGroup,
-      runReleaseSoak: currentEvidence.manifest.runReleaseSoak === "true",
-      validationInputs: currentEvidence.manifest.validationInputs,
-      producerOnTrustedMainLineage: false,
-    };
-    return {
-      ...evidence,
-      qualification: { ...qualificationFacts(evidence), disposition: "waived" },
-    };
   }
   const selectedKeys = new Set(qualification.coverage.children.map((child) => child.key));
   const executionPlan = sourcePlans.get(rootEvidence.manifest.runId);
@@ -3828,7 +3643,7 @@ async function main() {
   if (options.acquirePublicationManifest) {
     // Acquisition is not a qualification verdict. Every publisher still runs
     // the strict validation owner and its existing approval/consumption gates.
-    const evidence = await loadPublicationParentEvidence({
+    const evidence = await loadValidatedParentEvidence({
       client: createReleaseEvidenceClient(repository),
       repository,
       runId,
