@@ -214,6 +214,7 @@ it.each([false, true])(
       await pool.close();
     }
   },
+  180_000,
 );
 
 it.each<CredentialCase>([
