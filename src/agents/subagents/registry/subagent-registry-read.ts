@@ -39,10 +39,7 @@ import {
   prepareSubagentSessionListReadCache,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import {
-  isRequesterSettleWakeForRun,
-  owesRequesterCompletion,
-} from "./subagent-requester-settle-identity.js";
+import { owesRequesterCompletion } from "./subagent-requester-settle-identity.js";
 import {
   compareSubagentRunGeneration,
   copySubagentRunRuntimeOwner,
@@ -213,19 +210,14 @@ export function resolveSessionYieldWait(
     return undefined;
   }
   const interruptedRunId = session.lifecycleRunId ?? session.lastRunId;
-  if (interruptedRunId?.startsWith("announce:")) {
+  if (interruptedRunId?.startsWith("announce:requester-settle:")) {
     for (const child of getSubagentRunsForRequesterSession(sessionKey)) {
       if (
         !subagentRuns.isCompletionAuthorityRetired(child) &&
-        isRequesterSettleWakeForRun({
-          entry: child,
-          runId: interruptedRunId,
-          requesterSessionKey: sessionKey,
-          requesterAgentId: agentId,
-          runsById: subagentRuns,
-        })
+        resolveRecordedRequester(child) === agentId &&
+        child.requesterSettleWake !== undefined
       ) {
-        // The retained input owns this continuation; a separate restart turn would duplicate it.
+        // The registry owns this continuation even if recovery changed its cohort or retry ID.
         return "waiting";
       }
     }

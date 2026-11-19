@@ -105,14 +105,14 @@ access-policy outage still leaves delivery owed for retry. Explicit Stop and
 requester deletion still retire the selected completion obligations.
 
 If a requester wake is refused because the child's completion owner changed,
-that attempt ends instead of retrying indefinitely. The same requester and wake
-generation can still record a result already delivered after child cleanup. A yielded
+that attempt yields to the current owner. The completion stays owed and the registry
+re-evaluates its retained wake. The same requester and wake generation can still
+record a result already delivered after child cleanup. A yielded
 child's pause notice also settles if a resumed sibling changes the batch's run IDs;
 the notice belongs to that child, while the batch still waits for final results.
-Otherwise, OpenClaw records failed delivery and attempts to append a
-short notice to the requester session. If that session is unavailable, the failure
-is logged without retrying the wake. Retained wakes converge on their next
-attempt; no manual database edits are needed.
+The registry owns recovery of requester-settle continuations, including markers
+for an earlier cohort or retry. Startup clears those restart markers instead of
+starting a competing requester turn under the old run's operator authority.
 
 Completions from different operator invocations use separate settle wakes, each
 with its own retained authority. Sandbox setup failures and an unavailable Gateway
