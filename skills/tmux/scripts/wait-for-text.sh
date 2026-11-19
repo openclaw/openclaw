@@ -76,16 +76,21 @@ deadline=$((start_epoch + 10#$timeout))
 
 while true; do
   # -J joins wrapped lines, -S uses negative index to read last N lines
-  if pane_text="$(tmux capture-pane -p -J -t "$target" -S "-${lines}" 2>/dev/null)" &&
-    printf '%s\n' "$pane_text" | grep $grep_flag -- "$pattern" >/dev/null 2>&1; then
+  capture_failed=false
+  pane_text="$(tmux capture-pane -p -J -t "$target" -S "-${lines}" 2>&1)" || capture_failed=true
+  if [[ "$capture_failed" == false ]] &&
+    printf '%s\n' "$pane_text" | grep "$grep_flag" -- "$pattern" >/dev/null 2>&1; then
     exit 0
   fi
 
   now=$(date +%s)
   if (( now >= deadline )); then
-    echo "Timed out after ${timeout}s waiting for pattern: $pattern" >&2
-    echo "Last ${lines} lines from $target:" >&2
-    printf '%s\n' "$pane_text" >&2
+    if [[ "$capture_failed" == true ]]; then
+      printf 'Could not read tmux pane %s: %s\n' "$target" "$pane_text" >&2
+    else
+      printf 'Timed out after %ss waiting for pattern: %s\nLast %s lines from %s:\n%s\n' \
+        "$timeout" "$pattern" "$lines" "$target" "$pane_text" >&2
+    fi
     exit 1
   fi
 
