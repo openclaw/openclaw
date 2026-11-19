@@ -472,74 +472,74 @@ async function consolidatePacks(
       }
     },
   );
+  let retirementPending = false;
   if (pending) {
     // Resume the admitted retirement, not geometric selection: its verified union
     // can dominate the remaining inputs or put them over the next batch's limits.
     await verify([`pack-${pending.hash}.pack`]);
-    const retirementPending = await retire(pending);
-    const remainingNames = await fs.readdir(directory);
-    return {
-      remaining: remainingNames.filter((name) => name.endsWith(".pack")).length,
-      retirementPending,
-    };
-  }
-  packs.sort((a, b) => a.size - b.size || a.name.localeCompare(b.name));
-  let retirementPending = false;
-  for (const promisor of [true, false]) {
-    const candidates = packs.filter((pack) => pack.promisor === promisor);
-    const batch = [];
-    let bytes = 0;
-    let indexBytes = 0;
-    for (const pack of candidates) {
-      if (pack.indexBytes > PACK_BATCH_INDEX_BYTES) {
+    retirementPending = await retire(pending);
+  } else {
+    packs.sort((a, b) => a.size - b.size || a.name.localeCompare(b.name));
+    for (const promisor of [true, false]) {
+      const candidates = packs.filter(
+        (pack) => pack.promisor === promisor && pack.indexBytes <= PACK_BATCH_INDEX_BYTES,
+      );
+      // Find the largest affordable progression break; overlapping bytes cannot predict the union.
+      const end = candidates.findLastIndex(
+        (pack, i) =>
+          i > 0 &&
+          pack.size < 2 * candidates[i - 1]!.size &&
+          pack.size + candidates[i - 1]!.size <= PACK_BATCH_BYTES &&
+          pack.indexBytes + candidates[i - 1]!.indexBytes <= PACK_BATCH_INDEX_BYTES,
+      );
+      const batch = [];
+      let bytes = 0;
+      let indexBytes = 0;
+      // Start at the break so small arrivals cannot starve history peers; later passes use the output size.
+      for (let i = end; i >= 0; i--) {
+        const pack = candidates[i]!;
+        if (
+          bytes + pack.size > PACK_BATCH_BYTES ||
+          indexBytes + pack.indexBytes > PACK_BATCH_INDEX_BYTES ||
+          batch.length >= PACK_BATCH_COUNT
+        ) {
+          break;
+        }
+        batch.push(pack);
+        bytes += pack.size;
+        indexBytes += pack.indexBytes;
+      }
+      if (batch.length < 2) {
         continue;
       }
-      if (
-        bytes + pack.size > PACK_BATCH_BYTES ||
-        indexBytes + pack.indexBytes > PACK_BATCH_INDEX_BYTES ||
-        batch.length >= PACK_BATCH_COUNT
-      ) {
+      const selected = batch.map((pack) => pack.name);
+      // Validate only selected inputs. The streaming writer does not check source CRCs.
+      await verify(selected);
+      // Copy every object, including unreachable ones, and compress separately fetched revisions.
+      // index-pack publishes the promisor marker and verified index before returning the hash.
+      const alias =
+        "!if command -v ionice >/dev/null 2>&1; then ionice -c 3 -p $$ >/dev/null 2>&1; fi; git pack-objects --stdin-packs --stdout --window=10 --window-memory=8m --threads=1 | git index-pack --stdin --threads=1" +
+        (promisor ? " --promisor" : "");
+      const result = await git.requireGit(
+        repoRoot,
+        ["-c", `alias.openclaw-consolidate=${alias}`, "openclaw-consolidate"],
+        {
+          ...options,
+          timeoutMs: PACK_BATCH_TIMEOUT_MS,
+          input: `${selected.join("\n")}\n`,
+        },
+      );
+      const hash = /^pack\s+([a-f0-9]{40}|[a-f0-9]{64})$/.exec(result)?.[1];
+      if (!hash) {
+        throw new Error("Git pack consolidation returned an invalid pack identity");
+      }
+      // Record the verified replacement before retirement can yield, defer, or restart.
+      options.beforeRun?.();
+      await writeConfigMachineStateAsync(retirementKey, { hash, selected }, { env });
+      retirementPending = await retire({ hash, selected });
+      if (retirementPending) {
         break;
       }
-      batch.push(pack);
-      bytes += pack.size;
-      indexBytes += pack.indexBytes;
-    }
-    // Leave a dominant pack alone until the smaller inputs together reach its
-    // size; bounded batches can still make progress below a fixed pack count.
-    while (batch.length > 1 && bytes < 2 * batch.at(-1)!.size) {
-      bytes -= batch.pop()!.size;
-    }
-    if (batch.length < 2) {
-      continue;
-    }
-    const selected = batch.map((pack) => pack.name);
-    // Validate only selected inputs. The streaming writer does not check source CRCs.
-    await verify(selected);
-    // Copy every object, including unreachable ones, and compress separately fetched revisions.
-    // index-pack publishes the promisor marker and verified index before returning the hash.
-    const alias =
-      "!if command -v ionice >/dev/null 2>&1; then ionice -c 3 -p $$ >/dev/null 2>&1; fi; git pack-objects --stdin-packs --stdout --window=10 --window-memory=8m --threads=1 | git index-pack --stdin --threads=1" +
-      (promisor ? " --promisor" : "");
-    const result = await git.requireGit(
-      repoRoot,
-      ["-c", `alias.openclaw-consolidate=${alias}`, "openclaw-consolidate"],
-      {
-        ...options,
-        timeoutMs: PACK_BATCH_TIMEOUT_MS,
-        input: `${selected.join("\n")}\n`,
-      },
-    );
-    const hash = /^pack\s+([a-f0-9]{40}|[a-f0-9]{64})$/.exec(result)?.[1];
-    if (!hash) {
-      throw new Error("Git pack consolidation returned an invalid pack identity");
-    }
-    // Record the verified replacement before retirement can yield, defer, or restart.
-    options.beforeRun?.();
-    await writeConfigMachineStateAsync(retirementKey, { hash, selected }, { env });
-    retirementPending = await retire({ hash, selected });
-    if (retirementPending) {
-      break;
     }
   }
   const remainingNames = await fs.readdir(directory);

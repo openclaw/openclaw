@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { gitReleaseSlot, resolveGitReleasePrefix } from "./git-release-paths.js";
+import {
+  gitReleaseSlot,
+  resolveGitReleasePrefix,
+  servingGitReleaseSlot,
+} from "./git-release-paths.js";
 import {
   collectGitReleases,
   createGitReleaseDirs,
@@ -12,7 +16,10 @@ import {
   supersedeUnservedGitRelease,
 } from "./git-release.js";
 import { readPackageVersion } from "./package-json.js";
-import { readPackageReleaseSlotSync } from "./package-release-slot-path.js";
+import {
+  packageReleasePrefixOfRoot,
+  readPackageReleaseSlotSync,
+} from "./package-release-slot-path.js";
 import { DEV_BRANCH, type UpdateChannel } from "./update-channels.js";
 import {
   readBuiltGatewayBuildId,
@@ -85,7 +92,7 @@ export async function updateGitRelease(params: {
       env,
       progress: opts.progress,
       stepIndex: stepIndex++,
-      totalSteps: converting ? 12 : 9,
+      totalSteps: converting ? 10 : 8,
       results: steps,
     });
   const step = forRunner(timeoutMs);
@@ -93,7 +100,10 @@ export async function updateGitRelease(params: {
   // A release is a worktree of the developer's checkout; Git work happens there.
   // The release that serves, even when this CLI runs from the preserved checkout: the
   // link's release, unless an interrupted update left it on trial and nothing runs from it.
-  const running = placement?.serving ?? params.gitRoot;
+  // A link at the earlier `lib/node_modules` path serves until this update replaces it.
+  const serving = servingGitReleaseSlot(prefix);
+  const running =
+    placement?.serving ?? (readPackageReleaseSlotSync(serving) ? serving : params.gitRoot);
   const git = (root: string, ...args: string[]) =>
     runCommand(["git", "-C", root, ...args], { cwd: root, timeoutMs });
   const commonDir = (
@@ -168,8 +178,8 @@ export async function updateGitRelease(params: {
   let placedTree: string | null = null;
   let rebuiltFallback = false;
 
-  // Node refuses to strip types under node_modules, and the build runs .mts
-  // scripts, so a release is built beside its final path and moved into place.
+  // A release is built and validated at the path it serves from: a path rule that breaks
+  // the release (#201874: Node refuses to strip types under node_modules) breaks the build.
   const buildRelease = async (
     select: (
       release: Parameters<typeof runGitCandidatePreflight>[0]["release"] & {},
@@ -200,7 +210,7 @@ export async function updateGitRelease(params: {
       workTimeoutMs: opts.timeoutMs,
     };
     const built = await select(
-      { prefix: dirs.releasePrefix, worktreeDir: dirs.buildDir },
+      { prefix: dirs.releasePrefix, worktreeDir: dirs.releaseRoot },
       common,
       (retained) => {
         cleanup = retained;
@@ -242,17 +252,6 @@ export async function updateGitRelease(params: {
     ) {
       await cleanup?.();
       return { status: "skipped" as const, reason: "already-current" as const };
-    }
-    const moved = await runStep(
-      step(
-        "git-release-place",
-        ["git", "-C", gitRoot, "worktree", "move", dirs.buildDir, dirs.releaseRoot],
-        gitRoot,
-      ),
-    );
-    if (isFailedUpdateStep(moved)) {
-      await cleanup?.();
-      return { status: "error" as const, reason: "git-release-place-failed" };
     }
     return { ...built, releaseRoot: dirs.releaseRoot };
   };
@@ -339,7 +338,7 @@ export async function updateGitRelease(params: {
     const verified = rebuilt?.status === "ok" && (await verifiesAsGitRelease(rebuilt.releaseRoot));
     if (!verified || rebuilt?.status !== "ok") {
       if (rebuilt?.status === "ok" && !earlier) {
-        await fs.rm(path.resolve(rebuilt.releaseRoot, "../../.."), {
+        await fs.rm(packageReleasePrefixOfRoot(rebuilt.releaseRoot) ?? rebuilt.releaseRoot, {
           recursive: true,
           force: true,
         });
@@ -515,6 +514,11 @@ export async function updateGitRelease(params: {
       trial: true,
       pending: opts.deferReleaseActivation,
     });
+  }
+  if (serving !== slot && !opts.deferReleaseActivation) {
+    // The old link under lib/node_modules goes; its Gateway sees its installation replaced
+    // and restarts through the launcher, which now starts the link above.
+    await fs.rm(serving, { force: true });
   }
   const collected = await collectGitReleases({
     prefix,

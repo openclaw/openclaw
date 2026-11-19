@@ -389,7 +389,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     const install = await halfSwitchedInstall({ linkedCheckout: linked });
     target.duringValidation = started ? install.countStart : undefined;
     // The fallback was deselected days ago; age alone must not remove it.
-    await fs.utimes(path.resolve(install.serving, "../../.."), threeDaysAgo, threeDaysAgo);
+    await fs.utimes(path.dirname(install.serving), threeDaysAgo, threeDaysAgo);
     const result = await install.update(install.commits["2.0.0"]!);
     expect(result.status, JSON.stringify(result.steps)).toBe("ok");
     expect(result.before).toMatchObject({ sha: install.commits["1.0.0"], version: "1.0.0" });
@@ -546,7 +546,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
   });
 
   it.each([
-    ["is gone", "serving", ["../../.."], ""],
+    ["is gone", "serving", [".."], ""],
     ["lost its Git metadata", "serving", [".git"], ""],
     // Only the checkout's build reporting its commit shows that the fallback serves.
     ["has no evidence that it serves", "checkout", ["dist"], ""],
@@ -563,7 +563,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     }
     const trial = await fs.readFile(install.trialFile, "utf8");
     const link = await fs.realpath(install.slot);
-    const release = path.resolve(install.serving, "../../..");
+    const release = path.dirname(install.serving);
     await Promise.all(gone.map((p) => fs.rm(path.resolve(install[root], p), { recursive: true })));
     if (also === "lease") {
       target.broken.push(install.serving);
@@ -623,10 +623,10 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     const install = await halfSwitchedInstall({ linkedState: true });
     await install.update(install.commits["1.0.0"]!);
     // Both through the symlinked state directory, as the updater sees them.
-    const prefix = path.join(install.slot, "../../..");
-    const release = path.resolve(install.unserved, "../../..");
+    const prefix = path.dirname(install.slot);
+    const release = path.dirname(install.unserved);
     await fs.utimes(release, threeDaysAgo, threeDaysAgo);
-    const own = path.join(prefix, "releases", path.basename(release), "lib/node_modules/openclaw");
+    const own = path.join(prefix, "releases", path.basename(release), "openclaw");
     const collect = (runningRoot: string | null) =>
       collectGitReleases({ prefix, keep: [], prune: async () => {}, runningRoot });
     expect((await collect(own)).removed).toEqual([]);
@@ -641,5 +641,33 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     expect(result).toMatchObject({ status: "error", reason: "git-release-selection-changed" });
     expect(result.recovery).toMatchObject({ serviceRestartSafe: false });
     expect(await fs.realpath(install.slot)).toBe(install.unserved);
+  });
+
+  it("moves a release under node_modules out of it on its next update (#201874)", async () => {
+    const { dir, checkout, serving } = await checkoutWithTwoCommits();
+    const prefix = path.join(dir, "state", "git-install");
+    // Main builds since #199706 kept the link and its releases under lib/node_modules.
+    const legacy = path.join(prefix, "lib", "node_modules", "openclaw");
+    const legacyRelease = path.join(
+      prefix,
+      "releases",
+      "git-old",
+      "lib",
+      "node_modules",
+      "openclaw",
+    );
+    await fs.mkdir(path.dirname(legacyRelease), { recursive: true });
+    await git(checkout, "worktree", "add", "-q", "--detach", legacyRelease, serving);
+    await fs.mkdir(path.dirname(legacy), { recursive: true });
+    await fs.symlink(path.relative(path.dirname(legacy), legacyRelease), legacy);
+
+    const result = await convert(legacy);
+
+    expect(result.status, JSON.stringify(result.steps)).toBe("ok");
+    // The serving commit is rebuilt where it stays, and the old link no longer serves.
+    expect(target.conversionTargets).toEqual([serving]);
+    const served = await fs.realpath(gitReleaseSlot(prefix));
+    expect(served.split(path.sep)).not.toContain("node_modules");
+    await expect(fs.lstat(legacy)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

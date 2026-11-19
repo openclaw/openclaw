@@ -13,7 +13,7 @@ import { readPackageReleaseLeases } from "./package-release-lease.js";
 import { collectPackageReleases } from "./package-release-retention.js";
 import {
   PACKAGE_RELEASES_DIR,
-  packageReleaseGlobalRoot,
+  packageReleasePrefixOfRoot,
   readPackageReleaseSlotSync,
   type PackageReleaseSlot,
 } from "./package-release-slot-path.js";
@@ -30,27 +30,19 @@ import {
   verifyGitUpdateRecovery,
 } from "./update-git-runtime.js";
 
-/**
- * A new release directory. The worktree is built at `buildDir`, outside
- * `node_modules` (Node refuses to strip types there), then moved to `releaseRoot`.
- */
+/** A new release directory; its worktree is built at `releaseRoot`, where it serves. */
 export async function createGitReleaseDirs(prefix: string) {
   const releasePrefix = await createPackageReleasePrefix(prefix, "git");
-  const globalRoot = packageReleaseGlobalRoot(releasePrefix);
-  await fs.mkdir(globalRoot, { recursive: true });
-  return {
-    releasePrefix,
-    buildDir: path.join(releasePrefix, "build"),
-    releaseRoot: path.join(globalRoot, "openclaw"),
-  };
+  return { releasePrefix, releaseRoot: path.join(releasePrefix, "openclaw") };
 }
 
 const gitReleaseTrialFile = (prefix: string) =>
   path.join(prefix, PACKAGE_RELEASES_DIR, GIT_RELEASE_TRIAL);
 
-/** The ID of the release holding `releaseRoot` (`releases/<id>/lib/node_modules/openclaw`). */
+/** The ID of the release holding `releaseRoot` (`releases/<id>/openclaw`, or the earlier
+ * `releases/<id>/lib/node_modules/openclaw`). */
 export const gitReleaseId = (releaseRoot: string) =>
-  path.basename(path.resolve(releaseRoot, "../../.."));
+  path.basename(packageReleasePrefixOfRoot(releaseRoot) ?? releaseRoot);
 
 /**
  * Select `releaseRoot` with one rename. With `trial`, the launcher switches back
@@ -241,7 +233,7 @@ export async function findVerifiedGitRelease(params: {
       continue;
     }
     const root = await fs
-      .realpath(path.join(packageReleaseGlobalRoot(path.join(releasesDir, id)), "openclaw"))
+      .realpath(path.join(releasesDir, id, path.basename(gitReleaseSlot(params.prefix))))
       .catch(() => null);
     if (
       root &&

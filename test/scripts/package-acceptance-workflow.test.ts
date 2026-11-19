@@ -7319,7 +7319,7 @@ wait_for_run "$WORKFLOW" 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPROVE_ENVIRONMEN
     for (const stepName of [
       "Download OpenClaw npm preflight manifest",
       "Resolve full release validation run",
-      "Download full release validation manifest",
+      "Acquire authenticated publication manifest",
       "Validate OpenClaw npm preflight manifest",
       "Validate full release validation manifest",
     ]) {
@@ -7332,8 +7332,12 @@ wait_for_run "$WORKFLOW" 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPROVE_ENVIRONMEN
     ).toMatchObject({
       ref: "${{ github.workflow_sha }}",
       "persist-credentials": false,
-      "sparse-checkout": "scripts",
     });
+    expect(
+      workflowStep(resolveJob, "Checkout trusted release validation tooling").with?.[
+        "sparse-checkout"
+      ],
+    ).toBeUndefined();
     for (const stepName of [
       "Write Android release approval",
       "Attest Android release approval",
@@ -10264,10 +10268,12 @@ describe("package artifact reuse", () => {
     for (const checkout of [
       workflowStep(discovery, "Checkout trusted candidate discovery"),
       workflowStep(candidateBinding, "Checkout candidate binding authority"),
-      workflowStep(summary, "Checkout release state verifier"),
     ]) {
       expect(checkout.with?.["sparse-checkout"]).toBe("scripts");
     }
+    expect(
+      workflowStep(summary, "Checkout release state verifier").with?.["sparse-checkout"],
+    ).toBeUndefined();
     expect(discovery.outputs?.state).toBe("${{ steps.discover.outputs.state }}");
     expect(workflowStep(discovery, "Discover trusted release candidate").run).toContain(
       "full-release-candidate-reuse.mjs discover",
@@ -15039,11 +15045,11 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     const releaseRun = workflowStep(releaseResolveJob, "Resolve full release validation run");
     const releaseManifest = workflowStep(
       releaseResolveJob,
-      "Download full release validation manifest",
+      "Acquire authenticated publication manifest",
     );
     const npmPublishJob = workflowJob(OPENCLAW_NPM_RELEASE_WORKFLOW, "publish_openclaw_npm");
     const npmRun = workflowStep(npmPublishJob, "Verify full release validation evidence");
-    const npmManifest = workflowStep(npmPublishJob, "Download full release validation manifest");
+    const npmManifest = workflowStep(npmPublishJob, "Acquire authenticated publication manifest");
 
     expect(releaseRun).toMatchObject({
       id: "full_run",
@@ -15058,10 +15064,12 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(releaseResolveJob.outputs?.full_release_validation_run_attempt).toBe(
       "${{ steps.full_run.outputs.attempt }}",
     );
-    expect(releaseManifest.with).toMatchObject({
-      name: "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ steps.full_run.outputs.attempt }}",
-      "run-id": "${{ inputs.full_release_validation_run_id }}",
+    expect(releaseManifest.env).toMatchObject({
+      FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
+      FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "${{ steps.full_run.outputs.attempt }}",
     });
+    expect(releaseManifest.run).toContain("--acquire-publication-manifest");
+    expect(releaseManifest.run).toContain("--expected-run-attempts-json");
 
     expect(npmRun.env).toMatchObject({
       FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
@@ -15070,40 +15078,45 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(npmRun.run).toContain(
       "actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}",
     );
-    expect(npmManifest.with).toMatchObject({
-      name: "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ inputs.full_release_validation_run_attempt }}",
-      "run-id": "${{ inputs.full_release_validation_run_id }}",
+    expect(npmManifest.env).toMatchObject({
+      FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
+      FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "${{ inputs.full_release_validation_run_attempt }}",
     });
+    expect(npmManifest.run).toContain("--acquire-publication-manifest");
+    expect(npmManifest.run).toContain("--expected-run-attempts-json");
   });
 
   it("keeps release publish artifacts and release-note ordering wired", () => {
     const resolveJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
     const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
     const resolveFullRun = workflowStep(resolveJob, "Resolve full release validation run");
-    const resolveDownload = workflowStep(resolveJob, "Download full release validation manifest");
+    const resolveDownload = workflowStep(resolveJob, "Acquire authenticated publication manifest");
     const trustedTooling = workflowStep(resolveJob, "Checkout trusted release validation tooling");
     const validateManifest = workflowStep(resolveJob, "Validate full release validation manifest");
-    const publishDownload = workflowStep(publishJob, "Download full release validation manifest");
+    const publishDownload = workflowStep(publishJob, "Acquire authenticated publication manifest");
     const publishOrchestration = releasePublishOrchestration(publishJob);
     const npmPublishJob = workflowJob(OPENCLAW_NPM_RELEASE_WORKFLOW, "publish_openclaw_npm");
     const npmCheckout = workflowStep(npmPublishJob, "Checkout");
     const npmFullRun = workflowStep(npmPublishJob, "Verify full release validation evidence");
-    const npmDownload = workflowStep(npmPublishJob, "Download full release validation manifest");
+    const npmDownload = workflowStep(npmPublishJob, "Acquire authenticated publication manifest");
     const npmTarget = workflowStep(npmPublishJob, "Verify full release validation target");
 
     expect(resolveFullRun.id).toBe("full_run");
     expect(resolveFullRun.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
       "${{ inputs.full_release_validation_run_attempt }}",
     );
-    expect(resolveDownload.with?.name).toBe(
-      "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ steps.full_run.outputs.attempt }}",
-    );
+    expect(resolveDownload.env).toMatchObject({
+      FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
+      FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "${{ steps.full_run.outputs.attempt }}",
+    });
+    expect(resolveDownload.run).toContain("--acquire-publication-manifest");
+    expect(resolveDownload.run).toContain("--expected-run-attempts-json");
     expect(trustedTooling.with).toMatchObject({
       ref: "${{ github.workflow_sha }}",
       path: ".release-validation-tooling",
       "persist-credentials": false,
-      "sparse-checkout": "scripts",
     });
+    expect(trustedTooling.with?.["sparse-checkout"]).toBeUndefined();
     expect(validateManifest.env).toMatchObject({
       PUBLICATION_CONSUMER:
         "${{ inputs.publish_docker_only && !inputs.publish_openclaw_npm && 'docker-only' || 'publisher' }}",
@@ -15131,9 +15144,13 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       RELEASE_NPM_DIST_TAG: "${{ inputs.npm_dist_tag }}",
     });
     expect(npmFullRun.run).not.toContain('node "$STRICT_VALIDATOR_FILE"');
-    expect(publishDownload.with?.name).toBe(
-      "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}",
-    );
+    expect(publishDownload.env).toMatchObject({
+      FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
+      FULL_RELEASE_VALIDATION_RUN_ATTEMPT:
+        "${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}",
+    });
+    expect(publishDownload.run).toContain("--acquire-publication-manifest");
+    expect(publishDownload.run).toContain("--expected-run-attempts-json");
     expect(publishOrchestration.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
       "${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}",
     );
@@ -15141,9 +15158,12 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(npmFullRun.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
       "${{ inputs.full_release_validation_run_attempt }}",
     );
-    expect(npmDownload.with?.name).toBe(
-      "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ inputs.full_release_validation_run_attempt }}",
-    );
+    expect(npmDownload.env).toMatchObject({
+      FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
+      FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "${{ inputs.full_release_validation_run_attempt }}",
+    });
+    expect(npmDownload.run).toContain("--acquire-publication-manifest");
+    expect(npmDownload.run).toContain("--expected-run-attempts-json");
     expect(npmTarget.env?.FULL_RELEASE_VALIDATION_RUN_ID).toBeUndefined();
     expect(npmTarget.run).not.toContain(
       "node scripts/openclaw-npm-extended-stable-release.mjs verify-manifest",
