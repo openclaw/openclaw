@@ -112,7 +112,7 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
           onOpen: () => props.view.onOpenPreview("skill", item.name),
         })),
         () => (
-          <Icon name="book" />
+          <Icon name="sparkles" />
         ),
       )}
       {renderPluginCapabilitySection(

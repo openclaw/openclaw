@@ -458,7 +458,9 @@ it.each(["opens", "commits"] as const)(
     expect(backup.warnings).toEqual(
       opens
         ? []
-        : [`Database changed during capture; its snapshot requires manual recovery: ${f.shared}`],
+        : [
+            `Database write generation changed or could not be confirmed during capture (the running Gateway may have written to it); automatic rollback keeps the live database instead of this snapshot: ${f.shared}`,
+          ],
     );
   },
 );
