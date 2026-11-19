@@ -1,5 +1,6 @@
 import { createStore, Errored, lazy, Loading } from "solid-js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { probeGatewayReachability } from "../api/gateway-browser-socket.ts";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { withPromiseModalHost } from "../components/promise-modal-host.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
@@ -162,6 +163,7 @@ export function startBrowserAuthRecovery(
       try {
         // This canonical endpoint never redirects. Manual mode exposes an edge
         // redirect without following it or forwarding Gateway credentials to it.
+        const probeSignal = () => AbortSignal.any([lifetime.signal, AbortSignal.timeout(5_000)]);
         const probe = () =>
           fetchWithControlUiAuth(
             probeUrl.href,
@@ -170,7 +172,7 @@ export function startBrowserAuthRecovery(
               credentials: "same-origin",
               cache: "no-store",
               redirect: "manual",
-              signal: AbortSignal.any([lifetime.signal, AbortSignal.timeout(5_000)]),
+              signal: probeSignal(),
             },
             authCandidates,
             isCurrent,
@@ -189,10 +191,16 @@ export function startBrowserAuthRecovery(
           // Only a fresh authenticated probe establishes renewed HTTP access.
           response = await probe();
         }
+        // The Gateway answers `/healthz` before auth, so a 401/403 there too comes from
+        // a proxy or access policy in front of it, not from a refused Gateway credential.
+        const refused =
+          response.type === "opaqueredirect" ||
+          ((response.status === 401 || response.status === 403) &&
+            (await probeGatewayReachability(root.href, probeSignal())) === "access-denied");
         if (!isCurrent()) {
           return;
         }
-        if (response.type === "opaqueredirect") {
+        if (refused) {
           signInRequired = true;
           probeResult = openedSignIn ? "sign-in" : undefined;
           showDialog();
@@ -225,7 +233,7 @@ export function startBrowserAuthRecovery(
   }
 
   const stopFailures = bindBrowserHttpFailures((url) => {
-    const request = URL.parse(url, window.location.href);
+    const request = url === null ? root : URL.parse(url, window.location.href);
     if (request?.origin === root.origin && request.pathname.startsWith(root.pathname)) {
       void check();
     }
