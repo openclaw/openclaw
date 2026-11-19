@@ -11,6 +11,7 @@ import { isPidAlive } from "../shared/pid-alive.js";
 import { killPidIfAlive, waitForPidToExit } from "../test-utils/process-tree.js";
 import { createDirectoryWatchChannel, watchDirectory } from "./directory-watch-host.js";
 import { observeOwnedDirectory } from "./owned-directory-observation.js";
+import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
@@ -151,28 +152,12 @@ describe("directory watch host", () => {
     const localReady = Promise.withResolvers<void>();
     const local = watchDirectory(directory, () => localReady.resolve());
     const channel = createDirectoryWatchChannel();
-    const owner = new URL("./directory-watch-host.ts", import.meta.url);
-    const worker = new Worker(
-      `const { parentPort, workerData } = require("node:worker_threads");
-      const cp = require("node:child_process");
-      cp.spawn = () => { throw new Error("Unexpected second directory watch helper"); };
-      require("node:module").syncBuiltinESMExports();
-      import(${JSON.stringify(owner.href)}).then(({ installDirectoryWatchPort, watchDirectory }) => {
-        installDirectoryWatchPort(workerData.port);
-        watchDirectory(workerData.directory, (_event, filename) => parentPort.postMessage(filename))
-          .on("error", (error) => { throw error; });
-        parentPort.on("message", () => {});
-      });
-      `,
-      {
-        eval: true,
-        execArgv: process.versions.bun
-          ? []
-          : ["--import", new URL("../../scripts/tsx.mjs", import.meta.url).href],
-        workerData: { directory, port: channel.port },
-        transferList: [channel.port],
-      },
-    );
+    const workerUrl = new URL("./directory-watch-host.test-support.ts", import.meta.url);
+    const worker = new Worker(workerUrl, {
+      execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
+      workerData: { directory, port: channel.port },
+      transferList: [channel.port],
+    });
     let terminated = false;
     try {
       const [message] = await once(worker, "message");
