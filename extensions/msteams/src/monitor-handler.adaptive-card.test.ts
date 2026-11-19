@@ -243,6 +243,11 @@ describe("msteams adaptive card action invoke", () => {
       text: JSON.stringify({ value: "/codex permissions yolo", label: "Run" }),
     },
     {
+      label: "agent button",
+      action: { type: "Action.Submit", data: { value: "::/pick a", label: "Pick" } },
+      text: "callback_data: /pick a",
+    },
+    {
       label: "execute metadata",
       action: { type: "Action.Execute", verb: "ticket.approve", data: { ticketId: "ticket-123" } },
       text: '{"action":{"type":"Action.Execute","verb":"ticket.approve","data":{"ticketId":"ticket-123"}}}',

@@ -280,8 +280,9 @@ describe("usage cost estimation", () => {
   });
 
   it.each([
-    [{ input: 1_000, cost: { total: 0 } }, true, 0],
-    [{ input: 1_000 }, true, undefined],
+    [{ input: 1_000, cost: { total: 0.002 } }, true, 0.002],
+    [{ input: 1_000, cost: { total: 0 } }, true, 0.001],
+    [{ input: 1_000 }, true, 0.001],
     [{ total: 1_000 }, false, undefined],
   ] as const)("preserves aggregate call-tier pricing: %j", async (usage, tiered, expected) => {
     const rates = { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 };
@@ -303,6 +304,35 @@ describe("usage cost estimation", () => {
         }),
       }),
     ).toBe(expected);
+  });
+
+  it("prices an all-zero transport cost from the resolved price, keeping authored zero", () => {
+    const usage = { input: 1_000, output: 500, cost: { total: 0 } };
+    expect(
+      estimateAggregateUsageCost({
+        usage,
+        cost: { input: 2, output: 10, cacheRead: 0, cacheWrite: 0 },
+      }),
+    ).toBeCloseTo(0.007, 10);
+    expect(estimateAggregateUsageCost({ usage, cost: inputRates(0) })).toBe(0);
+  });
+
+  it("prices a tiered sum only while every call stays in the first tier", () => {
+    const rates = { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 };
+    const cost: ModelCostConfig = {
+      ...rates,
+      tieredPricing: [
+        { ...rates, range: [0, 200] },
+        { input: 3, output: 6, cacheRead: 1, cacheWrite: 0, range: [200, Infinity] },
+      ],
+    };
+    expect(estimateAggregateUsageCost({ usage: { input: 150, output: 10 }, cost })).toBeCloseTo(
+      0.00017,
+      10,
+    );
+    expect(
+      estimateAggregateUsageCost({ usage: { input: 150, cacheRead: 50 }, cost }),
+    ).toBeUndefined();
   });
 
   it("preserves provider-billed zero for unpriced aggregate usage", () => {

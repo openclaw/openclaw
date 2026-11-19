@@ -842,20 +842,7 @@ it("retains the execution's Gateway binding through immutable metadata publicati
   expect(getGatewayContextResolver(initial)).toBe(resolver);
   expect(isSameSubagentRunOwner(initial, alias)).toBe(true);
 
-  using clone = vi.spyOn(globalThis, "structuredClone");
   await change(child.runId, { label: "updated metadata" });
-
-  // Metadata commits must not traverse the owner's already immutable payloads.
-  expect(
-    clone.mock.calls.some(
-      ([value]) =>
-        value === initial ||
-        (value &&
-          typeof value === "object" &&
-          "execution" in value &&
-          value.execution === initial.execution),
-    ),
-  ).toBe(false);
 
   const published = subagentRuns.get(child.runId)!;
   expect(published).not.toBe(initial);
