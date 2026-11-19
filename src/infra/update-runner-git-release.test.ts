@@ -388,8 +388,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     expect(result.status, JSON.stringify(result.steps)).toBe("ok");
     expect(result.before).toMatchObject({ sha: install.commits["1.0.0"], version: "1.0.0" });
     expect(result.after).toMatchObject({ sha: install.commits["2.0.0"], version: "2.0.0" });
-    // The placed release is reused, not rebuilt, and its trial still falls back to 1.0.0.
-    // The target is still admitted and the reused release still passes candidate checks.
+    // Reused, not rebuilt; still admitted and checked; its trial still falls back to 1.0.0.
     expect(target.builds).toBe(0);
     expect(target.inspected).toContain(install.commits["2.0.0"]);
     expect(target.validated).toEqual([install.unserved]);
@@ -428,7 +427,10 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
   it.each([
     [
       "started by the launcher",
-      async (install: HalfSwitchedInstall) => (await install.countStart(), () => {}),
+      async (install: HalfSwitchedInstall) => {
+        await install.countStart();
+        return () => {};
+      },
     ],
     [
       "leased by a running process",
@@ -464,14 +466,14 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
   it.each([
     [
       "local replay changes the target",
-      (install: HalfSwitchedInstall) => {
+      async (install: HalfSwitchedInstall) => {
         // The upstream target is the placed tree; replaying local commits gives another one.
         target.replayed = install.commits["3.0.0"];
       },
     ],
     [
       "the placed build does not verify",
-      (install: HalfSwitchedInstall) => {
+      async (install: HalfSwitchedInstall) => {
         target.broken.push(install.unserved);
       },
     ],
@@ -573,7 +575,6 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
       const result = await install.update(install.commits[version]!);
 
       expect(result.status, JSON.stringify(result.steps)).not.toBe("error");
-      // The link resolves (no dangling text) and names the release this update chose.
       expect(await fs.realpath(install.slot)).toBe(await intended(install));
     },
   );
