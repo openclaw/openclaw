@@ -19,6 +19,9 @@ export function reuseBaselineFixture<T extends object>(create: (root: string) =>
     if (!context) {
       context = create(root);
       copyTreeCloseOnExec(root, pristine);
+      // The first caller already owns the pristine live tree; only later
+      // acquisitions need to undo mutations from an earlier test.
+      return context;
     }
     // Captured JavaScript state must stay read-only after setup. Registered
     // worktrees and evidence bind absolute paths, so restore the whole private root.
