@@ -1,4 +1,5 @@
 import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
+import { valid as validSemver } from "semver";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { compareValidSemver } from "./semver.js";
 
@@ -36,7 +37,8 @@ export function expectedIntegrityForUpdate(
     return undefined;
   }
   const version = value.slice(at + 1).trim();
-  if (!/^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
+  // Version-like moving tags are not exact npm version selectors.
+  if (validSemver(version, true) === null) {
     return undefined;
   }
   return integrity;
