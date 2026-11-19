@@ -658,8 +658,8 @@ it.skipIf(process.platform === "win32")(
     expect(await fs.readFile(copied, "utf8")).toBe("preserved");
     expect((await fs.realpath(copied)).startsWith(params.targetStateDir + path.sep)).toBe(true);
     expect(
-      (await fs.readdir(params.targetStateDir, { recursive: true })).some(
-        (entry) => path.basename(entry) === "unrelated",
+      (await listDirectoryTreeStrict(params.targetStateDir)).some(
+        ({ relativePath }) => path.basename(relativePath) === "unrelated",
       ),
     ).toBe(false);
   },

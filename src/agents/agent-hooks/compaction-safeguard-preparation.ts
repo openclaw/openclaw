@@ -135,13 +135,10 @@ export function prepareCompactionSafeguardSections(params: {
 }) {
   const { readFiles, modifiedFiles } = computeFileLists(params.fileOps);
   const { messagesToSummarize, turnPrefixMessages } = params.history;
-  const copilotMessages = messagesToSummarize as unknown as Parameters<
-    typeof buildCopilotDynamicHeaders
-  >[0]["messages"];
   return {
     copilotHeaders: buildCopilotDynamicHeaders({
-      messages: copilotMessages,
-      hasImages: hasCopilotVisionInput(copilotMessages),
+      messages: messagesToSummarize,
+      hasImages: hasCopilotVisionInput(messagesToSummarize),
     }),
     readFiles,
     modifiedFiles,
