@@ -325,6 +325,9 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     ).sections;
     const disclosure = this.sessionProjection.children;
     for (const section of sections) {
+      if (!section.renderHeader) {
+        continue;
+      }
       for (const row of section.rows) {
         if (row.key !== disclosure.selectedRootKey || row.visuallyActive) {
           continue;
@@ -365,17 +368,16 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   setVisibleSessionLimit(sectionId: string, limit: number): void {
-    const grouped = this.sidebarAgentsMode === "roster" && sectionId.startsWith("agent:");
+    const roster = this.sidebarAgentsMode === "roster" && sectionId === "roster-sessions";
     const grouping = this.effectiveSessionsGrouping();
     const { key, initialLimit } = sidebarSessionPagination(grouping, sectionId);
     const previousLimit =
-      (grouped ? this.rosterVisibleSessionLimits : this.sessionData.visibleSessionLimits).get(
-        key,
-      ) ?? initialLimit;
+      (roster ? this.rosterVisibleSessionLimits : this.sessionData.visibleSessionLimits).get(key) ??
+      initialLimit;
     if (limit < previousLimit) {
       this.sessionProjection.resetMembership(sectionId);
     }
-    if (grouped) {
+    if (roster) {
       this.rosterVisibleSessionLimits = new Map(this.rosterVisibleSessionLimits).set(key, limit);
       this.invalidate();
     } else {

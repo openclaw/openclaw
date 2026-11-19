@@ -398,9 +398,8 @@ describe("AppSidebar session attention", () => {
     sidebar.sidebarAgentsMode = "roster";
     const agentHeader = () => dom.query('[data-agent-group="main"] .sidebar-agent-roster__header');
     await waitForFast(() => {
-      expect(
-        dom.query(`openclaw-sidebar-agent-roster [data-session-key="${parentKey}"]`),
-      ).toBeNull();
+      expect(parentRow()).not.toBeNull();
+      expect(parentRow().querySelector('[data-session-attention="error"]')).toBeNull();
       expect(agentHeader()).not.toBeNull();
       expect(agentHeader()?.querySelector('[data-session-attention="error"]')).toBeNull();
     });

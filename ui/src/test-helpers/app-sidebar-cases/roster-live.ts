@@ -85,12 +85,12 @@ it("AppSidebar retains roster mode after remount, then restores chip sessions", 
   await R.toggleRoster(sidebar);
   await vi.waitFor(() => expect(R.agentIds(sidebar)).toHaveLength(3));
   expect(loadSettings().sidebarAgentsMode).toBe("roster");
-  expect(R.sessionKeys(sidebar)).toEqual([]);
+  await vi.waitFor(() => expect(R.sessionKeys(sidebar)).toContain("agent:working:recent"));
   provider.remove();
   const { sidebar: restored } = await R.mountRoster();
   restored.sidebarAgentsMode = loadSettings().sidebarAgentsMode ?? "chip";
   await vi.waitFor(() => expect(R.agentIds(restored)).toHaveLength(3));
-  expect(R.sessionKeys(restored)).toEqual([]);
+  await vi.waitFor(() => expect(R.sessionKeys(restored)).toContain("agent:working:recent"));
   await R.toggleRoster(restored);
   await vi.waitFor(() => expect(restored.querySelector(".sidebar-agent-roster")).toBeNull());
   expect(loadSettings().sidebarAgentsMode).toBe("chip");

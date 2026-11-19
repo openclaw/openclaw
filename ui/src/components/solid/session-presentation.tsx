@@ -36,7 +36,7 @@ import { SessionOwnerAvatar, SessionOwnerChip } from "./session-owner-chip.tsx";
 type SessionRunVisibility = typeof sessionRunVisibility;
 export { sessionRunVisibility };
 
-function SessionAttentionIcon(props: { attention: SidebarSessionAttention; size: number }) {
+export function SessionAttentionIcon(props: { attention: SidebarSessionAttention; size: number }) {
   const parts = createMemo(() => sessionAttentionTooltipParts(props.attention, t));
   const label = () =>
     [parts().status, parts().preview, parts().more].filter(Boolean).join("\n") || undefined;
@@ -478,6 +478,7 @@ export function renderSessionLeadingState(props: {
   ownerViewing?: boolean;
   avatarAuth?: { authTokens: readonly string[]; authReady: boolean };
   trailingState?: boolean;
+  keepAvatar?: boolean;
   icon?: JSX.Element;
   runVisibility?: SessionRunVisibility;
 }) {
@@ -502,7 +503,7 @@ export function renderSessionLeadingState(props: {
   );
   const icon = createMemo(() => session().icon);
   const attentionIcon = createMemo(
-    () => session().attention.kind !== "none" && !props.trailingState,
+    () => session().attention.kind !== "none" && !props.trailingState && !props.keepAvatar,
   );
   const hasIcon = createMemo(() => attentionIcon() || props.icon != null || Boolean(icon()));
   const child = createMemo(() => session().isChild && !props.trailingState);
@@ -588,7 +589,7 @@ export function renderSessionLeadingState(props: {
         runningLabel={runningLabel()}
         background={background()}
         runVisibility={props.runVisibility}
-        circular={!hasIcon() && Boolean(channelAvatarUrl() || hasOwner())}
+        circular={props.keepAvatar || (!hasIcon() && Boolean(channelAvatarUrl() || hasOwner()))}
         ring={
           !hasIcon() && !channelAvatarUrl() && hasOwner() && stackedParticipants() > 0
             ? "pair"

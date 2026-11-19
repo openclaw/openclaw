@@ -224,7 +224,7 @@ function PinnedSessionSection(params: { host: SidebarSessionListHost }) {
 export function renderSessionListFrame(
   host: () => SidebarSessionListHost,
   body: JSX.Element,
-  bodyFirst = false,
+  leading?: JSX.Element,
 ) {
   const home = createMemo(() =>
     host().sidebarAgentsMode === "roster" ? null : host().mainSessionRow(),
@@ -266,10 +266,10 @@ export function renderSessionListFrame(
         </div>
       ) : undefined}
       {renderSessionListError(host())}
-      {bodyFirst ? body : undefined}
+      {leading}
       <PinnedSessionSection host={host()} />
       <PersonalSessionGroups host={host()} />
-      {bodyFirst ? undefined : body}
+      {body}
     </section>
   );
 }

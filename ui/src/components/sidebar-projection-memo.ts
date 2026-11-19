@@ -162,14 +162,19 @@ export function memoizedSidebarSections(
     () => {
       const grouping = host.effectiveSessionsGrouping();
       const pinnedKeys = personalSessionPinKeys(host.sidebarEntries);
-      const sections = roster?.agentIds.map((agentId) => ({
-        id: `agent:${agentId}:recent` as const,
-        rows: rows.filter(
-          (row) =>
-            !isListedInPinnedSection(row, pinnedKeys) &&
-            host.sessionNavigationAgentId(row) === agentId,
-        ),
-      }));
+      const unpinned = roster
+        ? rows.filter((row) => !isListedInPinnedSection(row, pinnedKeys))
+        : [];
+      const sections = roster
+        ? [
+            // Agent sections supply their status summaries; only the common list renders rows.
+            ...roster.agentIds.map((agentId) => ({
+              id: `agent:${agentId}:recent` as const,
+              rows: unpinned.filter((row) => host.sessionNavigationAgentId(row) === agentId),
+            })),
+            { id: "roster-sessions" as const, rows: unpinned },
+          ]
+        : undefined;
       const collapsedSections = new Set(host.collapsedSessionSections);
       for (const agentId of roster?.collapsedAgentIds ?? []) {
         collapsedSections.add(`agent:${agentId}:recent`);

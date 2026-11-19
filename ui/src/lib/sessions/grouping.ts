@@ -34,6 +34,7 @@ export type SidebarSessionSection<Row> = {
   id:
     | `agent:${string}`
     | "pinned"
+    | "roster-sessions"
     | "ungrouped"
     | "groups"
     | "work"

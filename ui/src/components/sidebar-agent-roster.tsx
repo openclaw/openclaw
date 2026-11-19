@@ -18,6 +18,7 @@ import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { renderSessionListFrame } from "./app-sidebar-session-list-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
+import { renderSessionSection as SessionSection } from "./app-sidebar-session-section-render.tsx";
 import "../styles/sidebar-pinned-agents.css";
 import { createSidebarRosterWindow } from "./sidebar-roster-window.tsx";
 import { Icon } from "./solid/icon.tsx";
@@ -110,6 +111,10 @@ export function SidebarAgentRoster(props: {
     };
   };
   const parkedSections = createParkedProjection(() => props.sections, presented);
+  const sessionsSection = createMemo(() =>
+    parkedSections().find((section) => section.id === "roster-sessions"),
+  );
+  const cardsById = createMemo(() => new Map(cards().map((card) => [card.id, card])));
   const sectionsByAgent = createMemo(() => {
     const indexed = new Map<string, SidebarVisibleSections["sections"]>();
     for (const section of parkedSections()) {
@@ -264,6 +269,34 @@ export function SidebarAgentRoster(props: {
     <openclaw-sidebar-agent-roster>
       {renderSessionListFrame(
         host,
+        <Show when={sessionsSection()}>
+          {(section) => (
+            <div class="sidebar-recent-sessions">
+              <SessionSection
+                host={host()}
+                section={section()}
+                personHeaders={undefined}
+                renderAgentAvatar={(session) => {
+                  const id = createMemo(() => host().sessionNavigationAgentId(session()));
+                  return (
+                    <AgentIdentityAvatar
+                      agent={cardsById().get(id()) ?? { id: id() }}
+                      class="sidebar-roster-session-avatar"
+                      cachedOnly={Boolean(host().sidebarSnapshot)}
+                    />
+                  );
+                }}
+                empty={
+                  snapshot().membershipReady && !error() ? (
+                    <span class="sidebar-session-empty-hint">
+                      {t("presence.card.noRecentSessions")}
+                    </span>
+                  ) : undefined
+                }
+              />
+            </div>
+          )}
+        </Show>,
         <div class="sidebar-agent-roster">
           <Show when={error()}>
             <button class="sidebar-agent-roster__link" onClick={() => void store.refresh()}>
@@ -447,7 +480,6 @@ export function SidebarAgentRoster(props: {
             )}
           </Show>
         </div>,
-        true,
       )}
     </openclaw-sidebar-agent-roster>
   );

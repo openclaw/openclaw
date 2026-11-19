@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal } from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
 import { resolveControlUiAvatarAuth } from "../app/control-ui-auth.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { presenceMatchesProfile, projectPresencePayload } from "../lib/presence-users.ts";
@@ -16,6 +16,7 @@ import { Icon, sessionIcon } from "./solid/icon.tsx";
 import {
   renderSessionLeadingState,
   sessionRunVisibility,
+  SessionAttentionIcon,
   SessionRowBadges,
 } from "./solid/session-presentation.tsx";
 import { EMPTY_VIEWER_IDENTITIES } from "./solid/viewer-facepile.tsx";
@@ -26,6 +27,7 @@ export function renderSidebarSessionIndicators(
   readSession: () => SidebarRecentSession,
   readDisplay?: () => CatalogBackingSessionDisplay | undefined,
   readIcon?: () => JSX.Element,
+  readAgentAvatar?: () => JSX.Element,
 ) {
   const team = createMemo(() => host().sidebarAgentsMode === "roster");
   const childrenExpanded = createMemo(() => host().isSessionChildrenExpanded(readSession()));
@@ -119,7 +121,10 @@ export function renderSidebarSessionIndicators(
       return channelAvatarAuth();
     },
     get icon() {
-      return readIcon?.();
+      return readAgentAvatar?.() ?? readIcon?.();
+    },
+    get keepAvatar() {
+      return readAgentAvatar?.() !== undefined;
     },
     runVisibility: sessionRunVisibility,
   });
@@ -232,6 +237,9 @@ export function renderSidebarSessionIndicators(
       <>
         {" "}
         <span class="sidebar-recent-session__details-endcap">
+          <Show when={readAgentAvatar?.() !== undefined && readSession().attention.kind !== "none"}>
+            <SessionAttentionIcon attention={readSession().attention} size={15} />
+          </Show>
           <openclaw-viewer-facepile
             prop:presencePayload={host().sessionData.presencePayload}
             prop:selfUser={selfUser()}

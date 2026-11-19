@@ -165,7 +165,9 @@ describe("AppSidebar agent roster pins", () => {
       );
       expect(avatar!.querySelector(face)).not.toBeNull();
     }
-    expect(sessionKeys(sidebar)).toEqual(pinned);
+    for (const key of pinned) {
+      expect(sessionKeys(sidebar).filter((rendered) => rendered === key)).toHaveLength(1);
+    }
     expect(dom.query("[data-agent-collapse]")).toBeNull();
     await mode(sidebar, "chip");
     // Other agents' pins resolve through descriptors; the loaded row is listed once, first.
@@ -187,7 +189,7 @@ describe("AppSidebar agent roster pins", () => {
     expect(sidebar.sidebarEntries).toEqual(entries);
   });
 
-  it("toggles personal shortcuts from a session row while keeping the agent-only roster", async () => {
+  it("toggles personal shortcuts from a session row while keeping the roster mode", async () => {
     const key = "agent:main:task";
     const { sidebar, context, sessions, result } = await mountRoster(roster, [
       thread("main", "task", 2),
@@ -217,6 +219,6 @@ describe("AppSidebar agent roster pins", () => {
     expect(onUpdate).toHaveBeenLastCalledWith(["route:usage", "route:plugins"]);
     expect(sidebar.sidebarEntries).toEqual(["route:usage", "route:plugins"]);
     await mode(sidebar, "roster");
-    expect(sessionKeys(sidebar)).toEqual([]);
+    expect(sessionKeys(sidebar)).toEqual([key]);
   });
 });

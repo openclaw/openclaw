@@ -9,10 +9,13 @@ import {
   settleRoster,
 } from "./roster.test-support.ts";
 
-describe("AppSidebar agent-only roster", () => {
-  it("shows configured agents, recent assistant text, and one run ring without session trees", async () => {
-    const { sidebar, context, result } = await mountRoster(roster, [
+describe("AppSidebar agent roster", () => {
+  it("shows sessions from multiple agents below the roster and preserves agent summaries when collapsed", async () => {
+    const agents = structuredClone(roster);
+    agents.agents.find(({ id }) => id === "working")!.identity = { emoji: "🔥" };
+    const { sidebar, context, result } = await mountRoster(agents, [
       session("main", 10, { lastAssistantMessage: { text: "Ready to review.", timestamp: 10 } }),
+      session("main", 9, { key: "agent:main:notes", isMain: false }),
       session("working", 11, {
         key: "agent:working:project",
         isMain: false,
@@ -22,6 +25,26 @@ describe("AppSidebar agent-only roster", () => {
     ]);
     sidebar.sidebarAgentsMode = "roster";
     await vi.waitFor(() => expect(agentIds(sidebar)).toEqual(["main", "recent", "working"]));
+    const section = sidebar.querySelector('[data-session-section="roster-sessions"]')!;
+    const disclosure = section.querySelector<HTMLButtonElement>('button[aria-label="Sessions"]')!;
+    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+    expect(sessionKeys(sidebar).toSorted()).toEqual(["agent:main:notes", "agent:working:project"]);
+    for (const [key, avatar] of [
+      ["agent:main:notes", "⚓"],
+      ["agent:working:project", "🔥"],
+    ]) {
+      await vi.waitFor(() =>
+        expect(
+          section
+            .querySelector(`[data-session-key="${key}"] .sidebar-session-indicator [data-avatar]`)
+            ?.getAttribute("data-avatar"),
+          key,
+        ).toBe(avatar),
+      );
+    }
+    disclosure.click();
+    await settleRoster(sidebar);
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
     expect(sessionKeys(sidebar)).toEqual([]);
     expect(sidebar.querySelector("[data-agent-collapse]")).toBeNull();
     expect(
@@ -48,6 +71,9 @@ describe("AppSidebar agent-only roster", () => {
       working().querySelector(".sidebar-agent-roster__avatar .session-glyph__ring"),
     ).toBeNull();
     expect(sessionKeys(sidebar)).toEqual([]);
+    disclosure.click();
+    await settleRoster(sidebar);
+    expect(sessionKeys(sidebar).toSorted()).toEqual(["agent:main:notes", "agent:working:project"]);
   });
 
   it("offers a counted sessions route without a nested-session or create action", async () => {
