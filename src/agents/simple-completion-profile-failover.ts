@@ -21,6 +21,23 @@ export type SimpleCompletionAuthProfiles = {
   prepare(profileId: string, assertCurrent: () => void): Promise<PreparedSimpleCompletionModel>;
 };
 
+/**
+ * A connection that failed before any provider event says nothing about the
+ * credential, so its timeout stays out of shared profile health. A WebSocket
+ * failure that fell back to another transport describes only that first leg.
+ */
+function didProviderStart(result: AssistantMessage): boolean {
+  const transportFailure = result.diagnostics?.findLast(
+    (entry) => entry.type === "provider_transport_failure",
+  );
+  return !(
+    transportFailure?.details?.eventsEmitted === false &&
+    transportFailure.details.fallbackTransport === undefined &&
+    result.content.length === 0 &&
+    !result.responseId
+  );
+}
+
 /** Adapts one-shot completions to the shared auth planner, health store and candidate cursor. */
 export async function completeWithAuthProfileFailover(params: {
   prepared: PreparedModel & { authProfiles?: SimpleCompletionAuthProfiles };
@@ -41,12 +58,15 @@ export async function completeWithAuthProfileFailover(params: {
     if (params.signal?.aborted) {
       return result;
     }
+    const failoverReason = classifyAssistantFailoverReason(result, {
+      provider: current.model.provider,
+      providerOwner: getModelProviderRuntimePluginHandle(current.model)?.plugin ?? null,
+    });
+    // Rotation keeps its existing trigger; only the shared health write is narrowed.
+    const rotateReason = resolveAuthProfileFailureReason({ failoverReason, providerStarted: true });
     const reason = resolveAuthProfileFailureReason({
-      failoverReason: classifyAssistantFailoverReason(result, {
-        provider: current.model.provider,
-        providerOwner: getModelProviderRuntimePluginHandle(current.model)?.plugin ?? null,
-      }),
-      providerStarted: true,
+      failoverReason,
+      providerStarted: didProviderStart(result),
     });
     const profileId = current.auth.profileId;
     if (!profiles || !profileId || state.profileIndex < 0) {
@@ -74,7 +94,7 @@ export async function completeWithAuthProfileFailover(params: {
       params.warn("Simple completion auth profile bookkeeping failed.");
     }
     params.assertCurrent();
-    if (!reason || params.signal?.aborted) {
+    if (!rotateReason || params.signal?.aborted) {
       return result;
     }
     const advanced = await advanceAuthProfileCandidate({
