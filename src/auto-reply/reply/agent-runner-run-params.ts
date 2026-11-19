@@ -1,6 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
 import { modelTransportRoutesMatch } from "../../agents/model-compat-catalog.js";
 import {
@@ -18,6 +19,7 @@ import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
 import { isExecCompletionInputProvenance } from "../../sessions/input-provenance.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
+import { readGroupParticipationRun } from "./group-participation-run.js";
 import type { FollowupRun } from "./queue.js";
 import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
 
@@ -183,7 +185,14 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
     onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     currentInboundEventKind: turn.followupRun.currentInboundEventKind,
-    currentInboundContext: turn.followupRun.currentInboundContext,
+    currentInboundContext: readGroupParticipationRun(turn.replyOperation)?.requiresVisibleReply
+      ? appendCurrentInboundContext(turn.followupRun.currentInboundContext, [
+          {
+            kind: "runtime-instruction",
+            text: "Group participation was approved for this turn. Send a visible reply using this conversation's delivery instructions.",
+          },
+        ])
+      : turn.followupRun.currentInboundContext,
     extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
     extraSystemPromptTurnContext: turn.followupRun.run.extraSystemPromptTurnContext,
     sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,

@@ -318,7 +318,7 @@ export async function resolveFollowupDeliveryDecision(params: {
     resolveClaimedReplyExpectation(terminalReplyExpectation, result.meta),
     result.meta?.error?.kind === "hook_block" || result.didSendDeterministicApprovalPrompt === true
       ? "blocked"
-      : authoredSilence
+      : authoredSilence && !readGroupParticipationRun(turn.operation)?.requiresVisibleReply
         ? "silent"
         : sourceReplyDelivery !== "missing"
           ? sourceReplyDelivery

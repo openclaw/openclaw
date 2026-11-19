@@ -1536,7 +1536,7 @@ describe("runReplyAgent admission and cleanup", () => {
     expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[5]).toBe(false);
     expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(typing.cleanup).toHaveBeenCalledTimes(1);
+    expect(typing.cleanup).not.toHaveBeenCalled();
   });
 
   it.each([

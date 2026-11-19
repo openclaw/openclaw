@@ -21,7 +21,6 @@ export function createQuietTypingSignaler(): TypingSignaler {
     shouldStartOnMessageStart: false,
     shouldStartOnText: false,
     shouldStartOnReasoning: false,
-    deferUntilText: () => {},
     signalRunStart: async () => {},
     signalMessageStart: async () => {},
     signalTextDelta: async () => {},

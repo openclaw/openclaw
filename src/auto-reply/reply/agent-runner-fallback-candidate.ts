@@ -39,7 +39,6 @@ import {
   resolveRunThinkingLevelForFallbackCandidate,
 } from "./agent-runner-utils.js";
 import { hasBlockReplyDeliveryCustody } from "./block-reply-delivery.js";
-import { readGroupParticipationRun } from "./group-participation-run.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
 import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
 import {

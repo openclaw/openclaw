@@ -40,8 +40,7 @@ export type TypingSignaler = {
   shouldStartOnMessageStart: boolean;
   shouldStartOnText: boolean;
   shouldStartOnReasoning: boolean;
-  deferUntilText: () => void;
-  signalRunStart: (visibleText?: string) => Promise<void>;
+  signalRunStart: () => Promise<void>;
   signalMessageStart: () => Promise<void>;
   signalTextDelta: (text?: string) => Promise<void>;
   signalReasoningDelta: () => Promise<void>;
@@ -61,11 +60,10 @@ export function createTypingSignaler(params: {
   const shouldStartOnReasoning = mode === "thinking";
   const disabled = mode === "never";
   let hasRenderableText = false;
-  let deferredUntilText = false;
 
   const refreshTyping = async (allowStart: boolean) => {
     if (!typing.isActive()) {
-      if (!allowStart || (deferredUntilText && !hasRenderableText)) {
+      if (!allowStart) {
         return;
       }
       await typing.startTypingLoop();
@@ -75,19 +73,13 @@ export function createTypingSignaler(params: {
 
   return {
     mode,
-    deferUntilText() {
-      deferredUntilText = true;
-    },
     shouldStartImmediately,
     shouldStartOnMessageStart,
     shouldStartOnText,
     shouldStartOnReasoning,
-    async signalRunStart(visibleText) {
-      if (deferredUntilText && normalizeOptionalString(visibleText)) {
-        hasRenderableText = true;
-      }
-      if (!disabled && (shouldStartImmediately || (deferredUntilText && hasRenderableText))) {
-        await refreshTyping(true);
+    async signalRunStart() {
+      if (!disabled && shouldStartImmediately) {
+        await typing.startTypingLoop();
       }
     },
     async signalMessageStart() {
@@ -112,7 +104,8 @@ export function createTypingSignaler(params: {
         return;
       }
       // Thinking mode starts before visible assistant text arrives.
-      await refreshTyping(true);
+      await typing.startTypingLoop();
+      typing.refreshTypingTtl();
     },
     async signalToolStart() {
       if (!disabled) {

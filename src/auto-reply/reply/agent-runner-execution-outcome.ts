@@ -181,8 +181,8 @@ export async function runAgentTurnWithOutcome(
             if (participation?.mode === "ordinary") {
               await params.typingSignals.signalRunStart();
             } else if (participation) {
-              // Approval permits generation, but the primary model may still choose NO_REPLY.
-              params.typingSignals.deferUntilText();
+              await (params.typingSignals.signalExecutionActivity?.() ??
+                params.typingSignals.signalRunStart());
             }
             return run();
           },
