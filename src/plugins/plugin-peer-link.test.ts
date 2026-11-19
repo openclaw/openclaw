@@ -8,11 +8,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import * as pathSafety from "./path-safety.js";
 import {
   auditDeclaredOpenClawHostDependency,
   auditOpenClawPeerDependenciesInManagedNpmRoot,
   auditOpenClawPeerDependencyLinkSync,
   linkOpenClawPeerDependencies,
+  openClawHostRootsMatch,
   reconcileRegisteredOpenClawHostLinks,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
   repairInstalledOpenClawHostLinks,
@@ -171,6 +174,74 @@ describe("plugin peer links", () => {
     expect(linked).toEqual({ repaired: 1, skipped: 0 });
     expect(auditOpenClawPeerDependencyLinkSync({ packageDir })).toBeNull();
     expect(fs.realpathSync(peer)).toBe(fs.realpathSync(current));
+  });
+
+  it("matches host roots case-insensitively on Windows and case-sensitively on non-Windows", () => {
+    vi.spyOn(pathSafety, "safeRealpathSync").mockImplementation((target) => target);
+
+    mockProcessPlatform("win32");
+    expect(
+      openClawHostRootsMatch(
+        "D:\\Personal\\openclaw\\node_modules\\openclaw",
+        "D:\\Personal\\OpenClaw\\node_modules\\openclaw",
+      ),
+    ).toBe(true);
+    expect(openClawHostRootsMatch("D:\\Personal\\openclaw\\", "D:\\Personal\\OpenClaw")).toBe(true);
+    expect(
+      openClawHostRootsMatch("\\\\?\\C:\\Users\\User\\openclaw", "c:\\users\\user\\OpenClaw"),
+    ).toBe(true);
+    expect(
+      openClawHostRootsMatch("C:\\Users\\User\\openclaw", "C:\\Users\\User\\other-project"),
+    ).toBe(false);
+
+    mockProcessPlatform("linux");
+    expect(openClawHostRootsMatch("/home/user/openclaw", "/home/user/OpenClaw")).toBe(false);
+    expect(openClawHostRootsMatch("/home/user/openclaw", "/home/user/openclaw")).toBe(true);
+  });
+
+  it("admits a peer link on Windows when install directory casing differs", async () => {
+    mockProcessPlatform("win32");
+    const { root, packageDir, linkPath: peer } = peerFixture("missing-link");
+    const hostDir = path.join(root, "OpenClaw-Host");
+    fs.mkdirSync(hostDir, { recursive: true });
+    writePackage(hostDir, { name: "openclaw" });
+
+    // Host link path uses differing casing (e.g. from a Windows junction target)
+    const casedHostDir = path.join(root, "openclaw-host");
+    const stripTrailing = (val: unknown) =>
+      typeof val === "string" ? val.replace(/[/\\]+$/, "") : val;
+
+    vi.spyOn(pathSafety, "safeRealpathSync").mockImplementation((target) => {
+      const normalized = stripTrailing(target);
+      if (normalized === peer) {
+        return casedHostDir;
+      }
+      if (normalized === hostDir) {
+        return hostDir;
+      }
+      return target;
+    });
+    vi.stubGlobal("__openclawStandaloneRootUrl", new URL(`file://${hostDir}/`).href);
+
+    // Audit should pass without reporting mismatched host root
+    expect(auditOpenClawPeerDependencyLinkSync({ packageDir })).toBeNull();
+
+    // linkOpenClawPeerDependencies should recognize the link as unchanged
+    vi.spyOn(fsPromises, "realpath").mockImplementation(async (target) => {
+      const normalized = stripTrailing(target);
+      if (normalized === peer) {
+        return casedHostDir;
+      }
+      if (normalized === hostDir) {
+        return hostDir;
+      }
+      return target as string;
+    });
+    const install = peerInstall(packageDir);
+    expect(await linkOpenClawPeerDependencies({ ...install, hostRoot: hostDir })).toEqual({
+      repaired: 0,
+      skipped: 0,
+    });
   });
 
   describe.each([

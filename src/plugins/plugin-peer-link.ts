@@ -14,7 +14,7 @@ import { ignoreMissingPath } from "../infra/errno.js";
 import { resolveUserPath } from "../infra/home-dir.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { isPathInside } from "../infra/path-guards.js";
+import { isPathInside, normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import { resolvePluginInstallDir } from "./install-paths.js";
 import type { InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store-path.js";
 import { listNpmPackageDirs } from "./npm-package-dirs.js";
@@ -154,6 +154,26 @@ function resolveOpenClawHostRoot(): string | null {
       });
 }
 
+function normalizePathForComparison(value: string): string {
+  const normalized = normalizeWindowsPathForComparison(value);
+  return normalized.length > 3 && (normalized.endsWith("\\") || normalized.endsWith("/"))
+    ? normalized.slice(0, -1)
+    : normalized;
+}
+
+function pathsEqual(left: string | null | undefined, right: string | null | undefined): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
+  return (
+    process.platform === "win32" &&
+    normalizePathForComparison(left) === normalizePathForComparison(right)
+  );
+}
+
 /** Loose installs select a path; relocated standalone copies select the same immutable build. */
 export function openClawHostRootsMatch(currentRoot: string, expectedRoot: string): boolean {
   const current = safeRealpathSync(currentRoot);
@@ -161,7 +181,7 @@ export function openClawHostRootsMatch(currentRoot: string, expectedRoot: string
   if (!current || !expected) {
     return false;
   }
-  if (current === expected) {
+  if (pathsEqual(current, expected)) {
     return true;
   }
   try {
@@ -312,7 +332,7 @@ async function linkOpenClawPeerDependency(params: {
   const expectedTarget = (await safeRealpath(params.hostRoot)) ?? params.hostRoot;
   const currentTarget = await safeRealpath(linkPath);
   // Explicit install/repair always rebinds a relocated copy to this runtime, even for the same build.
-  if (currentTarget === expectedTarget) {
+  if (pathsEqual(currentTarget, expectedTarget)) {
     return "unchanged";
   }
 
@@ -460,7 +480,7 @@ async function reconcileRegisteredHostLinks(
     } catch {
       continue;
     }
-    if (packageDir !== expectedPackageDir) {
+    if (!pathsEqual(packageDir, expectedPackageDir)) {
       continue;
     }
 
@@ -473,7 +493,7 @@ async function reconcileRegisteredHostLinks(
     if (
       !packageRealPath ||
       !isPathInside(extensionsRootRealPath, packageRealPath) ||
-      packageRealPath !== expectedPackageRealPath
+      !pathsEqual(packageRealPath, expectedPackageRealPath)
     ) {
       continue;
     }
