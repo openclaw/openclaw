@@ -396,7 +396,9 @@ OpenClaw ID members use their membership role's definition in
 When OpenClaw ID turns on, and at Gateway start when it is already on, the Gateway
 writes any missing presets without overwriting owner-edited definitions. Installing
 presets uses the standard config writer: it rewrites the config file as JSON and
-removes JSON5 comments.
+removes JSON5 comments. When plugin policy blocks the Access page, startup and
+watcher reconciliation leave the config file unchanged; repair the plugin policy
+with Doctor first.
 
 The presets are:
 
@@ -495,11 +497,26 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
   OpenClaw ID**, **Turn on remote access**, **Your devices**, **Copy claw link**
   and **Sign out of OpenClaw ID**, depending on your connection and setup state.
 - **Access**, under **Pages**: the **Remote access** page from the bundled
-  `openclaw-id-access` plugin (enabled by default). It shows who may reach this
+  `openclaw-id-access` plugin (enabled by default). Turning OpenClaw ID on through
+  Labs, the config CLI, or setup adds this plugin to an existing nonempty
+  `plugins.allow` in the same config write. Empty or absent allowlists are unchanged.
+  Explicit `plugins.deny`, `plugins.entries["openclaw-id-access"].enabled: false`,
+  and `plugins.enabled: false` still win: activation warns that the Access page
+  stays off and leaves those settings unchanged. Turning OpenClaw ID off does not
+  remove the allowlist entry.
+
+  Hand-edited or read-only configurations are not automatically repaired when
+  the allowlist blocks Access. The Gateway warns; run `openclaw doctor` and
+  accept the repair to add only `openclaw-id-access` to `plugins.allow`. Doctor
+  does not override explicit denies or disables, and declining preserves the file.
+  A read-only config must be made writable by its owner before repair.
+
+  The page shows who may reach this
   claw through OpenClaw ID; its **People** section lets you invite someone,
   approve or deny their request, change a member's role, and remove members. Use an approved owner
   browser to change access. Devices paired with this Gateway are in
   **Settings → Devices**.
+
 - **Member names**: an approved member is named from their OpenClaw ID account,
   or from the part of their email before the `@` when the account reports no
   name. Their first visit opens a new session, which asks for a name and photo

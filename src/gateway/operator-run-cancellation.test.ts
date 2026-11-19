@@ -11,7 +11,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import {
@@ -261,14 +260,31 @@ describe("operator access cancellation", () => {
         expect(retained.authority!.assertCurrent).not.toThrow();
         expect(retained.authority!.signal?.aborted).not.toBe(true);
         target.expectCurrent();
-        // Revocation applies to new work, not the turn that already started.
-        const reauthorize = expectDefined(retained.authority?.reauthorize, "next turn admission");
-        expect(reauthorize).not.toThrow();
+        const continuationClient = createSyntheticPluginRuntimeClient({
+          authenticatedUserProfile: occurrence.client.authenticatedUserProfile,
+          operatorRoleActor: { kind: "operator", profileId: restored.authority.profileId },
+          operatorRunAuthority: retained.authority!,
+          agentToolCaller: { agentId: "main", sessionKey: sender },
+          scopes: ["operator.write"],
+        });
+        const beforeRevocation = await f.register(
+          "before-device-revocation",
+          undefined,
+          {},
+          false,
+          true,
+        );
+        const admittedChild = await beforeRevocation.retain(undefined, continuationClient);
+        // Revocation refuses the next start without canceling already-admitted work.
         invalidateGatewayDeviceRevocation(occurrence.context, "recovery-device", "operator");
-        expect(reauthorize).toThrow(GatewayOperatorRecoveryAuthorizationError);
+        const next = await f.register("after-device-revocation", undefined, {}, false, true);
+        await expect(next.retain(undefined, continuationClient)).rejects.toThrow(
+          "Restart recovery operator source policy changed.",
+        );
         expect(retained.authority!.assertCurrent).not.toThrow();
         expect(retained.authority!.signal?.aborted).not.toBe(true);
-        target.expectCurrent();
+        expect(admittedChild.authority!.assertCurrent).not.toThrow();
+        expect(admittedChild.authority!.signal?.aborted).not.toBe(true);
       } finally {
         restored.release();
       }

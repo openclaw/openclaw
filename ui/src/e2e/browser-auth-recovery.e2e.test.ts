@@ -198,6 +198,12 @@ suite.define(() => {
               () => navigator.serviceWorker.controller?.state === "activated",
             );
           }
+          // Recovery preloads the modal host while access is valid. A proxy then
+          // redirects every request, including code chunks not loaded yet.
+          await page.waitForFunction(() => customElements.get("openclaw-modal-dialog"));
+          await context.route("**/assets/**", async (route) =>
+            (await expired(route)) ? route.fulfill(redirect()) : route.fallback(),
+          );
           const originalUrl = page.url();
           const initialConnects = (await gateway.getRequests("connect")).length;
           const expectConversationRetained = async () => {
@@ -215,6 +221,8 @@ suite.define(() => {
           if (renewal === "interactive") {
             await modal.waitFor();
             expect(await modal.count()).toBe(1);
+            await modal.getByText("Your website sign-in has expired.", { exact: false }).waitFor();
+            expect(await modal.textContent()).not.toContain("Couldn’t load this panel.");
             expect({ probes, metadataRequests }).toEqual({ probes: 2, metadataRequests: 2 });
             await expectConversationRetained();
             const expectDialogToFit = async () => {
