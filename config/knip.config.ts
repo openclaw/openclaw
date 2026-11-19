@@ -65,6 +65,8 @@ const repositoryScriptEntries = [
   "test/scripts/fixtures/mantis-telegram-failure.mts",
   // Spawned directly by beam-handoff.joined.e2e.test.ts.
   "test/fixtures/beam-live-handoff-client/beam.mjs",
+  // Forked by update-command-doctor-child.test.ts to model the successor's state swap.
+  "src/cli/update-cli/update-command-state-handoff.process.test-support.ts!",
   // Their source headers document standalone benchmark and measurement commands.
   "scripts/bench-ci-lint-plan.mts!",
   "scripts/bench-ci-planner.mts!",
@@ -440,6 +442,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/projects-doctor.mjs!",
   // published-driver-update-docker.sh launches this managed-update proof inside Docker.
   "scripts/e2e/lib/upgrade-survivor/published-driver.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/published-driver-plugin-publication.mjs!",
   "scripts/e2e/lib/upgrade-survivor/published-plugin-registry.mjs!",
   "scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs!",
   // The compiler below exposes the runner's inline Node imports.

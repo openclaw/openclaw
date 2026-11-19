@@ -13,6 +13,11 @@ awaits operations, retains owner-published facts, and checks current authority
 before effects. Moving a query to a worker is not enough: reuse those facts and
 batch related work so ordinary requests do not repeat database calls.
 
+Session discovery settlement compares prepared physical paths directly. Exact
+targets already retained by the lane need no worker cleanup request. Family
+discovery still closes unretained siblings; revocation, native-close qualification,
+worker retirement, and admission byte accounting keep their existing owners.
+
 Plugin model catalog publication uses the agent database writer queue. Credential
 cleanup joins those same queues before inspecting candidate catalogs, so an earlier
 publication settles before a clean-catalog decision. Later publications revalidate
@@ -1877,6 +1882,7 @@ registry hints for durable children go through the entry worker. The Gateway tru
 the child owner's selection without repeating its parent checks. A reparenting
 after the read appears on the next lookup. There is no synchronous batch fallback.
 
+Filtered SQLite transcript search generates snippets as its visibility cursor consumes ordered candidates, and retains its connection in the worker's read scope.
 Transcript search returns its read snapshot and obtains indexing readiness from
 the projection owner. It does not reread a connection revision after awaiting
 readiness; an intervening append appears on the next search. Projection rebuilds

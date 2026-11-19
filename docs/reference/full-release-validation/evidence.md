@@ -101,14 +101,39 @@ and short reason; optional `targetSha` and `evidence: { runId, runAttempt }` res
 candidate/execution. Checked-in list is authoritative; retain release-specific
 authorization/diagnostics in PR or handoff.
 
+For a newly approved job waiver, default to the exact release version, child
+role, and job across all future FRV runs, attempts, and candidates for that
+release. Omit `evidence` and `targetSha` restrictions unless the operator
+explicitly limits the approval. Reserve attempt-specific waivers for
+exceptionally high-risk cases where only the reviewed execution is accepted;
+record the risk and the explicit limit in the PR or handoff. A diagnostic run
+ID is evidence of the original failure, not a reason to restrict an ordinary
+waiver to that attempt. This default does not broaden existing grants or waive
+other jobs, versions, required execution, or evidence-integrity checks.
+
 A `testFailures` entry additionally requires the sole failed step and the complete
 ordered set of exact test/error signatures from the native test-evidence parser.
 The verifier reads the original leaf log and requires completed invocation
 evidence before accepting it. Changed or additional errors, incomplete logs, and
-setup failures remain blocking; aggregate causes are also checked exactly. The
-2026.11.10-beta.1 entries cover only the observed MCP listener collision and cron
-pre-output assertion. UI, QA, and mixed firstbirth/attachment failures are not
-granted by those entries.
+setup failures remain blocking; aggregate causes are also checked exactly. The historical
+2026.11.10-beta.1 signature grants cover only the MCP listener collision and cron
+pre-output assertion in CI 44290065577/1. Separate FRV16 job-level grants accept
+the ten observed CI failures in 44465881623/1 and the core QA runtime-pair failure
+in 44465878180/1, only for candidate
+`995f9059b6e6fe3ba0865a3354924fd2bcbfceea`. These retain unresolved runtime, worker,
+UI, and cron uncertainty, not a claim of fixes or passing tests. Their aggregates
+require the exact observed causes and failed steps; the silent QA status-check
+aggregate additionally requires the SHA-256 of its complete reviewed original
+log. The November 19, 10:12 UTC authorization extends these grants to the eight
+additional observed CI failures in FRV17: Node large shards 17, 19, 20, 21, and 43,
+Node small shard 12, Bun large shard 39, and UI shard 4/13. The focused
+chat-permissions test passed on the unchanged candidate under Bun, including
+private-message and access-revocation assertions; its original failure remains
+unexplained. The remaining new failures are a browser-download infrastructure
+timeout and suspected timing failures, not proven harmless flakes. These grants
+apply across runs and attempts for the same release, candidate, and named jobs.
+Different candidates and additional failed jobs are not granted. Cancelled,
+timed-out, or incomplete jobs remain coverage gaps, not accepted failures.
 
 Changing P alone does not invalidate retained evidence for unchanged C/Q, coverage,
 inputs, and source digests. With reuse enabled, admitted P reevaluates sealed child

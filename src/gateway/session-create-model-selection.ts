@@ -272,7 +272,7 @@ export function resolveSessionCreationCommitGuard(
         throw new Error(error.message);
       }
       for (const selection of selections) {
-        selection?.assertCurrent();
+        selection?.assertCurrent?.();
       }
     }
     // Creation restrictions end at commit; a later policy change cannot block this chat's turn.

@@ -569,10 +569,16 @@ it("keeps completed reply roots unmarked while accepted inputs remain durable", 
 it("marks ordinary conversations without inheriting cron or external execution ownership", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
-    const cases: Array<{ sessionKey: string; resumable?: true; entry?: Partial<SessionEntry> }> = [
+    const cases: Array<{
+      sessionKey: string;
+      resumable?: true;
+      automation?: true;
+      entry?: Partial<SessionEntry>;
+    }> = [
       { sessionKey: "agent:other:main", resumable: true },
       { sessionKey: "agent:other:main:thread:123.456", resumable: true },
       { sessionKey: "agent:main:cron:scheduled:run:occurrence" },
+      { sessionKey: "agent:main:dashboard-automation", automation: true },
       { sessionKey: "agent:main:acp:external" },
       {
         sessionKey: "agent:main:external-acp-binding",
@@ -591,7 +597,7 @@ it("marks ordinary conversations without inheriting cron or external execution o
     ];
     const claims: Array<[string, string | undefined]> = [];
     try {
-      for (const { sessionKey, entry, resumable } of cases) {
+      for (const { sessionKey, entry, resumable, automation } of cases) {
         const agentId = resumable ? "other" : "main";
         replaceSessionEntrySync(
           { agentId, sessionKey },
@@ -614,7 +620,14 @@ it("marks ordinary conversations without inheriting cron or external execution o
           runId,
           claimAgentRunContext(
             runId,
-            { agentId, sessionKey, sessionId: sessionKey },
+            {
+              agentId,
+              sessionKey,
+              sessionId: sessionKey,
+              ...(automation
+                ? { cronRunsByJobId: new Map([["scheduled-job", { nextCheckEnabled: false }]]) }
+                : {}),
+            },
             { trackOwner: true, ownsContext: true },
           ),
         ]);
