@@ -6218,8 +6218,10 @@ describe("ci workflow guards", () => {
       // Already-emitted plans and explicit qualifications keep the full Boat route.
       preflightOutputs: {
         ...admitted.outputs,
+        runner_profile: "hybrid",
         node_runner_backend: "boat",
         effective_runner_backend: "boat",
+        placement_runner_backend: "hybrid",
       },
     };
     for (const [name, runner] of [
