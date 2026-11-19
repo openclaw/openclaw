@@ -137,6 +137,7 @@ describeControlUiE2e("Chat plugin installation status", () => {
             catalog: { name: "Granola", author: "openclaw", official: true, categories: [] },
             local: { installed: false, action: "install" },
           },
+          detail: { packageName: "@openclaw/granola" },
         },
         "skills.detail": {
           skill: { slug: "weather", displayName: "Weather", isOfficial: true },
