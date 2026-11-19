@@ -287,12 +287,6 @@ const messageToolConfig = { messages: { groupChat: { visibleReplies: "message_to
 const silentResult = { payloads: [], meta: { terminalReply: { disposition: "silent" } } };
 const responseWithResult = (result: Record<string, unknown>) => ({ result });
 
-function expectSentMessage(
-  sendMessage: typeof runtimeSendMessage,
-  fields: Record<string, unknown>,
-) {
-  expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining(fields));
-}
 function expectNoExternalDelivery(
   callGateway: typeof runtimeCallGateway,
   sendMessage: typeof runtimeSendMessage,
@@ -632,7 +626,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   ): DeliveryCase => ({ name, route, ...fields });
   it.each<DeliveryCase>([
     completionCase("yield custody", "thread", {
-      response: {},
       params: {
         sessionId: "requester-session-1",
         isActive: true,
@@ -646,6 +639,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         terminal: true,
         disposition: "intentional_non_delivery",
       },
+      gatewayCalls: 0,
+    }),
+    completionCase("cron run holding its turn after its attempt ended", "thread", {
+      params: { requesterSessionKey: "agent:main:cron:job:run:run-1", isActive: true },
+      expected: { delivered: false, path: "none", reason: "completion_handoff_pending" },
       gatewayCalls: 0,
     }),
     completionCase("omitted synthesis result", "discord", {
@@ -734,7 +732,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expected: { ...missingVisibleCompletion, terminal: undefined },
     }),
     completionCase("abandoned requester", "telegram", {
-      response: deliveredPayload("child completion output"),
       params: { requesterAbandonment: "timeout", isActive: false },
       expected: {
         delivered: false,
@@ -818,7 +815,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
     expectRecordFields(result, expected ?? { delivered: true, path: "direct" });
     if (sent) {
-      expectSentMessage(sendMessage, sent);
+      expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining(sent));
     } else {
       expect(sendMessage).not.toHaveBeenCalled();
     }
@@ -1607,12 +1604,14 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
     expectDeliveryPath(result, "direct");
     if (fallsBack) {
-      expectSentMessage(sendMessage, {
-        channel: "discord",
-        accountId: "acct-1",
-        to: "dm:U123",
-        content: "child completion output",
-      });
+      expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "discord",
+          accountId: "acct-1",
+          to: "dm:U123",
+          content: "child completion output",
+        }),
+      );
     } else {
       expect(sendMessage).not.toHaveBeenCalled();
     }
