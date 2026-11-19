@@ -207,4 +207,36 @@ describe("location.update node event (gateway consumer boundary)", () => {
     expect(consumer).not.toHaveBeenCalled();
     expectNoCalls(enqueue, handoff, dispatch, touchSession);
   });
+
+  it("isolates async consumer rejections: dispatch succeeds and the failure is logged", async () => {
+    // Regression for the review finding: an async consumer assignable to
+    // the declared void return rejected, the promise was discarded, and the
+    // rejection reached the process-level handler (which exits the
+    // Gateway). The dispatcher must observe the returned promise, log the
+    // failure, and still ack the event.
+    const rejection = new Error("consumer failed asynchronously");
+    const asyncConsumer = vi.fn(() => Promise.reject(rejection));
+    activateConsumerRegistryForTest(asyncConsumer);
+    const logGateway = { warn: vi.fn() };
+    const ctx = makeCtx({ broadcast: vi.fn(), logGateway });
+    const result = await handleNodeEvent(
+      ctx,
+      "iphone-node",
+      nodeEvent("location.update", validLocationUpdate),
+    );
+    // Dispatch succeeds: the event was handled and acked.
+    expect(result).toEqual({
+      ok: true,
+      event: "location.update",
+      handled: true,
+      reason: "dispatched",
+    });
+    expect(asyncConsumer).toHaveBeenCalledTimes(1);
+    // The rejection was observed and logged, not leaked: flush the
+    // microtask queue before asserting the warn.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(logGateway.warn).toHaveBeenCalledWith(
+      "node event consumer failed node=iphone-node event=location.update: consumer failed asynchronously",
+    );
+  });
 });

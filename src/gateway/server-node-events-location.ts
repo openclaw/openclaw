@@ -48,11 +48,27 @@ export async function handleNodeLocationEvent(
   if (!(await isNodeEventConnectionCurrent(opts))) {
     return pairingChangedResult(evt.event);
   }
+  // Consumers may be synchronous (void) or asynchronous (Promise). A
+  // declared void return is not evidence of synchrony: an `async` handler
+  // is assignable to it, and discarding its promise would leak rejections
+  // to the process-level handler, which exits the Gateway. Observe both
+  // shapes so a failing consumer stays isolated and logged.
+  const observeConsumerOutcome = (outcome: void | Promise<void>) => {
+    if (outcome instanceof Promise) {
+      outcome.catch((error: unknown) => {
+        ctx.logGateway.warn(
+          `node event consumer failed node=${nodeId} event=${evt.event}: ${formatErrorMessage(error)}`,
+        );
+      });
+    }
+  };
   try {
-    consumer.subscription.handle({
-      nodeId,
-      payload: locationPayload as unknown as NodeLocationUpdatePayload,
-    });
+    observeConsumerOutcome(
+      consumer.subscription.handle({
+        nodeId,
+        payload: locationPayload as unknown as NodeLocationUpdatePayload,
+      }),
+    );
   } catch (error) {
     ctx.logGateway.warn(
       `node event consumer failed node=${nodeId} event=${evt.event}: ${formatErrorMessage(error)}`,

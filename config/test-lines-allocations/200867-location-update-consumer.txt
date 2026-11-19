@@ -27,4 +27,12 @@
 # baseline pass is still evaluating must be preserved and fired, not
 # dropped — regression for the review's fix-loss finding; back-to-back
 # synchronous handle() calls make the mid-evaluation arrival deterministic.
-686
+# openclaw-agent-v44-postgres-upgrade.evidence.test.ts: live-PostgreSQL
+# v38 -> v44 shipped-upgrade evidence requested by review — destination
+# admission succeeds, existing keyword reminders preserved and usable,
+# location intent accepted by migrated constraints; connection via env var
+# only (no private details), skips without it.
+# server-node-events.location-update.test.ts: async consumer rejection
+# isolation regression — a rejected Promise<void> consumer is logged and
+# the event still acks, never reaching the process-exit rejection path.
+954

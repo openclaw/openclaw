@@ -1,17 +1,15 @@
-// v43 -> v44 PostgreSQL upgrade evidence test: the real migration adapter
-// against a live PostgreSQL 16 server (192.168.0.145, started by Fredrik).
+// Shipped-upgrade PostgreSQL evidence test (v2026.11.5, schema 38 -> current):
+// against a live PostgreSQL 16 server.
 //
 // Produces exactly what the automated review asks for: "redacted
 // shipped-upgrade output ... preserving existing state and demonstrating
 // PostgreSQL admission succeeding" and "existing data still loads and works".
 //
-// Connection handling: read from process.env.OPENCLAW_PG_EVIDENCE_CONNECTION
-// (or the workspace connection file) and forward through
-// withDatabaseEngineSelection — the engine-neutral selection path
-// postgresProductScope uses. No getEnvironmentData dependency, so the
-// connection survives vitest's fork pool.
-import fs from "node:fs";
-import os from "node:os";
+// Connection handling: the connection string arrives only via the
+// OPENCLAW_PG_EVIDENCE_CONNECTION environment variable — the same
+// env-driven convention as the workboard connection tests. No private
+// hosts, personal paths, or workspace fallbacks: the test skips without
+// the env var, matching CI-without-PostgreSQL behavior.
 import path from "node:path";
 import { withDatabaseEngineSelection } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterAll, describe, expect, it } from "vitest";
@@ -26,35 +24,13 @@ import { publishSqliteDatabaseSchemaChange } from "../infra/sqlite-database-admi
 import { agentEngineSchema } from "../state/openclaw-agent-db-engine.js";
 
 function resolveConnection(): string | undefined {
-  // HOME is sandboxed to a temp dir inside vitest workers, so os.homedir()
-  // cannot find the workspace connection file here. Read the real path
-  // directly and prefer the env override.
-  const realHome = process.env.OPENCLAW_REAL_HOME ?? "/Users/fredrikgarneij";
-  const fromEnv = process.env.OPENCLAW_PG_EVIDENCE_CONNECTION;
-  if (fromEnv) {
-    return fromEnv;
-  }
-  try {
-    const fromFile = fs
-      .readFileSync(
-        path.join(realHome, ".openclaw/workspace/location-walk-data/pg-connection.txt"),
-        "utf8",
-      )
-      .trim();
-    return fromFile || undefined;
-  } catch {
-    return undefined;
-  }
+  // Env-var only — the same convention as the workboard connection tests.
+  // No private hosts, personal paths, or workspace fallbacks; the test
+  // skips without the env var.
+  return process.env.OPENCLAW_PG_EVIDENCE_CONNECTION?.trim() || undefined;
 }
 
 const dirs = useAutoCleanupTempDirTracker(afterAll);
-console.log(
-  `[evidence-debug] homedir=${os.homedir()} env.HOME=${process.env.HOME ?? "(unset)"} ` +
-    `connectEnv=${process.env.OPENCLAW_PG_EVIDENCE_CONNECTION ? "set" : "unset"} ` +
-    `filePath=${path.join(os.homedir(), ".openclaw/workspace/location-walk-data/pg-connection.txt")} ` +
-    `fileExists=${fs.existsSync(path.join(os.homedir(), ".openclaw/workspace/location-walk-data/pg-connection.txt"))} ` +
-    `resolved=${resolveConnection() ? "YES" : "NO"}`,
-);
 
 describe.skipIf(!resolveConnection())("PostgreSQL v44 location-intents migration evidence", () => {
   const CONNECTION = resolveConnection()!;
@@ -77,22 +53,24 @@ describe.skipIf(!resolveConnection())("PostgreSQL v44 location-intents migration
     // dropped inside the test so the evidence server stays clean.
   });
 
-  it("migrates a v43 PostgreSQL store to v44 through the real adapter and preserves existing intents", () => {
+  it("migrates a shipped v2026.11.5 (schema 38) PostgreSQL store to v44 through the real adapter and preserves existing intents", () => {
     withEngineStoreAdmission(() => {
       const anchorPath = path.join(dirs.make("pg-v44-evidence-"), "anchor.sqlite");
 
-      const migration = agentEngineSchema.postgresMigrations!.find((step) => step.version === 44)!;
-      expect(migration).toBeDefined();
-
-      // The v43 predecessor: standing_intents WITHOUT the location columns —
-      // exactly what the v2026.11.5 release's PostgreSQL store carries.
+      // The shipped v2026.11.5 release carries schema 38. The v39 migration
+      // step's fromSchema IS that shape (the pre-navigation DDL), so the
+      // predecessor below is the real release store — and reopening at the
+      // current schema runs the complete 38 -> 44 migration chain through
+      // the engine, proving the shipped upgrade path end to end.
+      const v39Step = agentEngineSchema.postgresMigrations!.find((step) => step.version === 39)!;
+      expect(v39Step).toBeDefined();
       const predecessor: StoreSchema = {
         ...agentEngineSchema,
-        ...migration.fromSchema,
-        version: 43,
+        ...v39Step.fromSchema,
+        version: 38,
       };
 
-      // Phase 1: open at the v43 shape.
+      // Phase 1: open at the shipped v38 (v2026.11.5) shape.
       let db: unknown;
       selected(() => {
         const result = openEngineStore({
@@ -118,10 +96,10 @@ describe.skipIf(!resolveConnection())("PostgreSQL v44 location-intents migration
       };
       namespace = getPostgresPhysicalFacts(db)?.namespace ?? "";
       expect(namespace).not.toBe("");
-      console.log(`[evidence] opened v43 store, namespace: ${namespace}`);
+      console.log(`[evidence] opened v38 (v2026.11.5) store, namespace: ${namespace}`);
 
       // Seed a live keyword standing-intent row (existing state to preserve).
-      pg.exec(`INSERT INTO schema_meta VALUES ('primary', 'agent', 43, 'main', NULL, 1, 1)`);
+      pg.exec(`INSERT INTO schema_meta VALUES ('primary', 'agent', 38, 'main', NULL, 1, 1)`);
       pg.exec(
         `INSERT INTO standing_intents (id, description, trigger_keywords, trigger_embedding,
           channel_scope, sender_scope, creator_sender, status, expires_at, max_fires, fire_count,
@@ -251,7 +229,7 @@ describe.skipIf(!resolveConnection())("PostgreSQL v44 location-intents migration
       console.log("[evidence] evidence namespace dropped; server clean");
 
       console.log(
-        `=== EVIDENCE COMPLETE: v43 -> v44 PostgreSQL upgrade succeeds; existing data preserved and usable ===`,
+        `=== EVIDENCE COMPLETE: shipped v2026.11.5 (schema 38) -> v44 PostgreSQL upgrade succeeds; existing data preserved and usable ===`,
       );
     });
   });

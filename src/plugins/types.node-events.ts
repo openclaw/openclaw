@@ -12,9 +12,15 @@ export type OpenClawPluginNodeEventConsumerParams<TPayload> = {
   payload: TPayload;
 };
 
+/**
+ * Consumers may be synchronous (void) or asynchronous (Promise<void>). The
+ * gateway observes both: a returned promise is caught and logged so an
+ * async consumer failure stays isolated instead of reaching the
+ * process-level unhandled-rejection path (which exits the Gateway).
+ */
 export type OpenClawPluginNodeEventConsumer<TPayload = unknown> = (
   params: OpenClawPluginNodeEventConsumerParams<TPayload>,
-) => void;
+) => void | Promise<void>;
 
 export type OpenClawPluginNodeEventSubscription<TPayload = unknown> = {
   /**
