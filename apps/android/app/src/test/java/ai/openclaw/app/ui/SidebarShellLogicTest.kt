@@ -456,6 +456,17 @@ class SidebarShellLogicTest {
   }
 
   @Test
+  fun aCollapsedSectionReportsWorkInItsSessionsHiddenChildren() {
+    val pinnedParent = session("agent:main:dashboard:pinned", 30, pinned = true)
+    val runningChild = session("agent:main:subagent:child", 20).copy(parentSessionKey = pinnedParent.key, status = "running")
+    val other = session("agent:main:dashboard:other", 10)
+    val presentation = sidebarSessionPresentation(listOf(pinnedParent, runningChild, other), emptyList())
+
+    assertEquals(SidebarSessionActivity.Running, presentation.collapsedSectionChildActivity(presentation.pinned))
+    assertNull(presentation.collapsedSectionChildActivity(presentation.recent))
+  }
+
+  @Test
   fun aCollapsedParentReportsItsHiddenChildrensRequests() {
     val parent = session("agent:main:dashboard:parent", 30)
     val child = session("agent:main:subagent:child", 20).copy(parentSessionKey = parent.key)

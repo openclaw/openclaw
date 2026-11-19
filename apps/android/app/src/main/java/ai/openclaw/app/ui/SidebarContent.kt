@@ -250,8 +250,15 @@ internal fun SidebarSessionPresentation.descendantsOf(key: String): List<ChatSes
  * A collapsed parent shows work hidden in its children. Failures stay on the child row, matching
  * the web sidebar, so a finished failure does not keep flagging the parent.
  */
-internal fun SidebarSessionPresentation.collapsedChildActivity(key: String): SidebarSessionActivity? {
-  val descendants = descendantsOf(key)
+internal fun SidebarSessionPresentation.collapsedChildActivity(key: String): SidebarSessionActivity? = hiddenChildActivity(descendantsOf(key))
+
+/** Child work hidden by a collapsed section, which no longer shows those children elsewhere. */
+internal fun SidebarSessionPresentation.collapsedSectionChildActivity(roots: List<ChatSessionEntry>): SidebarSessionActivity? {
+  val hidden = roots.flatMap { descendantsOf(it.key) }
+  return hiddenChildActivity(hidden)
+}
+
+private fun hiddenChildActivity(descendants: List<ChatSessionEntry>): SidebarSessionActivity? {
   val activeChildren = descendants.filter { isSessionRunActive(it.hasActiveRun, it.status?.trim()?.lowercase()) }
   return when {
     activeChildren.any { it.status?.trim()?.lowercase() != "queued" } -> SidebarSessionActivity.Running
@@ -696,7 +703,8 @@ internal fun OpenClawSidebar(
     val expanded =
       children.isNotEmpty() &&
         recentPresentation.childrenExpanded(session.key, activeSessionKey, expandedParentKeys, collapsedParentKeys)
-    val attentionRows = recentPresentation.attentionRows(session, expanded)
+    // Flat search rows stand alone; only a disclosure may carry hidden children's requests.
+    val attentionRows = if (nested) recentPresentation.attentionRows(session, expanded) else listOf(session)
     SidebarSessionRow(
       session = session,
       attention = attentionFor(attentionRows.map { sidebarAttentionSessionKey(it.key, it.ownerAgentId ?: selectedAgentId ?: defaultAgentId) }),
@@ -735,6 +743,11 @@ internal fun OpenClawSidebar(
     )
     // Child rows are reached through their parent; pinning by drag stays a top-level gesture.
     if (expanded) children.forEach { child -> SessionNode(child, depth + 1, dragSource = null, nested = true) }
+  }
+
+  @Composable
+  fun SectionChildActivity(roots: List<ChatSessionEntry>) {
+    recentPresentation.collapsedSectionChildActivity(roots)?.let { SidebarSessionActivityIndicator(activity = it, palette = palette) }
   }
 
   @Composable
@@ -986,6 +999,7 @@ internal fun OpenClawSidebar(
             attention = if (pinnedExpanded) null else attentionFor(recentPresentation.withDescendants(pinnedSessions).map { sidebarAttentionSessionKey(it.key, it.ownerAgentId ?: selectedAgentId ?: defaultAgentId) }),
             expanded = pinnedExpanded,
             palette = palette,
+            trailingContent = { if (!pinnedExpanded) SectionChildActivity(pinnedSessions) },
             onClick = { pinnedExpandedChoice = !pinnedExpanded },
             modifier = Modifier.padding(top = 10.dp),
           )
@@ -1079,6 +1093,7 @@ internal fun OpenClawSidebar(
                   expanded = expanded,
                   palette = palette,
                   iconContent = { Icon(Icons.Outlined.Folder, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                  trailingContent = { if (!expanded) SectionChildActivity(group.entries) },
                   onClick = { collapsedGroups = toggleSidebarExpansion(collapsedGroups, group.name) },
                 )
                 if (expanded) sectionRows(token, group.entries)
@@ -1090,6 +1105,7 @@ internal fun OpenClawSidebar(
                   attention = if (chatGroupsExpanded) null else attentionFor(recentPresentation.withDescendants(recentPresentation.chatGroups).map { it.key }),
                   expanded = chatGroupsExpanded,
                   palette = palette,
+                  trailingContent = { if (!chatGroupsExpanded) SectionChildActivity(recentPresentation.chatGroups) },
                   onClick = { chatGroupsExpanded = !chatGroupsExpanded },
                 )
                 if (chatGroupsExpanded) sectionRows(token, recentPresentation.chatGroups)
@@ -1101,6 +1117,7 @@ internal fun OpenClawSidebar(
                   attention = if (recentExpanded) null else attentionFor(recentPresentation.withDescendants(recentRows).map { it.key }),
                   expanded = recentExpanded,
                   palette = palette,
+                  trailingContent = { if (!recentExpanded) SectionChildActivity(recentRows) },
                   onClick = { recentExpanded = !recentExpanded },
                 )
                 if (recentExpanded) {
