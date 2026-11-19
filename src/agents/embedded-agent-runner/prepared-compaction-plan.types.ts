@@ -3,11 +3,17 @@ import type {
   CompactionSettings,
   CompactionResult,
 } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+import type { ConversationEntryDescriptor } from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import type { CompactionError } from "../../../packages/agent-core/src/harness/types.js";
-import type { CompactionSelections } from "../../config/sessions/session-compaction-prepared.types.js";
 import type { PreparedCompactionSafeguardFacts } from "../agent-hooks/compaction-safeguard-prepared.types.js";
 import type { CompactionRequestConstraints } from "../sessions/compaction/request-budget.types.js";
 import type { PreparedCompactionReplayOptions } from "./prepared-compaction-replay.js";
+
+export type CompactionMessageSource = { seq: number; index: number };
+export type CompactionSelections = {
+  history: ConversationEntryDescriptor<CompactionMessageSource>[];
+  turnPrefix: ConversationEntryDescriptor<CompactionMessageSource>[];
+};
 
 /** Serializable inputs only: the host retains inference, callbacks, and write authority. */
 export type PreparedCompactionPlanOptions = CompactionRequestConstraints & {

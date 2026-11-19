@@ -13,6 +13,8 @@ import type {
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import type { PreparedCompactionMetadataFacts } from "../../agents/embedded-agent-runner/prepared-compaction-metadata.js";
 import type {
+  CompactionMessageSource,
+  CompactionSelections,
   PreparedCompactionPlan,
   PreparedCompactionPlanOptions,
   PreparedCompactionReplayMetrics,
@@ -24,9 +26,8 @@ import type {
 import type { SessionHeader } from "../../agents/sessions/session-manager-types.js";
 import type { SessionCompactionPreparation } from "./session-history-read.types.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
-import type { SessionTranscriptHydrationWorkerInput } from "./session-transcript-hydration.types.js";
+import type { SessionTranscriptHydrationWorkerInput } from "./session-transcript-hydration-input.types.js";
 
-export type CompactionMessageSource = { seq: number; index: number };
 export type PreparedCompactionEntry = CompactionPreparationEntryFact & {
   parentId: string | null;
   idempotencyKey?: string;
@@ -49,10 +50,6 @@ export type CompactionReadCounts = {
   extractedBytes: number;
   selectedRows: number;
   selectedBytes: number;
-};
-export type CompactionSelections = {
-  history: ConversationEntryDescriptor<CompactionMessageSource>[];
-  turnPrefix: ConversationEntryDescriptor<CompactionMessageSource>[];
 };
 export type SessionPreparedCompactionInput = Omit<
   SessionTranscriptHydrationWorkerInput,

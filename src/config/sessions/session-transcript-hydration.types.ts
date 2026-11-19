@@ -1,25 +1,19 @@
-import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
-import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type {
   SessionTranscriptContextVersion,
-  SessionTranscriptReadScope,
   SessionTranscriptWriteScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import type { SessionTranscriptMessageEvent } from "./session-accessor.sqlite-projection-read.js";
-import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import type {
   SessionPreparedCompactionInput,
   SessionPreparedCompactionValue,
 } from "./session-compaction-prepared.types.js";
-import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import type {
   PreparedSessionTranscriptHydration,
-  SessionTranscriptContextSelection,
   SessionTranscriptReadSnapshot,
 } from "./session-history-read.types.js";
-import type { SessionTranscriptAnchorEntry } from "./session-transcript-anchor-read.types.js";
+import type { SessionTranscriptHydrationWorkerInput } from "./session-transcript-hydration-input.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
 export type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
@@ -92,21 +86,6 @@ export type SessionTranscriptCurrentTurnEntryRequest = {
   entryId: string;
   version: SessionTranscriptContextVersion;
   includeEntry: boolean;
-};
-
-export type SessionTranscriptHydrationWorkerInput = {
-  kind: "transcript-hydration";
-  database: { agentId: string; path: string };
-  target: SessionTranscriptReadScope;
-  resolvedScope: ResolvedTranscriptReadScope;
-  expectedIdentity?: DatabaseFileIdentity;
-  afterSeq?: number;
-  includeEventJson?: boolean;
-  compaction?: true;
-  limits?: SessionTranscriptContextSelection;
-  transcript?: SessionEntryCohortRequest["transcript"];
-  preparedEntry?: SessionTranscriptAnchorEntry;
-  admission?: UserTurnTranscriptAdmissionReceipt;
 };
 
 type SessionTranscriptRuntimeHydrationInput = Omit<
