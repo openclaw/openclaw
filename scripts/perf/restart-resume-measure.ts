@@ -415,11 +415,12 @@ if (values["cold-stale"]) {
         WHERE session_id = ? AND seq = 1`)
           .run(`${runId}:user`, entry.sessionId);
         database.db
-          .prepare(`INSERT OR IGNORE INTO session_transcript_cold_archives
+          .prepare(`INSERT INTO session_transcript_cold_archives
         (session_id, generation, archive_name, archive_sha256, event_count, raw_bytes,
         archive_bytes, last_seq, archived_at, storage, archive_blob)
-        VALUES (?, 'synthetic', 'unavailable.zst', ?, 1, 1, 1, 1, 1, 'file', NULL)`)
-          .run(entry.sessionId, "0".repeat(64));
+        VALUES (?, 'synthetic', ?, ?, 1, 1, 1, 1, 1, 'file', NULL)
+        ON CONFLICT(session_id) DO NOTHING`)
+          .run(entry.sessionId, `${entry.sessionId}.zst`, "0".repeat(64));
         retainSessionColdNavigationInTransaction(database, entry.sessionId, 0, 1);
       }
     },
