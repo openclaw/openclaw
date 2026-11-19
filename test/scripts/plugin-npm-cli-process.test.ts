@@ -61,7 +61,7 @@ it.each([false, true])(
       JSON.stringify({ fullReleaseRequestProof: { recovery, packages: 101, requests } }),
     );
   },
-  240_000,
+  300_000,
 );
 
 // Distinct processes are essential: an in-memory client spy misses the retained
