@@ -1163,9 +1163,13 @@ declaration / case. Retain worker and WebSocket declaration identity, positive
 type compatibility and both expected type errors. Keep registration before
 fallible fixture setup and compiler disposal before teardown.
 
-The original registered-hook failure, candidate retry and clean baseline and
-candidate runs are pending qualification in the native PR workspace. Production
-and shared helpers remain unchanged.
+Actual registered-hook controls reproduce the lost failed and unattempted roots.
+The shared owner preserves the same error, removes the healthy root, retains the
+failed root and removes it on retry. The compiler is disposed before cleanup and
+the dependency symlink target stays intact. Clean baseline and candidate runs
+each pass the case; temporary instrumentation is restored byte for byte.
+Scoped typecheck, lint, formatting and line-cap checks pass. Independent
+preservation review found no gaps. Production and shared helpers are unchanged.
 
 ## Pending qualification and proof repairs
 
