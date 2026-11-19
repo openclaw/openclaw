@@ -32,7 +32,6 @@ export interface ReleaseValidationWaiver {
   childRole: string;
   jobName: string;
   reason: string;
-  desktopAptSetupFailure?: true;
   testFailures?: {
     stepName: string;
     signatures: { kind: "vitest"; file: string; test: string }[];
@@ -72,12 +71,9 @@ export function validateReleaseWaiverAggregates(input: {
   policy: ReleaseChildPolicy;
   jobs: (ReleasePolicyJob & {
     id: number;
-    run_id?: number;
-    run_attempt?: number;
     steps?: { name: string; conclusion: string | null }[];
   })[];
   getJobLog: (jobId: number) => unknown;
-  getDesktopReceipt?: (job: { id: number; run_id?: number; run_attempt?: number }) => unknown;
 }): Promise<void>;
 
 export function releaseChildAdvisories(child: {
