@@ -24,8 +24,11 @@ export type UpdateRunArtifactOwnership = {
   classify(runId: string, database: string): Classification;
 };
 
-/** One updater backup of one database that is still exactly what its record describes. */
-export type IntactUpdateBackup = { runId: string; database: string };
+/**
+ * One updater backup of one database whose metadata still matches its record. `verify`
+ * re-proves its content; it runs only when the backup would release an older one.
+ */
+export type IntactUpdateBackup = { runId: string; database: string; verify: () => boolean };
 
 /**
  * Owner-approved policy: a verified successful update releases its own backups and every
@@ -64,15 +67,24 @@ export function createUpdateRunArtifactOwnership(
     laterStartedAt > run.createdAtMs &&
     laterStartedAt >= run.finishedAtMs;
   const verifiedAfter = history?.latestVerifiedSuccessStartedAt ?? 0;
-  // Start time of the newest run holding an intact backup of each database.
-  const newestIntact = new Map<string, number>();
+  // Possible successors per database, each content-verified at most once and only on demand.
+  const successors = new Map<string, Array<{ startedAt: number; verify: () => boolean }>>();
   for (const backup of intactBackups) {
     const run = lookup(backup.runId);
     if (run) {
       const key = canonicalMigrationFilePath(backup.database);
-      newestIntact.set(key, Math.max(newestIntact.get(key) ?? 0, run.createdAtMs));
+      let verified: boolean | undefined;
+      const entry = {
+        startedAt: run.createdAtMs,
+        verify: () => (verified ??= backup.verify()),
+      };
+      successors.set(key, [...(successors.get(key) ?? []), entry]);
     }
   }
+  const hasVerifiedSuccessor = (run: UpdateRunRecord, database: string) =>
+    (successors.get(canonicalMigrationFilePath(database)) ?? []).some(
+      (successor) => supersededBy(run, successor.startedAt) && successor.verify(),
+    );
   return {
     classify(runId, database) {
       if (!history) {
@@ -94,11 +106,11 @@ export function createUpdateRunArtifactOwnership(
       if (supersededBy(run, verifiedAfter)) {
         return { outcome: "candidate", reason: "superseded-by-verified-update" };
       }
-      if (!supersededBy(run, newestIntact.get(canonicalMigrationFilePath(database)) ?? 0)) {
-        return { outcome: "protected", reason: "newest-unverified-update-backup" };
-      }
       if (history.hasPendingRecovery || history.hasUnfinishedRun) {
         return { outcome: "protected", reason: "awaiting-settled-update-history" };
+      }
+      if (!hasVerifiedSuccessor(run, database)) {
+        return { outcome: "protected", reason: "newest-unverified-update-backup" };
       }
       return { outcome: "candidate", reason: "superseded-by-newer-update-backup" };
     },

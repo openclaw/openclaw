@@ -40,7 +40,8 @@ export async function cleanupCompletedUpdateRecovery(
     }
     if (hasSettledAutomaticRecoveryCleanup(run)) {
       const message = run.steps.find(
-        (step) => step.step === `warning:${AUTOMATIC_RECOVERY_CLEANUP_STEP}`,
+        (step) =>
+          step.step === `warning:${AUTOMATIC_RECOVERY_CLEANUP_STEP}` && step.status === "completed",
       )?.detail;
       const detail = run.steps.find(
         (step) => step.step === `diagnostic:${AUTOMATIC_RECOVERY_CLEANUP_STEP}`,
@@ -51,10 +52,7 @@ export async function cleanupCompletedUpdateRecovery(
         cwd: "",
         durationMs: 0,
         exitCode: 0,
-        // A resolution note replaced an earlier warning; it is not a warning itself.
-        ...(message && !message.startsWith(RESOLVED_WARNING)
-          ? { advisory: { kind: "recoverable-maintenance", message } }
-          : {}),
+        ...(message ? { advisory: { kind: "recoverable-maintenance", message } } : {}),
         ...(detail ? { diagnostics: [detail] } : {}),
       };
     }
@@ -101,9 +99,10 @@ export async function cleanupCompletedUpdateRecovery(
     // A rerun replaces the earlier report; an earlier warning it no longer has is resolved.
     const resolved =
       !warning &&
-      run.steps.some((step) => step.step === `warning:${AUTOMATIC_RECOVERY_CLEANUP_STEP}`)
-        ? [`${RESOLVED_WARNING} ${diagnostics[0]}`]
-        : undefined;
+      run.steps.some(
+        (step) =>
+          step.step === `warning:${AUTOMATIC_RECOVERY_CLEANUP_STEP}` && step.status === "completed",
+      );
     // A failed update's own result already names what it keeps; add only real effects.
     if (
       !ownCaptureReleased &&
@@ -119,8 +118,9 @@ export async function cleanupCompletedUpdateRecovery(
       cwd: "",
       durationMs: Math.max(0, Date.now() - startedAt),
       exitCode: 0,
-      diagnostics,
-      ...(resolved ? { warnings: resolved } : {}),
+      // An empty warning list settles an earlier warning; the note stays a diagnostic.
+      diagnostics: resolved ? [...diagnostics, RESOLVED_WARNING] : diagnostics,
+      ...(resolved ? { warnings: [] } : {}),
       // Failed deletions and unverifiable state are warnings; policy keeps are diagnostics.
       ...(warning
         ? { advisory: { kind: "recoverable-maintenance" as const, message: warning } }

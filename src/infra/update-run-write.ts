@@ -89,7 +89,8 @@ export function applyUpdateRunStep(
       (record.status === "skipped" && record.reason === "already-current") ||
       record.status === "failed" ||
       record.status === "rolled-back") &&
-    step.status === "completed" &&
+    (step.status === "completed" ||
+      (step.status === "skipped" && step.step === "warning:recovery-artifact-cleanup")) &&
     [
       "recovery-artifact-cleanup",
       "warning:recovery-artifact-cleanup",

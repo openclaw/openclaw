@@ -68,6 +68,10 @@ export async function recordAutomaticRecoveryCleanup(
       (step) =>
         step.step === warningStep || step.step === `diagnostic:${AUTOMATIC_RECOVERY_CLEANUP_STEP}`,
     );
+    if (result.warnings?.length === 0 && !result.advisory) {
+      // A settled rerun clears the earlier warning instead of leaving it to count.
+      details.push({ step: warningStep, status: "skipped", detail: undefined });
+    }
     // Record completion last: a crash before diagnostics settle leaves a safe retry.
     for (const step of [...details, { ...completed!, endedAtMs: Date.now() }]) {
       const saved = await recordUpdateRunStepAsync(runId, step, { env, assertCurrent });

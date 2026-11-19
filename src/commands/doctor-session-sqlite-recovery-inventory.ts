@@ -1,7 +1,7 @@
 /** Read-only recovery inventory and dependency classification; never deletion authority. */
 import fs from "node:fs";
 import path from "node:path";
-import { listAgentIds } from "../agents/agent-scope-config.js";
+import { listAgentIds, resolveEffectiveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isMigrationArchiveArtifactName } from "../config/sessions/artifacts.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
   isPendingMigrationArtifactClaim,
+  readMigrationArtifactIdentity,
   sameMigrationArtifact,
   statMigrationPath,
   type MigrationArtifact,
@@ -41,7 +42,6 @@ import {
 import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
 import {
   classifyDisplacedDatabases,
-  isIntactDisplacedFamily,
   scanDisplacedDatabases,
 } from "./update-displaced-database-cleanup.js";
 import {
@@ -74,8 +74,8 @@ export function collectRecoveryInventory(params: {
   env: NodeJS.ProcessEnv;
   scan?: RecoveryInventoryScan;
   readHistory?: boolean;
-  /** Intact update backups of other kinds, so successors are chosen per database across kinds. */
-  intactBackups?: readonly IntactUpdateBackup[];
+  /** Rollback receipts exist, so their runs' outcomes must be read even without manifests. */
+  updateReceipts?: boolean;
 }) {
   const entries = (directory: string) =>
     params.scan?.directory(directory) ?? fs.readdirSync(directory, { withFileTypes: true });
@@ -188,7 +188,7 @@ export function collectRecoveryInventory(params: {
   if (
     params.readHistory !== false &&
     ([...references.values()].some((refs) => refs.some((ref) => ref.target.databaseIdentity)) ||
-      params.intactBackups?.length)
+      params.updateReceipts)
   ) {
     const history = readCompletedUpdateHistory(params.env);
     supersededBefore = Math.max(
@@ -197,33 +197,38 @@ export function collectRecoveryInventory(params: {
     );
     ownership = createUpdateRunArtifactOwnership(
       history,
-      [
-        // Each intact backup stands in only for its own database; a changed or missing
-        // backup never makes an older backup of any database "superseded".
-        ...[...references.entries()].flatMap(([archivePath, refs]) => {
-          const current = statMigrationPath(archivePath, { bigint: true });
-          const identity = refs[0]?.move.artifact?.identity;
-          const intact =
-            current?.isFile() === true &&
-            current.nlink === 1n &&
-            identity !== undefined &&
-            refs.every(
-              (ref) =>
-                ref.move.artifact !== undefined &&
-                sameMigrationArtifact(ref.move.artifact.identity, identity),
-            ) &&
-            (["ino", "mtimeNs", "size"] as const).every(
-              (key) => String(current[key]) === String(identity[key]),
-            );
-          return intact
-            ? refs.flatMap((ref) => {
-                const runId = updateRunIdOf(ref);
-                return runId ? [{ runId, database: ref.target.sqlitePath }] : [];
-              })
-            : [];
-        }),
-        ...(params.intactBackups ?? []),
-      ],
+      // Each intact backup stands in only for its own database; a changed or missing
+      // backup never makes an older backup of any database "superseded".
+      [...references.entries()].flatMap(([archivePath, refs]) => {
+        const current = statMigrationPath(archivePath, { bigint: true });
+        const identity = refs[0]?.move.artifact?.identity;
+        const intact =
+          current?.isFile() === true &&
+          current.nlink === 1n &&
+          identity !== undefined &&
+          refs.every(
+            (ref) =>
+              ref.move.artifact !== undefined &&
+              sameMigrationArtifact(ref.move.artifact.identity, identity),
+          ) &&
+          (["ino", "mtimeNs", "size"] as const).every(
+            (key) => String(current[key]) === String(identity[key]),
+          );
+        // Releasing an older backup re-proves this one's recorded content first.
+        const verify = () => {
+          try {
+            return sameMigrationArtifact(readMigrationArtifactIdentity(archivePath), identity!);
+          } catch {
+            return false;
+          }
+        };
+        return intact
+          ? refs.flatMap((ref): IntactUpdateBackup[] => {
+              const runId = updateRunIdOf(ref);
+              return runId ? [{ runId, database: ref.target.sqlitePath, verify }] : [];
+            })
+          : [];
+      }),
       params.env,
     );
   }
@@ -583,14 +588,16 @@ function readUpdateCleanupInventory(params: {
   const stateDir = path.dirname(
     canonicalMigrationFilePath(path.join(resolveStateDir(params.env), "anchor")),
   );
-  const families = scanDisplacedDatabases(stateDir, params.scan);
+  // Configured agent directories inside the state directory hold their own databases.
+  const agentDirectories = listAgentIds(params.cfg).map((agentId) =>
+    resolveEffectiveAgentDir(params.cfg, agentId, { env: params.env }),
+  );
+  const families = scanDisplacedDatabases(stateDir, params.scan, agentDirectories);
+  // A moved-aside family carries no content checksum, so it never stands in for an older
+  // backup; only a verified update or a content-verified Doctor backup does.
   const inventory = collectRecoveryInventory({
     ...params,
-    intactBackups: families.flatMap((family) =>
-      isIntactDisplacedFamily(family) && family.receipt
-        ? [{ runId: family.receipt.runId, database: family.receipt.databasePath }]
-        : [],
-    ),
+    updateReceipts: families.some((family) => family.receipt !== undefined),
   });
   const captures = collectUpdateCaptureInventory({
     stateDir: inventory.report.stateDir,

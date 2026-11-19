@@ -27,9 +27,19 @@ export type DisplacedDatabaseRetirement = Map<
   { receiptPath: string; receipt: DisplacedDatabaseReceipt }
 >;
 
-/** Only the two locations a rollback writes: the shared state directory and each agent's. */
-function databaseDirectories(stateDir: string, scan?: RecoveryInventoryScan): string[] {
-  const directories = [path.join(stateDir, "state")];
+/**
+ * Where a rollback writes: the shared state directory, each default agent directory, and
+ * configured agent directories. Callers keep only those inside the state directory.
+ */
+function databaseDirectories(
+  stateDir: string,
+  scan: RecoveryInventoryScan | undefined,
+  agentDirectories: readonly string[],
+): string[] {
+  const directories = [
+    path.join(stateDir, "state"),
+    ...agentDirectories.map((dir) => path.resolve(dir)),
+  ];
   const agents = path.join(stateDir, "agents");
   if (!fs.lstatSync(agents, { throwIfNoEntry: false })?.isDirectory()) {
     return directories;
@@ -39,11 +49,15 @@ function databaseDirectories(stateDir: string, scan?: RecoveryInventoryScan): st
       directories.push(path.join(agents, entry.name, "agent"));
     }
   }
-  return directories;
+  return [...new Set(directories)];
 }
 
 /** Discovery only: names suggest a family; only a matching receipt proves the updater made it. */
-export function scanDisplacedDatabases(stateDir: string, scan?: RecoveryInventoryScan): Family[] {
+export function scanDisplacedDatabases(
+  stateDir: string,
+  scan?: RecoveryInventoryScan,
+  agentDirectories: readonly string[] = [],
+): Family[] {
   const families = new Map<string, Family>();
   const family = (familyPath: string, runId: string) => {
     const existing = families.get(familyPath);
@@ -54,7 +68,7 @@ export function scanDisplacedDatabases(stateDir: string, scan?: RecoveryInventor
     families.set(familyPath, created);
     return created;
   };
-  for (const directory of databaseDirectories(stateDir, scan)) {
+  for (const directory of databaseDirectories(stateDir, scan, agentDirectories)) {
     if (
       !isPathInside(stateDir, directory) ||
       !fs.lstatSync(directory, { throwIfNoEntry: false })?.isDirectory() ||
@@ -126,12 +140,13 @@ export function scanDisplacedDatabases(stateDir: string, scan?: RecoveryInventor
 function matchesReceipt(
   stat: fs.BigIntStats,
   expected: DisplacedDatabaseReceipt["files"][number] | undefined,
+  file?: string,
 ): boolean {
   return (
     expected !== undefined &&
     stat.isFile() &&
     stat.nlink === 1n &&
-    String(stat.dev) === expected.dev &&
+    (String(stat.dev) === expected.dev || remountedBesideDirectory(stat, file)) &&
     String(stat.ino) === expected.ino &&
     String(stat.size) === expected.size &&
     String(stat.mtimeNs) === expected.mtimeNs
@@ -139,21 +154,15 @@ function matchesReceipt(
 }
 
 /**
- * A complete receipted family: its main database and every file the rollback recorded are
- * present and unchanged, and nothing unrecorded sits beside them. Only such a family can
- * stand in for an older copy of the same database.
+ * A reboot can renumber a volume (APFS): the device changes while inode, size and mtime stay.
+ * Accept that only for a file still on the same volume as the directory that holds it.
  */
-export function isIntactDisplacedFamily(family: Family): boolean {
-  const receipt = family.receipt;
-  if (!receipt) {
+function remountedBesideDirectory(stat: fs.BigIntStats, file: string | undefined): boolean {
+  if (!file) {
     return false;
   }
-  const listed = new Map(receipt.files.map((file) => [file.path, file]));
-  return (
-    listed.has(displacedDatabasePath(receipt.databasePath, receipt.runId)) &&
-    family.files.size === listed.size &&
-    [...family.files].every(([filePath, stat]) => matchesReceipt(stat, listed.get(filePath)))
-  );
+  const directory = fs.lstatSync(path.dirname(file), { bigint: true, throwIfNoEntry: false });
+  return directory?.isDirectory() === true && directory.dev === stat.dev;
 }
 
 export function classifyDisplacedDatabases(
@@ -182,7 +191,7 @@ export function classifyDisplacedDatabases(
     }
     const listed = new Map(item.receipt.files.map((file) => [file.path, file]));
     const changed = [...item.files].find(
-      ([filePath, stat]) => !matchesReceipt(stat, listed.get(filePath)),
+      ([filePath, stat]) => !matchesReceipt(stat, listed.get(filePath), filePath),
     );
     if (changed) {
       Object.assign(artifact, {
@@ -232,7 +241,7 @@ export async function retireDisplacedDatabases(params: {
         if (!stat) {
           continue;
         }
-        if (!matchesReceipt(stat, file)) {
+        if (!matchesReceipt(stat, file, file.path)) {
           throw new Error(`${file.path} changed after selection`);
         }
         await fs.promises.unlink(file.path);

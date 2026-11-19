@@ -4,8 +4,12 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { automaticallyCleanUpdateRecovery } from "../cli/update-cli/automatic-cleanup.js";
 import { prepareUpdateCommandTerminalResult } from "../cli/update-cli/update-command-terminal.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatDiskSpaceBytes } from "../infra/disk-space.js";
-import { readSessionSqliteMigrationManifest } from "../infra/session-sqlite-migration-manifest.js";
+import {
+  readSessionSqliteMigrationManifest,
+  writeSessionSqliteMigrationManifest,
+} from "../infra/session-sqlite-migration-manifest.js";
 import { discoverUpdateStateSchemaInspectionInProcess } from "../infra/update-candidate-state.js";
 import { createUpdateDatabaseBackupInProcess } from "../infra/update-database-backup.js";
 import { restoreUpdateDatabaseBackup } from "../infra/update-database-restore.js";
@@ -450,3 +454,98 @@ it.each([
     });
   },
 );
+
+async function cleanUpWith(state: OpenClawTestState, cfg: OpenClawConfig = {}) {
+  await closeOpenClawAgentDatabasesAsync(state.stateDir);
+  await closeOpenClawStateDatabaseAsync();
+  return retireSessionSqliteRecovery({
+    env: state.env,
+    preview: await inspectSessionSqliteRecovery({ cfg, env: state.env }),
+    readConfig: async () => cfg,
+    confirm: async () => true,
+  });
+}
+
+function verifiedRun(state: OpenClawTestState, at: number) {
+  const runId = startRun(state, at);
+  using clock = vi.spyOn(Date, "now");
+  clock.mockReturnValue(at + 1_000);
+  recordUpdateRunVerification(runId, VERIFIED, { env: state.env });
+  finishUpdateRun(runId, { status: "succeeded" }, { env: state.env });
+  return runId;
+}
+
+it("releases receipted families that are partial, remounted, or in a configured agent directory", async () => {
+  await withState(async (state) => {
+    const now = Date.now();
+    const r1 = await rolledBackUpdate(state, now);
+    // A cleanup already removed the agent family's main file; its WAL and receipt remain.
+    fs.unlinkSync(r1.displaced.find((file) => file.endsWith(`agent.sqlite.migrated-${r1.runId}`))!);
+    // A reboot renumbered the volume: the shared receipt names another device.
+    const receipt = r1.displaced.find((file) =>
+      /openclaw\.sqlite\.migrated-.*\.receipt\.json$/u.test(file),
+    )!;
+    const recorded = JSON.parse(fs.readFileSync(receipt, "utf8"));
+    for (const file of recorded.files) {
+      file.dev = String(BigInt(file.dev) + 7n);
+    }
+    fs.writeFileSync(receipt, JSON.stringify(recorded));
+    const agentDir = path.join(state.stateDir, "custom-agents", "work");
+    fs.mkdirSync(agentDir, { recursive: true });
+    const custom = path.join(agentDir, "openclaw-agent.sqlite");
+    fs.copyFileSync(agentPath(state), custom);
+    const family = await displacedFamily(custom, r1.runId);
+    verifiedRun(state, now + 60_000);
+    await cleanUpWith(state, { agents: { list: [{ id: "work", agentDir }] } } as OpenClawConfig);
+    const left = [...r1.displaced, family, `${family}-wal`, `${family}.receipt.json`];
+    expect(left.filter((file) => fs.existsSync(file))).toEqual([]);
+  });
+});
+
+it("keeps a released backup while its live database is missing", async () => {
+  await withState(async (state) => {
+    const now = Date.now();
+    const runId = startRun(state, now);
+    const backup = await doctorBackup(state, agentPath(state), runId);
+    using clock = vi.spyOn(Date, "now");
+    clock.mockReturnValue(now + 1_000);
+    recordUpdateRunVerification(runId, VERIFIED, { env: state.env });
+    finishUpdateRun(runId, { status: "succeeded" }, { env: state.env });
+    clock.mockRestore();
+    await closeOpenClawAgentDatabasesAsync(state.stateDir);
+    for (const suffix of ["", "-wal", "-shm"]) {
+      fs.rmSync(`${agentPath(state)}${suffix}`, { force: true });
+    }
+    const report = await cleanUpWith(state);
+    expect(fs.existsSync(backup)).toBe(true);
+    expect(report.artifacts.find((item) => item.path === backup)?.outcome).toBe("blocked");
+  });
+});
+
+it("keeps an older backup when the newer one no longer matches its recorded content", async () => {
+  await withState(async (state) => {
+    const now = Date.now();
+    const failedRun = async (at: number) => {
+      const runId = startRun(state, at);
+      const backup = await doctorBackup(state, agentPath(state), runId);
+      finishUpdateRun(runId, { status: "failed" }, { env: state.env });
+      return backup;
+    };
+    const older = await failedRun(now);
+    const newer = await failedRun(now + 60_000);
+    // Same inode, length and time as recorded, but not the recorded bytes.
+    const manifestDir = path.join(state.stateDir, "session-sqlite-migration-runs");
+    for (const manifestPath of fs.readdirSync(manifestDir).map((n) => path.join(manifestDir, n))) {
+      const manifest = readSessionSqliteMigrationManifest(manifestPath)!;
+      const target = manifest.targets[0]!;
+      if (target.completedMoves[0]!.archivePath === newer) {
+        for (const move of [...target.plannedMoves, ...target.completedMoves]) {
+          move.artifact!.identity.sha256 = "0".repeat(64);
+        }
+        writeSessionSqliteMigrationManifest({ manifestPath, manifest });
+      }
+    }
+    await cleanUpWith(state);
+    expect(fs.existsSync(older)).toBe(true);
+  });
+});

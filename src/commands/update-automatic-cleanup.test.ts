@@ -962,7 +962,12 @@ it("retires a failed run's capture after a later verified update, and reruns cle
   expect(report.find((step) => step.step.startsWith("diagnostic:"))?.detail).toBe(
     cleanup?.diagnostics?.[0],
   );
-  expect(report.find((step) => step.step.startsWith("warning:"))?.detail).toMatch(
-    /^An earlier cleanup warning was resolved by a later cleanup\. Update backup cleanup removed 2 items/,
+  // The earlier warning no longer counts; the resolution is a diagnostic in the result.
+  expect(report.find((step) => step.step.startsWith("warning:"))).toMatchObject({
+    status: "skipped",
+  });
+  expect(report.find((step) => step.step.startsWith("warning:"))?.detail).toBeUndefined();
+  expect(cleanup?.diagnostics?.at(-1)).toBe(
+    "An earlier cleanup warning was resolved by a later cleanup.",
   );
 });
