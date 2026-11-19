@@ -371,7 +371,8 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
 .template-publish-card {
   display: grid;
   gap: 14px;
-  width: min(600px, 100%);
+  width: 600px;
+  max-width: 100%;
   min-width: 0;
   padding: 20px;
   border: 1px solid var(--border);
