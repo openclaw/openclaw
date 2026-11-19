@@ -1857,10 +1857,12 @@ built and checked at that path, so the update proves the release loads from wher
 serves. Dev-channel installs on `main` builds from 2026-11-17 until this change (they report
 version 2026.11.5; no published release has the release layout) keep the link and releases under
 `git-install/lib/node_modules/openclaw`, where Node refuses to load a bundled plugin's
-TypeScript sources ([#201874](https://github.com/openclaw/openclaw/issues/201874)). The
-first update run by a build with this change rebuilds the serving commit at the new
-path and removes the old link. The update to this change is still run by the older build
-and still builds under the old path, so run `openclaw update` once more after it.
+TypeScript sources ([#201874](https://github.com/openclaw/openclaw/issues/201874)). When a
+web search provider is configured, their Gateway fails at startup. The old release cannot run
+its own updater either, so update from a terminal with the checkout's `openclaw`, not from the
+Control UI or another Gateway-started update. Run `openclaw update` twice: the older build
+runs the first update and moves the checkout to this change; the second, run by this change,
+rebuilds the serving commit at the new path and removes the old link.
 
 The inspection reports data at risk only on evidence: a schema that moved, or a store it
 cannot read after a new-version Doctor or boot check may have written it. When no
