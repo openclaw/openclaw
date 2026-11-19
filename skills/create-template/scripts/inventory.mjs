@@ -5,9 +5,10 @@
 // person is waiting on this command.
 
 import { spawn } from "node:child_process";
-import { readFile, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
+import { stat } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import validVersion from "semver/functions/valid.js";
 
 const CLI = fileURLToPath(new URL("./cli.mjs", import.meta.url));
@@ -15,7 +16,6 @@ const CLI = fileURLToPath(new URL("./cli.mjs", import.meta.url));
 const COMMAND_TIMEOUT_MS = 15_000;
 const DRAFT_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const AGENT_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
-const AVATAR_IMAGE = /\.(?:png|jpe?g|webp|gif|svg)$/i;
 const INLINE_AVATAR = /^data:image\/(png|jpeg|webp|gif|svg\+xml);base64,([A-Za-z0-9+/=]+)$/i;
 const INLINE_AVATAR_EXTENSIONS = {
   png: "png",
@@ -160,47 +160,19 @@ async function listInstructionFiles(workspace) {
   return { present, privateFiles };
 }
 
-/**
- * A workspace-relative image for the agent's avatar, if it has one. An avatar chosen in
- * the Control UI is stored inline as a data URL, so it is written beside the draft for
- * review to read as a file; the agent never has to copy image data into the proposal.
- */
-async function resolveAvatar(workspace, identity, draftId) {
-  let candidate = typeof identity?.avatar === "string" ? identity.avatar.trim() : "";
-  if (!candidate) {
-    try {
-      const identityFile = await readFile(join(workspace, "IDENTITY.md"), "utf8");
-      candidate = identityFile.match(/^\s*-?\s*\**avatar\**\s*:\s*(\S.*)$/im)?.[1]?.trim() ?? "";
-    } catch {
-      candidate = "";
-    }
+/** Stage only the selected agent’s local or inline image. Remote URLs are never fetched. */
+async function stageAvatar(workspace, projectedUrl, draftId) {
+  const inline = typeof projectedUrl === "string" && projectedUrl.match(INLINE_AVATAR);
+  if (!inline) return undefined;
+  const bytes = Buffer.from(inline[2], "base64");
+  if (bytes.length === 0 || bytes.length > AVATAR_MAX_BYTES) {
+    throw new Error("The agent portrait exceeds the supported image limits.");
   }
-  const inline = candidate.match(INLINE_AVATAR);
-  if (inline) {
-    const bytes = Buffer.from(inline[2], "base64");
-    if (bytes.length === 0 || bytes.length > AVATAR_MAX_BYTES) {
-      return undefined;
-    }
-    const extension = INLINE_AVATAR_EXTENSIONS[inline[1].toLowerCase()];
-    const relative = `.openclaw/template-drafts/${draftId}-avatar.${extension}`;
-    try {
-      await writeFile(join(workspace, relative), bytes, { flag: "wx", mode: 0o600 });
-    } catch (error) {
-      // A repeated inventory for the same draft finds the file it already wrote.
-      if (error?.code !== "EEXIST") {
-        return undefined;
-      }
-    }
-    return relative;
-  }
-  if (!candidate || /^[a-z][a-z0-9+.-]*:/i.test(candidate) || isAbsolute(candidate)) {
-    return undefined;
-  }
-  const relative = normalize(candidate).split(sep).join("/");
-  if (relative.startsWith("../") || relative === ".." || !AVATAR_IMAGE.test(relative)) {
-    return undefined;
-  }
-  return (await fileSize(join(workspace, relative))) ? relative : undefined;
+  const extension = INLINE_AVATAR_EXTENSIONS[inline[1].toLowerCase()];
+  const relative = `.openclaw/template-drafts/${draftId}-avatar.${extension}`;
+  const root = await fsSafeRoot(workspace);
+  await root.write(relative, bytes, { mode: 0o600, overwrite: true });
+  return relative;
 }
 
 function exactRelease(version) {
@@ -296,12 +268,12 @@ function summarizeAutomations(result, agentId) {
 }
 
 const options = parseArgs(process.argv.slice(2));
-const [draft, plugins, automations, identity, instructions, skillReport] = await Promise.all([
+const [draft, plugins, automations, roster, instructions, skillReport] = await Promise.all([
   requestDraft(options.workspace, options.draft),
   cliJson(["plugins", "inspect", "--all", "--json"]),
   // Use the active-only list: a paused routine must not become a new owner’s running job.
   cliJson(["cron", "list", "--agent", options.agent, "--json"]),
-  cliJson(["config", "get", `agents.entries.${options.agent}.identity`, "--json"]),
+  cliJson(["agents", "list", "--json"]),
   listInstructionFiles(options.workspace),
   cliJson([
     "gateway",
@@ -326,18 +298,24 @@ if (!plugins.ok || !Array.isArray(plugins.value)) warnings.push("plugin inspecti
 if (!automations.ok) warnings.push("automation inventory unavailable");
 const skills = summarizeSkills(hasSkills ? report : undefined, options.workspace);
 
-const avatar = await resolveAvatar(
-  options.workspace,
-  identity.ok ? identity.value : undefined,
-  draftId,
-);
+const identity =
+  roster.ok && Array.isArray(roster.value)
+    ? roster.value.find(
+        (row) =>
+          row?.id === options.agent &&
+          typeof row.workspace === "string" &&
+          resolve(row.workspace) === resolve(options.workspace),
+      )
+    : undefined;
+if (!identity) warnings.push("identity unavailable for this agent workspace");
+const avatar = await stageAvatar(options.workspace, identity?.identityAvatarUrl, draftId);
 const output = {
   draftId,
   draftPath: draft.path,
   agent: {
     id: options.agent,
-    ...(identity.ok && identity.value?.name ? { name: identity.value.name } : {}),
-    ...(identity.ok && identity.value?.emoji ? { emoji: identity.value.emoji } : {}),
+    ...(identity?.identityName ? { name: identity.identityName } : {}),
+    ...(identity?.identityEmoji ? { emoji: identity.identityEmoji } : {}),
   },
   ...(avatar ? { avatar } : {}),
   instructionFiles: instructions.present,

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -14,7 +14,20 @@ it("uses agent-scoped skills, resolved install records, and the single request d
   copyFileSync(resolve("skills/create-template/scripts/inventory.mjs"), script);
   symlinkSync(resolve("node_modules"), join(workspace, "node_modules"), "junction");
   const path = join(workspace, ".openclaw", "template-drafts", draftId + ".json");
+  const portrait = Buffer.from("iVBORw0KGgo=", "base64");
+  mkdirSync(join(workspace, "avatars"));
+  mkdirSync(join(workspace, ".openclaw", "template-drafts"), { recursive: true });
+  writeFileSync(join(workspace, "avatars", "demo.png"), portrait);
+  writeFileSync(join(workspace, "IDENTITY.md"), "- **Avatar:** avatars/demo.png\n");
   const cliResults = {
+    "agents list": [
+      { id: "other", workspace, identityAvatarUrl: "data:image/png;base64,AAAA" },
+      {
+        id: "demo",
+        workspace,
+        identityAvatarUrl: "data:image/png;base64," + portrait.toString("base64"),
+      },
+    ],
     "templates draft": { ok: true, draftId, path },
     "gateway call": {
       agentId: "demo",
@@ -93,6 +106,8 @@ it("uses agent-scoped skills, resolved install records, and the single request d
       notPortable: 0,
     },
   });
+  expect(ordinary.avatar).toEqual(expect.any(String));
+  expect(readFileSync(join(workspace, ordinary.avatar))).toEqual(portrait);
   expect(ordinary.warnings).toBeUndefined();
   expect(run("--draft", draftId)).toEqual(ordinary);
   const calls = readFileSync(join(workspace, "calls"), "utf8")
