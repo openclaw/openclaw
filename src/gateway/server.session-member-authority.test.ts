@@ -139,6 +139,10 @@ it("enforces creator permission ceilings and per-turn approval audiences over re
           for (const member of [invited, teammate]) {
             const own = member === raiser;
             expect((await listed(member)).some((record) => record.id === id)).toBe(own);
+            const replay = await member.request<{
+              approvalReplay: { approvals: Array<{ id: string }> };
+            }>("sessions.messages.subscribe", { key, includeApprovals: true });
+            expect(replay.approvalReplay.approvals.some((record) => record.id === id)).toBe(own);
             const memberEvents = member === invited ? events.invited : events.guest;
             expect(
               memberEvents.some(

@@ -239,7 +239,10 @@ it.for([
         true,
       );
       const connection = new AbortController();
-      const client = createClient({ deviceId: "legacy-reviewer" });
+      const client = createClient({
+        deviceId: "legacy-reviewer",
+        scopes: [autoReview ? "operator.approvals" : "operator.admin"],
+      });
       client.connectionSignal = connection.signal;
       if (autoReview) {
         client.internal = createApprovalRuntimeClient(

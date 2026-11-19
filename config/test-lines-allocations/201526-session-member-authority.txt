@@ -1,7 +1,10 @@
-537
+684
 # Issue #201526 part D: real-Gateway proof of creator/admin vs invited/team-writer
 # permission changes and per-turn approval audiences; shared lookup/resolve/history
 # and event/push boundaries for exec, plugin and system-agent approvals; authenticated
 # runtime requester provenance; SQLite runtime/doctor migration, rollback and actual
 # PostgreSQL v40->v41 upgrade preservation. Existing helpers and fixture updates keep
 # distinct security and storage owners covered without duplicating product boots.
+# CI follow-up: preserve custody/revocation tests with real requester profiles and
+# session provenance, prove filtered subscription replay, and align cumulative
+# migration/PostgreSQL fixtures with v41 without weakening catalog preservation.

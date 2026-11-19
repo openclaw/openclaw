@@ -90,7 +90,7 @@ export async function runApprovalProof(
   const requester = plugin ? second : first;
   expect(reviewer.identity.deviceId).not.toBe(requester.identity.deviceId);
   const method = (action: string) => `${kind}.approval.${action}`;
-  const listingClient = plugin ? reviewer.client : requester.client;
+  const listingClient = reviewer.client;
   const list = () => listingClient.request<Approval[]>(method("list"), {});
   const accepted = await requester.client.request<{
     id: string;
@@ -132,11 +132,16 @@ export async function runApprovalProof(
   if (plugin) {
     expect(await waitForEvent("plugin.approval.requested")).toEqual(expected);
   }
+  // Direct requests have no authenticated turn profile; only the administrator can inspect them.
+  expect(await requester.client.request<Approval[]>(method("list"), {})).toEqual([]);
+  await expect(
+    requester.client.request(method("waitDecision"), { id: accepted.id }),
+  ).rejects.toThrow(/unknown or expired|expired or not found/);
   const pending = await list();
   if (!plugin) {
     expect(pending).toContainEqual(expected);
     await expect(
-      requester.client.request(method("get"), { id: accepted.id }),
+      reviewer.client.request(method("get"), { id: accepted.id }),
     ).resolves.toMatchObject({
       id: accepted.id,
       commandText: "printf gateway-qa",
@@ -148,7 +153,7 @@ export async function runApprovalProof(
     expect(pending).toEqual([expected]);
   }
   let settled = false;
-  const wait = requester.client
+  const wait = reviewer.client
     .request<Decision>(method("waitDecision"), { id: accepted.id }, { timeoutMs: 10_000 })
     .finally(() => {
       settled = true;
@@ -162,7 +167,7 @@ export async function runApprovalProof(
   const remaining = await list();
   if (!plugin) {
     expect(remaining.map((entry) => entry.id)).not.toContain(accepted.id);
-    await expect(requester.client.request(method("get"), { id: accepted.id })).rejects.toThrow(
+    await expect(reviewer.client.request(method("get"), { id: accepted.id })).rejects.toThrow(
       "unknown or expired approval id",
     );
   } else {
