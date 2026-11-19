@@ -50,6 +50,7 @@ describeControlUiE2e("Chat plugin installation status", () => {
             catalog: { name: card.name, official: card.official, categories: [] },
             local: { installed, action: installed ? "manage" : "install" },
           },
+          detail: { packageName: "@openclaw/" + card.id.slice(3) },
         },
       })),
     });
@@ -86,7 +87,23 @@ describeControlUiE2e("Chat plugin installation status", () => {
       }
       expect(await cards.getByRole("button", { name: "Dismiss", exact: true }).count()).toBe(0);
       expect(await cards.getByRole("button", { name: "Install", exact: true }).count()).toBe(2);
+      // The official card installs where it is; the chat stays open.
+      await gateway.deferNext("plugins.install");
+      await cards.first().getByRole("button", { name: "Install", exact: true }).click();
+      const install = await gateway.waitForRequest("plugins.install");
+      expect(install.params).toEqual({ source: "clawhub", packageName: "@openclaw/calendar" });
+      await cards.first().getByRole("button", { name: "Installing", exact: true }).waitFor();
+      expect(page.url()).not.toContain("/plugins");
+      await captureScreenshot(page, "chat-plugin-card-installing.png", "viewport");
       await gateway.setMethodResponse("plugins.catalog.get", details(true));
+      await gateway.resolveDeferred("plugins.install", {
+        ok: true,
+        plugin: calendarPlugin,
+        restartRequired: false,
+      });
+      await cards.first().locator(".chat-clawhub-card__installed").waitFor();
+      expect(page.url()).not.toContain("/plugins");
+      expect(await gateway.getRequests("plugins.install")).toHaveLength(1);
       await gateway.setMethodResponse("plugins.uiDescriptors", enabledWorkboardCapabilities());
       await gateway.emitGatewayEvent("plugins.changed", { generation: 1 });
       await expect.poll(() => cards.locator(".chat-clawhub-card__installed").count()).toBe(2);
@@ -178,6 +195,7 @@ describeControlUiE2e("Chat plugin installation status", () => {
             action: state.unavailable ? "unavailable" : state.installed ? "manage" : "install",
           },
         },
+        detail: { packageName: "@openclaw/calendar" },
       };
       const gateway = await installMockGateway(page, {
         featureMethods: [...pluginMethods, "mcp.authLogin"],

@@ -105,7 +105,9 @@ it.for<Change>([
             expect(authority.signal?.aborted).toBe(false);
             expect(authority.assertCurrent).not.toThrow();
           }
-          expect(previouslyRestored.authority.reauthorize).toThrow();
+          expect(
+            expectDefined(previouslyRestored.authority.reauthorize, "fresh member admission"),
+          ).toThrow("Restart recovery operator source policy changed.");
         }
         const restored = await fixture.restore().then(
           (value) => {
@@ -119,9 +121,20 @@ it.for<Change>([
             ? /^refused: OpenClaw ID membership authority changed/
             : /^refused: Restart recovery operator (source policy|identity) changed/,
         );
+        if (change === "definition-edited" || change === "definition-deleted") {
+          for (const authority of [retained.authority, previouslyRestored.authority]) {
+            expect(authority.signal?.aborted).toBe(false);
+            expect(authority.assertCurrent).not.toThrow();
+          }
+          fixture.setConfig(config);
+          setRuntimeConfigSnapshot(config);
+          expect(retained.authority.assertCurrent).not.toThrow();
+        }
       } finally {
         retained.release();
         previouslyRestored.release();
+        expect(retained.authority.assertCurrent).toThrow();
+        expect(previouslyRestored.authority.assertCurrent).toThrow();
       }
     } finally {
       setOpenClawIdTunnelPrincipalLookup(undefined);

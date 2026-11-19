@@ -9,5 +9,6 @@
 # Owner certificate revocation and catalog-only MCP consent have distinct cutoffs;
 # canonical member roles retain sandbox, history and mention nondisclosure coverage.
 # Identified MCP callers cannot acquire owner grants without owner authority.
-# Measured against the PR base: 1476 net test lines; 400 ordinary + 1076 allocated.
-1076
+# Admitted profile-policy recovery retains work across definition edits until release.
+# Measured against the merged PR base: 1482 net test lines; 400 ordinary + 1082 allocated.
+1082

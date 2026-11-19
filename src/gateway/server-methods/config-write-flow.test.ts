@@ -264,3 +264,37 @@ it("keeps the committed write when the billing comparison fails or has nothing t
   });
   expect(billingMocks.collect).toHaveBeenCalledOnce();
 });
+
+it.each([
+  { deny: ["openclaw-id-access"] },
+  { entries: { "openclaw-id-access": { enabled: false } } },
+  { enabled: false },
+])(
+  "reports explicit Access plugin opposition without changing plugin policy: %j",
+  async (policy) => {
+    const respond = vi.fn();
+    const plugins = { allow: ["browser"], ...policy };
+    configMocks.replaceConfigFile.mockResolvedValueOnce({
+      nextConfig: { plugins, gateway: { openclawId: { enabled: true } } },
+      persistedHash: "persisted-hash",
+    });
+    const { reply } = await commitGatewayConfigWrite({
+      snapshot: writeSnapshot({ plugins }),
+      writeOptions: {},
+      nextConfig: { plugins, gateway: { openclawId: { enabled: true } } },
+      respond,
+    });
+    reply(true, { ok: true });
+    expect(respond).toHaveBeenLastCalledWith(
+      true,
+      expect.objectContaining({
+        warnings: [expect.stringMatching(/Access page stays off/)],
+      }),
+    );
+    expect(configMocks.replaceConfigFile).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        sourceConfig: expect.objectContaining({ plugins }),
+      }),
+    );
+  },
+);

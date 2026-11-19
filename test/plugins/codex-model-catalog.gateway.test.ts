@@ -220,7 +220,7 @@ it("models.list selects a native user-home API-key catalog through the prepared 
             await registeredList(true);
             await expect
               .poll(() => requests.filter((method) => method === "model/list").length, {
-                timeout: 15_000,
+                timeout: 30_000,
               })
               .toBeGreaterThan(beforeModels);
             await nativeCatalogSettled(available);

@@ -132,7 +132,7 @@ async function prepareTemplate(options: CheckoutOptions) {
           options.env,
           cacheKey,
           options.commitGuard,
-          undefined,
+          contentKey,
           options.workerAuthority,
         );
         if (
