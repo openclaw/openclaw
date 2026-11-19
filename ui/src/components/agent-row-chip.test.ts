@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
@@ -97,10 +98,13 @@ it("leaves retained chip DOM untouched when only the parent's loading state chan
 
 it("preserves the identity avatar grid so a loaded portrait does not share its row with fallback", async () => {
   const identityCss = readFileSync(
-    new URL("../styles/identity-avatar.css", import.meta.url),
+    path.resolve(import.meta.dirname, "../styles/identity-avatar.css"),
     "utf8",
   );
-  const chipCss = readFileSync(new URL("../styles/agent-row-chip.css", import.meta.url), "utf8");
+  const chipCss = readFileSync(
+    path.resolve(import.meta.dirname, "../styles/agent-row-chip.css"),
+    "utf8",
+  );
   const style = document.createElement("style");
   style.textContent = identityCss + chipCss;
   document.head.append(style);
