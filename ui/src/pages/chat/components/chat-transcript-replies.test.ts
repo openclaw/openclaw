@@ -18,7 +18,10 @@ import {
 } from "../test-helpers/chat-transcript-native.tsx";
 import * as chatMessage from "./chat-message-group-frame.ts";
 import { toggleTranscriptSearch, type ChatThreadProps } from "./chat-thread-interactions.ts";
-import { emitTranscriptResize, transcriptContainer } from "./chat-transcript-fixture.test-support.tsx";
+import {
+  emitTranscriptResize,
+  transcriptContainer,
+} from "./chat-transcript-fixture.test-support.tsx";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,

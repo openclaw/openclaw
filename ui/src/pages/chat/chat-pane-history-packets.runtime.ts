@@ -24,7 +24,6 @@ import {
   type ChatHistoryRequestBudget,
 } from "./chat-history-request-params.ts";
 import {
-  attachHistoryActivity,
   type OlderHistorySelector,
   createChatHistoryPageRead,
   chatHistoryPageSelector,
@@ -32,6 +31,7 @@ import {
 } from "./chat-history-request.ts";
 import { retryChatHistoryRead } from "./chat-history-retry.ts";
 import {
+  attachHistoryActivity,
   type ChatHistoryResult,
   resolveChatHistoryPagination,
   commitCurrentChatHistorySnapshot,

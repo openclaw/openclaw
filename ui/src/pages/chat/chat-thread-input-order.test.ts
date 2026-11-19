@@ -366,7 +366,10 @@ describe("transcript input order", () => {
     const [firstRow, steerA] = rows();
     expect([firstRow, steerA].map((row) => row?.split("@")[0])).toEqual(["Original", "Steer A"]);
     // The Gateway accepts A while it waits for a tool; B arrives optimistically after it.
-    const accepted = acceptedInput("Steer A", 10_000);
+    const accepted: NonNullable<BuildChatItemsProps["pendingInputs"]>[number] = acceptedInput(
+      "Steer A",
+      10_000,
+    );
     accepted.steerNow = { status: "blocked", tools: ["exec"] };
     props.pendingInputs = [accepted];
     props.queue = [];

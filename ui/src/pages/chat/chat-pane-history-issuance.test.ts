@@ -21,7 +21,13 @@ function createCanonicalRoutePane(
   fallback: () => unknown = () => ({}),
 ) {
   const request = vi.fn((method: string, params: Record<string, unknown>) =>
-    Promise.resolve(method === "agents.list" ? agentsList : (handlers[method] ?? fallback)(params)),
+    Promise.resolve(
+      method === "agents.list"
+        ? agentsList
+        : method === "models.list"
+          ? { models: [] }
+          : (handlers[method] ?? fallback)(params),
+    ),
   );
   const client = { request } as unknown as GatewayBrowserClient;
   const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);

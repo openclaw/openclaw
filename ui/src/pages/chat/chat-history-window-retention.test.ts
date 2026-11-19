@@ -3,6 +3,8 @@ import { createSessionProjection } from "@openclaw/gateway-client/browser";
 import { expect, it } from "vitest";
 import { nativeHistoryMessageSourceIdentity } from "../../lib/chat/history-message-identity.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
+import { reconcileHistoryTail } from "./chat-history-page-preparation.ts";
+import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import { prepareChatHistoryPacket } from "./chat-history-window.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import {
@@ -15,6 +17,12 @@ const row = (seq: number) => ({
   role: "assistant",
   content: [{ type: "text", text: `body-${seq}` }],
   __openclaw: { seq },
+});
+
+const durable = (seq: number) => ({
+  role: "user",
+  content: `source-${seq}`,
+  __openclaw: { id: `source-${seq}`, seq },
 });
 
 async function seedPackets(direction: "older" | "newer") {
@@ -156,3 +164,70 @@ it.each(["older", "newer"] as const)(
     expect(probes.discarded.deref()).toBeUndefined();
   },
 );
+
+it("retires packet certificates outside a physically retained compaction prefix", () => {
+  const positioned = (id: string, rawSeq: number) => ({
+    role: "assistant",
+    content: id,
+    __openclaw: { id, seq: rawSeq, transcriptPosition: { source: "history", rawSeq } },
+  });
+  // Activity can display before an older physical row; prefix length is not
+  // a slice boundary. A sequence-only row also cannot prove changed-leaf ancestry.
+  const future = positioned("future", 5);
+  const first = positioned("first", 1);
+  const shared = positioned("shared", 2);
+  const sequenceOnly = { role: "assistant", content: "unanchored", __openclaw: { seq: 4 } };
+  const previousMessages = [future, first, shared, sequenceOnly];
+  const previousPagination: ChatHistoryPagination = {
+    hasMore: true,
+    olderCursor: "older-held",
+    nextOffset: 5,
+    totalMessages: 5,
+    segments: previousMessages.map((message) =>
+      prepareChatHistoryPacket([message], { hasMore: true }),
+    ),
+  };
+  const next = positioned("next", 6);
+  const result = reconcileHistoryTail({
+    sameLeaf: false,
+    previousMessages,
+    previousPagination,
+    previousSessionId: "session",
+    nextMessages: [shared, next],
+    nextPagination: { hasMore: true, olderCursor: "older-fresh", nextOffset: 5, totalMessages: 6 },
+    nextSessionId: "session",
+  });
+  expect(result?.messages).toEqual([first, shared, next]);
+  expect(result?.messages[0]).toBe(first);
+  expect(result?.retainedCoverage).toBe(true);
+  expect(result?.pagination.segments?.map((packet) => packet.boundedPacket)).toEqual([
+    undefined,
+    true,
+    true,
+    undefined,
+  ]);
+});
+
+it.each([true, false])("keeps detached history only on the same leaf: %s", (sameLeaf) => {
+  const previousMessages = [durable(1), durable(2)];
+  const previousPagination: ChatHistoryPagination = {
+    hasMore: false,
+    hasNewer: true,
+    newerCursor: "newer-held",
+  };
+  const result = reconcileHistoryTail({
+    sameLeaf,
+    previousMessages,
+    previousPagination,
+    previousSessionId: "session",
+    nextMessages: [durable(8)],
+    nextPagination: { hasMore: true, olderCursor: "older-fresh" },
+    nextSessionId: "session",
+  });
+  if (sameLeaf) {
+    expect(result?.messages).toBe(previousMessages);
+    expect(result?.pagination).toBe(previousPagination);
+  } else {
+    expect(result).toBeNull();
+  }
+});

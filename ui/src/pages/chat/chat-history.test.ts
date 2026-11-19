@@ -378,8 +378,26 @@ it("keeps an overlapping loaded history window when compaction advances its leaf
   expect(state.chatHistoryPagination).toEqual({
     hasMore: true,
     olderCursor: "older:held",
+    needsBoundary: undefined,
     nextOffset: 4,
     totalMessages: 103,
+    segments: [
+      {
+        sources: ["id:prompt", "id:answer", "id:tool"],
+        olderCursor: "older:held",
+        newerCursor: undefined,
+        hasOlder: true,
+        hasNewer: true,
+        boundedPacket: undefined,
+      },
+      {
+        sources: ["id:tool", "id:compact"],
+        olderCursor: "older:tail",
+        hasOlder: true,
+        hasNewer: false,
+        boundedPacket: true,
+      },
+    ],
   });
   expect(request).toHaveBeenCalledTimes(3);
 });
@@ -454,9 +472,26 @@ it("recovers a paged held window when the compaction tail starts at an unheld to
   );
   expect(state.chatHistoryPagination).toEqual({
     hasMore: true,
-    olderCursor: "older:held",
+    olderCursor: "older:recovered",
+    needsBoundary: undefined,
     nextOffset: 4,
     totalMessages: 2003,
+    segments: [
+      {
+        sources: ["id:prompt", "id:call"],
+        olderCursor: "older:recovered",
+        hasOlder: true,
+        hasNewer: false,
+        boundedPacket: true,
+      },
+      {
+        sources: ["id:result", "id:compact"],
+        olderCursor: "older:tail",
+        hasOlder: true,
+        hasNewer: false,
+        boundedPacket: true,
+      },
+    ],
   });
 });
 

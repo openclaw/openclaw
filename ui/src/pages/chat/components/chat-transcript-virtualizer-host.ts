@@ -770,10 +770,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       isConnected: () => this.connected,
       scrollElement: this.scrollElement,
       threadInnerElement: this.#threadInnerElement,
-      rowCount: this.#rowKeys.length,
       callbacks: this.callbacks,
       prependAnchor: this.prependAnchor,
-      rowIndexesByKey: this.initialRange.rowIndexes,
       offsetState: this.offsetState,
       initialRange: this.initialRange,
       virtualizer: this.virtualizer,
@@ -783,7 +781,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       presentation: this.#presentation,
       renderer: this.renderer,
       scrollRestoreHost: this.#scrollRestoreHost,
-      canAutoFollow: () => this.canFollowEnd,
       scrollToEnd: (options) => this.scrollToEnd(options),
       invalidate: this.invalidate,
     });

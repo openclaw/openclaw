@@ -1,5 +1,5 @@
-import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
 import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
 import {
   accumulatedStreamText,
@@ -39,7 +39,10 @@ import { sameChatItemsStructuralInput, sameEntries } from "./chat-thread-input-m
 import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
 import { sanitizeStreamText } from "./chat-thread-items.ts";
 import type { PrependFacts } from "./chat-thread-prepend.ts";
-import { carryMovedDisclosures, retireCoalescedMessageSources } from "./chat-tool-activity-coalesce.ts";
+import {
+  carryMovedDisclosures,
+  retireCoalescedMessageSources,
+} from "./chat-tool-activity-coalesce.ts";
 import { activityDisclosureCalls } from "./components/chat-activity-projection.ts";
 import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 

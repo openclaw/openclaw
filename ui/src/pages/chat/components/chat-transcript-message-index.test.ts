@@ -4,8 +4,22 @@ import * as fingerprint from "../../../../../src/shared/fnv1a.js";
 import * as historyIdentity from "../../../lib/chat/history-message-identity.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { makeMessage } from "../chat-thread.test-support.ts";
-import { buildCachedChatItems, resetChatThreadState, retireChatThreadSources } from "../chat-thread.ts";
-import { finalAnswer, chatProps, chatItems, chainFor, indexFor, projectHistory, messagesIn } from "./chat-transcript-message-index.test-support.ts";
+import {
+  buildCachedChatItems,
+  resetChatThreadState,
+  retireChatThreadSources,
+} from "../chat-thread.ts";
+import {
+  finalAnswer,
+  labels,
+  chatProps,
+  chatItems,
+  chainFor,
+  indexFor,
+  projectHistory,
+  messagesIn,
+} from "./chat-transcript-message-index.test-support.ts";
+import { projectTranscriptIndex } from "./chat-transcript-message-index.ts";
 
 afterEach(() => resetChatThreadState());
 
@@ -288,4 +302,3 @@ it("leaves an attached live continuation out of reusable row geometry", () => {
     hash.mockRestore();
   }
 });
-

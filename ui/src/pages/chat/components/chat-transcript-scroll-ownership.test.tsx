@@ -433,6 +433,9 @@ it("grows the native range before compensating fractional row growth above a rea
   renderRows(rows);
   await vi.advanceTimersByTimeAsync(0);
   const row = measuredRowBeforeReader(container);
+  Object.defineProperty(row, "getBoundingClientRect", {
+    value: () => new DOMRect(0, -200, 800, row.offsetHeight),
+  });
   const before = container.scrollTop;
   writeExtents.length = 0;
   Object.defineProperty(row, "offsetHeight", { configurable: true, value: 160.375 });

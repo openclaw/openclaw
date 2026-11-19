@@ -1,5 +1,10 @@
 import type { SessionProjectionEntry } from "@openclaw/gateway-client/browser";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  readTranscriptDisplayPosition,
+  type TranscriptDisplayPosition,
+} from "../../../../src/chat/transcript-display-position.ts";
 import {
   nativeHistoryMessageIdentity,
   nativeHistoryMessageSourceIdentity,
@@ -41,7 +46,30 @@ function retainedRawHistoryStart(pagination: ChatHistoryPagination): number | nu
   return asSafeIntegerInRange(start, { min: 1 }) ?? null;
 }
 
+export function nativeHistoryMessagePosition(message: unknown) {
+  return readTranscriptDisplayPosition(
+    asNullableRecord(asNullableRecord(message)?.["__openclaw"])?.transcriptPosition,
+  );
+}
+
+/** Display order can relocate activity; cursor coverage follows physical rows. */
+export function oldestPositionedHistoryMessage(messages: readonly unknown[]) {
+  let oldest: { message: unknown; position: TranscriptDisplayPosition } | undefined;
+  for (const message of messages) {
+    const position = nativeHistoryMessagePosition(message);
+    if (
+      position &&
+      (!oldest ||
+        (position.source === oldest.position.source && position.rawSeq < oldest.position.rawSeq))
+    ) {
+      oldest = { message, position };
+    }
+  }
+  return oldest;
+}
+
 export function reconcileHistoryTail(options: {
+  sameLeaf: boolean;
   nextMessages: unknown[];
   nextPagination: ChatHistoryPagination;
   nextSessionId: string | null;
@@ -53,18 +81,20 @@ export function reconcileHistoryTail(options: {
     return null;
   }
   if (options.previousPagination.hasNewer) {
-    // A background tail refresh is not contiguous with a detached reader.
-    // Latest explicitly resets this window; never stitch across the newer gap.
-    return { messages: options.previousMessages, pagination: options.previousPagination };
+    // Only a fresh continuity-certified packet may replace a detached reader
+    // across a leaf change. Hydration owns that separate admission path.
+    return options.sameLeaf
+      ? { messages: options.previousMessages, pagination: options.previousPagination }
+      : null;
   }
+  // Pending/live rows without a native anchor remain owned by their reducer.
+  const previousMessages = options.sameLeaf
+    ? options.previousMessages
+    : options.previousMessages.filter(nativeHistoryMessageSourceId);
   const previousByIdentity = new Map<string, unknown[]>();
-  const previousSources = new Set<string>();
+  const previousSources = new Set(options.previousMessages.map(nativeHistoryMessageSourceIdentity));
   const changedSources = new Set<string>();
-  for (const message of options.previousMessages) {
-    const source = nativeHistoryMessageSourceIdentity(message);
-    if (source) {
-      previousSources.add(source);
-    }
+  for (const message of previousMessages) {
     const identity = nativeHistoryMessageIdentity(message);
     if (identity) {
       const matches = previousByIdentity.get(identity) ?? [];
@@ -75,15 +105,21 @@ export function reconcileHistoryTail(options: {
   // Identical history rows keep their render identity, including projected siblings.
   const messages = options.nextMessages.map((message) => {
     const identity = nativeHistoryMessageIdentity(message);
-    const held = identity ? previousByIdentity.get(identity)?.shift() : undefined;
+    const retained = identity ? previousByIdentity.get(identity)?.shift() : undefined;
     const source = nativeHistoryMessageSourceIdentity(message);
-    if (!held && source && previousSources.has(source)) {
+    if (!retained && source && previousSources.has(source)) {
       changedSources.add(source);
     }
-    return held ?? message;
+    return retained ?? message;
   });
   const reconciled = { messages, pagination: options.nextPagination };
-  if (!options.nextPagination.hasMore) {
+  const edge = oldestPositionedHistoryMessage(messages);
+  const previousEdge = oldestPositionedHistoryMessage(previousMessages);
+  if (
+    !options.nextPagination.hasMore ||
+    (!options.sameLeaf && !edge) ||
+    (edge && previousEdge && edge.position.source !== previousEdge.position.source)
+  ) {
     return reconciled;
   }
   const previousTotal = options.previousPagination.totalMessages;
@@ -92,26 +128,40 @@ export function reconcileHistoryTail(options: {
     return reconciled;
   }
   const nextStart = retainedRawHistoryStart(options.nextPagination);
-  const firstSource = nativeHistoryMessageSourceIdentity(messages[0]);
+  const edgeMessage = edge?.message ?? messages[0];
+  const firstSource = nativeHistoryMessageSourceIdentity(edgeMessage);
   const overlap = firstSource
-    ? options.previousMessages.findIndex(
-        (message) => nativeHistoryMessageSourceIdentity(message) === firstSource,
-      )
-    : options.previousMessages.indexOf(messages[0]);
+    ? previousMessages.findIndex((message) => {
+        const position = nativeHistoryMessagePosition(message);
+        return (
+          nativeHistoryMessageSourceIdentity(message) === firstSource &&
+          (!edge ||
+            (position?.source === edge.position.source && position.rawSeq === edge.position.rawSeq))
+        );
+      })
+    : previousMessages.indexOf(edgeMessage);
   // Matching source IDs prove overlap without interpreting native sequences as
   // CLI ordinals. An empty visible window needs authoritative raw coverage;
   // a hidden page still advances the admitted oldest edge.
   const adjoining =
+    options.sameLeaf &&
     typeof previousTotal === "number" &&
     nextStart !== null &&
-    (options.previousMessages.length === 0
+    (previousMessages.length === 0
       ? nextStart <= previousTotal + 1
       : nextStart === previousTotal + 1);
   if (overlap < 0 && !adjoining) {
     return reconciled;
   }
-  const prefix =
-    overlap >= 0 ? options.previousMessages.slice(0, overlap) : options.previousMessages;
+  // Shared ancestry ends at the physical anchor, not its relocated display index.
+  const prefix = edge
+    ? previousMessages.filter((message) => {
+        const position = nativeHistoryMessagePosition(message);
+        return position?.source === edge.position.source && position.rawSeq < edge.position.rawSeq;
+      })
+    : overlap >= 0
+      ? previousMessages.slice(0, overlap)
+      : previousMessages;
   const unavailable =
     options.previousPagination.hasMore &&
     !options.previousPagination.olderCursor &&
@@ -126,14 +176,18 @@ export function reconcileHistoryTail(options: {
     previousStart !== null && typeof nextTotal === "number"
       ? nextTotal - previousStart + 1
       : undefined;
+  const kept = new Set(prefix);
   const replacedSources = new Set(
-    options.previousMessages.slice(prefix.length).map(nativeHistoryMessageSourceIdentity),
+    options.previousMessages
+      .filter((message) => !kept.has(message))
+      .map(nativeHistoryMessageSourceIdentity),
   );
-  // Reuse occurrence matching above: removed or changed tail rows revoke every
-  // retained packet alias before refreshed bodies enter resident selection.
-  for (const remaining of previousByIdentity.values()) {
-    const source = nativeHistoryMessageSourceIdentity(remaining[0]);
-    if (source && replacedSources.has(source)) {
+  const admitted = new Set(messages);
+  // Physical prefixes need not be a display-array slice. Retire all removed
+  // source aliases, including rows excluded from changed-leaf ancestry matching.
+  for (const message of options.previousMessages) {
+    const source = nativeHistoryMessageSourceIdentity(message);
+    if (source && replacedSources.has(source) && !admitted.has(message)) {
       changedSources.add(source);
     }
   }

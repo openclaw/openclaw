@@ -2,8 +2,8 @@
 import { expect, it } from "vitest";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { subagentCompletionMessage } from "../../../../src/shared/subagent-completion.js";
+import { selectChatInputDisplay } from "./chat-input-display.ts";
 import { buildPendingInputQueueItems } from "./chat-pending-input-presentation.ts";
-import { selectChatInputDisplay } from "./history-merge.ts";
 
 const completion = subagentCompletionMessage({}, [
   { runId: "child-run", sessionKey: "agent:main:subagent:child", label: "Inspect example" },

@@ -10,7 +10,6 @@ import {
   advanceAccumulatedStreamText,
   streamSegmentHasItemId,
   trimAccumulatedStreamPrefix,
-  type ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
 import { stripHeartbeatTokenForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
@@ -45,7 +44,11 @@ import {
 } from "./chat-thread-canvas.ts";
 import type { BuildChatItemsProps } from "./chat-thread-contract.ts";
 import { groupChatDisplayItems, prepareChatStreamOnset } from "./chat-thread-display.ts";
-import { displayChatHistory, isHiddenChatCommentary, type ChatItemsFacts } from "./chat-thread-facts.ts";
+import {
+  displayChatHistory,
+  isHiddenChatCommentary,
+  type ChatItemsFacts,
+} from "./chat-thread-facts.ts";
 import { placeChatInputs, type ChatInputOrderState } from "./chat-thread-inputs.ts";
 import {
   appendCanvasBlockToAssistantMessage,
@@ -76,7 +79,10 @@ import {
   optionalRunIdentity,
   resolveRunInsertionBounds,
 } from "./chat-thread-run-identity.ts";
-import { createRecordedToolKeyLookup, createStreamSegmentProjector } from "./chat-thread-stream-projection.ts";
+import {
+  createRecordedToolKeyLookup,
+  createStreamSegmentProjector,
+} from "./chat-thread-stream-projection.ts";
 import { readProjectedContinuation, safeNormalizeMessage } from "./chat-turn-boundary.ts";
 
 export function buildChatItems(

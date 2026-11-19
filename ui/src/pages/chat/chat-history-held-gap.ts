@@ -5,7 +5,11 @@ import {
   nativeHistoryMessageSourceIdentity,
 } from "../../lib/chat/history-message-identity.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
-import { prepareChatHistoryPages } from "./chat-history-page-preparation.ts";
+import {
+  prepareChatHistoryPages,
+  nativeHistoryMessagePosition,
+  oldestPositionedHistoryMessage,
+} from "./chat-history-page-preparation.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import { CHAT_HISTORY_REQUEST_LIMIT } from "./chat-history-request-params.ts";
 import { requestOlderChatHistoryPage } from "./chat-history-request.ts";
@@ -125,7 +129,6 @@ function heldHistoryGapCursor(options: {
     next.nextOffset === undefined ||
     next.totalMessages === undefined ||
     options.result.windowReset === true ||
-    options.previousPagination.hasMore ||
     options.previousPagination.hasNewer ||
     options.previousMessages.length === 0 ||
     !options.previousSessionId ||
@@ -133,8 +136,32 @@ function heldHistoryGapCursor(options: {
   ) {
     return null;
   }
-  const rowsBeforeTail = next.totalMessages - next.nextOffset;
-  return rowsBeforeTail <= CHAT_HISTORY_REQUEST_LIMIT * MAX_RESIDENT_SEGMENTS
+  const previous = options.previousPagination;
+  const edge = oldestPositionedHistoryMessage(options.result.messages ?? []);
+  const firstId = nativeHistoryMessageSourceId(edge?.message ?? options.result.messages?.[0]);
+  if (
+    previous.hasMore &&
+    firstId &&
+    options.previousMessages.some((message) => {
+      const position = nativeHistoryMessagePosition(message);
+      return (
+        nativeHistoryMessageSourceId(message) === firstId &&
+        (!edge ||
+          (position?.source === edge.position.source && position.rawSeq === edge.position.rawSeq))
+      );
+    })
+  ) {
+    return null;
+  }
+  const omittedPrefix = previous.hasMore
+    ? previous.totalMessages !== undefined && previous.nextOffset !== undefined
+      ? previous.totalMessages - previous.nextOffset
+      : undefined
+    : 0;
+  const gap =
+    omittedPrefix === undefined ? undefined : next.totalMessages - next.nextOffset - omittedPrefix;
+  // Raw counts bound one authoritative read, never certify the held ancestry.
+  return gap !== undefined && gap >= 0 && gap <= CHAT_HISTORY_REQUEST_LIMIT * MAX_RESIDENT_SEGMENTS
     ? next.olderCursor
     : null;
 }
@@ -188,6 +215,7 @@ export async function fillHeldHistoryGap<Tail extends ChatHistoryResult>(
   if (!prepared.fits) {
     return { result };
   }
+  const heldOldest = oldestPositionedHistoryMessage(state.chatMessages);
   for (let attempt = 0; cursor && attempt < MAX_RESIDENT_SEGMENTS; attempt++) {
     const older = await requestOlderChatHistoryPage(
       client,
@@ -234,6 +262,17 @@ export async function fillHeldHistoryGap<Tail extends ChatHistoryResult>(
       olderCursor: next.pagination.hasMore ? next.pagination.olderCursor : undefined,
       nextOffset: next.pagination.hasMore ? next.pagination.nextOffset : undefined,
     };
+    const freshOldest = oldestPositionedHistoryMessage(next.messages);
+    // Stop at the held physical edge; equal ordinals from a rewritten source
+    // cannot certify continuity. Missing positions retain the bounded fallback.
+    if (
+      heldOldest &&
+      freshOldest &&
+      heldOldest.position.source === freshOldest.position.source &&
+      freshOldest.position.rawSeq <= heldOldest.position.rawSeq
+    ) {
+      break;
+    }
     cursor = next.pagination.hasMore ? (next.pagination.olderCursor ?? null) : null;
   }
   return result === tail ? { result } : { result, pagination: prepared.pagination };

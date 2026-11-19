@@ -10,6 +10,8 @@ export type ChatThreadDisplayProps = {
   stream: string | null;
   streamStartedAt: number | null;
   showToolCalls: boolean;
+  searchOpen?: boolean;
+  searchQuery?: string;
   /** True while the agent is visibly working (isChatRunWorking). */
   runWorking?: boolean;
   /** People the session row lists, loaded or not, keyed by `sessionParticipantIdentityKey`. */

@@ -211,10 +211,8 @@ type TranscriptLayoutRestoreHost = {
   isConnected(): boolean;
   scrollElement: HTMLDivElement | null;
   threadInnerElement: HTMLDivElement | null;
-  rowCount: number;
   callbacks: TranscriptCallbacks;
   prependAnchor: TranscriptPrependAnchor;
-  rowIndexesByKey: ReadonlyMap<string, number>;
   offsetState: TranscriptOffsetState;
   initialRange: TranscriptInitialRange;
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>;
@@ -224,13 +222,14 @@ type TranscriptLayoutRestoreHost = {
   messageElements: TranscriptMessageElements;
   renderer: ChatTranscriptRenderer;
   scrollRestoreHost: TranscriptScrollRestoreHost;
-  canAutoFollow(): boolean;
   scrollToEnd(options: ChatScrollToEndOptions): boolean;
   invalidate(): void;
 };
 
 /** One restoration flow owns saved semantic and measured initial positioning. */
 export function completeTranscriptLayout(owner: TranscriptLayoutRestoreHost): void {
+  const rowIndexes = owner.initialRange.rowIndexes;
+  const hasRows = rowIndexes.size > 0;
   if (!owner.isConnected() || owner.virtualizer.scrollElement !== owner.scrollElement) {
     return;
   }
@@ -252,7 +251,7 @@ export function completeTranscriptLayout(owner: TranscriptLayoutRestoreHost): vo
       owner.offsetState.pendingScrollOffset = null;
     } else {
       const rowKey = owner.prependAnchor.committedMessageRows.get(bookmark.messageKey);
-      const index = rowKey ? owner.rowIndexesByKey.get(rowKey) : undefined;
+      const index = rowKey ? rowIndexes.get(rowKey) : undefined;
       if (index !== undefined && owner.scrollElement) {
         // Reuse the measured prepend owner after a remount; cached pixels
         // alone cannot identify a reader in a different resident window.
@@ -293,9 +292,9 @@ export function completeTranscriptLayout(owner: TranscriptLayoutRestoreHost): vo
     owner.offsetState,
     owner.virtualizer,
     owner.messageRowKeysById,
-    owner.rowIndexesByKey,
+    rowIndexes,
   );
-  if (!owner.initialRange.pending || !owner.rowCount || !owner.scrollElement?.clientHeight) {
+  if (!owner.initialRange.pending || !hasRows || !owner.scrollElement?.clientHeight) {
     return;
   }
   const [measured, applyRail] = owner.presentation.measureInitialRows(owner.messageElements);
@@ -308,7 +307,7 @@ export function completeTranscriptLayout(owner: TranscriptLayoutRestoreHost): vo
     return;
   }
   if (
-    owner.canAutoFollow() &&
+    canFollowTranscriptEnd(owner.bookmarkState, owner.offsetState, owner.callbacks) &&
     !(owner.offsetState.pendingInteractionAnchor || owner.offsetState.touchActive)
   ) {
     const behavior = owner.offsetState.scrollCommand?.behavior ?? "instant";

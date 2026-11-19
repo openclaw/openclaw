@@ -386,17 +386,15 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
   protected handleTranscriptHistoryIntent(event: Event): void {
     const root = this.transcript.scrollElement;
     const direction = this.historyInput.readDirection(event, root);
-    // Initial placement may not emit a scroll; native input establishes the jump's origin.
-    if (root && direction < 0) {
-      this.transcriptScrollTop = root.scrollTop;
-    }
     if (
       !this.presented ||
       !this.visuallyPresented ||
       !root ||
       direction === 0 ||
       (direction < 0
-        ? root.scrollTop > CHAT_HISTORY_PREFETCH_EDGE_PX || this.history.loadingOlder || !this.hasOlderMessages()
+        ? root.scrollTop > CHAT_HISTORY_PREFETCH_EDGE_PX ||
+          this.history.loadingOlder ||
+          !this.hasOlderMessages()
         : root.scrollHeight - root.clientHeight - root.scrollTop > CHAT_HISTORY_PREFETCH_EDGE_PX)
     ) {
       return;

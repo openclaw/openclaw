@@ -86,6 +86,7 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
     sameReplySource(previous.replyCurrentSource, next.replyCurrentSource) &&
     previous.isStreaming === next.isStreaming &&
     previous.visibleContent === next.visibleContent &&
+    previous.startsActivityGroup === next.startsActivityGroup &&
     previous.runId === next.runId &&
     previous.messages.length === next.messages.length &&
     previous.messages.every((entry, index) => {
@@ -107,6 +108,7 @@ export const CHAT_ITEM_FIELDS = {
     "text",
     "label",
     "handoffBoundary",
+    "activityBoundary",
     "startsTurn",
     "boundaryId",
     "timestamp",

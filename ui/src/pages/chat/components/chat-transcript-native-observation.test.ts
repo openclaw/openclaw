@@ -91,6 +91,43 @@ function observedMaintenance(useScrollendEvent = false) {
   };
 }
 
+it.each(
+  [false, true].flatMap((silentPlacement) =>
+    [false, true].map((readerInput) => ({ silentPlacement, readerInput })),
+  ),
+)(
+  "arms older history only for native Home movement (silent placement: $silentPlacement, reader: $readerInput)",
+  ({ silentPlacement, readerInput }) => {
+    const observed = observedMaintenance();
+    if (silentPlacement) {
+      observed.native(0);
+      // Placement owns the offset even when the browser emits no scroll echo.
+      observed.write(800);
+    }
+    const { pane } = createNativeShowEarlierPane(vi.fn());
+    pane.visuallyPresented = true;
+    pane.historyObserverArmed = false;
+    const armOlder = vi.spyOn(pane, "syncHistoryObserver").mockImplementation(() => {});
+    observed.owner.onNativeScroll.mockImplementation((scroll) =>
+      pane.handleTranscriptScroll(scroll),
+    );
+    observed.owner.onNativeScroll.mockClear();
+    if (readerInput) {
+      observed.element.dispatchEvent(new KeyboardEvent("keydown", { key: "Home" }));
+    } else {
+      observed.write(0);
+    }
+    observed.native(0);
+    expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith({
+      ...readerScroll(0, readerInput ? -800 : 0),
+      programmatic: !readerInput,
+      maintenance: !readerInput,
+    });
+    expect(armOlder).toHaveBeenCalledTimes(Number(readerInput));
+    expect(pane.historyObserverArmed).toBe(readerInput);
+  },
+);
+
 it.each(["none", "before capture", "after capture"] as const)(
   "preserves upward native policy through measurement synchronization: %s",
   (synchronization) => {

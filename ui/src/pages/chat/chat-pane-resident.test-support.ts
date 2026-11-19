@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { CHAT_HISTORY_REQUEST_LIMIT } from "./chat-history-request-params.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
@@ -35,9 +36,15 @@ export function residentPane(
   });
   // Primitive request facts only: the harness must not retain response bodies.
   const request = async (
-    _method: string,
+    method: string,
     selector: { cursor?: string; messageId?: string; offset?: number; limit?: number },
   ) => {
+    if (method === "models.list") {
+      return { models: [] };
+    }
+    if (method !== "chat.history" && method !== "chat.startup") {
+      return method === "sessions.list" ? sessionsResult([], 1) : {};
+    }
     requests.push({
       cursor: selector.cursor,
       messageId: selector.messageId,

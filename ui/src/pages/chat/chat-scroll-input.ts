@@ -245,7 +245,7 @@ export class TranscriptHistoryInput {
     return distance <= margin ? direction : 0;
   }
 
-  private readDirection(event: Event, transcript: HTMLElement | null): -1 | 0 | 1 {
+  readDirection(event: Event, transcript: HTMLElement | null): -1 | 0 | 1 {
     if (event instanceof WheelEvent) {
       if (
         transcript === null ||

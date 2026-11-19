@@ -85,9 +85,7 @@ export function readTranscriptContinuityFromProjection(
         generation: projection.generation,
         frontier: projection.state.indexedSeq,
         latestResetRawSeq,
-        previousLeafActive:
-          readActivePathEntryRelationFromProjection(projection, continuity.activeLeafEntryId) !==
-          "off-path",
+        previousLeafActive: isOnActivePathInProjection(projection, continuity.activeLeafEntryId),
       }),
     },
     activeLeafEntryId: projection.state.leafEventId,

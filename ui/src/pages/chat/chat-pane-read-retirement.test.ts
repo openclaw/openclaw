@@ -2,11 +2,19 @@
 
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { getChatHistoryLoadState, isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { appendChatThread, createNativeShowEarlierPane } from "./chat-pane-history.test-support.ts";
 import { createTestChatPane, nativeHistoryMessage } from "./chat-pane.test-support.ts";
+
+function nonHistoryResponse(method: string) {
+  if (method === "models.list") {
+    return { models: [] };
+  }
+  return method === "sessions.list" ? sessionsResult([], 1) : {};
+}
 
 function heldTranscriptPane() {
   const reads: {
@@ -16,7 +24,7 @@ function heldTranscriptPane() {
   }[] = [];
   const client = createTestGatewayClient((method, _params, options) => {
     if (method !== "chat.startup" && method !== "chat.history") {
-      return {};
+      return nonHistoryResponse(method);
     }
     const response = createDeferred<ReturnType<typeof history>>();
     reads.push({ method, signal: options?.signal, response });
@@ -96,7 +104,7 @@ it("retires an older read on hide and permits the same cursor again on reveal", 
   let attempts = 0;
   const request = vi.fn((method: string, _params: unknown, options?: { signal?: AbortSignal }) => {
     if (method !== "chat.history") {
-      return Promise.resolve({});
+      return Promise.resolve(nonHistoryResponse(method));
     }
     signal = options?.signal;
     return ++attempts === 1 ? first.promise : Promise.resolve(older);

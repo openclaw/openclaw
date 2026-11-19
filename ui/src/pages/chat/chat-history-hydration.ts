@@ -419,7 +419,9 @@ export async function hydrateChatHistory(
       (!previousSessionId || !nextSessionId || previousSessionId === nextSessionId);
     const reconciledHistory = retainsTranscriptIdentity
       ? (tailPreparation?.reconcileHistoryTail({
-          sameLeaf: previousDisplayedLeafEntryId === undefined || previousDisplayedLeafEntryId === nextDisplayedLeafEntryId,
+          sameLeaf:
+            previousDisplayedLeafEntryId === undefined ||
+            previousDisplayedLeafEntryId === nextDisplayedLeafEntryId,
           nextMessages: visibleMessages,
           nextPagination,
           nextSessionId,
