@@ -285,6 +285,8 @@ export async function trySessionsSendActiveRunDelivery(
                 },
               }
             : {}),
+          // Admission is the receipt; the receiving run owns commit or withdrawal.
+          waitForTranscriptCommit: false,
           // The receiving runtime owns transcript writes to this exact incarnation.
           userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
             assertOriginalInputCommit: assertInputCurrent,

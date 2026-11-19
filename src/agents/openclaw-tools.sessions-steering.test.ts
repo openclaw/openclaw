@@ -275,7 +275,7 @@ it.each([
         delivery: { status: "skipped" },
       });
       expect(queueMessage).toHaveBeenCalledOnce();
-      expect(queueMessage.mock.calls[0]?.[1]).not.toHaveProperty("waitForTranscriptCommit");
+      expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(false);
       expect(queueMessage.mock.calls[0]?.[1]?.deliveryTimeoutMs).toBeUndefined();
       expect(queueMessage.mock.calls[0]?.[1]).not.toHaveProperty("sourceReplyDeliveryMode");
       expect(queueMessage.mock.calls[0]?.[1]?.isInboundUserMessage).toBeUndefined();

@@ -99,13 +99,14 @@ export function registerSessionsSendRejectedSteeringTests({
           steeringMode: "all",
           isInboundUserReply: false,
           debounceMs: 0,
+          waitForTranscriptCommit: false,
           onQueueAccepted: expect.any(Function),
           userTurnTranscriptRecorder: expect.any(Object),
         });
       } else if (disposition === "steered") {
         expect(queueMessage).toHaveBeenCalledOnce();
         expect(queueMessage.mock.calls[0]?.[0]).toContain("[TASK-COMPLETE] occupancy ready");
-        expect(queueMessage.mock.calls[0]?.[1]).not.toHaveProperty("waitForTranscriptCommit");
+        expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(false);
         // Guidance joins the receiver's reply owner; it cannot impose a new output policy.
         expect(queueMessage.mock.calls[0]?.[1]).not.toHaveProperty("sourceReplyDeliveryMode");
       } else {
@@ -176,6 +177,7 @@ export function registerSessionsSendRejectedSteeringTests({
             abortOnUnconfirmedTranscript: false,
             options: expect.objectContaining({
               assertCurrent: expect.any(Function),
+              waitForTranscriptCommit: false,
             }),
           });
         }

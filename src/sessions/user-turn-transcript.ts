@@ -667,10 +667,11 @@ export function createUserTurnTranscriptRecorder(
         const admission = recordAdmission(receipt, persistedMessage, true);
         const targetRunId = confirmedSteerTargetRunId;
         if (targetRunId && persistedMessage["__openclaw"]?.steerTargetRunId !== targetRunId) {
-          void admission.then(
-            () => stampPersistedSteerTargetRunId(targetRunId),
-            () => undefined,
-          );
+          // The stamp joins the admission write that the turn owner already awaits.
+          admissionWrite = admission.then(async () => {
+            await stampPersistedSteerTargetRunId(targetRunId);
+          });
+          admissionWrite.catch(() => undefined);
         }
       }
       if (persistedMessage && persistedResult) {
