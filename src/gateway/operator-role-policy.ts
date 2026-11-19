@@ -317,7 +317,10 @@ export function resolveOperatorRolePolicy(
     );
   }
   return openclawIdSubjectRolePolicy(principal, () =>
-    resolveOperatorRolePolicyForProfile(actor?.profileId, cfg),
+    resolveOperatorRolePolicyForProfile(
+      actor?.profileId ?? client?.authenticatedUserProfile?.profileId,
+      cfg,
+    ),
   );
 }
 

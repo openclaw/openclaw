@@ -25,7 +25,7 @@ installGatewayTestHooks({ scope: "suite" });
 await import("../../server.js");
 
 describe("definitions-only operator admission", () => {
-  test("allows setup-code and device-token operators with definitions alone and no effective role", async () => {
+  test("keeps setup-code and device-token owner authority while definitions govern identified profiles", async () => {
     const origin = BROWSER_ORIGIN;
     const auth = { mode: "token", token: "definitions-only-secret" } as const;
     await configureBrowserAuth(auth, {
@@ -73,15 +73,13 @@ describe("definitions-only operator admission", () => {
       expect(listed.ok).toBe(true);
       expect(listed.payload?.profiles.find((p) => p.id === person.id)).toMatchObject({
         role: "guest",
+        effectiveRole: "guest",
       });
-      expect(
-        listed.payload?.profiles.find((p) => p.id === person.id)?.effectiveRole,
-      ).toBeUndefined();
       const assigned = await rpcReq(reconnect, "users.setRole", {
         profileId: person.id,
         role: "guest",
       });
-      expect(assigned.error?.message).toContain("gateway.roles.default");
+      expect(assigned.ok, JSON.stringify(assigned)).toBe(true);
       expect(
         (await rpcReq(reconnect, "users.setRole", { profileId: person.id, role: null })).ok,
       ).toBe(true);

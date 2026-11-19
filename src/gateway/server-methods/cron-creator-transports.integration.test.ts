@@ -21,6 +21,7 @@ import {
   clearGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   mintAgentRuntimeIdentityToken,
@@ -199,10 +200,11 @@ it.each([
       kind: "member",
       peerKey: `iroh:${"ec".repeat(32)}`,
       accountId: "script-creator",
-      role: "operator",
+      role: "display-only",
       authority: { clawId: "creator-claw", rootPub: "creator-root", listedSeq: 1 },
     };
     if (ocid) {
+      setUserProfileRole(profile.id, "operator");
       config.gateway = {
         ...config.gateway,
         roles: {

@@ -688,6 +688,7 @@ describe("operator role policy", () => {
       expect(resolveGatewayOperatorRoleActor(undefined)).toBeUndefined();
       const ownerId = GATEWAY_OWNER_PROFILE_ID;
       expect(resolveGatewayOperatorRoleActor(identifiedClient(ownerId))).toBeUndefined();
+      expect(resolveOperatorRolePolicy(identifiedClient(ownerId), cfg)).toBeUndefined();
       expect(resolveOperatorRolePolicyForProfile(ownerId, cfg)).toBeUndefined();
       expect(resolveOperatorRolePolicyForAssignment(ownerId, "guest", cfg, null)).toBeUndefined();
     }));
