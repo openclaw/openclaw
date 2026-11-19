@@ -4,6 +4,8 @@ type MessageDerivations = {
   revision: string | undefined;
   normalized: NormalizedMessage | undefined;
   toolCards: ToolCard[] | undefined;
+  completedSubagentItems?: Array<{ key: string; message: unknown }>;
+  completedSubagentGroup?: { sources: unknown[]; completionsKey: string; message: unknown };
 };
 
 // Immutable source messages share one weak entry. Each consumer still

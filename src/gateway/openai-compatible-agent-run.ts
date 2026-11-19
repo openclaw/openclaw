@@ -1,7 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
+import { isClientToolNameConflictError } from "../agents/embedded-agent-runner/tool-name-allowlist.js";
 import { isFailoverError, isSignalTimeoutReason } from "../agents/failover/error.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";

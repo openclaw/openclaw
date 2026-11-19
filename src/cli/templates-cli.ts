@@ -9,6 +9,7 @@ export type TemplatesCreateOptions = TemplatesInspectOptions & {
   name?: string;
   agentId?: string;
 };
+export type TemplatesDraftOptions = { json?: boolean };
 export type TemplatesValidateOptions = { json?: boolean };
 export type TemplatesBuildOptions = { out: string; json?: boolean };
 export type TemplatesDevOptions = { agentId?: string; workspace?: string; json?: boolean };
@@ -18,6 +19,8 @@ export type TemplatesAddOptions = TemplatesDevOptions & {
   acceptCapabilities?: boolean;
   acknowledgeClawhubRisk?: boolean;
 };
+export type TemplatesReleaseOptions = { yes?: boolean };
+
 export function registerTemplatesCli(program: Command) {
   const templates = program.command("templates").description("Author and add OpenClaw Templates");
 
@@ -31,6 +34,16 @@ export function registerTemplatesCli(program: Command) {
     .action(async (path: string, opts: TemplatesCreateOptions) => {
       const { runTemplatesCreateCommand } = await import("./templates-cli.project.js");
       await runTemplatesCreateCommand(path, opts);
+    });
+
+  templates
+    .command("draft")
+    .description("Prepare a private Template draft without publishing")
+    .argument("<workspace>", "Agent workspace for the private draft")
+    .option("--json", "Print JSON", false)
+    .action(async (workspace: string, opts: TemplatesDraftOptions) => {
+      const { runTemplatesDraftCommand } = await import("./templates-cli.project.js");
+      await runTemplatesDraftCommand(workspace, opts);
     });
 
   templates
@@ -79,7 +92,7 @@ export function registerTemplatesCli(program: Command) {
   templates
     .command("add")
     .description("Add a new agent and its requirements from a Template")
-    .argument("<source>", "ClawHub package name, local package directory, or CLAW.md")
+    .argument("<source>", "ClawHub Template (@publisher/slug), local package directory, or CLAW.md")
     .option("--dry-run", "Preview all actions without mutating state", false)
     .option("--accept-capabilities", "Accept required plugin capabilities", false)
     .option("--acknowledge-clawhub-risk", "Acknowledge ClawHub trust warnings", false)
@@ -89,6 +102,16 @@ export function registerTemplatesCli(program: Command) {
     .action(async (source: string, opts: TemplatesAddOptions) => {
       const { runTemplatesAddCommand } = await import("./templates-cli.runtime.js");
       await runTemplatesAddCommand(source, opts);
+    });
+
+  templates
+    .command("release")
+    .description("Make an agent added by an older Template lifecycle an ordinary agent")
+    .argument("<agent-id>", "Template-managed agent to release")
+    .option("--yes", "Confirm without prompting", false)
+    .action(async (agentId: string, opts: TemplatesReleaseOptions) => {
+      const { runTemplatesReleaseCommand } = await import("./templates-cli.release.js");
+      await runTemplatesReleaseCommand(agentId, opts);
     });
 
   applyParentDefaultHelpAction(templates);

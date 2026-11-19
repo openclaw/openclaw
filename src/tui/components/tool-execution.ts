@@ -1,4 +1,5 @@
 import { Box, Container, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -123,6 +124,10 @@ function extractText(result?: ToolResult): string {
   return lines.join("\n");
 }
 
+function isJsonText(text: string): boolean {
+  return /^\s*[[{]/u.test(text) && safeParseJson(text) !== undefined;
+}
+
 function isCodeModeResult(toolName: string, result?: ToolResult): boolean {
   if (toolName !== "exec" && toolName !== "wait") {
     return false;
@@ -227,8 +232,9 @@ export class ToolExecutionComponent extends Container {
     this.isPartial = Boolean(opts?.partial);
     this.isError = !this.isPartial && Boolean(opts?.isError);
     this.refreshResult();
-    // Code Mode JSON is literal data; prose normalization can change values and escapes.
-    this.output.setText(extractText(result), isCodeModeResult(this.toolName, result));
+    // JSON results are literal data; prose normalization can change values and escapes.
+    const text = extractText(result);
+    this.output.setText(text, isCodeModeResult(this.toolName, result) || isJsonText(text));
     this.images.setImages(extractTuiImageSources(result));
   }
 

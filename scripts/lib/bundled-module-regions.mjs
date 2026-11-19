@@ -2,7 +2,7 @@
 export function bundledModuleRegions(source) {
   // Stable releases use regions. Rolldown 1.2.15 uses qualified module-ID labels;
   // recognize one qualified token, not arbitrary plain line comments.
-  return source.matchAll(/^\/\/(?:#region | (?=\S+\/\S+$))(.+)$/gm);
+  return source.matchAll(/^\/\/(?:#region |(?:! ?| )(?=\S+\/\S+$))(.+)$/gm);
 }
 
 /**

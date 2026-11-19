@@ -1,4 +1,5 @@
 /** Static SSH adapter and management hooks for the shared remote-shell workspace owner. */
+import type { WorkspaceStateGuard } from "../workspace-state-store.worker-contract.js";
 import type {
   CreateSandboxBackendParams,
   SandboxBackendHandle,
@@ -78,6 +79,7 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
 async function createSshSandboxBackendInternal(
   params: CreateSandboxBackendParams,
   preprovisionedWorkdir?: { runtimeId: string; remoteWorkspaceDir: string },
+  guard?: WorkspaceStateGuard,
 ): Promise<SandboxBackendHandle> {
   const target = params.cfg.ssh.target;
   if (!target) {
@@ -88,9 +90,11 @@ async function createSshSandboxBackendInternal(
     configLabel: target,
     configLabelKind: "Target",
     preprovisionedWorkdir,
+    prepareCurrent: guard?.prepareHost,
     createSession: async (): Promise<RemoteShellSandboxSession> => {
       const session = await createSshSandboxSessionFromSettings({ ...params.cfg.ssh, target });
       session.assertCurrent = params.assertRuntimeCurrent;
+      session.prepareCurrent = guard?.prepareHost;
       return {
         runCommand: (command) => runSshSandboxCommand({ ...command, session }),
         uploadDirectory: (upload) => uploadDirectoryToSshTarget({ ...upload, session }),
@@ -107,8 +111,9 @@ async function createSshSandboxBackendInternal(
 /** Create a static SSH sandbox using the shared remote workspace lifecycle. */
 export async function createSshSandboxBackend(
   params: CreateSandboxBackendParams,
+  guard?: WorkspaceStateGuard,
 ): Promise<SandboxBackendHandle> {
-  return createSshSandboxBackendInternal(params);
+  return createSshSandboxBackendInternal(params, undefined, guard);
 }
 
 /** Adopt a placement-owned worktree without mirroring local files into it. */

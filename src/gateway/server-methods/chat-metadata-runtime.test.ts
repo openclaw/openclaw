@@ -222,7 +222,7 @@ describe("gateway chat metadata runtime", () => {
     const harness = createChatMetadataHarness();
 
     await expect(harness.runtime.read({ agentId: "main" })).rejects.toThrow(
-      "prepared chat metadata snapshot is unavailable",
+      "Chat metadata is starting; retry shortly.",
     );
     await harness.runtime.refresh();
     expect(harness.buildProjection).not.toHaveBeenCalled();

@@ -216,6 +216,8 @@ function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
 // Older router catalogs omit input. Match exact native OpenAI identities, not a
 // GPT generation prefix: unknown siblings can have different modality contracts.
 const OPENAI_NATIVE_IMAGE_MODEL_IDS = new Set([
+  "gpt-6.2-sol",
+  "gpt-6.2-astra",
   "gpt-6.1-sol",
   "gpt-6-sol",
   "gpt-6-astra",
@@ -397,9 +399,6 @@ function buildRoutedModel(
   // Service catalog facts win over inherited native defaults.
   const compat = {
     ...nativeFacts?.compat,
-    // OpenAI Responses normalizes omitted strictness into required tool fields.
-    // Advertise support so the compatible-route policy emits explicit strict=false.
-    ...(provider.id === "openai" && api === "openai-responses" ? { supportsStrictMode: true } : {}),
     ...(provider.id === "mistral" && api === "openai-completions"
       ? { ...MISTRAL_MODEL_TRANSPORT_PATCH, supportsReasoningEffort: false }
       : {}),
@@ -575,13 +574,22 @@ export function normalizeClawRouterResolvedModel(
 }
 
 export function prepareClawRouterRequestModel(model: ProviderRuntimeModel): ProviderRuntimeModel {
-  const route = readRouteMetadata(model.params);
+  // OpenAI Responses treats omitted tool strictness as strict, so every optional tool input
+  // becomes required. Configured and catalog rows both dispatch here; declaring support makes
+  // the compatible-route policy send explicit strict=false.
+  const prepared =
+    model.api === "openai-responses" &&
+    model.id.startsWith("openai/") &&
+    model.compat?.supportsStrictMode === undefined
+      ? { ...model, compat: { ...model.compat, supportsStrictMode: true } }
+      : model;
+  const route = readRouteMetadata(prepared.params);
   if (!route) {
-    return model;
+    return prepared;
   }
   return {
-    ...model,
-    params: stripRouteMetadata(model.params),
+    ...prepared,
+    params: stripRouteMetadata(prepared.params),
     ...(route.upstreamModel && route.upstreamModel !== model.id ? { id: route.upstreamModel } : {}),
   };
 }

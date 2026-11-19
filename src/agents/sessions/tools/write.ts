@@ -35,13 +35,13 @@ import { writeSchema, WriteToolOutputSchema } from "./tool-schemas.js";
 interface WriteOperations {
   /** Resolve the physical identity used to order this backend's file operations. */
   resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
-  writeFile: (absolutePath: string, content: string) => Promise<void>;
+  writeFile: (absolutePath: string, content: string, signal?: AbortSignal) => Promise<void>;
   /** Omit when writeFile owns parent-directory creation. */
   mkdir?: (dir: string) => Promise<void>;
   /** Read persisted content before reporting success */
-  readFile: (absolutePath: string) => Promise<Buffer | string>;
+  readFile: (absolutePath: string, signal?: AbortSignal) => Promise<Buffer | string>;
   /** Stat the target for prechecks and persisted-file verification */
-  statFile: (absolutePath: string) => Promise<PersistedFileStat | null>;
+  statFile: (absolutePath: string, signal?: AbortSignal) => Promise<PersistedFileStat | null>;
 }
 
 const defaultWriteOperations: WriteOperations = {
@@ -75,10 +75,11 @@ async function readOriginalWriteState(
   absolutePath: string,
   content: string,
   ops: WriteOperations,
+  signal?: AbortSignal,
 ): Promise<WriteToolPrecheck> {
   let stat: PersistedFileStat | null;
   try {
-    stat = await ops.statFile(absolutePath);
+    stat = await ops.statFile(absolutePath, signal);
   } catch (error) {
     return isMissingFileError(error)
       ? { state: "different", beforeStat: null }
@@ -98,7 +99,7 @@ async function readOriginalWriteState(
   }
 
   try {
-    const originalContent = await ops.readFile(absolutePath);
+    const originalContent = await ops.readFile(absolutePath, signal);
     const originalBytes = Buffer.isBuffer(originalContent)
       ? originalContent
       : Buffer.from(originalContent, "utf8");
@@ -122,11 +123,12 @@ async function didWriteMetadataChange(
   absolutePath: string,
   beforeStat: PersistedFileStat | null | undefined,
   ops: WriteOperations,
+  signal?: AbortSignal,
 ): Promise<boolean> {
   if (!beforeStat) {
     return false;
   }
-  const afterStat = await ops.statFile(absolutePath).catch(() => null);
+  const afterStat = await ops.statFile(absolutePath, signal).catch(() => null);
   if (!afterStat || afterStat.type !== "file") {
     return false;
   }
@@ -173,98 +175,120 @@ export function createWriteTool(
       const absolutePath = resolvePath(path, cwd);
       const dir = dirname(absolutePath);
       const queueKey = resolveFileMutationQueueKey(absolutePath, ops.resolveQueueKey, signal);
-      return withFileMutationQueueKeyResolution(queueKey, async () => {
-        const precheck = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-          assertCurrent();
-          return readOriginalWriteState(absolutePath, content, ops);
-        });
-        assertFileToolNotAborted(signal);
-        // No-op: file already has identical content. Not terminal — the model
-        // may still be mid-task and needs a continuation, not an ended turn.
-        if (precheck.state === "same") {
-          return textResult(`No changes made to ${path}. The file already has identical content.`, {
-            changed: false,
-          } satisfies WriteToolDetails);
-        }
-        const details = await runWithAgentToolSourceExecutionScope(
-          assertCurrent,
-          async (): Promise<WriteToolDetails> => {
+      return withFileMutationQueueKeyResolution(
+        queueKey,
+        async () => {
+          const precheck = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
             assertCurrent();
-            if (Buffer.byteLength(content, "utf8") > WRITE_DIFF_MAX_BYTES) {
-              // Keep diff work bounded; a partial patch would misrepresent the write.
-              if (precheck.beforeStat === null) {
-                return { changed: true, created: true };
-              }
-              return precheck.beforeStat ? { changed: true, created: false } : { changed: true };
-            }
-            const beforeStat = precheck.beforeStat;
-            let beforeText = precheck.beforeText;
-            if (
-              beforeText === undefined &&
-              !precheck.readAttempted &&
-              beforeStat?.type === "file" &&
-              beforeStat.size <= WRITE_DIFF_MAX_BYTES
-            ) {
-              const originalContent = await ops.readFile(absolutePath).catch(() => undefined);
-              const candidate = Buffer.isBuffer(originalContent)
-                ? originalContent.toString("utf8")
-                : originalContent;
-              if (
-                candidate !== undefined &&
-                Buffer.byteLength(candidate, "utf8") <= WRITE_DIFF_MAX_BYTES
-              ) {
-                beforeText = candidate;
-              }
-            }
-            const created = beforeStat === null ? true : beforeStat ? false : undefined;
-            const receipt = await planFileWriteDiff({ path, content, beforeText, created }, signal);
-            return { changed: true, ...(created === undefined ? {} : { created }), ...receipt };
-          },
-        );
-        assertFileToolNotAborted(signal);
-        try {
-          await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-            assertCurrent();
-            await ops.mkdir?.(dir);
+            return readOriginalWriteState(absolutePath, content, ops, signal);
           });
           assertFileToolNotAborted(signal);
-          await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-            assertCurrent();
-            await ops.writeFile(absolutePath, content);
-          });
-          assertFileToolNotAborted(signal);
-          if (
-            !(await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+          // No-op: file already has identical content. Not terminal — the model
+          // may still be mid-task and needs a continuation, not an ended turn.
+          if (precheck.state === "same") {
+            return textResult(
+              `No changes made to ${path}. The file already has identical content.`,
+              {
+                changed: false,
+              } satisfies WriteToolDetails,
+            );
+          }
+          const details = await runWithAgentToolSourceExecutionScope(
+            assertCurrent,
+            async (): Promise<WriteToolDetails> => {
               assertCurrent();
-              return verifyPersistedUtf8File(absolutePath, content, ops);
-            }))
-          ) {
-            throw new Error(
-              `Write verification failed for ${path}: the persisted regular file does not match the requested content. Inspect the target and retry.`,
-            );
-          }
-          return successfulWriteResult(path, content, details);
-        } catch (error: unknown) {
-          if (isWriteRecoveryCandidate(error, signal)) {
-            const recovered = await runWithAgentToolSourceExecutionScope(
-              assertCurrent,
-              async () => {
+              if (Buffer.byteLength(content, "utf8") > WRITE_DIFF_MAX_BYTES) {
+                // Keep diff work bounded; a partial patch would misrepresent the write.
+                if (precheck.beforeStat === null) {
+                  return { changed: true, created: true };
+                }
+                return precheck.beforeStat ? { changed: true, created: false } : { changed: true };
+              }
+              const beforeStat = precheck.beforeStat;
+              let beforeText = precheck.beforeText;
+              if (
+                beforeText === undefined &&
+                !precheck.readAttempted &&
+                beforeStat?.type === "file" &&
+                beforeStat.size <= WRITE_DIFF_MAX_BYTES
+              ) {
+                const originalContent = await ops
+                  .readFile(absolutePath, signal)
+                  .catch(() => undefined);
+                const candidate = Buffer.isBuffer(originalContent)
+                  ? originalContent.toString("utf8")
+                  : originalContent;
+                if (
+                  candidate !== undefined &&
+                  Buffer.byteLength(candidate, "utf8") <= WRITE_DIFF_MAX_BYTES
+                ) {
+                  beforeText = candidate;
+                }
+              }
+              const created = beforeStat === null ? true : beforeStat ? false : undefined;
+              const receipt = await planFileWriteDiff(
+                { path, content, beforeText, created },
+                signal,
+              );
+              return { changed: true, ...(created === undefined ? {} : { created }), ...receipt };
+            },
+          );
+          assertFileToolNotAborted(signal);
+          try {
+            await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+              assertCurrent();
+              await ops.mkdir?.(dir);
+            });
+            assertFileToolNotAborted(signal);
+            await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+              assertCurrent();
+              await ops.writeFile(absolutePath, content, signal);
+            });
+            assertFileToolNotAborted(signal);
+            if (
+              !(await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
                 assertCurrent();
-                const verified = await verifyPersistedUtf8File(absolutePath, content, ops);
-                const changed =
-                  precheck.state === "different" ||
-                  (precheck.state === "unknown" &&
-                    (await didWriteMetadataChange(absolutePath, precheck.beforeStat, ops)));
-                return { verified, changed };
-              },
-            );
-            if (recovered.verified && recovered.changed) {
-              return successfulWriteResult(path, content, details);
+                return verifyPersistedUtf8File(absolutePath, content, ops, signal);
+              }))
+            ) {
+              throw new Error(
+                `Write verification failed for ${path}: the persisted regular file does not match the requested content. Inspect the target and retry.`,
+              );
             }
+            return successfulWriteResult(path, content, details);
+          } catch (error: unknown) {
+            if (isWriteRecoveryCandidate(error, signal)) {
+              const recovered = await runWithAgentToolSourceExecutionScope(
+                assertCurrent,
+                async () => {
+                  assertCurrent();
+                  const verified = await verifyPersistedUtf8File(
+                    absolutePath,
+                    content,
+                    ops,
+                    signal,
+                  );
+                  const changed =
+                    precheck.state === "different" ||
+                    (precheck.state === "unknown" &&
+                      (await didWriteMetadataChange(
+                        absolutePath,
+                        precheck.beforeStat,
+                        ops,
+                        signal,
+                      )));
+                  return { verified, changed };
+                },
+              );
+              if (recovered.verified && recovered.changed) {
+                return successfulWriteResult(path, content, details);
+              }
+            }
+            throw error;
           }
-          throw error;
-        }
-      });
+        },
+        signal,
+      );
     },
   });
 }

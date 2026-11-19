@@ -238,7 +238,45 @@ suite.define(() => {
       expect(errors).toEqual([]);
     },
   );
-  it("opens the mobile drawer by swipe over chat links, code, and tables at rest", async () => {
+  it("opens from the reachable content edge after a landscape safe-area inset", async () => {
+    const page = await openPage({ hasTouch: true, width: 852, height: 393 });
+    await shellHas(page, "shell--mobile-nav");
+    await page.evaluate(() => {
+      document.documentElement.style.setProperty("--safe-area-left", "48px");
+    });
+    await expect.poll(async () => (await page.locator(".content").boundingBox())?.x).toBe(48);
+    const cdp = await context!.newCDPSession(page);
+    const swipeFrom = async (x: number) => {
+      // CDP hit-tests the actual point, unlike dispatching a touch to .content.
+      expect(
+        await page
+          .locator(".content")
+          .evaluate(
+            (content, startX) => content.contains(document.elementFromPoint(startX, 180)),
+            x,
+          ),
+      ).toBe(true);
+      await cdp.send("Input.dispatchTouchEvent", {
+        type: "touchStart",
+        touchPoints: [{ x, y: 180 }],
+      });
+      for (let step = 1; step <= 12; step++) {
+        await cdp.send("Input.dispatchTouchEvent", {
+          type: "touchMove",
+          touchPoints: [{ x: x + step * 12, y: 180 }],
+        });
+      }
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    };
+
+    // The inset moves the opening strip; it must not broaden content interception.
+    await swipeFrom(112);
+    await shellHas(page, "shell--nav-drawer-open", false);
+    await swipeFrom(72);
+    await shellHas(page, "shell--nav-drawer-open");
+  });
+
+  it("leaves swipes away from the left edge to chat content", async () => {
     const text = [
       "See https://docs.openclaw.ai/a/long/synthetic/path/for/the/swipe/regression/test now.",
       "",
@@ -265,7 +303,7 @@ suite.define(() => {
     // Real input lets Chromium arbitrate native scrolling and taps against the gesture.
     const swipeFrom = async (selector: string) => {
       const box = await page.locator(selector).first().boundingBox();
-      const start = { x: Math.max(box!.x + 12, 30), y: box!.y + Math.min(box!.height / 2, 12) };
+      const start = { x: Math.max(box!.x + 12, 64), y: box!.y + Math.min(box!.height / 2, 12) };
       await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [start] });
       for (let step = 1; step <= 12; step++) {
         const touchPoints = [{ x: start.x + step * 12, y: start.y - step }];
@@ -280,8 +318,6 @@ suite.define(() => {
       ".markdown-table__viewport",
     ]) {
       await swipeFrom(selector);
-      await shellHas(page, "shell--nav-drawer-open");
-      await page.mouse.click(383, 100);
       await shellHas(page, "shell--nav-drawer-open", false);
     }
     // Swiping across the link must not follow it.
@@ -292,6 +328,33 @@ suite.define(() => {
     await table.evaluate((viewport) => (viewport.scrollLeft = 60));
     await swipeFrom(".markdown-table__viewport");
     await expect.poll(() => table.evaluate((viewport) => viewport.scrollLeft)).toBeLessThan(60);
+    await shellHas(page, "shell--nav-drawer-open", false);
+
+    // Canvas controls commonly use pointer events and disable native touch scrolling.
+    await page
+      .locator(".chat-thread pre")
+      .first()
+      .evaluate((pre) => {
+        const canvas = document.createElement("canvas");
+        pre.replaceChildren(canvas);
+        canvas.className = "gesture-canvas";
+        canvas.style.cssText = "display:block;width:240px;height:160px;touch-action:none";
+        let startX = 0;
+        canvas.addEventListener("pointerdown", (event) => {
+          startX = event.clientX;
+          canvas.setPointerCapture(event.pointerId);
+        });
+        canvas.addEventListener("pointermove", (event) => {
+          canvas.dataset.distance = String(event.clientX - startX);
+        });
+        canvas.addEventListener("pointerup", () => (canvas.dataset.completed = "true"));
+        canvas.addEventListener("pointercancel", () => (canvas.dataset.canceled = "true"));
+      });
+    await page.locator(".gesture-canvas").scrollIntoViewIfNeeded();
+    await swipeFrom(".gesture-canvas");
+    expect(await page.locator(".gesture-canvas").getAttribute("data-distance")).toBe("144");
+    expect(await page.locator(".gesture-canvas").getAttribute("data-completed")).toBe("true");
+    expect(await page.locator(".gesture-canvas").getAttribute("data-canceled")).toBeNull();
     await shellHas(page, "shell--nav-drawer-open", false);
   });
 });

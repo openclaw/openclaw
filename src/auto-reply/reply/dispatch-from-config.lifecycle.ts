@@ -409,6 +409,11 @@ export function createDispatchReplyOperationCoordinator(
         return { status: "ready" };
       }
       if (!mailboxClaim) {
+        // Commands skip ingress staging; a blocked turn still needs visible input custody.
+        await params.replyOptions?.userTurnTranscriptRecorder?.stageApproved?.({
+          runId: params.replyOptions?.runId ?? input.instance.id,
+          assertCurrent: assertRequestCurrent,
+        });
         const selected = claimSessionControllerTask(input, () => {}, replyTurnKind);
         try {
           using _ = observeDiagnosticsTimelinePhases("reply.admission.mailbox_wait");

@@ -138,7 +138,9 @@ also defers Package Acceptance Telegram, broad live/E2E, QA-live and Parallels.
 Package Telegram deferral applies to beta-profile `main` too, but it does not
 qualify for `npm-beta-v1`.
 
-FRV `normalCi` Windows Node shards and all other hard-gate failures block. Decide
+FRV `normalCi` Windows Node shards and all other unwaived hard-gate failures
+block. Only the exact checked-in operator grants may accept a failed job;
+preserve their candidate, version, job, and attempt scope. Decide
 blocker or flake for every failure,
 rerun flakes on the same Release SHA at most twice, and file a fix-in-parallel
 issue/PR on `main`. Do not re-cut solely to clear a flake. Every unwaived selected
@@ -147,9 +149,10 @@ job must pass, and FRV itself must conclude success before publication. See the
 Native platform publication remains independent and follows its own gates.
 All-group cross-OS qualification requires all nine Linux/Windows/macOS
 install/upgrade pairs. Focused recovery may select individual lanes but does
-not itself qualify publication. Exact live-provider/Telegram failures may use
-only the [checked-in release-tooling policy](../../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers),
-evaluated within FRV. Hard gates and soak cannot be waived.
+not itself qualify publication. Eligible failures and explicit not-run exemptions
+may use only the [checked-in release-tooling policy](../../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers),
+evaluated within FRV under the grant’s exact scope. All other hard gates and
+soak remain mandatory.
 
 ## Postpublish confidence
 

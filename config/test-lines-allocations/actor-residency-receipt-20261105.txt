@@ -1,2 +1,0 @@
-# Native entry invalidation must keep unchanged history off SQL replies and preserve exact receipt reconstruction.
-21

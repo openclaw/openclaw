@@ -1,6 +1,16 @@
+import fs from "node:fs/promises";
+import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
+import { captureWorkspaceFilesystemEvidence } from "../../agents/workspace-state-guard.js";
+import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
+import {
+  prepareSessionSourceEffect,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { hasGitWorkerContext } from "../../infra/git-worker-context.js";
 import type { GitWorkerCommand } from "../../infra/git-worker-contract.js";
 import { runGitWorkerOperation, type GitWorkerOperationOptions } from "../../infra/git-worker.js";
+import { createWorkerMutationAuthority } from "../../infra/worker-mutation-authority.js";
 import type { readActualWorkspaceManifestImpl } from "./workspace-actual-manifest.js";
 import { activeWorkspaceHashContext, pruneWorkspaceHashMemo } from "./workspace-hash-memo.js";
 import type {
@@ -10,6 +20,7 @@ import type {
   WorkspaceManifestComputationOperations,
   WorkspaceManifestValueInputs,
   WorkspaceStageInput,
+  WorkspaceReconciliationCommand,
 } from "./workspace-manifest-computation.js";
 import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { joinStagedWorkspaceManifestRead } from "./workspace-result-git.js";
@@ -22,6 +33,13 @@ function computationInputBytes(input: unknown): number {
   }
   if (ArrayBuffer.isView(input)) {
     return input.byteLength;
+  }
+  if (input instanceof Set) {
+    let bytes = 64;
+    for (const value of input) {
+      bytes += computationInputBytes(value);
+    }
+    return bytes;
   }
   if (input && typeof input === "object") {
     return Object.entries(input).reduce(
@@ -121,6 +139,7 @@ type WorkspaceCaptureCommand =
   | "workspace.manifest.capture"
   | "workspace.manifest.snapshot"
   | "workspace.manifest.document"
+  | "workspace.manifest.initial"
   | "workspace.manifest.reference";
 
 function captureWorkspace<Type extends WorkspaceCaptureCommand>(
@@ -137,7 +156,7 @@ async function captureWorkspace(type: WorkspaceCaptureCommand, params: Workspace
     gitIgnore,
     signal,
   } = params;
-  if (hasGitWorkerContext()) {
+  if (hasGitWorkerContext() && type !== "workspace.manifest.initial") {
     const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
     const snapshot = await readActualWorkspaceManifestImpl(params);
     if (type === "workspace.manifest.document") {
@@ -231,6 +250,24 @@ export async function workspaceSnapshotsEqual(
 
 export async function captureWorkspaceManifestDocument(params: WorkspaceCaptureArguments) {
   return await captureWorkspace("workspace.manifest.document", params);
+}
+
+/** Initialization publishes these same scan identities with its baseline, before guest access. */
+export async function captureInitialLocalWorkspaceManifest(params: WorkspaceCaptureArguments) {
+  const result = await captureWorkspace("workspace.manifest.initial", params);
+  return {
+    ...result,
+    projectionFingerprints:
+      result.projectionFingerprints && Buffer.from(result.projectionFingerprints),
+  };
+}
+
+/** Only the template owner supplies a previous generation after validating immutable source. */
+export async function captureTemplateWorkspaceManifest(
+  input: WorkspaceManifestValueInputs["workspace.manifest.template"],
+  signal?: AbortSignal,
+) {
+  return await computeValue("workspace.manifest.template", input, signal);
 }
 
 export async function captureWorkspaceManifestReference(params: WorkspaceCaptureArguments) {
@@ -362,33 +399,40 @@ export async function loadStagedWorkspaceManifest(
     : await joinStagedWorkspaceManifestRead(input, signal, read);
 }
 
-export async function prepareWorkspaceStageInput(input: WorkspaceStageInput<string>) {
+export async function prepareWorkspaceStageInput(
+  input: WorkspaceStageInput<string>,
+  authority?: WorkspaceFilesystemAuthority,
+) {
   const encoder = new TextEncoder();
-  return await computeWorkspaceManifest({
-    type: "workspace.manifest.stage-input",
-    input: {
-      inputPath: input.inputPath,
-      stagingRoot: input.stagingRoot,
-      stagedResultRef: input.stagedResultRef,
-      buildCacheInputs: input.buildCacheInputs,
-      gitHistory: input.gitHistory,
-      parentCommit: input.parentCommit,
-      ...("publication" in input
-        ? {
-            publication: {
-              ...input.publication,
-              metadata: encoder.encode(input.publication.metadata),
-            },
-          }
-        : {
-            baseManifestRef: input.baseManifestRef,
-            currentManifestRef: input.currentManifestRef,
-            baseManifestRaw: encoder.encode(input.baseManifestRaw),
-            currentManifestRaw: encoder.encode(input.currentManifestRaw),
-            existingObjects: input.existingObjects,
-          }),
+  return await runWorkspaceFilesystemComputation(
+    {
+      type: "workspace.manifest.stage-input",
+      input: {
+        inputPath: input.inputPath,
+        stagingRoot: input.stagingRoot,
+        stagedResultRef: input.stagedResultRef,
+        buildCacheInputs: input.buildCacheInputs,
+        gitHistory: input.gitHistory,
+        parentCommit: input.parentCommit,
+        blobsOnly: input.blobsOnly,
+        ...("publication" in input
+          ? {
+              publication: {
+                ...input.publication,
+                metadata: encoder.encode(input.publication.metadata),
+              },
+            }
+          : {
+              baseManifestRef: input.baseManifestRef,
+              currentManifestRef: input.currentManifestRef,
+              baseManifestRaw: encoder.encode(input.baseManifestRaw),
+              currentManifestRaw: encoder.encode(input.currentManifestRaw),
+              existingObjects: input.existingObjects,
+            }),
+      },
     },
-  });
+    authority,
+  );
 }
 
 export async function prepareWorkspaceTreeInput(
@@ -406,4 +450,83 @@ export async function prepareWorkspacePatch(
   input: WorkspaceManifestValueInputs["workspace.reconcile.patch"],
 ) {
   return computeValue("workspace.reconcile.patch", input);
+}
+
+type WorkspaceFilesystemAuthority = {
+  assertCurrent?: SessionSourceAssertion;
+  workerAuthority?: WorktreeWorkerAuthority;
+};
+type WorkspaceFilesystemCommand =
+  | WorkspaceReconciliationCommand
+  | Extract<WorkspaceManifestComputationCommand, { type: "workspace.manifest.stage-input" }>;
+
+export async function prepareWorkspaceTemporaryDirectory(
+  prefix: string,
+  authority?: WorkspaceFilesystemAuthority,
+): Promise<string> {
+  const preparedPrefix = await runWorkspaceFilesystemComputation(
+    { type: "workspace.reconcile.temporary", input: { prefix } },
+    authority,
+  );
+  // Creation returns directly to the caller that owns its cleanup, without another authority gate.
+  return await fs.mkdtemp(preparedPrefix);
+}
+
+/** Keep physical observations in the existing worker and logical custody on its host. */
+export function runWorkspaceFilesystemComputation<Command extends WorkspaceFilesystemCommand>(
+  command: Command,
+  options?: WorkspaceFilesystemAuthority,
+): Promise<WorkspaceManifestComputationOperations[Command["type"]]["output"]>;
+export async function runWorkspaceFilesystemComputation(
+  command: WorkspaceFilesystemCommand,
+  options: WorkspaceFilesystemAuthority = {},
+): Promise<void | string | null> {
+  const source = await prepareSessionSourceEffect(
+    composeSessionSourceAssertion([options.assertCurrent, options.workerAuthority?.assertCurrent]),
+  );
+  await using _ = { [Symbol.asyncDispose]: async () => await source.release?.() };
+  const filesystem = [
+    ...new Set([
+      ...(source.workspaceEvidence ?? []),
+      ...(options.workerAuthority?.workspaceEvidence ?? []),
+    ]),
+  ];
+  if ("root" in command.input) {
+    const root = command.input.root;
+    let target = filesystem.find((evidence) => evidence.workspaceDir === root);
+    if (!target) {
+      target = await captureWorkspaceFilesystemEvidence(command.input.root);
+      filesystem.push(target);
+    }
+    command.input.root = target.canonical;
+  }
+  const assertCurrent = source.assertCurrent;
+  assertCurrent();
+  const authority = createWorkerMutationAuthority(assertCurrent, options.workerAuthority?.signal);
+  try {
+    const operation = {
+      ...command,
+      mutation: {
+        decision: authority.buffer,
+        filesystem,
+        stateOwnerPath: options.workerAuthority?.stateOwnerPath,
+        nativeMode: getFsSafeNativeConfig().mode,
+      },
+    };
+    const result = await runGitWorkerOperation(operation, {
+      assertCurrent,
+      signal: options.workerAuthority?.signal,
+      onNotification: authority.onNotification,
+      inputBytes:
+        256 + computationInputBytes(command.input) + computationInputBytes(operation.mutation),
+      transferList: transferableManifestInput,
+    });
+    authority.throwIfRefused();
+    return result;
+  } catch (error) {
+    authority.throwIfRefused();
+    throw error;
+  } finally {
+    authority.dispose();
+  }
 }

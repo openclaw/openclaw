@@ -41,6 +41,7 @@ export function createSidebarSessionWindow(
       session: row,
       fullyShown: host().isSessionChildrenFullyShown(row.key),
     }).map(describe);
+    const loading = row.loadingChildren && children.length === 0;
     const errors = (row.childLoadParentKeys ?? [row.key]).map(
       (key) => host().sessionData.childSessionErrorsByParent.get(key) ?? "",
     );
@@ -49,8 +50,8 @@ export function createSidebarSessionWindow(
         ownHeight +
         children.reduce((height, child) => height + child.height, 0) +
         (children.length < row.children.length ? 28 : 0) +
-        (row.loadingChildren && children.length === 0 ? 32 : 0),
-      signature: [preview, children.map((child) => child.signature), row.loadingChildren, errors],
+        (loading ? 32 : 0),
+      signature: [preview, children.map((child) => child.signature), loading, errors],
     };
   };
   const inputs = createMemo(() => {
@@ -147,7 +148,7 @@ export function createSidebarSessionWindow(
     publish();
   };
   const scheduleMeasurement = createLayoutMeasurement(
-    () => ({ items: inputs() }),
+    () => ({ items: inputs(), rowFloor: rowFloor() }),
     (request) => {
       const scroller = scroll.element();
       if (!request || !scroller) {
@@ -172,12 +173,18 @@ export function createSidebarSessionWindow(
       return () => {
         scroll.captureRowFloor(nextRowFloor);
         // This request still contains estimates for the previous CSS minimum.
-        if (rowFloor() !== nextRowFloor) {
+        if (request.rowFloor !== nextRowFloor) {
           setRowFloor(nextRowFloor);
           return;
         }
         if (layout !== nextLayout) {
-          measured.clear();
+          // Mounted rows remain observed. Dropping their measurements can lose
+          // a resize already delivered, or wait forever for an unchanged size.
+          for (const key of measured.keys()) {
+            if (!mounted.has(key)) {
+              measured.delete(key);
+            }
+          }
         }
         layout = nextLayout;
         viewportHeight = nextHeight;
@@ -202,6 +209,8 @@ export function createSidebarSessionWindow(
       };
     },
     {
+      // Commit archive geometry before its native exit animation can finish.
+      changeTiming: () => (list?.hasAttribute("data-sidebar-archive-exiting") ? "sync" : undefined),
       targets: () => [
         list,
         ...(scroll.element() ? [scroll.element()!] : []),

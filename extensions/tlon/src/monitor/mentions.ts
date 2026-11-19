@@ -12,7 +12,7 @@ import { normalizeShip } from "../targets.js";
 import type { TlonResolvedAccount } from "../types.js";
 import { resolveChannelAuthorization } from "./authorization.js";
 import { fetchThreadRootAuthor } from "./history.js";
-import { isBotMentioned } from "./utils.js";
+import { extractMessageText, isBotMentioned } from "./utils.js";
 
 export async function prepareTlonGroupAdmission(params: {
   cfg: OpenClawConfig;
@@ -23,7 +23,7 @@ export async function prepareTlonGroupAdmission(params: {
   isOwner: (ship: string) => boolean;
   botShipName: string;
   botNickname: string | null;
-  rawText: string;
+  messageContent: unknown;
   messageSeal: Record<string, unknown> | null;
   isThreadReply: boolean;
   hasParticipatedInThread: (parentId: string) => boolean;
@@ -35,7 +35,9 @@ export async function prepareTlonGroupAdmission(params: {
     readStringField(params.messageSeal, "parent-id") ??
     readStringField(params.messageSeal, "parent") ??
     null;
-  const mentioned = isBotMentioned(params.rawText, botShipName, params.botNickname ?? undefined);
+  // Code nodes are left out so a ship name inside code never counts as a mention.
+  const mentionText = extractMessageText(params.messageContent, true);
+  const mentioned = isBotMentioned(mentionText, botShipName, params.botNickname ?? undefined);
   const configuredThreadMention =
     resolveChannelAuthorization(cfg, channelNest, params.getSettings())
       .requireMentionInBotThreads ?? account.requireMentionInBotThreads;

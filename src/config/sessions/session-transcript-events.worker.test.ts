@@ -12,7 +12,7 @@ import { loadTranscriptEvents } from "./session-accessor.js";
 import { appendTranscriptEvent } from "./session-accessor.sqlite-transcript-write.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { transcriptScope } from "./session-transcript-fixture.test-support.js";
-import * as targetWorker from "./session-transcript-read-worker-runtime.js";
+import * as preparation from "./session-transcript-worker-resources.js";
 
 function message(id: string, parentId: string | null, role: string, content: string) {
   return { type: "message", id, parentId, message: { role, content } };
@@ -120,11 +120,11 @@ it.each(["scope", "physical store"] as const)(
       await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
       const held = createDeferred();
       const release = createDeferred();
-      const resolve = targetWorker.resolveSessionSqliteTargetInWorker;
+      const prepare = preparation.prepareSessionStoreCandidatesInWorker;
       const observation = vi
-        .spyOn(targetWorker, "resolveSessionSqliteTargetInWorker")
+        .spyOn(preparation, "prepareSessionStoreCandidatesInWorker")
         .mockImplementation(async (...args) => {
-          const result = await resolve(...args);
+          const result = await prepare(...args);
           held.resolve();
           await release.promise;
           return result;
@@ -141,7 +141,9 @@ it.each(["scope", "physical store"] as const)(
           await fs.rename(scope.storePath, originalPath);
           await fs.copyFile(originalPath, scope.storePath);
           release.resolve();
-          await expect(pending).rejects.toThrow("Agent database changed during repair admission");
+          await expect(pending).rejects.toThrow(
+            "SQLite database file identity changed before existing-only open",
+          );
         } else {
           scope.sessionId = "replacement";
           scope.sessionKey = "agent:other:replacement";

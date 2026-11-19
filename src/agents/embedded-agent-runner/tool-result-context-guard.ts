@@ -320,6 +320,9 @@ export function installContextEngineLoopHook(params: {
 
   return () => {
     mutableAgent.transformContext = originalTransformContext;
+    // The removed hook stays reachable from retained run callbacks; drop its assembled history.
+    lastAssembledView = null;
+    lastSourceMessages = null;
   };
 }
 

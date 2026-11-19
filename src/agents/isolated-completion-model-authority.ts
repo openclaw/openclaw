@@ -1,3 +1,4 @@
+import { supportsOpenAITemperature } from "@openclaw/ai/internal/openai";
 import { adjustMaxTokensForThinking } from "@openclaw/ai/internal/shared";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { Model } from "../llm/types.js";
@@ -33,17 +34,22 @@ export function resolveIsolatedStreamParams(
   },
   model?: Model,
 ): AgentHarnessIsolatedCompletionParamsV2["streamParams"] {
-  let maxTokens = answerTokenBudget ?? streamParams?.maxTokens;
+  // Native harnesses build their own request body, so apply the transport temperature gate here.
+  const supported =
+    model && streamParams?.temperature !== undefined && !supportsOpenAITemperature(model)
+      ? { maxTokens: streamParams.maxTokens }
+      : streamParams;
+  let maxTokens = answerTokenBudget ?? supported?.maxTokens;
   if (maxTokens === undefined) {
-    return streamParams;
+    return supported;
   }
   const modelMaxTokens = model?.maxTokens ?? Number.POSITIVE_INFINITY;
   if (answerTokenBudget !== undefined && model?.reasoning && thinkLevel !== "off") {
     maxTokens = adjustMaxTokensForThinking(answerTokenBudget, modelMaxTokens, "medium").maxTokens;
   }
   return {
-    ...streamParams,
-    maxTokens: Math.min(maxTokens, modelMaxTokens, streamParams?.maxTokens ?? maxTokens),
+    ...supported,
+    maxTokens: Math.min(maxTokens, modelMaxTokens, supported?.maxTokens ?? maxTokens),
   };
 }
 

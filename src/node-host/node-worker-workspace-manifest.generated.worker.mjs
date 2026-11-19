@@ -59,6 +59,15 @@ function isManagedSandboxSkillsPath(relativePath) {
   );
 }
 const DERIVED_WORKSPACE_ROOT_PATHS = [
+  ".npm/_cacache",
+  ".npm/_logs",
+  ".cache/pip",
+  ".cache/uv",
+  ".pnpm-store",
+  ".bun/install/cache",
+  ".cargo/registry",
+  ".cargo/git",
+  ".gradle/caches",
   ".cache/vitest",
   ".cache/bun-transpiler",
   ".cache/openclaw/bun",

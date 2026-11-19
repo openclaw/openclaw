@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { startChatSendDiagnostics } from "../../gateway/server-methods/chat-send-diagnostics.js";
 import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
+import { withWorktreePreparationTiming } from "../worktrees/preparation-timing.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   prepareSandboxDependencyTemplate,
@@ -101,6 +102,40 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
+it("changes dependency identity when a mutable image is rebuilt or the engine target changes", async () => {
+  const config = { ...cfg, backend: "podman" };
+  const target = { key: "first", globalArgs: ["--url", "unix:///first.sock"] };
+  vi.mocked(resolvePodmanSandboxRuntimeInfo).mockResolvedValue({
+    machine: false,
+    rootless: true,
+    version: "5.7.0",
+    target,
+  });
+  vi.mocked(bindPodmanSandboxEngine).mockImplementation((selected) => ({
+    id: "podman",
+    command: "podman",
+    displayName: "Podman",
+    globalArgs: selected.globalArgs,
+  }));
+  const options = { assertCurrent: () => {} };
+  const first = await resolveSandboxDependencyTemplateIdentity(config, options);
+  const rebuilt = `sha256:${"c".repeat(64)}`;
+  mocks.exec.mockResolvedValue({ code: 0, stdout: rebuilt, stderr: "" });
+  const second = await resolveSandboxDependencyTemplateIdentity(config, options);
+  expect(first?.image).toBe(image);
+  expect(second?.image).toBe(rebuilt);
+  expect(second?.key).not.toBe(first?.key);
+  vi.mocked(resolvePodmanSandboxRuntimeInfo).mockResolvedValue({
+    machine: false,
+    rootless: true,
+    version: "5.7.0",
+    target: { key: "second", globalArgs: ["--url", "unix:///second.sock"] },
+  });
+  const third = await resolveSandboxDependencyTemplateIdentity(config, options);
+  expect(third?.key).not.toBe(second?.key);
+  expect(mocks.exec.mock.lastCall?.[0].globalArgs).toEqual(["--url", "unix:///second.sock"]);
+});
+
 async function prepare(config = cfg, signal?: AbortSignal, rollbackGuard = vi.fn()) {
   const identity = await resolveSandboxDependencyTemplateIdentity(config, {
     assertCurrent: () => {},
@@ -137,7 +172,17 @@ it.each([undefined, "PNPM_CONFIG_STORE_DIR", "npm_config_store_dir"])(
             ...cfg,
             docker: { ...cfg.docker, env: { ...cfg.docker.env, [key]: storeDir } },
           };
-    expect(await prepare(config)).toEqual({ installed: true });
+    const spans = new Map<string, number>();
+    const prepared = await withDiagnosticsTimelineObserver(
+      (name, _attributes, duration) => {
+        if (duration !== undefined) {
+          spans.set(name, duration);
+        }
+      },
+      () => withWorktreePreparationTiming("managed", () => prepare(config)),
+    );
+    expect(prepared).toEqual({ installed: true });
+    expect(spans.get("worktree.managed.templateRetire")).toEqual(expect.any(Number));
     const admitted = mocks.ensure.mock.calls[0]![0];
     expect(admitted.cfg.docker).toMatchObject({
       image,
@@ -268,6 +313,21 @@ it.each(["stdout", "stderr"] as const)(
       expect(result.reason).not.toContain("fixture-secret");
       expect(result.reason.length).toBeLessThanOrEqual(2100);
     }
+    expect(mocks.retire).toHaveBeenCalledOnce();
+  },
+);
+
+it.each(["ENOSPC", "No space left on device", "No space left\n      on device (os error 28)"])(
+  "fails preparation on %s instead of publishing a partial install or source-only success",
+  async (failure) => {
+    mocks.exec.mockImplementation(async (_engine, args: string[]) => ({
+      code: args[0] === "exec" ? 1 : 0,
+      stdout: args[0] === "image" ? image : containerId,
+      stderr: args[0] === "exec" ? `${failure}\n${"progress\n".repeat(400)}` : "",
+    }));
+    await expect(prepare()).rejects.toThrow(
+      /Sandbox dependency installation ran out of space.*PNPM_CONFIG_STORE_DIR/u,
+    );
     expect(mocks.retire).toHaveBeenCalledOnce();
   },
 );

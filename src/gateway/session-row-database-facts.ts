@@ -4,7 +4,7 @@ import {
   SessionRuntimeOwnershipChanged,
 } from "../agents/harness/session-runtime-ownership.js";
 import { readSessionActorRowFacts } from "../config/sessions/session-actor-replica.js";
-import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -219,7 +219,7 @@ export async function withSessionRowDatabaseFacts(
           consume.accept(currentIds, preparedFacts);
         }
       },
-      projectionLane,
+      sessionStoreLane,
     );
   } finally {
     for (const ownership of ownershipReads.values()) {

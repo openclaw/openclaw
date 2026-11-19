@@ -17,7 +17,11 @@ export class GatewayControlUiIngressError extends Error {
   }
 }
 
-export type GatewayIngressPrincipal = { kind: "owner" } | { kind: "person"; profileId: string };
+export type GatewayIngressPrincipal =
+  | { kind: "owner" }
+  | { kind: "person"; profileId: string }
+  /** Host-captured admission, retained verbatim by the consent owner. */
+  | { kind: "delegated-person"; profileId: string; admission: string };
 
 /** The plugin owns consent, expiry, persistence, and revocation of this exact grant. */
 export type GatewayIngressPrincipalOptionsV1 = {

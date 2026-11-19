@@ -14,12 +14,12 @@ These plugins participate in meetings. They are separate from messaging channels
 
 ## Choose a plugin
 
-| Platform        | Plugin                                      | Accepted meeting links                                                                                      | Installation                                    | Participation paths                                      | Platform-specific capabilities                                                                                |
-| --------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Google Meet     | [`google-meet`](/plugins/google-meet)       | `meet.google.com/...`                                                                                       | Install from npm or ClawHub; enabled by default | Local Chrome, Chrome on a paired node, or Twilio dial-in | Can create meetings through the Meet API or a signed-in browser; can read supported Meet artifacts with OAuth |
-| Microsoft Teams | [`teams-meetings`](/plugins/teams-meetings) | Work links under `teams.microsoft.com/l/meetup-join/...` and consumer links under `teams.live.com/meet/...` | Install from npm or ClawHub; enabled by default | Local Chrome or Chrome on a paired node                  | Guest join for work and consumer meetings                                                                     |
-| Slack huddles   | [`slack-huddles`](/plugins/slack-huddles)   | Slack `/huddle/<TEAM>/<CHANNEL>` or `/huddle/<CHANNEL>` links, or a channel id                              | Install from npm or ClawHub; enable explicitly  | Local Chrome or Chrome on a paired node                  | Joins active huddles as a dedicated signed-in Slack user                                                      |
-| Zoom            | [`zoom-meetings`](/plugins/zoom-meetings)   | `zoom.us/j/...` and account subdomains such as `example.zoom.us/j/...`                                      | Install from npm or ClawHub; enabled by default | Local Chrome or Chrome on a paired node                  | Guest join through the Zoom Web App                                                                           |
+| Platform        | Plugin                                      | Accepted meeting links                                                                                      | Installation                                         | Participation paths                                      | Platform-specific capabilities                                                                                |
+| --------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Google Meet     | [`google-meet`](/plugins/google-meet)       | `meet.google.com/...`                                                                                       | Install from npm or ClawHub; installation enables it | Local Chrome, Chrome on a paired node, or Twilio dial-in | Can create meetings through the Meet API or a signed-in browser; can read supported Meet artifacts with OAuth |
+| Microsoft Teams | [`teams-meetings`](/plugins/teams-meetings) | Work links under `teams.microsoft.com/l/meetup-join/...` and consumer links under `teams.live.com/meet/...` | Install from npm or ClawHub; installation enables it | Local Chrome or Chrome on a paired node                  | Guest join for work and consumer meetings                                                                     |
+| Slack huddles   | [`slack-huddles`](/plugins/slack-huddles)   | Slack `/huddle/<TEAM>/<CHANNEL>` or `/huddle/<CHANNEL>` links, or a channel id                              | Install from npm or ClawHub; enable explicitly       | Local Chrome or Chrome on a paired node                  | Joins active huddles as a dedicated signed-in Slack user                                                      |
+| Zoom            | [`zoom-meetings`](/plugins/zoom-meetings)   | `zoom.us/j/...` and account subdomains such as `example.zoom.us/j/...`                                      | Install from npm or ClawHub; installation enables it | Local Chrome or Chrome on a paired node                  | Guest join through the Zoom Web App                                                                           |
 
 Choose Google Meet when you need meeting creation, Google API artifacts, or a Twilio phone path. Choose Teams or Zoom for direct browser guest participation on those platforms. The Teams and Zoom plugins do not create meetings, dial in, call the vendor API, or capture audio/video recordings.
 
@@ -27,6 +27,33 @@ Choose Slack huddles to call the agent into an active huddle. It requires a
 dedicated Slack user signed into the OpenClaw Chrome profile with membership in
 the conversation. Slack app and bot tokens cannot join huddles or read their
 audio. The plugin does not start huddles or answer incoming rings.
+
+## Enable bundled meeting plugins
+
+Google Meet, Microsoft Teams meetings, and Zoom meetings are off by default when
+bundled in a source checkout or custom distribution and left unconfigured. The
+root npm package does not include these three plugins; installing them separately
+keeps the existing install-and-enable behavior.
+
+To enable a bundled copy, use the installed plugin’s enable control on the
+**Plugins** page, or run:
+
+```bash
+openclaw plugins enable google-meet teams-meetings zoom-meetings
+```
+
+Enable only the entries you need. The equivalent configuration is
+`plugins.entries.<id>.enabled: true`. Existing explicit enable/disable decisions
+keep their current activation behavior. Gateway startup still auto-enables
+material meeting configuration. Standalone `openclaw agent --local` does not run
+that Gateway startup phase; enable its meeting entries explicitly, even when
+they already have configuration. Externally discovered copies retain their
+existing activation rules; this is a bundled-default change, not a new universal
+explicit-enablement requirement.
+
+After an upgrade, users who relied only on bundled default enablement need to
+enable the relevant entries. The default does not rewrite saved configuration or
+delete transcript data.
 
 ## Choose a mode
 

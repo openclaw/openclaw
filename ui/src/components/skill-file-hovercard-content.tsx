@@ -60,7 +60,7 @@ export function SkillRead(props: {
           <button
             ref={createHovercardControlRef()}
             type="button"
-            title={t("filePreview.skill.open")}
+            title={t("filePreview.skill.openTooltip")}
             aria-label={t("filePreview.skill.open")}
             onClick={() => props.onOpen(file())}
           >

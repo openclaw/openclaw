@@ -329,6 +329,43 @@ describe("session branch diff stats", () => {
     expect(result.branch).toEqual(expectedBranch(1, 0, 1));
   });
 
+  it("ignores pull requests opened before a reused branch name was created", async () => {
+    // Managed worktrees create their branch from the default branch.
+    await initializeRepo();
+    await trackRemote("main");
+    await git("checkout", "-b", "feature", "refs/remotes/origin/main");
+    await writeCommit("a.txt", "two\n", "feature work", true);
+    await connectGithub();
+    const earlier = pullListItem({
+      number: 154218,
+      html_url: "https://github.com/openclaw/openclaw/pull/154218",
+      created_at: "2026-09-21T00:44:17Z",
+      head: { sha: "b".repeat(40), ref: "feature" },
+    });
+    const current = pullListItem({
+      created_at: new Date(Date.now() + 60_000).toISOString(),
+      head: { sha: "a".repeat(40), ref: "feature" },
+    });
+    vi.stubGlobal(
+      "fetch",
+      routedFetch([
+        { match: "/pulls?head=", response: () => githubJson([earlier, current]) },
+        { match: "/pulls/103469", response: () => githubJson({ additions: 1, deletions: 0 }) },
+        { match: "/commits/", response: () => githubJson({ total_count: 0, check_runs: [] }) },
+      ]),
+    );
+
+    const result = await loadCheckout("reused-branch-name");
+    expect(result.pullRequests.map((pull) => pull.number)).toEqual([103469]);
+
+    // Other start points, such as a remote branch, may adopt an existing PR.
+    await trackRemote("adopted");
+    await git("checkout", "-b", "adopted", "refs/remotes/origin/adopted");
+    const adopted = await runGitReadOperation({ type: "checkout.context", input: { root } });
+    expect(adopted).toMatchObject({ branch: "adopted" });
+    expect(adopted).not.toHaveProperty("branchStartedAt");
+  });
+
   describe("fork head discovery", () => {
     const forkOwner = "PratikRai0101";
     const forkContext = () => runGitReadOperation({ type: "checkout.context", input: { root } });

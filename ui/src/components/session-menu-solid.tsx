@@ -247,10 +247,8 @@ function SessionMenuContent(
     const value = item.id;
     const nextView = compactSessionMenuViewForValue(value);
     if (nextView) {
+      view.prepareView(nextView);
       setCompactView(nextView);
-      if (nextView === "icon") {
-        view.appearance.prepare();
-      }
       onSettled(() => actions.focusCurrentView());
       return;
     }

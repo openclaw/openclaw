@@ -90,8 +90,14 @@ export function mountSkills(
     ],
   });
   onTestFinished(() => router.stop());
-  const runtimeConfig: SkillsState["runtimeConfig"] = {
-    runExternalMutation: async (task) => ({
+  // Also read by the skill dialog: a loaded config with no stored skill keys.
+  const runtimeConfig = {
+    state: { configSnapshot: { config: {} }, lastError: null },
+    subscribe: () => () => undefined,
+    ensureDisplayLoaded: async () => undefined,
+    runExternalMutation: async (
+      task: Parameters<SkillsState["runtimeConfig"]["runExternalMutation"]>[0],
+    ) => ({
       ok: true,
       value: await task(client),
       refresh: { ok: true },

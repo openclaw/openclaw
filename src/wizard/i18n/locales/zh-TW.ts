@@ -478,6 +478,8 @@ export const zh_TW = {
       testAiProgress: "正在用真實 completion 測試 AI 存取…",
       testAiSuccess: "AI 存取正常，在 {seconds} 秒內回覆。",
       testAiTitle: "AI 存取測試",
+      utilityOnlyNote: "請為 agent 對話選擇供應商，或選擇暫時略過。",
+      utilityOnlyTitle: "選擇 agent 的模型",
       whatSetup: "你想設定什麼？",
       workspaceConflictConfirm: "要將現有 agent fleet 移動到要求的工作區嗎？",
       workspaceConflictNotice:

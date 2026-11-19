@@ -2,6 +2,7 @@ import { PassThrough } from "node:stream";
 import { setImmediate } from "node:timers/promises";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withMockedPlatform, withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import type { CommandProcessCustody } from "./command-process-custody.types.js";
@@ -13,6 +14,7 @@ import {
   withCommandProcessScope,
 } from "./exec-spawn.js";
 import { runCommandBuffered, runExec } from "./exec.js";
+import { killProcessTree } from "./kill-tree.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 
 const transport = vi.hoisted(() => ({ spawn: vi.fn(), settle: vi.fn() }));
@@ -30,11 +32,22 @@ vi.mock("../shared/pid-alive.js", () => ({
   getFileLockProcessStartTime: () => 1,
   getProcessInstanceStartTime: () => 1,
 }));
+// mock-isolation: Synthetic children have no operating-system birth identity.
+vi.mock("./command-process-identity.js", () => ({ readCommandProcessStartTime: () => 1 }));
 vi.mock("./kill-tree.js", () => ({ killProcessTree: vi.fn() }));
 // mock-isolation: Synthetic process groups must not leave real reaper work in the shared test worker.
 vi.mock("./scoped-child-reaper.js", () => ({ scheduleAdoptedChildZombieReapAfterExit: vi.fn() }));
-vi.mock("./exec-termination.js", () => ({
-  createCommandTerminationController: () => ({ terminate: () => false, settle: transport.settle }),
+vi.mock("./exec-termination.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./exec-termination.js")>()),
+  createCommandTerminationController: ({
+    cancelController,
+  }: {
+    cancelController: AbortController;
+  }) => ({
+    terminate: () => false,
+    cancel: () => cancelController.abort(),
+    settle: transport.settle,
+  }),
 }));
 
 const scopes: Promise<unknown>[] = [];
@@ -93,6 +106,7 @@ function commandFixture() {
   transport.settle.mockReturnValue(cleanup.promise);
   const fixture = {
     child,
+    command,
     closed,
     cleanup,
     result,
@@ -230,6 +244,85 @@ it.each([
   },
 );
 
+it.for([
+  { ending: "uncertain", interruption: "output cap" },
+  { ending: "rejected", interruption: "output cap" },
+  { ending: "forced", interruption: "signal" },
+  { ending: "forced", interruption: "timeout" },
+] as const)(
+  "preserves the cleanup owner's $ending result after a buffered $interruption",
+  ({ ending, interruption }, { signal }) =>
+    withMockedPlatform("linux", async () => {
+      const fixture = commandFixture();
+      const stdout = new PassThrough();
+      fixture.child.pid = 424242;
+      fixture.child.stdout = stdout;
+      const command = Object.defineProperty(fixture.command, "stdout", { value: stdout });
+      const entered = createDeferredCore();
+      transport.spawn.mockImplementation(() => {
+        entered.resolve();
+        return command;
+      });
+      const runner = await import("./exec-runner.js");
+      const run = runner.runCommandWithTimeout;
+      const returned = createDeferredCore<Awaited<ReturnType<typeof run>>>();
+      vi.spyOn(runner, "runCommandWithTimeout").mockImplementation(async (...params) => {
+        const result = await run(...params);
+        returned.resolve(result);
+        return result;
+      });
+      const failure = new Error("native cleanup observation failed");
+      const finished = vi.fn();
+      const controller = new AbortController();
+      const work = runCommandBuffered(["fixture"], {
+        maxOutputBytes: 1,
+        signal: controller.signal,
+        timeoutMs: interruption === "timeout" ? 1 : undefined,
+      }).finally(finished);
+      const outcome = work.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await withinTest(entered.promise, signal);
+        stdout.write(interruption === "output cap" ? "overflow" : "o");
+        if (interruption === "signal") {
+          controller.abort();
+        }
+        const inner = await withinTest(returned.promise, signal);
+        expect(inner).toMatchObject({
+          termination: interruption === "timeout" ? "timeout" : "signal",
+          outputLimitExceeded: interruption === "output cap" || undefined,
+          cleanup: "uncertain",
+        });
+        await expectPending(finished);
+        fixture.open();
+        stdout.end();
+        fixture.finish();
+        await expectPending(finished);
+        if (ending === "rejected") {
+          fixture.cleanup.reject(failure);
+        } else {
+          fixture.cleanup.resolve(ending);
+        }
+        const result = await withinTest(work, signal);
+        expect(result).toMatchObject({
+          termination: interruption === "output cap" ? "output-limit" : interruption,
+          code: null,
+        });
+        expect(result.stdout.toString()).toBe("o");
+        expect(hasCommandProcessCleanupError(result.error)).toBe(ending !== "forced");
+        expect(result.error?.cause).toBe(ending === "rejected" ? failure : undefined);
+      } finally {
+        fixture.open();
+        stdout.end();
+        fixture.finish();
+        fixture.cleanup.resolve("forced");
+        await outcome;
+      }
+    }),
+);
+
 it.each([false, true])("failed binding withholds input (group live: %s)", async (live) => {
   const fixture = commandFixture();
   fixture.child.stdin = new PassThrough();
@@ -292,16 +385,27 @@ it.each(["forced", "uncertain"] as const)(
 
 it.each(["exec", "spawn"] as const)("retains %s admitted before remote readiness", async (api) => {
   const fixture = commandFixture();
+  vi.mocked(killProcessTree).mockClear();
   const failure = new Error("caller stopped");
   const scopeFinished = vi.fn();
   const scope = ownScope(async () => {
-    const pending = api === "exec" ? runExec("fixture", [], { logOutput: false }) : spawnFixture();
+    const pending =
+      api === "exec"
+        ? runExec("fixture", [], { logOutput: false })
+        : spawnCommand(["fixture"], { reject: false, inheritScopeCancellation: false });
     void pending.catch(() => {});
     throw failure;
   }).finally(scopeFinished);
   const outcome = scope.catch((error: unknown) => error);
   await expectPending(scopeFinished);
   fixture.open();
+  await setImmediate();
+  if (process.platform !== "win32") {
+    expect(killProcessTree).toHaveBeenCalledExactlyOnceWith(424242, {
+      detached: true,
+      force: true,
+    });
+  }
   fixture.finish();
   expect(await outcome).toBe(failure);
 });
@@ -313,12 +417,13 @@ it.skipIf(process.platform === "win32").each([false, true])(
       const listeners = process.listeners("SIGCHLD");
       vi.useFakeTimers();
       const disappearsAt = Date.now() + 1_000;
-      vi.spyOn(process, "kill").mockImplementation(() => {
+      vi.spyOn(process, "kill").mockImplementation((pid) => {
         if (!exits) {
           return true;
         }
         throw Object.assign(new Error("synthetic group probe"), {
-          code: Date.now() < disappearsAt ? "EPERM" : "ESRCH",
+          // The denial canary's impossible group gets the kernel's ESRCH, so EPERM stays a kernel EPERM.
+          code: pid !== -(4_194_304 + 1) && Date.now() < disappearsAt ? "EPERM" : "ESRCH",
         });
       });
       const fixture = commandFixture();
