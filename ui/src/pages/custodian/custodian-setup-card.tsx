@@ -6,16 +6,23 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
+import { ModelProviderIcon } from "../../lib/reactive/provider-presentation.tsx";
 import type { CustodianSetupActions } from "./custodian-actions.ts";
 import type { CustodianAutoSetup } from "./custodian-auto-setup.ts";
 import type { CustodianSessionStore } from "./custodian-session-store.ts";
 import "../../styles/custodian-setup-card.css";
+import "../../styles/model-setup.css";
 
 function SignInWizard(props: { setup: () => CustodianAutoSetup; actions: CustodianSetupActions }) {
   const state = () => props.setup().wizard.state;
   const step = () => {
     const current = state();
     return current.phase === "step" ? current : undefined;
+  };
+  // The sign-in this step belongs to; automatic setup only offers OpenAI sign-ins.
+  const signInLabel = () => {
+    const result = props.setup().result;
+    return (result?.selected?.shared ? result.separateSignIn : result?.signIn)?.label;
   };
   const error = () => {
     const current = state();
@@ -36,8 +43,22 @@ function SignInWizard(props: { setup: () => CustodianAutoSetup; actions: Custodi
       <Show when={step()}>
         {(current) => (
           <div class="custodian-setup__wizard">
-            <Show when={current().step.title}>
-              {(title) => <h3>{formatUiExternalText(title())}</h3>}
+            <Show
+              when={signInLabel()}
+              fallback={
+                <Show when={current().step.title}>
+                  {(title) => <h3>{formatUiExternalText(title())}</h3>}
+                </Show>
+              }
+            >
+              {(label) => (
+                <div class="model-setup__row">
+                  <div class="model-setup__provider-copy">
+                    <ModelProviderIcon provider="openai" class="model-setup__icon" />
+                    <strong>{label()}</strong>
+                  </div>
+                </div>
+              )}
             </Show>
             <Show when={current().validationError}>
               {(message) => (
