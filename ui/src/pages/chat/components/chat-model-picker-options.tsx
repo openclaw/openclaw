@@ -1,9 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, Errored, For, Loading, Show, useContext } from "solid-js";
 import { providerDisplayLabel as defaultProviderLabel } from "../../../components/provider-icon-data.ts";
-import type { ProviderPresentation } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import { Tooltip } from "../../../components/solid/tooltip.tsx";
 import { registerModelFavoritesEnglish } from "../../../i18n/locales/en-model-favorites.ts";
 import { formatDurationHuman } from "../../../lib/format-duration.ts";
@@ -12,12 +10,14 @@ import { formatModelRuntimeLabel } from "../../../lib/model-runtime-label.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { readVisibleTime } from "../../../lib/reactive/visible-clock.ts";
 import { ChatContextWindowControl } from "./chat-context-window-control.tsx";
+import { ChatModelBrandIcon } from "./chat-model-brand-icon.tsx";
 import { ChatModelCatalogState } from "./chat-model-catalog-state.tsx";
 import {
   formatModelContextMeta,
   formatModelLabel,
   isModelPickerOptionSelected,
   modelPickerOptionKey,
+  routedModelBrand,
   type ChatModelPickerOptionProps,
   type ChatModelPickerTargetOptionProps,
   type ChatModelPickerTargetGroup,
@@ -68,19 +68,6 @@ export function ChatModelCooldown(props: { until: number }) {
 
 registerEnglishCatalog(registerModelFavoritesEnglish);
 
-export function ChatModelProviderIcon(props: {
-  provider: string;
-  presentation?: ProviderPresentation;
-}) {
-  return (
-    <ProviderBrandIcon
-      provider={props.provider}
-      presentation={props.presentation}
-      class="chat-controls__provider-icon"
-    />
-  );
-}
-
 export function ChatModelTargetIcon() {
   return (
     <span
@@ -112,6 +99,8 @@ function optionPresentation(options: ModelPresentationProps) {
   const modelLabel = formatModelLabel(options.entry);
   const runtime = formatModelRuntimeLabel(options.entry.provider, options.entry.agentRuntimeId, t);
   const runtimeLabel = runtime?.label ?? "";
+  const routerLabel =
+    options.entry.provider === "clawrouter" ? t("chat.modelControls.viaClawRouter") : undefined;
   const routeDetail = runtime?.detail ?? "";
   const chatOnlyHelp =
     options.entry.supportsTools === false ? t("chat.modelControls.chatOnlyHelp") : "";
@@ -143,6 +132,7 @@ function optionPresentation(options: ModelPresentationProps) {
     context: contextOption ? context : undefined,
     modelLabel,
     runtimeLabel,
+    routerLabel,
     chatOnlyHelp,
     detail,
     resetsPin,
@@ -319,6 +309,7 @@ function ModelOptionButton(
       aria-label={[
         props.presentation.modelLabel,
         props.presentation.runtimeLabel,
+        props.presentation.routerLabel,
         props.presentation.accessibleStatus,
         props.presentation.chatOnlyHelp,
       ]
@@ -354,9 +345,11 @@ function ModelOptionButton(
       }}
     >
       <span class="chat-controls__model-option-provider">
-        <ChatModelProviderIcon
+        <ChatModelBrandIcon
           provider={props.entry.provider}
+          maker={routedModelBrand(props.entry)}
           presentation={props.entry.presentation}
+          class="chat-controls__provider-icon"
         />
       </span>
       <span class="chat-controls__model-option-copy">
@@ -414,7 +407,9 @@ export function ChatModelPickerOption(props: ChatModelPickerOptionProps) {
     >
       <Tooltip
         class="chat-controls__model-tooltip"
-        content={[presentation().modelLabel, presentation().detail].filter(Boolean).join(". ")}
+        content={[presentation().modelLabel, presentation().routerLabel, presentation().detail]
+          .filter(Boolean)
+          .join(". ")}
         delay={800}
         describe={Boolean(presentation().detail)}
       >

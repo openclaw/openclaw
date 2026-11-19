@@ -2581,6 +2581,37 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   color: var(--icon-interactive, var(--chat-composer-secondary));
 }
 
+/* Both marks share the old slot; the knockout keeps the corner light on any surface. */
+.chat-controls__routed-brand {
+  position: relative;
+  display: inline-block;
+  color: var(--muted);
+}
+
+.chat-controls__routed-brand-maker {
+  position: absolute;
+  inset: 0;
+  mask-image: radial-gradient(circle at 77% 77%, transparent 25%, black 30%);
+}
+
+.chat-controls__routed-brand-maker .provider-brand-icon {
+  position: absolute;
+  inset: 0 auto auto 0;
+  width: 76%;
+  height: 76%;
+}
+
+.chat-controls__routed-brand-badge {
+  position: absolute;
+  inset: auto 0 0 auto;
+  width: 47%;
+  height: 47%;
+}
+
+.chat-controls__routed-brand .provider-brand-icon {
+  color: inherit;
+}
+
 .chat-controls__model-options {
   display: block;
   min-width: 0;

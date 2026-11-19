@@ -7,6 +7,7 @@ const enModelControls = {
       subscription: "Subscription",
       api: "API",
       nativeLogin: "Native login",
+      viaClawRouter: "via ClawRouter",
       default: "Default",
       defaultModel: "Default model",
       routes: {

@@ -4,10 +4,11 @@ import {
   type ProviderPresentation,
 } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../../../lib/reactive/platform.ts";
 import { createTabList } from "../../../lib/tabs.ts";
-import { ChatModelProviderIcon, ChatModelTargetIcon } from "./chat-model-picker-options.tsx";
+import { ChatModelTargetIcon } from "./chat-model-picker-options.tsx";
 import { loadModelProviderOrder, saveModelProviderOrder } from "./model-provider-order.ts";
 
 export function ChatModelProviderRail(props: {
@@ -196,7 +197,8 @@ export function ChatModelProviderRail(props: {
                 {item().id === "$favorites" ? (
                   <Icon name="star" class="chat-controls__provider-icon" />
                 ) : item().draggable ? (
-                  <ChatModelProviderIcon
+                  <ProviderBrandIcon
+                    class="chat-controls__provider-icon"
                     provider={item().id}
                     presentation={props.presentation(item().id)}
                   />

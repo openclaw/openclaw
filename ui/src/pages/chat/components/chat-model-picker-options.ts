@@ -2,6 +2,7 @@ import type { ModelCatalogEntry } from "../../../api/types.ts";
 import type { ProviderPresentation } from "../../../components/provider-icon-data.ts";
 import {
   formatRawProviderLabel,
+  hasProviderBrandIcon,
   providerDisplayLabel,
 } from "../../../components/provider-icon-data.ts";
 import { t } from "../../../i18n/index.ts";
@@ -28,11 +29,20 @@ export type ChatModelPickerOption = {
   isDefault: boolean;
   label: string;
   provider: string;
+  family?: string;
   /** Hosted-catalog recommendation; the rest of its provider collapses under "All models". */
   recommended?: boolean;
   supportsTools?: boolean;
   value: string;
 };
+
+export function routedModelBrand(option: Pick<ChatModelPickerOption, "provider" | "family">) {
+  const { provider, family } = option;
+  // The route is ClawRouter; the published family identifies who makes the model.
+  return provider === "clawrouter" && family && family !== provider && hasProviderBrandIcon(family)
+    ? family
+    : undefined;
+}
 
 export function modelCooldownDeadline(
   options: readonly ChatModelPickerOption[],

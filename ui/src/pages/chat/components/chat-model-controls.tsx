@@ -201,6 +201,7 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
         isDefault,
         value: option.value,
         label: resolveChatModelPickerLabel(catalogEntry, option.label),
+        family: catalogEntry?.family,
         contextTokens: catalogEntry?.contextTokens,
         contextWindow: catalogEntry?.contextWindow,
         supportsTools: catalogEntry?.supportsTools,

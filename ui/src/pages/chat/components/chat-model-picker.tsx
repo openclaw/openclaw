@@ -10,14 +10,15 @@ import {
 import type { ModelAuthStatusResult } from "../../../api/types.ts";
 import { hasProviderBrandIcon } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ChatContextWindowControlParams } from "./chat-context-window-control.tsx";
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
+import { ChatModelBrandIcon } from "./chat-model-brand-icon.tsx";
 import {
   isModelPickerOptionSelected,
+  routedModelBrand,
   type ChatModelPickerOption as ModelPickerOption,
   type ChatModelPickerTargetGroup,
 } from "./chat-model-picker-options.ts";
@@ -139,8 +140,12 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
       : contextWindow?.options.find((option) => option.id === contextWindow.selected);
   });
   const triggerLabel = () => params.triggerStatusLabel ?? params.triggerModelLabel;
+  const triggerRoute = () =>
+    !params.triggerStatusLabel && triggerModel()?.provider === "clawrouter"
+      ? t("chat.modelControls.viaClawRouter")
+      : undefined;
   const triggerAriaLabel = () => {
-    const label = triggerLabel();
+    const label = [triggerLabel(), triggerRoute()].filter(Boolean).join(" · ");
     const detail =
       label && triggerModel()?.supportsTools === false
         ? `${label} · ${t("chat.modelControls.chatOnly")}`
@@ -181,13 +186,15 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
               : "false"
           }
           aria-label={triggerAriaLabel()}
+          title={triggerRoute()}
           aria-busy="false"
           aria-disabled={params.disabled ? "true" : "false"}
           aria-description={params.disabledReason}
         >
           <Show when={showProviderIcon()}>
-            <ProviderBrandIcon
+            <ChatModelBrandIcon
               provider={triggerModel()!.provider}
+              maker={routedModelBrand(triggerModel()!)}
               presentation={triggerModel()!.presentation}
               class="chat-controls__trigger-provider-icon"
             />
