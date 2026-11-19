@@ -66,8 +66,9 @@ result["descendant_write"] = json.loads(descendant.stdout)["write"]
 result["credential_env"] = os.environ.get("ISOLATION_SECRET_CANARY")
 print(json.dumps(result))
 '''
+    print(json.dumps({'launchPid': os.getpid(), 'python': sys.executable}), file=sys.stderr, flush=True)
     os.execve('/usr/bin/sandbox-exec', ['/usr/bin/sandbox-exec', '-p', profile,
-              '/usr/bin/python3', '-I', '-c', code, root, allowed, denied, parent],
+              sys.executable, '-I', '-c', code, root, allowed, denied, parent],
               {'PATH': '/usr/bin:/bin', 'HOME': root + '/candidate',
                'TMPDIR': root + '/candidate', 'LANG': 'en_US.UTF-8'})
 
@@ -131,7 +132,16 @@ def main():
                                 env={**os.environ, 'ISOLATION_SECRET_CANARY': 'must-not-cross'},
                                 text=True, capture_output=True, timeout=30, close_fds=True)
         if result.returncode:
-            raise RuntimeError('Sandbox launch failed: ' + result.stderr)
+            diagnostic = subprocess.run(
+                ['/usr/bin/log', 'show', '--last', '1m', '--style', 'compact',
+                 '--predicate', 'subsystem == "com.apple.sandbox.reporting"'],
+                text=True, capture_output=True, timeout=15)
+            # Only this synthetic probe's denials are relevant; never dump host logs.
+            launch = json.loads(result.stderr.splitlines()[0])
+            denials = '\n'.join(line for line in diagnostic.stdout.splitlines()
+                                if str(root) in line or f"({launch['launchPid']})" in line)[-8000:]
+            raise RuntimeError(f'Sandbox launch failed (exit {result.returncode}): '
+                               + result.stderr + denials)
         facts = json.loads(result.stdout)
         assert facts['uid'] == uid and facts['groups'] == [uid], facts
         for key in ('qualification_read', 'qualification_write', 'actions_read', 'actions_write',
