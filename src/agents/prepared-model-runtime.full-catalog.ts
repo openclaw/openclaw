@@ -24,6 +24,11 @@ import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-pr
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
+import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
+import { resolveFallbackRateLimitModel } from "./model-fallback-rate-limit-model.js";
+import { modelKey } from "./model-ref-shared.js";
+import { resolveDefaultModelForAgent } from "./model-selection-config.js";
+import { resolveConfiguredModelFallbacks } from "./model-selection-resolve.js";
 import { applyModelServingContextLimit } from "./model-serving-context.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import {
@@ -354,6 +359,38 @@ export function createPreparedModelRuntimeSnapshot(
     pluginRegistry,
   } = pluginGeneration;
   const { configuredRuntimeModels, templateModelRegistry } = catalogFacts;
+  const fallbackRateLimitModels = withPluginRuntimeGenerationScope(
+    { metadataSnapshot: pluginMetadataSnapshot, pluginRegistry },
+    () => {
+      const models = new Map<string, Model | undefined>();
+      const selection = {
+        cfg: publishedConfig,
+        agentId: input.agentId,
+        manifestPlugins: pluginMetadataSnapshot,
+      };
+      if (resolveConfiguredModelFallbacks(selection).length === 0) {
+        return models;
+      }
+      const candidates = resolveModelCandidateChain({
+        ...selection,
+        ...resolveDefaultModelForAgent({ ...selection, allowPluginNormalization: false }),
+      });
+      for (const { provider, model: modelId } of candidates.length > 1 ? candidates : []) {
+        const key = modelKey(provider, modelId);
+        if (!models.has(key)) {
+          try {
+            models.set(
+              key,
+              resolveFallbackRateLimitModel({ provider, modelId, cfg: publishedConfig }),
+            );
+          } catch {
+            // Unavailable owners remain with normal candidate admission, including its error policy.
+          }
+        }
+      }
+      return models;
+    },
+  );
   const modelCatalog = materializePreparedModelCatalog(
     catalogFacts.modelCatalog,
     agentFacts.runtimeCapabilityModels,
@@ -401,6 +438,7 @@ export function createPreparedModelRuntimeSnapshot(
     loadFullModelCatalog: catalogAccess.loadFullModelCatalog,
     loadNativeModelCatalog: catalogAccess.loadNativeModelCatalog,
     configuredRuntimeModels,
+    fallbackRateLimitModels,
     configuredModelAliases: prepareConfiguredModelAliases(
       agentFacts,
       pluginGeneration,

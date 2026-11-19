@@ -189,7 +189,7 @@ describe("session notification authority", () => {
   );
 
   it.each(["source revoked", "role changed", "target deleted"] as const)(
-    "cannot queue when %s during notification authorization",
+    "keeps admitted policy but honors source and target fences (%s)",
     async (change) => {
       await withNotification(
         "operator.sessions.write",
@@ -227,20 +227,26 @@ describe("session notification authority", () => {
               await deleteTarget();
             }
             resume.resolve();
-            await expect(pending).rejects.toThrow(
-              change === "source revoked"
-                ? /notification source revoked/
-                : change === "role changed"
-                  ? /operator role changed/
+            if (change === "role changed") {
+              await expect(pending).resolves.toMatchObject({ details: { status: "queued" } });
+            } else {
+              await expect(pending).rejects.toThrow(
+                change === "source revoked"
+                  ? /notification source revoked/
                   : /session target is unavailable/i,
-            );
+              );
+            }
           } finally {
             resume.resolve();
             await pending.catch(() => {});
             context.ensureSessionRowProjection = prepare;
             spy.mockRestore();
           }
-          expect(drainSystemEvents(TARGET)).toEqual([]);
+          expect(drainSystemEvents(TARGET)).toEqual(
+            change === "role changed"
+              ? [expect.stringContaining("Inspect the prepared change.")]
+              : [],
+          );
         },
       );
     },

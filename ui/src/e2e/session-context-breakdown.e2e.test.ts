@@ -213,13 +213,11 @@ suite.define(() => {
       await summary.screenshot({
         path: path.join(createControlUiE2eArtifactDir("session-total-cost"), "popover.png"),
       });
-      const latest = summary.locator(".context-usage__latest").first();
+      const latest = summary.locator('[data-chat-usage-row="run"]');
       // Run: 530,000 of 532,004 prompt tokens were reads. Session: 8.8M of 9M.
-      expect(await latest.textContent()).toMatch(/Latest run\s*Cache\s*99\.62%\s*Cost\s*\$0\.116/);
-      expect(await latest.getAttribute("title")).toBe("In 4 · Out 9");
-      await expect
-        .poll(() => total.textContent())
-        .toMatch(/Session total\s*Cache\s*97\.77%\s*Cost\s*\$99\.14/);
+      expect(await latest.textContent()).toMatch(/Latest run\s*99\.62%\s*\$0\.116/);
+      expect(await latest.locator('[role="rowheader"]').getAttribute("title")).toBe("In 4 · Out 9");
+      await expect.poll(() => total.textContent()).toMatch(/Session total\s*97\.77%\s*\$99\.14/);
       const request = await gateway.waitForRequest("sessions.usage");
       expect(request.params).toMatchObject({ key: sessionKey, range: "all", groupBy: "instance" });
       expect(request.params).not.toHaveProperty("startDate");
@@ -233,6 +231,160 @@ suite.define(() => {
       await gateway.emitGatewayEvent("sessions.changed", { ...next, sessionKey });
       await expect.poll(() => total.textContent()).toMatch(/≥\s*\$99\.31/);
       expect(await latest.textContent()).toContain("$0.17");
+    });
+  });
+
+  it("keeps each usage row on one line with an unpriced run and a large session total", async () => {
+    await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
+      const session = {
+        key: sessionKey,
+        sessionId: "context-instance",
+        kind: "direct" as const,
+        label: "Context breakdown",
+        model: "demo-model",
+        modelProvider: "example",
+        contextTokens: 258_400,
+        totalTokens: 482_500,
+        totalTokensFresh: true,
+        inputTokens: 282_400,
+        outputTokens: 10_400,
+      };
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "sessions.usage"],
+        sessionKey,
+        sessions: [session],
+        agentModel: "example/demo-model",
+        models: [
+          { id: "demo-model", provider: "example", name: "Demo model", contextWindow: 258_400 },
+        ],
+        historyMessages: [
+          { role: "user", content: "Keep going." },
+          {
+            role: "assistant",
+            content: "Done.",
+            usage: { input: 32_400, output: 10_400, cacheRead: 250_000, cacheWrite: 0 },
+          },
+        ],
+        methodResponses: {
+          "sessions.usage": {
+            sessions: [
+              {
+                key: sessionKey,
+                sessionId: "context-instance",
+                contextWeight: report,
+                usage: {
+                  totalCost: 3_585.73,
+                  missingCostEntries: 12,
+                  input: 8_650_000,
+                  cacheRead: 91_350_000,
+                  cacheWrite: 0,
+                },
+              },
+            ],
+          },
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await gateway.waitForRequest("sessions.messages.subscribe");
+      await page.locator(".context-ring").filter({ visible: true }).click();
+      const summary = page.locator(".context-usage__popover").filter({ visible: true });
+      const total = summary.locator('[data-chat-session-cost="true"]');
+      await total.waitFor();
+      await summary.screenshot({
+        path: path.join(createControlUiE2eArtifactDir("usage-rows-one-line"), "popover.png"),
+      });
+      const run = summary.locator('[data-chat-usage-row="run"]');
+      expect(await run.textContent()).toMatch(/Latest run\s*88\.52%\s*—/);
+      expect(await total.textContent()).toMatch(/Session total\s*91\.35%\s*≥ \$3,585\.73/);
+      // Every cell of a row shares one line, and the value columns align across rows.
+      const cells = async (row: typeof run) =>
+        row.locator(":scope > *").evaluateAll((nodes) =>
+          nodes.map((node) => {
+            const box = node.getBoundingClientRect();
+            return { top: Math.round(box.top), right: Math.round(box.right), height: box.height };
+          }),
+        );
+      const [runCells, totalCells] = [await cells(run), await cells(total)];
+      for (const row of [runCells, totalCells]) {
+        expect(new Set(row.map((cell) => cell.top)).size).toBe(1);
+        expect(Math.max(...row.map((cell) => cell.height))).toBeLessThan(20);
+      }
+      expect(runCells.slice(1).map((cell) => cell.right)).toEqual(
+        totalCells.slice(1).map((cell) => cell.right),
+      );
+    });
+  });
+
+  it("keeps the session cache rate when the latest run has no cache split", async () => {
+    await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
+      const session = {
+        key: sessionKey,
+        sessionId: "context-instance",
+        kind: "direct" as const,
+        label: "Context breakdown",
+        model: "demo-model",
+        modelProvider: "example",
+        contextTokens: 100_000,
+        totalTokens: 20_000,
+        totalTokensFresh: true,
+        inputTokens: 1_000,
+        outputTokens: 10,
+        estimatedCostUsd: 0.01,
+      };
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "sessions.usage"],
+        sessionKey,
+        sessions: [session],
+        agentModel: "example/demo-model",
+        models: [
+          { id: "demo-model", provider: "example", name: "Demo model", contextWindow: 100_000 },
+        ],
+        historyMessages: [
+          { role: "user", content: "Hi." },
+          {
+            role: "assistant",
+            content: "Hello.",
+            usage: {
+              input: 1_000,
+              output: 10,
+              cacheRead: 0,
+              cacheWrite: 0,
+              cacheTelemetry: { state: "unavailable" },
+            },
+          },
+        ],
+        methodResponses: {
+          "sessions.usage": {
+            sessions: [
+              {
+                key: sessionKey,
+                sessionId: "context-instance",
+                contextWeight: report,
+                usage: {
+                  totalCost: 1.5,
+                  missingCostEntries: 0,
+                  input: 2_000,
+                  output: 40,
+                  cacheRead: 3_000,
+                  cacheWrite: 0,
+                  cacheUnmeasuredInput: 1_000,
+                },
+              },
+            ],
+          },
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await gateway.waitForRequest("sessions.messages.subscribe");
+      await page.locator(".context-ring").filter({ visible: true }).click();
+      const summary = page.locator(".context-usage__popover").filter({ visible: true });
+      const total = summary.locator('[data-chat-session-cost="true"]');
+      await total.waitFor();
+      // The session's measured calls earn the column; the unmeasured run shows a dash.
+      expect(await total.textContent()).toMatch(/Session total\s*75\.00%\s*\$1\.50/);
+      expect(await summary.locator('[data-chat-usage-row="run"]').textContent()).toMatch(
+        /Latest run\s*—\s*\$0\.01/,
+      );
     });
   });
 

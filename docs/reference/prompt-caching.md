@@ -156,6 +156,11 @@ the aggregate result budget when reducing them would rewrite already-sent
 history; session pruning and compaction remain the owners of intentional
 history changes.
 
+When a preflight check predicts overflow, OpenClaw can cap results from the
+current tool batch before sending them. If that cannot make room, it compacts
+retained history instead of truncating previously sent results in place.
+Recovery after an actual provider rejection can still truncate those results.
+
 OpenAI Chat Completions also preserves valid native tool-call IDs during replay
 and disambiguates repeated IDs deterministically. Changing result text or IDs
 between turns can invalidate an otherwise reusable provider prefix. Stable

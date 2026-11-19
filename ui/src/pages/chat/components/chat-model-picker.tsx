@@ -7,12 +7,12 @@ import {
   Show,
   type Element as SolidElement,
 } from "solid-js";
+import type { ModelAuthStatusResult } from "../../../api/types.ts";
 import { hasProviderBrandIcon } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
-import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ChatContextWindowControlParams } from "./chat-context-window-control.tsx";
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
@@ -36,7 +36,8 @@ const ChatModelPickerPanel = lazy(() => import("./chat-model-picker-panel.tsx"),
 });
 
 export type ChatModelPickerParams = {
-  providerAuth?: ReadonlyMap<string, ModelProviderAuthLabel>;
+  modelAuthStatusResult?: ModelAuthStatusResult | null;
+  authProfileId?: string;
   accountSection?: ChatModelAccountSection;
   contextWindow?: ChatContextWindowControlParams;
   disabled: boolean;
@@ -137,13 +138,15 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
       ? undefined
       : contextWindow?.options.find((option) => option.id === contextWindow.selected);
   });
-  const triggerTitle = () =>
-    [
-      params.triggerStatusLabel ?? params.triggerModelLabel,
-      triggerModel()?.supportsTools === false ? t("chat.modelControls.chatOnly") : "",
-    ]
-      .filter(Boolean)
-      .join(" · ");
+  const triggerLabel = () => params.triggerStatusLabel ?? params.triggerModelLabel;
+  const triggerAriaLabel = () => {
+    const label = triggerLabel();
+    const detail =
+      label && triggerModel()?.supportsTools === false
+        ? `${label} · ${t("chat.modelControls.chatOnly")}`
+        : label;
+    return `${t("chat.selectors.model")}${detail ? `: ${detail}` : ""}${params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""}`;
+  };
   const showProviderIcon = () => {
     const model = triggerModel();
     return Boolean(
@@ -177,7 +180,7 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
               ? "true"
               : "false"
           }
-          aria-label={`${t("chat.selectors.model")}: ${triggerTitle()}${params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""}`}
+          aria-label={triggerAriaLabel()}
           aria-busy="false"
           aria-disabled={params.disabled ? "true" : "false"}
           aria-description={params.disabledReason}
@@ -189,9 +192,7 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
               class="chat-controls__trigger-provider-icon"
             />
           </Show>
-          <span class="chat-controls__inline-select-label">
-            {params.triggerStatusLabel ?? params.triggerModelLabel}
-          </span>
+          <span class="chat-controls__inline-select-label">{triggerLabel()}</span>
           {contextWindowBadge() ? (
             <span
               class="chat-controls__locked-model-badge chat-controls__model-context-badge"

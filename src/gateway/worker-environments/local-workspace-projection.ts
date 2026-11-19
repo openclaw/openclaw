@@ -331,6 +331,7 @@ async function settleLocalWorkspace<T>(
                   projectionRevision: current.revision,
                   prepareArchive: state.prepareArchive,
                   canonicalPaths: state.canonicalPaths,
+                  resume: quiescence?.resume,
                   synchronizeProjection: () => state.synchronize("projection"),
                   markPhase: quiescence?.markPhase,
                   assertCurrent: state.current,

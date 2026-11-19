@@ -1241,7 +1241,7 @@ function canonicalMainCommits(base, mainRef, filters = []) {
     return [];
   }
   const mainCommit = /** @type {string} */ (gitCommit(mainRef, true));
-  const mainBase = git(["merge-base", base, mainCommit]);
+  const mainBase = gitMergeBase(base, mainCommit);
   const records = gitLogRecords([
     "--reverse",
     "--format=%H%x1f%s%x1f%an%x1f%ae%x1f%B%x1e",
@@ -1274,7 +1274,7 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   if (!gitIsAncestor(base, targetCommit)) {
     fail(`release range base ${base} must be an ancestor of target ${target}`);
   }
-  const mergeBase = git(["merge-base", base, targetCommit]);
+  const mergeBase = gitMergeBase(base, targetCommit);
   const targetTimestamp = Date.parse(git(["show", "-s", "--format=%cI", targetCommit]));
   if (!Number.isFinite(targetTimestamp)) {
     fail(`could not resolve timestamp for release target ${target}`);

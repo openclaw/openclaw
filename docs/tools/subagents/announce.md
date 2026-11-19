@@ -44,7 +44,9 @@ before it calls the model. A committed result is never dispatched again. If the 
 then fails before it answers (for example the provider is unavailable), the result
 is delivered: the turn shows its own error in the chat, and the next turn reads the
 results from the transcript. If the turn answered but the answer did not reach the
-channel, or the turn ended for a recorded reason, that outcome is kept.
+channel, or the turn ended for a recorded reason, that outcome is kept. An
+unconfirmed channel send stays ambiguous even after the requester consumes the
+child result.
 
 Results that no turn committed stay owed. Cancellation before dispatch, worker
 timeout, preparation invalidation and other retryable refusals keep the wake pending

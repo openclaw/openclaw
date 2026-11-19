@@ -52,6 +52,7 @@ const repositoryScriptEntries = [
   // Performance drivers and their preloads are invoked directly from documented commands.
   "scripts/perf/**/*.{js,mjs,cjs,ts,mts,cts}!",
   "scripts/perf/decision-tool-catalog-measure.ts!",
+  "scripts/perf/persisted-turn-admission-measure.ts!",
   "scripts/perf/exec-safe-bin-io-measure.mjs!",
   "scripts/perf/usage-cost-source-measure.mjs!",
   "scripts/perf/clickclack-account-snapshot.ts!",
@@ -416,6 +417,7 @@ const repositoryScriptEntries = [
   // Installed recovery launches its driver/access probe and preloads its fault observer by path.
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-access.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-fault.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/installed-recovery-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-terminal-dependencies.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-terminal-reference.mts!",

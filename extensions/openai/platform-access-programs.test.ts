@@ -2,6 +2,16 @@ import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-cata
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { buildOpenAIProvider } from "./openai-provider.js";
 
+// mock-isolation: these tests count model-list fetches; the npm Codex version read is
+// covered by openai-codex-discovery.test.ts.
+vi.mock("./codex-client-version.js", async (importOriginal) => {
+  const { BUNDLED_CODEX_VERSION } = await import("./test-support/codex-version.test-support.js");
+  return {
+    ...(await importOriginal<typeof import("./codex-client-version.js")>()),
+    resolveOpenAICodexClientVersion: async () => BUNDLED_CODEX_VERSION,
+  };
+});
+
 const fetchMock = vi.fn<typeof fetch>();
 const grants = new Map<string, unknown>();
 let now = 1_000_000;

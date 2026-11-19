@@ -39,3 +39,23 @@ export function sessionShareNodeBinding(config: SessionShareConfigSnapshot, node
     linkGitHubIdentities: isRecord(binding) && binding.linkGitHubIdentities === true,
   };
 }
+
+export function sessionShareGatewayEnabled(config: SessionShareConfigSnapshot): boolean {
+  const share = sessionShareConfig(config).share;
+  return (
+    config.plugins?.enabled !== false &&
+    config.plugins?.entries?.["session-share"]?.enabled !== false &&
+    isRecord(share) &&
+    share.gateway === true
+  );
+}
+
+export function sessionShareGatewayDeviceIds(
+  config: SessionShareConfigSnapshot,
+): readonly string[] {
+  const share = sessionShareConfig(config).share;
+  const ids = isRecord(share) ? share.gatewayDeviceIds : undefined;
+  return Array.isArray(ids) && ids.every((id) => typeof id === "string" && /^\S+$/.test(id))
+    ? ids
+    : [];
+}

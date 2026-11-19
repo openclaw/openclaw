@@ -6,7 +6,7 @@ import path from "node:path";
 import { after as afterAll, afterEach, describe, it } from "node:test";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
-import { extract } from "tar";
+import { extract } from "tar/raw";
 import {
   validatePackageExtensionEntriesForInstall,
   resolvePackageRuntimeExtensionSources,
