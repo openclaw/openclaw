@@ -1,5 +1,6 @@
 // Hostname normalization helpers keep SSRF and proxy policy comparisons stable
 // across case, trailing dots, bracketed IPv6 literals, and IDN punycode.
+import { isIP } from "node:net";
 import { domainToASCII } from "node:url";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
@@ -9,28 +10,23 @@ export function formatHostForUrl(host: string): string {
 }
 
 function normalizeDnsName(value: string): string {
-  // domainToASCII folds one Unicode name and its punycode spelling together.
-  // A lookalike label stays a different ASCII name, so it cannot satisfy an
-  // allowlist entry for the name it imitates.
+  // The URL parser also rewrites numeric hosts and drops path suffixes.
+  // Keep those inputs intact for the callers that validate host syntax.
+  if (/^\p{ASCII}*$/u.test(value) || !/^(?:[a-z\d._-]|[^\p{ASCII}])+$/u.test(value)) {
+    return value;
+  }
   const ascii = domainToASCII(value);
-  return ascii || value;
+  return ascii && !isIP(ascii) ? ascii : value;
 }
 
 /** Normalize a hostname for policy comparisons. */
 export function normalizeHostname(hostname: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(hostname).replace(/\.+$/, "");
-  if (!normalized) {
-    return "";
-  }
   if (normalized.startsWith("[") && normalized.endsWith("]")) {
     return normalized.slice(1, -1);
   }
-  if (normalized.includes(":")) {
-    return normalized;
-  }
   if (normalized.startsWith("*.")) {
-    const suffix = normalizeDnsName(normalized.slice(2));
-    return suffix ? `*.${suffix}` : normalized;
+    return `*.${normalizeDnsName(normalized.slice(2))}`;
   }
   return normalizeDnsName(normalized);
 }

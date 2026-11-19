@@ -13,6 +13,9 @@ describe("normalizeHostname", () => {
     { input: "München.de", expected: "xn--mnchen-3ya.de" },
     { input: "xn--mnchen-3ya.de", expected: "xn--mnchen-3ya.de" },
     { input: "*.München.de", expected: "*.xn--mnchen-3ya.de" },
+    { input: "192.00.2.1", expected: "192.00.2.1" },
+    { input: "example.com/docs", expected: "example.com/docs" },
+    { input: "München.de/docs", expected: "münchen.de/docs" },
   ])("normalizes %j", ({ input, expected }) => {
     expect(normalizeHostname(input)).toBe(expected);
   });
