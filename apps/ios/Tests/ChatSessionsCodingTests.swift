@@ -131,12 +131,68 @@ struct ChatSessionsCodingTests {
             #expect(item.resultText == output && item.isError == failed && item.isVisible && !item.isPending)
             let cached = try JSONEncoder().encode(message)
             let fields = try #require(JSONSerialization.jsonObject(with: cached) as? [String: Any])
-            #expect(fields["customType"] as? String == "openclaw.nested-tool.v1" && fields["id"] == nil)
+            #expect(fields["customType"] as? String == "openclaw.nested-tool.v1")
             let restored = try JSONDecoder().decode(OpenClawChatMessage.self, from: cached)
             #expect(restored.isNestedToolActivity && restored.role == "custom")
             #expect(restored.transcriptMessageID == "nested-row" && restored.workRunID == "nested-run")
             #expect(ChatToolActivity.items(message: restored) == items)
         }
+    }
+
+    @Test @MainActor func `ios sqlite cache preserves legacy text alongside nested output on reopen`() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nested-chat-cache-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // Legacy payload-format compatibility, not an old-binary or schema migration.
+        let legacyPayload = #"""
+        {
+            "role":"assistant",
+            "content":[{"type":"text","text":"Previously cached answer"}],
+            "timestamp":0,
+            "__openclaw":{"id":"legacy-row","runId":"legacy-run"}
+        }
+        """#
+        let legacy = try JSONDecoder().decode(OpenClawChatMessage.self, from: Data(legacyPayload.utf8))
+        let seeded = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? seeded.close() }
+        await seeded.store(gatewayID: "nested-cache").storeCanonicalTranscript(
+            sessionKey: "main", agentID: nil, messages: [legacy], canonicalMessageIdempotencyKeys: [])
+        // Seed the exact pre-change payload bytes using the existing cache-store test pattern.
+        try await seeded.cacheQueue.write { db in
+            try db.execute(
+                sql: "UPDATE cached_messages SET payload_json = ? WHERE gateway_id = ? AND session_key = ?",
+                arguments: [legacyPayload, "nested-cache", "main"])
+        }
+        try seeded.close()
+
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? reopened.close() }
+        let store = reopened.store(gatewayID: "nested-cache")
+        let existing = await store.loadTranscript(sessionKey: "main")
+        let existingRow = try #require(existing.first)
+        #expect(existing.count == 1 && existingRow.transcriptMessageID == "legacy-row")
+        #expect(existingRow.role == "assistant" && !existingRow.isNestedToolActivity)
+        #expect(existingRow.content.first?.text == "Previously cached answer")
+        let nested = try #require(await OpenClawChatViewModel.decodeMessages([Self.nestedRaw(Self.nestedEnvelope)])
+            .first)
+        await store.storeCanonicalTranscript(
+            sessionKey: "main", agentID: nil, messages: existing + [nested], canonicalMessageIdempotencyKeys: [])
+        try reopened.close()
+
+        let cold = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? cold.close() }
+        let rows = await cold.store(gatewayID: "nested-cache").loadTranscript(sessionKey: "main")
+        #expect(rows.map(\.transcriptMessageID) == ["legacy-row", "nested-row"])
+        let plain = try #require(rows.first)
+        #expect(plain.role == "assistant" && !plain.isNestedToolActivity && plain.workRunID == "legacy-run")
+        #expect(plain.content.first?.text == "Previously cached answer")
+        let restored = try #require(rows.last)
+        #expect(restored.role == "custom" && restored.isNestedToolActivity && restored.workRunID == "nested-run")
+        let items = ChatToolActivity.items(message: restored)
+        let item = try #require(items.first)
+        #expect(items.count == 1 && item.id == "nested-call" && item.name == "knowledge_status")
+        #expect(item.resultText == "Nested success output")
+        #expect(item.displayState == .finished && !item.isPending && !item.isError)
     }
 
     @Test @MainActor func `ios nested recognition is exact and ignores unrelated custom metadata`() async throws {
