@@ -63,8 +63,8 @@ export async function updateGitRelease(params: {
   const slot = gitReleaseSlot(prefix);
   const selected = readPackageReleaseSlotSync(slot);
   const converting = !selected;
-  const placement = selected ? await readGitReleasePlacement(selected) : null;
-  const unserved = placement?.unserved;
+  let placement = selected ? await readGitReleasePlacement(selected) : null;
+  let unserved = placement?.unserved;
   let stepIndex = 0;
   const forRunner =
     (deadline: number | undefined) =>
@@ -152,11 +152,8 @@ export async function updateGitRelease(params: {
   // A release an interrupted update placed but that does not serve is reused, not rebuilt,
   // when the target turns out to be its tree: candidates reach `beforeCandidate` after local
   // replay and before any install or build.
-  const placedSha =
-    unserved && unserved.root !== placement?.serving
-      ? (await git(unserved.root, "rev-parse", "HEAD")).stdout.trim()
-      : "";
-  const placedTree = placedSha ? await treeOf(placedSha) : null;
+  let placedSha = "";
+  let placedTree: string | null = null;
 
   // Node refuses to strip types under node_modules, and the build runs .mts
   // scripts, so a release is built beside its final path and moved into place.
@@ -245,6 +242,103 @@ export async function updateGitRelease(params: {
     return { ...built, releaseRoot: dirs.releaseRoot };
   };
 
+  const prune = () =>
+    runCommand(["git", "-C", gitRoot, "worktree", "prune"], { cwd: gitRoot, timeoutMs });
+  // States what serves and what this update did with a release an interrupted update placed.
+  const reportPlacement = async (message: string, context = true) => {
+    const placed = unserved ? gitReleaseId(unserved.root) : "";
+    const fallback = gitReleaseId(placement!.fallback);
+    const note: UpdateStepResult = {
+      name: "git-release-placement",
+      command: "reconcile release link",
+      cwd: prefix,
+      durationMs: 0,
+      exitCode: 0,
+      advisory: {
+        kind: "recoverable-maintenance",
+        message:
+          unserved && context
+            ? `Release ${placed} was placed by an earlier update and has not passed its trial${placement!.serving === unserved.root ? "; a process still runs from it" : ""}. Release ${fallback} last passed a trial and stays the fallback. ${message}`
+            : message,
+      },
+    };
+    steps.push(note);
+    const { progress, stepIndex: index, totalSteps: total } = step(note.name, [], prefix);
+    await progress?.onStepComplete?.({ ...note, index, total });
+  };
+  const supersedeUnserved = async () => {
+    if (!unserved || !placement) {
+      return;
+    }
+    const superseded = await supersedeUnservedGitRelease({ prefix, placement, prune });
+    await reportPlacement(
+      superseded.removed
+        ? "It never started, so this update removed it."
+        : superseded.error
+          ? `Removing it failed; release collection retries later: ${formatErrorMessage(superseded.error)}`
+          : "It may have started, so release collection keeps it for now.",
+    );
+  };
+  // No safe fallback: the trial's fallback is gone or incomplete. A release rebuilt from
+  // the commit it was built from, which is what serves, becomes the fallback. Without one,
+  // nothing is switched: restarting would start the placed release with nothing to back out to.
+  if (placement?.unsafeFallback && unserved) {
+    const { previous, reason, commit } = placement.unsafeFallback;
+    const lost = `Release ${gitReleaseId(unserved.root)} on the release link never passed its trial, and its fallback ${gitReleaseId(path.resolve(path.dirname(slot), previous))} ${reason === "missing" ? "no longer exists" : "does not verify as a complete build"}.`;
+    const rebuilt = commit
+      ? await buildRelease((release, common, retainCleanup) =>
+          runGitCandidatePreflight({
+            ...common,
+            release,
+            retainCleanup,
+            targetRevision: commit,
+            beforeRuntimeVerified: false,
+            validateCandidate: async () => [],
+            beforeCandidate: async () => {},
+          }),
+        )
+      : undefined;
+    const verified =
+      rebuilt?.status === "ok" &&
+      (await verifyGitUpdateRecovery({ root: rebuilt.releaseRoot, sha: rebuilt.candidateSha }))
+        .serviceRestartSafe;
+    if (!verified || rebuilt?.status !== "ok") {
+      if (rebuilt?.status === "ok") {
+        await fs.rm(path.resolve(rebuilt.releaseRoot, "../../.."), {
+          recursive: true,
+          force: true,
+        });
+        await prune();
+      }
+      steps.push({
+        name: "git-release-fallback",
+        command: "establish a fallback release",
+        cwd: prefix,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: `${lost} ${commit ? `Rebuilding the commit it was built from (${commit.slice(0, 12)}) did not produce a verified release` : "The commit that serves is not recorded"}, so a switch could not back out to a working Gateway. This update changed nothing and the Gateway keeps serving; do not restart it into the release link. Run \`openclaw triage\` to have an agent rebuild a fallback from the serving commit, then run \`openclaw update\` again.`,
+      });
+      return {
+        ...result("error", "git-release-fallback-unavailable"),
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      };
+    }
+    await reportPlacement(
+      `${lost} This update rebuilt the commit it was built from (${commit!.slice(0, 12)}) as release ${gitReleaseId(rebuilt.releaseRoot)}, which is now the fallback.`,
+      false,
+    );
+    placement = { ...placement, fallback: rebuilt.releaseRoot };
+    await supersedeUnserved();
+    const reread = readPackageReleaseSlotSync(slot);
+    placement = reread ? await readGitReleasePlacement(reread) : placement;
+    unserved = placement.unserved;
+  }
+  placedSha =
+    unserved && unserved.root !== placement?.serving
+      ? (await git(unserved.root, "rev-parse", "HEAD")).stdout.trim()
+      : "";
+  placedTree = placedSha ? await treeOf(placedSha) : null;
+
   // The first release is the code that runs now. It is not a candidate: it runs already.
   let previousRelease: string | undefined;
   if (converting) {
@@ -295,47 +389,6 @@ export async function updateGitRelease(params: {
       },
     }),
   );
-  const prune = () =>
-    runCommand(["git", "-C", gitRoot, "worktree", "prune"], { cwd: gitRoot, timeoutMs });
-  // States what serves and what this update did with a release an interrupted update placed.
-  const reportPlacement = async (message: string) => {
-    const placed = unserved ? gitReleaseId(unserved.root) : "";
-    const fallback = gitReleaseId(placement!.fallback);
-    const note: UpdateStepResult = {
-      name: "git-release-placement",
-      command: "reconcile release link",
-      cwd: prefix,
-      durationMs: 0,
-      exitCode: 0,
-      advisory: {
-        kind: "recoverable-maintenance",
-        message: unserved
-          ? `Release ${placed} was placed by an earlier update and has not passed its trial${placement!.serving === unserved.root ? "; a process still runs from it" : ""}. Release ${fallback} last passed a trial and stays the fallback. ${message}`
-          : message,
-      },
-    };
-    steps.push(note);
-    const { progress, stepIndex: index, totalSteps: total } = step(note.name, [], prefix);
-    await progress?.onStepComplete?.({ ...note, index, total });
-  };
-  if (placement?.missingFallback) {
-    await reportPlacement(
-      `The trial's fallback ${placement.missingFallback} no longer exists, so release ${gitReleaseId(placement.fallback)}, which the link names, is the fallback for this update.`,
-    );
-  }
-  const supersedeUnserved = async () => {
-    if (!unserved || !placement) {
-      return;
-    }
-    const superseded = await supersedeUnservedGitRelease({ prefix, placement, prune });
-    await reportPlacement(
-      superseded.removed
-        ? "It never started, so this update removed it."
-        : superseded.error
-          ? `Removing it failed; release collection retries later: ${formatErrorMessage(superseded.error)}`
-          : "It may have started, so release collection keeps it for now.",
-    );
-  };
   // The serving release is the target: the link goes back to it unless it already names it.
   if (
     target.status === "skipped" &&

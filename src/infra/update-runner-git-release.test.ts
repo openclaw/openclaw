@@ -19,6 +19,8 @@ const target = vi.hoisted(() => ({
   revision: undefined as string | undefined,
   /** Candidate builds the target selection started. */
   builds: 0,
+  /** Release roots whose runtime artifacts do not verify. */
+  broken: [] as string[],
 }));
 // mock-isolation: the build runs as a fixture; the real preflight would install and compile a checkout.
 vi.mock("./update-runner-git-preflight.js", () => ({
@@ -75,10 +77,12 @@ vi.mock("./update-runner-git-target.js", async (importOriginal) => ({
 vi.mock("./update-git-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-git-runtime.js")>()),
   // The running release is at the requested commit but its runtime artifacts are incomplete.
-  verifyGitUpdateRecovery: async (params: { root: string }) =>
-    target.runtimeVerified || (await fs.realpath(params.root)) !== target.runningRoot
+  verifyGitUpdateRecovery: async (params: { root: string }) => {
+    const root = await fs.realpath(params.root);
+    return (target.runtimeVerified || root !== target.runningRoot) && !target.broken.includes(root)
       ? { serviceRestartSafe: true, version: "1.0.0", buildId: "serving" }
-      : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      : { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+  },
 }));
 
 const { updateGitRelease } = await import("./update-runner-git-release.js");
@@ -98,6 +102,7 @@ afterEach(async () => {
   target.runningRoot = "";
   target.revision = undefined;
   target.builds = 0;
+  target.broken.length = 0;
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
@@ -457,6 +462,42 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
       previous: install.serving,
     });
     await expect(fs.access(install.unserved)).rejects.toThrow();
+  });
+
+  it("rebuilds the serving commit as the fallback when the trial's fallback does not verify", async () => {
+    const install = await halfSwitchedInstall();
+    target.broken.push(install.serving);
+
+    const result = await install.update(install.commits["3.0.0"]!);
+
+    expect(result.status, JSON.stringify(result.steps)).toBe("ok");
+    // A back-out must land on a complete build of what serves, never on the placed release.
+    expect(target.conversionTargets).toEqual([install.commits["1.0.0"]]);
+    const { previous } = await install.readTrial();
+    expect([install.serving, install.unserved]).not.toContain(previous);
+    expect(
+      JSON.parse(await fs.readFile(path.join(previous, "package.json"), "utf8")),
+    ).toMatchObject({ version: "1.0.0" });
+    await expect(fs.access(install.unserved)).rejects.toThrow();
+  });
+
+  it("changes nothing and refuses when no build of the serving commit exists", async () => {
+    const install = await halfSwitchedInstall();
+    const trial = await fs.readFile(install.trialFile, "utf8");
+    await fs.rm(path.resolve(install.serving, "../../.."), { recursive: true });
+
+    const result = await install.update(install.commits["3.0.0"]!);
+
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "git-release-fallback-unavailable",
+      // Restarting would start the placed release with nothing to back out to.
+      recovery: { serviceRestartSafe: false },
+    });
+    expect(target.builds).toBe(0);
+    expect(await fs.realpath(install.slot)).toBe(install.unserved);
+    expect(await fs.readFile(install.trialFile, "utf8")).toBe(trial);
+    expect(result.steps.at(-1)?.stderrTail).toContain("openclaw triage");
   });
 
   it("puts the link back on the serving release when that release is the target", async () => {

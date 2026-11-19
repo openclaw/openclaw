@@ -1591,7 +1591,13 @@ trial's previous release, the one that last served:
   that the installation is current.
 
 A trial's fallback is therefore always a release that served, and the serving release is
-never removed while it is a fallback. The update result includes a
+never removed while it is a fallback. A fallback must also be present and its build must
+verify against the commit it was built from. If the trial's fallback is incomplete, the
+update first rebuilds that commit, which is what serves, as a new release and uses it as
+the fallback. If the fallback is gone, the commit that serves is not known. The update
+then changes nothing and fails with `git-release-fallback-unavailable`, and the Gateway
+keeps serving. Do not restart it into the release link; run `openclaw triage` so an
+agent can rebuild a fallback from the serving commit, then run `openclaw update` again. The update result includes a
 `git-release-placement` note that names both releases and says what the update did. This
 runs in the installed updater, the checkout's own build. An updater built before this
 change still treats the link's release as the serving one.

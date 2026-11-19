@@ -24,7 +24,7 @@ import {
   sweepPackageReleaseTemporaryLinks,
   switchPackageReleaseLink,
 } from "./package-release-slot.js";
-import { readBuiltGatewayBuildId } from "./update-git-runtime.js";
+import { readBuiltGatewayBuildId, verifyGitUpdateRecovery } from "./update-git-runtime.js";
 
 /**
  * A new release directory. The worktree is built at `buildDir`, outside
@@ -143,15 +143,37 @@ export type GitReleasePlacement = {
     /** The launcher started it or a process holds it, so it may have served: never removed here. */
     mayHaveServed: boolean;
   };
-  /** Link text of a trial fallback that no longer exists. */
-  missingFallback?: string;
+  /**
+   * The trial's fallback (link text) is missing or its build does not verify, and nothing
+   * runs from the link's release. `commit` is what the fallback was built from, which is
+   * what serves: a release rebuilt from it is a safe fallback. Without it there is none.
+   */
+  unsafeFallback?: { previous: string; reason: "missing" | "unverified"; commit?: string };
 };
+
+/** A release worktree's checked-out commit, read from its Git metadata without running Git. */
+async function readReleaseHead(root: string): Promise<string | null> {
+  const dotGit = await fs.readFile(path.join(root, ".git"), "utf8").catch(() => "");
+  const gitDir = /^gitdir: (.+)$/mu.exec(dotGit)?.[1]?.trim();
+  const head = gitDir
+    ? (await fs.readFile(path.resolve(root, gitDir, "HEAD"), "utf8").catch(() => "")).trim()
+    : "";
+  return /^[0-9a-f]{40,64}$/u.test(head) ? head : null;
+}
+
+/** Present and intact: its runtime artifacts verify against the commit it was built from. */
+async function verifiesAsFallback(root: string): Promise<boolean> {
+  return (await verifyGitUpdateRecovery({ root, sha: await readReleaseHead(root) }))
+    .serviceRestartSafe;
+}
 
 /**
  * What the trial record says about the link. The link alone is not evidence of what
  * serves: an update that fails after the switch but before any Gateway starts the new
  * release leaves the link on a release that never served, with its trial still armed.
  * That trial's `previous` is the release that last served, and the next update builds on it.
+ * A fallback is safe only while it is present and its build verifies; the trial's
+ * `previous` matches what serves because a switch records the release the link left.
  */
 export async function readGitReleasePlacement(
   slot: PackageReleaseSlot,
@@ -172,21 +194,33 @@ export async function readGitReleasePlacement(
     return current;
   }
   const previous = await resolve(trial.previous);
-  if (!previous) {
-    return { ...current, missingFallback: trial.previous };
-  }
   if (previous === slot.releaseRoot) {
     return current;
   }
   const running = leased(slot.releaseRoot);
+  // The launcher counts every start of the release the link names on trial.
+  const unserved = {
+    root: slot.releaseRoot,
+    selected: true,
+    mayHaveServed: running || trial.attempts !== 0,
+  };
+  const intact = previous ? await verifiesAsFallback(previous) : false;
+  // A process runs from the link's release: that serves, and is the fallback if nothing better.
+  if (running) {
+    return { serving: slot.releaseRoot, fallback: intact ? previous! : slot.releaseRoot, unserved };
+  }
+  if (previous && intact) {
+    return { serving: previous, fallback: previous, unserved };
+  }
+  const commit = previous ? await readReleaseHead(previous) : null;
   return {
-    serving: running ? slot.releaseRoot : previous,
-    fallback: previous,
-    // The launcher counts every start of the release the link names on trial.
-    unserved: {
-      root: slot.releaseRoot,
-      selected: true,
-      mayHaveServed: running || trial.attempts !== 0,
+    serving: previous ?? slot.releaseRoot,
+    fallback: previous ?? slot.releaseRoot,
+    unserved,
+    unsafeFallback: {
+      previous: trial.previous,
+      reason: previous ? "unverified" : "missing",
+      ...(commit ? { commit } : {}),
     },
   };
 }
