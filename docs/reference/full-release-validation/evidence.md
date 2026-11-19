@@ -105,10 +105,16 @@ A `testFailures` entry additionally requires the sole failed step and the comple
 ordered set of exact test/error signatures from the native test-evidence parser.
 The verifier reads the original leaf log and requires completed invocation
 evidence before accepting it. Changed or additional errors, incomplete logs, and
-setup failures remain blocking; aggregate causes are also checked exactly. The
-2026.11.10-beta.1 entries cover only the observed MCP listener collision and cron
-pre-output assertion. UI, QA, and mixed firstbirth/attachment failures are not
-granted by those entries.
+setup failures remain blocking; aggregate causes are also checked exactly. The historical
+2026.11.10-beta.1 signature grants cover only the MCP listener collision and cron
+pre-output assertion in CI 44290065577/1. Separate FRV16 job-level grants accept
+the ten observed CI failures in 44465881623/1 and the core QA runtime-pair failure
+in 44465878180/1, only for candidate
+`995f9059b6e6fe3ba0865a3354924fd2bcbfceea`. These retain unresolved runtime, worker,
+UI, and cron uncertainty, not a claim of fixes or passing tests. Their aggregates
+require the exact observed causes and failed steps; the silent QA status-check
+aggregate additionally requires the SHA-256 of its complete reviewed original
+log. Different runs, attempts, candidates, and additional failures are not granted.
 
 Changing P alone does not invalidate retained evidence for unchanged C/Q, coverage,
 inputs, and source digests. With reuse enabled, admitted P reevaluates sealed child
