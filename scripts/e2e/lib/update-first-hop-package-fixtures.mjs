@@ -467,9 +467,19 @@ export function packUnsupportedAdmissionFixture(candidateTarball, outputTarball,
   };
 }
 
-function packFuturePluginFixture(candidateTarball, outputTarball, sequence = 0, expectedName = "") {
+/**
+ * A future plugin package. `targetVersion`, when given, is the core version it is served beside;
+ * otherwise the plugin's own release is advanced, which matches only a core cut from that release.
+ */
+export function packFuturePluginFixture(
+  candidateTarball,
+  outputTarball,
+  sequence = 0,
+  expectedName = "",
+  targetVersion = "",
+) {
   const receipt = packTransformedFixture(candidateTarball, outputTarball, (root, sourceVersion) => {
-    const version = futureFixtureVersion(sourceVersion, sequence);
+    const version = targetVersion || futureFixtureVersion(sourceVersion, sequence);
     const manifestPath = path.join(root, "package.json");
     const manifest = readJson(manifestPath);
     if (

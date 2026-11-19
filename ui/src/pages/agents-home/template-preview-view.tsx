@@ -17,7 +17,7 @@ import { TemplateWorkspaceFiles } from "./templates-workspace-files.tsx";
 type Category = "instructions" | "skills" | "integrations" | "automations";
 const categories: Array<{ key: Category; labelKey: string; icon: IconName }> = [
   { key: "instructions", labelKey: "workspaceFiles", icon: "fileText" },
-  { key: "skills", labelKey: "skillsSection", icon: "book" },
+  { key: "skills", labelKey: "skillsSection", icon: "sparkles" },
   { key: "integrations", labelKey: "integrations", icon: "plug" },
   { key: "automations", labelKey: "automations", icon: "clock" },
 ];

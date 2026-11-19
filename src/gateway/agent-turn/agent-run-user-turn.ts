@@ -273,7 +273,10 @@ export async function prepareAgentRunUserTurn(params: {
         "Private completion requires an exact internal requester turn with delivery disabled",
       );
     }
-    const trackRequesterCompletion = params.privateCompletion || settleWakeReplay !== undefined;
+    const trackRequesterCompletion =
+      params.privateCompletion ||
+      settleWakeReplay !== undefined ||
+      Boolean(params.subagentCompletions?.length);
     const suppressPromptPersistence =
       !params.privateCompletion && params.requestedPromptPersistenceSuppression;
     if (
