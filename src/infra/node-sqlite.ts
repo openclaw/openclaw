@@ -53,6 +53,17 @@ function resolveSqliteFileUriPath(pathname: string, platform: NodeJS.Platform): 
   return pathToFileURL(path.resolve(pathname)).href;
 }
 
+/**
+ * Read a WAL database without writing its shared-memory index: no reader mark, no
+ * index rebuild. SQLite reads the WAL itself when no live writer keeps the index valid.
+ */
+export function resolveReadOnlyShmSqliteFileUri(
+  pathname: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return `${resolveSqliteFileUriPath(pathname, platform)}?mode=ro&readonly_shm=1`;
+}
+
 /** Open an existing writable database without SQLite's create-if-missing flag. */
 export function resolveExistingSqliteFileUri(
   pathname: string,
