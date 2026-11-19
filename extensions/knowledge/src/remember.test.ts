@@ -337,3 +337,51 @@ it("replays a legacy collapsed date batch without publishing the suppressed asse
   expect((await restarted.records({ kind: "claim" }, f.owner)).total).toBe(2);
   expect((await restarted.remember(input, f.owner)).items).toStrictEqual(replay.items);
 });
+
+it("remember preserves different assertion dates and origins within calls and against saved claims", async () => {
+  const f = await fixture();
+  const pairs: [
+    string,
+    Partial<RememberInput["items"][number]>,
+    Partial<RememberInput["items"][number]>,
+  ][] = [
+    ["occurrence", { occurred_at: "2026-11-01" }, { occurred_at: "2026-11-02" }],
+    ["due", { due_at: "2026-11-02" }, { due_at: "2026-11-04T09:00:00+11:00" }],
+    ["validity", { valid_from: "2020-01-01T00:00:00Z" }, { valid_from: "2021-01-01T00:00:00Z" }],
+    ["expiry", { expires_at: "2098-01-01T00:00:00Z" }, { expires_at: "2099-01-01T00:00:00Z" }],
+    ["origin", { origin: "source" }, { origin: "user_belief" }],
+    ["precision", { occurred_at: "2026-11-01" }, { occurred_at: "2026-11-01T00:00:00Z" }],
+    ["unknown occurrence", {}, { occurred_at: "2026-11-01" }],
+    ["unknown due", {}, { due_at: "2026-11-02" }],
+  ];
+  const items: RememberInput["items"] = pairs.flatMap(([name, left, right]) =>
+    [left, right].map((fields) =>
+      Object.assign({ text: "Historical " + name + ".", kind: "commitment" as const }, fields),
+    ),
+  );
+  items.push(
+    { text: "Default source origin.", kind: "fact" },
+    { text: "default SOURCE origin.", kind: "fact", origin: "source" },
+  );
+  const saved = await f.remember(items);
+  for (let n = 0; n < pairs.length * 2; n++) {
+    expect(saved.items[n]!.status).toBe("inserted");
+    const metadata = (
+      await f.service.record({ id: saved.items[n]!.id, includeMetadata: true }, f.owner)
+    ).record!.metadata!;
+    const { origin, ...dates } = items[n]!;
+    for (const field of ["occurred_at", "due_at", "valid_from", "expires_at"] as const) {
+      expect(metadata[field]).toBe(dates[field]);
+    }
+    expect(metadata.assertion_origin).toBe(origin ?? "source");
+    if (n % 2 === 1) {
+      expect(saved.items[n]!.id).not.toBe(saved.items[n - 1]!.id);
+    }
+  }
+  expect(saved.items.at(-1)!.status).toBe("duplicate");
+  expect(saved.items.at(-1)!.id).toBe(saved.items.at(-2)!.id);
+  const repeated = await f.remember(items);
+  expect(repeated.receipt).toBe(null);
+  expect(repeated.items.map((i) => i.status)).toStrictEqual(items.map(() => "duplicate"));
+  expect(repeated.items.map((i) => i.id)).toStrictEqual(saved.items.map((i) => i.id));
+});
