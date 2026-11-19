@@ -1289,19 +1289,18 @@ private val CollapsedSessionKeysSaver =
     restore = { keys -> keys.toSet() },
   )
 
-internal fun buildSessionTreeSections(
-  entries: List<ChatSessionEntry>,
-  knownGroups: List<String> = emptyList(),
-  collapsedSessionKeys: Set<String> = emptySet(),
-  currentSessionKey: String = "",
-  nowMs: Long = System.currentTimeMillis(),
-): List<SessionTreeSection> {
-  if (entries.isEmpty()) return emptyList()
+/**
+ * Child-to-parent links among [entries], shared by Threads and the sidebar so both nest the same
+ * sessions. A parent outside [entries] or a link cycle leaves the row at the top level.
+ */
+internal fun sessionParentLinks(entries: List<ChatSessionEntry>): Map<String, String> {
   val entriesByKey = entries.associateBy { it.key }
   val candidateParents =
     buildMap {
       entries.forEach { entry ->
+        // Pinned and filed rows, and rows the Gateway marks as sidebar roots, keep their own place.
         if (entry.pinned == true || !entry.category.isNullOrBlank()) return@forEach
+        if (entry.sidebarRoot == true && entry.classification != "subagent" && ":subagent:" !in entry.key) return@forEach
         val parentKey =
           entry.parentSessionKey?.trim()?.takeIf(String::isNotEmpty)
             ?: entry.spawnedBy?.trim()?.takeIf(String::isNotEmpty)
@@ -1329,7 +1328,18 @@ internal fun buildSessionTreeSections(
     return false
   }
 
-  val parentByKey = candidateParents.filterKeys { key -> !hasParentCycle(key) }
+  return candidateParents.filterKeys { key -> !hasParentCycle(key) }
+}
+
+internal fun buildSessionTreeSections(
+  entries: List<ChatSessionEntry>,
+  knownGroups: List<String> = emptyList(),
+  collapsedSessionKeys: Set<String> = emptySet(),
+  currentSessionKey: String = "",
+  nowMs: Long = System.currentTimeMillis(),
+): List<SessionTreeSection> {
+  if (entries.isEmpty()) return emptyList()
+  val parentByKey = sessionParentLinks(entries)
   val childrenByParent = entries.filter { it.key in parentByKey }.groupBy { parentByKey.getValue(it.key) }
   val roots = entries.filter { it.key !in parentByKey }
   val visited = mutableSetOf<String>()
