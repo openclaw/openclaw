@@ -113,6 +113,8 @@ export type OpenClawSharedToolsOptions = {
 };
 
 export type OpenClawToolsOptions = {
+  /** Host-owned policy binding; used only by the delegation authority reader. */
+  readDelegationConfig?: () => OpenClawConfig;
   /** Actual prepared sandbox passed only by the coding-tool assembly owner. */
   sandbox?: import("./sandbox/types.js").SandboxContext | null;
   abortSignal?: AbortSignal;

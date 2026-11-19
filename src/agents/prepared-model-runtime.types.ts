@@ -136,6 +136,7 @@ export type PreparedReplyDispatchRuntime = Readonly<{
   agentDir: string;
   workspaceDir: string;
   config: OpenClawConfig;
+  readPolicyConfig?: () => OpenClawConfig;
   modelCatalog: ModelCatalogSnapshot;
   readFullModelCatalog?: () => ModelCatalogSnapshot | undefined;
   inboundPluginRegistry: PluginRegistry;
@@ -162,6 +163,8 @@ export type PreparedModelRuntimeInput = {
   env?: NodeJS.ProcessEnv;
   allowGatewaySubagentBinding?: boolean;
   runtimePluginSelections?: readonly AgentHarnessPluginSelection[];
+  /** Internal admission binding; never replaces the discovery/public config identities. */
+  readPolicyConfig?: () => OpenClawConfig;
   config: OpenClawConfig;
 };
 

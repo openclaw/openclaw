@@ -30,7 +30,6 @@ import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.async.js"
 import { runBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import { createOpenClawCodingToolsInternal } from "../agent-tools.js";
 import { log } from "../embedded-agent-runner/logger.js";
-import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
 import { createCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
@@ -49,12 +48,19 @@ import {
   transferCoreTtsToolResultProvenance,
 } from "../tools/tts-tool-result-provenance.js";
 import { bindHostToolSurface } from "./host-bound-tool.js";
-import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+import type {
+  AgentHarnessHostCapabilities,
+  AgentHarnessHost,
+  AgentHarnessHostApprovalResult,
+  AgentHarnessHostAttempt,
+  HostToolSurfaceOptions,
+} from "./host-capability-types.js";
 import {
   bindHostContinuationRetryCount,
   captureRequiredWorkspaceToolFloor,
   prepareHostWorkspaceReadiness,
 } from "./host-capability-workspace.js";
+import { captureHostDelegationPolicy } from "./host-delegation-policy.js";
 import { normalizeNativeOperationCwd, prepareAgentHarnessEnvironment } from "./host-environment.js";
 import { bindHarnessMedia } from "./host-media.js";
 import {
@@ -78,15 +84,6 @@ import { bindHarnessTrajectory } from "./host-trajectory.js";
 import { formatHarnessApprovalPresentation } from "./native-hook-relay-approval-presentation.js";
 import { createSessionNodeAuthorities } from "./node-execution-authority.js";
 
-type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptInternalParams> &
-  Pick<EmbeddedRunAttemptInternalParams, "admittedRunContext" | "runId">;
-type AgentHarnessHostApprovalResult = NonNullable<
-  Awaited<ReturnType<AgentHarnessHostCapabilities["waitForApproval"]>>
->;
-type HostToolSurfaceOptions = Parameters<
-  NonNullable<AgentHarnessHostCapabilities["createToolSurfaceAsync"]>
->[0];
-
 /** Creates a closure-bound capability before plugin invocation. */
 export function createAgentHarnessHostCapabilities(params: {
   attempt: AgentHarnessHostAttempt;
@@ -94,13 +91,11 @@ export function createAgentHarnessHostCapabilities(params: {
   requiredNodeCommands?: readonly string[];
   nativeModelPolicySupport?: "exact";
   toolCalls?: "deny";
-}): {
-  capabilities: AgentHarnessHostCapabilities;
-  close: () => void;
-  setInputAttachmentReadAllowed: (allowed: boolean) => void;
-  runWithScope: <T>(run: () => Promise<T>) => Promise<T>;
-} {
+}): AgentHarnessHost {
   const attempt = params.attempt;
+  const readToolPolicyConfig = captureHostDelegationPolicy(attempt, () =>
+    Boolean(requiredWorkspace),
+  );
   const prepareContinuationRetryCount = attempt.prepareContinuationRetryCount;
   const requestCustody = captureExecRequestCustody(attempt);
   // Capture authority by value before any plugin handoff can mutate the attempt.
@@ -407,12 +402,14 @@ export function createAgentHarnessHostCapabilities(params: {
     libraryEntries: readonly SkillEntry[],
     nativeLocalExecution?: true,
     assertCurrent: () => void = assertActive,
+    readDelegationConfig = readToolPolicyConfig(options),
   ) => {
     assertCurrent();
     const effectiveOptions = { ...options, ...requiredWorkspace?.apply(options) };
     return {
       options: {
         ...effectiveOptions,
+        readDelegationConfig,
         // Availability belongs to this prepared host, not mutable plugin inputs.
         githubPublicationAvailable,
         // One host owns selection and launch. A plugin's mutable config or exec
@@ -523,6 +520,7 @@ export function createAgentHarnessHostCapabilities(params: {
       );
     },
     createToolSurfaceAsync: async (options, bindingOptions) => {
+      const readDelegationConfig = readToolPolicyConfig(options);
       const librarySelections = skillResourceSnapshot(options)?.librarySelections ?? [];
       const library = librarySelections.length
         ? await prepareHostSkillLibraryResources(librarySelections, assertActive)
@@ -532,6 +530,7 @@ export function createAgentHarnessHostCapabilities(params: {
         library?.entries ?? [],
         bindingOptions?.nativeLocalExecution,
         library?.assertCurrent,
+        readDelegationConfig,
       );
       const sourceTools = await withToolConstructionScope(() =>
         createOpenClawCodingToolsInternalAsync(

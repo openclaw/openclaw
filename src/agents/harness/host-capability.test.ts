@@ -9,7 +9,13 @@ import {
   type InternalToolExecutionPreparer,
 } from "../../../packages/agent-core/src/internal-hooks.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  createRuntimeConfigReader,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { prepareSessionSourceAuthority } from "../../config/sessions/session-source-authority.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import {
@@ -33,6 +39,8 @@ import {
   rewrapToolWithBeforeToolCallHook,
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
+import { createModelGenerationFixture } from "../embedded-agent-runner/model.generation-scope.test-support.js";
+import { bindPreparedModelRuntimeAuth } from "../prepared-model-runtime-auth.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import {
@@ -69,6 +77,53 @@ afterEach(() => {
 });
 
 describe("agent harness host capability", () => {
+  it.each(["host", "scoped"] as const)(
+    "forwards the admitted %s policy reader to native tool construction",
+    async (scope) => {
+      const config: OpenClawConfig = { tools: { openclaw: { autoApproveChanges: true } } };
+      const scoped: OpenClawConfig = { tools: { openclaw: { autoApproveChanges: false } } };
+      setRuntimeConfigSnapshot(config);
+      const reader = createRuntimeConfigReader(config);
+      const preparedModelRuntime = {
+        ...createModelGenerationFixture({
+          config,
+          agentDir: "/synthetic/native-policy-agent",
+          workspaceDir: "/synthetic/native-policy-workspace",
+          label: "native-policy",
+        }).preparedModelRuntime,
+      };
+      bindPreparedModelRuntimeAuth(preparedModelRuntime, { readPolicyConfig: reader });
+      const replacement: OpenClawConfig = { ...config, ui: { seamColor: "#123456" } };
+      setRuntimeConfigSnapshot(replacement);
+      const { attempt } = await admittedAttempt("native-delegation-binding", {
+        config,
+        preparedModelRuntime,
+      });
+      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "copilot" });
+      try {
+        using construct = vi
+          .spyOn(agentTools, "createOpenClawCodingToolsInternalAsync")
+          .mockResolvedValue([]);
+        await host.capabilities.createToolSurfaceAsync!({
+          config: scope === "host" ? config : scoped,
+        });
+        const options = construct.mock.calls[0]![0]!;
+        expect(options.config).toBe(scope === "host" ? config : scoped);
+        expect(options.readDelegationConfig).toBeTypeOf("function");
+        if (scope === "host") {
+          expect(options.readDelegationConfig).toBe(reader);
+        }
+        expect(options.readDelegationConfig!()).toBe(scope === "host" ? replacement : scoped);
+        const revoked: OpenClawConfig = { tools: { openclaw: { autoApproveChanges: false } } };
+        setRuntimeConfigSnapshot(revoked);
+        expect(options.readDelegationConfig!()).toBe(scope === "host" ? revoked : scoped);
+      } finally {
+        host.close();
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
+
   it.each([
     "host close",
     "run replacement",

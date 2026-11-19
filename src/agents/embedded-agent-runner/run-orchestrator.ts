@@ -50,6 +50,7 @@ import {
   runOutsidePreparedModelRuntimePluginGenerationScope,
   withPreparedModelRuntimePluginGenerationScope,
 } from "../prepared-model-runtime-generation-scope.js";
+import { copyPreparedModelRuntimeSnapshotBindings } from "../prepared-model-runtime.capture.js";
 import {
   PreparedModelRuntimeInitialRunAdmissionError,
   PreparedModelRuntimeOwnerNotPublishedError,
@@ -397,10 +398,10 @@ async function runEmbeddedAgentForSession(
               sessionId: params.sessionId,
             });
             const { activeProjectKeys } = projects;
-            const preparedModelRuntime = Object.freeze({
-              ...preparedModelRuntimeOwnerSnapshot,
-              ...projects,
-            });
+            const preparedModelRuntime = copyPreparedModelRuntimeSnapshotBindings(
+              preparedModelRuntimeOwnerSnapshot,
+              Object.freeze({ ...preparedModelRuntimeOwnerSnapshot, ...projects }),
+            );
             const runPrepared = async () => {
               params = refresh.withDeliveryCallbacks(params);
               const preparedAgentId = workspaceResolution.agentId;

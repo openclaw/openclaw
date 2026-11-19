@@ -20,7 +20,7 @@ import type { ResolvedConversationCapabilityProfile } from "./conversation-capab
 import type { DelegationCapability } from "./delegation-capability.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
-import type { OpenClawSharedToolsOptions } from "./openclaw-tools.types.js";
+import type { OpenClawSharedToolsOptions, OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import type { SandboxContext } from "./sandbox/types.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
@@ -139,6 +139,7 @@ export type OpenClawCodingToolsOptions = {
   AgentRunChannelContext;
 
 export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
+  readDelegationConfig?: OpenClawToolsOptions["readDelegationConfig"];
   assertInvocationCurrent?: () => void;
   /** Live harness-owned local execution, independent of the Gateway tool catalog. */
   nativeHarnessExecution?: true;
