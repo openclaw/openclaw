@@ -77,7 +77,10 @@ function gate(backend = true) {
       { once: true },
     );
     await released.promise;
-    return { payloads: [] };
+    return {
+      payloads: [],
+      meta: { durationMs: 0, terminalReply: { disposition: "visible", text: "done" } },
+    };
   };
   if (backend) {
     mocks.runEmbeddedAgentCore.mockImplementationOnce(run);
@@ -145,6 +148,11 @@ const startedRunIds: string[] = [];
 beforeEach(() => {
   resetConsultFixture();
   mocks.runEmbeddedAgentCore.mockReset();
+  // The command owner settles with run meta, as the real one does.
+  mocks.runEmbeddedAgentCore.mockResolvedValue({
+    payloads: [],
+    meta: { durationMs: 0, terminalReply: { disposition: "visible", text: "done" } },
+  });
   order.length = 0;
   startedRunIds.length = 0;
   mocks.consultRealtimeVoiceAgent.mockImplementation(async (params: ConsultParams) => {
