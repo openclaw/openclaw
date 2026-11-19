@@ -1143,10 +1143,14 @@ If you use the `coding` tool profile, include `"message"` in `tools.alsoAllow`
 deny rules still apply. See [Tool access configuration](/gateway/config-tools).
 
 Select a card to open its listing inside the Control UI: plugins open in
-**Plugins**, and skills open in **Skills**. A card's **Install** button opens
-the capability details. Select **Install** on a plugin overview to start installation
-immediately. Configured install-policy warnings still require an explicit
-acknowledgment; see [Manage plugins](/web/control-ui/settings#manage-plugins).
+**Plugins**, and skills open in **Skills**. On an official plugin card,
+**Install** starts the installation in the conversation: the card shows
+**Installing**, then the result, and you stay in the chat. On community plugin
+and skill cards, **Install** opens the capability details; select **Install**
+on the plugin overview to start installation. Configured install-policy
+warnings still require an explicit acknowledgment. When an official plugin has
+one, the card opens the plugin overview, where you review and acknowledge it;
+see [Manage plugins](/web/control-ui/settings#manage-plugins).
 **Dismiss** dismisses the card from the current view.
 
 An installed capability shows a green checkmark and **Installed**. This means the

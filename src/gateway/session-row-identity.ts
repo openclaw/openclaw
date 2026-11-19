@@ -36,10 +36,13 @@ function sameRowField(left: unknown, right: unknown): boolean {
 export function freezeSessionRow(
   row: GatewaySessionRow,
   previous?: Readonly<GatewaySessionRow>,
+  fields = Object.keys(row),
 ): Readonly<GatewaySessionRow> {
-  for (const field of Object.keys(row)) {
+  for (const field of fields) {
     const current = Reflect.get(row, field);
-    if (current && typeof current === "object") {
+    if (current === undefined) {
+      Reflect.deleteProperty(row, field);
+    } else if (current && typeof current === "object") {
       const retained = previous && Reflect.get(previous, field);
       Reflect.set(
         row,

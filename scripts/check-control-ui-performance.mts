@@ -74,6 +74,8 @@ const controlUiPerformanceBudgets = {
   // Preserve the original main headroom; no additional margin.
   // Ayaan approved the #201130 Codex update recovery (2026-11-18): measured 1,332,226 B
   // (+911 B over paired base 1,331,315 B) plus 64 B headroom.
+  // Ayaan approved the plugin composer task card (#201695, 2026-11-19): measured 1,332,573 B
+  // (+849 B over paired base 1,331,724 B) plus 64 B headroom.
   // Bounded resident history (#187440): measured 1,338,663 B against frozen 11b,
   // plus 699 B headroom.
   chatBootJsGzipBytes: 1_339_362,

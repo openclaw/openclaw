@@ -131,6 +131,7 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
     typeof metadata.idempotencyKey === "string" ? metadata.idempotencyKey : undefined;
   const turnBoundary = metadata.turnBoundary === true;
   const transcriptPosition = readTranscriptDisplayPosition(metadata.transcriptPosition);
+  const transport = asOptionalRecord(metadata.transport);
   return {
     role,
     timestamp,
@@ -145,6 +146,7 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
       ...(metadataIdempotencyKey ? { idempotencyKey: metadataIdempotencyKey } : {}),
       ...(turnBoundary ? { turnBoundary: true } : {}),
       ...(transcriptPosition ? { transcriptPosition } : {}),
+      ...(transport ? { transport } : {}),
       truncated: true,
       reason: "oversized",
     },

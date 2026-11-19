@@ -118,6 +118,7 @@ export function readSessionRowInputs(params: {
   skipTranscriptUsageFallback?: boolean;
   transcriptUsage?: SessionTranscriptUsageSnapshot | null;
   lightweightListRow?: boolean;
+  hasMessages?: boolean;
   includeSwarmChildren?: boolean;
 }) {
   const { cfg, storePath, store, key, entry, agentId } = params;
@@ -183,7 +184,7 @@ export function readSessionRowInputs(params: {
     catalogEntry,
     selected: entry?.contextWindow,
   });
-  const modelContext = resolveModelContextTokenProjection({
+  const modelContext = (params.runtimeResolution?.context ?? resolveModelContextTokenProjection)({
     cfg,
     provider,
     model,
@@ -234,9 +235,12 @@ export function readSessionRowInputs(params: {
       displayName,
       derivedTitle: params.preparedTitle?.derivedTitle,
       lastMessagePreview: params.preparedTitle?.lastMessagePreview,
+      hasMessages: params.hasMessages,
       lastAssistantMessage: params.preparedTitle?.lastAssistantMessage,
       thinkingProjection,
-      agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
+      agentRuntime: (params.runtimeResolution?.placement ?? projectWorkerPlacementAgentRuntime)(
+        thinkingProjection.agentRuntime,
+      ),
       contextWindowProfile,
       fastModeState: resolveFastModeState({
         cfg,
@@ -446,6 +450,7 @@ export function materializeSessionRow(
       : input.displayName,
     derivedTitle: input.derivedTitle,
     lastMessagePreview: input.lastMessagePreview,
+    hasMessages: input.hasMessages,
     lastAssistantMessage: input.lastAssistantMessage,
     channel,
     subject: entry?.subject,
@@ -596,7 +601,7 @@ export function replaceSessionRowFacts(
   return Object.freeze({
     publicationIdentity: materialized.publicationIdentity,
     row: row
-      ? freezeSessionRow(omitUndefinedFields({ ...materialized.row, ...row }), materialized.row)
+      ? freezeSessionRow({ ...materialized.row, ...row }, materialized.row, Object.keys(row))
       : materialized.row,
     source: Object.freeze(nextSource),
   });

@@ -69,9 +69,22 @@ async function readUpdateStatus(manager: "npm" | "bun", latestVersion?: string) 
 it.each([
   { manager: "pnpm", name: "default", requests: ["latest"] },
   { manager: "npm", name: "tag", tag: "preview", requests: ["preview"] },
+  {
+    manager: "npm",
+    name: "version-like tag",
+    tag: "preview-2026.9.4",
+    requests: ["preview-2026.9.4"],
+  },
+  {
+    manager: "pnpm",
+    name: "version-like tag",
+    tag: "preview-2026.9.4",
+    requests: ["preview-2026.9.4"],
+  },
   { manager: "npm", name: "beta", channel: "beta", requests: ["beta", "latest"] },
   { manager: "pnpm", name: "beta fallback", channel: "beta", requests: ["beta", "latest"] },
   { manager: "npm", name: "numeric", tag: "2026.9.4", requests: ["2026.9.4"] },
+  { manager: "npm", name: "loose exact", tag: "=v2026.9.4", requests: ["2026.9.4"] },
   { manager: "pnpm", name: "tarball", tag: "./candidate.tgz", requests: [] },
   { manager: "pnpm", name: "moving override", requests: ["latest", "2026.9.4"] },
 ])("resolves $manager $name with paired metadata and bounded requests", async (entry) => {

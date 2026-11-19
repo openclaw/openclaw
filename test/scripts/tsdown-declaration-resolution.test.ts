@@ -722,7 +722,10 @@ it.concurrent.for([
       expect(output).toContain(
         ancestorOrReference ? "TS6053" : "Declaration input escapes checkout",
       );
-      expect(output).toContain(rejectedPath);
+      // References are written with forward slashes and reported as written.
+      expect(output).toContain(
+        ancestorOrReference ? rejectedPath.replaceAll(path.sep, "/") : rejectedPath,
+      );
     }
     expect(treeHashes(path.join(root, "dist"))).toEqual(before);
     expectStagingClean(root);

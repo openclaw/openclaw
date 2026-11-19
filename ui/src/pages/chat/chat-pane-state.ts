@@ -4,6 +4,7 @@ import type {
   SessionSharingRole,
   SessionSuggestion,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
@@ -14,6 +15,10 @@ import {
   resolveControlUiServerQueueMode,
 } from "../../lib/chat/follow-up-mode.ts";
 import { currentDisplayRuntimeConfig } from "../../lib/config/config-state-model.ts";
+import type {
+  SessionCapability,
+  SessionRowObservation,
+} from "../../lib/sessions/session-capability.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { chatSendPendingReason } from "./chat-send-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
@@ -24,6 +29,59 @@ import type { ChatSessionSharingState } from "./components/chat-session-sharing-
 import { dismissChatRunError, hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 
 registerChatSessionEnglish();
+
+export function createSessionObservationRefresh(
+  sessions: Pick<SessionCapability, "describe" | "canonicalListRevision">,
+  target: { key: string; agentId: string },
+  client: GatewayBrowserClient,
+  current: () => boolean,
+  observation: () => SessionRowObservation | null,
+  retryAfterList = false,
+) {
+  let reading: Promise<void> | null = null;
+  let pending = false;
+  let failedListRevision: number | undefined;
+  const refresh = () => {
+    if (!current()) {
+      return;
+    }
+    pending = true;
+    const selected = observation();
+    if (reading || !selected?.isCurrent()) {
+      return;
+    }
+    pending = false;
+    failedListRevision = undefined;
+    const reconcile = selected.captureReconcile();
+    reading = sessions
+      .describe(target, { client })
+      .then(({ session }) => {
+        if (current()) {
+          reconcile(session ?? undefined);
+        }
+      })
+      .catch(() => {
+        failedListRevision = sessions.canonicalListRevision;
+      })
+      .finally(() => {
+        reading = null;
+        if (pending) {
+          refresh();
+        }
+      });
+  };
+  return {
+    refresh,
+    retryFailedRead: () => {
+      if (
+        failedListRevision !== undefined &&
+        (!retryAfterList || sessions.canonicalListRevision > failedListRevision)
+      ) {
+        refresh();
+      }
+    },
+  };
+}
 
 export function createChatPaneCollaborationState(): {
   sharingStates: Map<string, ChatSessionSharingState>;

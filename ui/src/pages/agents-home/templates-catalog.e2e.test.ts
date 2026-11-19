@@ -27,9 +27,18 @@ const proofDir = createControlUiE2eArtifactDir("templates-catalog");
 const capture = async (page: Page, name: string, content: Locator, scrollTo?: Locator) => {
   const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [content], {
     animations: "disabled",
+    elements: name === "after-catalog" ? [content] : [],
     scrollTo,
   });
   await writeFile(`${proofDir}/${name}.png`, frame.png);
+  await writeFile(
+    `${proofDir}/${name}.json`,
+    JSON.stringify({
+      viewport: page.viewportSize(),
+      scale: await page.evaluate(() => devicePixelRatio),
+      elements: frame.elements.map(({ bounds }) => ({ bounds })),
+    }),
+  );
 };
 
 const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
@@ -88,6 +97,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     loading = false,
     colorScheme: "light" | "dark" = "light",
     linkPreviews = false,
+    catalogEntries: ClawHubTemplateCatalogEntry[] = [entry],
   ) {
     const context = await browser.newContext({
       colorScheme,
@@ -139,7 +149,10 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
         "agents.list": agentsList,
         "templates.catalog.search": {
           entries: [entry],
-          overview: { featured: [entry], sections: [{ category: "research", entries: [entry] }] },
+          overview: {
+            featured: catalogEntries,
+            sections: [{ category: "research", entries: catalogEntries }],
+          },
         },
         "templates.catalog.detail": {
           detail: {
@@ -535,7 +548,30 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
   });
 
   it("lays out featured cards and switches category shelves to filtered results", async () => {
-    const { page, gateway } = await fixture();
+    const { page, gateway } = await fixture(
+      undefined,
+      undefined,
+      undefined,
+      false,
+      "light",
+      false,
+      [
+        workflowOperator,
+        { ...researchTemplate, iconUrl: "/apple-touch-icon.png" },
+        {
+          ...workflowOperator,
+          packageName: "@maker/inbox",
+          displayName: "Inbox Organizer",
+          ownerHandle: "maker",
+        },
+        {
+          ...workflowOperator,
+          packageName: "@maker/planner",
+          displayName: "A long weekly planning Template name",
+          ownerHandle: "a-long-publisher-handle",
+        },
+      ],
+    );
     await page.locator("[data-templates-featured] [data-templates-entry]").first().waitFor();
     await page
       .locator('[data-templates-category="research"] [data-templates-entry]')
@@ -556,19 +592,57 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     await capture(
       page,
       "after-catalog",
-      page.getByRole("heading", { name: "Templates", exact: true }),
+      page.locator("[data-templates-featured] [data-templates-entry]").first(),
     );
-    // Four-column cards are too narrow to fit the name between the artwork and Add.
-    const titleRow = await page
-      .locator("[data-templates-featured] [data-templates-entry] .agents-home__template-head")
-      .first()
-      .evaluate((head) => ({
-        head: head.getBoundingClientRect().width,
-        name: head.querySelector("h3")?.getBoundingClientRect().width ?? 0,
-      }));
-    expect(Math.abs(titleRow.head - titleRow.name)).toBeLessThan(1);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await capture(page, "catalog-mobile", page.locator("[data-templates-featured]"));
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      390,
+    );
+    await page.setViewportSize({ width: 1440, height: 900 });
+    for (const selector of ["[data-templates-featured]", '[data-templates-category="research"]']) {
+      const cards = page.locator(`${selector} [data-templates-entry]`);
+      expect(await cards.count()).toBe(4);
+      const boxes = await cards.evaluateAll((elements) =>
+        elements.map((card) => {
+          const { x, y } = card.getBoundingClientRect();
+          return { x, y };
+        }),
+      );
+      expect(boxes[0]!.y).toBe(boxes[1]!.y);
+      expect(boxes[2]!.y).toBe(boxes[3]!.y);
+      expect(boxes[0]!.x).toBe(boxes[2]!.x);
+      expect(boxes[1]!.x).toBeGreaterThan(boxes[0]!.x);
+      expect(boxes[2]!.y).toBeGreaterThan(boxes[0]!.y);
+      const rows = await cards.evaluateAll((elements) =>
+        elements.map((card) => {
+          const art = card.querySelector(".agents-home__template-art")!;
+          const body = card.querySelector(".agents-home__template-head")!.getBoundingClientRect();
+          const image = art.getBoundingClientRect();
+          const add = card.querySelector(".agents-home__template-add")!.getBoundingClientRect();
+          const name = card.querySelector("h3")!.getBoundingClientRect();
+          const owner = card
+            .querySelector(".agents-home__template-identity span")!
+            .getBoundingClientRect();
+          return {
+            background: getComputedStyle(art).backgroundColor,
+            artworkHeight: image.height,
+            bodyHeight: body.height,
+            centerDelta: Math.abs(add.y + add.height / 2 - (body.y + body.height / 2)),
+            identityDelta: Math.abs(name.y - owner.y),
+          };
+        }),
+      );
+      for (const row of rows) {
+        expect(row.background).toBe("rgba(0, 0, 0, 0)");
+        expect(row.artworkHeight).toBe(row.bodyHeight);
+        expect(row.centerDelta).toBeLessThan(1);
+        // Different font sizes share a baseline, with a one-pixel top offset.
+        expect(row.identityDelta).toBeLessThanOrEqual(1);
+      }
+    }
     await gateway.waitForRequest("templates.catalog.search", {
-      match: { overview: true, limit: 8 },
+      match: { overview: true, limit: 4 },
     });
     expect(await gateway.getRequests("templates.catalog.search")).toHaveLength(1);
 
@@ -805,6 +879,14 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
         ownerHandle: "maker",
         official: false,
       });
+      await gateway.setHistoryMessages([]);
+      await gateway.setSessionRow({
+        key: "agent:workflow-operator:main",
+        kind: "direct",
+        sessionId: "template-empty-session",
+        hasMessages: false,
+      });
+      await gateway.deferNext("chat.startup");
       const card = page.locator("[data-templates-explore] [data-templates-entry]").first();
       await card.waitFor();
       expect(await card.textContent()).toContain("@openclaw");
@@ -904,12 +986,25 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       expect(Math.abs(admittedFooter!.y - pendingFooter!.y)).toBeLessThanOrEqual(1);
       expect(Math.abs(admittedFooter!.height - pendingFooter!.height)).toBeLessThanOrEqual(1);
       await capture(page, `template-add-${width}-admitted`, admittedPane);
+      // The session description proves there are no saved messages, even
+      // while setup and the first history response remain pending.
+      await gateway.waitForRequest("sessions.messages.subscribe", {
+        match: { key: "agent:workflow-operator:main" },
+      });
+      expect(await admittedPane.locator(".creation-composer").count()).toBe(1);
+      const transcriptSkeleton = admittedPane.locator(
+        ".chat-thread .chat-conversation-loading, .chat-thread .loading-skeleton, .chat-thread openclaw-panel-loading-skeleton",
+      );
+      expect(await transcriptSkeleton.count()).toBe(0);
       await gateway.resolveDeferred("templates.add.apply", {
         agentId: "workflow-operator",
         sessionKey: "agent:workflow-operator:main",
         status: "complete",
         readiness: { ready: false },
       });
+      await admittedPane.locator(".creation-composer").waitFor({ state: "hidden" });
+      expect(await transcriptSkeleton.count()).toBe(0);
+      await gateway.resolveDeferred("chat.startup");
       expect(await composer.inputValue()).toBe("Keep my draft while setup finishes");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       // One Add request, with no plan digest or acknowledgements, and no review first.

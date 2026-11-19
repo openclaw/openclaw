@@ -18,19 +18,20 @@ describe("replaceOversizedChatHistoryMessages", () => {
     expect(replace([], 10)).toEqual([]);
   });
 
-  it("replaces an oversized message and preserves its cursor and run metadata", () => {
+  it("replaces an oversized message and preserves its cursor, run, and transport metadata", () => {
     const transcriptPosition = { source: "snapshot", rawSeq: 9 };
+    const transport = { channel: "a2a", messageId: "m-1" };
     const last = {
       role: "assistant",
       timestamp: 1,
       content: [{ type: "text", text: "y".repeat(4000) }],
-      __openclaw: { id: "abc", seq: 7, runId: "run", turnBoundary: true, transcriptPosition },
+      __openclaw: { runId: "run", turnBoundary: true, transcriptPosition, transport },
     };
     const messages = replace([last], 2_000);
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatchObject({
       content: [{ text: expect.stringContaining("chat.history omitted: message too large") }],
-      __openclaw: { turnBoundary: true, transcriptPosition, runId: "run" },
+      __openclaw: { turnBoundary: true, transcriptPosition, runId: "run", transport },
     });
     expect(messages[0]).not.toBe(last);
   });
