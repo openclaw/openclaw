@@ -1,6 +1,5 @@
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { MISSING_REPLY_NOTICE_TEXT } from "../../agents/reply-completion.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
@@ -166,8 +165,13 @@ it.each(["engagement", "none", "reassessed"] as const)(
       queuedStarted.resolve();
       await releaseQueued.promise;
       return {
-        payloads: [],
-        meta: { durationMs: 1, terminalReply: { disposition: "silent" as const } },
+        payloads: attention === "reassessed" ? [] : [{ text: "Queued conversational reply." }],
+        meta: {
+          durationMs: 1,
+          ...(attention === "reassessed"
+            ? { terminalReply: { disposition: "silent" as const } }
+            : {}),
+        },
       };
     });
     const groupId = `-10115-${attention}`;
@@ -240,8 +244,8 @@ it.each(["engagement", "none", "reassessed"] as const)(
       expect(stop).toHaveBeenCalledOnce();
       expect(batches).toMatchObject([
         {
-          payloads: attention !== "none" ? [{ text: MISSING_REPLY_NOTICE_TEXT }] : [],
-          completion: { kind: attention !== "none" ? "failed" : "completed" },
+          payloads: attention === "engagement" ? [{ text: "Queued conversational reply." }] : [],
+          completion: { kind: "completed" },
         },
       ]);
     } finally {

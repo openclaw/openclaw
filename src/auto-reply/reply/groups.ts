@@ -121,7 +121,7 @@ function buildGroupChatContext(params: {
     );
   }
   lines.push(
-    "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.",
+    "Follow the participation assessment in the current turn's runtime context: approval requires a conversational reply. Without approval, mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.",
   );
   const channelId = normalizeChatChannelId(provider) ?? provider ?? "";
   const tableMode = getLoadedChannelPluginForRead(channelId)?.messaging?.defaultMarkdownTableMode;
@@ -130,7 +130,9 @@ function buildGroupChatContext(params: {
   lines.push(
     `Write like a human.${tableGuidance} Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.`,
   );
-  lines.push("If addressed to someone else, stay silent unless invited or correcting key facts.");
+  lines.push(
+    "Without participation approval for the current turn, if addressed to someone else, stay silent unless invited or correcting key facts.",
+  );
   if (provider === "discord") {
     lines.push("Discord: wrap bare URLs like <https://example.com> to suppress embeds.");
   }
@@ -139,10 +141,10 @@ function buildGroupChatContext(params: {
   );
   if (messageToolOnly) {
     lines.push(
-      `If no visible ${sharedChatNoun === "channel" ? "channel" : "group"} response is needed, do not call message(action=send).`,
+      `Without participation approval, if no visible ${sharedChatNoun === "channel" ? "channel" : "group"} response is needed, do not call message(action=send).`,
     );
   }
-  lines.push(silentReplyGuidance);
+  lines.push(`For turns without participation approval: ${silentReplyGuidance}`);
   return lines.join(" ");
 }
 

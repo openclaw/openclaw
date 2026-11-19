@@ -28,7 +28,7 @@ Set `agents.defaults.typingMode` to one of:
 
 Order of "how early it fires": `never` -> `message`/`thinking` -> `instant`.
 
-For group turns assessed by Decision assistance, assessment is quiet. Approval commits to a visible reply and starts typing before generation; a rejected assessment starts neither. An approved turn that returns `NO_REPLY` without delivering a reply reports the normal missing-reply failure. `never` mode still disables typing.
+For group turns assessed by Decision assistance, assessment is quiet. Approval commits to a conversational reply and starts typing before generation. The primary model follows that assessment and the conversation's delivery instructions. Typing stays active during generation and stops on completion or failure. Rejected turns persist the message without typing or a primary-model run. `NO_REPLY` after confirmed message-tool delivery prevents duplicate output. With Decision assistance off, ordinary reply behavior stays unchanged. `never` mode still disables typing.
 
 ## Configuration
 

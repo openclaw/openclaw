@@ -68,4 +68,24 @@ describe("system prompt messaging routing", () => {
     expect(prompt).not.toContain("NO_REPLY");
     expect(prompt).not.toContain("## Silent Replies");
   });
+
+  it.each(["automatic", "message_tool_only"] as const)(
+    "defers participation to the current turn's assessment in %s delivery",
+    (sourceReplyDeliveryMode) => {
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        sourceReplyDeliveryMode,
+        toolNames: ["message"],
+        runtimeInfo: { channel: "whatsapp", chatType: "group" },
+      });
+      if (sourceReplyDeliveryMode === "automatic") {
+        expect(prompt).toContain("Without participation approval for the current turn");
+        expect(prompt).toContain("After visible `message(send)`, final ONLY uppercase NO_REPLY");
+      } else {
+        expect(prompt).toContain("With approval, send a conversational reply");
+        expect(prompt).toContain("Without approval, stale/joke/light ack/low-value chatter");
+        expect(prompt).toContain("Visible `message(send)` content: never repeat in final.");
+      }
+    },
+  );
 });

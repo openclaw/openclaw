@@ -189,7 +189,7 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
       ? appendCurrentInboundContext(turn.followupRun.currentInboundContext, [
           {
             kind: "runtime-instruction",
-            text: "Group participation was approved for this turn. Send a visible reply using this conversation's delivery instructions.",
+            text: "Group participation was approved for this turn by the Decision Model. Its participation assessment is authoritative: generate and deliver a conversational reply using this conversation's delivery instructions. After confirmed message-tool delivery, end with NO_REPLY to avoid duplicating that delivered reply.",
           },
         ])
       : turn.followupRun.currentInboundContext,
