@@ -251,11 +251,16 @@ export async function relocateRuntimeLauncher(
     const shellBase = usesPhysicalBasedir(original)
       ? await canonicalPathFromExistingAncestor(destinationDir)
       : destinationDir;
+    // A launcher rewritten in place (repair) does not move with its directory, so a
+    // relocated root inside that directory (pnpm's home-level shim) still applies.
+    const inPlace = sourceDir === destinationDir;
     const relocateRelative = (relative: string, destinationBase: string) => {
       const sourceTarget = path.resolve(sourceDir, relative);
-      const target = isPathInside(sourceDir, sourceTarget)
-        ? path.resolve(destinationBase, path.relative(sourceDir, sourceTarget))
-        : relocateRuntimePath(sourceTarget, prepared);
+      const relocated = relocateRuntimePath(sourceTarget, prepared);
+      const target =
+        isPathInside(sourceDir, sourceTarget) && !(inPlace && relocated !== sourceTarget)
+          ? path.resolve(destinationBase, path.relative(sourceDir, sourceTarget))
+          : relocated;
       return path.relative(destinationBase, target);
     };
     // Windows launchers can also spell project paths with forward slashes.
