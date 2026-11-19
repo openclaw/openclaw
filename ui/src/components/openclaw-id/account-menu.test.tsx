@@ -530,11 +530,12 @@ describe("approved OpenClaw ID account menu", () => {
       expect(menu(current).labels).toEqual([
         "Copy claw link",
         "Move to new keys",
+        "Unlink from OpenClaw ID",
         "Your devices",
         "Sign out of OpenClaw ID",
       ]);
       expect(menu(current).text).toContain(`Remote access on${relayOnline ? "Online" : "Offline"}`);
-      expect(menu(current).text).not.toMatch(/People|\bAccess\b|Regenerate|Turn off remote|Unlink/);
+      expect(menu(current).text).not.toMatch(/People|\bAccess\b|Regenerate|Turn off remote/);
     },
   );
 
@@ -586,6 +587,8 @@ describe("approved OpenClaw ID account menu", () => {
     expect(keys.text).toContain("Remote access is off: a key file is missing");
     expect(keys.text).not.toContain("Remote access on");
     expect(keys.labels).toContain("Move to new keys");
+    // Unlinking signs with the Gateway key this computer cannot use.
+    expect(keys.labels).not.toContain("Unlink from OpenClaw ID");
     const superseded = menu(status({ link: linked }), {
       state: "failed",
       code: "binding_superseded",
@@ -608,6 +611,7 @@ describe("approved OpenClaw ID account menu", () => {
     });
     expect(remote.text).not.toContain("Newer keys");
     expect(remote.labels).not.toContain("Move to new keys");
+    expect(remote.labels).not.toContain("Unlink from OpenClaw ID");
   });
 
   it("publishes new keys with a link code fetched from the signed-in account", async () => {

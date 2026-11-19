@@ -586,11 +586,8 @@ export const openclawIdHandlers: GatewayRequestHandlers = {
   //   owner reset in this version (OCF-319);
   // - register_invite: an owner-signed InviteCap and its base64url proof key;
   // - register_node_invite: an owner-signed NodeInviteCap and its base64url proof key;
-  // - rebind_prepare / rebind_commit / rebind_cancel: "Move to new keys", direct loopback
-  //   only. prepare stages the next K_srv and K_gw and returns the binding the owner root
-  //   signs, with Discovery's published descriptor when `code` (the owner account's link code)
-  //   reads it; commit takes that R-signed binding and the code that publishes it; cancel
-  //   deletes uncommitted staged keys;
+  // - rebind_* and unlink*: Move to new keys and Unlink from OpenClaw ID, on this machine only
+  //   (openclaw-id-machine.ts);
   // - account_*: the Control UI's OpenClaw ID sign-in (see handleAccount).
   "openclawId.authority": async (opts) => {
     if (!isOpenClawIdEnabled(opts.context.getRuntimeConfig().gateway?.openclawId)) {
@@ -732,38 +729,18 @@ export const openclawIdHandlers: GatewayRequestHandlers = {
       return;
     }
     if (
-      params.action === "rebind_prepare" ||
-      params.action === "rebind_commit" ||
-      params.action === "rebind_cancel"
+      typeof params.action === "string" &&
+      (params.action.startsWith("rebind_") || params.action.startsWith("unlink"))
     ) {
-      if (channel !== "local_operator") {
-        refuse(opts, {
-          code: "not_local_operator",
-          detail: "Move to new keys only works on the computer running this claw",
-        });
-        return;
-      }
-      const result = await service.rebind(
-        params.action === "rebind_prepare"
-          ? "prepare"
-          : params.action === "rebind_commit"
-            ? "commit"
-            : "cancel",
-        channel,
-        { binding: params.binding, code: optionalCode(params.code) },
-      );
-      if ("ok" in result && !result.ok) {
-        refuse(opts, result);
-        return;
-      }
-      opts.respond(true, result);
+      const { handleOpenClawIdMachineAction } = await import("./openclaw-id-machine.js");
+      await handleOpenClawIdMachineAction(opts, service, channel, params);
       return;
     }
     if (params.action !== "commit") {
       refuse(opts, {
         code: "malformed",
         detail:
-          "action must be check_name, prepare, commit, publish, submit, register_invite, register_node_invite or rebind_*",
+          "action must be check_name, prepare, commit, publish, submit, register_invite, register_node_invite, rebind_* or unlink*",
       });
       return;
     }
