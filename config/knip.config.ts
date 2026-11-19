@@ -167,6 +167,8 @@ const repositoryScriptEntries = [
   ".github/workflows/plugin-prerelease.yml!",
   // Labeler steps import their shared helper through workspace file URLs.
   ".github/workflows/labeler.yml!",
+  // Full release validation imports policy from its trusted workflow checkout.
+  ".github/workflows/full-release-validation.yml!",
   // Stable closeout imports its recovery verifier from the trusted tooling checkout.
   ".github/workflows/openclaw-stable-main-closeout.yml!",
   // Prepared publication imports its verifier from the frozen release harness.
@@ -614,11 +616,13 @@ function compileWorkflowConsumers(source: string, filePath: string): string {
       : path.resolve(filePath) ===
           path.resolve(".github/workflows/openclaw-stable-main-closeout.yml")
         ? ".closeout-tooling"
-        : undefined;
+        : path.resolve(filePath) === path.resolve(".github/workflows/full-release-validation.yml")
+          ? "workflow"
+          : undefined;
   if (stagedToolingRoot) {
     return [
       ...source.matchAll(
-        /\b(?:import|const)\s*\{([^}]+)\}\s*(?:from\s*|=\s*await\s+import\(\s*)["']\.\/(\.(?:release-harness|closeout-tooling))\/(scripts\/[^"'\r\n]+)["']/gu,
+        /\b(?:import|const)\s*\{([^}]+)\}\s*(?:from\s*|=\s*await\s+import\(\s*)["']\.\/(\.(?:release-harness|closeout-tooling)|workflow)\/(scripts\/[^"'\r\n]+)["']/gu,
       ),
     ]
       .filter((match) => match[2] === stagedToolingRoot)

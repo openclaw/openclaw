@@ -254,6 +254,18 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     ["sh", "scripts/e2e/lib/upgrade-survivor/run.sh", "readPostCoreSnapshot", "./diagnostics.mjs"],
     [
       "yml",
+      ".github/workflows/full-release-validation.yml",
+      "resolveReleaseContextIdentity",
+      "../../scripts/lib/release-context.mjs",
+    ],
+    [
+      "yml",
+      ".github/workflows/full-release-validation.yml",
+      "resolveReleaseQualificationScope",
+      "../../scripts/full-release-validation-policy.mjs",
+    ],
+    [
+      "yml",
       ".github/workflows/openclaw-release-publish.yml",
       "prefetchPreparedPlugins",
       "../../scripts/openclaw-release-ready.mjs",
