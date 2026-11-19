@@ -106,6 +106,7 @@ const callGatewayMock = vi.fn(async (request: GatewayRequest): Promise<GatewayRe
     return {
       result: {
         payloads: [{ text: "completion delivered" }],
+        meta: { durationMs: 1, finalAssistantVisibleText: "completion delivered" },
         deliveryStatus: { status: "sent", resultCount: 1 },
       },
     };

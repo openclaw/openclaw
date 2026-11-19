@@ -1,9 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { expect, it, vi, type Mock } from "vitest";
+import { expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../../../config/sessions/session-accessor.sqlite-read.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
+import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
@@ -18,6 +19,10 @@ import {
 } from "../../tools/gateway-caller-context.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
+import {
+  registerRequesterFinalAttachment,
+  promoteRequesterFinalAttachment,
+} from "../requester-final-attachment.js";
 import { retireSubagentGatewayBinding } from "./subagent-registry-execution-cleanup.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
@@ -110,7 +115,24 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
           }
         }
       }
-      registry.resumeSubagentRun("run-bound");
+      const append = vi.fn(() => true);
+      const owner = {
+        requesterAgentId: "main",
+        requesterSessionKey,
+        requesterSessionId: "sess-main",
+        requesterTurnRunId: "yielded-requester",
+      };
+      const attachment = registerRequesterFinalAttachment({
+        ...owner,
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        timeoutMs: 60_000,
+        append,
+      });
+      onTestFinished(() => attachment.revoke());
+      expect(promoteRequesterFinalAttachment({ ...owner, batchRunIds, rearmGeneration: 1 })).toBe(
+        true,
+      );
+      registry.resumeSubagentRun(binding === "restored" ? "run-unbound" : "run-bound");
       await flushOwnedWork();
       expect(registry.getSubagentRunByRunId("run-bound")?.delivery).toMatchObject({
         status: "delivered",
@@ -120,6 +142,8 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
           String(call.params?.message).includes("saved result run-bound"),
         ),
       ).toBe(true);
+      expect(append).toHaveBeenCalledWith("completion delivered");
+      expect(append).toHaveBeenCalledTimes(binding === "restored" ? 1 : 2);
       const unbound = registry.getSubagentRunByRunId("run-unbound");
       if (binding === "restored") {
         expect(unbound).toBeUndefined();
