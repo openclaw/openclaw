@@ -10,6 +10,7 @@ import {
   getPublishedPreparedModelCatalogOwnerSnapshot,
 } from "../../agents/prepared-model-catalog.js";
 import { getPreparedModelFullCatalogAuth } from "../../agents/prepared-model-runtime-auth.js";
+import { PreparedModelRuntimeOwnerNotPublishedError } from "../../agents/prepared-model-runtime.errors.js";
 import { resolveRuntimeModelConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
@@ -31,6 +32,8 @@ export type PreparedGenerationFacts = {
   pluginRegistryVersion: number;
   agents: PreparedAgentFacts[];
 };
+
+export class ChatMetadataStartingError extends PreparedModelRuntimeOwnerNotPublishedError {}
 
 export class ChatMetadataSnapshotUnavailableError extends Error {
   constructor(message = "prepared chat metadata snapshot is unavailable") {
