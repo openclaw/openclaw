@@ -157,6 +157,7 @@ export class StorageIngestion extends StorageLifecycle {
             id: keys.get(item.key)!,
             data,
             snapshot,
+            occupied: (candidate) => parts.some((part) => part.record.path === candidate),
           }),
         );
       }
@@ -256,12 +257,12 @@ export class StorageIngestion extends StorageLifecycle {
     await this.initialize(access);
     const requestId = input.requestId,
       scope = scopeKey(access.scope),
-      intent = digest(canonical({ operation: "remember", input }));
+      intent = `remember:${digest(canonical({ operation: "remember", input }))}`;
     const prior = this.store.withDatabase((db) => this.row(db, scope, requestId));
-    if (prior) {
+    if (prior?.intent.startsWith("remember:")) {
       this.checkReplay(prior, intent);
       if (prior.state === "accepted") {
-        // An accepted remember blocks its own catalog read; resolve subjects after publication.
+        // An accepted write blocks catalog reads; validate before resuming it.
         this.resume(access, requestId);
       }
     }
@@ -278,6 +279,13 @@ export class StorageIngestion extends StorageLifecycle {
     const inserts = plan.flatMap((p, n) => (p.duplicateOf || p.sameAs !== undefined ? [] : [n]));
     let receipt: Receipt | null = null;
     if (prior) {
+      if (inserts.length) {
+        throw new Error(
+          "Request ID already belongs to a different payload. Use the original payload for retries.",
+        );
+      }
+      // Legacy receipts retain their batch digest, not the original remember input.
+      // Keep their published-claim reconciliation without inventing missing intent.
       // A replay finds its own published claims as duplicates; keys map them back.
       receipt = this.resume(access, requestId);
       for (const item of receipt.items ?? []) {

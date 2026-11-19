@@ -39,6 +39,7 @@ import {
   PageBudgetError,
   type Plan,
   type Prepared,
+  type BatchPreparation,
 } from "./storage-types.js";
 import type { SampleVault } from "./vault.js";
 import { digest } from "./vault.js";
@@ -157,7 +158,7 @@ export class StoragePublication extends StorageJournal {
     actor: string,
     correction?: CorrectInput,
     sourceAttachment?: import("./model.js").Evidence,
-    batch?: { id: string; data: Prepared["data"]; snapshot: string },
+    batch?: BatchPreparation,
     bodyEditReason?: string,
   ): Promise<Prepared> {
     const scope = scopeKey(access.scope);
@@ -261,7 +262,9 @@ export class StoragePublication extends StorageJournal {
         kind === "claim" ? "claims/" : definition!.directory,
         input.title,
         id,
-        (candidate) => existsSync(path.join(this.config.root, scope, candidate)),
+        (candidate) =>
+          Boolean(batch?.occupied?.(candidate)) ||
+          existsSync(path.join(this.config.root, scope, candidate)),
       );
     const revision = (previous?.revision ?? 0) + 1;
     const metadata: Envelope = previous

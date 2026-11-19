@@ -176,3 +176,84 @@ it("named and omitted subjects never guess competing names or create pages", asy
   expect((await f.record(out.items[6]!.id)).record!.metadata!.entities).toBe(undefined);
   expect(out.message).toMatch(/4 linked by inference/);
 });
+
+it("a replayed request returns its original result; a changed payload is rejected", async () => {
+  const f = await fixture();
+  const requestId = randomUUID(),
+    items = [{ text: "Uses link-only placement.", kind: "decision" }];
+  const first = await f.remember(items, { requestId });
+  const replay = await f.remember(items, { requestId });
+  expect(replay.items).toStrictEqual(first.items);
+  expect(replay.receipt!.requestId).toBe(requestId);
+  for (const change of [
+    { excerpt: "A different supporting excerpt." },
+    { attribution: "Another synthetic speaker" },
+    { items: [{ ...items[0]!, text: "  USES link-only placement. " }] },
+    { items: [{ ...items[0]!, about: "Different context" }] },
+    { items: [...items, { text: "Additional claim.", kind: "fact" }] },
+  ]) {
+    await expect(f.remember(change.items ?? items, { requestId, ...change })).rejects.toThrow(
+      /different payload/,
+    );
+  }
+  await expect(
+    f.remember([{ text: "Something else.", kind: "fact" }], { requestId }),
+  ).rejects.toThrow(/different payload/);
+});
+
+it("validates retained original input before resuming an accepted remember", async () => {
+  const f = await fixture();
+  const input: RememberInput = {
+    requestId: randomUUID(),
+    attribution: "Synthetic user",
+    excerpt: "Prefers short replies.",
+    items: [{ text: "Prefers short replies.", kind: "preference" }],
+  };
+  const storage = new KnowledgeStorage(f.config, undefined, (where) => {
+    if (where === "after-accept") throw new Error("interrupted");
+  });
+  await expect(storage.remember(input, accessFor(f.owner, true), "agent")).rejects.toThrow(
+    "interrupted",
+  );
+  await expect(
+    f.service.remember({ ...input, excerpt: "Changed excerpt" }, f.owner),
+  ).rejects.toThrow(/different payload/);
+  expect(
+    (await f.service.mutation({ requestId: input.requestId!, includeFiles: false }, f.owner))
+      .receipt!.state,
+  ).toBe("accepted");
+  const replay = await f.service.remember(input, f.owner);
+  expect(replay.receipt!.state).toBe("published");
+  expect((await f.service.remember(input, f.owner)).items).toStrictEqual(replay.items);
+});
+
+it("keeps same-title assertions with distinct dates and origins in one atomic batch", async () => {
+  const f = await fixture();
+  const items: RememberInput["items"] = [
+    { text: "Ships Friday.", kind: "commitment", occurred_at: "2026-11-01" },
+    { text: "Ships Friday.", kind: "commitment", occurred_at: "2026-11-02" },
+    { text: "Ships Friday.", kind: "commitment", occurred_at: "2026-11-01T00:00:00Z" },
+    { text: "Ships Friday.", kind: "commitment", origin: "user_belief" },
+    { text: "Ships Friday.", kind: "commitment" },
+    { text: "ships friday.", kind: "commitment", origin: "source" },
+  ];
+  const saved = await f.remember(items);
+  expect(saved.receipt!.state).toBe("published");
+  expect(saved.items.map((item) => item.status)).toStrictEqual([
+    "inserted",
+    "inserted",
+    "inserted",
+    "inserted",
+    "inserted",
+    "duplicate",
+  ]);
+  expect(new Set(saved.items.map((item) => item.id)).size).toBe(5);
+  for (let n = 0; n < 5; n++) {
+    const metadata = (await f.record(saved.items[n]!.id)).record!.metadata!;
+    expect(metadata.occurred_at).toBe(items[n]!.occurred_at);
+    expect(metadata.assertion_origin).toBe(items[n]!.origin ?? "source");
+  }
+  const repeat = await f.remember(items);
+  expect(repeat.receipt).toBe(null);
+  expect(repeat.items.map((item) => item.id)).toStrictEqual(saved.items.map((item) => item.id));
+});
