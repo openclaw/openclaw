@@ -274,34 +274,44 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
     });
   });
 
-  it("refuses to publish a launcher that relocation left pointing into the stage", async () => {
-    await withTestDir({ prefix: "native-package-stage-launcher-" }, async (base) => {
-      const project = join(base, "install", "global");
-      const globalRoot = join(project, "v11");
-      const packageRoot = join(globalRoot, "group", "node_modules", "openclaw");
-      await fs.mkdir(packageRoot, { recursive: true });
-      const stage = await prepareStage(
-        { manager: "pnpm", command: "pnpm", globalRoot, packageRoot },
-        join(base, "bin"),
-      );
-      // A launcher format the relocator does not recognize keeps its stage-relative target.
-      const target = relative(
-        stage.binDir,
-        join(stage.projectRoot, "v11", "group", "openclaw.mjs"),
-      );
-      await writeLauncher(
-        join(stage.binDir, "openclaw"),
-        `#!/bin/sh\nexec node "$(dirname "$0")/${target}" "$@"\n`,
-      );
-      await fs.mkdir(join(base, "bin"));
-      const snapshot = async () => [await fs.readdir(project), await fs.readdir(packageRoot)];
-      const before = await snapshot();
-      await expect(finalizeNativePackageStage(stage, "openclaw")).rejects.toThrow(
-        "still points into the update stage",
-      );
-      // Refused before activation: the live project and bin directory are untouched.
-      expect(await snapshot()).toEqual(before);
-      expect(await fs.readdir(join(base, "bin"))).toEqual([]);
-    });
-  });
+  it.each([
+    ["openclaw", "refuses"],
+    // Another global package's shim is never published by this update.
+    ["other-cli", "ignores"],
+  ] as const)(
+    "%s: %s a launcher relocation left pointing into the stage",
+    async (name, outcome) => {
+      await withTestDir({ prefix: "native-package-stage-launcher-" }, async (base) => {
+        const project = join(base, "install", "global");
+        const globalRoot = join(project, "v11");
+        const packageRoot = join(globalRoot, "group", "node_modules", "openclaw");
+        await fs.mkdir(packageRoot, { recursive: true });
+        const stage = await prepareStage(
+          { manager: "pnpm", command: "pnpm", globalRoot, packageRoot },
+          join(base, "bin"),
+        );
+        // A launcher format the relocator does not recognize keeps its stage-relative target.
+        const target = relative(
+          stage.binDir,
+          join(stage.projectRoot, "v11", "group", "openclaw.mjs"),
+        );
+        await writeLauncher(
+          join(stage.binDir, name),
+          `#!/bin/sh\nexec node "$(dirname "$0")/${target}" "$@"\n`,
+        );
+        await fs.mkdir(join(base, "bin"));
+        const snapshot = async () => [await fs.readdir(project), await fs.readdir(packageRoot)];
+        const before = await snapshot();
+        const finalized = finalizeNativePackageStage(stage, "openclaw");
+        if (outcome === "ignores") {
+          await expect(finalized).resolves.toBeTypeOf("function");
+          return;
+        }
+        await expect(finalized).rejects.toThrow("still points into the update stage");
+        // Refused before activation: the live project and bin directory are untouched.
+        expect(await snapshot()).toEqual(before);
+        expect(await fs.readdir(join(base, "bin"))).toEqual([]);
+      });
+    },
+  );
 });

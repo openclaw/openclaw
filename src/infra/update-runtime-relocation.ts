@@ -33,9 +33,11 @@ const windowsLauncherRelativePath =
   /(\$(?:basedir_abs|basedir_win|basedir)[/\\]|%~dp0\\)([^"\r\n]+)/gu;
 const SHELL_BASEDIR = new Set(["basedir", "basedir_abs", "basedir_win"]);
 
-// pnpm 12 shims resolve their directory physically through `basedir_abs`, however spelled.
+// pnpm 11+ shims define `basedir_abs` with `pwd -P` and derive `basedir` from it, so every
+// basedir word resolves physically. Older shims never assign it; a path that merely
+// contains the name (NODE_PATH, the target comment) is not a definition.
 function usesPhysicalBasedir(content: string): boolean {
-  return content.includes("basedir_abs");
+  return /^[ \t]*basedir_abs=/mu.test(content);
 }
 
 function isWindowsLauncher(file: string): boolean {

@@ -1211,7 +1211,7 @@ the new package's Doctor and Gateway startup repair it. They rewrite a launcher
 whose `cmd-shim-target` names this installation and whose stage directory is
 gone. This automatic repair runs on macOS and Linux only; on Windows, use the
 reinstall steps below. If the Gateway is also down and no new code has run yet, reinstall the same version
-with `pnpm add -g openclaw@<installed-version>` using the same account and global
+with `pnpm add -g --allow-build=openclaw openclaw@<installed-version>` using the same account and global
 directories, then run `openclaw gateway install --force` and
 `openclaw gateway restart`. Back up first and follow the
 [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun).

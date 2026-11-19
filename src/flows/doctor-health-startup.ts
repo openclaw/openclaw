@@ -355,7 +355,7 @@ export async function prepareDoctorRuntimeChecks(
       }
       for (const { file, error } of failed) {
         runtime.log(
-          `The openclaw launcher ${file} still points at a removed update stage and could not be repaired (${formatErrorMessage(error)}). Recreate it with \`pnpm add -g openclaw@<installed-version>\` as the account that owns the pnpm install.`,
+          `The openclaw launcher ${file} still points at a removed update stage and could not be repaired (${formatErrorMessage(error)}). Recreate it with \`pnpm add -g --allow-build=openclaw openclaw@<installed-version>\` as the account that owns the pnpm install.`,
         );
       }
     }

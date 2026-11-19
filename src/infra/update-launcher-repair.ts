@@ -29,18 +29,27 @@ function findStageDirectory(target: string): string | undefined {
  * Repair a published pnpm launcher that still executes a removed update stage.
  * Earlier updaters published launchers from the stage without relocating pnpm 12.15+
  * quoted targets, so the CLI fails once activation moves the stage away. Only a launcher
- * that is provably this installation's is touched: its stage sits beside the live project
- * and its `cmd-shim-target` comment names the same entry inside that project.
+ * that is provably this installation's is touched: its `cmd-shim-target` comment names
+ * `root`'s entry, and its stage sits beside that live project. Ownership and relocation
+ * use the same bytes, and the rename is skipped if the launcher changed meanwhile.
  */
 export async function repairStagedRuntimeLauncher(
   file: string,
+  root: string,
   entryName = "openclaw.mjs",
 ): Promise<StagedLauncherRepair> {
+  // pnpm writes regular files; reading a FIFO or device on PATH would block Doctor.
   const stat = await fs.lstat(file).catch(() => undefined);
   if (!stat?.isFile()) {
     return { outcome: "not-ours" };
   }
-  const content = await fs.readFile(file, "utf8");
+  const content = await fs.readFile(file, "utf8").catch(() => undefined);
+  const recorded = content && CMD_SHIM_TARGET.exec(content)?.[1]?.trim();
+  const recordedReal = recorded ? await fs.realpath(recorded).catch(() => undefined) : undefined;
+  const ownEntry = path.join(await fs.realpath(root), entryName);
+  if (!content || !recorded || recordedReal !== ownEntry) {
+    return { outcome: "not-ours" };
+  }
   const targets = await resolveRuntimeLauncherTargets(file, entryName, content);
   const missing: string[] = [];
   for (const target of targets) {
@@ -51,13 +60,12 @@ export async function repairStagedRuntimeLauncher(
   if (targets.length > 0 && missing.length === 0) {
     return { outcome: "current" };
   }
-  const recorded = CMD_SHIM_TARGET.exec(content)?.[1]?.trim();
   const stage = missing.length ? findStageDirectory(missing[0]!) : undefined;
-  if (!recorded || !stage || (await pathEntryExists(stage))) {
+  if (!stage || (await pathEntryExists(stage))) {
     return { outcome: "not-ours" };
   }
   const suffix = path.relative(stage, missing[0]!);
-  if (!recorded.endsWith(`${path.sep}${suffix}`) || !(await pathEntryExists(recorded))) {
+  if (!recorded.endsWith(`${path.sep}${suffix}`)) {
     return { outcome: "not-ours" };
   }
   const projectRoot = await fs.realpath(recorded.slice(0, -suffix.length - 1));
@@ -90,6 +98,10 @@ export async function repairStagedRuntimeLauncher(
       throw new Error("The repaired launcher names no executable target");
     }
     await fs.chmod(temporary, stat.mode & 0o7777);
+    // A package manager may have replaced the shim since it was inspected; leave its write.
+    if ((await fs.readFile(file, "utf8").catch(() => undefined)) !== content) {
+      throw new Error("The launcher changed while it was being repaired; it was left as is");
+    }
     await fs.rename(temporary, file);
   } finally {
     await fs.rm(staging, { recursive: true, force: true });
@@ -116,19 +128,8 @@ export async function repairPublishedPnpmLaunchers(params: {
     return { repaired, failed };
   }
   for (const file of new Set(listPnpmLauncherCandidates(params.root, params.env ?? process.env))) {
-    // pnpm writes regular files; reading a FIFO or device on PATH would block Doctor.
-    const stat = await fs.lstat(file).catch(() => undefined);
-    const content = stat?.isFile()
-      ? await fs.readFile(file, "utf8").catch(() => undefined)
-      : undefined;
-    const recorded = content && CMD_SHIM_TARGET.exec(content)?.[1]?.trim();
-    const recordedReal = recorded ? await fs.realpath(recorded).catch(() => undefined) : undefined;
-    // Only launchers whose recorded target is this installation's entry.
-    if (!recordedReal || recordedReal !== path.join(root, "openclaw.mjs")) {
-      continue;
-    }
     try {
-      const repair = await repairStagedRuntimeLauncher(file);
+      const repair = await repairStagedRuntimeLauncher(file, root);
       if (repair.outcome === "repaired") {
         repaired.push(repair);
       }
