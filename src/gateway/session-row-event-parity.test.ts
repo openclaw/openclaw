@@ -35,6 +35,7 @@ import {
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { createLifecycleEventBroadcastHandler } from "./server-session-lifecycle-events.js";
+import { ConnectionSessionRows } from "./session-ancestor-references.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { withPreparedEventRow } from "./session-event-prepared-row.js";
 import { prepareSessionEventProjection } from "./session-event-projection.js";
@@ -201,12 +202,19 @@ describe("session event privacy retained boundaries", () => {
             activeRunIds: null,
             label: null,
           };
+          const presentations = vi.spyOn(projection, "present");
+          const deliveries = vi.spyOn(ConnectionSessionRows.prototype, "prepareDelivery");
           connection.broadcast(event, source, {
             prepareSessionProjection: prepareSessionEventProjection(projection, undefined, {
               ancestors: [],
               reuseEnvelope: true,
             }),
           });
+          // Three independently authorized recipients need only the owner and viewer rows.
+          expect(presentations.mock.calls.length).toBeLessThanOrEqual(2);
+          expect(deliveries).toHaveBeenCalledTimes(2);
+          presentations.mockRestore();
+          deliveries.mockRestore();
           for (const [index, peer] of peers.entries()) {
             expect(peer.send).toHaveBeenCalled();
             const frame = peer.frame();
