@@ -16,7 +16,11 @@ import {
   readAdmittedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
-import { gateAgentToolExecution } from "../../agent-tool-availability.js";
+import {
+  gateAgentToolExecution,
+  markAgentToolExecutionUnavailable,
+} from "../../agent-tool-availability.js";
+import { copyAgentToolMetadata } from "../../agent-tool-metadata.js";
 import { createOpenClawCodingToolsInternalAsync } from "../../agent-tools.async.js";
 import { assertMemoryFlushPersistenceToolAvailable } from "../../agent-tools.memory-flush.js";
 import { formatScheduledRunToolRefusal } from "../../agent-tools.turn-authority.js";
@@ -450,7 +454,13 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         constructedToolsRaw = boundTools.map((tool) =>
           allowed.has(tool)
             ? tool
-            : gateAgentToolExecution(tool, formatScheduledRunToolRefusal(tool.name)),
+            : // Keep plugin and MCP provenance: the catalog classifies tools by it.
+              markAgentToolExecutionUnavailable(
+                copyAgentToolMetadata(
+                  tool,
+                  gateAgentToolExecution(tool, formatScheduledRunToolRefusal(tool.name)),
+                ),
+              ),
         );
       }
       params.markCoreToolStage("attempt:tools-allow");

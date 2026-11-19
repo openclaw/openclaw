@@ -4,25 +4,50 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/io.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import { getPluginToolMeta, setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { isAgentToolExecutionAvailable } from "../../agent-tool-availability.js";
+import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 
-vi.mock("../../openclaw-plugin-tools.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../openclaw-plugin-tools.js")>()),
-  resolveOpenClawPluginToolsForOptions: () => [],
-}));
+// One MCP-backed plugin tool the allowlist does not name.
+vi.mock("../../openclaw-plugin-tools.js", async (importOriginal) => {
+  const pluginTools = () => {
+    const tool = createStubTool("world__calendar_list");
+    setPluginToolMeta(tool, {
+      pluginId: "bundle-mcp",
+      optional: false,
+      mcp: {
+        serverName: "world",
+        safeServerName: "world",
+        toolName: "calendar_list",
+        operation: "tool",
+      },
+    });
+    return [tool];
+  };
+  return {
+    ...(await importOriginal<typeof import("../../openclaw-plugin-tools.js")>()),
+    resolveOpenClawPluginToolsForOptions: pluginTools,
+    resolveOpenClawPluginToolsForOptionsAsync: async () => pluginTools(),
+  };
+});
 
 const config: OpenClawConfig = {
   agents: { entries: { main: {} } },
-  tools: { profile: "coding", codeMode: false, toolSearch: { enabled: true, mode: "tools" } },
+  tools: {
+    profile: "coding",
+    alsoAllow: ["world__calendar_list"],
+    codeMode: false,
+    toolSearch: { enabled: true, mode: "tools" },
+  },
 };
 const sessionKey = "agent:main:telegram:direct:owner";
 // Names, a group, a glob, and `message`, which the allowlist adds over the coding profile.
@@ -134,4 +159,7 @@ it("keeps the session's tools listed on a scheduled run and refuses the rest vis
   expect(JSON.stringify(refused.content)).toContain(
     "exec is outside the tools this scheduled run allows",
   );
+  // A refused MCP tool keeps its provenance, so the catalog still treats it as MCP.
+  const mcp = run.tools.find((tool) => tool.name === "world__calendar_list")!;
+  expect(getPluginToolMeta(mcp)?.mcp?.serverName).toBe("world");
 });
