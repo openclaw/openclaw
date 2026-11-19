@@ -6,9 +6,10 @@ import { useApplication } from "../lib/reactive/context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
-import { PluginSurface } from "./control-ui-view.solid.tsx";
+import { PluginContribution, PluginSurface } from "./control-ui-view.solid.tsx";
 import {
   composerProps,
+  createInertViewHost,
   createViewRuntime,
   recordReplacement,
   replacement,
@@ -102,6 +103,54 @@ describe("native plugin surface", () => {
       warnings.mock.calls.some(([message]) => String(message).includes("STRICT_READ_UNTRACKED")),
     ).toBe(false);
     warnings.mockRestore();
+  });
+
+  it("mounts a routed page that settled before its parent inserted it", async () => {
+    const source = runtime();
+    const abort = new AbortController();
+    const dispose = vi.fn();
+    const mount = vi.fn((container: HTMLElement) => {
+      container.textContent = "Projects page";
+      return { dispose };
+    });
+    Object.assign(source.context.plugins, {
+      registrations: (kind: string) =>
+        kind === "pages"
+          ? [
+              {
+                key: "example/projects",
+                pluginId: "example",
+                value: { id: "projects", label: "Projects", mount },
+                host: createInertViewHost(abort.signal),
+                signal: abort.signal,
+              },
+            ]
+          : [],
+    });
+    const provider = createSolidApplicationContextProvider(source.context);
+    // A workspace replacement builds the page before it appends its pane to the document.
+    const detached = document.createElement("div");
+    const view = mountSolid(
+      () => <PluginContribution kind="pages" contributionKey="example/projects" props={{}} />,
+      { wrapper: provider.wrapper, container: detached },
+    );
+    await waitForSolid(() => expect(detached.querySelector("openclaw-plugin-view")).not.toBeNull());
+    expect(mount).not.toHaveBeenCalled();
+
+    document.body.append(detached);
+    await waitForSolid(() => expect(mount).toHaveBeenCalledOnce());
+    expect(mount.mock.calls[0]![0].isConnected).toBe(true);
+    expect(detached.textContent).toBe("Projects page");
+
+    // Moving the mounted page keeps its plugin state instead of mounting it again.
+    detached.remove();
+    document.body.append(detached);
+    flush();
+    expect(mount).toHaveBeenCalledOnce();
+    expect(dispose).not.toHaveBeenCalled();
+    view.unmount();
+    expect(dispose).toHaveBeenCalledOnce();
+    detached.remove();
   });
 
   it("revokes deselected composer operations before rendering and retires replaced contexts", async () => {
