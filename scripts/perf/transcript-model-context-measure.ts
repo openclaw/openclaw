@@ -252,7 +252,9 @@ try {
     })),
   );
   await closeOpenClawAgentDatabasesAsync();
-  const admission = new Promise<MessagePort>((resolve) => parentPort!.once("message", resolve));
+  const admission = new Promise<MessagePort>((resolve) => {
+    parentPort!.once("message", resolve);
+  });
   parentPort!.postMessage(storePath, []);
   const port = await admission;
   admissionPort = port;
