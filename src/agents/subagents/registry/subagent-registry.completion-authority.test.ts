@@ -182,11 +182,13 @@ describe("registered completion source custody", () => {
         const batch = ["a", "b", "c"].map((id) =>
           expectDefined(subagentRuns.get(id), "partition member"),
         );
-        expect(subagentRuns.selectCompletionAuthorityBatch(batch, batch[0])).toEqual([
+        const firstRun = expectDefined(batch[0], "first partition owner");
+        const secondRun = expectDefined(batch[1], "second partition owner");
+        expect(subagentRuns.selectCompletionAuthorityBatch(batch, firstRun)).toEqual([
           batch[0],
           batch[2],
         ]);
-        expect(subagentRuns.selectCompletionAuthorityBatch(batch, batch[1])).toEqual([batch[1]]);
+        expect(subagentRuns.selectCompletionAuthorityBatch(batch, secondRun)).toEqual([batch[1]]);
       } finally {
         first.source.release();
         second.source.release();

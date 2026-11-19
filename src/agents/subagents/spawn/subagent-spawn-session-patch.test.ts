@@ -429,7 +429,9 @@ it.each(["explicit", "inherited"] as const)(
       let visibility = "private";
       const fetchImpl = vi.fn(async () => Response.json({ visibility }));
       vi.stubGlobal("fetch", fetchImpl);
-      onTestFinished(() => vi.unstubAllGlobals());
+      onTestFinished(() => {
+        vi.unstubAllGlobals();
+      });
       const create = (suffix: string) =>
         spawn({
           cfg,

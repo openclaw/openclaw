@@ -648,21 +648,26 @@ test.for(["completed", "revoked", "missing"] as const)(
   },
 );
 
+function waitForRelease(release: string): string {
+  return (
+    'const fs = require("node:fs");' +
+    "const finish = () => { if (fs.existsSync(" +
+    JSON.stringify(release) +
+    ")) {" +
+    'watcher.close(); process.stdout.write("ATTACHED_RESULT"); } };' +
+    "const watcher = fs.watch(" +
+    JSON.stringify(path.dirname(release)) +
+    ", finish); finish();"
+  );
+}
+
 test.for(["edit", "rewind"] as const)(
   "attaches a background exec result after a conversation %s",
   async (change, { signal }) => {
     const sessionKey = "agent:main:dashboard:background-" + change;
     await seedOrigin(sessionKey);
     const release = path.join(state.workspaceDir, "release-background-" + change);
-    const script =
-      'const fs = require("node:fs");' +
-      "const finish = () => { if (fs.existsSync(" +
-      JSON.stringify(release) +
-      ")) {" +
-      'watcher.close(); process.stdout.write("ATTACHED_RESULT"); } };' +
-      "const watcher = fs.watch(" +
-      JSON.stringify(state.workspaceDir) +
-      ", finish); finish();";
+    const script = waitForRelease(release);
     try {
       runningSession(
         (await backgroundExec(sessionKey, { agentId: "main" })(change, script)).details,

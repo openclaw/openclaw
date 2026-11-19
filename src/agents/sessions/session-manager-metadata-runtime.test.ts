@@ -136,6 +136,7 @@ it("initializes bounded compaction metadata through the native owner without dup
       content: "Keep this conversation.",
       timestamp: 1,
     });
+    assert(userId !== undefined, "user message must be persisted before compaction");
     await manager.appendCompactionAsync("Earlier conversation", userId, 100);
     const populated = manager.getEntries();
     const preflight = await readPreparedSessionCompactionInWorker(target, { kind: "preflight" });

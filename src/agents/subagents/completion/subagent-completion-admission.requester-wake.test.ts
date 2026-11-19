@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
@@ -80,7 +81,9 @@ describe("persisted subagent requester wakes", () => {
   registerRequesterWakeOwnershipTests({ database: () => db.value, persistOwner });
 
   it("settles only a selected authority partition of a shared requester wave", async () => {
-    const [selected, sibling] = wakeBatch("selected", "sibling");
+    const batch = wakeBatch("selected", "sibling");
+    const selected = expectDefined(batch[0], "selected requester wake");
+    const sibling = expectDefined(batch[1], "sibling requester wake");
     persistOwner(selected);
     persistOwner(sibling);
     const before = structuredClone(stored(sibling));
