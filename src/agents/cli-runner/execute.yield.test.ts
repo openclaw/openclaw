@@ -11,6 +11,7 @@ import {
   createExecution,
   SUCCESS_RESULT,
 } from "./execute-plugin.test-support.js";
+import { createCliToolTracking } from "./execute-tool-tracking.js";
 import { executePreparedCliRun } from "./execute.js";
 import { prepareCliRunTerminalReply } from "./terminal-reply.js";
 
@@ -218,3 +219,25 @@ it.each([true, false])(
     expect(output.text).toBe(sentReply ? "" : narration);
   },
 );
+
+it("supports detached returned tracker callbacks through the yield receipt", async () => {
+  const { context } = await createExecution();
+  const tracking = createCliToolTracking(context);
+  const { registerTurnInterrupt, waitForTurnInterrupt, onInputSubmitted } = tracking;
+  const interrupt = vi.fn(async () => {});
+  registerTurnInterrupt({ interrupt });
+  onInputSubmitted();
+  const key = "bound-tracker-" + context.params.runId;
+  tracking.beginGatewayCapture(key, () => {});
+  const request = mcp.markMcpLoopbackRequestStarted(key);
+  try {
+    await mcp.resolveMcpLoopbackYieldContext(request)!.onYield("Wait for child");
+    tracking.handleCliToolResult({ toolCallId: "yield", name: "sessions_yield", isError: false });
+    await waitForTurnInterrupt();
+    expect(interrupt).toHaveBeenCalledExactlyOnceWith("yield");
+    expect(tracking.shouldSuppressAssistantOutput()).toBe(true);
+  } finally {
+    mcp.markMcpLoopbackRequestFinished(request);
+    tracking.finalizeCapture(() => {});
+  }
+});

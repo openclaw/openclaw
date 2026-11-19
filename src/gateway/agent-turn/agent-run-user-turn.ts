@@ -19,6 +19,7 @@ import {
   resolveRequesterPrincipalKey,
   type RequesterOrigin,
 } from "../../agents/requester-origin.js";
+import { isSubagentAnnounceCompletionHandoff } from "../../agents/subagents/announce/subagent-announce-handoff.js";
 import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
 import { readSessionSubmittedInput } from "../../config/sessions/session-accessor.pending-inputs.js";
@@ -272,7 +273,10 @@ export async function prepareAgentRunUserTurn(params: {
     const trackRequesterCompletion =
       params.privateCompletion ||
       settleWakeReplay !== undefined ||
-      Boolean(params.subagentCompletions?.length);
+      isSubagentAnnounceCompletionHandoff({
+        inputProvenance: params.inputProvenance,
+        internalEvents: params.request.internalEvents,
+      });
     const suppressPromptPersistence =
       !params.privateCompletion && params.requestedPromptPersistenceSuppression;
     if (

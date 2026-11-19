@@ -238,7 +238,7 @@ export function hasChatModelCatalogSelection(
 }
 
 function hasConfiguredChatModelRoute(
-  entry: Pick<ModelCatalogEntry, "available" | "unavailableReason">,
+  entry: Pick<ModelRuntimeEntry, "available" | "unavailableReason">,
 ): boolean {
   // Failed credentials and cooldowns still describe a configured route.
   return (

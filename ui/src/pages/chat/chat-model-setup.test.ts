@@ -131,6 +131,32 @@ it("reads credential readiness from the session's selected runtime route", () =>
   expect(banner(true, false, "claude-cli")).toBeDefined();
 });
 
+it("does not treat an unsupported runtime as a configured model route", () => {
+  expect(
+    requiresChatModelSetup({
+      ...loaded,
+      agentModel: "example/model",
+      chatModelCatalog: [
+        {
+          id: "model",
+          name: "Model",
+          provider: "example",
+          available: false,
+          unavailableReason: "missing-auth",
+          runtimeChoices: [
+            {
+              agentRuntime: { id: "openclaw", source: "model" },
+              available: false,
+              unavailableReason: "unsupported-runtime",
+            },
+          ],
+        },
+      ],
+      modelAuthStatusResult: { ts: 1, providers: [] },
+    }),
+  ).toBe(true);
+});
+
 it.each(["auth-failed", "cooldown"] as const)(
   "preserves a configured route during %s despite an empty auth inventory",
   (unavailableReason) => {

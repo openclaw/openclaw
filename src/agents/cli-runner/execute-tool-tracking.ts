@@ -657,9 +657,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   });
   return {
     beginGatewayCapture,
-    registerTurnInterrupt: yieldTurnEnd.register,
-    waitForTurnInterrupt: yieldTurnEnd.wait,
-    onInputSubmitted: yieldTurnEnd.beginInput,
+    registerTurnInterrupt: yieldTurnEnd.register.bind(yieldTurnEnd),
+    waitForTurnInterrupt: yieldTurnEnd.wait.bind(yieldTurnEnd),
+    onInputSubmitted: yieldTurnEnd.beginInput.bind(yieldTurnEnd),
     shouldSuppressAssistantOutput,
     getActiveLoopbackAskUserDeadline: askUserDeadlines.get,
     setOnActiveLoopbackAskUserDeadlineChange: askUserDeadlines.setOnChange,

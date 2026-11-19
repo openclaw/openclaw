@@ -31,6 +31,7 @@ import {
   prepareAgentRunUserTurn,
   reconcileAgentRunUserTurnCompletion as reconcileCompletion,
   releasePreparedAgentRunUserTurn as release,
+  releasePreparedAgentRunUserTurnAfterFailure as releaseAfterFailure,
 } from "./agent-run-user-turn.js";
 import { createTestRpcSource, testRpcSourceController } from "./rpc-source.test-support.js";
 
@@ -210,6 +211,74 @@ describe("requester-settle processing survives later user turns", () => {
     const entry = { sessionId, updatedAt: 1 };
     await upsertSessionEntryCore(scope(), entry);
   });
+
+  it.each(["completed", "stopped", "transient"] as const)(
+    "retains direct completion receipt across %s without private or settle flags",
+    async (outcome) => {
+      const controller = new AbortController();
+      const direct = (abortSignal?: AbortSignal) =>
+        prepare({
+          abortSignal,
+          privateCompletion: undefined,
+          settleWakeReplay: undefined,
+          inputProvenance: {
+            kind: "inter_session",
+            sourceSessionKey,
+            sourceTool: "subagent_announce",
+          },
+          request: {
+            ...request,
+            internalEvents: [
+              {
+                type: "task_completion",
+                source: "subagent",
+                childSessionKey: sourceSessionKey,
+                announceType: "completion",
+                taskLabel: "synthetic child",
+                status: "ok",
+                statusLabel: "completed",
+                result: "synthetic result",
+                replyInstruction: "Report result",
+              },
+            ],
+          },
+        });
+      const original = await direct(controller.signal);
+      if (outcome === "stopped") {
+        controller.abort();
+        await original.recorder!.waitForPendingInputSettlement!();
+        expect(completion(original)).toMatchObject({ reason: "cancelled", stopReason: "rpc" });
+      }
+      if (outcome === "completed") {
+        await original.recorder!.persistApproved();
+        await complete(original);
+      }
+      if (outcome === "transient") {
+        await releaseAfterFailure(original, new Error("Synthetic pre-consumption failure"));
+      } else {
+        await release(original);
+      }
+      rotateAgentEventLifecycleGeneration();
+      const replay = await direct();
+      if (outcome === "transient") {
+        expectNoReconciliation(replay);
+        expect(await replay.recorder!.persistApproved()).toMatchObject({ appended: true });
+        await complete(replay);
+      } else {
+        expect(completion(replay)).toMatchObject({
+          reason: outcome === "stopped" ? "cancelled" : outcome,
+        });
+      }
+      await release(replay);
+      const before = await loadTranscriptEvents(scope());
+      const duplicate = await direct();
+      expect(completion(duplicate)).toMatchObject({
+        reason: outcome === "stopped" ? "cancelled" : "completed",
+      });
+      expect(await loadTranscriptEvents(scope())).toEqual(before);
+      await release(duplicate);
+    },
+  );
 
   it.each([false, true])(
     "reconciles prior private input but admits a fresh deliverable continuation (private=%s)",

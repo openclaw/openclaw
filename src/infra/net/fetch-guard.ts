@@ -18,7 +18,6 @@ import {
   getRedirectVisitKey,
   isRedirectStatus,
 } from "./fetch-redirect.js";
-export { GuardedFetchRedirectError } from "./fetch-redirect.js";
 import { captureGuardedFetchRequestAuthority } from "./fetch-request-authority.js";
 import { responseWithAbortSignal } from "./guarded-body-stream.js";
 import { PinnedDispatcherPool, type PinnedDispatcherLease } from "./pinned-dispatcher-pool.js";
@@ -53,6 +52,8 @@ import {
   createHttp1EnvHttpProxyAgent,
   createHttp1ProxyAgent,
 } from "./undici-runtime.js";
+
+export { GuardedFetchRedirectError } from "./fetch-redirect.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
