@@ -93,6 +93,7 @@ export function createTemplateClawHubSignIn(dependencies = defaultDependencies) 
     status: "pending" as const,
     requestId: attempt.id,
     verificationUrl: device.verificationUrl,
+    userCode: device.userCode,
     expiresAt: attempt.expiresAt,
     pollAfterMs: Math.max(250, attempt.nextPollAt - dependencies.now()),
   });

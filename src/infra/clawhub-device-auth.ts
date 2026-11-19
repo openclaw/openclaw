@@ -27,6 +27,7 @@ export async function startClawHubDeviceSignIn(options: ClawHubFetchOptions) {
   const verificationUrl =
     typeof result.verification_uri === "string" ? URL.parse(result.verification_uri) : null;
   const deviceCode = result.device_code;
+  const userCode = result.user_code;
   const interval = result.interval;
   const expiresIn = result.expires_in;
   if (
@@ -35,6 +36,8 @@ export async function startClawHubDeviceSignIn(options: ClawHubFetchOptions) {
     verificationUrl.pathname !== "/cli/device" ||
     verificationUrl.username ||
     verificationUrl.password ||
+    typeof userCode !== "string" ||
+    !/^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/u.test(userCode) ||
     typeof deviceCode !== "string" ||
     !deviceCode ||
     typeof interval !== "number" ||
@@ -51,7 +54,9 @@ export async function startClawHubDeviceSignIn(options: ClawHubFetchOptions) {
   registerSecretValueForRedaction(deviceCode);
   return {
     deviceCode,
-    verificationUrl: verificationUrl.href,
+    // Open the bare verification page. Only the short human-facing code belongs on the card.
+    verificationUrl: new URL(verificationUrl.pathname, verificationUrl.origin).href,
+    userCode,
     intervalMs: interval * 1_000,
     expiresInMs: expiresIn * 1_000,
   };

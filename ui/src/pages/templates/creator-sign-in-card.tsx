@@ -37,7 +37,8 @@ export function TemplateCreatorSignInCard(props: {
               {t("templatesDraft.clawHub")}
             </strong>
             <span class="chat-clawhub-card__status muted" role="status">
-              {t(status())}
+              {t(status())}{" "}
+              <Show when={pending()}>{(request) => <code>{request().userCode}</code>}</Show>
             </span>
           </span>
         </div>

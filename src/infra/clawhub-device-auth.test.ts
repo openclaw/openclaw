@@ -3,13 +3,13 @@ import { pollClawHubDeviceSignIn, startClawHubDeviceSignIn } from "./clawhub-dev
 import { captureClawHubResponse } from "./clawhub.test-support.js";
 
 const baseUrl = "https://clawhub.example";
-const verificationUrl = "https://clawhub.example/cli/device?user_code=ZYXW-2345";
+const verificationUrl = "https://clawhub.example/cli/device";
 const fakeDeviceCode = "synthetic-device-code";
 
-function deviceCodeResponse(url = verificationUrl) {
+function deviceCodeResponse(url = verificationUrl, userCode: unknown = "ZYXW-2345") {
   return Response.json({
     device_code: fakeDeviceCode,
-    user_code: "ZYXW-2345",
+    user_code: userCode,
     verification_uri: url,
     expires_in: 900,
     interval: 5,
@@ -31,6 +31,7 @@ describe("ClawHub browser sign-in", () => {
     });
     expect(authorization).toEqual({
       deviceCode: fakeDeviceCode,
+      userCode: "ZYXW-2345",
       verificationUrl,
       intervalMs: 5_000,
       expiresInMs: 900_000,
@@ -43,6 +44,16 @@ describe("ClawHub browser sign-in", () => {
       site_url: baseUrl,
     });
   });
+
+  it.each([null, "", "0000-1111", "unexpected text"])(
+    "rejects an invalid public approval code",
+    async (userCode) => {
+      captureClawHubResponse(() => deviceCodeResponse(verificationUrl, userCode));
+      await expect(startClawHubDeviceSignIn({ baseUrl })).rejects.toThrow(
+        "invalid sign-in response",
+      );
+    },
+  );
 
   it("does not send the user to a foreign approval origin", async () => {
     captureClawHubResponse(() => deviceCodeResponse("https://different.example/cli/device"));

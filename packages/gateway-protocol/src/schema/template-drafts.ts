@@ -56,6 +56,7 @@ export type TemplatesDraftsSignInResult =
       status: "pending";
       requestId: string;
       verificationUrl: string;
+      userCode: string;
       expiresAt: number;
       pollAfterMs: number;
     };

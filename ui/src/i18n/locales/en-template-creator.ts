@@ -94,7 +94,7 @@ const enTemplateCreator = {
     clawHub: "ClawHub",
     signIn: "Sign in",
     signInExplanation: "Sign in to review and publish this template.",
-    signInWaiting: "Approve sign-in in your browser. Review will open here automatically.",
+    signInWaiting: "Enter this code on ClawHub to approve sign-in:",
     signInCancelled: "Sign-in cancelled. Your private draft is saved.",
     signInExpired: "Sign-in expired. Your private draft is saved.",
     signInFailed: "Couldn’t confirm sign-in. Your private draft is saved.",
