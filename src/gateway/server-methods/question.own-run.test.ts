@@ -570,8 +570,9 @@ describe("own-run question admission", () => {
     "missing session",
     "secret",
     "revoked during preparation",
+    "source revoked",
   ] as const)(
-    "cancels an admin %s producer independently of its admitted request",
+    "cancels an admin %s producer when its original source or role authority ends",
     async (kind) => {
       await withOwnRunQuestion(async (f) => {
         f.cfg.gateway!.roles!.definitions.admin = {
@@ -584,9 +585,14 @@ describe("own-run question admission", () => {
           ...f.browser.client,
           connect: { ...f.browser.client.connect, scopes: ["operator.admin"] },
         };
+        const grant = new AbortController();
         const admitted = await captureGatewayOperatorRunAuthority({
           client,
           context: { getRuntimeConfig: () => f.cfg },
+          sourceAuthority:
+            kind === "source revoked"
+              ? { signal: grant.signal, assertCurrent: () => grant.signal.throwIfAborted() }
+              : undefined,
         });
         if (!admitted) {
           throw new Error("Expected admitted admin source");
@@ -637,10 +643,15 @@ describe("own-run question admission", () => {
           const id = (response[1] as { id: string }).id;
           const observation = manager.observe(id)!;
           const waiting = manager.waitAnswer(id);
-          setUserProfileRole(f.profile.id, "suspended");
-          invalidateOperatorRolePolicy(f.profile.id);
-          expect(admitted.authority.signal?.aborted).toBe(false);
-          expect(admitted.authority.assertCurrent).not.toThrow();
+          if (kind === "source revoked") {
+            grant.abort(new Error("question grant revoked"));
+            expect(admitted.authority.assertCurrent).toThrow("question grant revoked");
+          } else {
+            setUserProfileRole(f.profile.id, "suspended");
+            invalidateOperatorRolePolicy(f.profile.id);
+            expect(admitted.authority.assertCurrent).not.toThrow();
+          }
+          expect(admitted.authority.signal?.aborted).toBe(kind === "source revoked");
           expect(observation.record.status).toBe("cancelled");
           expect(await waiting).toEqual({ status: "cancelled" });
           // Neither optional-session fallback nor a secret prompt can skip new admission.
@@ -648,7 +659,9 @@ describe("own-run question admission", () => {
           if (kind === "secret") {
             await expect(next).resolves.toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
           } else {
-            await expect(next).rejects.toThrow("Your operator role changed");
+            await expect(next).rejects.toThrow(
+              kind === "source revoked" ? "question grant revoked" : "Your operator role changed",
+            );
           }
           expect(manager.observe("refused-producer")).toBeNull();
         } finally {

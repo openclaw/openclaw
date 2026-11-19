@@ -25,11 +25,10 @@ import {
 } from "../../secrets/store/secret-store.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
 import { authorizeGatewaySessionCreation, hasOperatorBoundary } from "../operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
-import { retainGatewayOperatorRunAuthority } from "../operator-run-cancellation.js";
 import { canSelectQuestion, usesOwnRunQuestionAccess } from "../question-access.js";
 import { QuestionManager, type QuestionObservation } from "../question-manager.js";
 import {
+  prepareQuestionProducer,
   withQuestionSessionAccess,
   withPreparedQuestionSessions,
   type PreparedQuestionSession,
@@ -146,7 +145,7 @@ export function createQuestionHandlers(
       authority.assertCurrent();
       const narrow = usesOwnRunQuestionAccess(client);
       let sessionAccess: QuestionSessionAccess | undefined;
-      let producer: ReturnType<typeof retainGatewayOperatorRunAuthority> | undefined;
+      let producer: Awaited<ReturnType<typeof prepareQuestionProducer>>;
       let accepted = false;
       const requiresSharing = () =>
         !isGatewayAdmin(client) && hasOperatorBoundary(client, context.getRuntimeConfig());
@@ -215,8 +214,7 @@ export function createQuestionHandlers(
       try {
         // Every question is a retained producer, including secret and sessionless prompts.
         // Admission failures must not enter the optional session-facts fallback below.
-        const captured = await captureGatewayOperatorRunAuthority(options);
-        producer = captured && retainGatewayOperatorRunAuthority(captured);
+        producer = await prepareQuestionProducer(options);
         const questions = await normalizeQuestions(request, authority.assertCurrent);
         if (narrow && operatorAuthority) {
           assertAdmittedRunOperatorAuthority(operatorAuthority);
