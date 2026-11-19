@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isCommandCancellation, runCancelableCommand } from "../../../lib/cancelable-command.mts";
+import { toErrorObject } from "../../../lib/error-format.mts";
 import { runManagedCommand } from "../../../lib/managed-child-process.mts";
 
 const baseline = "2026.11.5";
@@ -100,7 +101,9 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     });
     const { port } = portClaim.address();
     await new Promise((resolve, reject) => {
-      portClaim.close((error) => (error ? reject(error) : resolve()));
+      portClaim.close((error) =>
+        error ? reject(toErrorObject(error, "Port close failed")) : resolve(),
+      );
     });
     const token = "published-postgres-synthetic-token";
     const gatewayArgs = ["--url", `ws://127.0.0.1:${port}`, "--token", token, "--json"];
@@ -177,7 +180,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       } finally {
         stop.abort();
         await ready.catch(() => {});
-        await gateway.catch((error) => {
+        await gateway.catch((/** @type {unknown} */ error) => {
           if (!isCommandCancellation(error)) {
             throw error;
           }
