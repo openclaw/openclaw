@@ -1029,6 +1029,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-state-lease-contention.test.ts",
   "src/state/openclaw-state-lease-existing.test.ts",
   "src/state/openclaw-state-lease-heartbeat.test.ts",
+  "src/state/openclaw-state-lease-heartbeat.postgres.test.ts",
   "src/state/openclaw-state-lease-worker-owner.test.ts",
   "src/state/openclaw-state-lease.test.ts",
   "src/state/openclaw-state-lease-native-renewal.test.ts",
