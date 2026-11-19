@@ -12,6 +12,7 @@ export const publicationSourceToolingPaths = new Set([
   "packages/plugin-package-contract/src/index.ts",
   "scripts/lib/bounded-response.mjs",
   "scripts/lib/canonical-json.mjs",
+  "scripts/lib/ci-node-test-evidence.mjs",
   "scripts/lib/clawhub-package-family.mjs",
   "scripts/lib/clawhub-publication-state.mjs",
   "scripts/lib/npm-publish-plan.mjs",
