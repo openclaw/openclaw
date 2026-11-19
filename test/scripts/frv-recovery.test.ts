@@ -188,14 +188,10 @@ function fixture(candidateSha = Q) {
     client.listRecoveryRuns.mockResolvedValue([run]);
     return { request, run };
   }
-  const verifyOriginal = vi.fn(async () => {
-    expect(JSON.parse(readFileSync(path, "utf8")).phase).toBe("prepared");
-  });
   return {
     path,
     artifact,
     client,
-    verifyOriginal,
     observeRecovery,
     artifacts,
     jobs,
@@ -291,12 +287,12 @@ describe("retained receipt recovery operator", () => {
       expect(record.request.publicationArtifacts.npmPreflight).toEqual({ original: "npm" });
       throw new Error("connection lost after acceptance");
     });
-    expect(
-      await dispatchReceiptRecovery(f.options, f.client, { verifyOriginal: f.verifyOriginal }),
-    ).toMatchObject({ action: "recovery-unconfirmed", phase: "attempted" });
-    await dispatchReceiptRecovery(f.options, f.client, { verifyOriginal: f.verifyOriginal });
+    expect(await dispatchReceiptRecovery(f.options, f.client)).toMatchObject({
+      action: "recovery-unconfirmed",
+      phase: "attempted",
+    });
+    await dispatchReceiptRecovery(f.options, f.client);
     expect(f.client.postRecovery).toHaveBeenCalledTimes(1);
-    expect(f.verifyOriginal).toHaveBeenCalledTimes(1);
     f.observeRecovery();
     expect(await reconcileReceiptRecovery(f.path, f.client)).toMatchObject({
       action: "recovery-unconfirmed",
@@ -355,15 +351,15 @@ describe("retained receipt recovery operator", () => {
     });
     expect(authenticated.selection).toEqual(expected);
     f.logs.set(31, log.replace(releaseChildReuseSha256(expected), "0".repeat(64)));
-    await expect(
-      dispatchReceiptRecovery(f.options, client, { verifyOriginal: f.verifyOriginal }),
-    ).rejects.toThrow("reuse adoption witness mismatch");
+    await expect(dispatchReceiptRecovery(f.options, client)).rejects.toThrow(
+      "reuse adoption witness mismatch",
+    );
     expect(f.client.postRecovery).not.toHaveBeenCalled();
   });
 
   it("rejects another request under the exact run title", async () => {
     const f = fixture();
-    await dispatchReceiptRecovery(f.options, f.client, { verifyOriginal: f.verifyOriginal });
+    await dispatchReceiptRecovery(f.options, f.client);
     const { request } = f.observeRecovery();
     f.artifact(99, "full-release-recovery-request-99-1", "request.json", {
       ...request,
@@ -375,7 +371,7 @@ describe("retained receipt recovery operator", () => {
 
   it("rejects a successful aggregate carrying a different retained request", async () => {
     const f = fixture();
-    await dispatchReceiptRecovery(f.options, f.client, { verifyOriginal: f.verifyOriginal });
+    await dispatchReceiptRecovery(f.options, f.client);
     const { request } = f.observeRecovery("completed", "success");
     const client = {
       ...f.client,
@@ -392,15 +388,23 @@ describe("retained receipt recovery operator", () => {
     expect(f.client.postRecovery).toHaveBeenCalledTimes(1);
   });
 
+  it("dispatches after bounded admission revalidation; full receipt verification belongs to the workflow", async () => {
+    const f = fixture();
+    await dispatchReceiptRecovery(f.options, f.client);
+    expect(f.client.verifyQualificationAdmission).toHaveBeenCalledTimes(2);
+    expect(f.client.postRecovery).toHaveBeenCalledTimes(1);
+  });
+
   it("fails closed before POST on final authority rejection, retaining the original request", async () => {
     const f = fixture();
-    await expect(
-      dispatchReceiptRecovery(f.options, f.client, {
-        verifyOriginal: async () => {
-          throw new Error("admission authority revoked");
-        },
-      }),
-    ).rejects.toThrow("admission authority revoked");
+    f.client.verifyQualificationAdmission
+      .mockImplementationOnce(async () => ({
+        coverage: { children: roles.map((key) => ({ key, parentJobName: key })) },
+      }))
+      .mockRejectedValueOnce(new Error("admission authority revoked"));
+    await expect(dispatchReceiptRecovery(f.options, f.client)).rejects.toThrow(
+      "admission authority revoked",
+    );
     expect(JSON.parse(readFileSync(f.path, "utf8")).phase).toBe("prepared");
     await dispatchReceiptRecovery(f.options, f.client);
     expect(f.client.postRecovery).not.toHaveBeenCalled();
@@ -409,9 +413,7 @@ describe("retained receipt recovery operator", () => {
   it("does not send after P moves and rejects changed retained identity", async () => {
     const f = fixture();
     f.client.getRef.mockResolvedValue({ object: { type: "commit", sha: Q } });
-    await expect(
-      dispatchReceiptRecovery(f.options, f.client, { verifyOriginal: f.verifyOriginal }),
-    ).rejects.toThrow("main moved");
+    await expect(dispatchReceiptRecovery(f.options, f.client)).rejects.toThrow("main moved");
     expect(f.client.postRecovery).not.toHaveBeenCalled();
     await expect(
       dispatchReceiptRecovery({ ...f.options, workflowSha: Q }, f.client),
@@ -420,7 +422,7 @@ describe("retained receipt recovery operator", () => {
 
   it("rejects wrong-P or duplicate reconciliation matches without a POST", async () => {
     const f = fixture();
-    await dispatchReceiptRecovery(f.options, f.client, { verifyOriginal: f.verifyOriginal });
+    await dispatchReceiptRecovery(f.options, f.client);
     const request = JSON.parse(readFileSync(f.path, "utf8")).request;
     const run = { ...f.runs.get(10), display_title: "Receipt Recovery " + request.requestId };
     f.client.listRecoveryRuns.mockResolvedValue([run]);
