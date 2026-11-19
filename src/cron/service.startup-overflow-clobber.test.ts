@@ -113,14 +113,14 @@ describe("CronService startup catch-up repair scoping", () => {
     await start(state);
 
     const deferred = state.store?.jobs.find((job) => job.id === "daily-overflow");
-
-    expect(deferred?.state.nextRunAtMs).toBe(startNow + 145_000);
-    expect(deferred?.state.nextRunAtMs).not.toBe(tomorrowNaturalSlot);
-    expect(deferred?.state.startupCatchupAtMs).toBe(startNow + 145_000);
-
+    const expectDeferred = (job: CronJob | undefined) =>
+      expect([job?.state.nextRunAtMs, job?.state.startupCatchupAtMs]).toEqual([
+        startNow + 145_000,
+        startNow + 145_000,
+      ]);
+    expectDeferred(deferred);
     await status(state);
     expect(deferred?.state.nextRunAtMs).toBe(startNow + 145_000);
-
     state.stopped = true;
     now = startNow + 3_000;
 
@@ -128,8 +128,7 @@ describe("CronService startup catch-up repair scoping", () => {
     await start(restartedState);
 
     const restarted = restartedState.store?.jobs.find((job) => job.id === "daily-overflow");
-    expect(restarted?.state.nextRunAtMs).toBe(startNow + 145_000);
-    expect(restarted?.state.startupCatchupAtMs).toBe(startNow + 145_000);
+    expectDeferred(restarted);
 
     now = startNow + 145_005;
     await onTimer(restartedState);
@@ -181,35 +180,32 @@ describe("CronService startup catch-up repair scoping", () => {
         order.push("notify");
       }
     });
-    const requestHeartbeat = vi.fn();
     const state = makeState(store.storePath, {
       nowMs: () => now,
       enqueueSessionEvent,
-      requestHeartbeat,
       maxMissedJobsPerRestart: 1,
       missedJobStaggerMs: 5_000,
     });
     await runMissedJobs(state);
 
-    const deferred = (state.store?.jobs ?? []).filter((job) => job.id !== "date-limit-0");
-    expect(deferred).toHaveLength(2);
-    for (const job of deferred) {
-      expect(job.enabled).toBe(false);
-      expect(job.state.nextRunAtMs).toBeUndefined();
-      expect(job.state.startupCatchupAtMs).toBeUndefined();
-      expect(job.state.autoDisabled).toEqual({
-        reason: "schedule-errors",
-        atMs: now,
-        consecutiveErrors: 1,
-      });
-    }
+    const expectDisabled = (jobs: CronJob[]) => {
+      const deferred = jobs.filter((job) => job.id !== "date-limit-0");
+      expect(deferred).toHaveLength(2);
+      for (const { enabled, state: jobState } of deferred) {
+        expect([enabled, jobState.nextRunAtMs, jobState.startupCatchupAtMs]).toEqual([
+          false,
+          undefined,
+          undefined,
+        ]);
+        expect(jobState.autoDisabled).toEqual({
+          reason: "schedule-errors",
+          atMs: now,
+          consecutiveErrors: 1,
+        });
+      }
+    };
+    expectDisabled(state.store?.jobs ?? []);
     expect(order).toEqual(["persist", "notify", "notify"]);
-    expect(requestHeartbeat).not.toHaveBeenCalled();
-    const persisted = (await loadCronStore(store.storePath)).jobs;
-    for (const job of deferred) {
-      const saved = persisted.find(({ id }) => id === job.id);
-      expect(saved?.enabled).toBe(false);
-      expect(saved?.state.autoDisabled).toEqual(job.state.autoDisabled);
-    }
+    expectDisabled((await loadCronStore(store.storePath)).jobs);
   });
 });

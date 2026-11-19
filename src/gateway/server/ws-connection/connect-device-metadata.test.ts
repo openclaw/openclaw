@@ -20,113 +20,31 @@ function resolvePlatforms(
   });
 }
 
-function expectPinned(
-  result: ReturnType<typeof resolvePinnedClientMetadata>,
-  pinnedPlatform: string,
-  pinnedDeviceFamily: string | undefined,
-  refreshPairedPlatform?: string,
-) {
-  expect(result).toEqual({
-    platformMismatch: false,
-    deviceFamilyMismatch: false,
-    pinnedPlatform,
-    pinnedDeviceFamily,
-    ...(refreshPairedPlatform ? { refreshPairedPlatform } : {}),
-  });
-}
-
 describe("resolvePinnedClientMetadata", () => {
   it.each([
-    ["runtime alias", "win32", "windows", "Windows", true],
-    ["runtime alias", "darwin", "macos", "Mac", true],
-    ["legacy node-host", "darwin", "macos", "Mac", false],
-    ["legacy node-host", "win32", "windows", "Windows", false],
-  ] as const)("accepts %s %s as %s", (_kind, legacy, canonical, family, unpinnedFamily) => {
-    expectPinned(
-      resolvePlatforms(
-        unpinnedFamily ? canonical : legacy,
-        legacy,
-        family,
-        unpinnedFamily ? unpinnedRuntime : {},
-      ),
-      canonical,
-      unpinnedFamily ? undefined : family,
-    );
-  });
-
-  it.each([
-    { pairedPlatform: "linux", claimedDeviceFamily: "Windows" },
-    { pairedPlatform: "win32", claimedDeviceFamily: "Linux" },
-    { pairedPlatform: "darwin", claimedDeviceFamily: "Windows" },
-  ] as const)(
-    "keeps non-equivalent runtime tuples approval-bound: %j",
-    ({ pairedPlatform, claimedDeviceFamily }) => {
-      expect(
-        resolvePlatforms("windows", pairedPlatform, claimedDeviceFamily, unpinnedRuntime),
-      ).toMatchObject({
-        platformMismatch: true,
-        deviceFamilyMismatch: false,
-      });
-    },
-  );
-
-  it("does not replace a conflicting family pin during a runtime-alias upgrade", () => {
-    expect(
-      resolvePlatforms("windows", "win32", "Windows", {
-        clientId: "openclaw-tui",
-        clientMode: "ui",
-        pairedDeviceFamily: "Linux",
-      }),
-    ).toMatchObject({
-      platformMismatch: true,
-      deviceFamilyMismatch: true,
-      pinnedDeviceFamily: "Linux",
-    });
-  });
-
-  it.each([
-    ["openclaw-ios", "iOS 26.5.0", "iOS 26.4.2", "iPhone"],
-    ["openclaw-ios", "iPadOS 26.5.0", "iPadOS 26.4.2", "iPad"],
-    ["openclaw-ios", "iPadOS 26.5.0", "iOS 26.4.2", "iPad"],
-    ["openclaw-android", "Android 16", "Android 15", "Android"],
-    ["openclaw-macos", "macOS 26.5.1", "macOS 26.5.0", "Mac"],
-  ])(
-    "allows %s platform version refresh without metadata-upgrade approval",
-    (clientId, claimedPlatform, pairedPlatform, deviceFamily) => {
-      expectPinned(
-        resolvePlatforms(claimedPlatform, pairedPlatform, deviceFamily, { clientId }),
-        claimedPlatform,
-        deviceFamily,
-        claimedPlatform,
-      );
-    },
-  );
-
-  it.each([
-    ["node-host", "node", "macos", "macOS 26.5.2", undefined],
-    ["cli", "cli", "macos", "macOS 26.5.2", undefined],
-    ["cli", "cli", "darwin", "macOS 26.5.2", undefined],
-    ["cli", "probe", "macos", "macOS 26.5.2", undefined],
-    ["cli", "probe", "darwin", "macOS 26.5.2", undefined],
-    ["openclaw-macos", "ui", "macOS 26.5.2", "macos", "macOS 26.5.2"],
-  ] as const)("shares the macOS pin with %s", (clientId, clientMode, claimed, paired, refresh) => {
-    expectPinned(
-      resolvePlatforms(claimed, paired, "Mac", { clientId, clientMode }),
+    ["windows", "win32", "Windows", unpinnedRuntime, "windows", false],
+    ["macos", "darwin", "Mac", unpinnedRuntime, "macos", false],
+    ["darwin", "darwin", "Mac", {}, "macos", false],
+    ["win32", "win32", "Windows", {}, "windows", false],
+    ["iOS 26.5.0", "iOS 26.4.2", "iPhone", { clientId: "openclaw-ios" }, "iOS 26.5.0", true],
+    ["iPadOS 26.5.0", "iOS 26.4.2", "iPad", { clientId: "openclaw-ios" }, "iPadOS 26.5.0", true],
+    ["Android 16", "Android 15", "Android", { clientId: "openclaw-android" }, "Android 16", true],
+    ["macos", "macOS 26.5.2", "Mac", {}, "macOS 26.5.2", false],
+    [
       "macOS 26.5.2",
+      "macos",
       "Mac",
-      refresh,
-    );
-  });
-
-  it.each([
-    { clientId: "cli", clientMode: "backend" },
-    { clientId: "openclaw-tui", clientMode: "cli" },
-    { clientId: "cli", clientMode: "probe", claimedPlatform: "linux" },
-  ])("keeps non-CLI Mac aliases approval-bound: %j", (overrides) => {
-    expect(resolvePlatforms("macos", "macOS 26.5.2", "Mac", overrides)).toMatchObject({
-      platformMismatch: true,
+      { clientId: "openclaw-macos", clientMode: "ui" },
+      "macOS 26.5.2",
+      true,
+    ],
+  ] as const)("accepts %s / %s (%j, %j)", (claimed, paired, family, overrides, pinned, refresh) => {
+    expect(resolvePlatforms(claimed, paired, family, overrides)).toEqual({
+      platformMismatch: false,
       deviceFamilyMismatch: false,
-      pinnedPlatform: undefined,
+      pinnedPlatform: pinned,
+      pinnedDeviceFamily: "pairedDeviceFamily" in overrides ? overrides.pairedDeviceFamily : family,
+      ...(refresh ? { refreshPairedPlatform: claimed } : {}),
     });
   });
 
@@ -159,16 +77,29 @@ describe("resolvePinnedClientMetadata", () => {
   });
 
   it.each([
-    ["node-host", "macOS 26.5.2", "macOS 26.5.1"],
-    ["openclaw-macos", "macOS anything", "macOS previous"],
-    ["openclaw-macos", "macOS", "macOS 26.5.1"],
-  ])(
-    "keeps non-version macOS platform changes approval-bound for %s",
-    (clientId, claimed, paired) => {
-      expect(resolvePlatforms(claimed, paired, "Mac", { clientId })).toMatchObject({
+    ["windows", "linux", "Windows", unpinnedRuntime, false],
+    ["windows", "win32", "Linux", unpinnedRuntime, false],
+    [
+      "windows",
+      "win32",
+      "Windows",
+      { clientId: "openclaw-tui", clientMode: "ui", pairedDeviceFamily: "Linux" },
+      true,
+    ],
+    ["macos", "macOS 26.5.2", "Mac", { clientId: "cli", clientMode: "backend" }, false],
+    ["macos", "macOS 26.5.2", "Mac", { clientId: "openclaw-tui", clientMode: "cli" }, false],
+    ["linux", "macOS 26.5.2", "Mac", { clientId: "cli", clientMode: "probe" }, false],
+    ["macOS 26.5.2", "macOS 26.5.1", "Mac", { clientId: "node-host" }, false],
+    ["macOS anything", "macOS previous", "Mac", { clientId: "openclaw-macos" }, false],
+  ] as const)(
+    "keeps %s / %s approval-bound (%j, %j)",
+    (claimed, paired, family, overrides, deviceFamilyMismatch) => {
+      expect(resolvePlatforms(claimed, paired, family, overrides)).toMatchObject({
         platformMismatch: true,
-        deviceFamilyMismatch: false,
+        deviceFamilyMismatch,
         pinnedPlatform: undefined,
+        pinnedDeviceFamily:
+          "pairedDeviceFamily" in overrides ? overrides.pairedDeviceFamily : family,
       });
     },
   );

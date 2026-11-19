@@ -7,6 +7,7 @@ import {
   authorizationClient,
   startExactAuthorizationRequest,
 } from "../server-methods.authorization.test-support.js";
+import { expectRpcError } from "./rpc-response.test-support.js";
 
 const { readActiveGatewayLockIdentity, prepareHostedGatewayStop } = vi.hoisted(() => ({
   readActiveGatewayLockIdentity: vi.fn(),
@@ -89,28 +90,24 @@ it("dispatches an authenticated targeted stop to the existing host lifecycle", a
   });
 });
 
-it.each([
-  {
-    label: "non-admin",
-    options: { scopes: ["operator.write"] },
-    error: { message: expect.stringContaining("operator.admin") },
-  },
-  ...(
-    [
-      ["missing target", {}],
-      ["different PID", { target: { ...target, pid: process.pid + 1 } }],
-      ["different owner", { target: { ...target, ownerId: "replacement-owner" } }],
-      ["different port", { target: { ...target, port: target.port + 1 } }],
-    ] as const
-  ).map(([label, params]) => ({ label, options: { params }, error: { code: "INVALID_REQUEST" } })),
-])("rejects $label without stopping the host", async ({ label, options, error }) => {
-  const { request, respond } = dispatchStop(options);
+it("rejects non-admin callers before reading host identity", async () => {
+  const { request, respond } = dispatchStop({ scopes: ["operator.write"] });
   await request;
-  if (label === "non-admin") {
-    expect(readActiveGatewayLockIdentity).not.toHaveBeenCalled();
-  }
   expect(acceptStop).not.toHaveBeenCalled();
-  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
+  expectRpcError(respond, { message: expect.stringContaining("operator.admin") });
+  expect(readActiveGatewayLockIdentity).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["missing target", {}],
+  ["different PID", { target: { ...target, pid: process.pid + 1 } }],
+  ["different owner", { target: { ...target, ownerId: "replacement-owner" } }],
+  ["different port", { target: { ...target, port: target.port + 1 } }],
+])("rejects %s without stopping the host", async (_label, params) => {
+  const { request, respond } = dispatchStop({ params });
+  await request;
+  expect(acceptStop).not.toHaveBeenCalled();
+  expectRpcError(respond, { code: "INVALID_REQUEST" });
 });
 
 it.each(["signal", "client invalidation", "transport authority", "stop preparation"] as const)(
@@ -150,13 +147,9 @@ it.each(["signal", "client invalidation", "transport authority", "stop preparati
       expect(prepareHostedGatewayStop).not.toHaveBeenCalled();
     }
     expect(acceptStop).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        ...(loss === "stop preparation" ? { message: "Gateway requester authority changed" } : {}),
-      }),
-    );
+    expectRpcError(respond, {
+      code: "UNAVAILABLE",
+      ...(loss === "stop preparation" ? { message: "Gateway requester authority changed" } : {}),
+    });
   },
 );

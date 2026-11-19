@@ -4,61 +4,59 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchModule from "openclaw/plugin-sdk/fetch-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createClosedChunkStream,
+  createStreamingResponse,
+} from "../../test-support/streaming-error-response.js";
 import { containerCheck, containerRpcRequest } from "./client-container.js";
-import { expectPreparedHandoff } from "./client.test-support.js";
+import { expectPreparedHandoff, useSignalHttpServer } from "./client.test-support.js";
 
-const account = "+14259798283";
-const recipient = ["+15550001111"];
-const timestamp = 1700000000000;
-const baseUrl = "http://localhost:8080";
-const mockFetch = vi.fn<typeof fetch>();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-type Options = Omit<Parameters<typeof containerRpcRequest>[2], "baseUrl">;
-const rpc = (method: string, params?: Record<string, unknown>, options: Options = {}) =>
-  containerRpcRequest(method, params, { baseUrl, ...options });
-const attachment = (options: Options = {}) =>
-  rpc("getAttachment", { id: "path/with/slashes" }, options);
-const respond = (value: unknown = {}) => mockFetch.mockResolvedValue(Response.json(value));
-const respondBody = (body: BodyInit | null, init?: ResponseInit) => {
-  const response = new Response(body, init);
-  mockFetch.mockResolvedValue(response);
-  return response;
-};
-const send = (params: Record<string, unknown>, options: Options = {}) =>
-  rpc("send", { account, recipient, ...params }, options);
-function expectPayload(endpoint: string, method: string, body: unknown) {
-  expect(request()).toMatchObject({ url: `${baseUrl}/v1/${endpoint}/%2B14259798283`, method });
-  expect(payload()).toEqual(body);
-}
-function request() {
-  const call = mockFetch.mock.calls[0];
-  if (!call?.[1]) {
-    throw new Error("expected a fetch request");
+describe("container mocked responses", () => {
+  const account = "+14259798283";
+  const recipient = ["+15550001111"];
+  const timestamp = 1700000000000;
+  const baseUrl = "http://localhost:8080";
+  const mockFetch = vi.fn<typeof fetch>();
+  type Options = Omit<Parameters<typeof containerRpcRequest>[2], "baseUrl">;
+  const rpc = (method: string, params?: Record<string, unknown>, options: Options = {}) =>
+    containerRpcRequest(method, params, { baseUrl, ...options });
+  const attachment = (options: Options = {}) =>
+    rpc("getAttachment", { id: "path/with/slashes" }, options);
+  const respond = (value: unknown = {}) => mockFetch.mockResolvedValue(Response.json(value));
+  const respondBody = (body: BodyInit | null, init?: ResponseInit) => {
+    const response = new Response(body, init);
+    mockFetch.mockResolvedValue(response);
+    return response;
+  };
+  const send = (params: Record<string, unknown>, options: Options = {}) =>
+    rpc("send", { account, recipient, ...params }, options);
+  function expectPayload(endpoint: string, method: string, body: unknown) {
+    expect(request()).toMatchObject({ url: `${baseUrl}/v1/${endpoint}/%2B14259798283`, method });
+    expect(payload()).toEqual(body);
   }
-  return { url: call[0], ...call[1] };
-}
-function payload(): unknown {
-  const { body } = request();
-  if (typeof body !== "string") {
-    throw new Error("expected a JSON request body");
+  const request = () => ({ url: mockFetch.mock.calls[0]?.[0], ...mockFetch.mock.calls[0]?.[1] });
+  function payload(): unknown {
+    const { body } = request();
+    if (typeof body !== "string") {
+      throw new Error("expected a JSON request body");
+    }
+    return JSON.parse(body);
   }
-  return JSON.parse(body);
-}
-async function file(name: string, bytes: number) {
-  const path = join(tempDirs.make("signal-container-"), name);
-  await writeFile(path, Buffer.alloc(bytes));
-  return path;
-}
-beforeEach(() => {
-  mockFetch.mockReset();
-  vi.spyOn(fetchModule, "resolveFetch").mockReturnValue(mockFetch);
-});
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.useRealTimers();
-});
+  async function file(name: string, bytes: number) {
+    const path = join(tempDirs.make("signal-container-"), name);
+    await writeFile(path, Buffer.alloc(bytes));
+    return path;
+  }
+  beforeEach(() => {
+    mockFetch.mockReset();
+    vi.spyOn(fetchModule, "resolveFetch").mockReturnValue(mockFetch);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
 
-describe("container health", () => {
   it("reports a network failure", async () => {
     mockFetch.mockRejectedValue(new Error("Network error"));
     await expect(containerCheck(baseUrl)).resolves.toEqual({
@@ -74,9 +72,6 @@ describe("container health", () => {
     await expect(containerCheck(url)).rejects.toThrow(error);
     expect(mockFetch).not.toHaveBeenCalled();
   });
-});
-
-describe("discarded container responses", () => {
   it.each([
     { operation: "health", status: 200, expected: { ok: true, status: 200, error: null } },
     { operation: "health", status: 503, expected: { ok: false, status: 503, error: "HTTP 503" } },
@@ -112,13 +107,15 @@ describe("discarded container responses", () => {
       }
     },
   );
-});
-
-describe("container REST responses", () => {
   it.each([
     { status: 500, text: "x".repeat(20_000), error: `Signal REST 500: ${"x".repeat(16 * 1024)}` },
     { status: 500, text: "", error: "Signal REST 500: Internal Server Error" },
     { status: 200, text: "not-valid-json", error: "Signal REST returned malformed JSON" },
+    {
+      status: 200,
+      text: '{"timestamp":"0x18bcfe56800"}',
+      error: "Signal REST send returned invalid timestamp",
+    },
   ])("bounds and reports REST response %#", async ({ status, text, error }) => {
     respondBody(text, { status, statusText: "Internal Server Error" });
     await expect(rpc("send")).rejects.toThrow(error);
@@ -129,17 +126,13 @@ describe("container REST responses", () => {
   });
   it("preserves the deadline error for slow-drip non-ok bodies", async () => {
     vi.useFakeTimers();
-    const timers: ReturnType<typeof setTimeout>[] = [];
+    let drip: ReturnType<typeof setInterval>;
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
-        for (const [index, text] of ["{", '"error"', ':"busy"', "}"].entries()) {
-          timers.push(
-            setTimeout(() => controller.enqueue(new TextEncoder().encode(text)), 10 + index * 20),
-          );
-        }
+        drip = setInterval(() => controller.enqueue(new Uint8Array([32])), 10);
       },
       cancel() {
-        timers.forEach(clearTimeout);
+        clearInterval(drip);
       },
     });
     respondBody(body, { status: 503 });
@@ -151,29 +144,16 @@ describe("container REST responses", () => {
     expect(request().signal?.aborted).toBe(true);
   });
   it("cancels oversized success streams without draining them", async () => {
-    let emitted = 0;
-    const chunk = new Uint8Array(1024 * 1024);
-    const body = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (emitted === 20) {
-          controller.close();
-          return;
-        }
-        emitted++;
-        controller.enqueue(chunk);
-      },
-    });
-    respondBody(body);
+    const oversized = createStreamingResponse({ chunkCount: 20, chunkSize: 1024 * 1024 });
+    mockFetch.mockResolvedValue(oversized.response);
     await expect(rpc("version")).rejects.toThrow(/exceeds \d+ bytes/);
-    expect(emitted).toBeLessThan(20);
+    expect(oversized.getReadCount()).toBeLessThan(20);
+    expect(oversized.wasCanceled()).toBe(true);
   });
-});
-
-describe("container send payloads", () => {
   it.each([false, true])(
     "prepares the REST handoff and rechecks its caller after waiting (revoked=%s)",
-    async (revoked) => {
-      await expectPreparedHandoff(revoked, async ({ arrive, response, assertHandoff }) => {
+    (revoked) =>
+      expectPreparedHandoff(revoked, async ({ arrive, response, assertHandoff }) => {
         const result = { timestamp: 1700000000000 };
         mockFetch.mockImplementation(async () => {
           arrive();
@@ -185,16 +165,9 @@ describe("container send payloads", () => {
           assertCount: (count) => expect(mockFetch).toHaveBeenCalledTimes(count),
           result,
         };
-      });
-    },
+      }),
   );
 
-  it("rejects a non-decimal send timestamp", async () => {
-    respond({ timestamp: "0x18bcfe56800" });
-    await expect(send({ message: "Hello" })).rejects.toThrow(
-      "Signal REST send returned invalid timestamp",
-    );
-  });
   it.each([
     {
       name: "styled text with literal markers and backslashes",
@@ -281,9 +254,6 @@ describe("container send payloads", () => {
       timestamp: 1699999999999,
     });
   });
-});
-
-describe("container attachments", () => {
   it("encodes the attachment path and returns base64 bytes", async () => {
     respondBody(new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
     await expect(attachment()).resolves.toEqual({ data: "iVBORw==" });
@@ -295,13 +265,7 @@ describe("container attachments", () => {
   it.each([true, false])(
     "rejects oversized attachments (content-length=%s)",
     async (lengthHeader) => {
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new Uint8Array([1, 2, 3]));
-          controller.enqueue(new Uint8Array([4, 5]));
-          controller.close();
-        },
-      });
+      const body = createClosedChunkStream([new Uint8Array([1, 2, 3]), new Uint8Array([4, 5])]);
       const response = respondBody(
         body,
         lengthHeader ? { headers: { "content-length": "5" } } : undefined,
@@ -315,4 +279,75 @@ describe("container attachments", () => {
       }
     },
   );
+});
+
+describe("container REST real server", () => {
+  const startServer = useSignalHttpServer();
+  const params = { account: "+15550001111", recipient: ["+15551234567"], message: "Photo" };
+  afterEach(() => vi.restoreAllMocks());
+  it("rejects malformed UTF-8 before JSON parsing", async () => {
+    const baseUrl = await startServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(Buffer.from('{"versions":["\xff"]}', "latin1"));
+    });
+    await expect(containerRpcRequest("version", undefined, { baseUrl })).rejects.toBeInstanceOf(
+      TypeError,
+    );
+  });
+  it("aborts an unfinished response at its deadline and closes the connection", async () => {
+    let flushed = false;
+    let closed = false;
+    const baseUrl = await startServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write("{", (error) => {
+        flushed = !error;
+      });
+      const drip = setInterval(() => res.write(" "), 50);
+      res.on("close", () => {
+        clearInterval(drip);
+        closed = true;
+      });
+    });
+    const start = Date.now();
+    await expect(
+      containerRpcRequest("version", undefined, { baseUrl, timeoutMs: 300 }),
+    ).rejects.toThrow("Signal REST request timed out");
+    expect(flushed).toBe(true);
+    expect(Date.now() - start).toBeLessThan(2_000);
+    await expect.poll(() => closed).toBe(true);
+  });
+  it("posts a provider-safe original attachment filename and intact bytes", async () => {
+    let received: unknown;
+    const baseUrl = await startServer(async (req, res) => {
+      expect(req.method).toBe("POST");
+      expect(req.url).toBe("/v2/send");
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) {
+        chunks.push(chunk);
+      }
+      received = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      res.writeHead(201, { "content-type": "application/json" });
+      res.end('{"timestamp":"1735689600000"}');
+    });
+    const content = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+    const file = join(
+      tempDirs.make("signal-filename-"),
+      "mixed;semi;comma,comma,hash#name---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+    );
+    await writeFile(file, content);
+    await expect(
+      containerRpcRequest(
+        "send",
+        { ...params, attachments: [file] },
+        { baseUrl, timeoutMs: 1_000 },
+      ),
+    ).resolves.toEqual({ timestamp: 1735689600000 });
+    const dataUri = "data:image/jpeg;filename=mixed_semi_comma_comma_hash_name.jpg;base64,/9j/4A==";
+    expect(received).toEqual({
+      message: params.message,
+      number: params.account,
+      recipients: params.recipient,
+      base64_attachments: [dataUri],
+    });
+  });
 });

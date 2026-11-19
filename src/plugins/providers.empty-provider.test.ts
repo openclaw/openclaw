@@ -26,65 +26,15 @@ describe.each(["manifest", "snapshot"] as const)("provider ownership through %s"
     };
   }
 
-  it("requires an alias receiver while preserving CLI and model ownership", () => {
-    const owner = {
-      id: "empty-owner",
-      providers: [],
-      cliBackends: ["shared-ref"],
-      providerAuthAliases: { "shared-ref": "target" },
-      modelCatalog: { aliases: { "catalog-ref": { provider: "target" } } },
-      modelSupport: { modelPrefixes: ["synthetic-prefix-"] },
-      setup: { providers: [{ id: "target" }] },
-    };
-    const empty = lookup([owner]);
-    expect([empty.provider("shared-ref"), empty.provider("catalog-ref")]).toEqual([
-      undefined,
-      undefined,
-    ]);
-    expect(empty.ref(" SHARED-REF ")).toEqual(["empty-owner"]);
-    expect(empty.model("synthetic-prefix-model")).toEqual(["empty-owner"]);
-
-    const populated = lookup([
-      owner,
-      {
-        id: "runtime-owner",
-        providers: ["TARGET"],
-        providerAuthAliases: owner.providerAuthAliases,
-        modelCatalog: owner.modelCatalog,
-      },
-    ]);
-    for (const ref of [" SHARED-REF ", "catalog-ref"]) {
-      expect([populated.provider(ref), populated.ref(ref)]).toEqual([
-        ["runtime-owner"],
-        ["runtime-owner"],
-      ]);
-    }
-  });
-
-  it("publishes sorted, deduplicated owners with provider precedence", () => {
-    const index = lookup([
-      { id: "z-owner", providers: ["TARGET", "target"], cliBackends: ["cli-ref", "CLI-REF"] },
-      { id: "a-owner", providers: ["target"], cliBackends: ["cli-ref"] },
-      { id: "cli-only", providers: [], cliBackends: ["target"] },
-    ]);
-    const providerOwners = index.provider("target");
-    expect(providerOwners).toEqual(["a-owner", "z-owner"]);
-    for (const ref of [" TARGET ", "cli-ref"]) {
-      const owners = index.ref(ref);
-      expect(owners).toEqual(["a-owner", "z-owner"]);
-      expect(Object.isFrozen(owners)).toBe(true);
-      expect(index.ref(ref)).toBe(owners);
-    }
-    expect(index.ref("target")).toBe(providerOwners);
-  });
-
-  it("shares immutable owner results and replaces them with the generation", () => {
+  it("shares sorted immutable owners with provider precedence and replaces the generation", () => {
     const generation = (id: string) =>
       lookup([
+        { id: "z-owner", providers: ["target"], cliBackends: ["cli-ref", "CLI-REF"] },
         {
           id,
           providers: ["TARGET", "target"],
           providerAuthAliases: { " AUTH-REF ": " target ", orphan: "absent" },
+          setup: { providers: [{ id: "absent" }] },
           modelCatalog: {
             aliases: {
               "catalog-ref": { provider: "target" },
@@ -92,21 +42,33 @@ describe.each(["manifest", "snapshot"] as const)("provider ownership through %s"
             },
           },
         },
-        { id: "cli-owner", providers: [], setup: { cliBackends: ["auth-ref", "cli-ref"] } },
+        {
+          id: "cli-owner",
+          providers: [],
+          setup: { cliBackends: ["target", "auth-ref", "cli-ref"] },
+        },
       ]);
     const first = generation("first-owner");
     for (const ref of ["target", "auth-ref", "catalog-ref", "cli-ref"]) {
       const owners = first.ref(ref);
-      expect(owners).toEqual([ref === "cli-ref" ? "cli-owner" : "first-owner"]);
+      expect(owners).toEqual(
+        ref === "cli-ref"
+          ? ["cli-owner", "z-owner"]
+          : ref === "target"
+            ? ["first-owner", "z-owner"]
+            : ["first-owner"],
+      );
       expect(first.ref(` ${ref.toUpperCase()} `)).toBe(owners);
       expect(Object.isFrozen(owners)).toBe(true);
       expect(first.model(`${ref}/synthetic-model`)).toBe(owners);
     }
+    expect(first.ref("target")).toBe(first.provider("target"));
+    expect(first.provider("cli-ref")).toBeUndefined();
     for (const ref of ["orphan", "orphan-catalog", "missing"]) {
       expect(first.ref(ref)).toBeUndefined();
     }
-    expect(generation("replacement-owner").ref("target")).toEqual(["replacement-owner"]);
-    expect(first.ref("target")).toEqual(["first-owner"]);
+    expect(generation("replacement-owner").ref("target")).toEqual(["replacement-owner", "z-owner"]);
+    expect(first.ref("target")).toEqual(["first-owner", "z-owner"]);
     expect(lookup([]).ref("target")).toBeUndefined();
   });
 });

@@ -6,6 +6,7 @@ import type { GatewayToolPolicyConfig } from "../config/types.tools.js";
 import { copyAgentToolMetadata, isGatewayToolPolicyControl } from "./agent-tool-metadata.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isCodeModeControlTool } from "./code-mode-control-tools.js";
+import { markToolExecutionRefused } from "./tool-effect-receipt.js";
 import { ToolAuthorizationError } from "./tool-input-error.js";
 import { normalizeToolPolicyName } from "./tool-policy-shared.js";
 
@@ -85,6 +86,20 @@ function toolAllowed(policy: GatewayToolPolicyConfig, name: string): boolean {
   return policy.allow.some((entry) => normalizeToolPolicyName(entry) === name);
 }
 
+/** Query the execution contract for tools such as exec that have no action argument. */
+export function isGatewayToolAllowedWithoutAction(
+  toolName: string,
+  config: OpenClawConfig | undefined = getRuntimeConfigSnapshot() ?? undefined,
+): boolean {
+  const policy = config?.tools?.gatewayPolicy;
+  const name = normalizeToolPolicyName(toolName);
+  return !policy || (toolAllowed(policy, name) && policyActions(policy, name) === undefined);
+}
+
+function gatewayPolicyDenial(reason: string): ToolAuthorizationError {
+  return markToolExecutionRefused(new ToolAuthorizationError(reason), { kind: "blocked", reason });
+}
+
 /** Capture the deployment policy when constructing the tool executor. */
 export function createGatewayToolPolicyAssertion(
   tool: GatewayToolPolicyTarget,
@@ -97,7 +112,7 @@ export function createGatewayToolPolicyAssertion(
     }
     const name = normalizeToolPolicyName(tool.name);
     if (!toolAllowed(policy, name)) {
-      throw new ToolAuthorizationError(`Gateway tool policy denies tool "${name}".`);
+      throw gatewayPolicyDenial(`Gateway tool policy denies tool "${name}".`);
     }
     const actions = policyActions(policy, name);
     if (!hasAction(tool.parameters) && actions === undefined) {
@@ -106,7 +121,7 @@ export function createGatewayToolPolicyAssertion(
     const action =
       isRecord(args) && typeof args.action === "string" ? args.action.trim() : undefined;
     if (!action || !actions?.includes(action)) {
-      throw new ToolAuthorizationError(
+      throw gatewayPolicyDenial(
         `Gateway tool policy denies ${name} action "${action ?? "<missing>"}".`,
       );
     }

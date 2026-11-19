@@ -1,4 +1,5 @@
 import { Type, type TProperties } from "typebox";
+import { AutomationResultSchema } from "../../../packages/gateway-protocol/src/schema/cron-automation-result.js";
 import {
   CronAddJobResultSchema,
   CronAddResultSchema,
@@ -25,6 +26,7 @@ const CompactCronJobSchema = closedObject({
   id: job.id,
   name: job.name,
   agentId: job.agentId,
+  cyberAccessProgram: job.cyberAccessProgram,
   // Protocol-v4 compact replies from older Gateways omit the update timestamp.
   updatedAtMs: Type.Optional(job.updatedAtMs),
   declarationKey: job.declarationKey,
@@ -43,6 +45,7 @@ const CompactCronJobSchema = closedObject({
     Type.Literal("event"),
   ]),
   streamExecutionHost: job.streamExecutionHost,
+  reauthorizationRequired: job.reauthorizationRequired,
   schedule: Type.Optional(
     Type.Union(
       job.schedule.anyOf.filter((schema) =>
@@ -56,7 +59,11 @@ const CompactCronJobSchema = closedObject({
   lastRunStatus: Type.Union([...job.lastRunStatus.anyOf, Type.Null()]),
   lastRunError: nullableString,
   runningAtMs: job.state.properties.runningAtMs,
+  lastDurationMs: job.state.properties.lastDurationMs,
+  lastTriggerEvalAtMs: job.state.properties.lastTriggerEvalAtMs,
+  lastMeaningfulResult: job.state.properties.lastMeaningfulResult,
   autoDisabled: job.state.properties.autoDisabled,
+  admissionDeferred: job.state.properties.admissionDeferred,
   lastDelivered: job.lastDelivered,
   lastDeliveryStatus: job.lastDeliveryStatus,
   lastDeliveryError: job.lastDeliveryError,
@@ -102,6 +109,7 @@ const CronStatusOutputSchema = closedObject({
   storage: Type.Optional(Type.Literal("sqlite")),
   sqlitePath: Type.Optional(Type.String()),
   jobs: Type.Optional(Type.Integer({ minimum: 0 })),
+  reauthorizationRequired: Type.Optional(Type.Integer({ minimum: 0 })),
   nextWakeAtMs: Type.Optional(nullableNumber),
 });
 
@@ -210,17 +218,11 @@ export const CronToolOutputSchema = defineToolOutputSchema({
     }),
     scratch_get: CronScratchGetResultSchema,
     scratch_set: CronScratchSetResultSchema,
-    record_result: closedObject({
-      ok: Type.Literal(true),
-      outcome: Type.Union([
-        Type.Literal("no_change"),
-        Type.Literal("progress"),
-        Type.Literal("done"),
-        Type.Literal("blocked"),
-        Type.Literal("needs_attention"),
-      ]),
-      summary: Type.String({ minLength: 1, maxLength: 2000 }),
-    }),
+    record_result: Type.Union(
+      AutomationResultSchema.anyOf.map((schema) =>
+        closedObject({ ok: Type.Literal(true), ...schema.properties }),
+      ),
+    ),
     wake: Type.Union([
       closedObject({ ok: Type.Literal(true) }),
       closedObject({

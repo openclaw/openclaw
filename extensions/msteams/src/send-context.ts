@@ -13,6 +13,7 @@ import {
   normalizeBotFrameworkServiceUrl,
 } from "./bot-framework-service-url.js";
 import {
+  PUBLIC_MSTEAMS_SERVICE_URL,
   resolveMSTeamsSdkCloudOptions,
   validateMSTeamsProactiveServiceUrlBoundary,
 } from "./cloud.js";
@@ -22,10 +23,10 @@ import { formatUnknownError } from "./errors.js";
 import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
 import { resolveMSTeamsReplyPolicy, resolveMSTeamsRouteConfig } from "./policy.js";
 import { getMSTeamsRuntime } from "./runtime.js";
+import { createMSTeamsPersonalConversation } from "./sdk-proactive.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
+import type { MSTeamsSendHandoff } from "./send-handoff.js";
 import { resolveMSTeamsCredentials } from "./token-config.js";
-
-type MSTeamsConversationType = "personal" | "groupChat" | "channel";
 
 // Keep reply policy and the Connector thread suffix together so every proactive
 // activity kind uses the same resolved destination instead of re-deriving it.
@@ -39,6 +40,8 @@ export async function resolveMSTeamsSendContext(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   to: string;
+  /** Delivery authority for a Connector request this resolution makes itself. */
+  assertDirectAdapterHandoff?: MSTeamsSendHandoff["assertDirectAdapterHandoff"];
 }) {
   const accountId = normalizeAccountId(
     params.accountId ?? resolveDefaultMSTeamsAccountId(params.cfg),
@@ -103,6 +106,8 @@ export async function resolveMSTeamsSendContext(params: {
     }
     return finalize("user", trimmed);
   })();
+  const sdkCloudOptions = resolveMSTeamsSdkCloudOptions(msteamsCfg);
+  const { app } = await loadMSTeamsSdkWithAuth(creds, sdkCloudOptions);
   const found = await (async (): Promise<{
     conversationId: string;
     ref: StoredConversationReference;
@@ -112,9 +117,54 @@ export async function resolveMSTeamsSendContext(params: {
       return ref ? { conversationId: recipient.id, ref } : null;
     }
     const preferred = await store.findPreferredDmByUserId(recipient.id);
-    return preferred
-      ? { conversationId: preferred.conversationId, ref: preferred.reference }
-      : null;
+    if (preferred) {
+      return { conversationId: preferred.conversationId, ref: preferred.reference };
+    }
+    // Teams opens (or returns) the 1:1 chat for any user who has the app installed,
+    // so a user target does not need an earlier inbound message. Only a Connector
+    // URL of the configured cloud may receive the authenticated create.
+    const candidates = sdkCloudOptions.serviceUrl
+      ? [sdkCloudOptions.serviceUrl]
+      : [
+          ...(await store.list()).map((entry) => entry.reference.serviceUrl),
+          PUBLIC_MSTEAMS_SERVICE_URL,
+        ];
+    const serviceUrl = candidates.find((candidate) => {
+      try {
+        validateMSTeamsProactiveServiceUrlBoundary({
+          cloud: sdkCloudOptions.cloud,
+          conversationId: `user:${recipient.id}`,
+          storedServiceUrl: candidate,
+          configuredServiceUrl: sdkCloudOptions.serviceUrl,
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    if (!serviceUrl) {
+      return null;
+    }
+    const tenantId = creds.tenantId;
+    const connectorUrl = normalizeBotFrameworkServiceUrl(serviceUrl);
+    const created = await createMSTeamsPersonalConversation(
+      app,
+      { serviceUrl: connectorUrl, userId: recipient.id, tenantId },
+      { assertDirectAdapterHandoff: params.assertDirectAdapterHandoff },
+    );
+    // Teams user ids carry a "29:" prefix; anything else is an AAD object id.
+    const aadObjectId = recipient.id.includes(":") ? undefined : recipient.id;
+    const ref: StoredConversationReference = {
+      user: { id: recipient.id, ...(aadObjectId ? { aadObjectId } : {}) },
+      agent: { id: `28:${creds.appId}` },
+      conversation: { id: created.id, conversationType: "personal", tenantId },
+      tenantId,
+      ...(aadObjectId ? { aadObjectId } : {}),
+      channelId: "msteams",
+      serviceUrl: connectorUrl,
+    };
+    await store.upsert(created.id, ref);
+    return { conversationId: created.id, ref };
   })();
 
   if (!found) {
@@ -163,8 +213,6 @@ export async function resolveMSTeamsSendContext(params: {
       );
     }
   }
-  const sdkCloudOptions = resolveMSTeamsSdkCloudOptions(msteamsCfg);
-  const { app } = await loadMSTeamsSdkWithAuth(creds, sdkCloudOptions);
   validateMSTeamsProactiveServiceUrlBoundary({
     cloud: sdkCloudOptions.cloud,
     conversationId,
@@ -177,7 +225,7 @@ export async function resolveMSTeamsSendContext(params: {
   const storedConversationType = normalizeLowercaseStringOrEmpty(
     safeRef.conversation?.conversationType ?? "",
   );
-  const conversationType: MSTeamsConversationType =
+  const conversationType: "personal" | "groupChat" | "channel" =
     storedConversationType === "personal" || storedConversationType === "channel"
       ? storedConversationType
       : "groupChat";

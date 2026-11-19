@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as modelRuntime from "../agents/embedded-agent-runner/model.js";
 import { prepareEmbeddedRunAuthPlan } from "../agents/embedded-agent-runner/run/auth-plan.js";
 import type { AgentHarness } from "../agents/harness/types.js";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import type { Model } from "../llm/types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -19,25 +20,20 @@ const harness: AgentHarness = {
   },
 };
 type FixtureModel = Model<"openai-responses" | "bedrock-converse-stream" | "ollama">;
-const model: FixtureModel = {
+const model = makeProviderModelFixture<"openai-responses">({
   id: "gpt-4.1",
-  name: "Synthetic scheduled model",
   provider: "openai",
   api: "openai-responses",
   baseUrl: "https://api.openai.com/v1",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 16_000,
   maxTokens: 1_024,
-};
+});
 afterEach(() => vi.restoreAllMocks());
 
 function prepareAuth(
   state: OpenClawTestState,
   stores: ReturnType<typeof modelRuntime.createEmptyAgentDiscoveryStores>,
   runParams: Partial<Parameters<typeof prepareEmbeddedRunAuthPlan>[0]["runParams"]>,
-  selectedModel = model,
+  selectedModel: FixtureModel = model,
   nativeModelOwned = false,
 ) {
   return withPluginRuntimeGenerationScope(
@@ -61,15 +57,9 @@ function prepareAuth(
         agentDir: state.agentDir(),
         workspaceDir: state.workspaceDir,
         nativeModelOwned,
-        ...(nativeModelOwned
-          ? {
-              nativeSessionRuntime: {
-                auth: "native" as const,
-                harness,
-                assertCurrent: async () => {},
-              },
-            }
-          : {}),
+        nativeSessionRuntime: nativeModelOwned
+          ? { auth: "native", harness, assertCurrent: async () => {} }
+          : undefined,
         ...stores,
         getAgentHarness: () => harness,
         setAgentHarness() {},
@@ -84,11 +74,14 @@ function prepareAuth(
 function withAuthState(callback: (state: OpenClawTestState) => Promise<void>, ambientKey?: string) {
   return withOpenClawTestState(
     { label: "scheduled-auth", env: { OPENAI_API_KEY: ambientKey } },
-    callback,
+    async (state) => {
+      await state.writeAuthProfiles({ version: 1, profiles: {} });
+      await callback(state);
+    },
   );
 }
 
-function mockModel(selectedModel = model) {
+function mockModel(selectedModel: FixtureModel = model) {
   const stores = modelRuntime.createEmptyAgentDiscoveryStores();
   vi.spyOn(modelRuntime, "resolveModelAsync").mockResolvedValue({
     ...stores,
@@ -99,18 +92,8 @@ function mockModel(selectedModel = model) {
 }
 
 function configFor(selectedModel: FixtureModel, auth: { apiKey: string } | { auth: "aws-sdk" }) {
-  return {
-    models: {
-      providers: {
-        [selectedModel.provider]: {
-          api: selectedModel.api,
-          baseUrl: selectedModel.baseUrl,
-          models: [],
-          ...auth,
-        },
-      },
-    },
-  };
+  const provider = { api: selectedModel.api, baseUrl: selectedModel.baseUrl, models: [], ...auth };
+  return { models: { providers: { [selectedModel.provider]: provider } } };
 }
 
 const bedrockModel: FixtureModel = {
@@ -121,39 +104,24 @@ const bedrockModel: FixtureModel = {
   baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 };
 
-it.each([
-  { source: "a current stored account", model, storedProfile: true, config: {} },
-  {
-    source: "ambient AWS SDK credentials",
-    model: bedrockModel,
-    storedProfile: false,
-    config: configFor(bedrockModel, { auth: "aws-sdk" }),
-  },
-])("refuses legacy adoption from $source at the auth boundary", async (testCase) => {
+// Stored-profile refusal is exercised through provider HTTP in auth-continuity.integration.
+it("refuses legacy adoption from ambient AWS SDK credentials at the auth boundary", async () => {
   await withAuthState(async (state) => {
-    await state.writeAuthProfiles({
-      version: 1,
-      profiles: testCase.storedProfile
-        ? {
-            "openai:current": {
-              type: "api_key",
-              provider: "openai",
-              key: "synthetic-current-key",
-            },
-          }
-        : {},
-    });
     const materialize = vi.spyOn(modelRuntime, "resolveModelAsync");
     const stores = modelRuntime.createEmptyAgentDiscoveryStores();
     await expect(
-      prepareAuth(state, stores, { config: testCase.config }, testCase.model),
+      prepareAuth(
+        state,
+        stores,
+        { config: configFor(bedrockModel, { auth: "aws-sdk" }) },
+        bedrockModel,
+      ),
     ).rejects.toThrow("Automation has no recorded inference account");
     expect(materialize).not.toHaveBeenCalled();
   });
 });
 
 it.each([
-  ["configured", "cron", "provider-config"],
   ["configured", "event", "provider-config"],
   ["native", "cron", undefined],
   ["credentialless", "cron", undefined],
@@ -163,7 +131,6 @@ it.each([
   async (kind, trigger, evidence) => {
     await withAuthState(
       async (state) => {
-        await state.writeAuthProfiles({ version: 1, profiles: {} });
         const selectedModel: FixtureModel =
           kind === "native" || kind === "configured"
             ? model

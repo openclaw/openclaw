@@ -6,6 +6,7 @@ import { randomBytes } from "node:crypto";
 import { chmod, copyFile } from "node:fs/promises";
 import path from "node:path";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { createBrowserTool } from "./browser-tool.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./browser/bridge-server.js";
@@ -51,19 +52,24 @@ export async function createAttachedBrowserToolRuntime(
   params: CreateAttachedBrowserToolRuntimeParams,
 ): Promise<AttachedBrowserToolRuntime> {
   const cdpUrl = normalizeAttachedCdpUrl(params.cdpUrl);
-  const resolved = resolveBrowserConfig({
-    enabled: true,
-    attachOnly: true,
-    cdpUrl,
-    defaultProfile: ATTACHED_PROFILE_NAME,
-    profiles: {
-      [ATTACHED_PROFILE_NAME]: {
-        driver: "openclaw",
-        attachOnly: true,
-        cdpUrl,
+  // This runtime has no Gateway preparation. Both the tool and bridge consume
+  // only this private attach-only profile, never the host runtime config.
+  const config: OpenClawConfig = {
+    browser: {
+      enabled: true,
+      attachOnly: true,
+      cdpUrl,
+      defaultProfile: ATTACHED_PROFILE_NAME,
+      profiles: {
+        [ATTACHED_PROFILE_NAME]: {
+          driver: "openclaw",
+          attachOnly: true,
+          cdpUrl,
+        },
       },
     },
-  });
+  };
+  const resolved = resolveBrowserConfig(config.browser, config);
 
   // Config resolution adds normal host profiles. This runtime is deliberately
   // closed: exposing any of them would reintroduce MCP, extension, or managed
@@ -93,31 +99,36 @@ export async function createAttachedBrowserToolRuntime(
     }
   };
   try {
-    const tool = createBrowserTool({
-      sandboxBridgeUrl: bridge.baseUrl,
-      allowHostControl: false,
-      ...(params.agentSessionKey !== undefined ? { agentSessionKey: params.agentSessionKey } : {}),
-      ...(params.agentDir !== undefined ? { agentDir: params.agentDir } : {}),
-      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-      // Worker transcript frames are bounded and inference is Gateway-proxied.
-      // Persist proof in the managed workspace, then return only a bounded receipt.
-      screenshotResultMode: "path",
-      persistScreenshot: async ({ sourcePath, type }) => {
-        const { workspaceDir } = params;
-        const extension = type === "jpeg" ? "jpg" : "png";
-        const fileName = `screenshot-${randomBytes(8).toString("hex")}.${extension}`;
-        const result = await writeExternalFileWithinRoot({
-          rootDir: workspaceDir,
-          path: path.join(".artifacts", "cloud-worker-browser", fileName),
-          fallbackFileName: fileName,
-          write: async (stagedPath) => {
-            await copyFile(sourcePath, stagedPath);
-            await chmod(stagedPath, 0o600);
-          },
-        });
-        return result.path;
+    const tool = createBrowserTool(
+      {
+        sandboxBridgeUrl: bridge.baseUrl,
+        allowHostControl: false,
+        ...(params.agentSessionKey !== undefined
+          ? { agentSessionKey: params.agentSessionKey }
+          : {}),
+        ...(params.agentDir !== undefined ? { agentDir: params.agentDir } : {}),
+        workspaceDir: params.workspaceDir,
+        // Worker transcript frames are bounded and inference is Gateway-proxied.
+        // Persist proof in the managed workspace, then return only a bounded receipt.
+        screenshotResultMode: "path",
+        persistScreenshot: async ({ sourcePath }) => {
+          const { workspaceDir } = params;
+          // The media store names the normalized image, which may differ from the requested format.
+          const fileName = `screenshot-${randomBytes(8).toString("hex")}${path.extname(sourcePath)}`;
+          const result = await writeExternalFileWithinRoot({
+            rootDir: workspaceDir,
+            path: path.join(".artifacts", "cloud-worker-browser", fileName),
+            fallbackFileName: fileName,
+            write: async (stagedPath) => {
+              await copyFile(sourcePath, stagedPath);
+              await chmod(stagedPath, 0o600);
+            },
+          });
+          return result.path;
+        },
       },
-    });
+      () => config,
+    );
     return {
       tool,
       dispose,

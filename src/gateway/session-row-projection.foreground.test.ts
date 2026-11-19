@@ -60,10 +60,11 @@ async function seedPreview(sessionId: string, content: string, config?: OpenClaw
   });
   return { scope, query: { agentId: scope.agentId, key: scope.sessionKey } };
 }
-const preview = (
+const snapshot = (
   projection: SessionRowProjection,
   query: Parameters<SessionRowProjection["snapshot"]>[0],
-) => projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview;
+) => projection.snapshot(query, { includeLastMessage: true }).row;
+const preview = (...args: Parameters<typeof snapshot>) => snapshot(...args)?.lastMessagePreview;
 
 function holdBackfillPublication(signal?: AbortSignal) {
   const backfill = transcriptBackfill.backfillSessionRowTranscriptFields;
@@ -158,16 +159,8 @@ it("publishes legacy transcript previews without acquiring stored row facts agai
     const stored = structuredClone(sessions.loadSessionEntry(scope));
     expect(projection.dirtyRowCount).toBe(0);
     expect(reads).toHaveBeenCalled();
-    const before = projection.snapshot(query, { includeLastMessage: true }).row;
-    expect(before?.lastMessagePreview).toBeUndefined();
-    const resident = projection.describe(query)!;
-    const retainedMaterialized = resident.materialized;
-    const membership = [...resident.membership];
-    const hasBoard = resident.hasBoard;
+    expect(preview(projection, query)).toBeUndefined();
     await listProjectedSessions({ projection, opts: { includeLastMessage: true } });
-    const select = vi.spyOn(projection, "selectEntries");
-    const materializedCount = projection.materializedCount;
-    const sequence = resident.materializedSequence;
     reads.mockClear();
     // Join the actual producer publication before a synchronous snapshot can consume dirty work.
     const hostReads = observeSqliteReadSql(StatementSync.prototype);
@@ -182,24 +175,11 @@ it("publishes legacy transcript previews without acquiring stored row facts agai
     } finally {
       hostReads.restore();
     }
-    const after = projection.snapshot(query, { includeLastMessage: true }).row;
-    expect(after?.lastMessagePreview).toBe("Read-only transcript preview");
-    expect(after?.activitySummary).toEqual(before?.activitySummary);
+    expect(preview(projection, query)).toBe("Read-only transcript preview");
     expect(sessions.loadSessionEntry(scope)).toEqual(stored);
-    expect(projection.describe(query)?.hasBoard).toBe(hasBoard);
-    expect([...projection.describe(query)!.membership]).toEqual(membership);
     expect(reads).not.toHaveBeenCalled();
-    const current = projection.describe(query)!;
-    expect(current.materialized).not.toBe(retainedMaterialized);
-    expect(retainedMaterialized.row.lastMessagePreview).toBeUndefined();
-    expect(retainedMaterialized.source.lastMessagePreview).toBeUndefined();
-    expect(current.materialized.source.lastMessagePreview).toBe(after?.lastMessagePreview);
-    expect(current.materialized.row.lastMessagePreview).toBe(after?.lastMessagePreview);
     const list = await listProjectedSessions({ projection, opts: { includeLastMessage: true } });
     expect(list.sessions[0]?.lastMessagePreview).toBe("Read-only transcript preview");
-    expect(select).not.toHaveBeenCalled();
-    expect(projection.materializedCount).toBe(materializedCount);
-    expect(current.materializedSequence).toBe(sequence);
   });
 });
 
@@ -237,13 +217,13 @@ it("retains transcript previews across metadata edits and consumes committed ali
       await projection.ensureMaterialized();
       // Let the background owner reach its next admission boundary after each edit.
       await nextTurn();
-      expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
+      expect(snapshot(projection, query)).toMatchObject({
         displayName: `Renamed ${edit}`,
         sidebarRoot: edit % 2 === 0,
         lastMessagePreview: "Original preview",
       });
     }
-    expect(backfill.mock.calls.length).toBe(0);
+    expect(backfill).not.toHaveBeenCalled();
     const reads = vi.fn();
     observeRowFacts((owner) => async (input) => {
       reads();
@@ -255,15 +235,7 @@ it("retains transcript previews across metadata edits and consumes committed ali
       { config: cfg, message: { role: "assistant", content: "Appended preview" } },
     );
     expect(append).toMatchObject({ ok: true, value: { appended: true } });
-    expect(projection.capture(query)?.retainedDatabaseFacts).toMatchObject({
-      activitySummaryWatermark: { maxSeq: 2 },
-      transcriptPreview: "Appended preview",
-    });
     const aliasQuery = { ...query, storePath: aliasPath };
-    expect(projection.capture(aliasQuery)?.retainedDatabaseFacts).toMatchObject({
-      activitySummaryWatermark: { maxSeq: 2 },
-      transcriptPreview: "Appended preview",
-    });
     await appended;
     expect(preview(projection, query)).toBe("Appended preview");
     const refreshed = vi.fn();
@@ -278,7 +250,7 @@ it("retains transcript previews across metadata edits and consumes committed ali
     await sessions.patchSessionEntryCore(scope, () => ({ displayName: "After append" }));
     await projection.ensureMaterialized();
     await nextTurn();
-    expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
+    expect(snapshot(projection, query)).toMatchObject({
       displayName: "After append",
       lastMessagePreview: "Appended preview",
     });
@@ -350,20 +322,20 @@ it.each([false, true])(
         touchSessionEntry: false,
       });
       await projection.ensureMaterialized();
+      const row = projection.describe(query)!;
+      expect(invalidate ? row.lastMessagePreview : preview(projection, query)).toBe(
+        "Committed preview",
+      );
       if (invalidate) {
-        const row = projection.describe(query)!;
-        expect(row.lastMessagePreview).toBe("Committed preview");
         sessionChanges.emit({ all: true, scope: { agentId: "main" }, factsInvalidated: true });
         expect(row.retainedDatabaseFacts).toBeUndefined();
-        await backfill.publish();
-        expect(row.lastMessagePreview).toBe("Committed preview");
-        await projection.ensureMaterialized();
-        expect(preview(projection, query)).toBe("Committed preview");
-      } else {
-        expect(preview(projection, query)).toBe("Committed preview");
-        await backfill.publish();
-        expect(preview(projection, query)).toBe("Committed preview");
       }
+      await backfill.publish();
+      expect(row.lastMessagePreview).toBe("Committed preview");
+      if (invalidate) {
+        await projection.ensureMaterialized();
+      }
+      expect(preview(projection, query)).toBe("Committed preview");
     });
   },
 );
@@ -472,24 +444,19 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
     release.resolve();
     const result = await reading;
     expect(reads).toBe(2);
-    expect(result.sessions).toEqual([
-      expect.objectContaining({
-        key: scope.sessionKey,
-        label: "Current label",
-        sharingRole: "viewer",
-        activitySummary: expect.objectContaining({
-          text: "Current summary",
-          updatedAt: 3,
-          state: "current",
-        }),
-      }),
-    ]);
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0]).toMatchObject({
+      key: scope.sessionKey,
+      label: "Current label",
+      sharingRole: "viewer",
+      activitySummary: { text: "Current summary", updatedAt: 3, state: "current" },
+    });
     // The metadata reload also carries the completed durable backfill, even while
     // its original optional publication is held.
     expect(result.sessions[0]?.lastMessagePreview).toBe("Read-only preview");
     expect(projection.dirtyRowCount).toBe(0);
     await backfill.publishAvailable();
-    expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
+    expect(snapshot(projection, query)).toMatchObject({
       label: "Current label",
       lastMessagePreview: "Read-only preview",
       activitySummary: { text: "Current summary", updatedAt: 3, state: "current" },

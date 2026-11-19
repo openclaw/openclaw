@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { toErrorObject } from "../../infra/errors.js";
+import { resolveIdentityPathViaExistingAncestor } from "../../infra/path-existence.js";
 import { withSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
@@ -55,6 +55,7 @@ export function mergeOAuthRefreshPeerClaims(
 }
 
 type OAuthRefreshPeerTransition = {
+  assertCurrent?: () => void;
   profileId: string;
   fence: OAuthCredential;
   claims: readonly OAuthRefreshPeerClaim[];
@@ -145,10 +146,9 @@ function isRemovableOAuthRefreshPeer(params: {
 
 async function listPeerCandidates(params: {
   cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
   ownerDatabasePath: string;
 }): Promise<CandidateAuthProfileStore[]> {
-  const ownerDatabasePath = resolvePathViaExistingAncestorSync(params.ownerDatabasePath);
+  const ownerDatabasePath = await resolveIdentityPathViaExistingAncestor(params.ownerDatabasePath);
   return (await listCandidateAuthProfileStores(params)).filter(
     (candidate) => candidate.databasePath !== ownerDatabasePath,
   );
@@ -161,11 +161,13 @@ function updateOAuthRefreshPeer(
   expected: OAuthCredential,
   update: (store: AuthProfileStore) => void,
   preserveProfileState?: boolean,
+  assertCurrent?: () => void,
 ) {
   return updateCandidateAuthProfileStore({
     candidate,
     profileId,
     preserveProfileState,
+    assertCurrent,
     updater: (store) => {
       if (!isExactOAuthCredential(store.profiles[profileId], expected)) {
         return false;
@@ -183,7 +185,6 @@ function updateOAuthRefreshPeer(
  */
 export async function fenceOAuthRefreshPeers(params: {
   cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
   ownerDatabasePath: string;
   profileId: string;
   generation: OAuthCredential;
@@ -273,6 +274,8 @@ export async function rollbackOAuthRefreshPeerClaims(
             ...claim.original!,
           });
         },
+        undefined,
+        params.assertCurrent,
       );
       if (restored.changed) {
         continue;
@@ -389,7 +392,6 @@ export type OAuthRefreshGenerationPeer = {
 /** Capture exact historical peers before removal updates their config references. */
 export async function listOAuthRefreshGenerationPeers(params: {
   cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
   ownerDatabasePath: string;
   profileId: string;
   generation: OAuthCredential;

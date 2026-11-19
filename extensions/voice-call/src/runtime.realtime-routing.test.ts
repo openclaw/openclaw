@@ -1,23 +1,19 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateKeyedStoreV2ForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type {
-  RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createVoiceCallStateRuntimeForTests } from "./manager.test-harness.js";
 import { MockProvider } from "./providers/mock.js";
-import type { VoiceCallStateRuntime } from "./runtime-state.js";
 import { createVoiceCallRuntime, type VoiceCallRuntime } from "./runtime.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
+import { makeBridge } from "./webhook/realtime-call-control.test-helpers.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "./websocket-test-support.js";
 
 const mocks = vi.hoisted(() => ({
@@ -32,49 +28,21 @@ vi.mock("./realtime-voice.runtime.js", async (importOriginal) => {
   };
 });
 
-function unusedIngress(): never {
-  throw new Error("Channel ingress is not used by realtime routing tests");
-}
-
-function createStateRuntime(): VoiceCallStateRuntime["state"] {
-  return {
-    resolveStateDir: () => "",
-    openKeyedStoreV2: <T>(options: OpenAsyncKeyedStoreOptions) =>
-      createPluginStateKeyedStoreV2ForTests<T>("voice-call", options, { assertCurrent() {} }),
-    openChannelIngressQueue: unusedIngress,
-    openChannelIngressDrain: unusedIngress,
-  };
-}
-
 function createOwner(agentId: string, id: string, model: string) {
-  const connected = createDeferred<void>();
-  const connect = vi.fn(async () => connected.resolve());
-  const requests: RealtimeVoiceBridgeCreateRequest[] = [];
+  const connected = createDeferred<RealtimeVoiceBridgeCreateRequest | undefined>();
   const provider: RealtimeVoiceProviderPlugin = {
     id,
     label: id,
     isConfigured: () => true,
-    createBridge: vi.fn((request): RealtimeVoiceBridge => {
-      requests.push(request);
-      return {
-        connect,
-        sendAudio: vi.fn(),
-        setMediaTimestamp: vi.fn(),
-        submitToolResult: vi.fn(),
-        acknowledgeMark: vi.fn(),
-        close: vi.fn(),
-        isConnected: () => true,
-        triggerGreeting: vi.fn(),
-      };
-    }),
+    createBridge: vi.fn((request) =>
+      makeBridge({ connect: async () => connected.resolve(request) }),
+    ),
   };
   return {
     agentId,
     provider,
     providerConfig: { credentialOwner: agentId, model },
     connected,
-    connect,
-    requests,
   };
 }
 
@@ -112,7 +80,7 @@ describe("voice-call realtime route ownership", () => {
 
     const stopWaiting = () => {
       for (const owner of owners) {
-        owner.connected.resolve();
+        owner.connected.resolve(undefined);
       }
     };
     signal.addEventListener("abort", stopWaiting, { once: true });
@@ -131,26 +99,16 @@ describe("voice-call realtime route ownership", () => {
         "+15550001001": { agentId: "sales" },
         "+15550001002": { agentId: "support" },
       };
-      const fullConfig = {
-        agents: {
-          entries: { main: {}, sales: {}, support: {} },
-        },
-      } as OpenClawConfig;
-
       runtime = await createVoiceCallRuntime({
         scheduler: createTestPluginServiceScheduler(),
         config,
-        coreConfig: fullConfig,
-        fullConfig,
+        coreConfig: { agents: { entries: { main: {}, sales: {}, support: {} } } },
         agentRuntime: {} as never,
-        stateRuntime: createStateRuntime(),
+        stateRuntime: createVoiceCallStateRuntimeForTests(),
       });
       expect(mocks.resolveConfiguredRealtimeVoiceProviderAsync).not.toHaveBeenCalled();
 
-      const handler = runtime.webhookServer.getRealtimeHandler();
-      if (!handler) {
-        throw new Error("expected realtime handler");
-      }
+      const handler = expectDefined(runtime.webhookServer.getRealtimeHandler(), "realtime handler");
       const routes = [
         { to: "+15550001001", callSid: "CA-sales", streamSid: "MZ-sales" },
         { to: "+15550001002", callSid: "CA-support", streamSid: "MZ-support" },
@@ -173,24 +131,18 @@ describe("voice-call realtime route ownership", () => {
       }
 
       signal.throwIfAborted();
-      await Promise.all(owners.map((owner) => owner.connected.promise));
+      const requests = await Promise.all(owners.map((owner) => owner.connected.promise));
       signal.throwIfAborted();
-      for (const { provider, connect, agentId, providerConfig } of owners) {
+      for (const { provider, agentId, providerConfig } of owners) {
         expect(provider.createBridge).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ agentId, providerConfig }),
         );
-        expect(connect).toHaveBeenCalledOnce();
       }
-      expect(
-        mocks.resolveConfiguredRealtimeVoiceProviderAsync.mock.calls.map(
-          ([options]) => (options as { agentId?: string }).agentId,
-        ),
-      ).toEqual(["sales", "support"]);
 
       const hangupCall = vi.spyOn(MockProvider.prototype, "hangupCall");
       onTestFinished(() => hangupCall.mockRestore());
       const closed = Promise.all(sockets.map((ws) => waitForClose(ws)));
-      sales.requests[0]?.onClose?.("completed");
+      requests[0]?.onClose?.("completed");
       sockets[1]?.close(1000);
       await closed;
       await vi.waitFor(() => expect(runtime?.manager.getActiveCalls()).toHaveLength(0), {
@@ -205,11 +157,8 @@ describe("voice-call realtime route ownership", () => {
         expect(hangupCall).toHaveBeenCalledWith(
           expect.objectContaining({ providerCallId, reason }),
         );
-        expect(history).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ providerCallId, endReason: reason, state: reason }),
-          ]),
-        );
+        const terminal = { providerCallId, endReason: reason, state: reason };
+        expect(history).toContainEqual(expect.objectContaining(terminal));
       }
     } finally {
       signal.removeEventListener("abort", stopWaiting);

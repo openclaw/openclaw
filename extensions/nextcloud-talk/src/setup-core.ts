@@ -181,6 +181,13 @@ const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
   },
 };
 
+function secretField<const Flags extends string, const Description extends string>(
+  flags: Flags,
+  description: Description,
+) {
+  return { kind: "string", sensitive: true, cli: { flags, description } } as const;
+}
+
 export const nextcloudTalkSetupContract = defineChannelSetupContract({
   fields: {
     baseUrl: {
@@ -191,31 +198,11 @@ export const nextcloudTalkSetupContract = defineChannelSetupContract({
       kind: "string",
       cli: { flags: "--url <url>", description: "Legacy Nextcloud base URL alias" },
     },
-    secret: {
-      kind: "string",
-      sensitive: true,
-      cli: { flags: "--secret <secret>", description: "Nextcloud Talk bot secret" },
-    },
-    token: {
-      kind: "string",
-      sensitive: true,
-      cli: { flags: "--token <secret>", description: "Legacy Nextcloud bot secret alias" },
-    },
-    password: {
-      kind: "string",
-      sensitive: true,
-      cli: { flags: "--password <secret>", description: "Legacy Nextcloud bot secret alias" },
-    },
-    secretFile: {
-      kind: "string",
-      sensitive: true,
-      cli: { flags: "--secret-file <path>", description: "Nextcloud Talk bot secret file" },
-    },
-    tokenFile: {
-      kind: "string",
-      sensitive: true,
-      cli: { flags: "--token-file <path>", description: "Legacy Nextcloud bot secret file alias" },
-    },
+    secret: secretField("--secret <secret>", "Nextcloud Talk bot secret"),
+    token: secretField("--token <secret>", "Legacy Nextcloud bot secret alias"),
+    password: secretField("--password <secret>", "Legacy Nextcloud bot secret alias"),
+    secretFile: secretField("--secret-file <path>", "Nextcloud Talk bot secret file"),
+    tokenFile: secretField("--token-file <path>", "Legacy Nextcloud bot secret file alias"),
     useEnv: {
       kind: "boolean",
       cli: { flags: "--use-env", description: "Use Nextcloud Talk environment credentials" },

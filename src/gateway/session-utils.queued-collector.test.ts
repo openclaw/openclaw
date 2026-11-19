@@ -4,7 +4,7 @@ import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
 import { useQueuedCollectorFixture } from "./session-utils.queued-collector.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import * as subagentKill from "../agents/subagents/registry/subagent-control-kill.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { isSubagentRunQueued } from "../agents/subagents/registry/subagent-registry-read.js";
@@ -15,6 +15,7 @@ import {
   releaseSubagentRun,
   releaseSubagentRunKillClaim,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import * as subagentDepth from "../agents/subagents/spawn/subagent-depth.js";
 import * as nativeSpawn from "../agents/subagents/spawn/subagent-spawn.js";
 import {
   activateSwarmRun,
@@ -57,6 +58,8 @@ const {
   spawnCollector,
   createQueuedReservation,
   expectUnstartedChildHistory,
+  expectChanged,
+  gateRowPreparation,
 } = useQueuedCollectorFixture();
 
 async function abortCollector(
@@ -81,13 +84,8 @@ function expectAborted(respond: ReturnType<typeof vi.fn>, runId: string | undefi
 function expectRejected(
   respond: ReturnType<typeof vi.fn>,
   error: Record<string, unknown> = { code: expect.any(String) },
-  soft = false,
 ) {
-  (soft ? expect.soft(respond) : expect(respond)).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining(error),
-  );
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
 }
 
 function reserveAgain(entry: { runId: string; groupId?: string }) {
@@ -99,17 +97,19 @@ function reserveAgain(entry: { runId: string; groupId?: string }) {
   });
 }
 
-function gateRequesterRead(afterRead = false) {
+function gateRequesterRead() {
   const gate = createDeferred();
+  const entered = createDeferred();
   const read = sessionStoreWorker.resolveGatewaySessionStoreTargetInWorker;
   const spy = vi
     .spyOn(sessionStoreWorker, "resolveGatewaySessionStoreTargetInWorker")
     .mockImplementationOnce(async (params) => {
-      const target = afterRead ? await read(params) : undefined;
+      const target = await read(params);
+      entered.resolve();
       await gate.promise;
-      return afterRead ? expectDefined(target, "prepared requester") : read(params);
+      return target;
     });
-  return { gate, spy };
+  return { gate, entered, spy };
 }
 
 describe("queued collector session projection", () => {
@@ -192,18 +192,13 @@ describe("queued collector session projection", () => {
         expect([stopped?.startedAt, stopped?.runtimeMs]).toEqual([undefined, undefined]);
         await expectUnstartedChildHistory(context, queued.key, []);
         await flushPendingSessionsChangedEvents(context);
-        expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-          "sessions.changed",
-          expect.objectContaining({
-            sessionKey: queued.key,
-            reason: "abort",
-            status: "killed",
-            hasActiveRun: false,
-            activeRunIds: [],
-          }),
-          new Set(["observer"]),
-          expect.any(Object),
-        );
+        expectChanged(context, {
+          sessionKey: queued.key,
+          reason: "abort",
+          status: "killed",
+          hasActiveRun: false,
+          activeRunIds: [],
+        });
         expect(launchedRunIds).toEqual([first.runId]);
       } finally {
         const hold = holdQueuedSwarmRun(second.runId!);
@@ -274,9 +269,23 @@ describe("queued collector session projection", () => {
 
   it("keeps native spawn's normalized duplicate-label contract", async () => {
     const label = `  ${"Shared collector title ".repeat(4)}  `;
-    const { gate, spy } = gateRequesterRead();
+    const gate = createDeferred();
+    const entered = createDeferred();
+    const readDepth = subagentDepth.getSubagentDepthFromSessionStoreInWorker;
+    const spy = vi
+      .spyOn(subagentDepth, "getSubagentDepthFromSessionStoreInWorker")
+      .mockImplementationOnce(async (...args) => {
+        entered.resolve();
+        await gate.promise;
+        return readDepth(...args);
+      });
     const first = spawnCollector(label);
     try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        first,
+        "First collector skipped depth preparation",
+      );
       // Finish the second preparation while the first still owns FIFO admission.
       const second = await spawnCollector(label);
       gate.resolve();
@@ -300,14 +309,51 @@ describe("queued collector session projection", () => {
     }
   });
 
+  it("withdraws FIFO admission when depth preparation fails", async () => {
+    const gate = createDeferred();
+    const entered = createDeferred();
+    const spy = vi
+      .spyOn(subagentDepth, "getSubagentDepthFromSessionStoreInWorker")
+      .mockImplementationOnce(async () => {
+        entered.resolve();
+        await gate.promise;
+        throw new Error("depth preparation failed");
+      });
+    const first = spawnCollector("Failed depth");
+    const failed = expect(first).rejects.toThrow("depth preparation failed");
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        first,
+        "First collector skipped depth preparation",
+      );
+      const second = await spawnCollector("Surviving collector");
+      expect(second.status).toBe("accepted");
+      expect(launchedRunIds).toEqual([]);
+      gate.resolve();
+      await failed;
+      await waitForLaunch(expectDefined(second.runId, "surviving collector run"));
+      expect(launchedRunIds).toEqual([second.runId]);
+    } finally {
+      gate.resolve();
+      await failed;
+      spy.mockRestore();
+    }
+  });
+
   it("withdraws FIFO admission after requester acquisition is cancelled", async () => {
-    const { gate, spy } = gateRequesterRead(true);
+    const { gate, entered, spy } = gateRequesterRead();
     const abort = new AbortController();
     const effectsStarted = vi.fn();
     const spawn = (label: string, assertActive?: () => void) =>
       spawnCollector(label, { onSpawnEffectsStart: effectsStarted, assertActive });
     const first = spawn("Failed requester", () => abort.signal.throwIfAborted());
     try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        first,
+        "First collector skipped requester preparation",
+      );
       const second = await spawn("Surviving collector");
       expect(second.status).toBe("accepted");
       expect(launchedRunIds).toEqual([]);
@@ -490,21 +536,9 @@ describe("queued collector session projection", () => {
   it("publishes current row truth when a replacement overtakes a queued Stop notice", async () => {
     const { entry, registration } = await createQueuedReservation();
     const context = requestContext();
-    const projection = expectDefined(getSessionRowProjection(context), "session projection");
-    const preparing = createDeferred();
-    const release = createDeferred();
     let holdNotices = false;
-    const prepare = projection.withPreparedExactRows.bind(projection);
-    const preparation = vi
-      .spyOn(projection, "withPreparedExactRows")
-      .mockImplementation(async (queries, consume, options) => {
-        if (holdNotices) {
-          preparing.resolve();
-          await release.promise;
-        }
-        return prepare(queries, consume, options);
-      });
-    onTestFinished(() => preparation.mockRestore());
+    const { entered, release, spy } = gateRowPreparation(context, () => holdNotices);
+    onTestFinished(() => spy.mockRestore());
     const kill = subagentKill.killSubagentRunAdmin;
     using _ = vi.spyOn(subagentKill, "killSubagentRunAdmin").mockImplementation(async (...args) => {
       holdNotices = true;
@@ -532,7 +566,7 @@ describe("queued collector session projection", () => {
     });
     try {
       const respond = await abortCollector({ key: entry.childSessionKey }, context);
-      await preparing.promise;
+      await entered.promise;
       expectAborted(respond, entry.runId);
       const successor = subagentRuns.get(entry.runId);
       expect(successor).not.toBe(entry);
@@ -542,18 +576,13 @@ describe("queued collector session projection", () => {
       expect(launchedRunIds).toEqual([]);
       release.resolve();
       await flushPendingSessionsChangedEvents(context);
-      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-        "sessions.changed",
-        expect.objectContaining({
-          sessionKey: entry.childSessionKey,
-          reason: "abort",
-          status: "queued",
-          hasActiveRun: true,
-          activeRunIds: [entry.runId],
-        }),
-        new Set(["observer"]),
-        expect.any(Object),
-      );
+      expectChanged(context, {
+        sessionKey: entry.childSessionKey,
+        reason: "abort",
+        status: "queued",
+        hasActiveRun: true,
+        activeRunIds: [entry.runId],
+      });
     } finally {
       release.resolve();
       const hold = holdQueuedSwarmRun(entry.runId);
@@ -734,17 +763,13 @@ describe("queued collector session projection", () => {
       admission.activeRunAbort.controller.signal.addEventListener("abort", () => finish.resolve(), {
         once: true,
       });
-      const producer = (async () => {
-        try {
-          await finish.promise;
-        } finally {
-          if (scenario === "parent-retired" && admission.activeRunAbort.controller.signal.aborted) {
-            rpcSourceTesting.deleteExpected("parent-turn", parentSource);
-          }
-          releaseClaim();
-          cleanup();
+      const producer = finish.promise.finally(() => {
+        if (scenario === "parent-retired" && admission.activeRunAbort.controller.signal.aborted) {
+          rpcSourceTesting.deleteExpected("parent-turn", parentSource);
         }
-      })();
+        releaseClaim();
+        cleanup();
+      });
       try {
         expect(rpcSourceTesting.get(extraRunId)).toBe(admission.activeRunAbort.entry);
         expect(isSubagentRunQueued(entry)).toBe(true);

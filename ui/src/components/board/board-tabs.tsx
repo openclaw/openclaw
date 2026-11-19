@@ -1,9 +1,12 @@
 import { createMemo, createSignal, createUniqueId, Show } from "solid-js";
+import { registerBoardDocumentEnglish } from "../../i18n/locales/en-board-document.ts";
 import type { BoardTab } from "../../lib/board/types.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { createResizeObserver } from "../../lib/reactive/observers.ts";
 import { Menu } from "../solid/menu.tsx";
 import { Tabs } from "../solid/tabs.tsx";
+
+registerEnglishCatalog(registerBoardDocumentEnglish);
 
 export function orderedBoardTabs(tabs: readonly BoardTab[]): BoardTab[] {
   return tabs.toSorted(

@@ -149,8 +149,8 @@ describe("channel entry authentication audit", () => {
     const { collectSecurityWarnings } = await import("../commands/doctor-security.js");
     const readOnlyPluginsModule = await import("../channels/plugins/read-only.js");
     const listReadOnlySpy = vi
-      .spyOn(readOnlyPluginsModule, "listReadOnlyChannelPluginsForConfig")
-      .mockReturnValue([whatsappSetupPlugin, slackPlugin]);
+      .spyOn(readOnlyPluginsModule, "listReadOnlyChannelPluginsForConfigAsync")
+      .mockResolvedValue([whatsappSetupPlugin, slackPlugin]);
     const readOverride = (sender: string) => ({
       toolsBySender: { [sender]: { allow: ["read"] } },
     });
@@ -193,7 +193,6 @@ describe("channel entry authentication audit", () => {
         config: auditConfig,
         sourceConfig: auditConfig,
         includeFilesystem: false,
-        includeChannelSecurity: true,
         loadPluginSecurityCollectors: false,
         plugins: [whatsappSetupPlugin, slackPlugin],
       });

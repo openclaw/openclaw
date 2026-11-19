@@ -78,9 +78,9 @@ it("records strict resolution owner metadata", () => {
 it("merges runtime-discovered credential owners and clears them independently", () => {
   setActiveDegradedSecretOwners([providerOwner]);
   setActiveCredentialDegradedOwner({
+    ...providerOwner,
     ownerKind: "account",
     ownerId: "telegram:work",
-    state: "unavailable",
     paths: ["channels.telegram.accounts.work.tokenFile"],
     refKeys: [],
     reason: "credential file is unavailable",

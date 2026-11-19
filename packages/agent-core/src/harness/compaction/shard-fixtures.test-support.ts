@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { createZeroUsage } from "../../../../ai/src/usage.test-support.js";
 import { createAssistantMessageEventStream } from "../../llm.js";
 import type { AssistantMessage, Message, Model, StreamFn } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
@@ -26,14 +27,7 @@ export function assistant(
     api: "test-api",
     provider: "test-provider",
     model: "test-model",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsage(),
     stopReason: "stop",
     timestamp: 1,
     ...overrides,

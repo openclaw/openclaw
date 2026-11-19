@@ -1,4 +1,4 @@
-import { HttpError } from "grammy";
+import { GrammyError, HttpError } from "grammy";
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
@@ -7,17 +7,29 @@ import {
 import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-type TelegramApiLogger = (message: string) => void;
-
 type TelegramApiLoggingParams<T> = {
   operation: string;
   fn: () => Promise<T>;
   runtime?: Pick<RuntimeEnv, "error">;
-  logger?: TelegramApiLogger;
   shouldLog?: (err: unknown) => boolean;
 };
 
 const fallbackLogger = createSubsystemLogger("telegram/api");
+
+/**
+ * Ends the description of the synthetic 429 the account limiter returns for a replaceable
+ * update (typing, preview) it skipped on purpose. A final it could not send keeps "request not sent".
+ */
+export const TELEGRAM_SKIPPED_UPDATE_SUFFIX = "; replaceable update not sent)";
+
+/** True when the account limiter skipped a replaceable update, so it never reached Telegram. */
+function isTelegramSkippedUpdateError(err: unknown): boolean {
+  return (
+    err instanceof GrammyError &&
+    err.error_code === 429 &&
+    err.description.endsWith(TELEGRAM_SKIPPED_UPDATE_SUFFIX)
+  );
+}
 
 export function formatTelegramTransportDiagnostics(error: unknown): string {
   const fields: { code?: string; syscall?: string } = {};
@@ -46,17 +58,18 @@ export function formatTelegramTransportDiagnostics(error: unknown): string {
 export async function withTelegramApiErrorLogging<T>(
   params: TelegramApiLoggingParams<T>,
 ): Promise<T> {
-  const { operation, fn, runtime, logger, shouldLog } = params;
+  const { operation, fn, runtime, shouldLog } = params;
   try {
     return await fn();
   } catch (err) {
-    if (!shouldLog || shouldLog(err)) {
+    // A skipped replaceable update is the limiter's choice, not an API failure; it warns once per flood wait.
+    if (!isTelegramSkippedUpdateError(err) && (!shouldLog || shouldLog(err))) {
       const transport = formatTelegramTransportDiagnostics(err);
       const errText =
         err instanceof HttpError || transport
           ? `network request failed${transport}`
           : formatErrorMessage(err);
-      const log = logger ?? runtime?.error ?? ((message: string) => fallbackLogger.error(message));
+      const log = runtime?.error ?? ((message: string) => fallbackLogger.error(message));
       log(`telegram ${operation} failed: ${errText}`);
     }
     throw err;

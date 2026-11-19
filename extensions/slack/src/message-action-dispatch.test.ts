@@ -1,14 +1,57 @@
-// Slack tests cover message action dispatch plugin behavior.
 import {
   createTestRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it } from "vitest";
 import { slackSetupPlugin } from "./channel.setup.js";
-import { createInvokeSpy, dispatch } from "./message-action-dispatch.test-support.js";
+import {
+  createInvokeSpy,
+  dispatch as dispatchAction,
+} from "./message-action-dispatch.test-support.js";
 import { extractSlackToolSend } from "./message-actions.js";
 import { renderSlackMessagePresentationFallbackText } from "./presentation-fallback.js";
+
+type ActionContext = Parameters<typeof dispatchAction>[1];
+function dispatch(
+  invoke: ReturnType<typeof createInvokeSpy>,
+  action: ActionContext["action"],
+  params: ActionContext["params"],
+  context: Partial<Omit<ActionContext, "action" | "params">> = {},
+) {
+  return dispatchAction(invoke, {
+    channel: "slack",
+    cfg: {},
+    ...context,
+    action,
+    params: action === "edit" ? { channelId: "C1", messageId: "171234.567", ...params } : params,
+  });
+}
+
+function present<const T extends unknown[]>(...blocks: T) {
+  return { blocks };
+}
+
+const buttons = (label: string, value: string) => ({
+  type: "buttons",
+  buttons: [{ label, value }],
+});
+const select = (placeholder: string, label: string, value: string) => ({
+  type: "select",
+  placeholder,
+  options: [{ label, value }],
+});
+const wideTable = (rows = 1) => {
+  const headers = Array.from({ length: 21 }, (_, index) => `Column ${index}`);
+  return {
+    type: "table",
+    caption: "Wide pipeline",
+    headers,
+    rows: Array.from({ length: rows }, (_entry, row) =>
+      headers.map((_header, column) => (rows === 1 ? `Value ${column}` : `Value ${row}-${column}`)),
+    ),
+  };
+};
 
 function slackConfig() {
   return { channels: { slack: { botToken: "tok" } } };
@@ -16,9 +59,7 @@ function slackConfig() {
 
 function firstInvokeCall(invoke: ReturnType<typeof createInvokeSpy>) {
   const [call] = invoke.mock.calls;
-  if (!call) {
-    throw new Error("expected first Slack action invoke");
-  }
+  assert(call, "expected first Slack action invoke");
   return call;
 }
 
@@ -32,9 +73,7 @@ function expectNoForwardedToolContext(invoke: ReturnType<typeof createInvokeSpy>
 
 function firstAction(invoke: ReturnType<typeof createInvokeSpy>) {
   const action = firstInvokeCall(invoke)[0];
-  if (!action || typeof action !== "object") {
-    throw new Error("expected first invoke action");
-  }
+  assert(action && typeof action === "object", "expected first invoke action");
   return action;
 }
 
@@ -43,27 +82,21 @@ function preparedMessages(invoke: ReturnType<typeof createInvokeSpy>) {
     | { preparedMessages?: Array<Record<string, unknown>> }
     | undefined;
   const messages = context?.preparedMessages;
-  if (!messages?.length) {
-    throw new Error("expected prepared Slack messages");
-  }
+  assert(messages?.length, "expected prepared Slack messages");
   return messages;
 }
 
 function blockAt(action: Record<string, unknown>, index: number) {
   const blocks = action.blocks as Array<Record<string, unknown>> | undefined;
   const block = blocks?.[index];
-  if (!block) {
-    throw new Error(`expected Slack block ${index}`);
-  }
+  assert(block, `expected Slack block ${index}`);
   return block;
 }
 
 function elementAt(block: Record<string, unknown>, index: number) {
   const elements = block.elements as Array<Record<string, unknown>> | undefined;
   const element = elements?.[index];
-  if (!element) {
-    throw new Error(`expected Slack block element ${index}`);
-  }
+  assert(element, `expected Slack block element ${index}`);
   return element;
 }
 
@@ -89,26 +122,23 @@ const paddedMarkdownTable = [
 ].join("\n");
 
 describe("Slack action adapter", () => {
+  let invoke: ReturnType<typeof createInvokeSpy>;
   beforeEach(() => {
+    invoke = createInvokeSpy();
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "slack", source: "test", plugin: slackSetupPlugin }]),
     );
   });
   afterEach(() => resetPluginRuntimeStateForTest());
+  const send = (params: ActionContext["params"], context: Partial<ActionContext> = {}) =>
+    dispatch(invoke, "send", params, context);
+  const edit = (params: ActionContext["params"], context: Partial<ActionContext> = {}) =>
+    dispatch(invoke, "edit", params, context);
 
   it("defaults reactions to the current inbound Slack message", async () => {
-    const invoke = createInvokeSpy();
     const toolContext = { currentMessageId: "171234.567" };
 
-    await dispatch(invoke, {
-      action: "react",
-      cfg: {},
-      params: {
-        channelId: "C1",
-        emoji: "✅",
-      },
-      toolContext,
-    } as never);
+    await dispatch(invoke, "react", { channelId: "C1", emoji: "✅" }, { toolContext });
 
     expect(firstAction(invoke)).toMatchObject({
       action: "react",
@@ -120,19 +150,16 @@ describe("Slack action adapter", () => {
   });
 
   it("sends an exact mirrored portable control row once", async () => {
-    const invoke = createInvokeSpy();
-    const buttons = [{ label: "Approve", action: { type: "callback" as const, value: "approve" } }];
+    const controls = [
+      { label: "Approve", action: { type: "callback" as const, value: "approve" } },
+    ];
 
-    await dispatch(invoke, {
-      action: "send",
-      cfg: {},
-      params: {
-        to: "channel:C1",
-        message: "Deploy?",
-        presentation: { blocks: [{ type: "buttons", buttons }] },
-        interactive: { blocks: [{ type: "buttons", buttons }] },
-      },
-    } as never);
+    await send({
+      to: "channel:C1",
+      message: "Deploy?",
+      presentation: present({ type: "buttons", buttons: controls }),
+      interactive: present({ type: "buttons", buttons: controls }),
+    });
 
     const action = firstAction(invoke);
     expect(action).not.toHaveProperty("blocks");
@@ -141,85 +168,6 @@ describe("Slack action adapter", () => {
     const actions = blocks?.filter((block) => block.type === "actions") ?? [];
     expect(actions).toHaveLength(1);
     expect(elementAt(actions[0]!, 0).value).toBe("approve");
-  });
-
-  it("sends native charts with a complete accessible text representation", async () => {
-    const invoke = createInvokeSpy();
-
-    await dispatch(invoke, {
-      action: "send",
-      cfg: {},
-      params: {
-        to: "channel:C1",
-        message: "Revenue summary",
-        presentation: {
-          blocks: [
-            {
-              type: "chart",
-              chartType: "pie",
-              title: "Revenue mix",
-              segments: [
-                { label: "Product", value: 60 },
-                { label: "Services", value: 40 },
-              ],
-            },
-          ],
-        },
-      },
-    } as never);
-
-    const action = firstAction(invoke);
-    expect(action.content).toBe("Revenue summary");
-    expect(action).not.toHaveProperty("blocks");
-    expect(action).not.toHaveProperty("nativeDataFallbackBaseText");
-    const message = preparedMessages(invoke)[0]!;
-    expect(message.text).toBe(
-      "Revenue summary\n\nRevenue mix (pie chart)\n- Product: 60\n- Services: 40",
-    );
-    expect(blockAt(message, 1)).toEqual({
-      type: "data_visualization",
-      title: "Revenue mix",
-      chart: {
-        type: "pie",
-        segments: [
-          { label: "Product", value: 60 },
-          { label: "Services", value: 40 },
-        ],
-      },
-    });
-  });
-
-  it("sends native tables with a complete accessible text representation", async () => {
-    const invoke = createInvokeSpy();
-
-    await dispatch(invoke, {
-      action: "send",
-      cfg: {},
-      params: {
-        to: "channel:C1",
-        message: "Pipeline summary",
-        presentation: {
-          blocks: [
-            {
-              type: "table",
-              caption: "Pipeline",
-              headers: ["Account", "ARR"],
-              rows: [
-                ["Acme", 125000],
-                ["Globex", 82000],
-              ],
-            },
-          ],
-        },
-      },
-    } as never);
-
-    const action = firstAction(invoke);
-    expect(action.content).toBe("Pipeline summary");
-    const message = preparedMessages(invoke)[0]!;
-    expect(message.text).toBe(
-      "Pipeline summary\n\nPipeline (table)\nAccount\tARR\nAcme\t125000\nGlobex\t82000",
-    );
   });
 
   it.each([
@@ -231,15 +179,9 @@ describe("Slack action adapter", () => {
       message: paddedMarkdownTable,
     },
   ])("rejects oversized $name text-only edits before sending", async ({ message }) => {
-    const invoke = createInvokeSpy();
-
-    await expect(
-      dispatch(invoke, {
-        action: "edit",
-        cfg: {},
-        params: { channelId: "C1", messageId: "171234.567", message },
-      } as never),
-    ).rejects.toThrow("Slack edit exceeds the 4000-byte edit limit. Send a new message instead.");
+    await expect(edit({ message })).rejects.toThrow(
+      "Slack edit exceeds the 4000-byte edit limit. Send a new message instead.",
+    );
 
     expect(invoke).not.toHaveBeenCalled();
   });
@@ -247,81 +189,60 @@ describe("Slack action adapter", () => {
   it.each(["off", "bullets"] as const)(
     "measures the account's %s table rendering before rejecting an edit",
     async (tables) => {
-      const invoke = createInvokeSpy();
-      await dispatch(invoke, {
-        action: "edit",
-        cfg: {
-          channels: {
-            slack: {
-              defaultAccount: "work",
-              markdown: { tables: "code" },
-              accounts: { work: { markdown: { tables } } },
+      await edit(
+        { message: paddedMarkdownTable },
+        {
+          cfg: {
+            channels: {
+              slack: {
+                defaultAccount: "work",
+                markdown: { tables: "code" },
+                accounts: { work: { markdown: { tables } } },
+              },
             },
           },
         },
-        params: { channelId: "C1", messageId: "171234.567", message: paddedMarkdownTable },
-      } as never);
+      );
       expect(firstAction(invoke)).toMatchObject({
         action: "editMessage",
-        content: paddedMarkdownTable,
+        content:
+          tables === "off"
+            ? paddedMarkdownTable
+            : Array.from({ length: 20 }, () => "*x*\n• Value: 2").join("\n\n"),
       });
     },
   );
 
   it("accepts a text-only edit at Slack's exact byte limit", async () => {
-    const invoke = createInvokeSpy();
     const message = "x".repeat(4_000);
 
-    await dispatch(invoke, {
-      action: "edit",
-      cfg: {},
-      params: { channelId: "C1", messageId: "171234.567", message },
-    } as never);
+    await edit({ message });
 
     expect(firstAction(invoke)).toMatchObject({ action: "editMessage", content: message });
   });
 
   it("keeps oversized notification fallback for visibly rendered block edits", async () => {
-    const invoke = createInvokeSpy();
     const message = "x".repeat(4_001);
 
-    await dispatch(invoke, {
-      action: "edit",
-      cfg: {},
-      params: {
-        channelId: "C1",
-        messageId: "171234.567",
-        message,
-        presentation: { blocks: [{ type: "text", text: "Visible block content" }] },
-      },
-    } as never);
+    await edit({
+      message,
+      presentation: present({ type: "text", text: "Visible block content" }),
+    });
 
     expect(firstAction(invoke)).toMatchObject({ action: "editMessage", content: message });
     expect(blockAt(firstAction(invoke), 0)).toMatchObject({ type: "section" });
   });
 
   it("edits native tables with a complete accessible text representation", async () => {
-    const invoke = createInvokeSpy();
-
-    await dispatch(invoke, {
-      action: "edit",
-      cfg: {},
-      params: {
-        channelId: "C1",
-        messageId: "171234.567",
-        message: "Updated pipeline",
-        presentation: {
-          blocks: [
-            {
-              type: "table",
-              caption: "Pipeline",
-              headers: ["Account", "Stage"],
-              rows: [["Acme", "Won"]],
-            },
-          ],
-        },
-      },
-    } as never);
+    await edit({
+      message: "Updated pipeline",
+      presentation: present({
+        type: "table",
+        caption: "Pipeline",
+        headers: ["Account", "Stage"],
+        rows: [["Acme", "Won"]],
+      }),
+    });
 
     expect(firstAction(invoke)).toMatchObject({
       action: "editMessage",
@@ -332,96 +253,62 @@ describe("Slack action adapter", () => {
   });
 
   it("routes non-native tables through Slack-safe text with native controls", async () => {
-    const invoke = createInvokeSpy();
-
-    await dispatch(invoke, {
-      action: "send",
-      cfg: {},
-      params: {
-        to: "channel:C1",
-        message: "Summary",
-        presentation: {
-          blocks: [
-            {
-              type: "chart",
-              chartType: "pie",
-              title: "Revenue mix",
-              segments: [{ label: "Product", value: 60 }],
-            },
-            ...largeTablePresentation().blocks,
-            {
-              type: "buttons",
-              buttons: [{ label: "Stage", value: "stage" }],
-            },
-            {
-              type: "select",
-              placeholder: "Lane",
-              options: [{ label: "Production", value: "production" }],
-            },
-          ],
+    await send({
+      to: "channel:C1",
+      message: "Summary",
+      presentation: present(
+        {
+          type: "chart",
+          chartType: "pie",
+          title: "Revenue mix",
+          segments: [{ label: "Product", value: 60 }],
         },
-        interactive: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [{ label: "Refresh", value: "refresh" }],
-            },
-            {
-              type: "select",
-              placeholder: "Window",
-              options: [{ label: "Recent", value: "recent" }],
-            },
-          ],
-        },
-      },
-    } as never);
+        ...largeTablePresentation().blocks,
+        buttons("Stage", "stage"),
+        select("Lane", "Production", "production"),
+      ),
+      interactive: present(buttons("Refresh", "refresh"), select("Window", "Recent", "recent")),
+    });
 
     const action = firstAction(invoke);
+    expect(action.content).toBe("Summary");
+    expect(action).not.toHaveProperty("nativeDataFallbackBaseText");
     expect(action).not.toHaveProperty("separateTextAndBlocks");
     expect(action).not.toHaveProperty("blocks");
     const messages = preparedMessages(invoke);
     expect(messages).toHaveLength(3);
     expect(messages[0]?.text).toBe("Summary\n\nRevenue mix (pie chart)\n- Product: 60");
-    expect(blockAt(messages[0]!, 1).type).toBe("data_visualization");
+    expect(blockAt(messages[0]!, 1)).toEqual({
+      type: "data_visualization",
+      title: "Revenue mix",
+      chart: { type: "pie", segments: [{ label: "Product", value: 60 }] },
+    });
     expect(messages[1]?.text).toContain("- Account: <@U123>");
     expect(messages[1]?.text).toContain("- Account: account-99");
     expect(messages[1]?.textIsSlackPlainText).toBe(true);
     const controls = messages[2]!;
-    const presentationButtons = blockAt(controls, 0);
-    expect(presentationButtons.block_id).toBe("openclaw_reply_buttons_1");
-    expect(elementAt(presentationButtons, 0)).toMatchObject({
-      action_id: "openclaw:reply_button:1:1",
-      value: "stage",
-    });
-    const presentationSelect = blockAt(controls, 1);
-    expect(presentationSelect.block_id).toBe("openclaw_reply_select_1");
-    expect(elementAt(presentationSelect, 0).action_id).toBe("openclaw:reply_select:1");
-    const legacyButtons = blockAt(controls, 2);
-    expect(legacyButtons.block_id).toBe("openclaw_reply_buttons_2");
-    expect(elementAt(legacyButtons, 0)).toMatchObject({
-      action_id: "openclaw:reply_button:2:1",
-      value: "refresh",
-    });
-    const legacySelect = blockAt(controls, 3);
-    expect(legacySelect.block_id).toBe("openclaw_reply_select_2");
-    expect(elementAt(legacySelect, 0).action_id).toBe("openclaw:reply_select:2");
+    expect(controls.blocks).toMatchObject([
+      {
+        block_id: "openclaw_reply_buttons_1",
+        elements: [{ action_id: "openclaw:reply_button:1:1", value: "stage" }],
+      },
+      { block_id: "openclaw_reply_select_1", elements: [{ action_id: "openclaw:reply_select:1" }] },
+      {
+        block_id: "openclaw_reply_buttons_2",
+        elements: [{ action_id: "openclaw:reply_button:2:1", value: "refresh" }],
+      },
+      { block_id: "openclaw_reply_select_2", elements: [{ action_id: "openclaw:reply_select:2" }] },
+    ]);
     expect(String(messages[1]?.text).length).toBeGreaterThan(8000);
   });
 
   it("keeps an oversized portable control label complete in literal fallback", async () => {
-    const invoke = createInvokeSpy();
     const label = `Deploy ${"x".repeat(80)}`;
 
-    await dispatch(invoke, {
-      action: "send",
-      cfg: {},
-      params: {
-        to: "channel:C1",
-        presentation: {
-          blocks: [{ type: "buttons", buttons: [{ label, value: "deploy" }] }],
-        },
-      },
-    } as never);
+    await send({
+      to: "channel:C1",
+      presentation: present({ type: "buttons", buttons: [{ label, value: "deploy" }] }),
+    });
 
     const action = firstAction(invoke);
     expect(action).not.toHaveProperty("blocks");
@@ -430,27 +317,9 @@ describe("Slack action adapter", () => {
   });
 
   it("uses text-only edits for non-native tables that fit one message", async () => {
-    const invoke = createInvokeSpy();
-    const headers = Array.from({ length: 21 }, (_entry, index) => `Column ${String(index)}`);
-
-    await dispatch(invoke, {
-      action: "edit",
-      cfg: {},
-      params: {
-        channelId: "C1",
-        messageId: "171234.567",
-        presentation: {
-          blocks: [
-            {
-              type: "table",
-              caption: "Wide pipeline",
-              headers,
-              rows: [headers.map((_header, index) => `Value ${String(index)}`)],
-            },
-          ],
-        },
-      },
-    } as never);
+    await edit({
+      presentation: present(wideTable()),
+    });
 
     const action = firstAction(invoke);
     expect(action.blocks).toBeUndefined();
@@ -458,42 +327,20 @@ describe("Slack action adapter", () => {
   });
 
   it("rejects non-native table edits whose complete fallback cannot fit", async () => {
-    const invoke = createInvokeSpy();
-    const headers = Array.from({ length: 21 }, (_entry, index) => `Column ${String(index)}`);
-    const presentation = {
-      blocks: [
-        {
-          type: "table" as const,
-          caption: "Wide pipeline",
-          headers,
-          rows: Array.from({ length: 10 }, (_row, rowIndex) =>
-            headers.map(
-              (_header, columnIndex) => `Value ${String(rowIndex)}-${String(columnIndex)}`,
-            ),
-          ),
-        },
-      ],
-    };
+    const presentation = present({ ...wideTable(10), type: "table" as const });
     const fallback = renderSlackMessagePresentationFallbackText({ presentation });
     expect(fallback.length).toBeGreaterThan(4000);
     expect(fallback.length).toBeLessThan(8000);
 
     await expect(
-      dispatch(invoke, {
-        action: "edit",
-        cfg: {},
-        params: {
-          channelId: "C1",
-          messageId: "171234.567",
-          presentation,
-        },
-      } as never),
+      edit({
+        presentation,
+      }),
     ).rejects.toThrow("Slack presentation fallback exceeds the 4000-byte edit limit");
     expect(invoke).not.toHaveBeenCalled();
   });
 
   it("rejects non-native chart edits whose complete fallback cannot fit", async () => {
-    const invoke = createInvokeSpy();
     const categories = Array.from(
       { length: 21 },
       (_entry, index) => `Category ${String(index)} ${"x".repeat(200)}`,
@@ -513,31 +360,18 @@ describe("Slack action adapter", () => {
       4000,
     );
 
-    await expect(
-      dispatch(invoke, {
-        action: "edit",
-        cfg: {},
-        params: { channelId: "C1", messageId: "171234.567", presentation },
-      } as never),
-    ).rejects.toThrow("Slack presentation fallback exceeds the 4000-byte edit limit");
+    await expect(edit({ presentation })).rejects.toThrow(
+      "Slack presentation fallback exceeds the 4000-byte edit limit",
+    );
     expect(invoke).not.toHaveBeenCalled();
   });
 
   it("keeps an unrenderable control label complete in text-only edits", async () => {
-    const invoke = createInvokeSpy();
     const label = `Deploy ${"x".repeat(80)}`;
 
-    await dispatch(invoke, {
-      action: "edit",
-      cfg: {},
-      params: {
-        channelId: "C1",
-        messageId: "171234.567",
-        presentation: {
-          blocks: [{ type: "buttons", buttons: [{ label, value: "deploy" }] }],
-        },
-      },
-    } as never);
+    await edit({
+      presentation: present({ type: "buttons", buttons: [{ label, value: "deploy" }] }),
+    });
 
     expect(firstAction(invoke)).toMatchObject({ content: `- ${label}`, blocks: undefined });
   });
@@ -545,41 +379,24 @@ describe("Slack action adapter", () => {
   it.each(["text", "context"] as const)(
     "keeps a complete oversized %s presentation in one text-only edit",
     async (type) => {
-      const invoke = createInvokeSpy();
       const text = "x".repeat(3_001);
 
-      await dispatch(invoke, {
-        action: "edit",
-        cfg: {},
-        params: {
-          channelId: "C1",
-          messageId: "171234.567",
-          presentation: { blocks: [{ type, text }] },
-        },
-      } as never);
+      await edit({
+        presentation: present({ type, text }),
+      });
 
       expect(firstAction(invoke)).toMatchObject({ content: text, blocks: undefined });
     },
   );
 
   it.each([
-    { name: "Slack markdown rendering", text: `${"&".repeat(801)}${"x".repeat(2_200)}` },
+    { name: "native entity bytes", text: `${"&amp;".repeat(801)}${"x".repeat(2_200)}` },
     { name: "UTF-8 expansion", text: "😀".repeat(1_501) },
   ])("rejects presentation fallback edits that overflow after $name", async ({ text }) => {
-    const invoke = createInvokeSpy();
-
     await expect(
-      dispatch(invoke, {
-        action: "edit",
-        cfg: {},
-        params: {
-          channelId: "C1",
-          messageId: "171234.567",
-          presentation: {
-            blocks: [{ type: "text", text }],
-          },
-        },
-      } as never),
+      edit({
+        presentation: present({ type: "text", text }),
+      }),
     ).rejects.toThrow(
       "Slack presentation fallback exceeds the 4000-byte edit limit. Send a new message instead.",
     );
@@ -588,7 +405,6 @@ describe("Slack action adapter", () => {
   });
 
   it("uses complete text-only fallback when an edit exceeds fifty blocks", async () => {
-    const invoke = createInvokeSpy();
     const presentation = {
       blocks: Array.from({ length: 51 }, (_entry, index) => ({
         type: "text" as const,
@@ -596,11 +412,7 @@ describe("Slack action adapter", () => {
       })),
     };
 
-    await dispatch(invoke, {
-      action: "edit",
-      cfg: {},
-      params: { channelId: "C1", messageId: "171234.567", presentation },
-    } as never);
+    await edit({ presentation });
 
     const action = firstAction(invoke);
     expect(action.blocks).toBeUndefined();
@@ -609,26 +421,20 @@ describe("Slack action adapter", () => {
   });
 
   it("passes media and rendered interactive blocks through for split Slack delivery", async () => {
-    const invoke = createInvokeSpy();
     const cfg = slackConfig();
 
-    await dispatch(invoke, {
-      action: "send",
-      cfg,
-      params: {
+    await send(
+      {
         to: "channel:C1",
         message: "Approval required",
         media: "https://example.com/report.md",
-        interactive: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [{ label: "Approve", value: "approve" }],
-            },
-          ],
-        },
+        interactive: present({
+          type: "buttons",
+          buttons: [{ label: "Approve", value: "approve" }],
+        }),
       },
-    } as never);
+      { cfg },
+    );
 
     expect(invoke).toHaveBeenCalledOnce();
     const action = firstAction(invoke);
@@ -646,73 +452,37 @@ describe("Slack action adapter", () => {
   });
 
   it.each([
-    {
-      name: "prefers an explicit reply target over an inherited Slack thread",
-      params: {
-        to: "channel:C1",
-        message: "Reply to the requested message",
-        threadId: "111.222",
-        replyTo: "999.000",
-      },
-      expected: { content: "Reply to the requested message", threadTs: "999.000" },
-    },
-    {
-      name: "falls back to the Slack thread when the reply target is not a timestamp",
-      params: {
-        to: "channel:C1",
-        message: "Reply in the current thread",
-        threadId: "111.222",
-        replyTo: "msg-internal-1",
-      },
-      expected: { content: "Reply in the current thread", threadTs: "111.222" },
-    },
-    {
-      name: "passes replyBroadcast through for Slack thread sends",
-      params: {
-        to: "channel:C1",
-        message: "Visible from the channel",
-        threadId: "111.222",
-        replyBroadcast: true,
-      },
-      expected: {
-        content: "Visible from the channel",
-        threadTs: "111.222",
-        replyBroadcast: true,
-      },
-    },
-    {
-      name: "passes topLevel through so same-channel Slack sends can suppress thread inheritance",
-      params: {
-        to: "channel:C1",
-        message: "Visible in the parent channel",
-        topLevel: true,
-      },
-      expected: { content: "Visible in the parent channel", threadTs: undefined, topLevel: true },
-    },
-    {
-      name: "treats threadId null as a Slack top-level send request",
-      params: {
-        to: "channel:C1",
-        message: "Visible in the parent channel",
-        threadId: null,
-      },
-      expected: { content: "Visible in the parent channel", threadTs: undefined, topLevel: true },
-    },
-  ])("$name", async ({ params, expected }) => {
-    const invoke = createInvokeSpy();
+    ["explicit reply wins", { threadId: "111.222", replyTo: "999.000" }, { threadTs: "999.000" }],
+    [
+      "invalid reply uses thread",
+      { threadId: "111.222", replyTo: "msg-internal-1" },
+      { threadTs: "111.222" },
+    ],
+    [
+      "broadcast",
+      { threadId: "111.222", replyBroadcast: true },
+      { threadTs: "111.222", replyBroadcast: true },
+    ],
+    ["topLevel", { topLevel: true }, { threadTs: undefined, topLevel: true }],
+    ["null thread", { threadId: null }, { threadTs: undefined, topLevel: true }],
+  ] as const)("routes send: %s", async (_name, params, expected) => {
     const cfg = slackConfig();
-    await dispatch(invoke, { action: "send", cfg, params } as never);
-    const action = firstAction(invoke);
-    expect(action).toMatchObject({ action: "sendMessage", to: "channel:C1", ...expected });
-    expect(action.threadTs).toBe(expected.threadTs);
+    await send({ to: "channel:C1", message: "Reply", ...params }, { cfg });
+    expect(firstAction(invoke)).toMatchObject({
+      action: "sendMessage",
+      to: "channel:C1",
+      content: "Reply",
+      ...expected,
+    });
+    expect(firstAction(invoke).threadTs).toBe(expected.threadTs);
     expectForwardedCfg(invoke, cfg);
     expectNoForwardedToolContext(invoke);
   });
 
   it.each([
-    {
-      name: "maps upload-file to the internal uploadFile action",
-      params: {
+    [
+      "native fields",
+      {
         to: "user:U1",
         filePath: "/tmp/report.png",
         initialComment: "fresh build",
@@ -720,7 +490,7 @@ describe("Slack action adapter", () => {
         title: "Build Screenshot",
         threadId: "111.222",
       },
-      expected: {
+      {
         to: "user:U1",
         filePath: "/tmp/report.png",
         initialComment: "fresh build",
@@ -728,65 +498,41 @@ describe("Slack action adapter", () => {
         title: "Build Screenshot",
         threadTs: "111.222",
       },
-    },
-    {
-      name: "maps upload-file aliases to upload params",
-      params: {
-        channelId: "C1",
-        media: "/tmp/chart.png",
-        message: "chart attached",
-        replyTo: "333.444",
-      },
-      expected: {
+    ],
+    [
+      "media/message/replyTo aliases",
+      { channelId: "C1", media: "/tmp/chart.png", message: "chart attached", replyTo: "333.444" },
+      {
         to: "C1",
         filePath: "/tmp/chart.png",
         initialComment: "chart attached",
         threadTs: "333.444",
       },
-    },
-    {
-      name: "maps upload-file path alias to filePath",
-      params: {
-        to: "channel:C1",
-        path: "/tmp/report.txt",
-        initialComment: "path alias",
-      },
-      expected: {
-        to: "channel:C1",
-        filePath: "/tmp/report.txt",
-        initialComment: "path alias",
-      },
-    },
-    {
-      name: "maps an upload-file caption to the upload's initial comment",
-      params: {
-        channelId: "C1",
-        media: "/tmp/chart.png",
-        caption: "chart attached",
-      },
-      expected: {
-        filePath: "/tmp/chart.png",
-        initialComment: "chart attached",
-      },
-    },
-    {
-      name: "prefers an explicit upload-file initial comment over message and caption",
-      params: {
+    ],
+    [
+      "path alias",
+      { to: "channel:C1", path: "/tmp/report.txt", initialComment: "path alias" },
+      { to: "channel:C1", filePath: "/tmp/report.txt", initialComment: "path alias" },
+    ],
+    [
+      "caption alias",
+      { channelId: "C1", media: "/tmp/chart.png", caption: "chart attached" },
+      { filePath: "/tmp/chart.png", initialComment: "chart attached" },
+    ],
+    [
+      "empty comment overrides message and caption",
+      {
         channelId: "C1",
         media: "/tmp/chart.png",
         initialComment: "",
         message: "message text",
         caption: "caption text",
       },
-      expected: {
-        filePath: "/tmp/chart.png",
-        initialComment: "",
-      },
-    },
-  ])("$name", async ({ params, expected }) => {
-    const invoke = createInvokeSpy();
+      { filePath: "/tmp/chart.png", initialComment: "" },
+    ],
+  ] as const)("maps upload-file: %s", async (_name, params, expected) => {
     const cfg = slackConfig();
-    await dispatch(invoke, { action: "upload-file", cfg, params } as never);
+    await dispatch(invoke, "upload-file", params, { cfg });
     expect(firstAction(invoke)).toMatchObject({ action: "uploadFile", ...expected });
     expectForwardedCfg(invoke, cfg);
     expectNoForwardedToolContext(invoke);
@@ -796,30 +542,32 @@ describe("Slack action adapter", () => {
     "normalizes %s for Slack send and upload-file",
     async (propertyName) => {
       const sendInvoke = createInvokeSpy();
-      await dispatch(sendInvoke, {
-        action: "send",
-        cfg: slackConfig(),
-        params: {
+      await dispatch(
+        sendInvoke,
+        "send",
+        {
           to: "channel:C1",
           media: "/tmp/original.png",
           [propertyName]: true,
         },
-      } as never);
+        { cfg: slackConfig() },
+      );
       expect(firstAction(sendInvoke)).toMatchObject({
         action: "sendMessage",
         forceDocument: true,
       });
 
       const uploadInvoke = createInvokeSpy();
-      await dispatch(uploadInvoke, {
-        action: "upload-file",
-        cfg: slackConfig(),
-        params: {
+      await dispatch(
+        uploadInvoke,
+        "upload-file",
+        {
           to: "channel:C1",
           filePath: "/tmp/original.png",
           [propertyName]: true,
         },
-      } as never);
+        { cfg: slackConfig() },
+      );
       expect(firstAction(uploadInvoke)).toMatchObject({
         action: "uploadFile",
         forceDocument: true,
@@ -829,30 +577,20 @@ describe("Slack action adapter", () => {
 
   it("rejects replyBroadcast for upload-file", async () => {
     await expect(
-      dispatch(createInvokeSpy(), {
-        action: "upload-file",
-        cfg: {},
-        params: {
-          to: "channel:C1",
-          filePath: "/tmp/report.png",
-          threadId: "111.222",
-          replyBroadcast: true,
-        },
-      } as never),
+      dispatch(createInvokeSpy(), "upload-file", {
+        to: "channel:C1",
+        filePath: "/tmp/report.png",
+        threadId: "111.222",
+        replyBroadcast: true,
+      }),
     ).rejects.toThrow(/replyBroadcast is only supported for text or block thread replies/i);
   });
 
   it("forwards messageId for read actions", async () => {
-    const invoke = createInvokeSpy();
-
-    await dispatch(invoke, {
-      action: "read",
-      cfg: {},
-      params: {
-        channelId: "C1",
-        messageId: "1712345678.654321",
-      },
-    } as never);
+    await dispatch(invoke, "read", {
+      channelId: "C1",
+      messageId: "1712345678.654321",
+    });
 
     const action = firstAction(invoke);
     expect(action.action).toBe("readMessages");
@@ -862,13 +600,7 @@ describe("Slack action adapter", () => {
   });
 
   it.each([2.5])("forwards raw read limit %s to the authorized action owner", async (limit) => {
-    const invoke = createInvokeSpy();
-
-    await dispatch(invoke, {
-      action: "read",
-      cfg: {},
-      params: { channelId: "C1", limit },
-    } as never);
+    await dispatch(invoke, "read", { channelId: "C1", limit });
 
     expect(firstAction(invoke)).toMatchObject({ action: "readMessages", limit });
     expect(invoke).toHaveBeenCalledOnce();
@@ -876,13 +608,9 @@ describe("Slack action adapter", () => {
 
   it("requires filePath, path, or media for upload-file", async () => {
     await expect(
-      dispatch(createInvokeSpy(), {
-        action: "upload-file",
-        cfg: {},
-        params: {
-          to: "channel:C1",
-        },
-      } as never),
+      dispatch(createInvokeSpy(), "upload-file", {
+        to: "channel:C1",
+      }),
     ).rejects.toThrow(/upload-file requires filePath, path, or media/i);
   });
 
@@ -898,26 +626,24 @@ describe("Slack action adapter", () => {
       expected: { fileId: "F999", channelId: "channel:C2", threadId: "333.444" },
     },
   ])("$name", async ({ params, expected }) => {
-    const invoke = createInvokeSpy();
     const cfg = slackConfig();
-    await dispatch(invoke, { action: "download-file", cfg, params } as never);
+    await dispatch(invoke, "download-file", params, { cfg });
     expect(firstAction(invoke)).toMatchObject({ action: "downloadFile", ...expected });
     expectForwardedCfg(invoke, cfg);
   });
 
   it("forwards tool context for current-channel download-file actions", async () => {
-    const invoke = createInvokeSpy();
     const cfg = slackConfig();
     const toolContext = { currentChannelId: "C1" };
 
-    await dispatch(invoke, {
-      action: "download-file",
-      cfg,
-      toolContext,
-      params: {
+    await dispatch(
+      invoke,
+      "download-file",
+      {
         fileId: "F123",
       },
-    } as never);
+      { cfg, toolContext },
+    );
 
     const action = firstAction(invoke);
     expect(action.action).toBe("downloadFile");
@@ -944,24 +670,20 @@ describe("Slack action adapter", () => {
       expectedError: /fileId/i,
     },
   ])("$name", async ({ params, expectedError }) => {
-    await expect(
-      dispatch(createInvokeSpy(), { action: "download-file", cfg: {}, params } as never),
-    ).rejects.toThrow(expectedError);
+    await expect(dispatch(createInvokeSpy(), "download-file", params, { cfg: {} })).rejects.toThrow(
+      expectedError,
+    );
   });
 
   it("defaults member-info userId to the inbound sender when omitted", async () => {
-    const invoke = createInvokeSpy();
     const toolContext = { currentChannelProvider: " Slack " };
 
-    await dispatch(invoke, {
-      action: "member-info",
-      cfg: {},
-      params: {},
-      accountId: "OPS",
-      requesterAccountId: "ops",
-      requesterSenderId: "U123",
-      toolContext,
-    } as never);
+    await dispatch(
+      invoke,
+      "member-info",
+      {},
+      { accountId: "OPS", requesterAccountId: "ops", requesterSenderId: "U123", toolContext },
+    );
 
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({ action: "memberInfo", userId: "U123" }),
@@ -975,17 +697,19 @@ describe("Slack action adapter", () => {
   });
 
   it("defaults member-info userId through the configured default Slack account", async () => {
-    const invoke = createInvokeSpy();
     const toolContext = { currentChannelProvider: "slack" };
 
-    await dispatch(invoke, {
-      action: "member-info",
-      cfg: { channels: { slack: { defaultAccount: "ops", accounts: { ops: {} } } } },
-      params: {},
-      requesterAccountId: "OPS",
-      requesterSenderId: "U123",
-      toolContext,
-    } as never);
+    await dispatch(
+      invoke,
+      "member-info",
+      {},
+      {
+        cfg: { channels: { slack: { defaultAccount: "ops", accounts: { ops: {} } } } },
+        requesterAccountId: "OPS",
+        requesterSenderId: "U123",
+        toolContext,
+      },
+    );
 
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({ action: "memberInfo", userId: "U123" }),
@@ -1022,29 +746,20 @@ describe("Slack action adapter", () => {
       { requesterSenderId: "U123", toolContext: { currentChannelProvider: "telegram" } },
     ],
   ])("rejects member-info without userId when the request %s", async (_label, context) => {
-    await expect(
-      dispatch(createInvokeSpy(), {
-        action: "member-info",
-        cfg: {},
-        params: {},
-        ...context,
-      } as never),
-    ).rejects.toThrow(/member-info requires a userId/i);
+    await expect(dispatch(createInvokeSpy(), "member-info", {}, { ...context })).rejects.toThrow(
+      /member-info requires a userId/i,
+    );
   });
 
   it("prefers an explicit member-info userId over the inbound sender", async () => {
-    const invoke = createInvokeSpy();
     const toolContext = { currentChannelProvider: "telegram" };
 
-    await dispatch(invoke, {
-      action: "member-info",
-      cfg: {},
-      params: { userId: "U999" },
-      accountId: "other",
-      requesterAccountId: "default",
-      requesterSenderId: "U123",
-      toolContext,
-    } as never);
+    await dispatch(
+      invoke,
+      "member-info",
+      { userId: "U999" },
+      { accountId: "other", requesterAccountId: "default", requesterSenderId: "U123", toolContext },
+    );
 
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({ action: "memberInfo", userId: "U999" }),
@@ -1059,80 +774,18 @@ describe("Slack action adapter", () => {
 });
 
 describe("extractSlackToolSend", () => {
-  it("maps native thread and top-level fields into send telemetry", () => {
-    expect(
-      extractSlackToolSend({
-        action: "sendMessage",
-        to: "channel:C1",
-        threadTs: "171.222",
-      }),
-    ).toMatchObject({
+  it.each([
+    [{ action: "sendMessage", threadTs: "171.222" }, { threadId: "171.222" }],
+    [{ action: "sendMessage" }, { threadImplicit: true }],
+    [{ action: "uploadFile" }, { threadImplicit: true }],
+    [{ action: "sendMessage", threadTs: null }, { threadSuppressed: true }],
+    [{ action: "send", threadId: "111.000", replyTo: "999.000" }, { threadId: "999.000" }],
+    [{ action: "upload-file", threadId: "111.000", replyTo: "999.000" }, { threadId: "111.000" }],
+    [{ action: "upload-file", replyTo: "999.000" }, { threadId: "999.000" }],
+  ])("maps thread telemetry %j", (args, expected) => {
+    expect(extractSlackToolSend({ to: "channel:C1", ...args })).toMatchObject({
       to: "channel:C1",
-      threadId: "171.222",
-    });
-    expect(
-      extractSlackToolSend({
-        action: "sendMessage",
-        to: "channel:C1",
-      }),
-    ).toMatchObject({
-      to: "channel:C1",
-      threadImplicit: true,
-    });
-    expect(
-      extractSlackToolSend({
-        action: "uploadFile",
-        to: "channel:C1",
-      }),
-    ).toMatchObject({
-      to: "channel:C1",
-      threadImplicit: true,
-    });
-    expect(
-      extractSlackToolSend({
-        action: "sendMessage",
-        to: "channel:C1",
-        threadTs: null,
-      }),
-    ).toMatchObject({
-      to: "channel:C1",
-      threadSuppressed: true,
-    });
-  });
-
-  it("maps generic send and upload thread precedence into telemetry", () => {
-    expect(
-      extractSlackToolSend({
-        action: "send",
-        to: "channel:C1",
-        threadId: "111.000",
-        replyTo: "999.000",
-      }),
-    ).toMatchObject({
-      to: "channel:C1",
-      threadId: "999.000",
-    });
-    expect(
-      extractSlackToolSend({
-        action: "upload-file",
-        to: "channel:C1",
-        threadId: "111.000",
-        replyTo: "999.000",
-      }),
-    ).toMatchObject({
-      to: "channel:C1",
-      threadId: "111.000",
-    });
-    expect(
-      extractSlackToolSend({
-        action: "upload-file",
-        to: "channel:C1",
-        replyTo: "999.000",
-      }),
-    ).toMatchObject({
-      to: "channel:C1",
-      threadId: "999.000",
+      ...expected,
     });
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

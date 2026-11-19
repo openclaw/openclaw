@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { assert, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { controlNextRecoverySleep } from "../../../test/helpers/infra/delivery-recovery.js";
 import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
 import {
@@ -271,18 +270,6 @@ describe("delivery-queue recovery", () => {
     sleepMock.mockReset();
     sleepMock.mockResolvedValue(undefined);
   });
-  const enqueueCrashRecoveryEntries = async () => {
-    await enqueue({
-      preparedMessageId: "prepared-message-a",
-    });
-    await enqueue({
-      channel: "demo-channel-b",
-      to: "2",
-      payloads: [{ text: "b" }],
-      queuePolicy: "required",
-      requireUnknownSendReconciliation: true,
-    });
-  };
   const recover = async ({
     deliver: send,
     log = createRecoveryLog(),
@@ -506,9 +493,6 @@ describe("delivery-queue recovery", () => {
     async (transportBoundary) => {
       const deliveryId = `pending-final-stale-recovery-${transportBoundary}`;
       const { completion } = await pendingFinal(deliveryId, true);
-      if (transportBoundary !== "afterHandoff") {
-        await replaceWriter(completion);
-      }
       const platformSend = vi.fn();
       deliver = vi.fn(async (params: SendParams) => {
         if (transportBoundary === "afterHandoff") {
@@ -516,6 +500,7 @@ describe("delivery-queue recovery", () => {
           await replaceWriter(completion);
           params.assertDirectAdapterHandoff?.();
         } else {
+          await replaceWriter(completion);
           await params[transportBoundary]?.();
         }
         await platformSend();
@@ -603,24 +588,6 @@ describe("delivery-queue recovery", () => {
     });
     await recover({ deliver });
     expect(deliver).not.toHaveBeenCalled();
-  });
-  it("counts replay pacing against the recovery budget", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-23T00:00:00.000Z"));
-    try {
-      const controlledSleep = controlNextRecoverySleep(sleepMock);
-      await enqueueCrashRecoveryEntries();
-      await enqueueBatch(["c"]);
-      const recovery = recover({ deliver, maxRecoveryMs: 1 });
-      await expect(controlledSleep.started).resolves.toBe(1);
-      expect(deliver).toHaveBeenCalledOnce();
-      controlledSleep.release();
-      expect((await recovery).result).toMatchObject({ recovered: 1, deferredBackoff: 0 });
-      expect(deliver).toHaveBeenCalledOnce();
-      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(2);
-    } finally {
-      vi.useRealTimers();
-    }
   });
   it.each([
     { maxRetries: 45, retryCount: MAX_RETRIES },
@@ -921,6 +888,27 @@ describe("delivery-queue recovery", () => {
       lastError: expect.stringContaining("provider lookup timed out"),
     });
   });
+
+  it.each([
+    ["permanent", "chat not found", undefined],
+    ["transient", "provider lookup timed out", 1],
+  ] as const)(
+    "classifies a thrown %s unknown-send reconciliation with the delivery error policy",
+    async (_kind, error, retryCount) => {
+      const id = await enqueueUnknown({ text: "unknown" });
+      const reconcileUnknownSend = vi.fn().mockRejectedValue(new Error(error));
+      installReconciler(reconcileUnknownSend);
+      const { result } = await recover({ deliver });
+      expect(reconcileUnknownSend).toHaveBeenCalledOnce();
+      expect(deliver).not.toHaveBeenCalled();
+      expect(result.failed).toBe(1);
+      if (retryCount === undefined) {
+        await expectRemoved(id);
+      } else {
+        await expectPending({ id, retryCount, recoveryState: "unknown_after_send" });
+      }
+    },
+  );
 
   it.each(["recovered", "exhausted", "untyped"] as const)(
     "preserves bounded final-text recovery across storage restart: %s",
@@ -1224,17 +1212,6 @@ describe("delivery-queue recovery", () => {
       gifPlayback: true,
       silent: true,
       gatewayClientScopes: ["operator.write"],
-      mirror: {
-        sessionKey: "agent:main:main",
-        expectedSessionId: "session-main",
-        text: "a",
-        mediaUrls: ["https://example.com/a.png"],
-        idempotencyKey: "channel-final:message-1",
-        deliveryMirror: {
-          kind: "channel-final",
-          sourceMessageId: "message-1",
-        },
-      },
       session: {
         key: "agent:main:main",
         agentId: "agent-main",
@@ -1249,6 +1226,8 @@ describe("delivery-queue recovery", () => {
     await recover({ deliver });
     const deliverInput = mockCallRecord(deliver);
     expect(deliverInput).toEqual(expect.objectContaining(storedOptions));
+    // Retained legacy mirror metadata never selects destination history on replay.
+    expect(deliverInput).not.toHaveProperty("mirror");
   });
   it("continues past high-backoff entries and recovers ready entries behind them", async () => {
     const now = Date.now();

@@ -78,6 +78,17 @@ function expectAgentWaitRequest(
   expect(paramTimeoutMs).toBeLessThanOrEqual(maxParamTimeoutMs);
 }
 
+function cappedHistoryReply() {
+  return {
+    messages: [
+      {
+        ...textAssistant("Report head\n...(truncated)..."),
+        __openclaw: { id: "msg-1", truncated: true, reason: "display-cap" },
+      },
+    ],
+  };
+}
+
 describe("readLatestAssistantReply", () => {
   beforeEach(() => {
     callGatewayMock.mockReset();
@@ -214,14 +225,7 @@ describe("readLatestAssistantReply", () => {
   it("reads the full message when history returns a display-capped preview", async () => {
     callGatewayMock.mockImplementation(async (request) => {
       if (request.method === "chat.history") {
-        return {
-          messages: [
-            {
-              ...textAssistant("Report head\n...(truncated)..."),
-              __openclaw: { id: "msg-1", truncated: true, reason: "display-cap" },
-            },
-          ],
-        };
+        return cappedHistoryReply();
       }
       return { ok: true, message: textAssistant("Report head and the full remainder.") };
     });
@@ -241,14 +245,7 @@ describe("readLatestAssistantReply", () => {
   it("returns no reply when the full-message lookup is rejected", async () => {
     callGatewayMock.mockImplementation(async (request) => {
       if (request.method === "chat.history") {
-        return {
-          messages: [
-            {
-              ...textAssistant("Report head\n...(truncated)..."),
-              __openclaw: { id: "msg-1", truncated: true, reason: "display-cap" },
-            },
-          ],
-        };
+        return cappedHistoryReply();
       }
       throw new Error("session changed while reading history; reload the conversation");
     });
@@ -659,6 +656,35 @@ describe("waitForAgentRunsToDrain", () => {
       });
 
       expect(callGatewayMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the agent.wait budget bounded when the wall clock rewinds mid-drain", async () => {
+    const wallNow = 1_000_000_000;
+    vi.useFakeTimers();
+    vi.setSystemTime(wallNow);
+    callGatewayMock.mockResolvedValue({ status: "pending" });
+    let rounds = 0;
+    try {
+      await waitForAgentRunsToDrain({
+        deadlineAtMs: wallNow + 5_000,
+        getPendingRunIds: async () => {
+          rounds += 1;
+          if (rounds === 1) {
+            vi.setSystemTime(wallNow - 90_000);
+          }
+          return rounds <= 2 ? [`run-${rounds}`] : [];
+        },
+      });
+
+      const requests = gatewayWaitRequests();
+      expect(requests).toHaveLength(2);
+      for (const request of requests) {
+        const paramTimeoutMs = expectNumber(request.params?.timeoutMs, "param timeoutMs");
+        expect(paramTimeoutMs).toBeLessThanOrEqual(5_000);
+      }
     } finally {
       vi.useRealTimers();
     }

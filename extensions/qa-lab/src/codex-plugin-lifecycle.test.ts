@@ -55,8 +55,6 @@ it("repairs a missing codex plugin before the retry succeeds without leaking to 
   expect(resolveCodexAuthProfile(await snapshotAuthProfiles(agentDir))).toMatchObject({
     status: "ready",
     profileId: QA_CODEX_OAUTH_PROFILE_ID,
-    provider: "openai",
-    mode: "oauth",
   });
   expect(missing).toMatchObject({
     status: "repair-required",

@@ -11,17 +11,13 @@ import {
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
 import {
-  isExecCompletionSystemEvent,
-  isHeartbeatWakeEvent,
-} from "../../infra/heartbeat-events-filter.js";
-import {
   isSystemEventStoreCurrent,
   resolveSystemEventQueueKey,
 } from "../../infra/system-event-ownership.js";
 import {
   adoptSelectedSystemEventEntries,
   isSystemEventTurnOwned,
-  peekSystemEventEntries,
+  peekDeliverableSystemEventEntries,
   type SystemEvent,
 } from "../../infra/system-events.js";
 import { SESSION_CREATED_NOTICE_CONTEXT_PREFIX } from "../../sessions/session-state-event-kinds.js";
@@ -42,7 +38,7 @@ function compactSystemEvent(event: SystemEvent): string | null {
   if (
     lower.includes("reason periodic") ||
     lower.startsWith("read heartbeat.md") ||
-    isHeartbeatWakeEvent(trimmed)
+    /^heartbeat (?:poll|wake)/i.test(trimmed)
   ) {
     return null;
   }
@@ -98,11 +94,11 @@ export async function drainFormattedSystemEvents(params: {
 }): Promise<string | undefined> {
   const systemLines: string[] = [];
   const queueKey = resolveSystemEventQueueKey(params.sessionKey, params.agentId);
-  // Claimed turns and legacy exec wakes retain their own execution and delivery owner.
+  // Passive selection leaves held notices with their delivery owner.
   const queued = adoptSelectedSystemEventEntries(
     queueKey,
-    (params.events ?? peekSystemEventEntries(queueKey)).filter(
-      (event) => !isSystemEventTurnOwned(queueKey, event) && !isExecCompletionSystemEvent(event),
+    (params.events ?? peekDeliverableSystemEventEntries(queueKey)).filter(
+      (event) => !isSystemEventTurnOwned(queueKey, event),
     ),
     { deferredEventIds: params.deferredEventIds },
   );

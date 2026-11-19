@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
-import { normalizeCronFormState, validateCronForm } from "./index.ts";
+import { normalizeCronFormState, validateCronForm } from "./form.ts";
 
 describe("cron form validation", () => {
   it.each([
@@ -31,18 +31,16 @@ describe("cron form validation", () => {
   ] as const)(
     "normalizes announce delivery for %s/%s",
     (sessionTarget, payloadKind, payloadLocked, deliveryMode) => {
-      expect(
-        normalizeCronFormState({
-          ...DEFAULT_CRON_FORM,
-          sessionTarget,
-          payloadKind,
-          payloadLocked,
-          deliveryMode: "announce",
-        }).deliveryMode,
-      ).toBe(deliveryMode);
+      const form = {
+        ...DEFAULT_CRON_FORM,
+        sessionTarget,
+        payloadKind,
+        payloadLocked,
+        deliveryMode: "announce" as const,
+      };
+      expect(normalizeCronFormState(form).deliveryMode).toBe(deliveryMode);
     },
   );
-
   it("validates key cron form errors", () => {
     const errors = validateCronForm({
       ...DEFAULT_CRON_FORM,

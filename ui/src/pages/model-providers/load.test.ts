@@ -5,7 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { peekModelCatalog } from "../../lib/model-catalog-store.ts";
 import { requestProviderUsage } from "../../lib/provider-usage-request.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { loadModelProviderCost, loadModelProvidersData } from "./load.ts";
+import { startModelProvidersData } from "./load.ts";
 
 const emptyAuth = { ts: 1, providers: [] };
 const model = { id: "configured", name: "Configured", provider: "test-provider" };
@@ -29,8 +29,11 @@ function harness(
     : createTestGatewayClient(request);
   return {
     request,
-    load: (refresh = false, signal?: AbortSignal) =>
-      loadModelProvidersData(client, { agentId: "main", refresh, signal }),
+    load: async (refresh = false, signal?: AbortSignal) => {
+      const read = startModelProvidersData(client, { agentId: "main", refresh, signal });
+      const [authData, catalogData] = await Promise.all([read.auth, read.catalog]);
+      return { ...authData, ...catalogData };
+    },
     cached: (allowStale = false) => peekModelCatalog(client, { agentId: "main" }, { allowStale }),
   };
 }
@@ -83,7 +86,7 @@ it("keeps failed provider outcomes from a fulfilled explicit refresh", async () 
   }));
   expect(await h.load(true)).toMatchObject({
     providerOutcomes: [{ provider: "ollama", status: "unavailable" }],
-    catalogError: "More models could not be discovered.",
+    catalogError: "Couldn’t load models from ollama. Try again.",
     error: null,
   });
   expect(h.cached(true)?.models).toEqual([retained]);
@@ -98,7 +101,7 @@ it.each([false, true])(
         if (!refresh || (params as { refresh?: boolean } | undefined)?.refresh) {
           throw new Error("catalog unavailable: OPENAI_API_KEY=sk-1234567890abcdef");
         }
-        return configured;
+        return { ...configured, pendingProviders: ["test-provider"] };
       },
       () => ({
         ...emptyAuth,
@@ -114,6 +117,8 @@ it.each([false, true])(
     const result = await h.load(refresh);
     expect(result).toMatchObject({
       catalogError: "catalog unavailable: OPENAI_API_KEY=sk-123...cdef",
+      catalogRequestFailed: true,
+      pendingProviders: refresh ? ["test-provider"] : [],
       error: null,
     });
     expect(result.authStatus?.providers).toHaveLength(1);
@@ -148,8 +153,6 @@ it("retries a missing auth-status response without discarding other provider dat
   expect(result).toMatchObject({
     providerOutcomes: [],
     catalogError: null,
-    providerUsage: null,
-    costByProvider: null,
     error: null,
   });
   expect(h.cached()?.models).toEqual([]);
@@ -158,7 +161,7 @@ it("retries a missing auth-status response without discarding other provider dat
   expect(h.request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(2);
 });
 
-it("retires both supplemental requests when aborted while pending", async () => {
+it("retires the provider usage request when aborted while pending", async () => {
   const pending = new GatewayPendingRequests({
     createRequestId: () => "models",
     nowMs: () => 0,
@@ -170,24 +173,15 @@ it("retires both supplemental requests when aborted while pending", async () => 
       pending.request<T>({ send }, ...args),
   } as GatewayBrowserClient;
   const controller = new AbortController();
-  const loading = Promise.allSettled([
-    requestProviderUsage(client, { signal: controller.signal }),
-    loadModelProviderCost(client, controller.signal),
-  ]);
+  const loading = Promise.allSettled([requestProviderUsage(client, { signal: controller.signal })]);
   try {
-    expect(sent.map(({ method }) => method)).toEqual(["usage.status", "sessions.usage"]);
+    // Local session usage belongs to the Usage page; Models reads only provider usage.
+    expect(sent.map(({ method }) => method)).toEqual(["usage.status"]);
     expect(sent[0]?.params).toBeUndefined();
-    expect(sent[1]?.params).toMatchObject({
-      agentScope: "all",
-      groupBy: "family",
-      projection: "overview",
-      limit: 50,
-    });
-    expect(sent[1]?.params).not.toHaveProperty("agentId");
     expect(pending.hasPending).toBe(true);
     controller.abort();
     expect(pending.hasPending).toBe(false);
-    expect(await loading).toMatchObject([{ status: "rejected" }, { status: "rejected" }]);
+    expect(await loading).toMatchObject([{ status: "rejected" }]);
   } finally {
     // Release a leaked wait even if cancellation regresses.
     pending.flush(new Error("test cleanup"));

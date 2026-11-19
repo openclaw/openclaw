@@ -20,16 +20,25 @@ const acceptedSessionSpawns: [AcceptedSessionSpawn] = [
   { runId: "child", childSessionKey: "agent:main:subagent:child", expectsCompletionMessage: true },
 ];
 
-function makeResult(meta: Partial<EmbeddedAgentRunResult["meta"]>): EmbeddedAgentRunResult {
-  return { acceptedSessionSpawns, meta: { durationMs: 1, ...meta } };
+function makeResult(
+  meta: Partial<EmbeddedAgentRunResult["meta"]>,
+  spawns: AcceptedSessionSpawn[] = acceptedSessionSpawns,
+): EmbeddedAgentRunResult {
+  return { acceptedSessionSpawns: spawns, meta: { durationMs: 1, ...meta } };
 }
-const settlement = {
-  requesterSessionKey: requester.sessionKey,
-  requesterAgentId: requester.agentId,
-  requesterTurnRunId: requester.runId,
-  acceptedSessionSpawns,
-  assertCurrent: expect.any(Function),
-};
+function expectSettled(
+  requesterYielded: boolean,
+  spawns: AcceptedSessionSpawn[] = acceptedSessionSpawns,
+) {
+  expect(registry.settle).toHaveBeenCalledExactlyOnceWith({
+    requesterSessionKey: requester.sessionKey,
+    requesterAgentId: requester.agentId,
+    requesterTurnRunId: requester.runId,
+    acceptedSessionSpawns: spawns,
+    assertCurrent: expect.any(Function),
+    requesterYielded,
+  });
+}
 function createAdmission(assertSourceCurrent?: () => void) {
   const admission = prepareAdmission({}, requester.runId, "main", "test", assertSourceCurrent);
   onTestFinished(() => admission.close());
@@ -86,14 +95,11 @@ it.each([
 
 it("transfers producer-owned completion after a partial harness receipt", async () => {
   const params = await admit();
-  const result: EmbeddedAgentRunResult = {
-    acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:subagent:child" }],
-    meta: { durationMs: 1, yielded: true },
-  };
-
+  const result = makeResult({ yielded: true }, [
+    { runId: "child", childSessionKey: "agent:main:subagent:child" },
+  ]);
   await settleRequesterRun(params, result, assertCurrent);
-
-  expect(registry.settle.mock.calls).toEqual([[{ ...settlement, requesterYielded: true }]]);
+  expectSettled(true);
   expect(result.requesterContinuationSettled).toBe(true);
 });
 
@@ -109,22 +115,9 @@ it("keeps confirmed cancellations retired when a stale harness receipt is settle
     params.preparedRunAdmission.operationalRunInstance,
     cancelled,
   );
-  const result: EmbeddedAgentRunResult = {
-    acceptedSessionSpawns: [cancelled, replacement],
-    meta: { durationMs: 1, yielded: true },
-  };
-
+  const result = makeResult({ yielded: true }, [cancelled, replacement]);
   await settleRequesterRun(params, result, assertCurrent);
-
-  expect(registry.settle.mock.calls).toEqual([
-    [
-      {
-        ...settlement,
-        acceptedSessionSpawns: [{ ...cancelled, expectsCompletionMessage: false }, replacement],
-        requesterYielded: true,
-      },
-    ],
-  ]);
+  expectSettled(true, [{ ...cancelled, expectsCompletionMessage: false }, replacement]);
   expect(result.requesterContinuationSettled).toBe(true);
   expect(cancelled.expectsCompletionMessage).toBe(true);
 });
@@ -140,16 +133,17 @@ it.each(["another run instance", "another child session", "unknown run"] as cons
         : params.preparedRunAdmission.operationalRunInstance,
       {
         ...acceptedSessionSpawns[0],
-        ...(target === "another child session"
-          ? { childSessionKey: "agent:main:subagent:other" }
-          : {}),
-        ...(target === "unknown run" ? { runId: "unknown" } : {}),
+        childSessionKey:
+          target === "another child session"
+            ? "agent:main:subagent:other"
+            : acceptedSessionSpawns[0].childSessionKey,
+        runId: target === "unknown run" ? "unknown" : acceptedSessionSpawns[0].runId,
       },
     );
 
     await settleRequesterRun(params, makeResult({ yielded: true }), assertCurrent);
 
-    expect(registry.settle.mock.calls).toEqual([[{ ...settlement, requesterYielded: true }]]);
+    expectSettled(true);
   },
 );
 
@@ -164,7 +158,6 @@ it.each(["active", "closed", "replaced", "source-revoked", "cancelled"] as const
     });
     const admission = params.preparedRunAdmission;
     const replacement = createAdmission();
-    const abort = new AbortController();
     if (owner === "closed") {
       admission.close();
     }
@@ -174,15 +167,12 @@ it.each(["active", "closed", "replaced", "source-revoked", "cancelled"] as const
     if (owner === "source-revoked") {
       current = false;
     }
-    if (owner === "cancelled") {
-      abort.abort();
-    }
     await settleFailedRequesterRun(
-      { ...params, abortSignal: abort.signal },
+      { ...params, abortSignal: owner === "cancelled" ? AbortSignal.abort() : undefined },
       new Error("provider failed"),
     );
     if (owner === "active") {
-      expect(registry.settle.mock.calls).toEqual([[{ ...settlement, requesterYielded: false }]]);
+      expectSettled(false);
     } else {
       expect(registry.settle).not.toHaveBeenCalled();
     }

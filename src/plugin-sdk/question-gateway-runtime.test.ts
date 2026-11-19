@@ -4,7 +4,7 @@ import { createQuestionReactionTargetStore } from "./question-gateway-runtime.js
 type RegisterChannelDelivery =
   typeof import("../infra/question-channel-runtime.js").registerQuestionChannelDelivery;
 type ResolveReaction =
-  typeof import("../infra/question-reaction-runtime.js").resolveQuestionReactionOverGateway;
+  typeof import("./question-gateway-runtime.js").questionGatewayRuntime.resolveReaction;
 
 const binding = {
   questionId: "ask_0123456789abcdef0123456789abcdef",
@@ -36,9 +36,7 @@ function resolve(store: Store, params: Partial<Parameters<Store["resolve"]>[0]> 
   return expect(store.resolve({ ...resolveDefaults, ...params })).resolves.toBe(true);
 }
 
-afterEach(() => {
-  vi.useRealTimers();
-});
+afterEach(() => vi.useRealTimers());
 
 it("replaces target timers without letting the old timer delete the new target", () => {
   vi.useFakeTimers();

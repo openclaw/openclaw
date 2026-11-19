@@ -1,22 +1,33 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
-import type { ProviderMessage, ProviderModel } from "../provider-types.js";
+import type { ModelInputContent, ProviderMessage, ProviderModel } from "../provider-types.js";
+import { createAssistantOutput } from "../transports/assistant-output.js";
 import type { AssistantMessage, Message, ToolResultMessage } from "../types.js";
-import { createZeroUsage } from "../usage.test-support.js";
 import { makeProviderModel } from "./provider-model.test-support.js";
 import { transformMessages } from "./transform-messages.js";
 
 const EXPECTED_FAILURE_MARKER =
   "[This turn failed before it completed. Do not redo its work without confirming with the user first.]";
 const NO_CONTENT_PLACEHOLDER = "[assistant turn failed before producing content]";
-
 const model = makeProviderModel("openai-completions", "openai", "text-only-model");
 afterEach(() => vi.restoreAllMocks());
 const text = (value: string) => ({ type: "text" as const, text: value });
-function image(data: string, mimeType = "image/png") {
-  return { type: "image" as const, data, mimeType };
-}
-const user = (content: string, timestamp = 1): Message => ({ role: "user", content, timestamp });
+const omittedImage = text("(image omitted: model does not support images)");
+const omittedVideo = text("(video omitted: provider does not support video input)");
+const image = (data: string) => ({ type: "image" as const, data, mimeType: "image/png" });
+const photo = image("image-bytes");
+const video = { type: "video" as const, data: "video-secret-sentinel", mimeType: "video/mp4" };
+const videoModel: ProviderModel<"openai-completions"> = {
+  ...model,
+  input: ["text", "image", "video"],
+};
+const call = (id = "call_1", async?: boolean) => ({
+  type: "toolCall" as const,
+  id,
+  name: "lookup",
+  arguments: {},
+  ...(async ? { async } : {}),
+});
 function toolResult(
   content: ToolResultMessage["content"],
   toolCallId = "call_1",
@@ -31,11 +42,7 @@ function makeAssistant(
   overrides: Partial<AssistantMessage> = {},
 ): AssistantMessage {
   return {
-    role: "assistant",
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: createZeroUsage(),
+    ...createAssistantOutput(model),
     timestamp: 2,
     content,
     stopReason,
@@ -46,14 +53,7 @@ function makeAssistant(
 it("replays missing synchronous and delayed asynchronous results with their original timestamps", () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
   const messages: Message[] = [
-    makeAssistant(
-      [
-        { type: "toolCall", id: "sync", name: "lookup", arguments: {} },
-        { type: "toolCall", id: "async", name: "lookup", arguments: {}, async: true },
-      ],
-      "toolUse",
-      { timestamp: 0 },
-    ),
+    makeAssistant([call("sync"), call("async", true)], "toolUse", { timestamp: 0 }),
     makeAssistant([text("later fragment")], "stop", { timestamp: 3 }),
   ];
   const first = transformMessages(messages, model);
@@ -71,59 +71,35 @@ it("replays missing synchronous and delayed asynchronous results with their orig
   expect(messages.map(({ role }) => role)).toEqual(["assistant", "assistant"]);
 });
 
-it("keeps host-sanitized repetition history through provider replay", () => {
-  const message = makeAssistant(
-    [text("Earlier answer stays intact."), text("[Repetitive output stopped]")],
-    "error",
-    { errorCode: "openclaw_repetitive_output" },
-  );
+it.each([
+  makeAssistant([text("Earlier answer stays intact.")], "error", {
+    errorCode: "openclaw_repetitive_output",
+  }),
+  makeAssistant(
+    [{ type: "thinking", thinking: "partial reasoning", thinkingSignature: "signed-reasoning" }],
+    "length",
+  ),
+])("preserves same-model $stopReason history", (message) => {
   expect(transformMessages([message], model)).toEqual([message]);
 });
 
-it("replaces partial text with one marker between unrelated user turns", () => {
-  const before = user("summarize the incident");
-  const after = user("what is the weather?", 3);
-  const failed = makeAssistant([text("Starting the incident summary")], "aborted");
-
-  const transformed = transformMessages([before, failed, after], model);
-
-  expect(transformed).toEqual([
-    before,
-    { ...failed, content: [text(EXPECTED_FAILURE_MARKER)] },
-    after,
+it.each<[string, AssistantMessage["content"], boolean]>([
+  ["partial text", [text("partial")], true],
+  ["partial tool-call turn", [text("partial"), call()], false],
+  [
+    "placeholder reasoning",
+    [text(NO_CONTENT_PLACEHOLDER), { type: "thinking", thinking: "hidden" }],
+    false,
+  ],
+])("replays aborted %s without unfinished work", (_name, content, marker) => {
+  const failed = makeAssistant(content, "aborted", { model: "source-model" });
+  const original = structuredClone(failed);
+  const next: Message = { role: "user", content: "next turn", timestamp: 3 };
+  expect(transformMessages([failed, next], model)).toEqual([
+    ...(marker ? [{ ...failed, content: [text(EXPECTED_FAILURE_MARKER)] }] : []),
+    next,
   ]);
-  expect(failed.content).toEqual([text("Starting the incident summary")]);
-});
-
-it("drops a failed tool-call turn even when it also contains partial text", () => {
-  const prompt = user("run it");
-  const failed = makeAssistant(
-    [
-      text("Starting the lookup"),
-      { type: "toolCall", id: "call-1", name: "lookup", arguments: {} },
-    ],
-    "aborted",
-  );
-
-  expect(transformMessages([prompt, failed], model)).toEqual([prompt]);
-});
-
-it("drops the no-content placeholder with hidden reasoning across a model change", () => {
-  const failed = makeAssistant(
-    [text(NO_CONTENT_PLACEHOLDER), { type: "thinking", thinking: "hidden partial reasoning" }],
-    "aborted",
-    { model: "source-model" },
-  );
-  const prompt = user("what is the weather?", 3);
-  expect(transformMessages([failed, prompt], model)).toEqual([prompt]);
-});
-it("preserves native same-model reasoning on a length stop", () => {
-  const assistant = makeAssistant(
-    [{ type: "thinking", thinking: "partial reasoning", thinkingSignature: "signed-reasoning" }],
-    "length",
-  );
-
-  expect(transformMessages([assistant], model)).toEqual([assistant]);
+  expect(failed).toEqual(original);
 });
 
 it("normalizes null or missing content before provider transforms", () => {
@@ -138,73 +114,32 @@ it("normalizes null or missing content before provider transforms", () => {
   expect(contents).toEqual([[], [], []]);
 });
 
-it("replaces unsupported user media in order without exposing video bytes", () => {
-  const sentinel = "video-secret-sentinel";
-  const messages = [
-    {
-      role: "user",
-      content: [
-        text("before"),
-        image("image-one"),
-        { type: "video", data: sentinel, mimeType: "video/mp4" },
-        text("after"),
-        image("image-two", "image/jpeg"),
-      ],
-      timestamp: 1,
-    },
-  ] satisfies [ProviderMessage];
-
-  const originalContent = structuredClone(messages[0].content);
-  const transformed = transformProviderMessages(messages, model);
-
-  expect(transformed[0]?.content).toEqual([
-    text("before"),
-    text("(image omitted: model does not support images)"),
-    text("(video omitted: provider does not support video input)"),
-    text("after"),
-    text("(image omitted: model does not support images)"),
-  ]);
-  expect(JSON.stringify(transformed)).not.toContain(sentinel);
-
-  const advertisedVideoModel: ProviderModel<"openai-completions"> = {
-    ...model,
-    input: ["text", "image", "video"],
-  };
-  expect(transformProviderMessages(messages, advertisedVideoModel)[0]?.content).toEqual(
-    originalContent,
-  );
-  const responses = transformProviderMessages(messages, {
-    ...advertisedVideoModel,
-    api: "openai-responses",
-  });
-  expect(responses[0]?.content).toContainEqual(
-    text("(video omitted: provider does not support video input)"),
-  );
-  expect(JSON.stringify(responses)).not.toContain(sentinel);
+it.each<[ProviderModel, ModelInputContent[]]>([
+  [model, [omittedImage, omittedVideo]],
+  [videoModel, [photo, video]],
+  [{ ...videoModel, api: "openai-responses" }, [photo, omittedVideo]],
+])("projects user media for %j without exposing unsupported bytes", (target, expected) => {
+  const content = [text("before"), photo, video, text("after")];
+  const messages = [{ role: "user", content, timestamp: 1 }] satisfies [ProviderMessage];
+  const original = structuredClone(messages);
+  const transformed = transformProviderMessages(messages, target);
+  expect(transformed[0]?.content).toEqual([text("before"), ...expected, text("after")]);
+  expect(messages).toEqual(original);
+  if (target !== videoModel) {
+    expect(JSON.stringify(transformed)).not.toContain(video.data);
+  }
 });
 
 it("preserves structured tool blocks while projecting only real images", () => {
   const resource = { type: "resource", uri: "file:///tmp/result.json" };
-  const metadata = { type: "metadata", value: { count: 2 } };
-  const content = [
-    resource,
-    image("image-one"),
-    image(""),
-    image("image-two", "image/jpeg"),
-    metadata,
-    image("image-three", "image/webp"),
-  ] as unknown as ToolResultMessage["content"];
-  const [transformed] = transformMessages([toolResult(content)], model);
-  const projected = (transformed as ToolResultMessage).content;
-
-  expect(projected).toEqual([
-    resource,
-    text("(tool image omitted: model does not support images)"),
-    metadata,
-    text("(tool image omitted: model does not support images)"),
-  ]);
+  const blocks = [resource, image("a"), image(""), image("b"), resource, image("c")];
+  const content = blocks as unknown as ToolResultMessage["content"];
+  const projected = (transformMessages([toolResult(content)], model)[0] as ToolResultMessage)
+    .content;
+  const omitted = text("(tool image omitted: model does not support images)");
+  expect(projected).toEqual([resource, omitted, resource, omitted]);
   expect(projected[0]).toBe(resource);
-  expect(projected[2]).toBe(metadata);
+  expect(projected[2]).toBe(resource);
 });
 
 it.each([
@@ -212,33 +147,19 @@ it.each([
   ["asynchronous call", true, " call_1 ", "call_1"],
   ["asynchronous result", true, "call_1", " call_1 "],
 ] as const)("pairs padded %s ids", (_name, async, id, toolCallId) => {
-  const assistant = makeAssistant(
-    [{ type: "toolCall", id, name: "lookup", arguments: {}, ...(async ? { async } : {}) }],
-    "toolUse",
-    { model: async ? "source-model" : model.id, timestamp: 1 },
-  );
-  const messages: Message[] = [
-    assistant,
-    ...(async ? [{ ...assistant, content: [text("later answer")] }] : []),
-    toolResult([text("actual result")], toolCallId, 2),
-  ];
+  const assistant = makeAssistant([call(id, async)], "toolUse", {
+    model: async ? "source-model" : model.id,
+    timestamp: 1,
+  });
+  const later = async ? [{ ...assistant, content: [text("later answer")] }] : [];
+  const recorded = toolResult([text("actual result")], toolCallId, 2);
+  const messages: Message[] = [assistant, ...later, recorded];
   const original = structuredClone(messages);
 
-  const transformed = transformMessages(messages, model);
-
-  expect(transformed.map((message) => message.role)).toEqual([
-    "assistant",
-    "toolResult",
-    ...(async ? ["assistant"] : []),
+  expect(transformMessages(messages, model)).toEqual([
+    { ...assistant, content: [call()] },
+    { ...recorded, toolCallId: "call_1" },
+    ...later,
   ]);
-  expect(transformed[0]?.content).toEqual([
-    { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
-  ]);
-  expect(transformed[1]).toMatchObject({
-    role: "toolResult",
-    toolCallId: "call_1",
-    isError: false,
-    content: [text("actual result")],
-  });
   expect(messages).toEqual(original);
 });

@@ -1,78 +1,48 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { detectGatewayRespawnSupervisor, detectRespawnSupervisor } from "./supervisor-markers.js";
 
-const gatewayServiceEnv = {
-  OPENCLAW_SERVICE_MARKER: " openclaw ",
-  OPENCLAW_SERVICE_KIND: " gateway ",
-};
-const linuxOptIn = { includeLinuxOpenClawGatewayServiceMarker: true };
-function expectSupervisor(
-  env: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform,
-  expected: ReturnType<typeof detectRespawnSupervisor>,
-  options?: Parameters<typeof detectRespawnSupervisor>[2],
-) {
-  expect(detectRespawnSupervisor(env, platform, options)).toBe(expected);
-}
+const service = { OPENCLAW_SERVICE_MARKER: " openclaw ", OPENCLAW_SERVICE_KIND: " gateway " };
+const worker = { ...service, OPENCLAW_SERVICE_KIND: "worker" };
+const foreign = { ...service, OPENCLAW_SERVICE_MARKER: "other" };
+const macApp = { XPC_SERVICE_NAME: "ai.openclaw.mac" };
+type Case = [
+  NodeJS.Platform,
+  NodeJS.ProcessEnv,
+  ReturnType<typeof detectRespawnSupervisor>,
+  boolean?,
+];
 
-describe("detectRespawnSupervisor", () => {
-  it("detects launchd from OpenClaw's explicit marker or current gateway launchd job", () => {
-    expectSupervisor({ OPENCLAW_LAUNCHD_LABEL: " ai.openclaw.gateway " }, "darwin", "launchd");
-    expectSupervisor({ OPENCLAW_LAUNCHD_LABEL: "   " }, "darwin", null);
-    expectSupervisor({ LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, "darwin", "launchd");
-    expectSupervisor(
-      { LAUNCH_JOB_NAME: "ai.openclaw.work", OPENCLAW_PROFILE: "work" },
-      "darwin",
-      "launchd",
-    );
-    expectSupervisor({ LAUNCH_JOB_LABEL: "ai.openclaw.mac" }, "darwin", null);
-    expectSupervisor({ XPC_SERVICE_NAME: "ai.openclaw.mac" }, "darwin", null);
-    expectSupervisor(
-      { XPC_SERVICE_NAME: "ai.openclaw.mac", OPENCLAW_PROFILE: "mac" },
-      "darwin",
-      null,
-    );
-    expectSupervisor({ XPC_SERVICE_NAME: "ai.openclaw.gateway" }, "darwin", "launchd");
-  });
-
-  it("detects Linux OpenClaw gateway service markers only for opt-in callers", () => {
-    expectSupervisor(gatewayServiceEnv, "linux", null);
-    expectSupervisor(gatewayServiceEnv, "linux", "systemd", linuxOptIn);
-    expectSupervisor(
-      { ...gatewayServiceEnv, OPENCLAW_SERVICE_KIND: "worker" },
-      "linux",
-      null,
-      linuxOptIn,
-    );
-    expectSupervisor(
-      { ...gatewayServiceEnv, OPENCLAW_SERVICE_MARKER: "other" },
-      "linux",
-      null,
-      linuxOptIn,
-    );
-  });
-
-  it("detects scheduled-task supervision on Windows from either hint family", () => {
-    expectSupervisor({ OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway" }, "win32", "schtasks");
-    expectSupervisor(gatewayServiceEnv, "win32", "schtasks");
-    expectSupervisor({ ...gatewayServiceEnv, OPENCLAW_SERVICE_KIND: "worker" }, "win32", null);
-    expectSupervisor({ ...gatewayServiceEnv, OPENCLAW_SERVICE_MARKER: "other" }, "win32", null);
-  });
-
-  it("ignores service markers on non-Windows platforms and unknown platforms", () => {
-    expectSupervisor(gatewayServiceEnv, "linux", null);
-    expectSupervisor({ LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, "freebsd", null);
-  });
+it.each<Case>([
+  ["darwin", { OPENCLAW_LAUNCHD_LABEL: " ai.openclaw.gateway " }, "launchd"],
+  ["darwin", { OPENCLAW_LAUNCHD_LABEL: "   " }, null],
+  ["darwin", { LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, "launchd"],
+  ["darwin", { XPC_SERVICE_NAME: "ai.openclaw.gateway" }, "launchd"],
+  ["darwin", { LAUNCH_JOB_NAME: "ai.openclaw.work", OPENCLAW_PROFILE: "work" }, "launchd"],
+  ["darwin", { LAUNCH_JOB_LABEL: "ai.openclaw.mac" }, null],
+  ["darwin", macApp, null],
+  ["linux", service, null],
+  ["linux", service, "systemd", true],
+  ["linux", worker, null, true],
+  ["linux", foreign, null, true],
+  ["win32", { OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway" }, "schtasks"],
+  ["win32", service, "schtasks"],
+  ["win32", worker, null],
+  ["win32", foreign, null],
+  ["freebsd", { LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, null],
+])("detects %s supervisor from %j", (platform, env, expected, optIn = false) => {
+  expect(
+    detectRespawnSupervisor(env, platform, {
+      includeLinuxOpenClawGatewayServiceMarker: optIn,
+    }),
+  ).toBe(expected);
 });
 
-describe("detectGatewayRespawnSupervisor", () => {
-  it("keeps external ownership separate from native supervisor detection", () => {
-    const env = {
-      OPENCLAW_SUPERVISOR_MODE: "external",
-      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
-    };
+it("keeps external ownership separate from native supervisor detection", () => {
+  const env = {
+    OPENCLAW_SUPERVISOR_MODE: "external",
+    OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+  };
 
-    expect(detectGatewayRespawnSupervisor(env, "darwin")).toBe("external");
-    expect(detectRespawnSupervisor(env, "darwin")).toBe("launchd");
-  });
+  expect(detectGatewayRespawnSupervisor(env, "darwin")).toBe("external");
+  expect(detectRespawnSupervisor(env, "darwin")).toBe("launchd");
 });

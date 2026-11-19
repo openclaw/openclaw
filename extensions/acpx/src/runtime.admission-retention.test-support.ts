@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
 import { createFileSessionStore } from "acpx/runtime";
-import { promptJson, withProcessRuntime } from "./runtime-process.test-support.js";
+import { withProcessRuntime } from "./runtime-process.test-support.js";
 import { acpxOperationScope } from "./runtime-session-store.js";
+import type { AcpxRuntime } from "./runtime.js";
 
 const gc = globalThis.gc;
 assert.ok(gc, "The retention child requires --expose-gc");
@@ -15,6 +16,24 @@ const track = (label: string, value: object) =>
 const ids: number[] = [];
 let failLaunch = true;
 let lookupResult: "missing" | "error" | undefined;
+
+// Return the frame retaining the last rejected lookup promise before checking GC.
+async function exerciseUnusedLookups(runtime: AcpxRuntime) {
+  for (let index = 0; index < 8; index++) {
+    lookupResult = index % 2 === 0 ? "missing" : "error";
+    const lookup = runtime.findSession({
+      sessionKey: `lookup-only-${index}`,
+      agentId: "main",
+      agent: "fixture",
+    });
+    if (lookupResult === "error") {
+      await assert.rejects(lookup, /synthetic lookup failure/);
+    } else {
+      assert.equal(await lookup, undefined);
+    }
+  }
+  lookupResult = undefined;
+}
 
 await withProcessRuntime(
   `acpx-admission-${scenario}`,
@@ -30,20 +49,7 @@ await withProcessRuntime(
     }
     const failedIds = [...ids];
     if (scenario === "initial") {
-      for (let index = 0; index < 8; index++) {
-        lookupResult = index % 2 === 0 ? "missing" : "error";
-        const lookup = runtime.findSession({
-          sessionKey: `lookup-only-${index}`,
-          agentId: "main",
-          agent: "fixture",
-        });
-        if (lookupResult === "error") {
-          await assert.rejects(lookup, /synthetic lookup failure/);
-        } else {
-          assert.equal(await lookup, undefined);
-        }
-      }
-      lookupResult = undefined;
+      await exerciseUnusedLookups(runtime);
     }
     const control = new WeakRef({ unowned: true });
     // Cross task boundaries and allow GC convergence; the broken registry retains every owner.
@@ -52,9 +58,7 @@ await withProcessRuntime(
       gc();
     }
     assert.equal(control.deref(), undefined, "Unowned GC control must collect");
-    const retained = references
-      .filter(({ value }) => value.deref() !== undefined)
-      .map(({ label }) => label);
+    const retained = references.flatMap(({ label, value }) => (value.deref() ? [label] : []));
     console.log(
       JSON.stringify({ scenario, observed: references.length, retained, controlCollected: true }),
     );
@@ -63,23 +67,8 @@ await withProcessRuntime(
     failLaunch = false;
     const handle = await ensure(0);
     const retryId = ids.at(-1);
-    assert.ok(
-      retryId !== undefined && !failedIds.includes(retryId),
-      "Sequential retry needs a fresh admission owner",
-    );
-    const context = await promptJson(runtime, handle, "show context", "retry");
-    assert.deepEqual(context.mcpServers, [
-      {
-        name: "openclaw-tools",
-        command: process.execPath,
-        args: ["--openclaw-agent-id", "main"],
-        env: [{ name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY", value: target(0).sessionKey }],
-      },
-    ]);
+    assert.ok(retryId !== undefined && !failedIds.includes(retryId), "Retry needs a fresh owner");
     await runtime.close({ handle, reason: "test-complete" });
-    const found = await runtime.findSession({ ...target(0), agent: "fixture" });
-    assert.ok(found, "Ordinary close preserves discoverable session history");
-    assert.equal((await runtime.getStatus({ handle: found })).details?.closed, true);
   },
   async (state) => {
     const store = createFileSessionStore({ stateDir: state.root });

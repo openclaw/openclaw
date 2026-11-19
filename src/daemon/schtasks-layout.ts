@@ -233,7 +233,10 @@ export async function readScheduledTaskCommand(
 
 export async function readStartupEntryCommand(
   startupEntryPath: string,
-  options?: { onLauncherContent?: LauncherContentObserver; deadline?: number },
+  options?: Pick<GatewayServiceReadOptions, "onEffectiveExecutable"> & {
+    onLauncherContent?: LauncherContentObserver;
+    deadline?: number;
+  },
 ): Promise<GatewayServiceCommandConfig> {
   const command = await readWindowsTaskCommand(
     { kind: "startup-entry", path: startupEntryPath },
@@ -405,6 +408,7 @@ async function readWindowsTaskCommand(
         ...(action.workingDirectory ? { workingDirectory: action.workingDirectory } : {}),
       };
       assertCommandProfile(command);
+      options?.onEffectiveExecutable?.(action.path);
       return command;
     }
     if (launchers?.length === 0) {
@@ -508,6 +512,9 @@ async function readWindowsTaskCommand(
           }
         : {}),
     };
+    if (requireEffective && programArguments[0]) {
+      options?.onEffectiveExecutable?.(programArguments[0]);
+    }
     return {
       ...managedDefinition,
       ...(action?.workingDirectory

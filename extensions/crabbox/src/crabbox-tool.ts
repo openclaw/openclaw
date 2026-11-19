@@ -30,27 +30,6 @@ type CrabboxExecResult = SpawnResult & {
   process?: { processId: string; state: "running" | "exited" };
 };
 
-function crabboxProfilesResult(result: { profiles: Array<CrabboxProfile & { desktop: boolean }> }) {
-  const lines = result.profiles.map((profile) => {
-    const choices = [
-      profile.desktop ? "desktop enabled" : "desktop disabled",
-      ...(profile.operatingSystems?.map((os) =>
-        os.disabledReason ? `${os.id} (unavailable: ${os.disabledReason})` : os.id,
-      ) ?? []),
-      ...(profile.machines?.map(
-        (machine) => `${machine.id}${machine.os ? ` (${machine.os})` : ""}`,
-      ) ?? []),
-    ];
-    return `- ${profile.id}: ${choices.join("; ")}`;
-  });
-  return textResult(
-    lines.length
-      ? `Crabbox profiles:\n${lines.join("\n")}\nUse action=create with a profileId to create or reuse a Crabbox.`
-      : "No Crabbox profiles are currently available.",
-    result,
-  );
-}
-
 function crabboxEnvironmentText(environment: CrabboxEnvironment): string {
   return `Environment: ${environment.status} (${environment.worker.state}).${environment.worker.error ? `\n${environment.worker.error}` : ""}`;
 }
@@ -211,7 +190,24 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
             });
           }
         }
-        return crabboxProfilesResult({ profiles: machineProfiles });
+        const lines = machineProfiles.map((profile) => {
+          const choices = [
+            profile.desktop ? "desktop enabled" : "desktop disabled",
+            ...(profile.operatingSystems?.map((os) =>
+              os.disabledReason ? `${os.id} (unavailable: ${os.disabledReason})` : os.id,
+            ) ?? []),
+            ...(profile.machines?.map(
+              (machine) => `${machine.id}${machine.os ? ` (${machine.os})` : ""}`,
+            ) ?? []),
+          ];
+          return `- ${profile.id}: ${choices.join("; ")}`;
+        });
+        return textResult(
+          lines.length
+            ? `Crabbox profiles:\n${lines.join("\n")}\nUse action=create with a profileId to create or reuse a Crabbox.`
+            : "No Crabbox profiles are currently available.",
+          { profiles: machineProfiles },
+        );
       }
       if (action === "create") {
         const available = profiles();

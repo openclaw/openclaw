@@ -56,7 +56,7 @@ describe("Mattermost opaque channel resolution over real HTTP", () => {
             cfg,
             accountId: "default",
           });
-          expect(resolved).toEqual({ kind, id, to: `channel:${id}` });
+          expect(resolved).toEqual({ kind, to: `channel:${id}` });
 
           const route = resolveMattermostOutboundSessionRoute({
             cfg,

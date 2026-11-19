@@ -9,7 +9,6 @@ import {
   controlUiSessionUrl,
   createControlUiMockSameOriginGatewayScript,
   installMockGateway,
-  startControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -46,7 +45,6 @@ const accessServer = createServer((request, response) => {
 });
 const suite = createControlUiE2eSuite({
   name: "Browser sign-in recovery",
-  startServer: () => startControlUiE2eServer(undefined, { source: true }),
   resources: {
     run: async () => {
       await new Promise<void>((resolve) => {
@@ -181,7 +179,7 @@ suite.define(() => {
             { "set-cookie": renewedCookie },
           );
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
-          // Apply shipped CSP after Vite boot without relaxing frames or IdP access.
+          // Apply shipped CSP after UI boot without relaxing frames or IdP access.
           await page.evaluate((policy) => {
             const meta = document.createElement("meta");
             meta.httpEquiv = "Content-Security-Policy";
@@ -200,6 +198,12 @@ suite.define(() => {
               () => navigator.serviceWorker.controller?.state === "activated",
             );
           }
+          // Recovery preloads the modal host while access is valid. A proxy then
+          // redirects every request, including code chunks not loaded yet.
+          await page.waitForFunction(() => customElements.get("openclaw-modal-dialog"));
+          await context.route("**/assets/**", async (route) =>
+            (await expired(route)) ? route.fulfill(redirect()) : route.fallback(),
+          );
           const originalUrl = page.url();
           const initialConnects = (await gateway.getRequests("connect")).length;
           const expectConversationRetained = async () => {
@@ -217,6 +221,8 @@ suite.define(() => {
           if (renewal === "interactive") {
             await modal.waitFor();
             expect(await modal.count()).toBe(1);
+            await modal.getByText("Your website sign-in has expired.", { exact: false }).waitFor();
+            expect(await modal.textContent()).not.toContain("Couldn’t load this panel.");
             expect({ probes, metadataRequests }).toEqual({ probes: 2, metadataRequests: 2 });
             await expectConversationRetained();
             const expectDialogToFit = async () => {
@@ -273,4 +279,56 @@ suite.define(() => {
       );
     },
   );
+
+  it("offers sign-in when a proxy refuses an established tab's reconnect", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, locale: "en-US" },
+      async ({ context, page }) => {
+        let signedIn = true;
+        // A sign-in proxy that answers 401 instead of redirecting once the session expires.
+        const proxy = (route: Route) =>
+          signedIn ? route.fallback() : route.fulfill({ status: 401 });
+        await page.addInitScript(createControlUiMockSameOriginGatewayScript());
+        const gateway = await installMockGateway(page, {
+          deviceToken: "synthetic-recovery-device-token",
+        });
+        await page.route("**/healthz", proxy);
+        await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, proxy);
+        const rootUrl = new URL("/", suite.server.baseUrl).href;
+        await context.route(rootUrl, (route) =>
+          route.fulfill({ contentType: "text/html", body: "Synthetic sign-in page" }),
+        );
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const draft = "Keep this unsent draft while I sign in.";
+        await composer.fill(draft);
+        await page.waitForFunction(() => customElements.get("openclaw-modal-dialog"));
+        const sockets = await gateway.getSocketCount();
+        signedIn = false;
+        await gateway.setOnline(false);
+        await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(sockets);
+        // The proxy refuses the upgrade: the browser reports only 1006 without a reason.
+        await gateway.closeLatest(1006, "");
+        const modal = page
+          .locator("openclaw-modal-dialog")
+          .filter({ hasText: "Sign in to continue loading content" });
+        await modal.waitFor();
+        expect(await composer.inputValue()).toBe(draft);
+        const popup = context.waitForEvent("page");
+        await modal.getByRole("button", { name: "Sign in", exact: true }).click();
+        await (await popup).waitForURL(rootUrl);
+        signedIn = true;
+        await gateway.setOnline(true);
+        await modal.getByRole("button", { name: "Check again", exact: true }).click();
+        await modal.waitFor({ state: "detached" });
+        await page.waitForFunction(
+          () => window.openclawControlUi?.snapshot().gatewayPhase === "connected",
+        );
+        expect(await composer.inputValue()).toBe(draft);
+        await composer.press("Enter");
+        const sent = await gateway.waitForRequest("chat.send");
+        expect(sent.params).toMatchObject({ message: draft, sessionKey: "agent:main:main" });
+      },
+    );
+  });
 });

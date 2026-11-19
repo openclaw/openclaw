@@ -560,15 +560,14 @@ export async function buildTelegramInboundContextPayload(
     },
     sessionTranscript: {
       chatWindow: true,
+      ...(shouldSuppressPersistedDmChatWindowContext ? { deliveryOnly: true } : {}),
       historyLimit: isGroup ? historyLimit : dmHistoryLimit,
       beforeTimestampMs: options?.receivedAtMs ?? messageTimestamp,
       minTimestampMs: options?.promptContextMinTimestampMs,
       senderLabels: { assistant: "OpenClaw", user: "User" },
     },
     access: {
-      commands: {
-        authorized: commandAuthorized,
-      },
+      commands: { authorized: commandAuthorized },
       mentions: mentionFacts,
     },
     command:
@@ -658,6 +657,7 @@ export async function buildTelegramInboundContextPayload(
       LocationLivePeriodSeconds: primaryCtx.message?.location?.live_period,
       IsForum: isForum,
       TopicName: isForum && topicName ? topicName : undefined,
+      ThreadLabel: !isGroup && threadSpec.scope === "dm" ? topicName : undefined,
     },
   } satisfies BuildChannelInboundEventContextAsyncParams);
 

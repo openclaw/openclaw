@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareUpdateCandidateRehearsal } from "../infra/update-candidate-rehearsal.js";
 import { materializeUpdateCandidateStateWorker } from "../infra/update-candidate-state.test-support.js";
@@ -14,7 +15,7 @@ import { inspectPreparedDoctorRehearsal } from "./doctor-update-rehearsal-invent
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
-it("admits real producer plugin host, dependency and basename links without traversing the candidate", async () => {
+it("normalizes external data before real producer Doctor admission without new authority", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (source) => {
     const root = dirs.make("rehearsal-plugin-source-");
     const candidate = path.join(root, "candidate");
@@ -24,14 +25,20 @@ it("admits real producer plugin host, dependency and basename links without trav
     await fs.mkdir(candidate);
     await materializeUpdateCandidateStateWorker(candidate);
     await fs.mkdir(plugin);
+    const assetsRoot = path.join(root, "external-assets");
+    await fs.mkdir(assetsRoot);
+    await writeFixtureJson(path.join(assetsRoot, "package.json"), { name: "external-assets" });
+    const asset = path.join(assetsRoot, "config.txt");
+    await fs.writeFile(asset, "producer-owned external configuration");
+    await fs.symlink(asset, path.join(plugin, "config.txt"));
     await fs.symlink(plugin, locator, "dir");
     await fs.mkdir(path.join(modules, "dependency"), { recursive: true });
     await fs.writeFile(path.join(candidate, "retained.txt"), "candidate is not migration data");
     await fs.symlink(source.stateDir, path.join(candidate, "unrelated-live-alias"), "dir");
-    await fs.writeFile(
-      path.join(plugin, "package.json"),
-      JSON.stringify({ name: "example", dependencies: { dependency: "*" } }),
-    );
+    await writeFixtureJson(path.join(plugin, "package.json"), {
+      name: "example",
+      dependencies: { dependency: "*" },
+    });
     await fs.writeFile(path.join(plugin, "index.js"), "export default {};\n");
     await fs.writeFile(path.join(modules, "dependency", "package.json"), '{"name":"dependency"}');
     await fs.symlink(candidate, path.join(modules, "openclaw"), "dir");
@@ -51,7 +58,8 @@ it("admits real producer plugin host, dependency and basename links without trav
       env: source.env,
     });
     try {
-      const params = {
+      await rehearsal.prepareRuntime(() => {});
+      const params: Parameters<typeof inspectPreparedDoctorRehearsal>[0] = {
         ...rehearsal,
         env: { ...rehearsal.env, OPENCLAW_UPDATE_IN_PROGRESS: "0" },
         assertCurrent() {},
@@ -63,18 +71,58 @@ it("admits real producer plugin host, dependency and basename links without trav
       expect(
         (await fs.lstat(path.join(await fs.realpath(alias), "node_modules"))).isSymbolicLink(),
       ).toBe(true);
+      const normalizedAsset = path.join(await fs.realpath(alias), "config.txt");
+      expect((await fs.lstat(normalizedAsset)).isFile()).toBe(true);
+      expect(await fs.readFile(normalizedAsset, "utf8")).toBe(
+        "producer-owned external configuration",
+      );
+      expect(await fs.readFile(asset, "utf8")).toBe("producer-owned external configuration");
       const host = rehearsal.pluginCodeLinks!.find((fact) => fact.target?.path === candidate)!;
       expect(host).toBeDefined();
       const admitted = await inspectPreparedDoctorRehearsal(params);
       admitted.assertPrepared();
 
+      for (const key of [
+        "HOME",
+        "USERPROFILE",
+        "OPENCLAW_HOME",
+        "OPENCLAW_STATE_DIR",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "OPENCLAW_CONFIG_PATH",
+        "OPENCLAW_WORKSPACE_DIR",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "OPENCLAW_SKIP_CHANNELS",
+        "OPENCLAW_SKIP_PROVIDERS",
+        "OPENCLAW_SKIP_CRON",
+        "OPENCLAW_SKIP_GMAIL_WATCHER",
+        "OPENCLAW_SKIP_CANVAS_HOST",
+        "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
+        "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM",
+        "OPENCLAW_NO_AUTO_UPDATE",
+        "NODE_DISABLE_COMPILE_CACHE",
+      ]) {
+        const original = params.env[key];
+        params.env[key] = "changed";
+        try {
+          expect(() => admitted.assertCurrent()).toThrow(/isolated environment changed/);
+          await expect(inspectPreparedDoctorRehearsal(params)).rejects.toThrow(
+            /isolated environment changed|not a prepared disposable copy/,
+          );
+        } finally {
+          params.env[key] = original;
+        }
+      }
+      admitted.assertPrepared();
+
       // A producer-owned code edge still cannot authorize migration data, either
       // at the link itself or through a descendant of that link.
       for (const dataPath of [host.path, path.join(host.path, "retained.txt")]) {
-        await fs.writeFile(
-          rehearsal.configPath,
-          JSON.stringify({ ...copied, canvasHost: { root: dataPath } }),
-        );
+        await writeFixtureJson(rehearsal.configPath, { ...copied, canvasHost: { root: dataPath } });
         await expect(inspectPreparedDoctorRehearsal(params)).rejects.toThrow(
           /unsafe ownership or links/,
         );
@@ -95,7 +143,7 @@ it("admits real producer plugin host, dependency and basename links without trav
         { plugins: { entries: { "memory-wiki": { config: { vault: { path: escaped } } } } } },
         { channels: { reef: { stateDir: escaped } } },
       ]) {
-        await fs.writeFile(rehearsal.configPath, JSON.stringify({ ...copied, ...overrides }));
+        await writeFixtureJson(rehearsal.configPath, { ...copied, ...overrides });
         await expect(inspectPreparedDoctorRehearsal(params)).rejects.toThrow(/parent traversal/);
         expect(await fs.readFile(sentinel, "utf8")).toBe("external state must not be admitted");
       }

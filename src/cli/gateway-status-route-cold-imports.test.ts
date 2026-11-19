@@ -42,8 +42,11 @@ vi.mock("../gateway/desktop/host-source.js", () => ({
 
 // mock-isolation: Network discovery is outside the config-import boundary being measured.
 vi.mock("../infra/network-discovery-display.js", () => ({
-  inspectBestEffortPrimaryTailnetIPv4: () => ({ tailnetIPv4: undefined }),
-  resolveBestEffortGatewayBindHostForDisplay: async () => ({ bindHost: "127.0.0.1" }),
+  pickBestEffortPrimaryTailnetIPv4: () => undefined,
+}));
+vi.mock("../gateway/net.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/net.js")>()),
+  resolveGatewayBindHost: async () => "127.0.0.1",
 }));
 
 // mock-isolation: Supply an idle port without probing the operator's live services.

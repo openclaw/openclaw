@@ -9,8 +9,11 @@ import type { SlackMessageEvent } from "../../types.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js";
-import { resolveSlackMonitorEventScope } from "../event-scope.js";
-import { enqueueSlackInteractionEvent } from "./interaction-event.js";
+import { resolveSlackInteractionEventScope } from "../event-scope.js";
+import {
+  captureSlackInteractionEventRoute,
+  enqueueSlackInteractionEvent,
+} from "./interaction-event.js";
 import { summarizeSlackViewState } from "./modal-input-summary.js";
 
 type SlackModalBody = {
@@ -70,21 +73,12 @@ export function registerModalLifecycleHandler(params: {
         return;
       }
       await ack();
-      const eventScope = resolveSlackMonitorEventScope({
-        ctx: params.ctx,
-        body,
-        context: args.context,
-        client: args.client,
-        onDrop: (reason) =>
-          params.ctx.runtime.log?.(`slack:interaction drop ${params.interactionType} ${reason}`),
-      });
+      const eventScope = resolveSlackInteractionEventScope(
+        params.ctx,
+        args,
+        params.interactionType,
+      );
       if (eventScope === null) {
-        return;
-      }
-      if (params.ctx.shouldDropMismatchedSlackEvent?.(body)) {
-        params.ctx.runtime.log?.(
-          `slack:interaction drop ${params.interactionType} payload (mismatched app/team)`,
-        );
         return;
       }
       params.trackEvent?.();
@@ -136,6 +130,10 @@ export function registerModalLifecycleHandler(params: {
       };
 
       const sessionRouting = await resolveModalSessionRouting();
+      const route = await captureSlackInteractionEventRoute(sessionRouting, runtimeCtx.runtime.log);
+      if (!runtimeCtx.isRuntimePolicyCurrent()) {
+        return;
+      }
       const stateValues = typedBody.view?.state?.values;
       const payload = {
         actionId: `view:${callbackId}`,
@@ -182,6 +180,9 @@ export function registerModalLifecycleHandler(params: {
       ) => {
         try {
           if (!pluginInteractiveData) {
+            return undefined;
+          }
+          if (!runtimeCtx.isRuntimePolicyCurrent()) {
             return undefined;
           }
 
@@ -291,22 +292,30 @@ export function registerModalLifecycleHandler(params: {
           })
         : undefined;
 
-      enqueueSlackInteractionEvent({ ...eventPayload, ...pluginEventFields }, sessionRouting, {
-        contextKey: [
-          isViewClosed ? "slack:interaction:view-closed" : "slack:interaction:view",
-          teamId,
-          callbackId,
-          viewId,
-          userId,
-        ]
-          .filter(Boolean)
-          .join(":"),
-        deliveryContext: {
-          channel: "slack",
-          ...(deferredTarget ? { to: deferredTarget.target } : {}),
-          accountId: runtimeCtx.accountId,
+      if (!route || !runtimeCtx.isRuntimePolicyCurrent()) {
+        return;
+      }
+      await enqueueSlackInteractionEvent(
+        { ...eventPayload, ...pluginEventFields },
+        route,
+        {
+          contextKey: [
+            isViewClosed ? "slack:interaction:view-closed" : "slack:interaction:view",
+            teamId,
+            callbackId,
+            viewId,
+            userId,
+          ]
+            .filter(Boolean)
+            .join(":"),
+          deliveryContext: {
+            channel: "slack",
+            ...(deferredTarget ? { to: deferredTarget.target } : {}),
+            accountId: runtimeCtx.accountId,
+          },
         },
-      });
+        runtimeCtx.runtime.log,
+      );
     },
   );
 }

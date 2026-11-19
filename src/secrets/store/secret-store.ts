@@ -139,13 +139,11 @@ export async function listSecretStoreEntries(
 /** Atomically returns and hard-deletes one exact fresh, non-egress GitHub setup handoff. */
 export async function consumeGitHubSetupHandoff(params: {
   name: string;
-  nowMs?: number;
-  database?: OpenClawStateDatabaseOptions;
 }): Promise<string | undefined> {
-  const context = captureOpenClawStateWorkerContext(params.database);
+  const context = captureOpenClawStateWorkerContext();
   const value = await executeOpenClawStateWorker(context, {
     type: "githubSetup.consume",
-    input: { name: params.name, now: params.nowMs ?? Date.now() },
+    input: { name: params.name, now: Date.now() },
   });
   if (value !== undefined) {
     registerSecretValueForRedaction(value);

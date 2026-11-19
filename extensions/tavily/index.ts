@@ -1,5 +1,8 @@
 import { optionalStringEnum } from "openclaw/plugin-sdk/channel-actions";
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  definePluginEntry,
+  type OpenClawPluginToolContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import {
   jsonResult,
   readPositiveIntegerParam,
@@ -9,7 +12,6 @@ import {
 import { Type } from "typebox";
 import { runTavilyExtract, runTavilySearch } from "./src/tavily-client.js";
 import { createTavilyWebSearchProvider } from "./src/tavily-search-provider.js";
-import { resolveTavilyToolConfig } from "./src/tavily-tool-config.js";
 
 const TavilySearchToolSchema = Type.Object(
   {
@@ -85,6 +87,9 @@ export default definePluginEntry({
   name: "Tavily Plugin",
   description: "Bundled Tavily search and extract plugin",
   register(api) {
+    const resolveToolConfig = (ctx?: OpenClawPluginToolContext) =>
+      ctx?.getRuntimeConfig?.() ?? ctx?.runtimeConfig ?? ctx?.config ?? api.config;
+
     api.registerWebSearchProvider(createTavilyWebSearchProvider());
     api.registerTool(
       (ctx) => ({
@@ -113,7 +118,7 @@ export default definePluginEntry({
               timeRange: readStringParam(rawParams, "time_range") || undefined,
               includeDomains: readStringArrayParam(rawParams, "include_domains"),
               excludeDomains: readStringArrayParam(rawParams, "exclude_domains"),
-              cfg: resolveTavilyToolConfig(api, ctx),
+              cfg: resolveToolConfig(ctx),
               ...(signal ? { signal } : {}),
             }),
           );
@@ -152,7 +157,7 @@ export default definePluginEntry({
 
           return jsonResult(
             await runTavilyExtract({
-              cfg: resolveTavilyToolConfig(api, ctx),
+              cfg: resolveToolConfig(ctx),
               urls,
               query,
               extractDepth,

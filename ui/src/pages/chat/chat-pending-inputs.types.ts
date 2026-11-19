@@ -1,6 +1,10 @@
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
+export type ChatPendingInputAction =
+  | { kind: "steer"; runId: string }
+  | { kind: "dismiss"; inputId: string };
+
 export type PendingInputRequest = {
   before?: number;
   kind: "navigation" | "refresh" | "discovery";
@@ -22,4 +26,8 @@ export type ChatPendingInputView = {
   readonly loading: boolean;
   error?: string;
   request?: PendingInputRequest;
+  /** Optimistic dismissals keyed to the request that owns each; failure restores only its own. */
+  dismissing?: Map<string, object>;
+  /** Gateway-confirmed dismissals hide late pages read before the tombstone committed. */
+  dismissed?: ReadonlySet<string>;
 };

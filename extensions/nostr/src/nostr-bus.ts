@@ -1,10 +1,7 @@
 import { SimplePool, finalizeEvent, getPublicKey, verifyEvent, type Event } from "nostr-tools";
 import { decrypt, encrypt } from "nostr-tools/nip04";
 import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
-import {
-  createDirectDmPreCryptoGuardPolicy,
-  type DirectDmPreCryptoGuardPolicyOverrides,
-} from "openclaw/plugin-sdk/direct-dm-guard-policy";
+import { createDirectDmPreCryptoGuardPolicy } from "openclaw/plugin-sdk/direct-dm-guard-policy";
 import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { createFixedWindowRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
 import type { NostrProfile } from "./config-schema.js";
@@ -18,7 +15,6 @@ import {
 } from "./nostr-ingress.js";
 import { validatePrivateKey } from "./nostr-key-utils.js";
 import { publishProfile as publishProfileFn, type ProfilePublishResult } from "./nostr-profile.js";
-import { createNostrRelaySubscriptionGroup } from "./nostr-relay-subscription.js";
 import {
   readNostrBusState,
   writeNostrBusState,
@@ -31,6 +27,10 @@ const STARTUP_LOOKBACK_SEC = 120; // tolerate relay lag / clock skew
 const STATE_PERSIST_DEBOUNCE_MS = 5000;
 const NOSTR_INGRESS_ENVELOPE_OVERHEAD_BYTES = 16 * 1024;
 const NOSTR_INGRESS_MAX_PENDING_EVENTS = 1_000;
+const DEFAULT_EOSE_CONFIRM_DEADLINE_MS = 10_000;
+const LIBRARY_EOSE_TIMEOUT_MARGIN_MS = 1_000;
+
+type BackfillStatus = "pending" | "confirmed" | "incomplete";
 
 type NostrEventRejection =
   | "self_message"
@@ -64,8 +64,6 @@ interface NostrBusOptions {
   }) => Promise<"allow" | "block" | "pairing">;
   /** Internal local rejection hint for literal-only allowlist accounts; never grants access. */
   admissionPubkeys?: readonly string[];
-  /** Override pre-crypto DM guardrails for tests or future channel tuning (optional) */
-  guardPolicy?: DirectDmPreCryptoGuardPolicyOverrides;
   onError?: (error: Error, context: string) => void;
   onConnect?: (relay: string) => void;
   onDisconnect?: (relay: string) => void;
@@ -102,7 +100,7 @@ export async function startNostrBus(options: NostrBusOptions) {
   pool.onRelayConnectionSuccess = options.onConnect;
   const accountId = options.accountId ?? pk.slice(0, 16);
   const gatewayStartedAt = Math.floor(Date.now() / 1000);
-  const guardPolicy = createDirectDmPreCryptoGuardPolicy(options.guardPolicy);
+  const guardPolicy = createDirectDmPreCryptoGuardPolicy();
 
   let preferredRelay: string | undefined;
 
@@ -248,13 +246,13 @@ export async function startNostrBus(options: NostrBusOptions) {
     typeof pool.subscribeMany
   >[1];
   const relayAbort = new AbortController();
-  let relaySubscriptions: ReturnType<typeof createNostrRelaySubscriptionGroup> | undefined;
+  let closeRelaySubscriptions: ((reason: string) => Promise<void>) | undefined;
   let relayStopPromise: Promise<void> | undefined;
   const stopRelays = (reason: string): Promise<void> => {
     relayStopPromise ??= (async () => {
       relayAbort.abort(reason);
       try {
-        await relaySubscriptions?.close(reason);
+        await closeRelaySubscriptions?.(reason);
       } catch (error) {
         onError?.(error as Error, "close subscription");
       } finally {
@@ -353,19 +351,24 @@ export async function startNostrBus(options: NostrBusOptions) {
       recentEventIds: [],
     });
 
-    relaySubscriptions = createNostrRelaySubscriptionGroup({
-      pool,
-      relays,
-      filter: dmFilter,
-      abort: relayAbort.signal,
-      onEvent: (event) => {
-        const task = handleRelayEvent(event);
-        if (options.trackIngressTask) {
-          options.trackIngressTask(task.then(() => ingress.waitForIdle()));
-        }
-        void task;
-      },
-      onBackfillComplete: (confirmedRelays) => {
+    /** Separates real relay EOSE frames from nostr-tools timeout/close synthesis. */
+    const subscriptionRelays = [...new Set(relays)];
+    const subscriptions: Array<ReturnType<SimplePool["subscribeMany"]>> = [];
+    const deadlineTimers = new Set<ReturnType<typeof setTimeout>>();
+    let locallyClosing = false;
+    const backfillStatus = new Map<string, BackfillStatus>(
+      subscriptionRelays.map((relay): [string, BackfillStatus] => [relay, "pending"]),
+    );
+
+    const settleBackfill = (relay: string, status: "confirmed" | "incomplete"): void => {
+      if (backfillStatus.get(relay) !== "pending") {
+        return;
+      }
+      backfillStatus.set(relay, status);
+      if ([...backfillStatus.values()].some((value) => value === "pending")) {
+        return;
+      }
+      if ([...backfillStatus.values()].every((value) => value === "confirmed")) {
         backfillFinalizePromise ??= ingress
           .waitForIdle()
           .then(() => {
@@ -373,16 +376,74 @@ export async function startNostrBus(options: NostrBusOptions) {
             if (cursor !== undefined) {
               cursorWriter.schedule(cursor);
             }
-            onEose?.(confirmedRelays.join(", "));
+            onEose?.(subscriptionRelays.join(", "));
           })
           .catch((error: unknown) => onError?.(error as Error, "finalize relay backfill"));
-      },
-      onClose: (relay, reasons) => {
-        options.onDisconnect?.(relay);
-        onError?.(new Error(`Subscription closed: ${reasons.join(", ")}`), "subscription");
-      },
-    });
-    relaySubscriptions.start();
+      }
+    };
+
+    closeRelaySubscriptions = async (reason: string): Promise<void> => {
+      // nostr-tools reports caller-requested closes through the same callback as relay failures.
+      locallyClosing = true;
+      for (const timer of deadlineTimers) {
+        clearTimeout(timer);
+      }
+      deadlineTimers.clear();
+      await Promise.all(subscriptions.map(async (subscription) => subscription.close(reason)));
+    };
+
+    const onRelayEvent = (event: Event) => {
+      const task = handleRelayEvent(event);
+      if (options.trackIngressTask) {
+        options.trackIngressTask(task.then(() => ingress.waitForIdle()));
+      }
+      void task;
+    };
+
+    for (const relay of subscriptionRelays) {
+      let relayClosed = false;
+      let deadlineReached = false;
+      const deadlineTimer = setTimeout(() => {
+        deadlineTimers.delete(deadlineTimer);
+        deadlineReached = true;
+        settleBackfill(relay, "incomplete");
+      }, DEFAULT_EOSE_CONFIRM_DEADLINE_MS);
+      deadlineTimer.unref?.();
+      deadlineTimers.add(deadlineTimer);
+
+      subscriptions.push(
+        pool.subscribeMany([relay], dmFilter, {
+          onevent: onRelayEvent,
+          oneose: () => {
+            // Pool close is reported as EOSE first. Its onclose runs in this same turn.
+            queueMicrotask(() => {
+              if (!relayClosed && !deadlineReached) {
+                clearTimeout(deadlineTimer);
+                deadlineTimers.delete(deadlineTimer);
+                settleBackfill(relay, "confirmed");
+              }
+            });
+          },
+          onclose: (reasons) => {
+            relayClosed = true;
+            clearTimeout(deadlineTimer);
+            deadlineTimers.delete(deadlineTimer);
+            settleBackfill(relay, "incomplete");
+            if (!locallyClosing && !relayAbort.signal.aborted) {
+              const closeReasons = reasons.map(({ reason }) => reason);
+              options.onDisconnect?.(relay);
+              onError?.(
+                new Error(`Subscription closed: ${closeReasons.join(", ")}`),
+                "subscription",
+              );
+            }
+          },
+          // Own earlier deadline marks synthetic library EOSE as incomplete.
+          maxWait: DEFAULT_EOSE_CONFIRM_DEADLINE_MS + LIBRARY_EOSE_TIMEOUT_MARGIN_MS,
+          abort: relayAbort.signal,
+        }),
+      );
+    }
   } catch (error) {
     await Promise.allSettled([stopRelays("startup failed"), ingress.stop()]);
     throw error;

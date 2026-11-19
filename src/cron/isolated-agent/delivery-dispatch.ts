@@ -1,16 +1,17 @@
-/** Finalize one run result, confirm its notification, then commit its destination conversation. */
+/** Finalize one run result and delegate confirmed external conversation writes to outbound. */
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
-import type { CronResultConversation } from "../conversation-result.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
 import { normalizeCronRunErrorText } from "../service/execution-errors.js";
 import type { CronResolvedDeliveryState } from "../types.js";
 import {
+  deliveredToPersistentExecution,
   logCronDeliveryWarn,
   resolveDescendantSubagentFollowup,
   resolveDirectCronDeliveryGeneration,
@@ -35,6 +36,7 @@ export async function dispatchCronDelivery(
 ): Promise<DispatchCronDeliveryState> {
   let { summary, outputText, synthesizedText, deliveryPayloads } = params;
   let diagnostics: DispatchCronDeliveryState["diagnostics"];
+  const deliveryReceipts: NonNullable<DispatchCronDeliveryState["deliveryReceipts"]> = [];
   const sentByTool = params.sourceDeliveryOutcome.satisfiesSourceDelivery;
   const state: CronResolvedDeliveryState = {
     status: params.deliveryRequested ? "not-delivered" : "not-requested",
@@ -97,6 +99,7 @@ export async function dispatchCronDelivery(
       deliveryState: state,
       delivered: state.delivered,
       deliveryAttempted,
+      ...(deliveryReceipts.length ? { deliveryReceipts } : {}),
       deliveryError: state.error,
       deliverySuppressionReason: state.deliverySuppressionReason,
       summary,
@@ -106,12 +109,36 @@ export async function dispatchCronDelivery(
       diagnostics,
     };
   };
-  const failTarget = (error: string) => {
+  // Commits the settled result into a persistent execution conversation; returns an error.
+  const commitExecutionResult = async (
+    payloads: ReplyPayload[],
+    sessionKey = params.agentSessionKey,
+  ) => {
+    const committed = await (
+      await conversationResult.load()
+    ).commitCronConversationResult({
+      config: params.cfgWithAgentDefaults,
+      agentId: params.agentId,
+      jobId: params.job.id,
+      runStartedAt: params.runStartedAt,
+      conversation: { sessionKey },
+      payloads,
+      signal: params.abortSignal,
+      deliveryAttemptFence: params.deliveryAttemptFence,
+    });
+    if (!committed.ok) {
+      return committed.reason;
+    }
+    diagnostics = mergeCronRunDiagnostics(diagnostics, committed.diagnostics);
+    return undefined;
+  };
+  const failTarget = async (error: string) => {
     const detail = params.sourceDeliveryOutcome.unverifiedMessageToolDelivery
       ? error +
         "; the agent used the message tool, but OpenClaw could not verify that message matched the cron delivery target"
       : error;
     record("not-delivered", detail);
+    await logCronDeliveryWarn(`[cron:${params.job.id}] delivery failed: ${detail}`);
     return finish({ kind: "error", error: detail, errorKind: "delivery-target" });
   };
   const finishInterrupted = () => {
@@ -146,6 +173,28 @@ export async function dispatchCronDelivery(
       }
       if (child?.reply) {
         adoptChild(child.reply);
+      }
+    }
+    // Persistent executions keep their raw transcript audit-only. A disabled
+    // notification does not discard the settled reply in that same conversation.
+    if (
+      params.job.sessionTarget.startsWith("session:") &&
+      params.undeliveredRunStatus === "ok" &&
+      !params.skipDelivery &&
+      !sentByTool &&
+      !params.isAborted()
+    ) {
+      const normalized = normalizeDirectCronDeliveryPayloads({
+        deliveryPayloads,
+        outputText,
+        summary,
+        synthesizedText,
+      });
+      if (normalized.kind === "deliver") {
+        const error = await commitExecutionResult(normalized.payload);
+        if (error) {
+          return finish({ kind: "error", error });
+        }
       }
     }
     return finish();
@@ -257,31 +306,11 @@ export async function dispatchCronDelivery(
     outputText = synthesizedText;
   }
 
-  const conversationRuntime = await conversationResult.load();
-  let conversationResolution: CronResultConversation = {};
   let conversationError: string | undefined;
-  const conversationParams = {
-    config: params.cfgWithAgentDefaults,
-    agentId: params.agentId,
-    delivery: params.resolvedDelivery,
-    source:
-      params.sourceSessionKey && params.sourceSessionGeneration
-        ? { sessionKey: params.sourceSessionKey, ...params.sourceSessionGeneration }
-        : undefined,
-    sourceSessionKey: params.runSessionKey,
-    deliveryAttemptFence: params.deliveryAttemptFence,
-  };
-  try {
-    conversationResolution =
-      await conversationRuntime.resolveCronResultConversation(conversationParams);
-  } catch (error) {
-    if (!params.resolvedDelivery.ok && !sentByTool) {
-      return failTarget(formatErrorMessage(error));
-    }
-    conversationError = formatErrorMessage(error);
-  }
-  let { conversation } = conversationResolution;
-  diagnostics = conversationResolution.diagnostics;
+  const conversation =
+    !params.resolvedDelivery.ok && params.sourceSessionKey && params.sourceSessionGeneration
+      ? { sessionKey: params.sourceSessionKey }
+      : undefined;
   if (!conversation && !params.resolvedDelivery.ok && !sentByTool) {
     if (params.job.sessionTarget === "current") {
       return failTarget("current cron delivery is missing its source session binding");
@@ -303,6 +332,7 @@ export async function dispatchCronDelivery(
     let mayHaveReachedRecipient = false;
     try {
       const { sendCronAnnouncePayloadStrict } = await notification.load();
+      const sessionGeneration = resolveDirectCronDeliveryGeneration(params);
       const sent = await sendCronAnnouncePayloadStrict({
         deps: params.deps,
         cfg: params.cfgWithAgentDefaults,
@@ -310,11 +340,18 @@ export async function dispatchCronDelivery(
         jobId: params.job.id,
         target: {
           ...params.resolvedDelivery,
-          sessionKey: params.resolvedDelivery.sessionRoute?.sessionKey,
+          sessionKey: params.runSessionKey,
         },
         payload: deliveryPayloads,
         admittedReasoning: true,
-        sessionGeneration: resolveDirectCronDeliveryGeneration(params),
+        sessionGeneration,
+        transcriptRoute: params.resolvedDelivery.sessionRoute,
+        onTranscriptDiagnostic: (message) => {
+          diagnostics = mergeCronRunDiagnostics(
+            diagnostics,
+            createCronRunDiagnosticsFromError("delivery", message, { severity: "warn" }),
+          );
+        },
         tts: { auto: params.ttsAuto },
         inspectionUrl: resolveControlUiSessionUrl(params.cfgWithAgentDefaults, {
           sessionKey: params.runSessionKey,
@@ -328,6 +365,7 @@ export async function dispatchCronDelivery(
           runStartedAt: params.runStartedAt,
           deliveryAttemptFence: params.deliveryAttemptFence,
         },
+        onDeliveryReceipt: (receipt) => deliveryReceipts.push(receipt),
         onDeliveryAttempt: (reachedRecipient) => {
           mayHaveReachedRecipient ||= reachedRecipient;
         },
@@ -371,17 +409,29 @@ export async function dispatchCronDelivery(
       return finish();
     }
   }
-  if (params.resolvedDelivery.ok) {
-    try {
-      const bound = await conversationRuntime.bindCronResultConversation(conversationParams);
-      conversation = bound.conversation;
-      conversationError = undefined;
-    } catch (error) {
-      conversation = undefined;
-      conversationError = formatErrorMessage(error);
+  if (params.resolvedDelivery.ok || sentByTool) {
+    // Outbound skips the execution's own conversation; a persistent session still keeps
+    // the settled result there once its notification was confirmed.
+    const executionRouteKey = sentByTool
+      ? undefined
+      : deliveredToPersistentExecution(params, state.status);
+    if (executionRouteKey) {
+      const error = await commitExecutionResult(deliveryPayloads, executionRouteKey);
+      if (error) {
+        diagnostics = mergeCronRunDiagnostics(
+          diagnostics,
+          createCronRunDiagnosticsFromError(
+            "delivery",
+            `result was delivered but was not added to the conversation: ${error}`,
+            { severity: "warn" },
+          ),
+        );
+      }
     }
+    return finish();
   }
   const executionOwnsResult =
+    (params.undeliveredRunStatus === "error" || sentByTool) &&
     params.job.sessionTarget.startsWith("session:") &&
     conversation &&
     toAgentStoreSessionKey({
@@ -394,18 +444,20 @@ export async function dispatchCronDelivery(
         requestKey: params.agentSessionKey,
         mainKey: params.cfgWithAgentDefaults.session?.mainKey,
       });
-  // A persistent execution in this destination already owns its transcript entry.
+  // Errors and explicit message sends are already visible. Other execution
+  // transcript entries stay audit-only until this settled result is published.
   if (conversation && !executionOwnsResult && deliveryPayloads.length > 0) {
     deliveryAttempted = true;
     try {
-      const committed = await conversationRuntime.commitCronConversationResult({
+      const committed = await (
+        await conversationResult.load()
+      ).commitCronConversationResult({
         config: params.cfgWithAgentDefaults,
         agentId: params.agentId,
         jobId: params.job.id,
         runStartedAt: params.runStartedAt,
         conversation,
         payloads: deliveryPayloads,
-        text: params.resolvedDelivery.ok || sentByTool ? undefined : synthesizedText,
         signal: params.abortSignal,
         deliveryAttemptFence: params.deliveryAttemptFence,
       });
@@ -419,18 +471,8 @@ export async function dispatchCronDelivery(
     }
   }
   if (conversationError) {
-    if (state.status !== "delivered") {
-      return failTarget(conversationError);
-    }
-    diagnostics = mergeCronRunDiagnostics(
-      diagnostics,
-      createCronRunDiagnosticsFromError(
-        "delivery",
-        `result was delivered but was not added to the conversation: ${conversationError}`,
-        { severity: "warn" },
-      ),
-    );
-  } else if (conversation && !params.resolvedDelivery.ok && !sentByTool) {
+    return failTarget(conversationError);
+  } else if (conversation) {
     record("delivered");
   }
   return finish();

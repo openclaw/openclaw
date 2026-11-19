@@ -12,8 +12,7 @@ import {
   surface,
   trigger,
 } from "../../test-helpers/solid-menu.tsx";
-import { ModalDialog, type OpenClawModalDialog } from "../modal-dialog.ts";
-import { Menu } from "./menu.tsx";
+import type { MenuItem } from "./menu.tsx";
 import { Popover, type PopoverHandle } from "./popover.tsx";
 import "../../styles/base.css";
 import "../../../public/themes/absolutely.css";
@@ -53,6 +52,8 @@ function color(value: string) {
 }
 
 function expectWithinViewport(element: HTMLElement) {
+  // Measure settled geometry, not WebKit's in-flight entry scale.
+  finishElementAnimations(element);
   const box = element.getBoundingClientRect();
   expect(box.width).toBeGreaterThan(0);
   expect(box.height).toBeGreaterThan(0);
@@ -63,37 +64,32 @@ function expectWithinViewport(element: HTMLElement) {
   return box;
 }
 
-function mountModalMenu() {
-  let modal!: OpenClawModalDialog;
-  render(() => (
-    <ModalDialog label="Modal menu" ref={(value) => (modal = value)}>
-      <Menu
-        id="modal-menu"
-        label="Modal actions"
-        items={[{ id: "nested", label: "Nested", children: [{ id: "apply", label: "Apply" }] }]}
-      />
-    </ModalDialog>
-  ));
-  flush();
-  return modal;
-}
-
 function details(label: string) {
   return item(label).querySelector(".oc-menu-item__details")!;
 }
 
+function entries(prefix: string, count: number, padded = false): MenuItem[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `${prefix.toLowerCase()}-${index}`,
+    label: `${prefix} ${padded ? String(index + 1).padStart(2, "0") : index + 1}`,
+  }));
+}
+
+function positionTrigger(style: Partial<CSSStyleDeclaration>) {
+  Object.assign(trigger().style, { position: "fixed" }, style);
+}
+
 function expectItemVisible(element: HTMLElement, menu: HTMLElement) {
-  const box = expectWithinViewport(menu);
+  // The menu's scrollport clips rows: a menu inside the viewport can still cut one off.
+  const top = expectWithinViewport(menu).top + menu.clientTop;
   const itemBox = element.getBoundingClientRect();
-  expect(box.height).toBeLessThanOrEqual(420);
-  expect(itemBox.bottom).toBeLessThanOrEqual(box.bottom);
-  expect(itemBox.top).toBeGreaterThanOrEqual(box.top);
+  expect(itemBox.top, element.textContent ?? "").toBeGreaterThanOrEqual(top);
+  expect(itemBox.bottom, element.textContent ?? "").toBeLessThanOrEqual(top + menu.clientHeight);
 }
 
 describe("native overlay presentation", () => {
   it("inherits palettes, focus, and menu states across stock, imported, and custom themes", async () => {
     mountMenu({
-      children: <h3>Actions</h3>,
       items: [
         { id: "open", label: "Open", details: "Details" },
         { id: "delete", label: "Delete", details: "Permanently", variant: "danger" },
@@ -124,23 +120,20 @@ describe("native overlay presentation", () => {
       }
       document.getAnimations().forEach((animation) => animation.finish());
       const colors: [Element, "color" | "backgroundColor", string][] = [
-        [surface(), "backgroundColor", "popover"],
+        [surface(), "backgroundColor", "menu-surface"],
         [item("Open"), "color", "text"],
-        [details("Open"), "color", "muted"],
-        [trigger("people-group").querySelector(".oc-menu-item__submenu-icon")!, "color", "muted"],
+        [details("Open"), "color", "text-tertiary"],
+        [
+          trigger("people-group").querySelector(".oc-menu-item__submenu-icon")!,
+          "color",
+          "text-tertiary",
+        ],
         [item("Delete"), "color", "danger"],
         [details("Delete"), "color", "danger"],
-        [trigger("people-group"), "backgroundColor", "bg-hover"],
+        [trigger("people-group"), "backgroundColor", "surface-hover"],
       ];
       for (const [element, property, token] of colors) {
         expect(getComputedStyle(element)[property], theme).toBe(color(`var(--${token})`));
-      }
-      expect(getComputedStyle(item("Open")).fontWeight, theme).toBe("400");
-      expect(getComputedStyle(surface().querySelector("h3")!).fontWeight, theme).toBe("500");
-      const itemStyle = getComputedStyle(item("Open"));
-      for (const duration of itemStyle.transitionDuration.split(",")) {
-        const seconds = Number.parseFloat(duration) / (duration.trim().endsWith("ms") ? 1000 : 1);
-        expect(seconds, theme).toBeCloseTo(0.075, 6);
       }
       const rootFontSize = Number.parseFloat(getComputedStyle(root).fontSize);
       expect(getComputedStyle(child), theme).toMatchObject({
@@ -153,33 +146,6 @@ describe("native overlay presentation", () => {
     }
   });
 
-  it.each(["ltr", "rtl"] as const)(
-    "uses space above a low submenu trigger before scrolling its actions in %s",
-    async (dir) => {
-      await page.viewport(800, 600);
-      mountMenu({
-        dir,
-        items: [
-          {
-            id: "gateways",
-            label: "Gateways",
-            children: Array.from({ length: 10 }, (_, index) => ({
-              id: `gateway-${index}`,
-              label: `Gateway ${index + 1}`,
-            })),
-          },
-        ],
-      });
-      Object.assign(trigger().style, { position: "fixed", left: "350px", top: "400px" });
-      await openMenu();
-      await openMenu("people-gateways");
-      const child = surface("people-gateways");
-      expectWithinViewport(child);
-      expect(child.scrollHeight).toBe(child.clientHeight);
-      expectItemVisible(item("Gateway 10", "people-gateways"), child);
-    },
-  );
-
   it("preserves a consumer height budget when its stylesheet loads before the overlay", async () => {
     await page.viewport(800, 700);
     const style = document.createElement("style");
@@ -189,15 +155,10 @@ describe("native overlay presentation", () => {
       mountMenu({
         placement: "right-start",
         panelClass: "consumer-sized-menu",
-        items: Array.from({ length: 24 }, (_, index) => ({
-          id: `action-${index}`,
-          label: `Action ${index + 1}`,
-        })),
+        items: entries("Action", 24),
       });
-      Object.assign(trigger().style, { position: "fixed", left: "200px", top: "50px" });
+      positionTrigger({ left: "200px", top: "50px" });
       await openMenu();
-      // Measure the consumer budget, not WebKit's in-flight entry scale.
-      finishElementAnimations(surface());
       expect(expectWithinViewport(surface()).height).toBe(500);
       await userEvent.keyboard("{End}");
       expect(document.activeElement).toBe(item("Action 24"));
@@ -209,90 +170,120 @@ describe("native overlay presentation", () => {
   });
 
   it.each([
+    ["ltr", "low"],
+    ["rtl", "low"],
     ["ltr", "bottom"],
     ["rtl", "bottom"],
     ["ltr", "middle"],
     ["rtl", "middle"],
   ] as const)(
-    "fits a large nested menu within the viewport in %s near the %s at enlarged text",
+    "fits nested menu actions within the viewport in %s near the %s",
     async (dir, position) => {
       await page.viewport(800, 600);
-      root.style.fontSize = "24px";
+      const enlarged = position !== "low";
+      const count = enlarged ? 28 : 10;
+      if (enlarged) {
+        root.style.fontSize = "24px";
+      }
       mountMenu({
         dir,
-        items: [
-          {
-            id: "large",
-            label: "Many actions",
-            children: Array.from({ length: 28 }, (_, index) => ({
-              id: `action-${index}`,
-              label: `Action ${String(index + 1).padStart(2, "0")}`,
-            })),
-          },
-        ],
+        items: [{ id: "actions", label: "Actions", children: entries("Action", count, enlarged) }],
       });
-      Object.assign(trigger().style, {
-        position: "fixed",
-        right: "8px",
-        bottom: position === "bottom" ? "8px" : "250px",
-      });
+      positionTrigger(
+        position === "low"
+          ? { left: "350px", top: "400px" }
+          : { right: "8px", bottom: position === "bottom" ? "8px" : "250px" },
+      );
       await openMenu();
       const parentBox = expectWithinViewport(surface());
       if (position === "bottom") {
         expect(parentBox.bottom).toBeLessThanOrEqual(trigger().getBoundingClientRect().top);
       }
-      await openMenu("people-large");
-      const childBox = expectWithinViewport(surface("people-large"));
-      expect(childBox.height).toBeLessThanOrEqual(420);
-      expect(surface("people-large").scrollHeight).toBeGreaterThan(
-        surface("people-large").clientHeight,
-      );
+      await openMenu("people-actions");
+      const child = surface("people-actions");
+      const last = item(`Action ${count}`, "people-actions");
+      expectWithinViewport(child);
+      if (!enlarged) {
+        expect(child.scrollHeight).toBe(child.clientHeight);
+        expectItemVisible(last, child);
+        return;
+      }
+      expect(child.scrollHeight).toBeGreaterThan(child.clientHeight);
       await userEvent.keyboard("{End}");
-      const last = item("Action 28", "people-large");
       expect(document.activeElement).toBe(last);
-      expectItemVisible(last, surface("people-large"));
+      expectItemVisible(last, child);
 
       // Scrolling the menu can hide the focused action; End must reveal it again.
-      surface("people-large").scrollTo({ top: 0, behavior: "instant" });
+      child.scrollTo({ top: 0, behavior: "instant" });
       await userEvent.keyboard("{End}");
       expect(document.activeElement).toBe(last);
-      expectItemVisible(last, surface("people-large"));
+      expectItemVisible(last, child);
     },
   );
 
-  it.each(["Escape", "selection", "Tab"])("keeps modal ownership after menu %s", async (action) => {
-    const modal = mountModalMenu();
-    expect(modal.querySelector("dialog")!.matches(":modal")).toBe(true);
-    await openMenu("modal-menu");
-    await openMenu("modal-menu-nested");
-    const apply = item("Apply", "modal-menu-nested");
-    const bounds = apply.getBoundingClientRect();
-    expect(
-      document
-        .elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
-        ?.closest("button"),
-    ).toBe(apply);
-    if (action === "Escape") {
-      await userEvent.keyboard("{Escape}");
-      await phase(surface("modal-menu-nested"), "hidden");
-      expect(surface("modal-menu").matches(":popover-open")).toBe(true);
-      expect(modal.querySelector("dialog")!.matches(":modal")).toBe(true);
-    }
-    if (action === "selection") {
-      await userEvent.click(apply);
-    } else {
-      if (action === "Tab") {
-        await expect.element(apply).toHaveFocus();
+  it.each(["bottom-end", "top-start"] as const)(
+    "keeps %s when it fits, flips before clipping, and scrolls when neither side fits",
+    async (placement) => {
+      await page.viewport(800, 600);
+      mountMenu({ placement, items: entries("Action", 24) });
+      surface().style.setProperty("--oc-overlay-max-height", "126px");
+      positionTrigger({ left: "350px", top: "280px" });
+      await openMenu();
+      const preferred = expectWithinViewport(surface());
+      const anchor = trigger().getBoundingClientRect();
+      if (placement === "bottom-end") {
+        expect(preferred.top).toBeGreaterThanOrEqual(anchor.bottom);
+      } else {
+        expect(preferred.bottom).toBeLessThanOrEqual(anchor.top);
       }
-      await userEvent.keyboard(`{${action}}`);
-    }
-    await phase(surface("modal-menu"), "hidden");
-    expect(modal.open).toBe(true);
-    expect(modal.querySelector("dialog")!.matches(":modal")).toBe(true);
-    if (action === "Escape") {
       await userEvent.keyboard("{Escape}");
-      expect(modal.open).toBe(false);
-    }
+      positionTrigger({ top: placement === "bottom-end" ? "550px" : "20px" });
+      await openMenu();
+      const flipped = expectWithinViewport(surface());
+      expect(flipped.height).toBe(preferred.height);
+      expect(surface().scrollHeight).toBeGreaterThan(surface().clientHeight);
+      const edge = trigger().getBoundingClientRect();
+      if (placement === "bottom-end") {
+        expect(flipped.bottom).toBeLessThanOrEqual(edge.top);
+      } else {
+        expect(flipped.top).toBeGreaterThanOrEqual(edge.bottom);
+      }
+      await userEvent.keyboard("{End}");
+      expect(document.activeElement).toBe(item("Action 24"));
+      expectItemVisible(item("Action 24"), surface());
+
+      await userEvent.keyboard("{Escape}");
+      surface().style.removeProperty("--oc-overlay-max-height");
+      await page.viewport(390, 200);
+      positionTrigger({ left: "150px", top: "80px" });
+      await openMenu();
+      expectWithinViewport(surface());
+      expect(surface().scrollHeight).toBeGreaterThan(surface().clientHeight);
+      await userEvent.keyboard("{End}");
+      expectItemVisible(item("Action 24"), surface());
+      await userEvent.keyboard("{Home}");
+      expectItemVisible(item("Action 1"), surface());
+    },
+  );
+
+  it("flips a short row menu at the window edge with every action whole", async () => {
+    await page.viewport(800, 600);
+    mountMenu({
+      placement: "bottom-end",
+      items: [
+        { id: "edit", label: "Edit" },
+        { id: "delete", label: "Delete", variant: "danger" },
+      ],
+    });
+    // Like the last Secrets row: less room below the trigger than the menu needs.
+    positionTrigger({ right: "16px", bottom: "40px" });
+    await openMenu();
+    const rows = [...surface().querySelectorAll<HTMLElement>('[role="menuitem"]')];
+    expect(rows).toHaveLength(2);
+    rows.forEach((row) => expectItemVisible(row, surface()));
+    expect(surface().getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      trigger().getBoundingClientRect().top,
+    );
   });
 
   it("uses high-contrast borders and focus in forced colors", async () => {

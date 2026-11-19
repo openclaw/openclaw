@@ -13,11 +13,11 @@ import {
   patchReceipt,
 } from "./session-rpc.test-support.ts";
 
+const key = "agent:main:permission";
+const sessionId = "permission-generation";
 function permissionRow(
-  key: string,
-  sessionId: string,
-  updatedAt: number,
-  permissionMode: GatewaySessionRow["permissionMode"],
+  updatedAt = 1,
+  permissionMode: GatewaySessionRow["permissionMode"] = "guarded",
 ) {
   return { key, sessionId, updatedAt, permissionMode, kind: "direct" as const };
 }
@@ -25,8 +25,7 @@ function permissionRow(
 it.each(["  generation-b  ", "  "])(
   "binds the normalized expected incarnation %j instead of a stale primary row",
   async (expectedSessionId) => {
-    const key = "agent:main:permission-successor";
-    const original = permissionRow(key, "generation-a", 1, "guarded");
+    const original = { ...permissionRow(), sessionId: "generation-a" };
     const successor = { ...original, sessionId: "generation-b", updatedAt: 3 };
     let listCalls = 0;
     const { sessions } = permissionHarness({
@@ -71,8 +70,6 @@ it.each([
 ] as const)(
   "keeps the newer permission when a $eventMode snapshot at $eventAt crosses an acknowledgment at $ackAt",
   async ({ eventAt, ackAt, eventMode, expected, expectedLists }) => {
-    const key = "agent:main:permission-pending";
-    const sessionId = "permission-pending-generation";
     const patch = createDeferred<SessionsPatchResult>();
     let listCalls = 0;
     const { sessions, emitEvent } = permissionHarness({
@@ -83,21 +80,14 @@ it.each([
           throw new Error("Roster unavailable");
         }
         return sessionsResult(
-          [
-            permissionRow(
-              key,
-              sessionId,
-              listCalls === 1 ? 1 : 3,
-              listCalls === 1 ? "guarded" : "workspace",
-            ),
-          ],
+          [permissionRow(listCalls === 1 ? 1 : 3, listCalls === 1 ? "guarded" : "workspace")],
           listCalls,
         );
       },
     });
     await sessions.refresh({ force: true });
     const pending = sessions.patch(key, { permissionMode: "workspace" });
-    emitEvent(liveSessionEvent(permissionRow(key, sessionId, eventAt, eventMode), {}));
+    emitEvent(liveSessionEvent(permissionRow(eventAt, eventMode), {}));
     patch.resolve(patchReceipt(key, { sessionId, updatedAt: ackAt, permissionMode: "workspace" }));
     await pending;
     expect(sessions.state.result?.sessions[0]?.permissionMode).toBe(expected);
@@ -115,9 +105,7 @@ it.each([
 ] as const)(
   "keeps permission and refresh error with descriptor %s/%s, ack at %s",
   async (read, mode, ackAt, expected) => {
-    const key = "agent:main:permission-refresh";
-    const sessionId = "permission-refresh-generation";
-    const initial = { ...permissionRow(key, sessionId, 1, "guarded"), label: "Permission refresh" };
+    const initial = { ...permissionRow(), label: "Permission refresh" };
     const confirmed = { ...initial, permissionMode: "workspace" as const, updatedAt: ackAt };
     const readBeforeAck = read === "before" || read === "other-incarnation";
     const described = {
@@ -192,8 +180,6 @@ it.each([
 );
 
 it("discards patch A and its refresh after patch B applies first", async () => {
-  const key = "agent:main:permission-ordering";
-  const sessionId = "permission-ordering-generation";
   const patchA = createDeferred<SessionsPatchResult>();
   const patchB = createDeferred<SessionsPatchResult>();
   let listCalls = 0;
@@ -204,10 +190,7 @@ it("discards patch A and its refresh after patch B applies first", async () => {
       if (listCalls > 2) {
         throw new Error("Obsolete refresh should not run");
       }
-      return sessionsResult(
-        [permissionRow(key, sessionId, listCalls, listCalls === 1 ? "guarded" : "full")],
-        1,
-      );
+      return sessionsResult([permissionRow(listCalls, listCalls === 1 ? "guarded" : "full")], 1);
     },
     "sessions.patch": (params) => {
       const permissionMode = (params as { permissionMode?: unknown })?.permissionMode;
@@ -256,17 +239,13 @@ it("discards patch A and its refresh after patch B applies first", async () => {
 it.each(["success", "failure"])(
   "settles patch A refresh %s after event B applies",
   async (outcome) => {
-    const key = "agent:main:permission-refresh-ordering";
-    const sessionId = "permission-refresh-ordering-generation";
     const refreshA = createDeferred<SessionsListResult>();
     let listCalls = 0;
     const { sessions, emitEvent } = permissionHarness({
       "sessions.subscribe": () => ({ subscribed: true }),
       "sessions.list": () => {
         listCalls += 1;
-        return listCalls === 1
-          ? sessionsResult([permissionRow(key, sessionId, 1, "guarded")], 1)
-          : refreshA.promise;
+        return listCalls === 1 ? sessionsResult([permissionRow()], 1) : refreshA.promise;
       },
       "sessions.patch": () =>
         patchReceipt(
@@ -295,7 +274,7 @@ it.each(["success", "failure"])(
     if (outcome === "failure") {
       refreshA.reject(new Error("obsolete refresh failed"));
     } else {
-      refreshA.resolve(sessionsResult([permissionRow(key, sessionId, 2, "workspace")], 2));
+      refreshA.resolve(sessionsResult([permissionRow(2, "workspace")], 2));
     }
 
     await expect(older).resolves.not.toHaveProperty("listRefreshError");

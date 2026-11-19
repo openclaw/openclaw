@@ -76,3 +76,26 @@ it("indexes the store once and answers repeated conflicts without rescanning ent
   }
   expect(labelReads).toHaveBeenCalledTimes(2);
 });
+
+it("retains the projected patch entry while updating label ownership and removing aliases", () => {
+  const store: Record<string, SessionEntry> = {
+    alias: { sessionId: "target", updatedAt: 1, label: "Old" },
+    target: { sessionId: "target", updatedAt: 1, label: "Old" },
+    sibling: { sessionId: "sibling", updatedAt: 1, label: "Taken" },
+  };
+  const index = new SessionLabelOwnerIndex(store);
+  const projected: SessionEntry = {
+    sessionId: "target",
+    updatedAt: 2,
+    label: "New",
+    skillsSnapshot: { prompt: "retained instructions".repeat(1_000), skills: [] },
+  };
+
+  expect(index.replaceEntry(["alias", "target"], "target", projected)).toBe(projected);
+  expect(store.target).toBe(projected);
+  expect(store).not.toHaveProperty("alias");
+  expect(index.isLabelInUse("Old", [])).toBe(false);
+  expect(index.isLabelInUse("New", [])).toBe(true);
+  expect(index.isLabelInUse("New", ["target"])).toBe(false);
+  expect(index.isLabelInUse("Taken", ["target"])).toBe(true);
+});

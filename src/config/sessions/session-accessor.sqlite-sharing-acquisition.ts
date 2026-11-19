@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import type {
   SessionEntryPlaceholder,
@@ -59,10 +60,13 @@ export type SessionSharingAcquisition = {
   entry?: SessionSharingEntry;
   sessionId?: string;
   membership: Map<string, boolean>;
+  membershipPostimage?: ReadonlySet<string>;
 };
 
 export type PreparedSessionSharingRead = {
   followLifecycle?: boolean;
+  /** Transcript compaction preserves the logical session incarnation. */
+  followTranscript?: boolean;
   predicate?: PreparedSessionEntryPredicate;
   pending: Set<object>;
   facts: CommittedSessionSharingFacts | undefined;
@@ -84,6 +88,8 @@ export type SessionSharingRetentionRequest = {
   sessionKey: string;
   /** Input custody owns same-session rollovers; access facts follow committed postimages. */
   followLifecycle?: boolean;
+  /** Transcript compaction preserves the logical session incarnation. */
+  followTranscript?: boolean;
   predicate?: PreparedSessionEntryPredicate;
 } & (
   | { acquiring: true }
@@ -196,8 +202,11 @@ export function publishRetainedSessionGeneration(
     generation.current.lifecycleRevision !== entry.lifecycleRevision
   ) {
     generation.current = null;
-  } else {
-    // Same-generation policy changes must narrow retained execution before its next effect.
+  } else if (
+    generation.current.permissionMode !== entry.permissionMode ||
+    !isDeepStrictEqual(generation.current.toolOverrides, entry.toolOverrides)
+  ) {
+    // Keep the same fact for metadata-only writes; policy changes narrow the next effect.
     generation.current = entry;
   }
 }
@@ -215,7 +224,7 @@ export function reconcileSessionSharingAcquisition(
   ) {
     throw new Error("Session sharing acquisition is no longer current");
   }
-  const membership = new Set(snapshot.membership);
+  const membership = new Set(acquisition.membershipPostimage ?? snapshot.membership);
   for (const [identityId, present] of acquisition.membership) {
     if (present) {
       membership.add(identityId);

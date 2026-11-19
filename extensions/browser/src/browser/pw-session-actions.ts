@@ -2,7 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
-import { errors, type Browser, type Page, type Response } from "playwright-core";
+import type { Browser, Page, Response } from "playwright-core";
 import { resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
 import { isSelectableCdpBrowserTarget } from "./cdp-target-filter.js";
 import {
@@ -22,6 +22,7 @@ import {
   assertBrowserNavigationAllowed,
   type BrowserNavigationPolicyOptions,
 } from "./navigation-guard.js";
+import { getPlaywrightCore } from "./playwright-core.runtime.js";
 import {
   clearBlockedPageRef,
   clearBlockedPageRefsForCdpUrl,
@@ -50,7 +51,7 @@ import {
   gotoPageWithNavigationGuard,
   isPolicyDenyNavigationError,
 } from "./pw-session-navigation.js";
-import { isConnectionScopedPage } from "./pw-session-page-target.js";
+import { pageCloseClosesConnection } from "./pw-session-page-target.js";
 import type { PlaywrightOwnedPage } from "./pw-session-page.types.js";
 import {
   ensurePageState,
@@ -305,8 +306,7 @@ export async function listPagesViaPlaywright(opts: {
   if (timeoutMs !== undefined) {
     timer = setTimeout(() => {
       controller.abort(new Error(`Playwright page enumeration timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    timer.unref?.();
+    }, timeoutMs).unref();
   }
   const signal = controller.signal;
   try {
@@ -504,11 +504,15 @@ export async function createPageViaPlaywright(
   const assertCurrent = () => {
     opts.signal?.throwIfAborted();
     opts.assertCurrent?.();
+    opts.assertNavigationCurrent?.();
   };
   assertCurrent();
   const targetUrl = opts.url.trim() || "about:blank";
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
+    assertNavigationCurrent: opts.assertNavigationCurrent,
+    standingSsrfPolicy: opts.standingSsrfPolicy,
+    allowOperatorPages: opts.allowOperatorPages,
   });
   await assertBrowserNavigationAllowed({
     url: targetUrl,
@@ -542,7 +546,7 @@ export async function createPageViaPlaywright(
   const close = async () => {
     if (opts.isolatedContext) {
       await context.close();
-    } else if (adapter.descriptor.sessionScope === "connection") {
+    } else if (adapter.closePageClosesConnection) {
       await closeConnectionScopedPageBrowser(opts.cdpUrl, browser);
     } else {
       await page?.close();
@@ -591,7 +595,7 @@ export async function createPageViaPlaywright(
         // A committed page can be usable while subresources still delay load.
         // Return it through normal adoption after the same safety checks.
         if (
-          !(error instanceof errors.TimeoutError) ||
+          !(error instanceof getPlaywrightCore().errors.TimeoutError) ||
           page.isClosed() ||
           page.url() === "about:blank"
         ) {
@@ -671,7 +675,7 @@ export async function closeResolvedPageViaPlaywright(
     undefined,
     async () => {
       opts.signal?.throwIfAborted();
-      if (isConnectionScopedPage(page)) {
+      if (pageCloseClosesConnection(page)) {
         const browser = page.context().browser();
         if (browser) {
           await closeConnectionScopedPageBrowser(opts.cdpUrl, browser);

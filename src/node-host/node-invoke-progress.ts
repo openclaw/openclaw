@@ -77,12 +77,12 @@ export function createNodeInvokeProgressWriter(params: {
       return;
     }
     heartbeatQueued = true;
-    const delayMs = Math.max(0, heartbeatIntervalMs - (Date.now() - lastProgressAt));
+    const delayMs = Math.max(0, heartbeatIntervalMs - (performance.now() - lastProgressAt));
     heartbeatTimer = setTimeout(() => {
       heartbeatTimer = undefined;
       void enqueue(async () => {
         await sendChunk("");
-        lastProgressAt = Date.now();
+        lastProgressAt = performance.now();
       }).finally(() => {
         heartbeatQueued = false;
         if ((heartbeatDirty || recurringHeartbeats) && !stopped) {
@@ -98,7 +98,7 @@ export function createNodeInvokeProgressWriter(params: {
       if (!text || stopped) {
         return queue;
       }
-      lastProgressAt = Date.now();
+      lastProgressAt = performance.now();
       return enqueue(() => sendText(text));
     },
     queueHeartbeat,

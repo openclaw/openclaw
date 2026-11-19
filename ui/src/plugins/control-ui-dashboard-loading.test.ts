@@ -4,11 +4,8 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import "./control-ui-dashboard.tsx";
 
 const loading = vi.hoisted(() => {
-  let release!: () => void;
-  const promise = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  return { promise, release, started: false };
+  const { promise, resolve: release } = Promise.withResolvers<void>();
+  return { promise, release: () => release(), started: false };
 });
 
 vi.mock("../components/board/board-view.tsx", async (original) => {

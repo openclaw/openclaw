@@ -345,27 +345,18 @@ function formatFallbackTurns(
 /** Prefer the harvested summary, then retain recent turns within the fallback prompt budget. */
 export async function buildClaudeCliFallbackContextPrelude(params: {
   cliSessionId: string | undefined;
-  homeDir?: string;
-  charBudget?: number;
 }): Promise<string> {
   const sessionId = params.cliSessionId?.trim();
   if (!sessionId) {
     return "";
   }
-  const seed = await readClaudeCliFallbackSeed({
-    cliSessionId: sessionId,
-    homeDir: params.homeDir,
-  });
+  const seed = await readClaudeCliFallbackSeed({ cliSessionId: sessionId });
   if (!seed) {
     return "";
   }
-  const charBudget = Math.max(
-    CLAUDE_CLI_FALLBACK_PRELUDE_MIN_TURN_CHARS,
-    params.charBudget ?? CLAUDE_CLI_FALLBACK_PRELUDE_DEFAULT_CHAR_BUDGET,
-  );
   const heading = "## Prior session context (from claude-cli)";
   const sections: string[] = [heading];
-  let remaining = charBudget - heading.length;
+  let remaining = CLAUDE_CLI_FALLBACK_PRELUDE_DEFAULT_CHAR_BUDGET - heading.length;
   if (seed.summaryText) {
     const summarySection = `\nSummary of earlier conversation:\n${seed.summaryText}`;
     if (summarySection.length <= remaining) {

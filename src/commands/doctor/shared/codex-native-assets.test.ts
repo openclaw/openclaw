@@ -20,10 +20,6 @@ function codexConfig(): OpenClawConfigWithLegacyRoster {
   };
 }
 
-function hasAsset(hits: Array<{ kind: string; path: string }>, kind: string, assetPath: string) {
-  return hits.some((hit) => hit.kind === kind && hit.path === assetPath);
-}
-
 let root: string;
 let codexHome: string;
 let env: NodeJS.ProcessEnv;
@@ -35,26 +31,27 @@ beforeEach(() => {
 
 describe("scanCodexNativeAssets", () => {
   it("finds personal Codex CLI assets that isolated agents will not load implicitly", async () => {
-    await writeFile(path.join(codexHome, "skills", "tweet-helper", "SKILL.md"));
-    await writeFile(path.join(root, ".agents", "skills", "agent-helper", "SKILL.md"));
-    await writeFile(path.join(codexHome, "skills", ".system", "system-skill", "SKILL.md"));
-    const plugin = path.join(codexHome, "plugins/cache/openai-primary-runtime/documents/1.0.0");
-    await writeFile(path.join(plugin, ".codex-plugin", "plugin.json"), "{}");
-    await writeFile(path.join(codexHome, "config.toml"));
-    await writeFile(path.join(codexHome, "hooks", "hooks.json"));
-
+    for (const file of [
+      ".codex/skills/tweet-helper/SKILL.md",
+      ".agents/skills/agent-helper/SKILL.md",
+      ".codex/skills/.system/system-skill/SKILL.md",
+      ".codex/config.toml",
+      ".codex/hooks/hooks.json",
+    ]) {
+      await writeFile(path.join(root, file));
+    }
+    const plugin = ".codex/plugins/cache/openai-primary-runtime/documents/1.0.0";
+    await writeFile(path.join(root, plugin, ".codex-plugin/plugin.json"), "{}");
     const hits = await scanCodexNativeAssets({ cfg: codexConfig(), env });
-
-    expect(hasAsset(hits, "skill", path.join(codexHome, "skills", "tweet-helper"))).toBe(true);
-    expect(hasAsset(hits, "skill", path.join(root, ".agents", "skills", "agent-helper"))).toBe(
-      true,
-    );
-    expect(hasAsset(hits, "plugin", plugin)).toBe(true);
-    expect(hasAsset(hits, "config", path.join(codexHome, "config.toml"))).toBe(true);
-    expect(hasAsset(hits, "hooks", path.join(codexHome, "hooks", "hooks.json"))).toBe(true);
-    expect(hasAsset(hits, "skill", path.join(codexHome, "skills", ".system", "system-skill"))).toBe(
-      false,
-    );
+    expect(
+      hits.map((hit) => [hit.kind, path.relative(root, hit.path).split(path.sep).join("/")]),
+    ).toEqual([
+      ["skill", ".agents/skills/agent-helper"],
+      ["config", ".codex/config.toml"],
+      ["hooks", ".codex/hooks/hooks.json"],
+      ["plugin", plugin],
+      ["skill", ".codex/skills/tweet-helper"],
+    ]);
   });
 
   it("does not scan when Codex is not configured", async () => {

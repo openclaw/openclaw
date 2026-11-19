@@ -1,3 +1,4 @@
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -91,10 +92,7 @@ function normalizeVoiceWakeRoutingConfig(input: unknown): VoiceWakeRoutingConfig
         .map((entry) => normalizeRouteRule(entry))
         .filter((entry): entry is VoiceWakeRouteRule => Boolean(entry))
     : [];
-  const updatedAtMs =
-    typeof rec.updatedAtMs === "number" && Number.isFinite(rec.updatedAtMs) && rec.updatedAtMs > 0
-      ? Math.floor(rec.updatedAtMs)
-      : 0;
+  const updatedAtMs = floorPositiveFiniteNumber(rec.updatedAtMs) ?? 0;
   return {
     version: 1,
     defaultTarget,

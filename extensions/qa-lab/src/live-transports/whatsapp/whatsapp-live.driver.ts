@@ -56,7 +56,6 @@ export async function waitForDistinctWhatsAppSutMessages(
     initialMessages?: WhatsAppQaDriverObservedMessage[];
     matchers: Array<(message: WhatsAppQaDriverObservedMessage) => boolean>;
     observedAfter: Date;
-    timeoutMs?: number;
   },
 ) {
   const matched = new Map<number, WhatsAppQaDriverObservedMessage>();
@@ -98,7 +97,7 @@ export async function waitForDistinctWhatsAppSutMessages(
   while (matched.size < params.matchers.length) {
     const next = await waitForScenarioObservedMessage(context, {
       observedAfter: params.observedAfter,
-      timeoutMs: params.timeoutMs,
+      timeoutMs: 60_000,
       match: (message) => {
         const key = messageKey(message);
         return (

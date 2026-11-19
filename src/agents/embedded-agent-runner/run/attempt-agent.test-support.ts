@@ -1,11 +1,8 @@
-import {
-  createAssistantMessageEventStream,
-  type AssistantMessage,
-  type Model,
-} from "openclaw/plugin-sdk/llm";
+import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
 import type { Agent } from "../../runtime/index.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { createQueuedAssistantStream } from "../../test-helpers/assistant-event-stream.test-support.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
   createDefaultEmbeddedSession,
@@ -24,12 +21,9 @@ export function streamAttemptAssistant(model: Model, content: AssistantMessage["
     content,
     stopReason: reason,
   });
-  const stream = createAssistantMessageEventStream();
-  queueMicrotask(() => {
-    stream.push({ type: "done", reason, message });
-    stream.end();
+  return createQueuedAssistantStream((push) => {
+    push({ type: "done", reason, message });
   });
-  return stream;
 }
 
 export function attemptToolCall(id: string, name: string, args: Record<string, unknown> = {}) {

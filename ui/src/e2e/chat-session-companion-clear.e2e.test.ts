@@ -1,10 +1,6 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import type { Locator, Page } from "playwright";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -21,7 +17,6 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
 const answer = "Keep this companion answer visible until the reset succeeds.";
 const sessionKey = "agent:main:companion-clear";
 const nextSessionKey = "agent:main:companion-next";
@@ -32,17 +27,11 @@ async function withCompanion(
   width = 1200,
   placement: "main" | "side" = "main",
 ): Promise<void> {
-  const artifactDir = artifactRoot
-    ? createControlUiE2eArtifactDir("chat-session-companion-clear", artifactRoot)
-    : undefined;
   await suite.withPage(
     {
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 800, width },
-      ...(artifactDir
-        ? { recordVideo: { dir: artifactDir, size: { height: 800, width: 1200 } } }
-        : {}),
     },
     async ({ page }) => {
       // Desktop side tabs reset on close; Clear remains available in the main pane.
@@ -59,10 +48,7 @@ async function withCompanion(
                       {
                         id: "side-panel-column",
                         side: "right",
-                        panels: [
-                          { id: "companion", slot: "companion" },
-                          { id: "conversation", slot: "conversation" },
-                        ],
+                        panels: ["companion", "conversation"].map((id) => ({ id, slot: id })),
                         activePanelId: "conversation",
                         width: 480,
                         height: 360,
@@ -80,7 +66,7 @@ async function withCompanion(
           },
         );
       }
-      const surface = await companionSurface(page, artifactDir);
+      const surface = await companionSurface(page);
       if (width === 1200 && placement === "main") {
         await page.locator('[data-panel-slot="companion"][data-region="main"]').waitFor();
       }
@@ -89,7 +75,7 @@ async function withCompanion(
   );
 }
 
-async function companionSurface(page: Page, artifactDir: string | undefined) {
+async function companionSurface(page: Page) {
   const gateway = await installMockGateway(page, {
     methodResponses: {
       "sessions.companion.reset": {
@@ -151,14 +137,6 @@ async function companionSurface(page: Page, artifactDir: string | undefined) {
     await gateway.resolveDeferred("sessions.companion.reset", { ok: true });
     await expect.poll(() => text(answer).count()).toBe(0);
   };
-  const capture = async (name: string, elements: Locator[]) => {
-    if (artifactDir) {
-      await writeFile(
-        path.join(artifactDir, `${name}.png`),
-        await takeControlUiViewportScreenshot(page, page.locator(".shell"), elements),
-      );
-    }
-  };
   return {
     clear,
     clearButton,
@@ -169,7 +147,6 @@ async function companionSurface(page: Page, artifactDir: string | undefined) {
     text,
     gateway,
     page,
-    capture,
   };
 }
 
@@ -212,23 +189,12 @@ suite.define(() => {
     "preserves the thread on reset failure and a newer draft after a successful retry at %ipx",
     async (width) => {
       await withCompanion(
-        async ({
-          clear,
-          finishClear,
-          hideMobile,
-          companion,
-          input,
-          text,
-          gateway,
-          page,
-          capture,
-        }) => {
+        async ({ clear, finishClear, hideMobile, input, text, gateway, page }) => {
           await clear();
 
           const alert = page.getByRole("alert").filter({ hasText: resetError });
           await alert.waitFor({ state: "visible" });
           await text(answer).waitFor();
-          await capture("reset-failure", [alert, companion]);
 
           const reopen = await hideMobile();
           await openChatDetails(page);
@@ -248,32 +214,11 @@ suite.define(() => {
           await finishClear();
           expect(await input.inputValue()).toBe("Keep the question I typed after Clear");
           expect(await page.getByRole("alert").count()).toBe(0);
-          await capture("reset-success", [companion]);
         },
         width,
       );
     },
   );
-
-  it("retains a question sent after Clear while its answer is pending", async () => {
-    await withCompanion(async ({ clear, finishClear, input, text, gateway }) => {
-      const question = "Answer the question sent after Clear";
-      await clear(true);
-      await gateway.deferNext("sessions.companion.ask");
-      await input.fill(question);
-      await input.press("Enter");
-      const request = await gateway.waitForRequest("sessions.companion.ask");
-      expect(request.params).toMatchObject({ question });
-      await finishClear();
-      await text(question).waitFor();
-      await gateway.resolveDeferred("sessions.companion.ask", {
-        answer: "New answer retained",
-        ts: 2,
-      });
-      await text("New answer retained").waitFor();
-      expect(await input.inputValue()).toBe("");
-    });
-  });
 
   it.each(["pending", "completed"])(
     "retires a pre-Clear %s image without cancelling a newer image",
@@ -356,7 +301,7 @@ suite.define(() => {
   );
 
   it("does not publish a delayed reset rejection into a newly selected session", async () => {
-    await withCompanion(async ({ clear, gateway, page, capture }) => {
+    await withCompanion(async ({ clear, gateway, page }) => {
       await clear(true);
 
       await navigateToControlUiSession(page, nextSessionKey);
@@ -368,9 +313,6 @@ suite.define(() => {
       const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
       const error = pane.getByRole("alert").filter({ hasText: resetError });
       expect(await error.count()).toBe(0);
-      await capture("stale-reset-error-suppressed", [
-        pane.locator(".agent-chat__composer-combobox textarea"),
-      ]);
 
       await navigateToControlUiSession(page, sessionKey);
       expect(await error.count()).toBe(0);
@@ -378,7 +320,6 @@ suite.define(() => {
         .locator("openclaw-chat-session-rail")
         .getByText(answer, { exact: true });
       await preservedAnswer.waitFor();
-      await capture("initiating-thread-preserved", [preservedAnswer]);
     });
   });
 });

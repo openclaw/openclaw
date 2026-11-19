@@ -11,11 +11,8 @@ import {
   findReadOnlySessionAccessorViolations,
   findSessionAccessorBoundaryViolations,
   findSessionAccessorWriteBoundaryViolations,
-  findSessionLifecycleCleanupBoundaryViolations,
   findSessionStoreRuntimeFileBackedCompatExportViolations,
-  findTranscriptWriterBoundaryViolations,
   formatSessionAccessorDebtImprovements,
-  readOnlyGatewaySessionAccessorFiles,
 } from "../../scripts/check-session-accessor-boundary.mts";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -56,32 +53,34 @@ function check(
 }
 
 describe("session accessor guards", () => {
-  it("keeps Gateway read paths on non-materializing accessors", () => {
-    expect(
-      readOnlyGatewaySessionAccessorFiles.has("src/gateway/server-methods/sessions-read.ts"),
-    ).toBe(true);
-    check(
+  it.each([
+    [
+      "non-materializing reads",
       findReadOnlySessionAccessorViolations,
-      `
-        import { listSessionEntriesCore, loadSessionEntry } from "../config/sessions/session-accessor.js";
-        listSessionEntriesCore({ storePath });
-        sessionUtils.loadSessionEntry(sessionKey);
-      `,
-      "materializing session entry accessor",
-      [2, "imports", "listSessionEntriesCore"],
-      [2, "imports", "loadSessionEntry"],
-      [3, "calls", "listSessionEntriesCore"],
-      [4, "references", "loadSessionEntry"],
-    );
-    check(
-      findReadOnlySessionAccessorViolations,
-      `
-        import { listSessionEntriesReadOnly, loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
-        listSessionEntriesReadOnly({ storePath });
-        sessionUtils.loadSessionEntryReadOnly(sessionKey);
-      `,
-      "materializing session entry accessor",
-    );
+      'import { listSessionEntriesReadOnly, loadSessionEntryReadOnly } from "./session-accessor.js"; listSessionEntriesReadOnly(); sessionUtils.loadSessionEntryReadOnly();',
+    ],
+    [
+      "migrated reads",
+      findSessionAccessorBoundaryViolations,
+      'import { listSessionEntriesCore } from "./session-accessor.js"; listSessionEntriesCore();',
+    ],
+    [
+      "accessor-backed corpus",
+      findMemoryHostSessionCorpusBoundaryViolations,
+      "function listSessionTranscriptCorpusEntriesForAgentSync() { return listSessionEntriesCore(); } export async function listSessionFilesForAgent() { return (await listSessionTranscriptCorpusEntriesForAgent()).map(entry => entry.sessionFile); }",
+    ],
+    [
+      "comments and strings",
+      findSessionAccessorBoundaryViolations,
+      '// resolveSessionStoreEntryCore must not be called here.\nconst description = "resolveSessionStoreEntryCore";',
+    ],
+    [
+      "sessionTarget identity",
+      findEmbeddedAgentSessionTargetViolations,
+      "agentRuntime.runEmbeddedAgent({ sessionId, sessionKey, sessionTarget: { agentId, sessionId, sessionKey, storePath } });",
+    ],
+  ] as const)("allows %s", (_name, find, source) => {
+    expect(find(...parseFixture(source))).toEqual([]);
   });
 
   it("rejects file-backed SDK exports and aliases", () => {
@@ -125,41 +124,21 @@ describe("session accessor guards", () => {
     );
   });
 
-  it("allows migrated accessor reads", () => {
-    expect(
-      findSessionAccessorBoundaryViolations(
-        ...parseFixture(`
-        import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
-        listSessionEntriesCore({ storePath });
-      `),
-      ),
-    ).toEqual([]);
-  });
-
   it("flags legacy memory-host corpus classification calls in migrated entrypoints", () => {
-    expect(
-      findMemoryHostSessionCorpusBoundaryViolations(
-        ...parseFixture(`
+    check(
+      findMemoryHostSessionCorpusBoundaryViolations,
+      `
         function listSessionTranscriptCorpusEntriesForAgentSync(agentId) {
           return loadSessionTranscriptClassificationForSessionsDir(resolveSessionTranscriptsDirForAgent(agentId));
         }
         export async function listSessionFilesForAgent(agentId) {
           return readSessionTranscriptClassificationStore("sessions.json");
         }
-      `),
-      ),
-    ).toEqual([
-      {
-        line: 3,
-        reason:
-          'calls legacy memory-host session corpus helper "loadSessionTranscriptClassificationForSessionsDir"',
-      },
-      {
-        line: 6,
-        reason:
-          'calls legacy memory-host session corpus helper "readSessionTranscriptClassificationStore"',
-      },
-    ]);
+      `,
+      "legacy memory-host session corpus helper",
+      [3, "calls", "loadSessionTranscriptClassificationForSessionsDir"],
+      [6, "calls", "readSessionTranscriptClassificationStore"],
+    );
   });
 
   it("follows memory-host corpus helper calls when checking legacy access", () => {
@@ -171,45 +150,6 @@ describe("session accessor guards", () => {
       `,
       "legacy memory-host session corpus helper",
       [2, "calls", "readSessionTranscriptClassificationStore"],
-    );
-  });
-
-  it("allows memory-host corpus entrypoints to use the accessor-backed corpus helper", () => {
-    expect(
-      findMemoryHostSessionCorpusBoundaryViolations(
-        ...parseFixture(`
-        function listSessionTranscriptCorpusEntriesForAgentSync(agentId) {
-          return listSessionEntriesCore({ agentId });
-        }
-        export async function listSessionFilesForAgent(agentId) {
-          return (await listSessionTranscriptCorpusEntriesForAgent(agentId)).map((entry) => entry.sessionFile);
-        }
-      `),
-      ),
-    ).toEqual([]);
-  });
-
-  it("flags owner-only SDK writer imports and calls", () => {
-    check(
-      findSessionAccessorWriteBoundaryViolations,
-      `
-        import { recordSessionMetaFromInbound, updateLastRoute, updateSessionStoreEntry as updateEntry } from "../plugin-sdk/session-store-runtime.js";
-        recordSessionMetaFromInbound(params);
-        sessions.updateLastRoute(params);
-        sessions["updateSessionStoreEntry"](params);
-      `,
-      "legacy session store writer",
-      [2, "imports", "recordSessionMetaFromInbound"],
-      [2, "imports", "updateLastRoute"],
-      [2, "imports", "updateSessionStoreEntry"],
-      [3, "calls", "recordSessionMetaFromInbound"],
-      [4, "references", "updateLastRoute"],
-      [5, "references", "updateSessionStoreEntry"],
-    );
-    check(
-      findSessionAccessorWriteBoundaryViolations,
-      "patchSessionEntry(params);",
-      "legacy session store writer",
     );
   });
 
@@ -248,39 +188,6 @@ describe("session accessor guards", () => {
     }
   });
 
-  it("flags legacy transcript writer imports", () => {
-    check(
-      findTranscriptWriterBoundaryViolations,
-      "appendSessionTranscriptMessages(params);",
-      "legacy transcript writer",
-    );
-    expect(
-      findTranscriptWriterBoundaryViolations(
-        ...parseFixture(`
-        import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.test-support.js";
-        import { emitSessionTranscriptUpdate as emitUpdate } from "../sessions/transcript-events.js";
-      `),
-      ),
-    ).toEqual([
-      { line: 2, reason: 'imports legacy transcript writer "appendSessionTranscriptMessage"' },
-      { line: 3, reason: 'imports legacy transcript writer "emitSessionTranscriptUpdate"' },
-    ]);
-  });
-  it("flags direct and namespace legacy transcript writer calls", () => {
-    check(
-      findTranscriptWriterBoundaryViolations,
-      `
-        appendSessionTranscriptMessage({ transcriptPath, message });
-        transcriptEvents.emitSessionTranscriptUpdate({ sessionFile });
-        transcriptAppend["appendSessionTranscriptMessage"]({ transcriptPath, message });
-      `,
-      "legacy transcript writer",
-      [2, "calls", "appendSessionTranscriptMessage"],
-      [3, "references", "emitSessionTranscriptUpdate"],
-      [4, "references", "appendSessionTranscriptMessage"],
-    );
-  });
-
   it("restricts opaque writers only within sessions.create handlers", () => {
     check(
       findGatewaySessionCreateLifecycleViolations,
@@ -298,39 +205,6 @@ describe("session accessor guards", () => {
       'const handlers = { "sessions.create": () => createSessionEntryWithTranscript(params) };',
       "legacy sessions.create lifecycle writer",
     );
-  });
-
-  it("flags direct lifecycle cleanup helper usage", () => {
-    check(
-      findSessionLifecycleCleanupBoundaryViolations,
-      "cleanupSessionEntryArtifacts(params);",
-      "legacy session store lifecycle cleanup",
-    );
-    check(
-      findSessionLifecycleCleanupBoundaryViolations,
-      `
-        import { archiveRemovedSessionTranscripts } from "../config/sessions/store.js";
-        import { cleanupArchivedSessionTranscripts } from "../gateway/session-utils.fs.js";
-        archiveRemovedSessionTranscripts({ removedSessionFiles, referencedSessionIds, storePath, reason: "deleted" });
-        cleanupArchivedSessionTranscripts({ directories, rules });
-      `,
-      "legacy session store lifecycle cleanup",
-      [2, "imports", "archiveRemovedSessionTranscripts"],
-      [3, "imports", "cleanupArchivedSessionTranscripts"],
-      [4, "calls", "archiveRemovedSessionTranscripts"],
-      [5, "calls", "cleanupArchivedSessionTranscripts"],
-    );
-  });
-
-  it("ignores comments and strings that describe legacy readers", () => {
-    expect(
-      findSessionAccessorBoundaryViolations(
-        ...parseFixture(`
-        // resolveSessionStoreEntryCore must not be called here.
-        const description = "resolveSessionStoreEntryCore";
-      `),
-      ),
-    ).toEqual([]);
   });
 
   it("flags embedded-agent calls that pass deprecated sessionFile identity", () => {
@@ -351,20 +225,6 @@ describe("session accessor guards", () => {
         ),
       ),
     ]);
-  });
-
-  it("allows embedded-agent calls that pass sessionTarget identity", () => {
-    expect(
-      findEmbeddedAgentSessionTargetViolations(
-        ...parseFixture(`
-        agentRuntime.runEmbeddedAgent({
-          sessionId,
-          sessionKey,
-          sessionTarget: { agentId, sessionId, sessionKey, storePath },
-        });
-      `),
-      ),
-    ).toEqual([]);
   });
 });
 

@@ -10,7 +10,7 @@ import { readWindowsProcessCensus } from "./windows-process-census.js";
 const temp = useAutoCleanupTempDirTracker(afterEach);
 
 it.runIf(process.platform === "win32")(
-  "observes a retained-cwd descendant and proves its exit",
+  "observes a retained-cwd descendant, excludes its custody, and proves its exit",
   { timeout: 30_000 },
   async ({ signal }) => {
     const retained = temp.make("openclaw-handoff-census retained 工作-");
@@ -65,12 +65,13 @@ it.runIf(process.platform === "win32")(
       );
       const [workerObserved] = await once(worker, "message", { signal });
       expect(workerObserved).toEqual(observed);
-      // The run ID is absent from argv: matching this child requires native cwd inspection.
+      // The run ID is absent from argv: native cwd inspection sees the retained path,
+      // while start-ordered ancestry still proves this inspector's child is not handoff work.
       const census = inspectOtherOpenClawProcesses({
         runId: "absent-fixture-run",
         artifactPaths: [retained],
       });
-      expect(census.matchingPids).toContain(child.pid);
+      expect(census.matchingPids).not.toContain(child.pid);
       // Unrelated same-user processes on hosted runners may have unreadable PEBs.
       expect(census.unverifiedPids).not.toContain(child.pid);
       if (census.unverifiedPids.length === 0) {

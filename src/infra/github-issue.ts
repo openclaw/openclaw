@@ -343,8 +343,7 @@ async function runGithubCli(
       child.stdout.destroy();
       child.unref();
       settle(null);
-    }, GITHUB_ISSUE_CREATE_TIMEOUT_MS);
-    timeout.unref?.();
+    }, GITHUB_ISSUE_CREATE_TIMEOUT_MS).unref();
     child.stdin.end(options.input);
   });
 }

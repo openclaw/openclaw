@@ -1,26 +1,14 @@
-// Covers disk-space formatting and warning generation.
+// Covers disk-space formatting and the package staging refusal.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createLowDiskSpaceWarning, formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
-
-function statfsFixture(params: {
-  bavail: number;
-  bsize?: number;
-  blocks?: number;
-}): ReturnType<typeof fs.statfsSync> {
-  return {
-    type: 0,
-    bsize: params.bsize ?? 1024,
-    blocks: params.blocks ?? 2_000_000,
-    bfree: params.bavail,
-    bavail: params.bavail,
-    files: 0,
-    frsize: params.bsize ?? 1024,
-    ffree: 0,
-  };
-}
+import {
+  describePackageStagingShortfall,
+  formatDiskSpaceBytes,
+  tryReadDiskSpace,
+} from "./disk-space.js";
+import { createStatfsFixture as statfsFixture } from "./disk-space.test-support.js";
 
 describe("disk-space helpers", () => {
   afterEach(() => {
@@ -52,23 +40,17 @@ describe("disk-space helpers", () => {
     }
   });
 
-  it("formats low disk warnings without making them hard errors", () => {
+  it("refuses package staging sized from the target's unpacked size", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-disk-space-"));
     try {
-      vi.spyOn(fs, "statfsSync").mockReturnValue(
-        statfsFixture({
-          bavail: 256,
-          bsize: 1024 * 1024,
-        }),
+      const statfs = vi.spyOn(fs, "statfsSync");
+      const unpacked = 100 * 1024 * 1024;
+      statfs.mockReturnValue(statfsFixture({ bavail: 256, bsize: 1024 * 1024 }));
+      expect(describePackageStagingShortfall(tempDir, unpacked)).toBe(
+        `Update refused: 256 MiB free on the volume holding ${tempDir}; this package update needs about 440 MiB. Free 184 MiB there, then retry openclaw update. No changes were made.`,
       );
-
-      expect(
-        createLowDiskSpaceWarning({
-          targetPath: tempDir,
-          purpose: "test staging",
-          thresholdBytes: 512 * 1024 * 1024,
-        }),
-      ).toBe(`Low disk space near ${tempDir}: 256 MiB available; test staging may fail.`);
+      statfs.mockReturnValue(statfsFixture({ bavail: 440, bsize: 1024 * 1024 }));
+      expect(describePackageStagingShortfall(tempDir, unpacked)).toBeNull();
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

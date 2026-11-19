@@ -1,17 +1,7 @@
 import type { BoardCommand, BoardCommandEvent, BoardSnapshot } from "@openclaw/gateway-protocol";
-import { t } from "../i18n/index.ts";
-import { normalizeBoardWidgetTitle } from "../lib/board/provider-helpers.ts";
 import { EventStream, ValueSignal } from "../lib/board/provider-signals.ts";
-import type {
-  BoardPinMcpAppInput,
-  BoardPinWidgetInput,
-  BoardProvider,
-} from "../lib/board/provider-types.ts";
+import type { BoardProvider } from "../lib/board/provider-types.ts";
 import type { BoardWidgetAppViewState } from "../lib/board/view-types.ts";
-import {
-  canvasWidgetNameForDocument,
-  mcpAppWidgetNameForViewId,
-} from "../lib/board/widget-names.ts";
 import { normalizeDefaultMainSessionAliasForUi } from "../lib/sessions/session-key.ts";
 import { applyMockBoardOp, normalizeMockBoardSnapshot } from "./board-ops.ts";
 
@@ -51,41 +41,9 @@ export function createMockBoardProvider(rawSessionKey: string): BoardProvider & 
   const events = new EventStream<BoardCommandEvent>();
   const publish = (snapshot: BoardSnapshot) =>
     snapshot$.set({ ...snapshot, revision: snapshot.revision + 1 });
-  function pinMockBoardWidget(
-    input: BoardPinWidgetInput | BoardPinMcpAppInput,
-    name: string,
-    contentKind: "html" | "mcp-app",
-  ): void {
-    const snapshot = snapshot$.value;
-    const title = normalizeBoardWidgetTitle(input.title);
-    const tabId = input.tabId ?? snapshot.tabs[0]?.tabId ?? "main";
-    const tabs = snapshot.tabs.length
-      ? snapshot.tabs
-      : [
-          {
-            tabId: "main",
-            title: t("chat.board.defaultTab"),
-            position: 0,
-            chatDock: "right" as const,
-          },
-        ];
-    const existing = snapshot.widgets.find((widget) => widget.name === name);
-    const widgets = snapshot.widgets.filter((widget) => widget.name !== name);
-    widgets.push({
-      name,
-      tabId,
-      ...(title ? { title } : {}),
-      contentKind,
-      sizeW: existing?.sizeW ?? 6,
-      sizeH: existing?.sizeH ?? 4,
-      position: existing?.position ?? widgets.filter((widget) => widget.tabId === tabId).length,
-      grantState: "none",
-      revision: (existing?.revision ?? 0) + 1,
-      ...(contentKind === "html"
-        ? { frameUrl: `about:blank#board-widget=${encodeURIComponent(name)}` }
-        : {}),
-    });
-    publish(normalizeMockBoardSnapshot({ ...snapshot, tabs, widgets }));
+  // Pinning belongs to provider.test.ts; presentation tests must configure it explicitly.
+  async function unsupportedPin(): Promise<never> {
+    throw new Error("Pinning is not configured in the board presentation fixture");
   }
 
   return {
@@ -116,12 +74,8 @@ export function createMockBoardProvider(rawSessionKey: string): BoardProvider & 
         ),
       });
     },
-    async pinWidget(input) {
-      pinMockBoardWidget(input, input.name ?? canvasWidgetNameForDocument(input.docId), "html");
-    },
-    async pinMcpApp(input) {
-      pinMockBoardWidget(input, input.name ?? mcpAppWidgetNameForViewId(input.viewId), "mcp-app");
-    },
+    pinWidget: unsupportedPin,
+    pinMcpApp: unsupportedPin,
     widgetFrameUrl(name, revision) {
       return (
         snapshot$.value.widgets.find(

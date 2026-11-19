@@ -1,5 +1,7 @@
-import { For, Show } from "solid-js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { For, Show, type Element } from "solid-js";
 import type { CronJob } from "../../../api/types.ts";
+import { Checkbox } from "../../../components/solid/checkbox.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuControls } from "../../../components/solid/menu.tsx";
 import { SettingsToggle } from "../../../components/solid/settings-ui.tsx";
@@ -21,6 +23,7 @@ export type ChatCiAutomationProps = {
   loading: boolean;
   saving: boolean;
   error: string | null;
+  errorContent?: Element;
   disabled?: boolean;
   disabledReason?: string;
   retryDisabled?: boolean;
@@ -46,9 +49,15 @@ const MENU_OPTIONS = {
   },
 } as const;
 
-function JobError(props: { job?: CronJob }) {
+function JobError(props: { job?: CronJob; option: CiAutomationOption }) {
+  const blocker = () => {
+    const state = props.job?.state.triggerState;
+    return props.option === "autoFix" && isRecord(state) && typeof state.blocked === "string"
+      ? state.blocked
+      : undefined;
+  };
   return (
-    <Show when={props.job?.state.autoDisabled || props.job?.state.lastError}>
+    <Show when={props.job?.state.autoDisabled || props.job?.state.lastError || blocker()}>
       <div class="chat-ci__automation-job-error" role="status">
         <Show when={props.job?.state.autoDisabled}>
           {(disabled) => (
@@ -65,13 +74,13 @@ function JobError(props: { job?: CronJob }) {
         <Show when={props.job?.state.lastError}>
           {(error) => <div>{t("chat.pullRequests.automationLastError", { error: error() })}</div>}
         </Show>
+        <Show when={blocker()}>{(message) => <div>{message()}</div>}</Show>
       </div>
     </Show>
   );
 }
 
 export function ChatCiAutomationView(props: ChatCiAutomationProps) {
-  const retryRef = props.controls?.ref();
   return (
     <div class="chat-ci__automation">
       <fieldset
@@ -80,56 +89,58 @@ export function ChatCiAutomationView(props: ChatCiAutomationProps) {
         disabled={props.disabled}
       >
         <For each={OPTIONS}>
-          {(entry) => {
-            const inputRef = props.controls?.ref();
-            return (
-              <div class="chat-ci__automation-row">
-                <Show
-                  when={props.menuPresentation}
-                  fallback={
-                    <label class="chat-ci__automation-option">
-                      <input
-                        ref={(element) => inputRef?.(element)}
-                        class="chat-ci__automation-checkbox"
-                        type="checkbox"
-                        name={entry[0]}
-                        checked={props.options[entry[0]]}
-                        disabled={props.pending[entry[0]] !== undefined}
-                        onChange={(event) => props.onChange(entry[0], event.currentTarget.checked)}
-                      />
-                      <span class="chat-ci__automation-label">{t(entry[1])}</span>
-                    </label>
-                  }
-                >
-                  <label class="chat-ci__automation-option chat-ci__automation-option--menu">
-                    <Icon name={MENU_OPTIONS[entry[0]].icon} />
-                    <span class="chat-ci__automation-label">
-                      {t(
-                        entry[0] === "autoArchive"
-                          ? "chat.pullRequests.automationAutoArchiveSession"
-                          : entry[1],
-                      )}
-                      <span class="chat-ci__automation-description">
-                        {t(MENU_OPTIONS[entry[0]].descriptionKey)}
+          {(entry) => (
+            <Show when={{ ref: props.controls?.ref() }} keyed>
+              {(binding) => (
+                <div class="chat-ci__automation-row">
+                  <Show
+                    when={props.menuPresentation}
+                    fallback={
+                      <label class="chat-ci__automation-option">
+                        <Checkbox
+                          ref={(element) => binding.ref?.(element)}
+                          name={entry[0]}
+                          checked={props.options[entry[0]]}
+                          disabled={props.pending[entry[0]] !== undefined}
+                          onChange={(event) =>
+                            props.onChange(entry[0], event.currentTarget.checked)
+                          }
+                        />
+                        <span class="chat-ci__automation-label">{t(entry[1])}</span>
+                      </label>
+                    }
+                  >
+                    <label class="chat-ci__automation-option chat-ci__automation-option--menu">
+                      <Icon name={MENU_OPTIONS[entry[0]].icon} />
+                      <span class="chat-ci__automation-label">
+                        {t(
+                          entry[0] === "autoArchive"
+                            ? "chat.pullRequests.automationAutoArchiveSession"
+                            : entry[1],
+                        )}
+                        <span class="chat-ci__automation-description">
+                          {t(MENU_OPTIONS[entry[0]].descriptionKey)}
+                        </span>
                       </span>
-                    </span>
-                    <SettingsToggle
-                      inputRef={inputRef}
-                      ariaLabel={t(
-                        entry[0] === "autoArchive"
-                          ? "chat.pullRequests.automationAutoArchiveSession"
-                          : entry[1],
-                      )}
-                      checked={props.options[entry[0]]}
-                      disabled={props.disabled || props.pending[entry[0]] !== undefined}
-                      onChange={(enabled) => props.onChange(entry[0], enabled)}
-                    />
-                  </label>
-                </Show>
-                <JobError job={props.jobs?.[entry[0]]} />
-              </div>
-            );
-          }}
+                      <SettingsToggle
+                        inputRef={binding.ref}
+                        ariaLabel={t(
+                          entry[0] === "autoArchive"
+                            ? "chat.pullRequests.automationAutoArchiveSession"
+                            : entry[1],
+                        )}
+                        checked={props.options[entry[0]]}
+                        disabled={props.disabled}
+                        saving={props.pending[entry[0]] !== undefined}
+                        onChange={(enabled) => props.onChange(entry[0], enabled)}
+                      />
+                    </label>
+                  </Show>
+                  <JobError job={props.jobs?.[entry[0]]} option={entry[0]} />
+                </div>
+              )}
+            </Show>
+          )}
         </For>
       </fieldset>
       <Show when={props.schedulerEnabled === false}>
@@ -145,21 +156,37 @@ export function ChatCiAutomationView(props: ChatCiAutomationProps) {
         )}
       </Show>
       <Show when={props.error}>
-        {(error) => (
-          <div class="chat-ci__automation-error">
-            <span role="alert">{error()}</span>
-            <button
-              ref={(element) => retryRef?.(element)}
-              class="chat-ci__automation-retry"
-              type="button"
-              disabled={props.loading || props.saving || props.retryDisabled}
-              onClick={() => props.onRetry()}
-            >
-              {t("chat.pullRequests.automationRetry")}
-            </button>
-          </div>
-        )}
+        {(error) => <ChatCiAutomationError {...props} error={error()} />}
       </Show>
+      {props.errorContent}
     </div>
+  );
+}
+
+export function ChatCiAutomationError(
+  props: Pick<
+    ChatCiAutomationProps,
+    "loading" | "saving" | "retryDisabled" | "onRetry" | "controls"
+  > & {
+    error: string;
+  },
+) {
+  return (
+    <Show when={{ ref: props.controls?.ref() }} keyed>
+      {(binding) => (
+        <div class="chat-ci__automation-error">
+          <span role="alert">{props.error}</span>
+          <button
+            ref={binding.ref}
+            class="chat-ci__automation-retry"
+            type="button"
+            disabled={props.loading || props.saving || props.retryDisabled}
+            onClick={() => props.onRetry()}
+          >
+            {t("chat.pullRequests.automationRetry")}
+          </button>
+        </div>
+      )}
+    </Show>
   );
 }

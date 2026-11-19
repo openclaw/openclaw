@@ -670,7 +670,6 @@ export async function createQaGatewayProcessBoundaryController(params: {
       ),
     evidencePath,
     retainCredentialLeasePath,
-    retainCredentialLease,
   };
 }
 

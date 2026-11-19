@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -37,7 +38,7 @@ import {
 import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission-state.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
-import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
+import { getGatewayLifecycleRuntime } from "./server-lifecycle-runtime-context.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { releaseSessionTestDirectories } from "./session-test-directories.test-support.js";
 import { createGatewayConfigOverrides } from "./test-helpers.config-runtime.js";
@@ -90,16 +91,12 @@ async function ownedDirectory(name: string) {
 
 async function retainGatewayEvent() {
   const root = tryBeginGatewayRootWorkAdmission("test:transcript-event");
-  if (!root) {
-    throw new Error("expected gateway root admission");
-  }
+  assert(root, "expected gateway root admission");
   try {
     const continuation = await root.run(async () =>
       retainGatewayRootWorkAdmissionContinuationScope(),
     );
-    if (!continuation) {
-      throw new Error("expected retained gateway event");
-    }
+    assert(continuation, "expected retained gateway event");
     return continuation;
   } finally {
     root.release();
@@ -111,11 +108,9 @@ describe("Gateway RPC fixture session writes", () => {
     const { dir, storePath, seed } = storeFixture("projection-release");
     await seed();
     expect((await rpcReq(ws, "chat.history", { sessionKey: "main" })).ok).toBe(true);
-    const runtime = getGatewayRecoveryRuntime();
+    const runtime = getGatewayLifecycleRuntime();
     const projection = getSessionRowProjection(runtime && getGatewayContextResolver(runtime)?.());
-    if (!projection) {
-      throw new Error("Suite Gateway projection is missing");
-    }
+    assert(projection, "Suite Gateway projection is missing");
     await projection.ensureMaterialized();
     const entered = createDeferred();
     const release = createDeferred();

@@ -76,12 +76,13 @@ function storageShape(
       // nullable additions while refusing every extra column on conversion input.
       allowCompatibleAdditiveColumns: shape === "binary",
       allowedMissingIndexes: indexes.map((index) => index.name),
+      // Legacy chunks have no chunk_rowid yet. The lazy body index can already
+      // carry the canonical triggers that address it; admit that exact SQL.
+      // The rebuild drops and reinstalls them after the column exists.
       optionalCanonicalTriggerGroups: chunks
         ? [
             { tableName: table, triggers: LEGACY_CHUNK_REVISION_TRIGGERS },
-            ...(shape === "binary"
-              ? [{ tableName: table, triggers: MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS }]
-              : []),
+            { tableName: table, triggers: MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS },
           ]
         : [],
     },
@@ -92,7 +93,12 @@ function storageShape(
       db,
       table,
       indexes.map((index) => index.name),
-      chunks ? LEGACY_CHUNK_REVISION_TRIGGERS.map((trigger) => trigger.name) : [],
+      chunks
+        ? [
+            ...LEGACY_CHUNK_REVISION_TRIGGERS.map((trigger) => trigger.name),
+            ...MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS.map((trigger) => trigger.name),
+          ]
+        : [],
     );
   }
   return shape;
@@ -296,10 +302,9 @@ export function registerMemoryEmbeddingMigrationFunctions(
     if (!renewAuthority) {
       return;
     }
-    const now = performance.now();
-    if (now - renewedAt >= 1_000) {
+    if (performance.now() - renewedAt >= 1_000) {
       renewAuthority();
-      renewedAt = now;
+      renewedAt = performance.now();
     }
   };
   db.function("openclaw_memory_embedding_from_json", { deterministic: true }, (raw) => {
@@ -411,6 +416,9 @@ export function migrateMemoryIndexStorage(
         assertBinaryEmbeddings(db, cacheTable);
       }
       if (migrateChunks) {
+        // Later DDL in this transaction reparses triggers. Drop the admitted
+        // body triggers before that, then reinstall them on the converted table.
+        dropMemoryChunkFtsTriggers(db);
         ensureMemoryRecallMetadataSchema(db);
         // Keep text and provenance searchable, but never invent a vector from
         // malformed legacy JSON. Source sync owns regeneration of these rows.
@@ -422,7 +430,6 @@ export function migrateMemoryIndexStorage(
           FROM memory_index_chunks
         `,
         );
-        dropMemoryChunkFtsTriggers(db);
         db.exec(
           MEMORY_INDEX_CHUNKS_SCHEMA_SQL.replace(
             "CREATE TABLE IF NOT EXISTS",

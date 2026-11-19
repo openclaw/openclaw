@@ -31,7 +31,7 @@ function normalizeFailureCounts(raw: unknown): ProfileUsageStats["failureCounts"
   const normalized: NonNullable<ProfileUsageStats["failureCounts"]> = {};
   for (const [rawReason, count] of Object.entries(raw)) {
     const reason = normalizeEnumValue(rawReason, AUTH_PROFILE_FAILURE_REASONS);
-    if (reason === undefined) {
+    if (reason === undefined || reason === "rate_limit") {
       continue;
     }
     if (typeof count !== "number" || !Number.isFinite(count) || count <= 0) {
@@ -79,6 +79,29 @@ export function coerceProfileUsageStats(raw: unknown): ProfileUsageStats | undef
   setStat("errorCount", asFiniteNumber(raw.errorCount));
   setStat("failureCounts", normalizeFailureCounts(raw.failureCounts));
   setStat("lastFailureAt", asFiniteNumber(raw.lastFailureAt));
+  setStat("lastRateLimitAt", asFiniteNumber(raw.lastRateLimitAt));
   setStat("lastProbeAt", asFiniteNumber(raw.lastProbeAt));
+  releaseRetiredRateLimitBackoff(stats, raw.failureCounts);
   return Object.keys(stats).length > 0 ? stats : undefined;
+}
+
+/**
+ * Releases state written by the retired local rate-limit backoff. Only that writer
+ * persisted `failureCounts.rate_limit`, so its rate-limit window has no provider
+ * basis; the next provider-timed failure records a fresh one. The count survives
+ * only as the session-recovery fact it also served.
+ */
+function releaseRetiredRateLimitBackoff(stats: ProfileUsageStats, rawCounts: unknown): void {
+  const legacyCount = isRecord(rawCounts) ? asFiniteNumber(rawCounts.rate_limit) : undefined;
+  if (legacyCount === undefined || legacyCount <= 0) {
+    return;
+  }
+  stats.lastRateLimitAt ??= stats.lastFailureAt ?? 0;
+  if (stats.cooldownReason === "rate_limit") {
+    delete stats.cooldownUntil;
+    delete stats.cooldownReason;
+    delete stats.cooldownClassification;
+    delete stats.cooldownModel;
+    delete stats.errorCount;
+  }
 }

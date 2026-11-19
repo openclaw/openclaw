@@ -139,9 +139,8 @@ describe("worker launch capabilities", () => {
           return fx.measureLaunchTurn(plan, claim);
         },
         stageAttachments: vi.fn(),
-        quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
-        reconcileWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(fx.reconcileUnchangedLocalWorkspace),
       });
       let publicationOffered = false;
       const environments = environmentFor(tunnel, {
@@ -162,6 +161,7 @@ describe("worker launch capabilities", () => {
       }
       expect(publicationOffered).toBe(true);
       expect(controller.signal.aborted).toBe(available);
+      expect(tunnel.reconcileWorkspace).toHaveBeenCalledOnce();
     },
   );
 
@@ -206,9 +206,8 @@ describe("worker launch capabilities", () => {
             (name) => supervisorAdmitsComputer || name !== "computer",
           ),
         stageAttachments: vi.fn(async () => {}),
-        quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
-        reconcileWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(fx.reconcileUnchangedLocalWorkspace),
       });
       const environments = environmentFor(tunnel, {
         get: vi.fn(() => environment),
@@ -228,6 +227,7 @@ describe("worker launch capabilities", () => {
         !missingFeature && modelHasVision !== false ? 1 : 0,
       );
       expect(bind).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      expect(tunnel.reconcileWorkspace).toHaveBeenCalledOnce();
     },
   );
 
@@ -328,6 +328,8 @@ describe("worker launch capabilities", () => {
         });
       await fx.seedActivePlacement("remote-exec", remote);
       const order: string[] = [];
+      let quiescenceCalls = 0;
+      let reconciliationCalls = 0;
       const launchTurn = vi.fn();
       const tunnel: WorkerTunnelHandle = fx.createWorkerTurnTunnel({
         launchTurn,
@@ -339,17 +341,19 @@ describe("worker launch capabilities", () => {
             signal: command.signal,
           }),
         quiesceWorkspace: vi.fn(async () => {
-          order.push("quiesce");
+          const phase = quiescenceCalls++ === 0 ? "pre-turn" : "completed-turn";
+          order.push(`${phase}:quiesce`);
           return {
             assertActive: vi.fn(async () => {}),
             resume: vi.fn(async () => {
-              order.push("resume");
+              order.push(`${phase}:resume`);
             }),
           };
         }),
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(async (request) => {
-          order.push("reconcile");
+          const phase = reconciliationCalls++ === 0 ? "pre-turn" : "completed-turn";
+          order.push(`${phase}:reconcile`);
           return fx.reconcileUnchangedLocalWorkspace(request);
         }),
       });
@@ -601,11 +605,14 @@ describe("worker launch capabilities", () => {
       expectRestoredPrompts();
       expect(closeComputer).toHaveBeenCalledTimes(nodeDeviceId ? 1 : 0);
       expect(order).toEqual([
+        "pre-turn:quiesce",
+        "pre-turn:reconcile",
+        "pre-turn:resume",
         "local",
         ...(nodeDeviceId ? ["close"] : []),
-        "quiesce",
-        "reconcile",
-        "resume",
+        "completed-turn:quiesce",
+        "completed-turn:reconcile",
+        "completed-turn:resume",
       ]);
       expectUncalled(launchTurn, environments.acquireTurnCredential);
       expect(await fx.placements.listPendingWorkspaceResultsAsync()).toEqual([]);

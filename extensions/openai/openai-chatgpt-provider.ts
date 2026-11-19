@@ -27,6 +27,8 @@ import {
 } from "./base-url.js";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
 import {
+  OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS,
+  OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
   OPENAI_CHATGPT_MODERN_MODEL_IDS,
   OPENAI_DUAL_ROUTE_MODEL_IDS,
   OPENAI_GPT_53_CODEX_SPARK_MODEL_ID as OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
@@ -41,10 +43,6 @@ import {
   OPENAI_GPT_61_SOL_MODEL_ID,
 } from "./model-route-contract.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import {
-  OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS,
-  OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
-} from "./shared.js";
 import { fetchOpenAIUsage, resolveOpenAIUsageAuth } from "./usage.js";
 
 const PROVIDER_ID = "openai";
@@ -358,33 +356,21 @@ function buildCodexCredentialExtra(identity: {
 }
 
 async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
-  try {
-    const { refreshOpenAICodexToken } = await import("./openai-chatgpt-provider.runtime.js");
-    const refreshed = await refreshOpenAICodexToken(cred.refresh);
-    const identity = resolveOpenAICodexAuthIdentity({
-      access: refreshed.access,
-      email: cred.email,
-    });
-    return {
-      ...cred,
-      ...refreshed,
-      type: "oauth" as const,
-      provider: PROVIDER_ID,
-      email: identity.email ?? cred.email,
-      displayName: cred.displayName,
-      ...buildCodexCredentialExtra(identity),
-    };
-  } catch (error) {
-    const message = formatErrorMessage(error);
-    if (
-      /extract\s+accountid\s+from\s+token/i.test(message) &&
-      typeof cred.access === "string" &&
-      cred.access.trim().length > 0
-    ) {
-      return cred;
-    }
-    throw error;
-  }
+  const { refreshOpenAICodexToken } = await import("./openai-chatgpt-provider.runtime.js");
+  const refreshed = await refreshOpenAICodexToken(cred.refresh);
+  const identity = resolveOpenAICodexAuthIdentity({
+    access: refreshed.access,
+    email: cred.email,
+  });
+  return {
+    ...cred,
+    ...refreshed,
+    type: "oauth" as const,
+    provider: PROVIDER_ID,
+    email: identity.email ?? cred.email,
+    displayName: cred.displayName,
+    ...buildCodexCredentialExtra(identity),
+  };
 }
 
 type OpenAICodexOAuthContext = ProviderAuthContext & {

@@ -4,6 +4,7 @@ import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
 import {
+  capturePreparedModelRuntimeRefreshError,
   isPreparedModelRuntimePluginLifecycleFailure,
   PreparedModelRuntimePublicationSupersededError,
 } from "./prepared-model-runtime.errors.js";
@@ -25,13 +26,14 @@ export type PreparedModelRuntimeAuthMutation = {
   agentDir?: string;
   affectsInheritedStores: boolean;
   profileSetChanged: boolean;
+  availabilityOnly?: boolean;
 };
 
 type PreparedModelRuntimeAuthTransaction = {
   adoptedBy?: PreparedModelRuntimeReplacementGateId;
   ownerGates: Map<
     PreparedModelRuntimeOwner,
-    Deferred<PreparedModelRuntimeSnapshot> & { retried?: boolean }
+    Deferred<PreparedModelRuntimeSnapshot> & { retries?: number }
   >;
   publicationQueued: boolean;
   profileSetChanged: boolean;
@@ -272,9 +274,10 @@ export class PreparedModelRuntimeAuthPublicationOwner {
           owners.filter((owner) => owner.pluginGeneration !== undefined),
         );
         const gates = owners.flatMap((owner) => this.#transaction?.ownerGates.get(owner) ?? []);
-        const retrying = gates.some((gate) => gate.retried);
+        const retries = Math.max(0, ...gates.map((gate) => gate.retries ?? 0));
+        const retrying = retries > 0;
         for (const gate of gates) {
-          gate.retried = retrying;
+          gate.retries = retries;
         }
         try {
           if (owners.length > 0) {
@@ -350,28 +353,30 @@ export class PreparedModelRuntimeAuthPublicationOwner {
               params.owners.get(ownerKey(owner.input)) === owner &&
               transaction?.ownerGates.get(owner)?.promise === owner.pending,
           );
+          const superseded = error instanceof PreparedModelRuntimePublicationSupersededError;
           if (
             transaction &&
-            !retrying &&
+            retries < (superseded ? 2 : 1) &&
             isPreparedModelRuntimePluginLifecycleFailure(error) &&
-            currentOwners.some((owner) => reusedOwners.has(owner))
+            currentOwners.some((owner) => superseded || reusedOwners.has(owner))
           ) {
             for (const owner of currentOwners) {
-              transaction.ownerGates.get(owner)!.retried = true;
+              transaction.ownerGates.get(owner)!.retries = retries + 1;
             }
             // Preserve the exact gates and atomic component, including superseded members.
             this.#events.push(componentOwners);
             continue;
           }
+          const Failure = superseded ? PreparedModelRuntimePublicationSupersededError : Error;
           const failure = retrying
-            ? new Error(
-                `Auth-triggered model runtime refresh failed after 1 fresh-generation retry: ${toStringifiedError(error).message}`,
+            ? new Failure(
+                `Auth-triggered model runtime refresh failed after ${retries} fresh-generation ${retries === 1 ? "retry" : "retries"}: ${toStringifiedError(error).message}${superseded ? "; retry the request" : ""}`,
                 { cause: error },
               )
             : error;
           if (
             transaction &&
-            this.rejectComponentOwners(transaction, componentOwners, failure, retrying) > 0
+            this.rejectComponentOwners(transaction, componentOwners, failure, true) > 0
           ) {
             params.onOwnerFailure?.(failure);
           }
@@ -415,8 +420,17 @@ export class PreparedModelRuntimeAuthPublicationOwner {
       }
       if (owner.pending === gate.promise) {
         owner.pending = undefined;
-        if (recordRefreshError && owner.needsRefresh) {
-          owner.refreshError = toStringifiedError(error);
+        if (recordRefreshError) {
+          owner.refreshError = capturePreparedModelRuntimeRefreshError(error);
+          owner.needsRefresh = true;
+          if (owner.provenance === "configured") {
+            owner.catalogRecovery ??= {
+              error: owner.refreshError,
+              scheduledAttempted: false,
+              retryAfter: 0,
+            };
+            owner.catalogRecovery.error = owner.refreshError;
+          }
         }
       }
       transaction.ownerGates.delete(owner);
@@ -429,12 +443,20 @@ export class PreparedModelRuntimeAuthPublicationOwner {
 
 export function invalidatePreparedModelRuntimeOwnersForAuthMutation(
   owners: Map<string, PreparedModelRuntimeOwner>,
-  normalizedEvent: PreparedModelRuntimeAuthMutation,
+  event: PreparedModelRuntimeAuthMutation,
 ): {
   invalidatedOwners: PreparedModelRuntimeOwner[];
   invalidatedConfiguredAgentIds: Set<string>;
 } {
-  const staleError = new Error("prepared model runtime owner is stale after auth mutation");
+  // Availability reads use the auth snapshot owner's current usage view. Rebuilding here
+  // would retire otherwise-current plugins and supersede concurrent credential publications.
+  if (event.availabilityOnly) {
+    return { invalidatedOwners: [], invalidatedConfiguredAgentIds: new Set() };
+  }
+  const agentDir = normalizeOptionalDir(event.agentDir);
+  const staleError = capturePreparedModelRuntimeRefreshError(
+    new Error("prepared model runtime owner is stale after auth mutation"),
+  );
   const invalidatedOwners: PreparedModelRuntimeOwner[] = [];
   const invalidatedConfiguredAgentIds = new Set<string>();
   for (const owner of owners.values()) {
@@ -448,9 +470,9 @@ export function invalidatePreparedModelRuntimeOwnersForAuthMutation(
           normalizeOptionalDir(
             resolveLegacyInheritedAuthDir(owner.input.config, owner.input.env),
           )) ||
-      (!normalizedEvent.affectsInheritedStores &&
-        owner.input.agentDir !== normalizedEvent.agentDir &&
-        owner.input.inheritedAuthDir !== normalizedEvent.agentDir)
+      (!event.affectsInheritedStores &&
+        owner.input.agentDir !== agentDir &&
+        owner.input.inheritedAuthDir !== agentDir)
     ) {
       continue;
     }
@@ -459,7 +481,7 @@ export function invalidatePreparedModelRuntimeOwnersForAuthMutation(
     retirePreparedModelRuntimeGeneration(owner);
     owner.needsRefresh = true;
     owner.refreshError = staleError;
-    if (normalizedEvent.profileSetChanged) {
+    if (event.profileSetChanged) {
       owner.catalogStale = true;
     }
     if (owner.provenance === "configured" && owner.input.agentId) {

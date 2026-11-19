@@ -75,7 +75,7 @@
   height: 25px;
   flex: 0 0 auto;
   place-items: center;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--bg-hover);
   color: var(--muted);
 }
@@ -89,11 +89,19 @@
   bottom: -2px;
   width: 10px;
   height: 10px;
-  border: 1.5px solid color-mix(in srgb, currentColor 28%, transparent);
-  border-top-color: currentColor;
+  color: var(--accent);
   border-radius: 50%;
   background: var(--bg);
-  animation: chat-processes-spin 1.6s linear infinite;
+  animation: btn-spinner-spin 1.6s linear infinite;
+}
+
+/* The disc behind the ring stays opaque, so only this layer takes the mask. */
+.chat-processes__spinner::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: currentColor;
+  mask: var(--spinner-mask);
 }
 .chat-processes__open {
   white-space: normal;
@@ -115,13 +123,6 @@
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
   font-weight: 400;
-}
-.chat-processes__shimmer {
-  background: linear-gradient(100deg, var(--muted) 25%, var(--text) 50%, var(--muted) 75%);
-  background-size: 200% 100%;
-  background-clip: text;
-  color: transparent;
-  animation: chat-processes-shimmer 2s linear infinite;
 }
 .chat-processes__finished-meta {
   display: flex;
@@ -230,7 +231,9 @@
   background: var(--muted);
   content: "";
 }
-.chat-processes__metadata[data-status="running"] .chat-processes__status::before,
+.chat-processes__metadata[data-status="running"] .chat-processes__status::before {
+  background: var(--status-running);
+}
 .chat-processes__metadata[data-status="completed"] .chat-processes__status::before {
   background: var(--ok);
 }
@@ -263,14 +266,7 @@
 }
 .chat-processes__output-empty {
   display: flex;
-  flex: none;
   width: 100%;
-  aspect-ratio: 8 / 5;
-  min-height: 220px;
-  max-height: 100%;
-}
-.chat-processes__output-empty .empty-state {
-  transform: none;
 }
 .chat-processes__panel button:focus-visible,
 .chat-processes__output:focus-visible {
@@ -383,7 +379,7 @@
     place-items: center;
     padding: 0;
     border: 0;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: transparent;
     color: var(--muted);
   }
@@ -395,7 +391,7 @@
     min-height: var(--mobile-panel-rail-control, 32px);
     padding: 0 8px;
     border: 0;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: transparent;
   }
   .chat-processes__running {
@@ -422,7 +418,7 @@
     padding-inline: 12px;
   }
   [role="list"] {
-    border-radius: 14px;
+    border-radius: var(--radius-lg);
     background: color-mix(in srgb, var(--popover) 95%, var(--text) 5%);
   }
   .chat-processes__item {
@@ -454,7 +450,7 @@
   .chat-processes__mobile-row .chat-processes__open::after {
     position: absolute;
     inset: 0;
-    border-radius: 14px;
+    border-radius: var(--radius-lg);
     content: "";
   }
   .chat-processes__name {
@@ -485,7 +481,7 @@
     position: relative;
     z-index: 1;
     min-height: 32px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--danger) 8%, transparent);
   }
   .chat-processes__mobile-row > .chat-processes__stop {
@@ -580,28 +576,13 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .chat-processes__spinner,
-  .chat-processes__shimmer {
+  .chat-processes__spinner {
     animation: none;
-  }
-  .chat-processes__shimmer {
-    background: none;
-    color: var(--muted);
   }
 }
 @media (prefers-reduced-transparency: reduce) {
   .chat-processes__panel[data-mobile="true"] .chat-processes__list,
   .chat-processes__panel[data-mobile="true"] .chat-processes__output {
     mask-image: none;
-  }
-}
-@keyframes chat-processes-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-@keyframes chat-processes-shimmer {
-  to {
-    background-position: -200% 0;
   }
 }

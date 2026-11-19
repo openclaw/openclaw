@@ -1,8 +1,33 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Command } from "commander";
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../../test-utils/env.js";
+import { resolveCliNetworkProxyPolicy } from "../command-path-policy.js";
+import { withCliTty } from "../run-main.bare-root.test-support.js";
+import { registerCoreCliCommands } from "./command-registry-core.js";
+import { createProgramContext } from "./context.js";
+import { expectNoCalls } from "./program.test-helpers.js";
 import { registerOnboardCommand } from "./register.onboard.js";
+import { registerSetupCommand } from "./register.setup.js";
 
-const { acknowledge, recommendations, refresh, systemAgent, wizard, runtime } = vi.hoisted(() => ({
+const {
+  acknowledge,
+  recommendations,
+  refresh,
+  systemAgent,
+  wizard,
+  setup,
+  config,
+  onboardingState,
+  runtime,
+} = vi.hoisted(() => ({
+  setup: vi.fn(),
+  config: vi.fn(),
+  onboardingState: vi.fn(),
   acknowledge: vi.fn(),
   recommendations: vi.fn(),
   refresh: vi.fn(),
@@ -25,10 +50,18 @@ vi.mock("../../plugins/provider-auth-choices.js", () => ({
     ].map(([cliOption, optionKey]) => ({ cliOption, optionKey, description: "Fixture flag" })),
 }));
 
-// mock-isolation: CLI parsing captures command dispatch without running onboarding, inference, or recommendation state.
+// mock-isolation: Setup routes use synthetic config and never run setup or read shared state.
+vi.mock("../../commands/setup.js", () => ({ setupCommand: setup }));
+// mock-isolation: Route parsing reads a synthetic config without opening shared state.
+vi.mock("../../config/config.js", () => ({ readConfigFileSnapshot: config }));
+// mock-isolation: Onboarding status comes from the route fixture, not the local database.
+vi.mock("../../state/local-onboarding-state.js", () => ({
+  readLocalOnboardingStateForConfigAsync: onboardingState,
+}));
+// mock-isolation: Capture wizard dispatch without executing onboarding side effects.
 vi.mock("../../commands/onboard.js", () => ({ setupWizardCommand: wizard }));
 
-// mock-isolation: CLI parsing captures command dispatch without running onboarding, inference, or recommendation state.
+// mock-isolation: Capture dispatch without onboarding, inference, or recommendation state.
 vi.mock("../../commands/onboard-recommendations.js", () => ({
   acknowledgeOnboardRecommendationsCommand: acknowledge,
   onboardRecommendationsCommand: recommendations,
@@ -50,32 +83,49 @@ function createProgram() {
   registerOnboardCommand(program);
   return program;
 }
-async function runCli(args: string[] | string) {
+async function runCli(args: string[] | string, route: "onboard" | "setup" = "onboard") {
   const argv = typeof args === "string" ? args.split(" ") : args;
-  await createProgram().parseAsync(["onboard", ...argv], { from: "user" });
+  const program = route === "onboard" ? createProgram() : new Command();
+  if (route === "setup") {
+    registerSetupCommand(program);
+  }
+  await program.parseAsync([route, ...argv], { from: "user" });
 }
-function optionsError(message: string) {
-  const error = { type: "cli_error", message };
-  return JSON.stringify({ ok: false, error, phase: "options", message }, null, 2);
+function expectOptionFailure(message: string, json: boolean) {
+  const diagnostic = expect.stringContaining(message);
+  expect(runtime.error).toHaveBeenCalledExactlyOnceWith(diagnostic);
+  expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+  expectNoCalls(setup, recommendations, acknowledge, refresh, wizard, systemAgent);
+  if (json) {
+    expect(runtime.log).toHaveBeenCalledOnce();
+    const call = expectDefined(runtime.log.mock.calls[0], "JSON option diagnostic");
+    expect(JSON.parse(call[0])).toMatchObject({
+      ok: false,
+      phase: "options",
+      error: { type: "cli_error", message: diagnostic },
+    });
+  } else {
+    expectNoCalls(runtime.log);
+  }
 }
 function expectCall(target: typeof wizard, ...args: unknown[]) {
-  expect(target).toHaveBeenCalledExactlyOnceWith(...args);
+  expect(target.mock.calls).toEqual([args]);
 }
 
 beforeEach(() => vi.resetAllMocks());
 
 it("passes a plugin's boolean consent flag without string coercion", async () => {
   await runCli(["--non-interactive", "--accept-risk", "--local-embedding-only"]);
-  expect(wizard).toHaveBeenCalledWith(
+  expect(wizard.mock.calls).toContainEqual([
     expect.objectContaining({ localEmbeddingOnly: true }),
     runtime,
-  );
+  ]);
 });
 it.each([
   ["recommendations --agent writer --json", recommendations, { agent: "writer", json: true }],
   ["recommendations acknowledge", acknowledge, { retry: undefined }],
 ] as const)("routes %s", async (args, target, options) => {
-  await runCli(args.split(" "));
+  await runCli(args);
   expectCall(target, options, runtime);
   expect(wizard).not.toHaveBeenCalled();
 });
@@ -106,49 +156,18 @@ it("resolves explicitly disabled daemon installation", async () => {
 });
 
 it.each([
-  [
-    "recommendations --json refresh",
-    "This recommendations command does not support parent option(s): --json.",
-    false,
-  ],
-  [
-    "--json --reset recommendations",
-    "This recommendations command does not support parent option(s): --reset.",
-    true,
-  ],
+  ["recommendations --json refresh", "parent option(s): --json.", false],
+  ["--json --reset recommendations", "parent option(s): --reset.", true],
   [
     "--custom-image-input --custom-text-input --json",
     "Use either --custom-image-input or --custom-text-input, not both.",
     true,
   ],
-  [
-    "--json --modern --non-interactive",
-    "Non-interactive setup requires explicit risk acknowledgement.",
-    true,
-  ],
+  ["--json --modern --non-interactive", "explicit risk acknowledgement", true],
   ["--modern --no-install-daemon", "--modern cannot be combined with: --no-install-daemon.", false],
 ] as const)("rejects invalid options: %s", async (args, message, json) => {
-  const partial = args.includes("--modern");
   await runCli(args);
-  const expected = partial ? expect.stringContaining(message) : message;
-  expect(runtime.error).toHaveBeenCalledExactlyOnceWith(expected);
-  expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
-  if (json && partial) {
-    expect(runtime.log).toHaveBeenCalledOnce();
-    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
-      ok: false,
-      error: { type: "cli_error", message: expected },
-      phase: "options",
-      message: expected,
-    });
-  } else if (json) {
-    expect(runtime.log).toHaveBeenCalledExactlyOnceWith(optionsError(message));
-  } else {
-    expect(runtime.log).not.toHaveBeenCalled();
-  }
-  for (const command of [recommendations, acknowledge, refresh, wizard, systemAgent]) {
-    expect(command).not.toHaveBeenCalled();
-  }
+  expectOptionFailure(message, json);
 });
 
 it.each([
@@ -172,4 +191,201 @@ it.each([
     fallback,
   );
   expect(wizard).not.toHaveBeenCalled();
+});
+
+describe("setup routing", () => {
+  const runSetup = (args: string | string[]) => runCli(args, "setup");
+  const configPath = "/tmp/openclaw.json";
+  function configSnapshot(sourceConfig = {}, exists = true) {
+    config.mockResolvedValue({ exists, valid: true, path: configPath, sourceConfig });
+  }
+  function expectWizard(options: Record<string, unknown>) {
+    expect(wizard).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(options), runtime);
+    expect(systemAgent).not.toHaveBeenCalled();
+  }
+  beforeEach(() => configSnapshot({}, false));
+
+  it.skipIf(process.platform === "win32").each(["default", "configured", "missing"])(
+    "exposes the verified desktop CLI without reading config or running setup (home=%s)",
+    async (homeKind) => {
+      const customHome = homeKind !== "default";
+      const configured = homeKind === "configured";
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-desktop-path-"));
+      try {
+        const operatorHome = path.join(home, "operator-home");
+        const stateDir = path.join(operatorHome, "state");
+        const configFile = path.join(stateDir, "openclaw.json");
+        const configBytes = Buffer.from(' {"gateway":{"mode":"remote"}}\n');
+        if (configured) {
+          await fs.mkdir(stateDir, { recursive: true });
+          await fs.writeFile(configFile, configBytes);
+        }
+        const launcher = path.join(home, ".openclaw/bin/openclaw");
+        await fs.mkdir(path.dirname(launcher), { recursive: true });
+        const marker = {
+          purpose: "gateway",
+          runtime: { bun: process.execPath },
+          entry: process.argv[1],
+        };
+        await fs.writeFile(
+          launcher,
+          `#!/bin/sh\n# OpenClaw-Tauri runtime v1 ${JSON.stringify(marker)}\nprintf '%s\\n' "$HOME" "$OPENCLAW_HOME" "$OPENCLAW_STATE_DIR" "$OPENCLAW_CONFIG_PATH"\nprintf 'desktop:%s:%s\\n' "$OPENCLAW_PROFILE" "$*"\n`,
+          { mode: 0o755 },
+        );
+        const launcherBytes = await fs.readFile(launcher);
+        await fs.writeFile(
+          path.join(home, ".bashrc"),
+          "# operator settings\nexport PATH=/usr/bin:/bin\n",
+          { mode: 0o600 },
+        );
+        const env = {
+          HOME: home,
+          OPENCLAW_HOME: customHome ? operatorHome : undefined,
+          OPENCLAW_PROFILE: configured ? "operator" : undefined,
+          OPENCLAW_STATE_DIR: configured ? stateDir : undefined,
+          OPENCLAW_CONFIG_PATH: configured ? configFile : undefined,
+          SHELL: "/bin/bash",
+          PATH: "/usr/bin:/bin",
+        };
+        expect(
+          resolveCliNetworkProxyPolicy(["node", "openclaw", "setup", "--terminal-path", launcher]),
+        ).toBe("bypass");
+        expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "setup"])).toBe("default");
+        expect(
+          resolveCliNetworkProxyPolicy([
+            "node",
+            "openclaw",
+            "setup",
+            "--",
+            "--terminal-path",
+            launcher,
+          ]),
+        ).toBe("default");
+        await withEnvAsync(env, async () => {
+          for (let attempt = 0; attempt < 2; attempt++) {
+            await runSetup(["--terminal-path", launcher]);
+            expectNoCalls(config, setup, wizard, systemAgent, runtime.error, runtime.exit);
+            for (const [key, value] of Object.entries(env)) {
+              expect(process.env[key]).toBe(value);
+            }
+          }
+        });
+        // Source the installed PATH without loading host-wide shell startup files.
+        const output = execFileSync(
+          "/bin/bash",
+          ["--noprofile", "--norc", "-c", ". \"$HOME/.bashrc\"; openclaw qr 'literal argument'"],
+          {
+            env: { ...env, OPENCLAW_PROFILE: "operator" },
+            encoding: "utf8",
+          },
+        );
+        expect(output.trimEnd().split("\n")).toEqual([
+          home,
+          env.OPENCLAW_HOME ?? "",
+          env.OPENCLAW_STATE_DIR ?? "",
+          env.OPENCLAW_CONFIG_PATH ?? "",
+          "desktop:operator:qr literal argument",
+        ]);
+        expect(await fs.readFile(launcher)).toEqual(launcherBytes);
+        if (configured) {
+          expect(await fs.readFile(configFile)).toEqual(configBytes);
+          expect(await fs.readdir(operatorHome)).toEqual(["state"]);
+          expect(await fs.readdir(stateDir)).toEqual(["openclaw.json"]);
+        } else {
+          await expect(fs.lstat(operatorHome)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        expect((await fs.stat(path.join(home, ".bashrc"))).mode & 0o777).toBe(0o600);
+        expect(
+          (await fs.readFile(path.join(home, ".bashrc"), "utf8")).match(/if ! command/g),
+        ).toHaveLength(1);
+        expect((await fs.readdir(home)).toSorted()).toEqual([
+          ".bashrc",
+          ".openclaw",
+          ".profile",
+          ...(configured ? ["operator-home"] : []),
+        ]);
+        expect(await fs.readdir(path.join(home, ".openclaw"))).toEqual(["bin"]);
+      } finally {
+        await fs.rm(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["--baseline", "--mode remote", "--message status", "--json"])(
+    "rejects terminal-only setup combined with %s before reading config",
+    async (other) => {
+      await runSetup(["--terminal-path", "/missing/openclaw", ...other.split(" ")]);
+      expectNoCalls(config, setup, wizard, systemAgent);
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("--terminal-path cannot be combined"),
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    },
+  );
+
+  it.each([
+    ["pending inference", { agents: { defaults: { model: "acme/verified" } } }, true, true],
+    ["remote Gateway", { gateway: { mode: "remote" } }, true, false],
+  ] as const)(
+    "routes interactive setup for %s",
+    async (name, sourceConfig, pending, onboarding) => {
+      configSnapshot(sourceConfig);
+      onboardingState.mockResolvedValue(pending ? { status: "pending" } : undefined);
+      await withCliTty(true, async () => {
+        await runSetup([]);
+        expect(onboardingState.mock.calls).toEqual(
+          name === "pending inference" ? [["/tmp/openclaw.json", sourceConfig]] : [],
+        );
+        if (onboarding) {
+          expectWizard({ json: false });
+        } else {
+          expect(systemAgent).toHaveBeenCalledExactlyOnceWith(
+            { message: undefined, yes: false, json: false },
+            runtime,
+          );
+          expect(wizard).not.toHaveBeenCalled();
+        }
+      });
+    },
+  );
+
+  it("routes JSON setup for an unconfigured system", async () => {
+    await runSetup("--json");
+    expectWizard({ json: true });
+  });
+
+  it("registers the hidden retired-name alias through lazy registration", async () => {
+    const program = new Command().name("openclaw");
+    registerCoreCliCommands(program, createProgramContext(), ["node", "openclaw", "--help"]);
+    expect(program.helpInformation()).not.toContain("crestodian");
+    await program.parseAsync(["crestodian", "--message", "status"], { from: "user" });
+    expect(systemAgent).toHaveBeenCalledWith(
+      { message: "status", yes: false, json: false },
+      runtime,
+    );
+  });
+
+  it.each([
+    ["--baseline --mode remote --json", "--baseline cannot be combined with: --mode.", true],
+    [["--gateway-port", ""], "--gateway-port must be an integer between 1 and 65535.", false],
+  ] as const)("rejects invalid setup options: %s", async (args, message, json) => {
+    await runSetup(typeof args === "string" ? args : [...args]);
+    expectOptionFailure(message, json);
+  });
+
+  it("dispatches scripted onboarding controls", async () => {
+    await runSetup(
+      "--non-interactive --accept-risk --team --gateway-port 18789 --install-daemon --skip-daemon --json --custom-text-input",
+    );
+    expectWizard({
+      nonInteractive: true,
+      acceptRisk: true,
+      team: true,
+      gatewayPort: 18789,
+      installDaemon: false,
+      json: true,
+      customImageInput: false,
+    });
+    expect(setup).not.toHaveBeenCalled();
+  });
 });

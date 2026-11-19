@@ -107,9 +107,13 @@ async function readOpenRouterAudioStream(response: Response, maxBytes: number) {
     appendDecodedOpenRouterMusicAudio(combined.slice(0, completeLength));
   }
 
-  function flushOpenRouterMusicAudio(): void {
+  function finishOpenRouterMusicStream() {
     appendDecodedOpenRouterMusicAudio(result.audioBase64Remainder);
     result.audioBase64Remainder = "";
+    return {
+      audioBuffer: Buffer.concat(result.audioBuffers, result.audioBytes),
+      transcript: result.transcriptChunks.join(""),
+    };
   }
 
   function appendOpenRouterMusicTranscript(transcript: string): void {
@@ -176,11 +180,7 @@ async function readOpenRouterAudioStream(response: Response, maxBytes: number) {
           lineFragments.length = 0;
         }
         if (processOpenRouterSseLine(line.trim())) {
-          flushOpenRouterMusicAudio();
-          return {
-            audioBuffer: Buffer.concat(result.audioBuffers, result.audioBytes),
-            transcript: result.transcriptChunks.join(""),
-          };
+          return finishOpenRouterMusicStream();
         }
       }
       if (start < chunk.length) {
@@ -198,11 +198,7 @@ async function readOpenRouterAudioStream(response: Response, maxBytes: number) {
     if (!processOpenRouterSseLine(buffer.trim())) {
       throw new Error("OpenRouter music generation stream ended before completion");
     }
-    flushOpenRouterMusicAudio();
-    return {
-      audioBuffer: Buffer.concat(result.audioBuffers, result.audioBytes),
-      transcript: result.transcriptChunks.join(""),
-    };
+    return finishOpenRouterMusicStream();
   } finally {
     // A capture tee can keep cancellation pending until its sibling finishes.
     // Release the reader without waiting so the request owner can abort transport.

@@ -7,6 +7,7 @@ import {
   type GoogleMeetEntryPointAccess,
   type GoogleMeetSpaceConfig,
 } from "./meet-api.js";
+import type { GoogleMeetOAuthRuntime } from "./oauth-owner.js";
 import { resolveGoogleMeetTokenFromParams } from "./plugin-helpers.js";
 import { normalizeMode, normalizeTransport } from "./plugin-registration.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
@@ -56,8 +57,9 @@ export function hasCreateSpaceConfigInput(raw: Record<string, unknown>): boolean
 export async function createSpaceFromParams(
   config: GoogleMeetConfig,
   raw: Record<string, unknown>,
+  runtime?: GoogleMeetOAuthRuntime,
 ) {
-  const token = await resolveGoogleMeetTokenFromParams(config, raw);
+  const token = await resolveGoogleMeetTokenFromParams(config, raw, runtime);
   const result = await createGoogleMeetSpace({
     accessToken: token.accessToken,
     config: resolveCreateSpaceConfig(raw),
@@ -84,7 +86,11 @@ export async function createMeetFromParams(params: {
   createViaBrowser?: () => ReturnType<GoogleMeetRuntime["createViaBrowser"]>;
 }) {
   if (hasGoogleMeetOAuth(params.config, params.raw)) {
-    const { token: _token, ...result } = await createSpaceFromParams(params.config, params.raw);
+    const { token: _token, ...result } = await createSpaceFromParams(
+      params.config,
+      params.raw,
+      params.runtime,
+    );
     return {
       ...result,
       joined: false,

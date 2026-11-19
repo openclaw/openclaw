@@ -1,6 +1,7 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
-import { lazyCompile } from "../protocol-validator.js";
+import * as Checks from "../compiled/protocol.generated/schema-skill-library.js";
+import { createProtocolValidator } from "../protocol-validator.js";
 import { closedObject } from "./closed-object.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
 
@@ -158,10 +159,31 @@ export type SkillsLibraryUploadResult =
   | { uploadId: string; offset: number; maxChunkBytes: number }
   | SkillsLibraryReceipt;
 
-export const validateSkillsLibraryListParams = lazyCompile(SkillsLibraryListParamsSchema);
-export const validateSkillsLibraryReadParams = lazyCompile(SkillsLibraryReadParamsSchema);
-export const validateSkillsLibrarySaveParams = lazyCompile(SkillsLibrarySaveParamsSchema);
-export const validateSkillsLibraryMutateParams = lazyCompile(SkillsLibraryMutateParamsSchema);
-export const validateSkillsLibraryActivateParams = lazyCompile(SkillsLibraryActivateParamsSchema);
-export const validateSkillsLibraryImportParams = lazyCompile(SkillsLibraryImportParamsSchema);
-export const validateSkillsLibraryUploadParams = lazyCompile(SkillsLibraryUploadParamsSchema);
+export const validateSkillsLibraryListParams = createProtocolValidator(
+  SkillsLibraryListParamsSchema,
+  Checks.isSkillsLibraryListParams,
+);
+export const validateSkillsLibraryReadParams = createProtocolValidator(
+  SkillsLibraryReadParamsSchema,
+  Checks.isSkillsLibraryReadParams,
+);
+export const validateSkillsLibrarySaveParams = createProtocolValidator(
+  SkillsLibrarySaveParamsSchema,
+  Checks.isSkillsLibrarySaveParams,
+);
+export const validateSkillsLibraryMutateParams = createProtocolValidator(
+  SkillsLibraryMutateParamsSchema,
+  Checks.isSkillsLibraryMutateParams,
+);
+export const validateSkillsLibraryActivateParams = createProtocolValidator(
+  SkillsLibraryActivateParamsSchema,
+  Checks.isSkillsLibraryActivateParams,
+);
+export const validateSkillsLibraryImportParams = createProtocolValidator(
+  SkillsLibraryImportParamsSchema,
+  Checks.isSkillsLibraryImportParams,
+);
+export const validateSkillsLibraryUploadParams = createProtocolValidator(
+  SkillsLibraryUploadParamsSchema,
+  Checks.isSkillsLibraryUploadParams,
+);

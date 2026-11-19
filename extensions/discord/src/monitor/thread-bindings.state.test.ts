@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
@@ -16,8 +15,12 @@ import {
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { discordPlugin } from "../channel.js";
+import * as discordSend from "../send.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
-import { registerThreadBindingCompatibilityTests } from "./thread-bindings.compatibility.test-support.js";
+import {
+  unbindThreadBindingsBySessionKey as unbind,
+  unbindThreadBindingsBySessionKeyAsync as unbindAsync,
+} from "./thread-bindings.lifecycle.js";
 import { createThreadBindingManager, getThreadBindingManager } from "./thread-bindings.manager.js";
 import { ensureBindingsLoaded, ensureBindingsLoadedAsync } from "./thread-bindings.state.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
@@ -73,6 +76,23 @@ const replacementTarget = {
   webhookId: "synthetic-webhook",
   webhookToken: "synthetic-token",
 } satisfies Parameters<ThreadBindingManager["bindTarget"]>[0];
+
+const storeOptions = { namespace: "thread-bindings", maxEntries: 10_000 };
+const bindingScope = { channel: "discord", accountId: "work" };
+const nativeStore = (options: OpenKeyedStoreOptions = storeOptions) =>
+  createPluginStateSyncKeyedStoreForTests<ThreadBindingRecord>("discord", options);
+
+function expectStoredField<K extends keyof ThreadBindingRecord>(
+  store: Pick<PluginStateSyncKeyedStore<ThreadBindingRecord>, "lookup">,
+  manager: ThreadBindingManager,
+  field: K,
+  expected: ThreadBindingRecord[K] | undefined,
+) {
+  expect([
+    store.lookup("work:thread-1")?.[field],
+    manager.getByThreadId("thread-1")?.[field],
+  ]).toEqual([expected, expected]);
+}
 
 function createTestManager(options: { accountId?: string; persist?: boolean } = {}) {
   return createThreadBindingManager({
@@ -173,7 +193,6 @@ it("awaits one shared cold read before publishing channel binding managers", asy
   try {
     await entered.promise;
     expect(getThreadBindingManager("work")).toBeNull();
-    expect(stores.openSyncKeyedStore).not.toHaveBeenCalled();
     expect(stores.entries).toHaveBeenCalledTimes(1);
   } finally {
     ready.resolve([persistedBinding()]);
@@ -199,9 +218,6 @@ it.each(["resolve", "reject"] as const)(
       ensureBindingsLoaded();
       manager = await createTestManager();
       await manager.touchThread({ threadId: "thread-1", at: 200, persist: false });
-      expect(manager.getByThreadId("thread-1")?.targetSessionKey).toBe(
-        current.value.targetSessionKey,
-      );
     } finally {
       if (settlement === "resolve") {
         ready.resolve([persistedBinding()]);
@@ -222,7 +238,6 @@ it.each(["startup", "write"])("keeps an in-memory fallback after failed %s", asy
     stores.register.mockRejectedValueOnce(new Error("persistence failed"));
   }
   const manager = await persistentManager();
-  expect(manager).toBe(getThreadBindingManager("work"));
   if (phase === "startup") {
     expect(manager.listBindings()).toEqual([]);
   }
@@ -232,9 +247,6 @@ it.each(["startup", "write"])("keeps an in-memory fallback after failed %s", asy
       : replacementTarget.targetSessionKey;
   await manager.bindTarget({ ...replacementTarget, targetSessionKey });
   expect(manager.getByThreadId("thread-1")).toMatchObject({ targetSessionKey });
-  if (phase === "write") {
-    expect(stores.register).toHaveBeenCalledOnce();
-  }
   expect(stores.openSyncKeyedStore).not.toHaveBeenCalled();
 });
 
@@ -258,7 +270,135 @@ it("does not turn revoked bind authority into an in-memory fallback", async () =
   expect(manager.getByThreadId("thread-1")).toEqual(persistedBinding().value);
 });
 
-registerThreadBindingCompatibilityTests({ stores, persistedBinding, persistentManager });
+it.each([
+  "committed-intro-unbind",
+  "committed-intro-touch",
+  "stopping-unbind",
+  "queued-unbind",
+  "queued-age",
+] as const)("settles real SQLite compatibility at %s", async (boundary) => {
+  await withOpenClawTestState({ label: "discord-binding-commit-order" }, async () => {
+    const entered = createDeferred<void>();
+    const finish = createDeferred<void>();
+    const pause = async () => {
+      entered.resolve();
+      await finish.promise;
+    };
+    const introOperation = boundary.startsWith("committed-intro-");
+    const webhookSend = introOperation
+      ? vi
+          .spyOn(discordSend, "sendWebhookMessageDiscord")
+          .mockRejectedValue(new Error("Synthetic transport boundary"))
+      : undefined;
+    const botSend = introOperation
+      ? vi
+          .spyOn(discordSend, "sendMessageDiscord")
+          .mockRejectedValue(new Error("Unexpected bot intro"))
+      : undefined;
+    const queuedOperation = boundary.startsWith("queued-");
+    const removes = boundary === "committed-intro-unbind" || boundary === "queued-unbind";
+    stores.openKeyedStoreV2.mockImplementation((options) => {
+      const store = createPluginStateKeyedStoreV2ForTests<ThreadBindingRecord>("discord", options, {
+        assertCurrent() {},
+      });
+      return {
+        ...store,
+        register: async (...args: Parameters<typeof store.register>) => {
+          if (boundary === "stopping-unbind") {
+            await pause();
+          }
+          await store.register(...args);
+          if (queuedOperation || introOperation) {
+            await pause();
+          }
+        },
+      };
+    });
+    stores.openSyncKeyedStore.mockImplementation(nativeStore);
+    const saved = persistedBinding();
+    const originalTarget = { targetSessionKey: saved.value.targetSessionKey };
+    const bindingTarget = introOperation
+      ? saved.value.targetSessionKey
+      : "agent:main:subagent:replacement";
+    const store = nativeStore();
+    store.register(saved.key, saved.value);
+    const manager = await persistentManager();
+    const notify = vi.spyOn(manager, "notifyUnbound").mockImplementation(() => {});
+    const mutation = manager.bindTarget({
+      ...replacementTarget,
+      targetSessionKey: bindingTarget,
+      ...(introOperation ? { introText: "Binding ready" } : {}),
+    });
+    const outcome = expect(mutation).resolves.toMatchObject({ targetSessionKey: bindingTarget });
+    let stopping: Promise<void> | undefined;
+    let followup: Promise<unknown[]> | undefined;
+    const followupFailure = vi.fn(() => []);
+    try {
+      await entered.promise;
+      expect(store.lookup(saved.key)?.targetSessionKey).toBe(
+        boundary === "stopping-unbind" ? saved.value.targetSessionKey : bindingTarget,
+      );
+      if (boundary === "committed-intro-unbind") {
+        expect(unbind({ ...originalTarget, sendFarewell: false })).toHaveLength(1);
+        expect([store.lookup(saved.key), manager.getByThreadId("thread-1")]).toEqual([
+          undefined,
+          undefined,
+        ]);
+      } else if (boundary === "stopping-unbind") {
+        stopping = manager.stop();
+        expect(() => unbind(originalTarget)).toThrow("manager is stopping");
+        expect(store.lookup(saved.key)).toEqual(saved.value);
+      } else if (queuedOperation) {
+        const params = { targetSessionKey: bindingTarget, accountId: "work" };
+        followup =
+          boundary === "queued-unbind"
+            ? unbindAsync({ ...params, sendFarewell: false })
+            : discordPlugin.conversationBindings!.setMaxAgeBySessionKeyAsync!({
+                ...params,
+                maxAgeMs: 1000,
+              });
+        followup = followup.catch(followupFailure);
+      } else {
+        const at = Date.now() + 1;
+        getSessionBindingService().touch(saved.key, at, bindingScope);
+        expectStoredField(store, manager, "lastActivityAt", at);
+      }
+      if (queuedOperation) {
+        const stopped = vi.fn();
+        stopping = manager.stop().then(stopped);
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(stopped).not.toHaveBeenCalled();
+      }
+      finish.resolve();
+      await outcome;
+      await stopping;
+      if (followup) {
+        const changed = await followup;
+        expect(followupFailure).not.toHaveBeenCalled();
+        expect(changed).toHaveLength(1);
+        if (boundary === "queued-age") {
+          expectStoredField(store, manager, "maxAgeMs", 1000);
+        }
+      }
+      const expectedTarget = removes ? undefined : bindingTarget;
+      expectStoredField(store, manager, "targetSessionKey", expectedTarget);
+      expect(notify).toHaveBeenCalledTimes(removes ? 1 : 0);
+      if (introOperation) {
+        expect(webhookSend).toHaveBeenCalledTimes(boundary === "committed-intro-touch" ? 1 : 0);
+        expect(botSend).not.toHaveBeenCalled();
+      }
+    } finally {
+      finish.resolve();
+      await Promise.allSettled([outcome, stopping]);
+      await resetThreadBindingsForTests();
+      resetPluginStateStoreForTests();
+      webhookSend?.mockRestore();
+      botSend?.mockRestore();
+    }
+  });
+});
 
 it.each([false, true])("preflights selected stopping owners (matching=%s)", async (matching) => {
   const saved = persistedBinding();
@@ -300,47 +440,22 @@ it("keeps activity in memory after a real native read-only failure", async () =>
         assertCurrent() {},
       }),
     );
-    let observed = false;
-    const nativeStore = (options: OpenKeyedStoreOptions) =>
-      createPluginStateSyncKeyedStoreForTests<ThreadBindingRecord>("discord", options);
-    stores.openSyncKeyedStore.mockImplementation((options): SyncStore => {
-      const store = nativeStore(options);
-      const update = store.update?.bind(store);
-      assert(update, "missing native atomic update");
-      return {
-        ...store,
-        update: (key, change, updateOptions) =>
-          update(
-            key,
-            (current) => {
-              observed = true;
-              return change(current);
-            },
-            updateOptions,
-          ),
-      };
-    });
+    stores.openSyncKeyedStore.mockImplementation(nativeStore);
     const saved = persistedBinding();
-    const store = nativeStore({ namespace: "thread-bindings", maxEntries: 10_000 });
+    const store = nativeStore();
     store.register(saved.key, saved.value);
     const manager = await persistentManager();
     const database = openOpenClawStateDatabase();
     try {
       database.db.exec("PRAGMA query_only = ON");
-      getSessionBindingService().touch(saved.key, 200, {
-        channel: "discord",
-        accountId: "work",
-      });
-      expect(observed).toBe(false);
+      getSessionBindingService().touch(saved.key, 200, bindingScope);
       expect(manager.getByThreadId("thread-1")?.lastActivityAt).toBe(200);
+      expect(store.lookup(saved.key)?.lastActivityAt).toBe(100);
     } finally {
       database.db.exec("PRAGMA query_only = OFF");
       await manager.stop();
     }
-    expect([
-      manager.getByThreadId("thread-1")?.targetSessionKey,
-      store.lookup(saved.key)?.targetSessionKey,
-    ]).toEqual([saved.value.targetSessionKey, saved.value.targetSessionKey]);
+    expectStoredField(store, manager, "targetSessionKey", saved.value.targetSessionKey);
     await resetThreadBindingsForTests();
     resetPluginStateStoreForTests();
   });

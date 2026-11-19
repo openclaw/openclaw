@@ -3,19 +3,21 @@ import { spawn, spawnSync } from "node:child_process";
 import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { resolveOpenClawCliRespawn } from "./cli-invocation.mjs";
-import { consumeRootOptionToken as consumeLauncherRootOptionToken } from "./cli-root-options.mjs";
+import {
+  consumeRootOptionToken as consumeLauncherRootOptionToken,
+  isUpdateCommandArgv,
+} from "./cli-root-options.mjs";
 import { isForegroundGatewayRunArgv } from "./gateway-run-argv.mjs";
 import {
   RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS,
   resolveLauncherStopTimeoutMs,
 } from "./gateway-shutdown-budget.mjs";
-import { withNodeRuntimePath } from "./node-runtime-env.mjs";
-import {
-  detectCurrentSqliteCapabilities,
-  nodeRuntimeFailure,
-  SQLITE_CAPABILITY_PROBE,
-} from "./node-sqlite.mjs";
+import { nodeRuntimePathEntries, withNodeRuntimePath } from "./node-runtime-env.mjs";
+import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "./node-sqlite.mjs";
+import { formatNodeSecurityWarning } from "./node-version.mjs";
+import { createRuntimeProcessScriptFile } from "./runtime-process-scripts.generated.mjs";
 
 export { consumeLauncherRootOptionToken };
 
@@ -45,6 +47,25 @@ const respawnSignals =
     : ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
 const respawnSignalForceKillGraceMs = RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS;
 
+/**
+ * Startup-only bootstrap cannot depend on dist or installed packages, so this
+ * mirrors formatErrorStackWithMessage
+ * (packages/normalization-core/src/error-coercion.ts): Bun can materialize
+ * `stack` during garbage collection with a bare header that drops the message.
+ */
+function formatRespawnErrorDetail(error) {
+  const name = typeof error.name === "string" && error.name ? error.name : "Error";
+  const message = typeof error.message === "string" ? error.message : "";
+  const stack = typeof error.stack === "string" ? error.stack : "";
+  if (!stack || !message || stack.includes(message)) {
+    return stack || message || name;
+  }
+  const header = `${name}: ${message}`;
+  const lineEnd = stack.indexOf("\n");
+  const firstLine = lineEnd < 0 ? stack : stack.slice(0, lineEnd);
+  return firstLine === name ? header + stack.slice(firstLine.length) : `${header}\n${stack}`;
+}
+
 /** Resolve true only after the replacement and its stdio close; the caller must return. */
 export const runRespawnedChild = ({ command, args, env }) => {
   // The serving Gateway owns drain and cleanup. Reap a stuck child only in the
@@ -54,6 +75,7 @@ export const runRespawnedChild = ({ command, args, env }) => {
   const launcherStopTimeoutMs = resolveLauncherStopTimeoutMs({
     platform: process.platform,
     foreground: isForegroundGatewayRunArgv(process.argv),
+    update: isUpdateCommandArgv(process.argv),
   });
   const signalExitGraceMs = launcherStopTimeoutMs - respawnSignalForceKillGraceMs;
   const stdioIsTerminal = process.stdin.isTTY || process.stdout.isTTY;
@@ -64,9 +86,9 @@ export const runRespawnedChild = ({ command, args, env }) => {
   });
   const listeners = new Map();
   // Keep signal forwarding and bounded shutdown in sync with src/entry.compile-cache.ts,
-  // which drives src/process/respawn-child-runner.ts. That runner still holds its own
-  // copies of the escalation graces and reaps on a fixed short one, so only this
-  // launcher's deadline is the one the serving Gateway derives.
+  // which drives src/process/respawn-child-runner.ts. That runner shares this escalation
+  // policy but never wraps a foreground Unix Gateway, so only this launcher's deadline
+  // is the one the serving Gateway derives.
   let signalExitTimer = null;
   let signalForceKillTimer = null;
   let firstForwardedSignal = null;
@@ -143,7 +165,7 @@ export const runRespawnedChild = ({ command, args, env }) => {
     child.once("error", (error) => {
       failed = true;
       process.stderr.write(
-        `[openclaw] Failed to respawn launcher: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
+        `[openclaw] Failed to respawn launcher: ${error instanceof Error ? formatRespawnErrorDetail(error) : String(error)}\n`,
       );
     });
     child.once("exit", () => {
@@ -401,31 +423,29 @@ export function isUsableNode(
       probeEnv[key] = value;
     }
   }
+  let script;
   try {
-    const result = spawnSync(
-      resolved,
-      [
-        "-e",
-        `const probe = ${SQLITE_CAPABILITY_PROBE}; process.stdout.write(JSON.stringify({ version: process.versions.node, probe }));`,
-      ],
-      {
-        encoding: "utf8",
-        env: probeEnv,
-        timeout: 5_000,
-        killSignal: "SIGKILL",
-        maxBuffer: 65_536,
-        windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    script = createRuntimeProcessScriptFile("daemonRuntimeProbe");
+    const result = spawnSync(resolved, [fileURLToPath(script.url), "node"], {
+      encoding: "utf8",
+      env: probeEnv,
+      timeout: 5_000,
+      killSignal: "SIGKILL",
+      maxBuffer: 65_536,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     const details = JSON.parse(result.stdout);
     return (
       result.status === 0 &&
-      !nodeRuntimeFailure(details.version, details.probe) &&
-      (!acceptVersion || acceptVersion(details.version))
+      !details.bunVersion &&
+      !nodeRuntimeFailure(details.nodeVersion, details.sqliteProbe) &&
+      (!acceptVersion || acceptVersion(details.nodeVersion))
     );
   } catch {
     return false;
+  } finally {
+    script?.dispose();
   }
 }
 
@@ -589,7 +609,7 @@ function* availableNodeCandidates(homeDir, env) {
       ? Object.keys(env).find((key) => key.toUpperCase() === "PATH") || "PATH"
       : "PATH";
   const binary = process.platform === "win32" ? "node.exe" : "node";
-  for (const directory of (env[pathKey] || "").split(path.delimiter)) {
+  for (const directory of nodeRuntimePathEntries(env[pathKey])) {
     if (path.isAbsolute(directory)) {
       yield [path.join(directory, binary), "PATH"];
     }
@@ -749,19 +769,32 @@ export async function recoverNodeRuntime({
     env.OPENCLAW_NODE_UPDATE_RESPAWNED === "1" ||
     !process.argv[1] ||
     isForegroundGmailRunInvocation(process.argv) ||
-    (process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) ||
-    !nodeRuntimeFailure(process.versions.node, await detectCurrentSqliteCapabilities())
+    (process.platform !== "win32" && isNativeHookRelayInvocation(process.argv))
   ) {
     return false;
   }
-  const selected = await findUsableNodeRuntime({ homeDir, allowInstall, env });
+  const failure = nodeRuntimeFailure(
+    process.versions.node,
+    await detectCurrentSqliteCapabilities(),
+  );
+  const securityWarning = formatNodeSecurityWarning(process.versions.node);
+  if (!failure && !securityWarning) {
+    return false;
+  }
+  // Certificate-only recovery may reuse a patched runtime, never download one.
+  const selected = await findUsableNodeRuntime({
+    homeDir,
+    allowInstall: Boolean(failure) && allowInstall,
+    env,
+    acceptVersion: failure ? undefined : (version) => !formatNodeSecurityWarning(version),
+  });
   const nodePath = selected?.nodePath;
   const reason = selected?.reason;
   if (!nodePath) {
     return false;
   }
   process.stderr.write(
-    `openclaw: Retrying with ${JSON.stringify(nodePath)} (${reason}; current Node failed runtime admission).\n`,
+    `openclaw: Retrying with ${JSON.stringify(nodePath)} (${reason}; ${failure ? "current Node failed runtime admission" : "recommended security patch"}).\n`,
   );
   return await runRespawnedChild(
     resolveOpenClawCliRespawn({

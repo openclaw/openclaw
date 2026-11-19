@@ -1,6 +1,8 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { readNonBlankString as normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readChatAppContext } from "../../../../packages/gateway-protocol/src/chat-app-context.js";
 import { normalizeQueueMode } from "../../../../src/auto-reply/reply/queue/normalize.js";
 import { readChatWorkContext } from "../../../../src/chat/work-context.js";
 import { t } from "../../i18n/index.ts";
@@ -31,7 +33,7 @@ export const MAX_STORED_QUEUE_ITEMS = 50;
 // existing input while the canonical queue drains back below 50.
 const MAX_RETAINED_QUEUE_ITEMS = MAX_STORED_SESSIONS * MAX_STORED_QUEUE_ITEMS;
 export const INTERRUPTED_SETTINGS_WAIT_ERROR =
-  "Chat settings update was interrupted. Review and retry when ready.";
+  "Couldn’t update session settings. The update was interrupted. Review the settings before trying again.";
 
 export type StoredComposerState = {
   version: 4;
@@ -67,6 +69,7 @@ export function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueI
     left.text === right.text &&
     left.workContextUnavailable === right.workContextUnavailable &&
     JSON.stringify(left.workContext) === JSON.stringify(right.workContext) &&
+    stableStringify(left.appContext) === stableStringify(right.appContext) &&
     JSON.stringify(left.mentions ?? []) === JSON.stringify(right.mentions ?? []) &&
     left.sendRunId === right.sendRunId &&
     left.sendAttempts === right.sendAttempts &&
@@ -144,6 +147,10 @@ export function normalizeStoredQueueItem(entry: unknown): ChatQueueItem | null {
     if (!item.workContext) {
       item.workContextUnavailable = true;
     }
+  }
+  const appContext = readChatAppContext(entry.appContext);
+  if (appContext) {
+    item.appContext = appContext;
   }
   const mentions = readHumanMentions(text, entry.mentions);
   if (mentions) {
@@ -230,15 +237,20 @@ export function normalizeStoredQueueItem(entry: unknown): ChatQueueItem | null {
   if (replyToId) {
     item.replyToId = replyToId;
   }
-  if (entry.sendState === "steering" || entry.sendState === "executing-command") {
-    item.sendState = "unconfirmed";
+  if (
+    entry.sendState === "executing-command" ||
+    (entry.sendState === "unconfirmed" && normalizeOptionalString(entry.localCommandName))
+  ) {
+    item.sendState = "failed";
+    item.sendError = "Command was interrupted. Review the conversation before retrying.";
+  } else if (entry.sendState === "steering") {
+    item.sendState = "waiting-reconnect";
   } else if (entry.sendState === "submitting") {
     item.sendState = "waiting-idle";
   } else if (entry.sendState === "sending") {
     item.sendState = "waiting-reconnect";
   } else if (
     entry.sendState === "failed" ||
-    entry.sendState === "unconfirmed" ||
     entry.sendState === "held" ||
     entry.sendState === "waiting-idle" ||
     entry.sendState === "waiting-reconnect"
@@ -267,6 +279,17 @@ export function normalizeStoredQueueItem(entry: unknown): ChatQueueItem | null {
   const agentId = normalizeOptionalString(entry.agentId);
   if (agentId) {
     item.agentId = normalizeAgentId(agentId);
+  }
+  if (
+    item.sendRunId &&
+    ((item.sendAttempts ?? 0) > 0 || entry.sendRequestStartedAtMs !== undefined) &&
+    item.sendState !== "failed" &&
+    !item.sessionId &&
+    !item.localCommandName &&
+    !item.intent
+  ) {
+    // Unsettled attempts need a physical target before automatic replay.
+    item.sendState = "held";
   }
   if (
     entry.mentions !== undefined &&

@@ -16,13 +16,13 @@ const fixture = useTempSessionsFixture("pending-input-origin-replay-");
 const receipts: SessionPendingInputReceipt[] = [];
 afterEach(async () => {
   for (const receipt of receipts.splice(0)) {
-    receipt.finish("interrupted");
+    receipt.finish("interrupted", "failed");
     await receipt.settled?.();
   }
   await closeOpenClawAgentDatabasesAsync();
 });
 
-it("replays pre-normalization requester origins only against their complete accepted hash", async () => {
+it("preserves pre-normalization requester hashes without reviving unfinished input", async () => {
   const scope = {
     agentId: "main",
     sessionKey: "agent:main:origin-replay",
@@ -78,7 +78,7 @@ it("replays pre-normalization requester origins only against their complete acce
     if (completed) {
       await first.completeAsync!(outcome);
     }
-    first.finish("interrupted");
+    first.finish("interrupted", "failed");
     await first.settled?.();
     rotateAgentEventLifecycleGeneration();
     await closeOpenClawAgentDatabasesAsync();
@@ -94,13 +94,14 @@ it("replays pre-normalization requester origins only against their complete acce
         },
       }),
     ).rejects.toThrow(/conflicts with the accepted input/);
-    const replay = await stage();
-    if (completed) {
-      expect(replay).toMatchObject({ state: "consumed", completion: outcome });
-    } else {
-      await expect(replay.completeAsync!(outcome)).resolves.toEqual(outcome);
+    if (!completed) {
+      await expect(stage()).rejects.toThrow("ownership ended");
+      continue;
     }
-    replay.finish("interrupted");
+    const replay = await stage();
+    expect(replay).toMatchObject({ state: "consumed", completion: outcome });
+    expect(() => replay.run(() => {})).toThrow("already completed");
+    replay.finish("interrupted", "failed");
     await replay.settled?.();
   }
 });

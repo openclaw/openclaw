@@ -35,31 +35,27 @@ it.skipIf(!explicitSqliteCloseReleasesNativeResources)(
     const file = databasePath();
     const root = path.dirname(file);
     await (await open(file)).close();
-    const siblings = [];
-    for (let index = 0; index < 4; index++) {
-      const store = await open(databasePath());
-      siblings.push({ store, receipt: await append(store, "before refusal") });
-    }
     const refused = new Error("Fixture opening authority revoked");
     let allowed = false;
     const markerPath = path.join(root, "factory-entered");
     const input = { type: "observe" as const, markerPath };
-    const reopen = async () => {
+    const reopen = async (pathname = file) => {
+      const openingInput = pathname === file ? input : undefined;
       const store = await openAgentDatabaseSqliteWorkerStore<FixtureOperations>(
         {
           moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
-          databasePath: file,
-          existingOnly: true,
-          input,
+          databasePath: pathname,
+          existingOnly: pathname === file,
+          input: openingInput,
         },
         {
           stateContext: { environment: { OPENCLAW_STATE_DIR: root } },
           assertCurrent() {},
           createAdmission: () => ({
-            nativeLocations: [file],
+            nativeLocations: [pathname],
             admission: createSqliteWorkerOperationAdmission((request, grant) => {
-              expect(request).toEqual({ stage: "open", facts: input });
-              if (!allowed) {
+              expect(request).toEqual({ stage: "open", facts: openingInput });
+              if (pathname === file && !allowed) {
                 throw refused;
               }
               grant();
@@ -71,6 +67,11 @@ it.skipIf(!explicitSqliteCloseReleasesNativeResources)(
       stores.add(store);
       return store;
     };
+    const siblings = [];
+    for (let index = 0; index < 4; index++) {
+      const store = await reopen(databasePath());
+      siblings.push({ store, receipt: await append(store, "before refusal") });
+    }
     const requests = vi.spyOn(Worker.prototype, "postMessage");
     try {
       await expect(reopen()).rejects.toBe(refused);

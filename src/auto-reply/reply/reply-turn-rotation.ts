@@ -23,7 +23,6 @@ export function createReplyTurnRotationEvidence(params: {
 }) {
   const controller = params.controller ?? getSessionControllerEntry(params.sessionKey);
   const waitedRotations = new Map<ReplyRotationSource["databaseIdentity"], ReplyRotationSource>();
-  const observedOperations = new Map<ReplyOperation, OpenClawAgentDatabaseIdentity | undefined>();
   // Barrier snapshots retain their source lane after rekeying; active owners do not.
   const isCurrent = (source: ReplyRotationSource) =>
     !isReplyOperationAbortedForRestart(source.operation) &&
@@ -54,50 +53,6 @@ export function createReplyTurnRotationEvidence(params: {
   };
 
   return {
-    capturePreparation() {
-      const registered = controller.active;
-      // A newly observed predecessor may complete before preparation retries.
-      // Retain its original store, not an association acquired by later adoption.
-      if (registered && !observedOperations.has(registered)) {
-        observedOperations.set(
-          registered,
-          lifecycleAdmissionByOperation.get(registered)?.databaseIdentity,
-        );
-      }
-      const observations = [
-        ...new Set([
-          ...(params.expectedActiveOperations ?? []),
-          params.activeAtAdmission,
-          ...observedOperations.keys(),
-          registered,
-          ...Array.from(waitedRotations.values(), (source) => source.operation),
-        ]),
-      ].flatMap((operation) =>
-        operation
-          ? [
-              {
-                operation,
-                key: operation.key,
-                sessionId: operation.sessionId,
-                result: operation.result,
-                databaseIdentity: lifecycleAdmissionByOperation.get(operation)?.databaseIdentity,
-              },
-            ]
-          : [],
-      );
-      // These values invalidate a delayed row, never authorize a new logical ID.
-      // In particular, observing a rekey must not extend immutable barrier history.
-      return () =>
-        controller.active === registered &&
-        observations.every(
-          ({ operation, key, sessionId, result, databaseIdentity }) =>
-            operation.key === key &&
-            operation.sessionId === sessionId &&
-            operation.result === result &&
-            lifecycleAdmissionByOperation.get(operation)?.databaseIdentity === databaseIdentity,
-        );
-    },
-
     recordBarrierSources(sources: ReplyRunAdmissionSource[] = []) {
       recordSources(sources, true);
     },

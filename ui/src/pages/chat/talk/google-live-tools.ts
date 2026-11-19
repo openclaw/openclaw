@@ -83,7 +83,11 @@ export class GoogleLiveToolOwner {
     }
 
     if (name === REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME) {
-      this.submitDescribeView(callId);
+      const active = this.options.isDescribeViewActive();
+      this.submitResult(
+        callId,
+        active ? { ok: true, cameraStreamActive: true } : { ok: false, error: "camera is off" },
+      );
       return;
     }
     await this.runAgentTool(pending, callId, call.args);
@@ -150,14 +154,6 @@ export class GoogleLiveToolOwner {
         }
       }
     }
-  }
-
-  private submitDescribeView(callId: string): void {
-    const active = this.options.isDescribeViewActive();
-    this.submitResult(
-      callId,
-      active ? { ok: true, cameraStreamActive: true } : { ok: false, error: "camera is off" },
-    );
   }
 
   private submitResult(callId: string, result: unknown): void {

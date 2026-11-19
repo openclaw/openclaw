@@ -7,7 +7,7 @@ import { createNativeTypeScriptParser } from "../scripts/lib/native-typescript.m
 
 const libraryPath = new URL("./library.ts", import.meta.url);
 const lazyRuntimeSpecifiers = [
-  "./auto-reply/reply.runtime.js",
+  "./auto-reply/reply/get-reply.js",
   "./cli/prompt.js",
   "./infra/binaries.js",
   "./process/exec.js",

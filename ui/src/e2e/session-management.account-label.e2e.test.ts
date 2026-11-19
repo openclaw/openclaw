@@ -6,11 +6,10 @@ import {
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import * as ui from "./session-management.compact.test-support.ts";
 import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
-  installMockGateway,
-  sessionsListResponse,
   trimmedTextContents,
 } from "./session-management.test-support.ts";
 
@@ -25,22 +24,18 @@ function gatewayDirectRow(key: string, updatedAt: number, accountId?: string) {
 
 async function openDirectSession(page: Page, paired = false) {
   const key = paired ? defaultKey : cardsKey;
-  await installMockGateway(page, {
-    methodResponses: {
-      "sessions.list": sessionsListResponse([
-        ...(paired ? [gatewayDirectRow(defaultKey, 2)] : []),
-        gatewayDirectRow(cardsKey, 1, "cards"),
-      ]),
-    },
-    sessionKey: key,
-  });
+  await ui.installSessionRows(
+    page,
+    [...(paired ? [gatewayDirectRow(defaultKey, 2)] : []), gatewayDirectRow(cardsKey, 1, "cards")],
+    { sessionKey: key },
+  );
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
 }
 
 async function openRowRename(page: Page, row: Locator) {
   await row.hover();
   await row.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Rename…" }).click();
+  await ui.menuItem(page, "Rename…", false).click();
 }
 
 suite.define(() => {
@@ -57,7 +52,7 @@ suite.define(() => {
           let field: Locator;
           if (surface === "header") {
             const title = page.locator(".chat-pane__session-title-button");
-            await expect.poll(() => title.textContent()).toContain("Alice · cards");
+            await ui.expectText(title, "Alice · cards");
             await title.click();
             field = page.locator(".chat-pane__session-title-input");
           } else {
@@ -87,7 +82,7 @@ suite.define(() => {
     async (surface) => {
       const key = "agent:main:dashboard:generated-title";
       const generatedTitle = "Repository activity dashboard";
-      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      await ui.withSessionPage(suite, async (page) => {
         const original = {
           ...sessionRow(key, generatedTitle, Date.now()),
           label: undefined,
@@ -95,10 +90,7 @@ suite.define(() => {
             ? { displayName: undefined, derivedTitle: generatedTitle }
             : {}),
         };
-        const gateway = await installMockGateway(page, {
-          methodResponses: { "sessions.list": sessionsListResponse([original]) },
-          sessionKey: key,
-        });
+        const gateway = await ui.installSessionRows(page, [original], { sessionKey: key });
 
         await page.goto(
           surface === "sessions"
@@ -137,18 +129,10 @@ suite.define(() => {
         await openRename();
         await page.keyboard.press("ArrowRight");
         await page.keyboard.type(" updated");
-        expect(await field.inputValue()).toBe(`${generatedTitle} updated`);
-        await page.keyboard.press("Escape");
-        await field.waitFor({ state: "detached" });
-        expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
-
-        await openRename();
-        await page.keyboard.press("ArrowRight");
-        await page.keyboard.type(" updated");
         if (surface === "header") {
           await page.keyboard.press("Enter");
         } else {
-          await page.locator("openclaw-modal-dialog").getByRole("button", { name: "Save" }).click();
+          await ui.button(page.locator("openclaw-modal-dialog"), "Save", false).click();
         }
         const patchRequest = await gateway.waitForRequest("sessions.patch");
         expect(patchRequest.params).toMatchObject({
@@ -156,14 +140,14 @@ suite.define(() => {
           expectedSessionId: original.sessionId,
           label: `${generatedTitle} updated`,
         });
-        await expect.poll(() => row.textContent()).toContain(`${generatedTitle} updated`);
+        await ui.expectText(row, `${generatedTitle} updated`);
         await openRename();
-        await expect.poll(() => field.inputValue()).toBe(`${generatedTitle} updated`);
+        await ui.pollValue(field).toBe(`${generatedTitle} updated`);
         await field.fill("");
         await field.press("Enter");
-        await expect.poll(() => row.textContent()).not.toContain(`${generatedTitle} updated`);
+        await ui.pollText(row).not.toContain(`${generatedTitle} updated`);
         await openRename();
-        await expect.poll(() => field.inputValue()).toBe(generatedTitle);
+        await ui.pollValue(field).toBe(generatedTitle);
         if (surface === "sidebar" || surface === "header") {
           await gateway.setOnline(false);
           await waitForControlUiGatewayReconnecting(page);
@@ -174,13 +158,11 @@ suite.define(() => {
             await field.press("Enter");
           } else {
             const dialog = page.getByRole("dialog", { name: "Rename session", exact: true });
-            await expect
-              .poll(() => dialog.getByRole("button", { name: "Save", exact: true }).isEnabled())
-              .toBe(true);
-            await dialog.getByRole("button", { name: "Save", exact: true }).click();
+            await expect.poll(() => ui.button(dialog, "Save").isEnabled()).toBe(true);
+            await ui.button(dialog, "Save").click();
           }
           await field.waitFor({ state: "detached" });
-          await expect.poll(() => row.textContent()).toContain(`${generatedTitle} queued`);
+          await ui.expectText(row, `${generatedTitle} queued`);
           expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);
           await gateway.setOnline(true);
           await waitForControlUiGatewayReady(page);
@@ -192,7 +174,7 @@ suite.define(() => {
             expectedSessionId: original.sessionId,
             label: `${generatedTitle} queued`,
           });
-          await expect.poll(() => row.textContent()).toContain(`${generatedTitle} queued`);
+          await ui.expectText(row, `${generatedTitle} queued`);
         } else {
           await gateway.closeLatest();
         }

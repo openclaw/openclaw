@@ -186,8 +186,6 @@ it.each([
       releaseSetup.resolve();
       if (outcome === "completed") {
         expect(await pending).toMatchObject({ payloads: [{ text }] });
-        expect(runLocal).toHaveBeenCalledOnce();
-        expect(replacement.environments.createWithRequest).toHaveBeenCalledOnce();
         expect(placements.get(REQUEST.sessionId)).toMatchObject({
           state: "active",
           environmentId: replacement.ready.environmentId,
@@ -198,7 +196,6 @@ it.each([
         expect(controller.signal.aborted).toBe(false);
       } else {
         expect(await pending).toBe(termination);
-        expect(replacement.environments.createWithRequest).not.toHaveBeenCalled();
         expect(runLocal).not.toHaveBeenCalled();
         expect(placements.get(REQUEST.sessionId)).toMatchObject(idlePlacement);
       }

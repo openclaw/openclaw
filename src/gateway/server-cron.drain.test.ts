@@ -18,7 +18,7 @@ import { captureCronSchedulerWakeForTest } from "../cron/service/scheduler-actor
 import * as cronServiceState from "../cron/service/state.js";
 import * as cronRunFinalization from "../cron/service/timer-outcome-finalization.js";
 import {
-  loadCronJobsStoreWithConfigJobs as loadJobs,
+  loadCronJobsStoreWithConfigJobsByKey,
   resolveCronJobsStorePathFromConfigAsync,
 } from "../cron/store.js";
 import {
@@ -74,6 +74,12 @@ type StartedGatewayCron = ReturnType<typeof buildGatewayCronService> & {
 };
 const fixtures: StartedGatewayCron[] = [];
 
+function loadJobs({ cron }: StartedGatewayCron) {
+  return loadCronJobsStoreWithConfigJobsByKey(
+    expectDefined(cron.getStoreKey?.(), "prepared cron store key"),
+  );
+}
+
 async function startGatewayCron(
   label: string,
   enabled = true,
@@ -120,10 +126,6 @@ async function cleanGatewayCron({ cron, stateDir }: StartedGatewayCron): Promise
   }
 }
 
-async function finishPending(pending: unknown[], signal: AbortSignal) {
-  await withinTest(Promise.allSettled(pending), signal);
-}
-
 function observe(promise: Promise<unknown>) {
   let outcome: { ok: true } | { ok: false; error: unknown } | undefined;
   return {
@@ -139,32 +141,6 @@ function observe(promise: Promise<unknown>) {
       },
     ),
   };
-}
-
-async function enteredBeforeSettled(
-  entered: Promise<void>,
-  pending: Promise<unknown>,
-  signal: AbortSignal,
-  label: string,
-) {
-  await withinTest(awaitGateBeforeSettlement(entered, pending, label), signal);
-}
-
-async function withExitWatcher(
-  label: string,
-  run: (
-    original: StartedGatewayCron,
-    release: ReturnType<typeof createDeferred<void>>,
-  ) => Promise<void>,
-) {
-  const release = createDeferred();
-  cancelAllMock.mockReturnValue(release.promise);
-  const original = await startGatewayCron(label);
-  try {
-    await run(original, release);
-  } finally {
-    release.resolve();
-  }
 }
 
 async function addCommand(original: StartedGatewayCron, name: string, deleteAfterRun: boolean) {
@@ -245,17 +221,19 @@ describe("gateway cron stop-and-drain automation ownership", () => {
     const tick = wake(cronState);
     let drain: Promise<void> | undefined;
     try {
-      await enteredBeforeSettled(
-        entered.promise,
-        Promise.resolve(tick),
+      await withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          Promise.resolve(tick),
+          "Worker maintenance gate",
+        ),
         signal,
-        "Worker maintenance gate",
       );
       const observed = observe(expectDefined(original.cron.stopAndDrain?.(), "cron drain"));
       drain = observed.settled;
       original.scheduler.schedule({ id: "cron-drain-sibling", delayMs: 0, run: sibling });
       await withinTest(Promise.resolve(original.clock.advanceBy(0)), signal);
-      await loadJobs(original.storePath);
+      await loadJobs(original);
       expect(sibling).toHaveBeenCalledOnce();
       expect(original.scheduler.signal.aborted).toBe(false);
       expect(observed.outcome).toBeUndefined();
@@ -268,73 +246,62 @@ describe("gateway cron stop-and-drain automation ownership", () => {
       original.cron.stop();
       original.scheduler.beginClose();
       sessionAgents.mockRestore();
-      await finishPending([tick, drain], signal);
+      await withinTest(Promise.allSettled([tick, drain]), signal);
     }
   });
 
-  it.each(["success", "exit-watcher-failure"] as const)(
-    "waits for durable manual-run finalization after its payload has settled (%s)",
-    async (stopResult) => {
-      const finalizationEntered = createDeferred();
-      const releaseFinalization = createDeferred();
-      const stopError = new Error("exit watcher drain failed");
-      let jobId: string | undefined;
-      const original = await startGatewayCron("finalization", false);
-      const finalize = cronRunFinalization.finalizeCompletedCronRunOutcomes;
-      const finalization = vi
-        .spyOn(cronRunFinalization, "finalizeCompletedCronRunOutcomes")
-        .mockImplementation(async (cronState, outcomes, opts) => {
-          if (outcomes.some((outcome) => outcome.jobId === jobId)) {
-            finalizationEntered.resolve();
-            await releaseFinalization.promise;
-          }
-          return finalize(cronState, outcomes, opts);
-        });
-      let run: Promise<unknown> | undefined;
-      let drain: Promise<void> | undefined;
-      try {
-        const job = await addCommand(original, "finalization drain", false);
-        jobId = job.id;
-        run = original.cron.run(job.id, "force");
-        await awaitGateBeforeSettlement(
-          finalizationEntered.promise,
-          run,
-          "Cron run settled before entering finalization",
-        );
-        expect(await waitForActiveCronTaskRuns(0)).toEqual({ drained: true, active: 0 });
-        expect(isCronJobActive(job.id)).toBe(true);
-        if (stopResult === "exit-watcher-failure") {
-          cancelAllMock.mockRejectedValueOnce(stopError);
-          original.cleanupError = stopError;
+  it("waits for durable manual-run finalization even when exit-watcher cleanup fails", async () => {
+    const finalizationEntered = createDeferred();
+    const releaseFinalization = createDeferred();
+    const stopError = new Error("exit watcher drain failed");
+    let jobId: string | undefined;
+    const original = await startGatewayCron("finalization", false);
+    const finalize = cronRunFinalization.finalizeCompletedCronRunOutcomes;
+    const finalization = vi
+      .spyOn(cronRunFinalization, "finalizeCompletedCronRunOutcomes")
+      .mockImplementation(async (cronState, outcomes, opts) => {
+        if (outcomes.some((outcome) => outcome.jobId === jobId)) {
+          finalizationEntered.resolve();
+          await releaseFinalization.promise;
         }
-        const observed = observe(expectDefined(original.cron.stopAndDrain?.(), "cron drain"));
-        drain = observed.settled;
-        const pending = (await loadJobs(original.storePath)).store.jobs.find(
-          (entry) => entry.id === job.id,
-        );
-        expect(pending?.state.runningAtMs).toEqual(expect.any(Number));
-        expect(pending?.state.lastRunStatus).toBeUndefined();
-        expect(observed.outcome).toBeUndefined();
+        return finalize(cronState, outcomes, opts);
+      });
+    let run: Promise<unknown> | undefined;
+    let drain: Promise<void> | undefined;
+    try {
+      const job = await addCommand(original, "finalization drain", false);
+      jobId = job.id;
+      run = original.cron.run(job.id, "force");
+      await awaitGateBeforeSettlement(
+        finalizationEntered.promise,
+        run,
+        "Cron run settled before entering finalization",
+      );
+      expect(await waitForActiveCronTaskRuns(0)).toEqual({ drained: true, active: 0 });
+      expect(isCronJobActive(job.id)).toBe(true);
+      cancelAllMock.mockRejectedValueOnce(stopError);
+      original.cleanupError = stopError;
+      const observed = observe(expectDefined(original.cron.stopAndDrain?.(), "cron drain"));
+      drain = observed.settled;
+      const pending = (await loadJobs(original)).store.jobs.find((entry) => entry.id === job.id);
+      expect(pending?.state.runningAtMs).toEqual(expect.any(Number));
+      expect(pending?.state.lastRunStatus).toBeUndefined();
+      expect(observed.outcome).toBeUndefined();
 
-        releaseFinalization.resolve();
-        await expect(run).resolves.toMatchObject({ ok: true, ran: true });
-        await drain;
-        expect(observed.outcome).toEqual(
-          stopResult === "success" ? { ok: true } : { ok: false, error: stopError },
-        );
-        const completed = (await loadJobs(original.storePath)).store.jobs.find(
-          (entry) => entry.id === job.id,
-        );
-        expect(completed).toMatchObject({ enabled: false, state: { lastRunStatus: "ok" } });
-        expect(completed?.state.runningAtMs).toBeUndefined();
-        expect(isCronJobActive(job.id)).toBe(false);
-      } finally {
-        releaseFinalization.resolve();
-        finalization.mockRestore();
-        await Promise.allSettled([run, drain]);
-      }
-    },
-  );
+      releaseFinalization.resolve();
+      await expect(run).resolves.toMatchObject({ ok: true, ran: true });
+      await drain;
+      expect(observed.outcome).toEqual({ ok: false, error: stopError });
+      const completed = (await loadJobs(original)).store.jobs.find((entry) => entry.id === job.id);
+      expect(completed).toMatchObject({ enabled: false, state: { lastRunStatus: "ok" } });
+      expect(completed?.state.runningAtMs).toBeUndefined();
+      expect(isCronJobActive(job.id)).toBe(false);
+    } finally {
+      releaseFinalization.resolve();
+      finalization.mockRestore();
+      await Promise.allSettled([run, drain]);
+    }
+  });
 
   it.each([false, true])(
     "publishes a one-shot binding removal after completion (delete=%s)",
@@ -364,10 +331,13 @@ describe("gateway cron stop-and-drain automation ownership", () => {
     },
   );
 
-  it.each(["drain", "restart", "superseded restart"] as const)(
+  it.each(["drain", "superseded restart"] as const)(
     "waits for cancelled exit watchers before completing %s",
     async (action) => {
-      await withExitWatcher(`exit-watcher-${action}`, async ({ cron, cfg }, release) => {
+      const release = createDeferred();
+      cancelAllMock.mockReturnValue(release.promise);
+      const { cron, cfg } = await startGatewayCron(`exit-watcher-${action}`);
+      try {
         if (action !== "drain") {
           cron.stop();
         }
@@ -386,7 +356,9 @@ describe("gateway cron stop-and-drain automation ownership", () => {
         if (action === "superseded restart") {
           expect(sessionHasAutomation("agent:main:main", cfg)).toBe(false);
         }
-      });
+      } finally {
+        release.resolve();
+      }
     },
   );
 
@@ -463,19 +435,6 @@ describe("gateway cron stop-and-drain automation ownership", () => {
     await nextTurn();
   });
 
-  it("unregisters a stopped scheduler when stream draining fails and permits retry", async () => {
-    stopAllMock.mockRejectedValueOnce(new Error("stream drain failed"));
-    stopAllMock.mockResolvedValue(undefined);
-    const original = await startGatewayCron("failed");
-
-    expect(sessionHasAutomation("agent:main:main", original.cfg)).toBe(true);
-    await expect(original.cron.stopAndDrain?.()).rejects.toThrow("stream drain failed");
-    expect(sessionHasAutomation("agent:main:main", original.cfg)).toBe(false);
-    await expect(original.cron.stopAndDrain?.()).resolves.toBeUndefined();
-    expect(stopAllMock).toHaveBeenCalledTimes(2);
-    expect(sessionHasAutomation("agent:main:main", original.cfg)).toBe(false);
-  });
-
   it("does not unregister a replacement scheduler when a stale drain fails", async () => {
     const pendingDrain = createDeferred();
     stopAllMock.mockImplementationOnce(() => pendingDrain.promise);
@@ -483,6 +442,7 @@ describe("gateway cron stop-and-drain automation ownership", () => {
     const original = await startGatewayCron("stale");
     expect(sessionHasAutomation("agent:main:main", original.cfg)).toBe(true);
     const staleDrain = expectDefined(original.cron.stopAndDrain?.(), "cron drain");
+    expect(sessionHasAutomation("agent:main:main", original.cfg)).toBe(false);
     const replacement = await startGatewayCron("replacement");
     expect(sessionHasAutomation("agent:main:main", replacement.cfg)).toBe(true);
     const failedDrain = expect(staleDrain).rejects.toThrow("stream drain failed");

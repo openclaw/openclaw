@@ -53,6 +53,10 @@ it.each(["durable", "incognito"])(
         owner.current = undefined;
         disposeCodeModeSessionStore(owner);
       };
+      const expectValue = (binding: ReturnType<typeof bind>, key: string, value: unknown) =>
+        expect(binding.cell().load(key)).resolves.toMatchObject({ value });
+      const expectMissing = (binding: ReturnType<typeof bind>, key: string) =>
+        expect(binding.cell().load(key)).resolves.toEqual({ networkContent: false });
       let restoreRead = () => {};
       try {
         const manager = await SessionManager.openAsync(scope, dir);
@@ -99,19 +103,15 @@ it.each(["durable", "incognito"])(
         const next = resumed.cell();
         await next.save("current", "visible", false);
         await next.commit();
-        await expect(resumed.cell().load("current")).resolves.toMatchObject({ value: "visible" });
-        await expect(resumed.cell().load("old")).resolves.toMatchObject({
-          value: { retained: true },
-        });
+        await expectValue(resumed, "current", "visible");
+        await expectValue(resumed, "old", { retained: true });
         expect(reopen).not.toHaveBeenCalled();
         close(resumed.owner);
 
         await selected.branchAsync(old);
         const branched = bind(selected);
-        await expect(branched.cell().load("old")).resolves.toMatchObject({
-          value: { retained: true },
-        });
-        await expect(branched.cell().load("current")).resolves.toEqual({ networkContent: false });
+        await expectValue(branched, "old", { retained: true });
+        await expectMissing(branched, "current");
         const branchCell = branched.cell();
         await branchCell.save("branch", "selected", false);
         await branchCell.commit();
@@ -124,11 +124,9 @@ it.each(["durable", "incognito"])(
         const compacted = bind(
           await SessionManager.openAsync(scope, dir, { maxEvents: 2, maxBytes: 4096 }),
         );
-        await expect(compacted.cell().load("old")).resolves.toMatchObject({
-          value: { retained: true },
-        });
-        await expect(compacted.cell().load("branch")).resolves.toMatchObject({ value: "selected" });
-        await expect(compacted.cell().load("current")).resolves.toEqual({ networkContent: false });
+        await expectValue(compacted, "old", { retained: true });
+        await expectValue(compacted, "branch", "selected");
+        await expectMissing(compacted, "current");
         close(compacted.owner);
 
         const retired = bind(selected);

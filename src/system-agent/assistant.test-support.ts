@@ -3,7 +3,6 @@ import { vi } from "vitest";
 import * as cliRunner from "../agents/cli-runner.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
 import * as config from "../config/config.js";
-import * as assistantTimeout from "./assistant-timeout.js";
 import { planSystemAgentCommand as planSystemAgentCommandImpl } from "./assistant.js";
 
 // mock-isolation: Planner dispatch fixtures never initialize or launch a CLI runner.
@@ -17,7 +16,6 @@ type PlannerTestDeps = {
   runEmbeddedAgent?: typeof embeddedAgent.runEmbeddedAgent;
   createTempDir?: () => Promise<string>;
   removeTempDir?: (dir: string) => Promise<void>;
-  resolveAssistantTimeoutMs?: typeof assistantTimeout.resolveSystemAgentAssistantTimeoutMs;
 };
 
 export async function planSystemAgentCommand(
@@ -26,14 +24,8 @@ export async function planSystemAgentCommand(
   },
 ) {
   const { deps, ...plannerParams } = params;
-  const {
-    readConfigFileSnapshot,
-    runCliAgent,
-    runEmbeddedAgent,
-    createTempDir,
-    removeTempDir,
-    resolveAssistantTimeoutMs,
-  } = deps ?? {};
+  const { readConfigFileSnapshot, runCliAgent, runEmbeddedAgent, createTempDir, removeTempDir } =
+    deps ?? {};
   const mocks: Array<{ mockRestore(): void }> = [];
   try {
     if (readConfigFileSnapshot) {
@@ -52,13 +44,6 @@ export async function planSystemAgentCommand(
     }
     if (removeTempDir) {
       mocks.push(vi.spyOn(fs, "rm").mockImplementation((dir) => removeTempDir(String(dir))));
-    }
-    if (resolveAssistantTimeoutMs) {
-      mocks.push(
-        vi
-          .spyOn(assistantTimeout, "resolveSystemAgentAssistantTimeoutMs")
-          .mockImplementation(resolveAssistantTimeoutMs),
-      );
     }
     return await planSystemAgentCommandImpl(plannerParams);
   } finally {

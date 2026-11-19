@@ -41,20 +41,15 @@ it("correlates a follow-up after custody arrives", () => {
   expect(reply.controlUiRequestSettled(row)).toBe(true);
 });
 
-it.each([true, false])("ignores non-replies and retains finals with ACK first=%s", (ackFirst) => {
+it("ignores non-replies and retains finals until ACK arrives", () => {
   const { row, observe, final, ack } = fixture();
-  if (ackFirst) {
-    ack();
-  }
   observe("status", 2, { phase: "starting_model" });
   observe("delta", 3, { deltaText: "", replace: true });
   observe("final", 4, { runId: row.requestId });
   expect(reply.controlUiRequestSettled(row)).toBe(false);
   final();
-  expect(reply.controlUiRequestSettled(row)).toBe(ackFirst);
-  if (!ackFirst) {
-    ack();
-  }
+  expect(reply.controlUiRequestSettled(row)).toBe(false);
+  ack();
   expect(reply.controlUiRequestSettled(row)).toBe(true);
   expect(row.firstDeltaMs).toBeNull();
 });

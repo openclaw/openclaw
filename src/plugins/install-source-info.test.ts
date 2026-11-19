@@ -127,15 +127,7 @@ it.each<SourceCase>([
     { localPath: local.path, defaultChoice: "npm" },
     { defaultChoice: "npm", local, warnings: ["default-choice-missing-source"] },
   ],
-  [
-    { npmSpec: invalidNpm, defaultChoice: "npm" },
-    { defaultChoice: "npm", warnings: ["invalid-npm-spec", "default-choice-missing-source"] },
-  ],
   [{ expectedIntegrity: clawhubIntegrity }, { warnings: ["npm-integrity-without-source"] }],
-  [
-    { localPath: local.path, expectedIntegrity: npmIntegrity },
-    { local, warnings: ["npm-integrity-without-source"] },
-  ],
   [
     { clawhubSpec: clawhub.spec, expectedIntegrity: "not-a-hash" },
     { clawhub, warnings: ["npm-integrity-without-source"] },

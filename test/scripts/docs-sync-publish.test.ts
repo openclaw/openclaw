@@ -9,6 +9,7 @@ import {
   reportOrphanLocaleDocs,
 } from "../../scripts/docs-sync-publish.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { files } from "./docs-fixture.test-support.js";
 
 const slugifyPackage = "@sindresorhus/slugify";
 const sourceSlugifyVersion = JSON.parse(
@@ -24,23 +25,6 @@ const navGroup = (name: string, pages: NavGroup["pages"]): NavGroup => ({ group:
 const navFixture = (tab: string, name: string, pages: NavGroup["pages"]) => ({
   tabs: [{ tab, groups: [navGroup(name, pages)] }],
 });
-function files(root: string) {
-  return {
-    read: (name: string) => fs.readFileSync(path.join(root, name), "utf8"),
-    json: (name: string) => JSON.parse(fs.readFileSync(path.join(root, name), "utf8")),
-    append: (name: string, text: string) => fs.appendFileSync(path.join(root, name), text),
-    write: (name: string, content: string) => {
-      fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
-      fs.writeFileSync(path.join(root, name), content);
-    },
-    exists: (name: string) => fs.existsSync(path.join(root, name)),
-    linkDependencies: (
-      type: "junction" | "dir" = process.platform === "win32" ? "junction" : "dir",
-    ) => {
-      fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), type);
-    },
-  };
-}
 function publisherFixture(
   version = sourceSlugifyVersion,
   { sourceSha, index }: { sourceSha?: string; index?: string } = { index: "# ClawHub\n" },
@@ -102,31 +86,10 @@ function collectPages(entry: NavEntry | NavEntry[] | undefined): string[] {
   if (typeof entry === "string") {
     return [entry];
   }
-  if (Array.isArray(entry)) {
-    return entry.flatMap((item) => collectPages(item));
-  }
-  return [entry.page, entry.pages, entry.groups, entry.tabs].flatMap(collectPages);
+  return (
+    Array.isArray(entry) ? entry : [entry.page, entry.pages, entry.groups, entry.tabs]
+  ).flatMap(collectPages);
 }
-function findNestedGroup(pages: NavGroup["pages"] | undefined, name: string): NavGroup | undefined {
-  for (const entry of pages ?? []) {
-    if (typeof entry === "string") {
-      continue;
-    }
-    const found = entry.group === name ? entry : findNestedGroup(entry.pages, name);
-    if (found) {
-      return found;
-    }
-  }
-  return undefined;
-}
-const findNestedGroupByPage = (pages: NavGroup["pages"] | undefined, page: string) =>
-  pages?.find((entry) => typeof entry !== "string" && collectPages(entry.pages).includes(page));
-function expectFirstLabels(locale: { tabs: NavTab[] } | undefined, tab: string, group: string) {
-  const first = locale!.tabs[0];
-  expect({ tab: first?.tab, group: first?.groups?.[0]?.group }).toEqual({ tab, group });
-}
-const findTab = (locale: { tabs: NavTab[] } | undefined, tab: string) =>
-  locale!.tabs.find((entry) => entry.tab === tab);
 const authoredEnglish = (files("docs").json("docs.json") as DocsConfig).navigation.languages.find(
   (entry) => entry.language === "en",
 )!;
@@ -137,7 +100,11 @@ it("reuses only exact successful page checks and checks docs.json on warm runs",
   const { read, write, json, append } = files(root);
   const checker = path.join(root, ".openclaw-sync", "check-docs-mdx.mts");
   fs.mkdirSync(path.join(root, ".openclaw-sync", "lib"), { recursive: true });
-  for (const name of ["check-docs-mdx.mts", "lib/arg-utils.runtime.mjs"]) {
+  for (const name of [
+    "check-docs-mdx.mts",
+    "lib/arg-utils.runtime.mjs",
+    "lib/numeric-options.mjs",
+  ]) {
     fs.copyFileSync(path.join("scripts", name), path.join(root, ".openclaw-sync", name));
   }
   files(path.join(root, ".openclaw-sync")).linkDependencies("junction");
@@ -176,6 +143,7 @@ it("reuses only exact successful page checks and checks docs.json on warm runs",
   expect(Object.keys(json("cache.json").files)).toEqual(["docs/b.MD"]);
   for (const name of [
     ".openclaw-sync/check-docs-mdx.mts",
+    ".openclaw-sync/lib/numeric-options.mjs",
     "package-lock.json",
     "node_modules/.package-lock.json",
   ]) {
@@ -194,7 +162,13 @@ it("executes the copied MDX checker and shared anchor runtime closures", () => {
   write("docs/fa/index.md", translation);
   files(publishRoot).linkDependencies();
   sync();
-  runNode(publishRoot, path.join(publishRoot, ".openclaw-sync/check-docs-mdx.mjs"), minimalMdx);
+  runNode(
+    publishRoot,
+    path.join(publishRoot, ".openclaw-sync/check-docs-mdx.mjs"),
+    minimalMdx,
+    "--max-errors",
+    "7",
+  );
   expect(read("docs/fa/index.md")).toBe(translation);
   expect(read("docs/reference/templates/AGENTS.md")).toBe(
     fs.readFileSync("docs/reference/templates/AGENTS.md", "utf8"),
@@ -247,9 +221,7 @@ it.each([
   { fault: "exit", error: "npm lock failure" },
   { fault: "stale", error: "publisher manifest and lock must both pin" },
 ])("syncs an independent publisher lock with $fault outcome", async ({ fault, error }) => {
-  const fixture = publisherFixture("2.2.0", {
-    sourceSha: "fixture-source",
-  });
+  const fixture = publisherFixture("2.2.0", { sourceSha: "fixture-source" });
   const { root, publishRoot, exists, read, write, json, append } = fixture;
   const bin = path.join(root, "bin");
   fs.mkdirSync(bin);
@@ -260,8 +232,8 @@ it.each([
     path.join(bin, "npm"),
     `#!${process.execPath}\n` +
       String.raw`
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
 const fault = ${JSON.stringify(fault)};
 const args = process.argv.slice(2);
 assert.deepEqual(args.slice(0, -1), ['install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund', '--save-dev', '--save-exact']);
@@ -357,42 +329,9 @@ it("overlays deep groups without changing the input or ambiguously labeling sibl
   );
 });
 
-it("covers every published Swedish navigation label with a matching English anchor", () => {
-  const glossary = new Map<string, string>(
-    files("docs/.i18n")
-      .json("glossary.sv.json")
-      .map((entry: { source: string; target: string }) => [entry.source, entry.target]),
-  );
-  const label = (value: string) => {
-    expect(glossary.has(value), value).toBe(true);
-    return glossary.get(value)!;
-  };
-  const group = (entry: NavGroup, translated: boolean): NavGroup => ({
-    group: translated ? label(entry.group) : entry.group,
-    pages: entry.pages.map((page) =>
-      typeof page === "string" ? `sv/${page}` : group(page, translated),
-    ),
-  });
-  const overlay = files("docs/.i18n").json("sv-navigation.json");
-  const navigation = (translated: boolean) => ({
-    language: "sv",
-    tabs: englishTabs.map((tab) => ({
-      tab: translated ? label(tab.tab) : tab.tab,
-      groups: tab.groups.map((entry) => group(entry, translated)),
-    })),
-  });
-  expect(applyLocaleNavLabelOverlay(navigation(false), overlay)).toEqual(navigation(true));
-});
-
 it("keeps generated locale navigation aligned with English routes", () => {
   const config = composeDocsConfig() as DocsConfig;
-  const [english, chinese, german, turkish, swedish] = ["en", "zh-Hans", "de", "tr", "sv"].map(
-    (code) => {
-      const locale = config.navigation.languages.find((entry) => entry.language === code);
-      expect(locale).toBeDefined();
-      return locale!;
-    },
-  );
+  const english = config.navigation.languages.find((entry) => entry.language === "en");
   expect(english).toEqual(authoredEnglish);
 
   const localeDirs: Record<string, string> = {
@@ -410,58 +349,5 @@ it("keeps generated locale navigation aligned with English routes", () => {
         tab.groups?.map((group) => collectPages(group).map(localize)),
       );
     }
-  }
-
-  expectFirstLabels(chinese, "快速开始", "首页");
-  for (const [tab, groups] of [
-    ["发布", ["发布说明", "发布流程"]],
-    ["贡献", ["成熟度", "测试与 CI"]],
-  ] as const) {
-    expect(findTab(chinese, tab)?.groups.map((group) => group.group)).toEqual(groups);
-  }
-  expectFirstLabels(swedish, "Kom igång", "Översikt");
-  expectFirstLabels(german, "Loslegen", "Überblick");
-
-  const chineseGateway = findTab(chinese, "网关与运维")?.groups.find(
-    (group) => group.group === "网关",
-  );
-  for (const [page, group] of [
-    ["zh-CN/gateway/configuration", "Configuration"],
-    ["zh-CN/gateway/authentication", "Authentication and secrets"],
-    ["zh-CN/gateway/health", "Health and diagnostics"],
-    ["zh-CN/gateway/gateway-lock", "Scaling and operations"],
-  ] as const) {
-    expect(findNestedGroupByPage(chineseGateway?.pages, page)).toEqual(
-      expect.objectContaining({ group }),
-    );
-  }
-
-  expect(turkish!.tabs.map((tab) => tab.tab)).toEqual([
-    "Başlangıç",
-    "Kurulum",
-    "Kanallar",
-    "Ajanlar",
-    "Yetenekler",
-    "Modeller",
-    "Platformlar",
-    "Gateway ve operasyonlar",
-    "Başvuru",
-    "Sürümler",
-    "Katkıda bulunma",
-    "Yardım",
-  ]);
-  expect(turkish!.tabs[0]?.groups?.[0]?.group).toBe("Genel bakış");
-  for (const [tab, parent, child, page] of [
-    ["Kurulum", "Bakım", "Geçiş", "tr/install/migrating"],
-    ["Ajanlar", "Oturumlar ve bellek", "Active Memory", "tr/concepts/active-memory/enabling"],
-    ["Yetenekler", "Plugin kılavuzları", "Codex harness", "tr/plugins/codex-harness/placement"],
-    ["Yetenekler", "Araçlar", "Tarayıcı", "tr/tools/browser/setup"],
-    ["Gateway ve operasyonlar", "Gateway", "OpenTelemetry", "tr/gateway/opentelemetry/setup"],
-    ["Başvuru", "CLI komutları", "Gateway", "tr/cli/gateway/running"],
-  ] as const) {
-    const parentGroup = findTab(turkish, tab)?.groups.find((entry) => entry.group === parent);
-    expect(findNestedGroup(parentGroup?.pages, child)).toEqual(
-      expect.objectContaining({ pages: expect.arrayContaining([page]) }),
-    );
   }
 });

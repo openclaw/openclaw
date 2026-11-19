@@ -6,12 +6,11 @@ run_hosted_prepare_gates() {
   local current_head="$2"
   local changelog_only="$3"
   local recent_sha=""
-  local remote_record="${4:-}" remote_head remote_head_ref remote_is_cross_repository
+  local remote_record="${4:-}" remote_head remote_is_cross_repository
   if [ -z "$remote_record" ]; then
     remote_record=$(read_pr_observation "$pr") || return 1
   fi
   remote_head=$(pr_view_string_field "$remote_record" "headRefOid" "$pr" "Re-run prepare-init.") || return 1
-  remote_head_ref=$(printf '%s\n' "$remote_record" | jq -r .headRefName)
   remote_is_cross_repository=$(printf '%s\n' "$remote_record" | jq -r .isCrossRepository)
   if [ "$remote_head" != "$current_head" ]; then
     echo "PR head changed before hosted gate verification (expected $current_head, got $remote_head). Re-run prepare-init."
@@ -92,12 +91,7 @@ EOF_RECOVERY
     cat <<EOF_RECOVERY
 Missing hosted CI recovery:
   scripts/pr ci-dispatch $pr
-Underlying command:
 EOF_RECOVERY
-    printf '  gh workflow run ci.yml --ref %q -f %q -f release_gate=true -f %q\n' \
-      "$remote_head_ref" \
-      "target_ref=$remote_head" \
-      "pull_request_number=$pr"
   fi
   return 1
 }
@@ -593,6 +587,14 @@ prepare_gates() {
 
   local gates_mode="full"
   local hosted_gates_head=""
+  local gate_head="$current_head"
+  if [ "$gates_remote_mode" = github ] || [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
+    local PREP_PUBLICATION_LEASE_SHA="" PREP_PUBLICATION_HEAD_SHA=""
+    # Requalification keeps a verified GraphQL alias: hosted checks belong to
+    # its published OID, while change planning and local proof still use HEAD.
+    resolve_prep_publication_target "$pr" "$current_head" || return 1
+    gate_head="$PREP_PUBLICATION_HEAD_SHA"
+  fi
   local reuse_gates=false
   if [ "${OPENCLAW_TESTBOX:-}" != "1" ] && [ "$docs_only" = "true" ] && [ -n "$previous_last_verified_head" ] && pr_git merge-base --is-ancestor "$previous_last_verified_head" HEAD 2>/dev/null; then
     local delta_since_verified
@@ -604,8 +606,8 @@ prepare_gates() {
 
   if [ "$gates_remote_mode" = github ]; then
     gates_mode=github_pending
-    hosted_gates_head="$current_head"
-    echo "Required GitHub gates deferred for $current_head; no successful gate proof recorded."
+    hosted_gates_head="$gate_head"
+    echo "Required GitHub gates deferred for $gate_head; no successful gate proof recorded."
   elif [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
     gates_mode="hosted_exact_or_recent_parent"
     remote_gates_provider=""
@@ -615,8 +617,8 @@ prepare_gates() {
     if [ "$changelog_only" = "true" ]; then
       run_quiet_logged "git diff --check" ".local/gates-diff-check.log" pr_git diff --check "$PR_MAIN_SHA...HEAD"
     fi
-    run_hosted_prepare_gates "$pr" "$current_head" "$changelog_only" "$remote_record" || return 1
-    hosted_gates_head="$current_head"
+    run_hosted_prepare_gates "$pr" "$gate_head" "$changelog_only" "$remote_record" || return 1
+    hosted_gates_head="$gate_head"
   elif [ "$reuse_gates" = "true" ]; then
     gates_mode="reused_docs_only"
     echo "Docs/changelog-only delta since last verified head $previous_last_verified_head; reusing prior gates."
@@ -697,7 +699,7 @@ prepare_gates() {
     "$docs_only" \
     "$changelog_required" \
     "$gates_mode" \
-    "$current_head" \
+    "$gate_head" \
     "${previous_full_gates_head:-}" \
     "$hosted_gates_head" \
     "$remote_gates_provider" \

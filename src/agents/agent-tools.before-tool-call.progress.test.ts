@@ -12,10 +12,7 @@ import {
   resetDiagnosticRunActivityForTest,
   startDiagnosticRunActivityTracking,
 } from "../logging/diagnostic-run-activity.js";
-import {
-  classifySessionAttention,
-  isRepeatedModelRequestStalled,
-} from "../logging/diagnostic-session-attention.js";
+import { classifySessionAttention } from "../logging/diagnostic-session-attention.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
 import { createModelObserver } from "./embedded-agent-runner/run/attempt.model-diagnostic-observation.js";
@@ -65,9 +62,6 @@ it.each(["completed", "error", "blocked", "retired-during-execution", "retired-b
     }
     await vi.advanceTimersByTimeAsync(0);
     await waitForDiagnosticEventsDrained();
-    expect(
-      getDiagnosticSessionActivitySnapshot(ref, startedAt + 659_000).repeatedRequestNoProgressAgeMs,
-    ).toBeDefined();
 
     // The issue reported successful execution 76 seconds before the false abort.
     vi.setSystemTime(startedAt + 583_000);
@@ -75,20 +69,19 @@ it.each(["completed", "error", "blocked", "retired-during-execution", "retired-b
     if (outcome === "retired-before-delivery") {
       replaceOwner();
     }
-    createModelObserver({ streamContext: {}, capturePromptStats: false }).observeFinalResult(
-      modelCall,
-      Date.now(),
-      {
-        role: "assistant",
-        stopReason: "length",
-        content: [{ type: "toolCall", id: "read-call", name: "read", arguments: {}, async: true }],
-      },
-    );
+    createModelObserver({
+      streamContext: {},
+      capturePromptStats: false,
+      captureByteStats: false,
+    }).observeFinalResult(modelCall, Date.now(), {
+      role: "assistant",
+      stopReason: "length",
+      content: [{ type: "toolCall", id: "read-call", name: "read", arguments: {}, async: true }],
+    });
     await vi.advanceTimersByTimeAsync(0);
     await waitForDiagnosticEventsDrained();
     vi.setSystemTime(startedAt + 659_000);
     const snapshot = getDiagnosticSessionActivitySnapshot(ref, Date.now());
-    const stalled = isRepeatedModelRequestStalled(snapshot, STUCK_SESSION_ABORT_MS);
     const attention = classifySessionAttention({
       state: "processing",
       queueDepth: 0,
@@ -97,10 +90,7 @@ it.each(["completed", "error", "blocked", "retired-during-execution", "retired-b
       stuckSessionAbortMs: STUCK_SESSION_ABORT_MS,
     });
     const completed = outcome === "completed";
-    expect({ ageMissing: snapshot.repeatedRequestNoProgressAgeMs === undefined, stalled }).toEqual({
-      ageMissing: completed,
-      stalled: !completed,
-    });
+    expect(snapshot.repeatedRequestNoProgressAgeMs === undefined).toBe(completed);
     const assertion = expect(attention);
     (completed ? assertion.not : assertion).toMatchObject({
       eventType: "session.stalled",

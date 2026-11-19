@@ -81,14 +81,11 @@ registerFixtureSourceTransform({
           },
         ),
       );
-      const preparationError = result.error === undefined ? "" : formatErrorMessage(result.error);
       expect(
         result.status,
-        [preparationError, result.stderr, result.stdout].filter(Boolean).join("\n"),
+        `${result.error === undefined ? "" : formatErrorMessage(result.error)}\n${result.stderr}\n${result.stdout}`,
       ).toBe(0);
       await verifyVitestWorkerArtifacts(template);
-      const manifest = JSON.parse(fs.readFileSync(path.join(template, "manifest.json"), "utf8"));
-      console.log(`file compiler prepared in ${Math.round(manifest.durationMs)}ms`);
     },
     readCompiles,
     async cleanup() {
@@ -142,10 +139,10 @@ export const vitestWorkerDeclarationEntries = {
     "tsdown-wrapper.mjs",
     `import * as compiler from ${JSON.stringify(compilerModuleUrl)};\nconst compile = compiler.build;\n${source}`,
   );
-  return `import {registerHooks} from 'node:module';
+  return `import nodeModule from 'node:module';
 globalThis[Symbol.for('openclaw.fixture.realCompiler')]=true;
 const replacements=${JSON.stringify(replacements)};
-registerHooks({resolve(specifier,context,nextResolve) {
+nodeModule.registerHooks({resolve(specifier,context,nextResolve) {
   if(specifier==='tsdown') return {url:${JSON.stringify(pathToFileURL(wrapper).href)},format:'module',shortCircuit:true};
   const resolved=nextResolve(specifier,context);
   const replacement=replacements[resolved.url];

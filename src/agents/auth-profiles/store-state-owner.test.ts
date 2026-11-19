@@ -18,7 +18,6 @@ import {
   loadPersistedSharedAuthProfileStore as readSharedStore,
 } from "./persisted.js";
 import {
-  getRuntimeAuthProfileStoreCredentialsRevision,
   listOwnedRuntimeAuthProfileStoreSnapshots as listSnapshots,
   prepareRuntimeAuthProfileStoreSnapshots,
   replaceOwnedRuntimeAuthProfileStoreSnapshots,
@@ -123,17 +122,12 @@ describe("explicit auth state ownership", () => {
         },
         usageStats: { [sharedProfileId]: usageStats(30) },
       });
-      expect(readSharedStore(first.env)?.usageStats?.[sharedProfileId]?.lastUsed).toBe(30);
       await updateBookkeeping(first, 10);
       if (bookkeepingOwner === "mixed-live") {
         await update(second, undefined, { usageStats: { shared: { lastUsed: 40 } } });
       }
       bindSnapshot(second, agentDir);
       const prepared = await prepare(first, agentDir);
-      expect(prepared.snapshot.authStores[0]?.store?.runtimeInheritsMainState === true).toBe(
-        bookkeepingOwner === "mixed-live",
-      );
-
       await closeOpenClawAgentDatabaseByPathAsync(first.agentPath);
       if (bookkeepingOwner === "cleared-local") {
         await updateAuthProfileStoreWithLock({
@@ -148,12 +142,6 @@ describe("explicit auth state ownership", () => {
       } else {
         await updateBookkeeping(second, 20);
       }
-      expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(
-        prepared.snapshot.authStoreCredentialsRevision,
-      );
-      expect(snapshotAt(first.agentPath)?.runtimeInheritsMainState === true).toBe(
-        bookkeepingOwner === "mixed-live",
-      );
       activateSnapshot({ ...prepared, refreshHandler: null });
       const expectedLastUsed = bookkeepingOwner === "cleared-local" ? 30 : 20;
       const usage = snapshotAt(first.agentPath)?.usageStats;

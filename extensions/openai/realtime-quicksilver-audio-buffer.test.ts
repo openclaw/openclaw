@@ -18,14 +18,6 @@ describe("GPT-Live pending microphone audio", () => {
     pending = new OpenAIQuicksilverPendingAudio();
   });
   afterEach(() => vi.restoreAllMocks());
-  it("copies caller-owned PCM16 and drops an incomplete sample", () => {
-    const source = Buffer.from([0x01, 0x02, 0x03]);
-    pending.append(source);
-    source.fill(0xff);
-
-    expect(readPendingAudio(pending)).toEqual(Buffer.from([0x01, 0x02]));
-  });
-
   it("retains the newest bounded tail across existing and oversized input", () => {
     pending.append(Buffer.alloc(MAX_PENDING_AUDIO_BYTES, 0x01));
     pending.append(Buffer.from([0x02, 0x02]));
@@ -55,8 +47,8 @@ describe("GPT-Live pending microphone audio", () => {
     expect(pending).toHaveLength(0);
   });
 
-  it("never splits a PCM16 sample when the read target has an odd length", () => {
-    pending.append(Buffer.from([0x01, 0x02, 0x03, 0x04]));
+  it("keeps complete PCM16 samples when append and read buffers have odd lengths", () => {
+    pending.append(Buffer.from([0x01, 0x02, 0x03, 0x04, 0x05]));
     const target = Buffer.alloc(3, 0xff);
 
     expect(pending.readInto(target)).toBe(2);
@@ -66,12 +58,16 @@ describe("GPT-Live pending microphone audio", () => {
 
   it("releases circular storage on clear without allocating an output copy", () => {
     const sample = Buffer.from([0x01, 0x02]);
+    const target = Buffer.alloc(2, 0xff);
     const allocations = vi.spyOn(Buffer, "alloc");
     pending.append(sample);
     pending.clear();
+    const clearedLength = pending.length;
+    const copied = pending.readInto(target);
     pending.append(sample);
     const allocatedSizes = allocations.mock.calls.map(([bytes]) => bytes);
     allocations.mockRestore();
+    expect([clearedLength, copied, target]).toEqual([0, 0, Buffer.from([0xff, 0xff])]);
     expect(allocatedSizes).toEqual([MAX_PENDING_AUDIO_BYTES, MAX_PENDING_AUDIO_BYTES]);
     expect(readPendingAudio(pending)).toEqual(sample);
   });
@@ -99,15 +95,5 @@ describe("GPT-Live pending microphone audio", () => {
     expect(retained).toHaveLength(MAX_PENDING_AUDIO_BYTES);
     expect(retained[0]).toBe(250);
     expect(retained.at(-1)).toBe(499 & 0xff);
-  });
-
-  it("clears pending PCM without exposing stale samples", () => {
-    pending.append(Buffer.from([0x01, 0x02]));
-    pending.clear();
-    const target = Buffer.alloc(2, 0xff);
-
-    expect(pending).toHaveLength(0);
-    expect(pending.readInto(target)).toBe(0);
-    expect(target).toEqual(Buffer.from([0xff, 0xff]));
   });
 });

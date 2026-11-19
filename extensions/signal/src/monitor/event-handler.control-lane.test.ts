@@ -1,15 +1,18 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SignalIngressLifecycle } from "../signal-ingress.js";
 import type { SignalInboundEntry } from "./event-handler.control-lane.js";
 
-const { dispatchMock, recordMock, receiptMock, typingMock } = vi.hoisted(() => ({
-  dispatchMock: vi.fn<(params: { ctx: MsgContext }) => Promise<unknown>>(),
+const { dispatchMock, recordMock, receiptMock, typingMock, fixture } = vi.hoisted(() => ({
+  fixture: { realSession: false },
+  dispatchMock:
+    vi.fn<(params: { ctx: MsgContext; replyOptions?: GetReplyOptions }) => Promise<unknown>>(),
   recordMock: vi.fn(),
   receiptMock: vi.fn(),
   typingMock: vi.fn(),
@@ -22,46 +25,52 @@ vi.mock("../send.js", () => ({
   sendReadReceiptSignal: receiptMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
-    "openclaw/plugin-sdk/channel-inbound",
-  );
-  const { createSignalPreparedDispatchRunner } = await import("./event-handler.test-harness.js");
+// mock-isolation: Shared helper preserves real exports while isolating worker-backed dispatch.
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  const { signalInboundTestModule } =
+    await import("./event-handler.inbound-context.test-support.js");
+  const mocked = await signalInboundTestModule(actual, recordMock, async (resolved) => {
+    const result = dispatchMock({ ctx: resolved.ctxPayload, replyOptions: resolved.replyOptions });
+    for (const [count, started] of dispatchStarts) {
+      if (dispatchMock.mock.calls.length >= count) {
+        started.resolve();
+      }
+    }
+    return await result;
+  });
   return {
-    ...actual,
-    // Control-lane timing must not depend on filesystem or worker scheduling.
-    resolveInboundSessionEnvelopeContextAsync: vi
-      .fn<typeof actual.resolveInboundSessionEnvelopeContextAsync>()
-      .mockImplementation(async ({ cfg }) => ({
-        storePath: "/tmp/openclaw/signal-sessions.json",
-        envelopeOptions: actual.resolveEnvelopeFormatOptions(cfg),
-        previousTimestamp: undefined,
-      })),
-    runChannelInboundEvent: createSignalPreparedDispatchRunner(
-      actual.runChannelInboundEvent,
-      recordMock,
-      async (resolved) => {
-        const result = dispatchMock({ ctx: resolved.ctxPayload });
-        for (const [count, started] of dispatchStarts) {
-          if (dispatchMock.mock.calls.length >= count) {
-            started.resolve();
-          }
-        }
-        return await result;
-      },
-    ),
+    ...mocked,
+    resolveInboundSessionEnvelopeContextAsync: (
+      params: Parameters<typeof actual.resolveInboundSessionEnvelopeContextAsync>[0],
+    ) =>
+      fixture.realSession
+        ? actual.resolveInboundSessionEnvelopeContextAsync(params)
+        : mocked.resolveInboundSessionEnvelopeContextAsync(params),
   };
 });
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
-    "openclaw/plugin-sdk/conversation-runtime",
-  );
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  const { signalConversationTestModule } =
+    await import("./event-handler.inbound-context.test-support.js");
+  const mocked = signalConversationTestModule(actual, recordMock);
   return {
     ...actual,
-    recordInboundSession: recordMock,
-    readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
-    upsertChannelPairingRequest: vi.fn(),
+    recordInboundSession: (...args: Parameters<typeof actual.recordInboundSession>) =>
+      fixture.realSession
+        ? actual.recordInboundSession(...args)
+        : mocked.recordInboundSession(...args),
+    readChannelAllowFromStore: (...args: Parameters<typeof actual.readChannelAllowFromStore>) =>
+      fixture.realSession
+        ? actual.readChannelAllowFromStore(...args)
+        : mocked.readChannelAllowFromStore(),
+    upsertChannelPairingRequest: (
+      ...args: Parameters<typeof actual.upsertChannelPairingRequest>
+    ) =>
+      fixture.realSession
+        ? actual.upsertChannelPairingRequest(...args)
+        : mocked.upsertChannelPairingRequest(),
   };
 });
 
@@ -173,6 +182,7 @@ function expectDispatch(index: number, body: string) {
 
 describe("Signal active-run control lane", () => {
   beforeEach(() => {
+    fixture.realSession = false;
     vi.useFakeTimers();
     dispatchStarts.clear();
     dispatchMock.mockReset().mockResolvedValue(dispatchResult);
@@ -262,19 +272,13 @@ describe("Signal active-run control lane", () => {
     expect(cancelKey).not.toHaveBeenCalled();
   });
 
-  it("shares one group control lane without merging normal sender batches", () => {
-    const entry = controlEntry();
-    const otherSender = { ...entry, senderPeerId: "+15550002222" };
-
-    expect(controlKey("default", entry)).toBe(controlKey("default", otherSender));
-    expect(debounceKey("default", entry)).not.toBe(debounceKey("default", otherSender));
-  });
-
   it("cancels each pending sender once and forgets completed entries", () => {
     const entry = controlEntry();
     const second = { ...entry };
     const otherSender = { ...entry, senderPeerId: "+15550002222" };
     const otherGroup = { ...entry, groupId: "group-2" };
+    expect(controlKey("default", entry)).toBe(controlKey("default", otherSender));
+    expect(debounceKey("default", entry)).not.toBe(debounceKey("default", otherSender));
     const registry = createRegistry("default");
     for (const pending of [entry, entry, second, otherSender, otherGroup]) {
       registry.track(pending);
@@ -331,5 +335,85 @@ describe("Signal active-run control lane", () => {
     release();
     await vi.advanceTimersByTimeAsync(20);
     expect(dispatchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+const waitOptions = { timeout: 5_000 };
+
+function createTrackedLifecycle() {
+  return {
+    abortSignal: new AbortController().signal,
+    onAdopted: vi.fn(async () => {}),
+    onDeferred: () => {},
+    onAdoptionFinalizing: () => {},
+    onFailed: vi.fn(),
+    onAbandoned: vi.fn(),
+  } satisfies SignalIngressLifecycle;
+}
+
+function createDataEvent(timestamp: number, message: string) {
+  return createSignalReceiveEvent({
+    sourceUuid: "11111111-2222-3333-4444-555555555555",
+    timestamp,
+    dataMessage: { timestamp, message },
+  });
+}
+
+async function enqueueMergedClaims(timestamp: number) {
+  const handler = createSignalEventHandler(
+    createBaseSignalEventHandlerDeps({ cfg: { messages: { inbound: { debounceMs: 40 } } } }),
+  );
+  const first = createTrackedLifecycle();
+  const second = createTrackedLifecycle();
+  expect([
+    await handler(createDataEvent(timestamp, "part one"), first),
+    await handler(createDataEvent(timestamp + 100, "part two"), second),
+  ]).toEqual([{ kind: "deferred" }, { kind: "deferred" }]);
+  return [first, second];
+}
+
+describe("signal drain claim ownership", () => {
+  beforeEach(() => {
+    fixture.realSession = true;
+    vi.useRealTimers();
+    dispatchMock.mockReset().mockImplementation(async (params) => {
+      await params.replyOptions?.turnAdoptionLifecycle?.onAdopted();
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+    });
+  });
+
+  it("completes every constituent claim when debounced entries merge into one turn", async () => {
+    const claims = await enqueueMergedClaims(1700000002000);
+    await vi.waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(1), waitOptions);
+    await vi.waitFor(
+      () => expect(claims.map((c) => c.onAdopted.mock.calls.length)).toEqual([1, 1]),
+      waitOptions,
+    );
+  });
+
+  it("fails every constituent claim when a merged dispatch rejects before adoption", async () => {
+    dispatchMock.mockRejectedValue(new Error("merged dispatch failed"));
+    const claims = await enqueueMergedClaims(1700000003500);
+    await vi.waitFor(() => {
+      expect(dispatchMock).toHaveBeenCalledOnce();
+      expect(claims.map((c) => c.onFailed.mock.calls.length)).toEqual([1, 1]);
+    }, waitOptions);
+    for (const claim of claims) {
+      expect(claim.onAdopted).not.toHaveBeenCalled();
+      expect(claim.onAbandoned).not.toHaveBeenCalled();
+    }
+  });
+
+  it("settles the claim for a turn that finishes without adoption", async () => {
+    // A gated/no-reply dispatch must settle rather than dead-letter via the watchdog.
+    dispatchMock.mockResolvedValue({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    const handler = createSignalEventHandler(createBaseSignalEventHandlerDeps());
+    const lifecycle = createTrackedLifecycle();
+
+    const result = await handler(createDataEvent(1700000004000, "no adoption"), lifecycle);
+
+    expect(result).toEqual({ kind: "deferred" });
+    await vi.waitFor(() => expect(lifecycle.onAdopted).toHaveBeenCalledTimes(1), waitOptions);
+    expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
   });
 });

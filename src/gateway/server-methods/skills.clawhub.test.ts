@@ -64,10 +64,6 @@ const { skillsHandlers } = await import("./skills.js");
 
 type SkillsHandlerName = keyof typeof skillsHandlers;
 
-function skillStatusReport(skills: unknown[] = []) {
-  return { skills };
-}
-
 async function callSkillsHandler(method: SkillsHandlerName, params: Record<string, unknown>) {
   return callGatewayHandler(skillsHandlers, method, params);
 }
@@ -91,7 +87,7 @@ describe("skills gateway handlers (clawhub)", () => {
     listAgentIdsMock.mockReset().mockReturnValue(["main"]);
     resolveDefaultAgentIdMock.mockReset().mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReset().mockReturnValue("/tmp/workspace");
-    skillStatusReportMock.mockReset().mockReturnValue(skillStatusReport());
+    skillStatusReportMock.mockReset().mockReturnValue({ skills: [] });
     skillStatusFilesMock.mockReset().mockReturnValue([]);
     fetchExactClawHubSkillSecurityVerdictsMock.mockReset();
     resolveClawHubBaseUrlMock.mockReset().mockReturnValue("https://clawhub.ai");
@@ -102,32 +98,26 @@ describe("skills gateway handlers (clawhub)", () => {
 
   it("keeps owner-qualified verdict targets distinct for shared slugs", async () => {
     resolveClawHubBaseUrlMock.mockReturnValue("https://registry.example/base/");
-    skillStatusReportMock.mockReturnValue(
-      skillStatusReport([
+    skillStatusReportMock.mockReturnValue({
+      skills: [
         linkedSkill("https://registry.example/base", "alice"),
         linkedSkill("https://registry.example/base", "bob"),
-      ]),
+      ],
+    });
+    fetchExactClawHubSkillSecurityVerdictsMock.mockResolvedValue(
+      ["alice", "bob"].map((publisherHandle) => ({
+        ok: publisherHandle === "alice",
+        decision: publisherHandle === "alice" ? "pass" : "fail",
+        reasons: publisherHandle === "alice" ? [] : ["security.suspicious"],
+        slug: "weather",
+        version: "1.2.3",
+        publisherHandle,
+        security: {
+          status: publisherHandle === "alice" ? "clean" : "suspicious",
+          passed: publisherHandle === "alice",
+        },
+      })),
     );
-    fetchExactClawHubSkillSecurityVerdictsMock.mockResolvedValue([
-      {
-        ok: true,
-        decision: "pass",
-        reasons: [],
-        slug: "weather",
-        version: "1.2.3",
-        publisherHandle: "alice",
-        security: { status: "clean", passed: true },
-      },
-      {
-        ok: false,
-        decision: "fail",
-        reasons: ["security.suspicious"],
-        slug: "weather",
-        version: "1.2.3",
-        publisherHandle: "bob",
-        security: { status: "suspicious", passed: false },
-      },
-    ]);
 
     const { ok, response, error } = await callSkillsHandler("skills.securityVerdicts", {});
 
@@ -144,27 +134,21 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(ok).toBe(true);
     expect(response).toEqual({
       schema: "openclaw.skills.security-verdicts.v1",
-      items: [
+      items: ["alice", "bob"].map((owner) =>
         expect.objectContaining({
           requestedSlug: "weather",
-          requestedOwnerHandle: "alice",
+          requestedOwnerHandle: owner,
           requestedVersion: "1.2.3",
-          publisherHandle: "alice",
+          publisherHandle: owner,
         }),
-        expect.objectContaining({
-          requestedSlug: "weather",
-          requestedOwnerHandle: "bob",
-          requestedVersion: "1.2.3",
-          publisherHandle: "bob",
-        }),
-      ],
+      ),
     });
   });
 
   it("does not passively fetch verdicts from a non-configured registry", async () => {
-    skillStatusReportMock.mockReturnValue(
-      skillStatusReport([linkedSkill("http://127.0.0.1:3999", undefined, "agentreceipt")]),
-    );
+    skillStatusReportMock.mockReturnValue({
+      skills: [linkedSkill("http://127.0.0.1:3999", undefined, "agentreceipt")],
+    });
     expect(await callSkillsHandler("skills.securityVerdicts", {})).toEqual({
       ok: true,
       error: undefined,
@@ -236,12 +220,9 @@ describe("skills gateway handlers (clawhub)", () => {
   });
 
   it("accepts deprecated unsafe override without forwarding it to skill installs", async () => {
-    installSkillMock.mockResolvedValue({
-      ok: true,
-      message: "Installed",
-    });
+    installSkillMock.mockResolvedValue({ ok: true, message: "Installed" });
 
-    const { ok, response, error } = await callSkillsHandler("skills.install", {
+    const result = await callSkillsHandler("skills.install", {
       name: "calendar",
       installId: "deps",
       dangerouslyForceUnsafeInstall: true,
@@ -256,15 +237,17 @@ describe("skills gateway handlers (clawhub)", () => {
       timeoutMs: 120_000,
       config: {},
     });
-    expect(ok).toBe(true);
-    expect(error).toBeUndefined();
-    expect(response).toMatchObject({ ok: true, message: "Installed" });
+    expect(result).toMatchObject({
+      ok: true,
+      error: undefined,
+      response: { ok: true, message: "Installed" },
+    });
   });
 
   it("forwards ClawHub skill update force overrides", async () => {
     updateSkillsFromClawHubMock.mockResolvedValue([{ ok: true }]);
 
-    const { ok, error } = await callSkillsHandler("skills.update", {
+    const result = await callSkillsHandler("skills.update", {
       source: "clawhub",
       slug: "calendar",
       force: true,
@@ -277,8 +260,7 @@ describe("skills gateway handlers (clawhub)", () => {
       logger: expect.objectContaining({ warn: expect.any(Function) }),
       config: {},
     });
-    expect(ok).toBe(true);
-    expect(error).toBeUndefined();
+    expect(result).toMatchObject({ ok: true, error: undefined });
   });
 
   it.each(["install", "update"] as const)(
@@ -321,13 +303,10 @@ describe("skills gateway handlers (clawhub)", () => {
   );
 
   it("rejects ClawHub skills.update requests without slug or all", async () => {
-    const { ok, error } = await callSkillsHandler("skills.update", {
-      source: "clawhub",
+    expect(await callSkillsHandler("skills.update", { source: "clawhub" })).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining('requires "slug" or "all"') },
     });
-    const typedError = error as { code?: string; message?: string } | undefined;
-
-    expect(ok).toBe(false);
-    expect(typedError?.message).toContain('requires "slug" or "all"');
     expect(updateSkillsFromClawHubMock).not.toHaveBeenCalled();
   });
 });

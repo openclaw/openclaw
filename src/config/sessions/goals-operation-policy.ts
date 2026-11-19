@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -7,12 +8,13 @@ import {
   type SessionTranscriptTurnMutation,
 } from "./goals-operations.types.js";
 import {
+  accountSessionGoalUsage,
   SessionGoalTransitionError,
   buildCreatedSessionGoal,
   buildUpdatedSessionGoalObjective,
   buildUpdatedSessionGoalStatus,
 } from "./goals-transitions.js";
-import type { SessionEntry, SessionGoal } from "./types.js";
+import type { InternalSessionEntry as SessionEntry, SessionGoal } from "./types.js";
 
 export const OPERATION_VALIDITY_MS = 24 * 60 * 60 * 1000;
 const OPERATION_FUTURE_SKEW_MS = 5 * 60 * 1000;
@@ -48,6 +50,8 @@ export function operationFingerprint(operation: SessionGoalOperation): string {
       "objective" in operation ? operation.objective : null,
       "tokenBudget" in operation ? operation.tokenBudget : null,
       "note" in operation ? operation.note : null,
+      ...(operation.action === "resume" && operation.preserveBudget ? ["preserve-budget"] : []),
+      ...(operation.action === "replace" ? [operation.expectedRunId] : []),
     ]),
   );
 }
@@ -68,11 +72,43 @@ export function applySessionGoalOperation(
         "Goal changed or was cleared; refresh before trying again.",
       );
     }
+    if (operation.action === "replace") {
+      if (
+        (entry.lifecycleRunId ?? entry.lastRunId) !== operation.expectedRunId ||
+        entry.goal.status === "complete"
+      ) {
+        throw new SessionGoalOperationError(
+          "goal-rebound",
+          "Goal or turn changed before interruption was recorded.",
+        );
+      }
+      return entry.goal;
+    }
     if (operation.action === "clear") {
       return undefined;
     }
     if (operation.action === "edit") {
       return buildUpdatedSessionGoalObjective(entry, operation.objective, now);
+    }
+    if (
+      operation.action === "resume" &&
+      operation.replacementSource &&
+      ((entry.lifecycleRunId ?? entry.lastRunId) !== operation.replacementSource.runId ||
+        !isDeepStrictEqual(entry.goal, operation.replacementSource.goal))
+    ) {
+      throw new SessionGoalOperationError(
+        "goal-rebound",
+        "The goal or turn changed before replacement resumed; review its current state.",
+      );
+    }
+    if (operation.action === "resume" && operation.preserveBudget) {
+      const accounted = accountSessionGoalUsage(entry, now);
+      if (accounted?.tokenBudget !== undefined && accounted.tokensUsed >= accounted.tokenBudget) {
+        throw new SessionGoalOperationError(
+          "invalid",
+          "The goal budget was reached. Replacement remains paused; explicitly review its budget before resuming.",
+        );
+      }
     }
     return buildUpdatedSessionGoalStatus(
       entry,

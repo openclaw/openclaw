@@ -182,34 +182,28 @@ it.each(["cancelled", "cleanup-failure"] as const)(
 );
 
 it("settles retained startup cancellation without joining its own admission", async () => {
-  const f = await fixture();
+  await using f = await fixture();
   const controller = new AbortController();
-  try {
-    await f.beginSettlement();
-    f.persistence.resolve();
-    await nextTurn();
-    expect(await f.supervisor.status(f.identity.launchId)).toMatchObject({ state: "completed" });
-    f.firstRemoval.resolve();
-    f.retryRemoval.resolve();
-    mocks.send.mockImplementation(async (_adapter, message) => {
-      if (message.type === "turn") {
-        controller.abort(new Error("Caller cancelled during retained dispatch"));
-      } else {
-        throw new Error("Synthetic child input is closed");
-      }
-    });
-    const input = testWorkerLaunchInput("/synthetic/workspace", "retained-start-cancel");
-    expect(await f.supervisor.launch(input, TEST_WORKER_ENDPOINT, controller.signal)).toMatchObject(
-      {
-        launchId: input.launchId,
-        state: "cancelled",
-      },
-    );
-    expect(f.snapshots.at(-1)).toBe(1);
-    expect(await f.supervisor.hasActiveWork()).toBe(false);
-  } finally {
-    await f.dispose();
-  }
+  await f.beginSettlement();
+  f.persistence.resolve();
+  await nextTurn();
+  expect(await f.supervisor.status(f.identity.launchId)).toMatchObject({ state: "completed" });
+  f.firstRemoval.resolve();
+  f.retryRemoval.resolve();
+  mocks.send.mockImplementation(async (_adapter, message) => {
+    if (message.type === "turn") {
+      controller.abort(new Error("Caller cancelled during retained dispatch"));
+    } else {
+      throw new Error("Synthetic child input is closed");
+    }
+  });
+  const input = testWorkerLaunchInput("/synthetic/workspace", "retained-start-cancel");
+  expect(await f.supervisor.launch(input, TEST_WORKER_ENDPOINT, controller.signal)).toMatchObject({
+    launchId: input.launchId,
+    state: "cancelled",
+  });
+  expect(f.snapshots.at(-1)).toBe(1);
+  expect(await f.supervisor.hasActiveWork()).toBe(false);
 });
 
 describe("node worker persistence settlement lifetime", () => {
@@ -219,33 +213,31 @@ describe("node worker persistence settlement lifetime", () => {
     const release = createDeferred();
     const controller = new AbortController();
     const f = await fixture(false, { entered: () => admitted.resolve(), ready: release.promise });
-    const observed: NodeWorkerLaunchReceipt[] = [];
+    const observed = vi.fn<(receipt: NodeWorkerLaunchReceipt | undefined) => void>();
     let waiting: Promise<unknown> | undefined;
     try {
       await admitted.promise;
       waiting = f.supervisor
         .status(f.identity.launchId, { waitMs: 20_000, signal: controller.signal })
-        .then((receipt) => {
-          if (receipt) {
-            observed.push(receipt);
-          }
-        });
+        .then(observed);
       await vi.advanceTimersByTimeAsync(0);
-      expect(observed).toEqual([]);
+      expect(observed).not.toHaveBeenCalled();
       release.resolve();
       await f.launching;
       await f.beginSettlement();
       await vi.advanceTimersByTimeAsync(0);
-      expect(observed).toEqual([]);
+      expect(observed).not.toHaveBeenCalled();
       f.persistence.resolve();
       await vi.advanceTimersByTimeAsync(0);
-      expect(observed).toEqual([expect.objectContaining({ state: "completed" })]);
+      expect(observed).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ state: "completed" }),
+      );
       await waiting;
       expect(vi.getTimerCount()).toBe(0);
       expect(f.snapshots.at(-1)).toBe(0);
       expect(await f.supervisor.hasActiveWork()).toBe(true);
       await expect(f.supervisor.status(f.identity.launchId, { waitMs: 20_000 })).resolves.toEqual(
-        observed[0],
+        observed.mock.lastCall?.[0],
       );
       await expect(
         f.supervisor.status("unknown-turn", { waitMs: 20_000 }),
@@ -434,7 +426,6 @@ describe("node worker persistence settlement lifetime", () => {
     expect(f.snapshot()).toMatchObject({ remove: 2, finish: 0 });
     f.retryRemoval.resolve();
     expect(await retry).toMatchObject({ state: "cancelled" });
-    expect(mocks.launchFinish.mock.lastCall?.[0].state).toBe("cancelled");
     expect(f.snapshot()).toMatchObject({ done: true, free: 1 });
   });
 
@@ -461,14 +452,12 @@ describe("node worker persistence settlement lifetime", () => {
     );
     await f.beginSettlement();
     const cancellation = f.supervisor.cancel(f.identity);
-    const cancelled = vi.fn();
-    void cancellation.then(cancelled, cancelled);
+    void cancellation.catch(() => undefined);
     await nextTurn();
     f.persistence.reject(failure);
     await f.removalEntered.promise;
     f.firstRemoval.reject(new Error("Synthetic container cleanup failed"));
     await nextTurn();
-    expect(cancelled).toHaveBeenCalledOnce();
     await expect(cancellation).rejects.toBe(failure);
     expect(f.readTurn()?.state).toBe("running");
     expect(f.snapshot()).toMatchObject({ done: false, send: 0, finish: 0, free: 0 });

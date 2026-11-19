@@ -41,6 +41,6 @@ CREATE TABLE "outbound_message_progress" (
   UNIQUE ("occurred_at", "progress_id")
 );
 
-CREATE INDEX "outbound_message_progress_occurred_idx" ON "outbound_message_progress" (("occurred_at") ASC NULLS FIRST, ("sequence") ASC NULLS FIRST);
+CREATE INDEX "outbound_message_progress_occurred_idx" ON "outbound_message_progress" (("occurred_at") ASC, ("sequence") ASC);
 
-CREATE INDEX "outbound_message_progress_run_occurred_idx" ON "outbound_message_progress" (("run_id") ASC NULLS FIRST, ("occurred_at") ASC NULLS FIRST, ("sequence") ASC NULLS FIRST);
+CREATE INDEX "outbound_message_progress_run_occurred_idx" ON "outbound_message_progress" (("run_id") ASC NULLS FIRST, ("occurred_at") ASC, ("sequence") ASC);

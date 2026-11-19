@@ -19,15 +19,6 @@ const PROVIDER_ID = "venice";
 const VENICE_BALANCE_URL = "https://api.venice.ai/api/v1/billing/balance";
 const VENICE_USAGE_RESPONSE_MAX_BYTES = 1024 * 1024;
 
-type VeniceBalanceResponse = {
-  canConsume?: unknown;
-  consumptionCurrency?: unknown;
-  balances?: {
-    diem?: unknown;
-    usd?: unknown;
-  };
-  diemEpochAllocation?: unknown;
-};
 const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = [
   "minLength",
   "maxLength",
@@ -36,10 +27,6 @@ const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = [
   "minContains",
   "maxContains",
 ] as const;
-
-function isXaiBackedVeniceModel(modelId: string): boolean {
-  return normalizeLowercaseStringOrEmpty(modelId).includes("grok");
-}
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
@@ -64,7 +51,7 @@ export default defineSingleProviderPluginEntry({
       liveModelDiscovery: VENICE_MODEL_DISCOVERY_OPTIONS,
     },
     normalizeResolvedModel: ({ modelId, model }) => {
-      const normalized = isXaiBackedVeniceModel(modelId)
+      const normalized = normalizeLowercaseStringOrEmpty(modelId).includes("grok")
         ? applyModelCompatPatch(model, {
             toolSchemaProfile: "xai",
             unsupportedToolSchemaKeywords: [...XAI_UNSUPPORTED_SCHEMA_KEYWORDS],
@@ -98,7 +85,15 @@ export default defineSingleProviderPluginEntry({
         await response.body?.cancel().catch(() => undefined);
         return buildUsageHttpErrorSnapshot({ provider: "venice", status: response.status });
       }
-      let data: VeniceBalanceResponse;
+      let data: {
+        canConsume?: unknown;
+        consumptionCurrency?: unknown;
+        balances?: {
+          diem?: unknown;
+          usd?: unknown;
+        };
+        diemEpochAllocation?: unknown;
+      };
       try {
         data = await readProviderJsonObjectResponse(response, "Venice usage", {
           maxBytes: VENICE_USAGE_RESPONSE_MAX_BYTES,

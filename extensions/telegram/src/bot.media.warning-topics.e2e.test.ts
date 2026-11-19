@@ -19,7 +19,6 @@ import {
 } from "./bot.media.e2e.test-harness.js";
 import {
   TELEGRAM_TEST_TIMINGS,
-  createBotHandler,
   createBotHandlerWithOptions,
   createTelegramPhotoForTest,
   mockTelegramPngDownload,
@@ -139,7 +138,7 @@ function configureForum(requireMention: boolean) {
 
 describe("telegram inbound media", () => {
   it("captures pin and venue location payload fields", async () => {
-    const { handler, replySpy } = await createBotHandler();
+    const { handler, replySpy } = await createBotHandlerWithOptions({});
 
     const cases = [
       {
@@ -281,7 +280,7 @@ describe("telegram media groups", () => {
   ])(
     "$name album siblings in prompt context",
     async ({ partial, firstId, file, photo, caption }) => {
-      const { handler, replySpy, runtimeError } = await createBotHandler();
+      const { handler, replySpy, runtimeError } = await createBotHandlerWithOptions({});
       const fetchSpy = partial ? undefined : mockTelegramPngDownload();
       const timers = holdMediaGroup();
       const savedPaths = (partial ? [2, 3] : [1, 2, 3]).map(
@@ -346,7 +345,7 @@ describe("telegram media groups", () => {
   it(
     "buffers separate media groups independently",
     async () => {
-      const { handler, replySpy, runtimeError } = await createBotHandler();
+      const { handler, replySpy, runtimeError } = await createBotHandlerWithOptions({});
       const fetchSpy = mockTelegramPngDownload();
       const timers = holdMediaGroup();
 
@@ -381,7 +380,7 @@ describe("telegram media groups", () => {
     async () => {
       const restoreConfig = configureForum(false);
 
-      const { handler, replySpy, runtimeError } = await createBotHandler();
+      const { handler, replySpy, runtimeError } = await createBotHandlerWithOptions({});
       const fetchSpy = mockTelegramPngDownload();
       const timers = holdMediaGroup();
 
@@ -650,6 +649,110 @@ describe("Telegram media failure notices", () => {
         4242,
         expect.stringContaining("0 of 2 images"),
         expect.objectContaining({ reply_parameters: expect.objectContaining({ message_id: 910 }) }),
+      ]);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      enqueueSpy.mockRestore();
+    }
+  });
+
+  it("names the media kind in the album fetch warning", async () => {
+    const { handler } = await createBotHandlerWithOptions({});
+    const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
+    const enqueueSpy = vi.spyOn(keyedAsyncQueue, "enqueueKeyedTask");
+    try {
+      mockTelegramPngDownload();
+      readRemoteMediaBufferSpy.mockRejectedValueOnce(
+        new Error("Telegram media exceeds 8 MB limit"),
+      );
+      for (let index = 0; index < 2; index++) {
+        await handler(
+          mediaContext(920 + index, `video-${index}`, `videos/video-${index}.mp4`, {
+            chat: { id: 4242, type: "private" },
+            media_group_id: "video-failure-notice-album",
+            photo: undefined,
+            video: {
+              file_id: `video-file-${index}`,
+              file_unique_id: `video-unique-${index}`,
+              width: 640,
+              height: 360,
+              duration: 5,
+            },
+            ...(index === 0 ? { caption: "Video album" } : {}),
+          }),
+        );
+      }
+      await flushChannelPostMediaGroup(
+        setTimeoutSpy,
+        enqueueSpy,
+        0,
+        TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
+      );
+      const warnings = telegramMediaHarnessSendMessageSpy.mock.calls.filter(
+        ([, text]) => typeof text === "string" && text.includes(" of 2 videos"),
+      );
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toEqual([
+        4242,
+        expect.stringContaining("Received 1 of 2 videos — 1 could not be fetched and was skipped."),
+        expect.objectContaining({
+          reply_parameters: expect.objectContaining({ message_id: 920 }),
+        }),
+      ]);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      enqueueSpy.mockRestore();
+    }
+  });
+
+  it("uses attachments for mixed-kind album fetch warnings", async () => {
+    const { handler } = await createBotHandlerWithOptions({});
+    const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
+    const enqueueSpy = vi.spyOn(keyedAsyncQueue, "enqueueKeyedTask");
+    try {
+      mockTelegramPngDownload();
+      readRemoteMediaBufferSpy.mockRejectedValueOnce(
+        new Error("Telegram media exceeds 8 MB limit"),
+      );
+      await handler(
+        mediaContext(930, "mixed-photo", "photos/mixed-photo.jpg", {
+          chat: { id: 4242, type: "private" },
+          media_group_id: "mixed-failure-notice-album",
+          caption: "Mixed album",
+        }),
+      );
+      await handler(
+        mediaContext(931, "mixed-video", "videos/mixed-video.mp4", {
+          chat: { id: 4242, type: "private" },
+          media_group_id: "mixed-failure-notice-album",
+          photo: undefined,
+          video: {
+            file_id: "mixed-video-file",
+            file_unique_id: "mixed-video-unique",
+            width: 640,
+            height: 360,
+            duration: 5,
+          },
+        }),
+      );
+      await flushChannelPostMediaGroup(
+        setTimeoutSpy,
+        enqueueSpy,
+        0,
+        TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
+      );
+      const warnings = telegramMediaHarnessSendMessageSpy.mock.calls.filter(
+        ([, text]) => typeof text === "string" && text.includes(" of 2 attachments"),
+      );
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toEqual([
+        4242,
+        expect.stringContaining(
+          "Received 1 of 2 attachments — 1 could not be fetched and was skipped.",
+        ),
+        expect.objectContaining({
+          reply_parameters: expect.objectContaining({ message_id: 930 }),
+        }),
       ]);
     } finally {
       setTimeoutSpy.mockRestore();

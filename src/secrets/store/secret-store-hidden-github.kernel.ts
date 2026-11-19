@@ -148,10 +148,22 @@ function selectHiddenGitHubSecretRecords(sqlite: EngineConnection) {
 
 export function writeHiddenGitHubSecretInDatabase(
   sqlite: EngineConnection,
-  params: { name: string; value: string; updatedBy?: string | null; now: number },
+  params: {
+    name: string;
+    value: string;
+    expectedValue?: string;
+    updatedBy?: string | null;
+    now: number;
+  },
 ): void {
   assertHiddenGitHubSecretRecordName(params.name);
   assertSecretStoreValueLength(params.value, "secret");
+  if (
+    params.expectedValue !== undefined &&
+    readHiddenGitHubSecretInDatabase(sqlite, params.name, params.now) !== params.expectedValue
+  ) {
+    throw new Error("GitHub OAuth record changed before settlement");
+  }
   ensureSecretStoreSchema(sqlite);
   upsertHiddenGitHubSecret(
     sqlite,
@@ -183,24 +195,32 @@ export function readHiddenGitHubSecretInDatabase(
 
 export function listHiddenGitHubSecretsInDatabase(
   sqlite: EngineConnection,
-  prefix: HiddenGitHubStorePrefix,
+  prefix: HiddenGitHubStorePrefix | undefined,
   now: number,
 ): Array<{ name: string; value: string }> {
-  const kind = hiddenGitHubStoreKindFromPrefix(prefix);
+  const kind = prefix === undefined ? undefined : hiddenGitHubStoreKindFromPrefix(prefix);
   return withMissingSecretStoreFallback(
     () =>
       executeSqliteQuerySync(
         sqlite,
         selectHiddenGitHubSecretRecords(sqlite)
-          .where("name", ">=", `${prefix}-`)
-          .where("name", "<", `${prefix}.`)
+          .where((eb) =>
+            eb.or(
+              (prefix === undefined ? ["github-device", "github-oauth"] : [prefix]).map(
+                (selected) =>
+                  eb.and([eb("name", ">=", `${selected}-`), eb("name", "<", `${selected}.`)]),
+              ),
+            ),
+          )
           .orderBy("name", "asc"),
-      ).rows.flatMap((row) =>
-        classifyHiddenGitHubStoreName(row.name) === kind &&
-        isLiveHiddenGitHubStoreRow(row, kind, now)
+      ).rows.flatMap((row) => {
+        const rowKind = classifyHiddenGitHubStoreName(row.name);
+        return (rowKind === "device" || rowKind === "oauth") &&
+          (kind === undefined || rowKind === kind) &&
+          isLiveHiddenGitHubStoreRow(row, rowKind, now)
           ? [{ name: row.name, value: row.value }]
-          : [],
-      ),
+          : [];
+      }),
     [],
   );
 }

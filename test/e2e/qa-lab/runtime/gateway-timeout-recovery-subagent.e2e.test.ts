@@ -196,10 +196,16 @@ async function startProofProvider() {
       }
       if (parentContinuationSeen) {
         // Compacted history must neither respawn the child nor fabricate its completion.
+        // The "awaiting delivery" roster is status, not delivery; only the completion event counts.
+        // Prompt updates are appended after a turn's input, so read everything since the last reply.
+        const input = body.input as Array<{ role?: string }>;
+        const currentInput = JSON.stringify(
+          input.slice(input.findLastIndex((item) => item.role === "assistant") + 1),
+        );
         const hasChildCompletion =
-          inputText.includes("Agent steering queue items arrived since your last turn.") &&
-          inputText.includes("qa-timeout-recovery-child") &&
-          inputText.includes(CHILD_MARKER);
+          currentInput.includes("[Internal task completion event]") &&
+          currentInput.includes("qa-timeout-recovery-child") &&
+          currentInput.includes(CHILD_MARKER);
         const reply = hasChildCompletion ? CHILD_MARKER : "QA-TIMEOUT-RECOVERY-PARENT-OK";
         proof.recoveredParentReplies.push(reply);
         writeSse(response, buildAssistantEvents(reply));
@@ -304,16 +310,12 @@ it("delivers a child completion once while parent timeout recovery is active", a
     readQaSubagentRuns(gateway.runtimeEnv).filter(
       (entry) => entry.label === "qa-timeout-recovery-child",
     );
-  // Only a pending, unclaimed payload can be injected into the recovered retry.
+  // The completion stays owed on its controller reservation while recovery holds the requester.
   const readChildHandoff = () =>
     readChildRuns().map((run) => ({
       execution: run.execution.status,
       outcome: run.execution.outcome?.status,
       delivery: run.delivery?.status,
-      leasable:
-        run.delivery?.status === "pending" &&
-        run.delivery.payload !== undefined &&
-        run.cleanupHandled !== true,
     }));
   const sendInbound = (text: string) =>
     transport.sendInbound({
@@ -343,10 +345,10 @@ it("delivers a child completion once while parent timeout recovery is active", a
     (async () => {
       await provider.compactionStarted;
       phase = "child completion handoff";
-      // A terminal row races handoff: hold compaction until delivery defers the payload.
+      // Hold compaction until the child is terminal with its delivery still owed.
       await expect
         .poll(readChildHandoff, { timeout: remainingMs() })
-        .toEqual([{ execution: "terminal", outcome: "ok", delivery: "pending", leasable: true }]);
+        .toEqual([{ execution: "terminal", outcome: "ok", delivery: "pending" }]);
       provider.releaseCompaction();
       phase = "child completion outbound";
       return await waitOutbound(sinceIndex, CHILD_MARKER, remainingMs());
@@ -373,8 +375,11 @@ it("delivers a child completion once while parent timeout recovery is active", a
   expect(provider.proof.compactionReleasedAt).toBeTypeOf("number");
   expect(provider.proof.compactionStartedAt!).toBeLessThan(provider.proof.childReleasedAt!);
   expect(provider.proof.childReleasedAt!).toBeLessThan(provider.proof.compactionReleasedAt!);
-  // The deferred result reaches the recovered retry itself, not a later wake.
-  expect(provider.proof.recoveredParentReplies[0]).toBe(CHILD_MARKER);
+  // Prompt assembly no longer drains owed results; the reservation's own turn delivers it once.
+  expect(provider.proof.recoveredParentReplies).toEqual([
+    "QA-TIMEOUT-RECOVERY-PARENT-OK",
+    CHILD_MARKER,
+  ]);
   expect(gateway.logs()).toContain("attempting compaction before retry");
   expect(gateway.logs()).toContain("compaction succeeded");
   const runs = readChildRuns();

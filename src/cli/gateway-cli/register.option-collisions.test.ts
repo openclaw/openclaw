@@ -1,10 +1,12 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { registerGatewayCli } from "./register.js";
+import { expectCallCount } from "./run-loop-cleanup.test-support.js";
 
-const mocks = vi.hoisted(() => ({
+const mocks = await vi.hoisted(async () => ({
   callGatewayCli: vi.fn(
     async (method: string, _opts: unknown, _params?: unknown): Promise<unknown> => {
       if (method === "gateway.suspend.prepare") {
@@ -27,13 +29,9 @@ const mocks = vi.hoisted(() => ({
   gatewayStatusCommand: vi.fn(async (_opts: unknown, _runtime: unknown) => {}),
   gatewayAuthTokenCommand: vi.fn(async (_runtime: unknown) => {}),
   consumeGatewayRestartHandoffSync: vi.fn(),
-  defaultRuntime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    writeStdout: vi.fn(),
-    writeJson: vi.fn(),
-    exit: vi.fn(),
-  },
+  defaultRuntime: vi.mocked(
+    (await import("../../test-utils/plugin-runtime-env.js")).createNonExitingRuntimeEnv(),
+  ),
 }));
 
 vi.mock("../../infra/restart-handoff.js", async (importOriginal) => ({
@@ -101,10 +99,6 @@ vi.mock("../../config/read-best-effort-config.runtime.js", () => ({
   readSourceConfigBestEffort: async () => ({}),
 }));
 
-// mock-isolation: Prevent network discovery in CLI option tests.
-vi.mock("../../infra/bonjour-discovery.js", () => ({ discoverGatewayBeacons: async () => [] }));
-// mock-isolation: Prevent DNS discovery in CLI option tests.
-vi.mock("../../infra/widearea-dns.js", () => ({ resolveWideAreaDiscoveryDomain: () => undefined }));
 vi.mock("../../../packages/terminal-core/src/health-style.js", () => ({
   styleHealthChannelLine: (line: string) => line,
 }));
@@ -122,11 +116,6 @@ vi.mock("../../../packages/terminal-core/src/theme.js", () => ({
   },
 }));
 
-vi.mock("../../utils/usage-format.js", () => ({
-  formatTokenCount: () => "0",
-  formatUsd: () => "$0.00",
-}));
-
 // mock-isolation: Keep help rendering out of the CLI routing fixture.
 vi.mock("../help-format.js", () => ({ formatHelpExamples: () => "" }));
 
@@ -134,26 +123,24 @@ vi.mock("../progress.js", () => ({
   withProgress: async (_opts: unknown, fn: () => Promise<unknown>) => await fn(),
 }));
 
-vi.mock("./discover.js", () => ({
-  dedupeBeacons: (beacons: unknown[]) => beacons,
-  renderBeaconLines: () => [],
-}));
-
 function expectCliError(message: unknown) {
-  expect(callGatewayCli).not.toHaveBeenCalled();
+  expectCallCount(0, callGatewayCli, defaultRuntime.error);
   expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
     ok: false,
     error: { type: "cli_error", message },
   });
-  expect(defaultRuntime.error).not.toHaveBeenCalled();
   expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
 }
 
 const parse = (...args: string[]) =>
   sharedProgram.parseAsync(["gateway", ...args], { from: "user" });
-const sharedProgram = new Command();
-sharedProgram.exitOverride();
-registerGatewayCli(sharedProgram);
+function createProgram(register = registerGatewayCli) {
+  const program = new Command();
+  program.exitOverride();
+  register(program);
+  return program;
+}
+const sharedProgram = createProgram();
 
 describe("gateway register option collisions", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -173,6 +160,18 @@ describe("gateway register option collisions", () => {
 
     expect(mocks.gatewayAuthTokenCommand).toHaveBeenCalledWith(defaultRuntime);
     expect(defaultRuntime.error).not.toHaveBeenCalled();
+  });
+
+  it("does not print a gateway call reply that lands after Ctrl+C aborts the read", async () => {
+    const work = new AsyncWorkScope();
+    mocks.callGatewayCli.mockImplementationOnce(async () => {
+      work.beginClose();
+      throw new Error("gateway request aborted");
+    });
+    await work.run(() => parse("call", "system-presence", "--json"));
+    // Ctrl+C owns the exit; an aborted read neither prints a reply nor exits nonzero.
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -251,10 +250,10 @@ describe("gateway register option collisions", () => {
       ).rejects.toMatchObject({ name: "ExitError", code: 1 });
     });
 
-    const stdout = defaultRuntime.writeJson.mock.calls
-      .map(([value]) => JSON.stringify(value))
-      .join("\n");
-    expect(JSON.parse(stdout)).toEqual({ ...busy, requestId: "host-operation" });
+    expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith({
+      ...busy,
+      requestId: "host-operation",
+    });
     expect(defaultRuntime.error).not.toHaveBeenCalled();
   });
 
@@ -290,8 +289,6 @@ describe("gateway register option collisions", () => {
   });
 
   it("loads health presentation only for text output", async () => {
-    const program = new Command();
-    program.exitOverride();
     const loadGatewayHealthModule = vi.fn(async () => ({
       emitReachableGatewayAuthDiagnostic: mocks.emitReachableGatewayAuthDiagnostic,
       formatHealthChannelLines: mocks.formatHealthChannelLines,
@@ -304,7 +301,7 @@ describe("gateway register option collisions", () => {
     vi.doMock("../../commands/health.js", loadGatewayHealthModule);
     vi.doMock("../../../packages/terminal-core/src/health-style.js", loadHealthStyleModule);
     const { registerGatewayCli: registerFreshGatewayCli } = await import("./register.js");
-    registerFreshGatewayCli(program);
+    const program = createProgram(registerFreshGatewayCli);
 
     await program.parseAsync(["node", "openclaw", "gateway", "health", "--json"]);
 
@@ -314,17 +311,13 @@ describe("gateway register option collisions", () => {
       undefined,
       { defaultTimeoutMs: 10_000, sharedStateMode: "read-only" },
     );
-    expect(loadGatewayHealthModule).not.toHaveBeenCalled();
-    expect(loadHealthStyleModule).not.toHaveBeenCalled();
+    expectCallCount(0, loadGatewayHealthModule, loadHealthStyleModule);
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ ok: true });
 
-    const textProgram = new Command();
-    textProgram.exitOverride();
-    registerFreshGatewayCli(textProgram);
+    const textProgram = createProgram(registerFreshGatewayCli);
     await textProgram.parseAsync(["node", "openclaw", "gateway", "health"]);
 
-    expect(loadGatewayHealthModule).toHaveBeenCalledOnce();
-    expect(loadHealthStyleModule).toHaveBeenCalledOnce();
+    expectCallCount(1, loadGatewayHealthModule, loadHealthStyleModule);
     expect(defaultRuntime.log).toHaveBeenCalledWith("Gateway Health");
   });
 });

@@ -7,30 +7,35 @@ import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coer
 import {
   sealBackupResourceInventory,
   describeCapturedBackupSqliteSnapshots,
-  type BackupAgentRoot,
   type BackupResourcePlan,
+  type BackupAgentRoot,
   type BackupSqliteSnapshotFact,
 } from "../commands/backup-resource-inventory.js";
 import {
   buildBackupArchiveBasename,
-  buildBackupArchivePath,
   buildBackupArchiveRoot,
   canonicalizePathForContainment,
   type BackupAsset,
   resolveBackupPlanFromDisk,
+  resolveBackupArchivePath,
 } from "../commands/backup-shared.js";
 import { encodeBackupManifest, type BackupManifest } from "../commands/backup-verify-manifest.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { runOfflineDatabaseBackup } from "../snapshot/database-backup.js";
-import { resolveHomeDir, resolveUserPath } from "../utils.js";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
+import { resolveHomeDir } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import {
   recordArchiveSymbolicLink,
   type BackupSymbolicLink,
+  buildBackupArchivePath,
 } from "./backup-archive-path-policy.js";
 import {
+  assertOutputPathReady,
+  prepareBackupOutputParent,
+  formatBackupOutputFailure,
   cleanupBackupArchivePublication,
   createBackupArchivePublication,
   publishPreparedBackupArchive,
@@ -47,6 +52,11 @@ import {
   writeArchiveStreamToFile,
 } from "./backup-create-stream.js";
 import {
+  createLegacyAuditStateSnapshotPlan,
+  type BackupStateSnapshotPlan,
+} from "./backup-legacy-audit-snapshot.js";
+import type { ReportBackupProgress } from "./backup-progress.js";
+import {
   createBackupScratchDirectory,
   finishBackupScratch,
   maintainBackupScratch,
@@ -57,25 +67,34 @@ import {
 } from "./backup-sqlite-snapshot.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { walkBackupTar } from "./backup-tar-walk.js";
-import { isErrno } from "./errors.js";
+import { withDatabaseEngineSelection } from "./database-engine/context.js";
+import { listDatabaseEngineStores } from "./database-engine/registry.js";
 import { safeStat } from "./path-existence.js";
-import {
-  createLegacyAuditBackupCapture,
-  legacyAuditBackupCapturesMatch,
-  LegacyAuditBackupStateChangedError,
-  type LegacyAuditBackupSnapshot,
-} from "./state-migrations.audit-backup.js";
-import { withLegacyAuditMigrationLease } from "./state-migrations.audit-coordination.js";
+import { assertDeferredSqliteContent } from "./sqlite-snapshot-file.js";
 import { isUpdateCapturePath } from "./update-capture-paths.js";
 
-const loadTarRuntime = createLazyRuntimeModule(() => import("tar"));
+const loadTarRuntime = createLazyRuntimeModule(() => import("tar/raw"));
 
 export type BackupCreateOptions = {
   /** Internal lifecycle cancellation for backup preparation, not admitted repairs. */
   signal?: AbortSignal;
+  /**
+   * Internal capture in an isolated backup process: inspect only private SQLite copies.
+   * Preserves row IDs instead of compacting; free-page bytes may remain in the archive.
+   */
+  preserveSourceArtifacts?: boolean;
+  /** Files and anchors for reconnecting to current PostgreSQL rows, not disaster recovery. */
+  localCompanion?: boolean;
   output?: string;
+  /**
+   * Without `output`, write to the home folder unless it lies inside a backed-up source,
+   * then fall back to the usual cwd default. For backups no one started from a shell.
+   */
+  preferHomeOutput?: boolean;
   dryRun?: boolean;
   includeWorkspace?: boolean;
+  excludeWorktreeTemplates?: boolean;
+  excludeMigrationBackups?: boolean;
   onlyConfig?: boolean;
   verify?: boolean;
   json?: boolean;
@@ -88,6 +107,7 @@ export type BackupCreateOptions = {
   log?: (message: string) => void;
   /** Internal consumers bind later effects to the canonical images actually captured. */
   onSqliteSnapshots?: (facts: readonly BackupSqliteSnapshotFact[]) => void;
+  onProgress?: ReportBackupProgress;
 };
 
 type BackupManifestAgentRoot = Pick<BackupAgentRoot, "agentId" | "sourcePath">;
@@ -98,7 +118,10 @@ export type BackupCreateResult = {
   archivePath: string;
   dryRun: boolean;
   includeWorkspace: boolean;
+  excludeWorktreeTemplates?: boolean;
+  excludeMigrationBackups?: boolean;
   onlyConfig: boolean;
+  localCompanion?: boolean;
   verified: boolean;
   assets: BackupAsset[];
   agentRoots?: readonly BackupManifestAgentRoot[];
@@ -124,20 +147,25 @@ async function resolveOutputPath(params: {
   nowMs: number;
   includedAssets: BackupAsset[];
   stateDir: string;
+  preferHomeOutput?: boolean;
 }): Promise<string> {
   const basename = buildBackupArchiveBasename(params.nowMs);
-  const rawOutput = params.output?.trim();
-  if (!rawOutput) {
+  const rawOutput = params.output;
+  if (!rawOutput?.trim()) {
+    const insideSource = async (dir: string) => {
+      const canonical = await fs.realpath(dir).catch(() => dir);
+      return params.includedAssets.some((asset) => isPathInside(asset.sourcePath, canonical));
+    };
+    const home = resolveHomeDir();
+    if (params.preferHomeOutput && home && !(await insideSource(path.resolve(home)))) {
+      return path.resolve(home, basename);
+    }
     const cwd = path.resolve(process.cwd());
-    const canonicalCwd = await fs.realpath(cwd).catch(() => cwd);
-    const cwdInsideSource = params.includedAssets.some((asset) =>
-      isPathInside(asset.sourcePath, canonicalCwd),
-    );
-    const defaultDir = cwdInsideSource ? (resolveHomeDir() ?? path.dirname(params.stateDir)) : cwd;
+    const defaultDir = (await insideSource(cwd)) ? (home ?? path.dirname(params.stateDir)) : cwd;
     return path.resolve(defaultDir, basename);
   }
 
-  const resolved = resolveUserPath(rawOutput);
+  const resolved = resolveBackupArchivePath(rawOutput, "--output");
   if (rawOutput.endsWith("/") || rawOutput.endsWith("\\")) {
     return path.join(resolved, basename);
   }
@@ -147,78 +175,6 @@ async function resolveOutputPath(params: {
   }
 
   return resolved;
-}
-
-type BackupOutputFailurePhase = "parent" | "publication" | "write";
-
-function formatBackupOutputFailure(
-  error: unknown,
-  outputPath: string,
-  phase: BackupOutputFailurePhase,
-  ownedRoot?: string,
-): unknown {
-  const cause = phase === "write" && error instanceof Error ? error.cause : undefined;
-  const filesystemError = isErrno(error) ? error : isErrno(cause) ? cause : null;
-  if (!filesystemError) {
-    return error;
-  }
-  if (ownedRoot) {
-    const failedPath = filesystemError.path;
-    if (typeof failedPath !== "string" || !isPathInside(ownedRoot, path.resolve(failedPath))) {
-      return error;
-    }
-  }
-
-  const outputParent = path.dirname(outputPath);
-  const retry = "run `openclaw backup create --output <archive>` again.";
-  let detail: string;
-  switch (filesystemError.code) {
-    case "ENOENT":
-      detail = `Backup output directory could not be created: ${outputParent}. Check the path and ${retry}`;
-      break;
-    case "EACCES":
-    case "EPERM":
-    case "EROFS":
-      detail = `Backup output directory is not writable: ${outputParent}. Check the path and directory permissions, then ${retry}`;
-      break;
-    case "EEXIST":
-    case "ENOTDIR":
-      if (phase !== "parent") {
-        return error;
-      }
-      detail = `Backup output parent is not a directory: ${outputParent}. Choose a directory path and ${retry}`;
-      break;
-    case "ENOSPC":
-      detail = `The destination does not have enough free space: ${outputParent}. Free up disk space and ${retry}`;
-      break;
-    case "EDQUOT":
-      detail = `The destination storage quota is exhausted: ${outputParent}. Free up space or choose another path, then ${retry}`;
-      break;
-    default:
-      detail = `The output path could not be prepared: ${outputParent}. Check the path and filesystem, then ${retry}`;
-  }
-  return new Error(`Backup archive creation failed: ${outputPath}. ${detail}`, { cause: error });
-}
-
-async function assertOutputPathReady(outputPath: string): Promise<void> {
-  try {
-    await fs.access(outputPath);
-    throw new Error(`Refusing to overwrite existing backup archive: ${outputPath}`);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
-    if (code === "ENOENT" || code === "ENOTDIR") {
-      return;
-    }
-    throw formatBackupOutputFailure(error, outputPath, "parent");
-  }
-}
-
-async function prepareBackupOutputParent(outputPath: string): Promise<void> {
-  try {
-    await fs.mkdir(path.dirname(outputPath), { recursive: true });
-  } catch (error) {
-    throw formatBackupOutputFailure(error, outputPath, "parent");
-  }
 }
 
 // Keep staged config and database snapshots outside the tree being archived.
@@ -263,6 +219,7 @@ function buildManifest(
 ): BackupManifest {
   return {
     schemaVersion: 1,
+    ...(result.localCompanion ? { profile: "local-companion" as const } : {}),
     createdAt: result.createdAt,
     archiveRoot: result.archiveRoot,
     runtimeVersion: resolveRuntimeServiceVersion(),
@@ -270,6 +227,7 @@ function buildManifest(
     nodeVersion: process.version,
     options: {
       includeWorkspace: result.includeWorkspace,
+      ...(result.excludeWorktreeTemplates ? { excludeWorktreeTemplates: true } : {}),
       onlyConfig: result.onlyConfig,
     },
     paths: {
@@ -296,28 +254,23 @@ function buildManifest(
   };
 }
 
-const MAX_LEGACY_AUDIT_CAPTURE_ATTEMPTS = 3;
-
-type ConsistentStateSnapshotPlan = {
-  legacyAuditSnapshots: LegacyAuditBackupSnapshot[];
-  stateSqliteBackup: Awaited<ReturnType<typeof createBackupSqliteSnapshotPlan>>;
-};
-
 async function createConsistentStateSnapshotPlan(params: {
   resources: BackupResourcePlan;
   stateDir?: string;
   tempDir: string;
   onlyConfig: boolean;
-}): Promise<ConsistentStateSnapshotPlan> {
-  const captureSqlite = (
-    tempDir: string,
-    audit?: Awaited<ReturnType<typeof createLegacyAuditBackupCapture>>,
-  ) =>
+  preserveSourceArtifacts?: boolean;
+  localCompanion?: boolean;
+  onProgress?: ReportBackupProgress;
+}): Promise<BackupStateSnapshotPlan> {
+  const captureSqlite = (tempDir: string) =>
     createBackupSqliteSnapshotPlan({
       resources: params.resources,
       tempDir,
-      legacyAuditSnapshots: audit?.snapshots ?? [],
-      ...(audit ? { legacyAuditDatabaseWitness: audit.databaseWitness } : {}),
+      legacyAuditSnapshots: [],
+      preserveSourceArtifacts: params.preserveSourceArtifacts,
+      localCompanion: params.localCompanion,
+      onProgress: params.onProgress,
     });
   if (params.onlyConfig || !params.stateDir) {
     return {
@@ -327,7 +280,9 @@ async function createConsistentStateSnapshotPlan(params: {
             inventory: sealBackupResourceInventory(params.resources, []),
             snapshots: [],
             postgresSnapshots: [],
+            postgresAnchors: [],
             discoveredSourcePaths: new Set<string>(),
+            deferredContentChecks: new Map(),
           }
         : await captureSqlite(params.tempDir),
     };
@@ -343,43 +298,25 @@ async function createConsistentStateSnapshotPlan(params: {
     }
     await fs.rm(fastAttemptDir, { recursive: true, force: true });
   }
-
-  let lastStateChangeMessage: string | undefined;
-  for (let attempt = 0; attempt < MAX_LEGACY_AUDIT_CAPTURE_ATTEMPTS; attempt += 1) {
-    const attemptDir = path.join(params.tempDir, `state-snapshot-attempt-${attempt + 1}`);
-    const verificationDir = path.join(attemptDir, "legacy-verification");
-    await fs.mkdir(attemptDir, { recursive: true });
-    try {
-      const firstCapture = await withLegacyAuditMigrationLease(stateDir, () =>
-        createLegacyAuditBackupCapture({ stateDir, tempDir: attemptDir }),
-      );
-      const stateSqliteBackup = await captureSqlite(attemptDir, firstCapture);
-      await fs.mkdir(verificationDir, { recursive: true });
-      const secondCapture = await withLegacyAuditMigrationLease(stateDir, () =>
-        createLegacyAuditBackupCapture({ stateDir, tempDir: verificationDir }),
-      );
-      if (!legacyAuditBackupCapturesMatch(firstCapture, secondCapture)) {
-        throw new LegacyAuditBackupStateChangedError();
-      }
-      await fs.rm(verificationDir, { recursive: true, force: true });
-      return { legacyAuditSnapshots: firstCapture.snapshots, stateSqliteBackup };
-    } catch (error) {
-      await fs.rm(attemptDir, { recursive: true, force: true });
-      if (!(error instanceof LegacyAuditBackupStateChangedError)) {
-        throw error;
-      }
-      lastStateChangeMessage = error.message;
-    }
-  }
-  throw new LegacyAuditBackupStateChangedError(
-    `${lastStateChangeMessage ?? "Legacy audit state changed while backup was capturing it"}; retry backup after legacy audit migration settles`,
-  );
+  return createLegacyAuditStateSnapshotPlan({
+    resources: params.resources,
+    stateDir,
+    tempDir: params.tempDir,
+    preserveSourceArtifacts: params.preserveSourceArtifacts,
+    onProgress: params.onProgress,
+  });
 }
 
 export async function createBackupArchive(
   opts: BackupCreateOptions = {},
 ): Promise<BackupCreateResult> {
-  return await withCommandProcessScope(() => createBackupArchiveInScope(opts), opts.signal);
+  const options = opts.localCompanion ? { ...opts, preserveSourceArtifacts: true } : opts;
+  const capture = () =>
+    withCommandProcessScope(() => createBackupArchiveInScope(options), options.signal);
+  // Planning and owner discovery also read SQLite before explicit snapshot acquisition.
+  return await (options.preserveSourceArtifacts
+    ? withArtifactPreservingStateReads(capture, { agentDatabases: true })
+    : capture());
 }
 
 async function createBackupArchiveInScope(
@@ -390,14 +327,41 @@ async function createBackupArchiveInScope(
   const archiveRoot = buildBackupArchiveRoot(nowMs);
   const onlyConfig = Boolean(opts.onlyConfig);
   const includeWorkspace = onlyConfig ? false : (opts.includeWorkspace ?? true);
+  opts.onProgress?.({ stage: "plan", phase: "start" });
   const plan =
-    preparedPlan ?? (await resolveBackupPlanFromDisk({ includeWorkspace, onlyConfig, nowMs }));
+    preparedPlan ??
+    (await resolveBackupPlanFromDisk({
+      includeWorkspace,
+      excludeWorktreeTemplates: opts.excludeWorktreeTemplates,
+      excludeMigrationBackups: opts.excludeMigrationBackups,
+      localCompanion: opts.localCompanion,
+      onlyConfig,
+      nowMs,
+    }));
+  opts.onProgress?.({ stage: "plan", phase: "done" });
   const selection = plan.databaseSelection;
+  if (!preparedPlan && opts.localCompanion) {
+    if (
+      onlyConfig ||
+      !selection?.postgres ||
+      listDatabaseEngineStores().some(
+        (store) => store.postgres && selection.effectiveEngines[store.id] !== "postgres",
+      )
+    ) {
+      throw new Error(
+        "Local companion capture requires PostgreSQL for all portable database families.",
+      );
+    }
+    return withDatabaseEngineSelection(selection, () =>
+      createBackupArchiveInScope({ ...opts, nowMs }, plan),
+    );
+  }
   if (!preparedPlan && !opts.dryRun && selection?.postgres && plan.databaseConfig) {
     return runOfflineDatabaseBackup(
       plan.stateDir,
       () => createBackupArchiveInScope({ ...opts, nowMs }, plan),
       { config: plan.databaseConfig, selection },
+      { online: true },
     );
   }
   const outputPath = await resolveOutputPath({
@@ -405,6 +369,7 @@ async function createBackupArchiveInScope(
     nowMs,
     includedAssets: plan.included,
     stateDir: plan.stateDir,
+    preferHomeOutput: opts.preferHomeOutput,
   });
 
   if (plan.included.length === 0) {
@@ -438,7 +403,10 @@ async function createBackupArchiveInScope(
     archivePath: outputPath,
     dryRun: Boolean(opts.dryRun),
     includeWorkspace,
+    ...(opts.excludeWorktreeTemplates ? { excludeWorktreeTemplates: true } : {}),
+    ...(opts.excludeMigrationBackups ? { excludeMigrationBackups: true } : {}),
     onlyConfig,
+    ...(opts.localCompanion ? { localCompanion: true } : {}),
     verified: false,
     assets: plan.included,
     ...(onlyConfig
@@ -489,6 +457,9 @@ async function createBackupArchiveInScope(
       stateDir: stateAsset?.sourcePath,
       tempDir,
       onlyConfig,
+      preserveSourceArtifacts: opts.preserveSourceArtifacts,
+      localCompanion: opts.localCompanion,
+      onProgress: opts.onProgress,
     });
     const inventory = stateSqliteBackup.inventory;
     snapshotFacts = describeCapturedBackupSqliteSnapshots(
@@ -510,10 +481,13 @@ async function createBackupArchiveInScope(
     }
     const clientDirectories = new Set(
       inventory.coreDatabases
-        .filter((database) => database.role === "client" && database.identity)
+        .filter(
+          (database) =>
+            (database.role === "client" || database.role === "services") && database.identity,
+        )
         .map((database) => path.dirname(database.sourcePath)),
     );
-    // Emit private client directories before snapshots create implicit tar parents.
+    // Emit private store directories before snapshots create implicit tar parents.
     const requiredSourcePaths = new Set([
       ...clientDirectories,
       ...sourcePathRemaps.keys(),
@@ -525,6 +499,11 @@ async function createBackupArchiveInScope(
     const gatewayLockDir = resolveGatewayLockDir(plan.stateDir);
     const skippedEntries = new Map<string, "volatile" | "vanished">();
     const opaqueSqliteSourcePaths = new Map<string, "archived" | "skipped">();
+    const deferredContentChecks = stateSqliteBackup.deferredContentChecks;
+    const archivedContentChecks = new Map(
+      [...deferredContentChecks].map(([source, check]) => [source, check.content]),
+    );
+    const verifiedContentPaths = new Set<string>();
     // Linked state roots can have distinct configured and canonical capture siblings.
     // Otherwise the inventory owns privacy admission, except for config-only exports.
     const checkConfiguredCaptureRoot = onlyConfig || plan.stateDir !== inventory.stateDir;
@@ -544,6 +523,14 @@ async function createBackupArchiveInScope(
           : inventory.isIncluded(inventoryPath))
       ) {
         return false;
+      }
+      if (
+        opts.localCompanion &&
+        path.basename(resolvedEntryPath).toLowerCase().endsWith(".postgres")
+      ) {
+        throw new Error(
+          `Local-companion checkpoints cannot contain PostgreSQL export directories: ${entryPath}. Move the export outside the backup sources and retry.`,
+        );
       }
       if (isPathInside(gatewayLockDir, resolvedEntryPath)) {
         return false;
@@ -587,8 +574,10 @@ async function createBackupArchiveInScope(
         }
         externalSymbolicLinks.length = 0;
         opaqueSqliteSourcePaths.clear();
+        verifiedContentPaths.clear();
         const prepared = await writeArchiveStreamToFile({
           archivePath: attemptTempArchivePath,
+          onProgress: opts.onProgress,
           createArchiveStream: (reportProgress, signal) =>
             appendBackupManifest(
               walkBackupTar({
@@ -613,6 +602,8 @@ async function createBackupArchiveInScope(
                   );
                 },
                 filter: tarFilter,
+                contentChecks: archivedContentChecks,
+                onContentVerified: (source) => verifiedContentPaths.add(source),
                 onVanished: (sourcePath) => {
                   if (requiredSourcePaths.has(sourcePath)) {
                     throw new Error(`Required backup source disappeared: ${sourcePath}`);
@@ -682,6 +673,9 @@ async function createBackupArchiveInScope(
                     manifestSha256: snapshot.manifestSha256,
                   }),
                 );
+                if (opts.localCompanion) {
+                  manifest.postgresAnchors = stateSqliteBackup.postgresAnchors;
+                }
                 return encodeBackupManifest(manifest);
               },
             ),
@@ -691,6 +685,11 @@ async function createBackupArchiveInScope(
         });
         try {
           await plan.configCapture?.assertRootAlias?.();
+          for (const [sourcePath, check] of deferredContentChecks) {
+            if (!verifiedContentPaths.has(sourcePath)) {
+              await assertDeferredSqliteContent(sourcePath, check);
+            }
+          }
         } catch (error) {
           if (!removePreparedBackupArchive(prepared)) {
             publication.pendingCleanupArchives.push(prepared);

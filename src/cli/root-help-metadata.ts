@@ -12,7 +12,7 @@ type PrecomputedHelpTextKey =
   | "nodesHelpText"
   | PrecomputedSubcommandHelpName;
 
-function loadPrecomputedHelpText(key: PrecomputedHelpTextKey): string | null {
+function outputPrecomputedHelpText(key: PrecomputedHelpTextKey): boolean {
   const parsed = readCliStartupMetadata(import.meta.url);
   let value: unknown;
   if (isPrecomputedSubcommandHelpName(key)) {
@@ -23,11 +23,7 @@ function loadPrecomputedHelpText(key: PrecomputedHelpTextKey): string | null {
   } else if (parsed) {
     value = parsed[key];
   }
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function outputPrecomputedHelpText(key: PrecomputedHelpTextKey): boolean {
-  const helpText = loadPrecomputedHelpText(key);
+  const helpText = typeof value === "string" && value.length > 0 ? value : null;
   if (!helpText) {
     return false;
   }

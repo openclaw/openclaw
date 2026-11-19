@@ -13,19 +13,23 @@ import {
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { Icon } from "../components/solid/icon.tsx";
+import { registerPluginManagementEnglish } from "../i18n/locales/en-plugin-management.ts";
 import {
   acquireBoardProviderForSession,
   boardExists,
   boardProviderCacheKey,
   type BoardViewCallbacks,
 } from "../lib/board/provider.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { observeSolidBridgeProperties } from "./control-ui-properties.ts";
 import "./control-ui-dashboard.css";
+
+registerEnglishCatalog(registerPluginManagementEnglish);
 
 const DashboardBoard = lazy(() => import("./control-ui-dashboard-board.tsx"), {
   export: "PluginSessionDashboardBoard",
@@ -200,7 +204,7 @@ function PluginSessionDashboardContent(
           fallback={(error, reset) => {
             const message = () => {
               const failure = error();
-              return failure instanceof Error ? failure.message : String(failure);
+              return formatUiError(failure);
             };
             return (
               <Show when={!isPending(() => content())}>

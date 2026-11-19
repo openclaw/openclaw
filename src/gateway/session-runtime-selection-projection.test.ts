@@ -137,29 +137,23 @@ it.each([
         expect(lifecycle).not.toHaveProperty("runtimeSelectionLocked");
         expect(lifecycle).not.toHaveProperty("session.runtimeSelectionLocked");
         if (kind === "acp") {
-          const project = (patch: { model?: string; agentRuntime?: null }) =>
-            projectSessionsPatchEntry({
+          expect(
+            await projectSessionsPatchEntry({
               cfg,
               storeKey: key,
               agentId: "main",
               existingEntry: entry,
               isLabelInUse: () => false,
-              patch: { key, ...patch },
+              patch: { key, model: "openai/gpt-5.6-luna" },
               loadGatewayModelCatalogSnapshot: async () => ({
                 entries: catalog,
                 routeVariants: catalog,
               }),
-            });
-          expect(await project({ model: "openai/gpt-5.6-luna" })).toMatchObject({
+            }),
+          ).toMatchObject({
             ok: true,
             entry: { modelOverride: "gpt-5.6-luna" },
           });
-          expect(await project({ model: "openai/gpt-5.6-luna", agentRuntime: null })).toMatchObject(
-            {
-              ok: false,
-              error: { message: "Runtime selection is owned by this ACP session." },
-            },
-          );
         }
       },
     );

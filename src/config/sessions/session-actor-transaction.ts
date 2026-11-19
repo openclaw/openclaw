@@ -28,7 +28,7 @@ export function withSessionActorTransactionState<T>(
   }
   current = { database: database.db, state, publishTranscript };
   try {
-    const result = withSqliteDatabaseWriteScope(
+    return withSqliteDatabaseWriteScope(
       database.db,
       [
         ...state.entryRows.keys(),
@@ -38,10 +38,6 @@ export function withSessionActorTransactionState<T>(
       ],
       run,
     );
-    if (result instanceof Promise) {
-      throw new Error("Session actor transactions cannot await work");
-    }
-    return result;
   } finally {
     current = undefined;
   }
@@ -96,12 +92,16 @@ export function replaceSessionActorStoredEntry(
   sessionKey: string,
   postimage: Pick<SessionEntryWritePostimage, "entry" | "row" | "window">,
 ): void {
+  const entry = structuredClone(postimage.entry);
+  const {
+    skills_snapshot_json: _skills,
+    system_prompt_report_json: _systemPrompt,
+    session_diff_baseline_json: _diffBaseline,
+    ...row
+  } = postimage.row;
   state.entryRows = writableSessionActorMap(state.entryRows);
-  state.entryRows.set(sessionKey, {
-    entry: structuredClone(postimage.entry),
-    row: postimage.row,
-  });
-  state.hot.entry = structuredClone(postimage.entry);
+  state.entryRows.set(sessionKey, { entry, row });
+  state.hot.entry = entry;
   state.window = postimage.window;
 }
 

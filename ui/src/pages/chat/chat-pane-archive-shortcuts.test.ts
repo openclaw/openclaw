@@ -6,12 +6,9 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { showToast } from "../../lib/toast.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
-  createTestChatPane,
-  type TestChatPane,
-} from "./chat-pane.test-support.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
+import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 
 vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn() }));
 
@@ -43,7 +40,10 @@ function fixture(guard = "") {
   pane.active = true;
   state.sessionKey = row.key;
   state.sessionsResult = guard === "missing-row" ? null : result;
-  state.connected = guard !== "offline";
+  state.connected = guard !== "stopped";
+  if (guard === "stopped") {
+    pane.context.gateway.snapshot.phase = "stopped";
+  }
   pane.onboarding = guard === "onboarding";
   state.chatMessage = "Keep the unsent foreground draft";
   pane.onPaneSessionChange = vi.fn();
@@ -63,35 +63,29 @@ function press(pane: TestChatPane, init: KeyboardEventInit = {}) {
   return event;
 }
 
+const undoToast = () =>
+  vi.mocked(showToast).mock.calls.filter(([options]) => options.actionLabel === t("common.undo"));
+
 it.each(["success", "failure"])("archives via the keyboard with %s feedback", async (outcome) => {
   const { pane, state, patch, sessions, row } = fixture();
   if (outcome === "failure") {
     patch.mockRejectedValue(new Error("Archive rejected"));
   }
-  const action = vi.spyOn(pane, "handleHeaderSessionAction");
   const scope = { agentId: "main", expectedSessionId: row.sessionId };
   expect(press(pane).defaultPrevented).toBe(true);
-  expect(action).toHaveBeenCalledExactlyOnceWith({ kind: "toggle-archived" }, row);
-  await action.mock.results[0]?.value;
+  // The shortcut holds the archive behind the same Undo window as the header menu.
+  await vi.waitFor(() => expect(undoToast()).toHaveLength(1));
+  expect(sessions.archiveVisibility(row.key)).toBe("pending");
+  expect(patch).not.toHaveBeenCalled();
+  undoToast()[0]![0].onDismiss?.("timeout");
+  await vi.waitFor(() =>
+    expect(patch).toHaveBeenCalledExactlyOnceWith(row.key, { archived: true }, scope),
+  );
   expect(state.chatMessage).toBe("Keep the unsent foreground draft");
   expect(pane.onPaneSessionChange).not.toHaveBeenCalled();
   if (outcome === "failure") {
-    expect(state.chatError).toContain("Archive rejected");
-    expect(showToast).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(state.chatError).toContain("Archive rejected"));
     expect(sessions.archiveVisibility(row.key)).toBeUndefined();
-  } else {
-    expect(showToast).toHaveBeenCalledWith(
-      expect.objectContaining({ actionLabel: t("common.undo") }),
-    );
-    expect(patch).toHaveBeenCalledExactlyOnceWith(row.key, { archived: true }, scope);
-    vi.mocked(showToast).mock.calls.at(-1)?.[0].onAction?.();
-    await vi.waitFor(() =>
-      expect(patch).toHaveBeenCalledWith(
-        row.key,
-        { archived: false },
-        { ...scope, deferListRefresh: true },
-      ),
-    );
   }
 });
 
@@ -101,9 +95,11 @@ it("deduplicates rapid requests through the shared archive owner", async () => {
   patch.mockImplementation(() => pending.promise);
   press(pane);
   press(pane);
-  await vi.waitFor(() => expect(patch).toHaveBeenCalledOnce());
-  expect(sessions.archiveVisibility(row.key)).toBe("pending");
+  await vi.waitFor(() => expect(sessions.archiveVisibility(row.key)).toBe("pending"));
   expect(press(pane).defaultPrevented).toBe(false);
+  expect(undoToast()).toHaveLength(1);
+  undoToast()[0]![0].onDismiss?.("timeout");
+  await vi.waitFor(() => expect(patch).toHaveBeenCalledOnce());
   pending.resolve({});
   await vi.waitFor(() => expect(sessions.archiveVisibility(row.key)).toBeUndefined());
   expect(patch).toHaveBeenCalledOnce();
@@ -115,7 +111,7 @@ it.each([
   ["non-durable", false],
   ["modal", false],
   ["onboarding", false],
-  ["offline", false],
+  ["stopped", false],
   ["read-only", false],
   ["unavailable", false],
   ["missing-row", false],

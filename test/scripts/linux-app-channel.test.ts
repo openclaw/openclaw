@@ -15,7 +15,9 @@ const nextTag = "v2026.9.4";
 const channel = "linux-stable";
 const publicKey = Buffer.from("fixture public key\n").toString("base64");
 const signature = Buffer.from("fixture signature\n").toString("base64");
-const toolingSha = "b".repeat(40);
+const requestSha = "a".repeat(40);
+const builderSha = "b".repeat(40);
+const toolingSha = builderSha;
 const toolingRef = `release-publish/${toolingSha.slice(0, 12)}-42`;
 const mutationActions = new Set(["upload", "DELETE", "PATCH", "create", "edit"]);
 const appimageName = "OpenClaw-2026.9.3-amd64.AppImage";
@@ -59,6 +61,7 @@ type Call = {
   url?: string;
   releaseId?: number;
   makeLatest?: boolean;
+  delay?: number;
 };
 type Transition = {
   kind: "replace-release" | "move-tag" | "select-latest";
@@ -210,16 +213,13 @@ const fail = (message, status = 1) => {
 const answer = (value) => {
   if (value !== undefined) output = JSON.stringify(value);
 };
-const release = (tag) => {
-  const value = state.releases.find((entry) => entry.tag_name === tag);
-  if (!value) fail("HTTP 404: release not found");
-  return value;
-};
-const releaseById = (id) => {
-  const owner = state.releases.find((entry) => entry.id === Number(id));
+const findRelease = (matches) => {
+  const owner = state.releases.find(matches);
   if (!owner) fail("HTTP 404: release not found");
   return owner;
 };
+const release = (tag) => findRelease((entry) => entry.tag_name === tag);
+const releaseById = (id) => findRelease((entry) => entry.id === Number(id));
 const publicAsset = ({ bytes, ...entry }) => entry;
 const publicRelease = ({ source, assets, ...entry }) => entry;
 const releaseResponse = (owner) => {
@@ -229,23 +229,19 @@ const releaseResponse = (owner) => {
 };
 const workflowRun = (id, prefix, fields) => ({
   id, run_attempt: state.authority[prefix + "Attempt"],
-  repository: { full_name: "openclaw/openclaw" }, head_sha: "b".repeat(40),
+  repository: { full_name: "openclaw/openclaw" }, head_sha: state.authority[prefix + "Sha"],
   status: state.authority[prefix + "Status"], conclusion: state.authority[prefix + "Conclusion"],
   ...fields,
 });
 const flag = (name) => args[args.indexOf(name) + 1];
-const take = (key, apply) => {
+const take = (key, apply, match = {}) => {
   const value = state[key];
-  if (value) {
+  if (value && Object.entries(match).every(([field, expected]) => value[field] === expected)) {
     delete state[key];
-    apply(value);
+    return apply(value);
   }
 };
-const fault = (point, tag, name) => {
-  if (state.fault?.point !== point || state.fault.tag !== tag || state.fault.name !== name) return false;
-  delete state.fault;
-  return true;
-};
+const fault = (point, tag, name) => take("fault", () => true, { point, tag, name }) ?? false;
 const transition = (change) => {
   if (change.kind === "select-latest") state.latest = change.tag;
   else if (change.kind === "replace-release") {
@@ -306,7 +302,7 @@ try {
       take("authorityAfterDelete", changeAuthority);
       if (owner.tag_name === "desktop-test") take("authorityAfterDesktopDelete", changeAuthority);
     } else if (route.startsWith("compare/") && route.endsWith("...main")) {
-      assert.equal(route, "compare/" + "b".repeat(40) + "...main");
+      assert.equal(route, "compare/" + state.authority.toolingSha + "...main");
       answer({ status: "identical" });
     } else if (route === "actions/runs/42") {
       answer(workflowRun(42, "parent", {
@@ -345,8 +341,8 @@ try {
       }
       const owner = release(tag);
       const response = { object: { type: "commit", sha: owner.source } };
-      if (state.afterSourceRead?.tag === tag) take("afterSourceRead", ({ change }) => transition(change));
-      if (state.authorityAfterSourceRead?.tag === tag) take("authorityAfterSourceRead", ({ change }) => changeAuthority(change));
+      take("afterSourceRead", ({ change }) => transition(change), { tag });
+      take("authorityAfterSourceRead", ({ change }) => changeAuthority(change), { tag });
       answer(response);
     } else if (/^releases\/assets\/\d+$/.test(route)) {
       const id = Number(route.split("/").at(-1));
@@ -405,9 +401,7 @@ try {
       const bytes = state.wrongUpload?.tag === tag && state.wrongUpload.name === name
         ? Buffer.alloc(fs.readFileSync(file).length, 120) : fs.readFileSync(file);
       putAsset(state, tag, name, bytes);
-      if (state.staleAfterUpload?.tag === tag && state.staleAfterUpload.name === name) {
-        take("staleAfterUpload", (entry) => (state.staleDownloads ??= []).push(entry));
-      }
+      take("staleAfterUpload", (entry) => (state.staleDownloads ??= []).push(entry), { tag, name });
       take("latestAfterUpload", (tag) => { state.latest = tag; });
       if (fault("upload-readback", tag, name)) state.corruptDownload = { tag, name };
       if (fault("upload-after", tag, name)) fail("fixture lost upload acknowledgement");
@@ -432,25 +426,17 @@ try {
       if (cached && !revalidate) bytes = Buffer.from(cached, "base64");
       state.publicDownloadCache[url] = bytes.toString("base64");
     }
-    if (state.corruptDownload?.tag === tag && state.corruptDownload.name === name) {
-      delete state.corruptDownload;
-      bytes = Buffer.alloc(bytes.length, 120);
-    }
+    take("corruptDownload", () => { bytes = Buffer.alloc(bytes.length, 120); }, { tag, name });
     const stale = state.staleDownloads?.find((entry) => entry.tag === tag && entry.name === name && Boolean(entry.legacy) === legacy && entry.remaining > 0);
     if (stale?.skip) stale.skip--;
     else if (stale) { bytes = Buffer.from(stale.bytes, "base64"); stale.remaining--; }
     assert(bytes.length <= Number(flag("--max-filesize")), "Fixture download exceeds limit");
     fs.writeFileSync(flag("--output"), bytes);
-    if (state.replaceReleaseAfterDownload?.tag === tag &&
-        state.replaceReleaseAfterDownload.name === name) {
-      take("replaceReleaseAfterDownload", () => transition({ kind: "replace-release", tag }));
-    }
-    if (state.authorityAfterDownload?.tag === tag && state.authorityAfterDownload.name === name) {
-      take("authorityAfterDownload", ({ change }) => changeAuthority(change));
-    }
+    take("replaceReleaseAfterDownload", () => transition({ kind: "replace-release", tag }), { tag, name });
+    take("authorityAfterDownload", ({ change }) => changeAuthority(change), { tag, name });
   } else if (tool === "sleep") {
-    assert(args.length === 1 && ["2", "5", "10"].includes(args[0]));
-    state.calls.push({ tool, action: "wait" });
+    assert(args.length === 1 && /^[1-9][0-9]*$/u.test(args[0]) && Number(args[0]) <= 60);
+    state.calls.push({ tool, action: "wait", delay: Number(args[0]) });
   } else if (tool === "minisign") {
     state.calls.push({ tool, action: "verify" });
     for (const option of ["-Vm", "-x", "-p"]) {
@@ -480,12 +466,15 @@ function makeAuthority(workflowRef: string, desktop: boolean, conclusion: string
     toolingRef: workflowRef,
     toolingFullRef: fullRef,
     parentAttempt: 1,
+    parentSha: toolingSha,
     parentStatus: "in_progress",
     parentConclusion: conclusion,
     requestTag: tag,
     requestAttempt: 1,
+    requestSha,
     desktop,
     writerAttempt: 1,
+    writerSha: toolingSha,
     writerStatus: "in_progress",
     writerConclusion: conclusion,
     writerRef: workflowRef,
@@ -610,6 +599,8 @@ function fixture(
       "finalize-core": "openclaw-release-publish",
     }[mode];
     Object.assign(current.authority, {
+      toolingSha: publishing ? requestSha : toolingSha,
+      writerSha: publishing ? builderSha : toolingSha,
       writerRef: ref,
       writerFullRef: fullRef,
       writerPath: `.github/workflows/${workflowName}.yml`,
@@ -619,7 +610,8 @@ function fixture(
       current.authority.requestTag = releaseTag;
     }
     flags({
-      "tooling-sha": toolingSha,
+      "tooling-sha": current.authority.toolingSha,
+      ...(publishing ? { "builder-sha": builderSha } : {}),
       "workflow-ref": ref,
       "workflow-full-ref": fullRef,
       ...(publishing
@@ -726,6 +718,43 @@ function failed(run: () => unknown, message?: string) {
   }
   throw new Error("Expected publication to fail");
 }
+
+it("publishes with request SHA tooling under an independently authorized later builder SHA", () => {
+  const f = fixture();
+  expect(f.run("publish")).toMatchObject({ state: "published" });
+  expect(JSON.parse(f.bytes(tag, linuxName(tag)).toString()).linuxPublication.toolingSha).toBe(
+    requestSha,
+  );
+  expect(requestSha).not.toBe(builderSha);
+  expect(f.mutations().length).toBeGreaterThan(0);
+});
+
+it.each([
+  [
+    "unauthorized request",
+    (state: State) => {
+      state.authority.requestSha = "c".repeat(40);
+    },
+  ],
+  [
+    "superseded request attempt",
+    (state: State) => {
+      state.authority.requestAttempt = 2;
+    },
+  ],
+  [
+    "cancelled builder",
+    (state: State) => {
+      state.authority.writerStatus = "completed";
+      state.authority.writerConclusion = "cancelled";
+    },
+  ],
+] as const)("rejects %s before release mutations", (_name, revoke) => {
+  const f = fixture();
+  f.update(revoke);
+  failed(() => f.run("publish"));
+  expect(f.mutations()).toEqual([]);
+});
 
 it("reuses complete public Linux assets without local build inputs", () => {
   const f = fixture({ publicDownloadCache: {} });
@@ -1025,19 +1054,11 @@ it.each(["Linux first", "core first"])("converges when publishing %s", (order) =
     expect(f.bytes(channel)).toEqual(immutable);
     expect(f.state().latest).toBe(tag);
 
-    for (const keepLegacy of [true, false]) {
-      f.update((state) => {
-        if (!keepLegacy) {
-          const previous = releaseFrom(state, tag);
-          previous.assets = previous.assets.filter((asset) => asset.name !== "latest.json");
-        }
-        state.calls = [];
-      });
-      const beforeMirror = f.state().releases;
-      failed(() => f.run("mirror"), "Canonical Linux version is newer than core latest");
-      expect(f.mutations()).toEqual([]);
-      expect(f.state().releases).toEqual(beforeMirror);
-    }
+    f.update({ calls: [] });
+    const beforeMirror = f.state().releases;
+    failed(() => f.run("mirror"), "Canonical Linux version is newer than core latest");
+    expect(f.mutations()).toEqual([]);
+    expect(f.state().releases).toEqual(beforeMirror);
 
     const nativeAssets = f.release(nextTag).assets;
     expect(f.run("finalize-core", nextTag, "true")).toMatchObject({
@@ -1088,6 +1109,7 @@ it("rejects corrupted public bundle readback before publishing channel metadata"
   const f = fixture({ fault: { point: "upload-readback", tag, name: appimageName } });
   failed(() => f.run("publish"), "Public asset digest mismatch");
   expect(f.state().releases.some((release) => release.tag_name === channel)).toBe(false);
+  expect(f.calls("curl")).toHaveLength(1);
   expect(f.calls("sleep")).toEqual([]);
 });
 
@@ -1102,32 +1124,30 @@ it("does not adopt a replacement release ID between immutable bundle uploads", (
   expect(f.mutations()).toEqual([{ tool: "gh", action: "upload", tag, name }]);
 });
 
-it("refuses retry after versioned-only ACK loss leaves the canonical manifest missing", () => {
-  const name = linuxName(tag);
-  const f = fixture({ fault: { point: "upload-after", tag, name } });
-  failed(() => f.run("publish"), "fixture lost upload acknowledgement");
-  const retained = f.asset(tag, name);
-  assert.ok(retained);
-  const writes = f.mutations();
-  expect(f.release(channel).assets).toEqual([]);
-  failed(() => f.run("publish"), "Missing channel metadata is not a new channel");
-  expect(f.asset(tag, name)).toEqual(retained);
-  expect(f.release(channel).assets).toEqual([]);
-  expect(f.mutations()).toEqual(writes);
-});
-
-it("reconciles a committed canonical upload with a lost acknowledgement", () => {
-  const owner = channel;
-  const name = "latest.json";
-  const f = fixture({ fault: { point: "upload-after", tag: owner, name } });
-  failed(() => f.run("publish"), "fixture lost upload acknowledgement");
-  const retained = f.asset(owner, name);
-  assert.ok(retained);
-  f.run("publish");
-  expect(f.asset(owner, name)).toEqual(retained);
-  expect(f.bytes(tag)).toEqual(f.bytes(channel));
-  expect(f.calls("gh", { action: "upload", tag: owner, name })).toHaveLength(1);
-});
+it.each([
+  ["versioned-only", tag, linuxName(tag)],
+  ["canonical", channel, "latest.json"],
+])(
+  "preserves the %s upload after ACK loss and reconciles only a complete channel",
+  (_, owner, name) => {
+    const f = fixture({ fault: { point: "upload-after", tag: owner, name } });
+    failed(() => f.run("publish"), "fixture lost upload acknowledgement");
+    const retained = f.asset(owner, name);
+    assert.ok(retained);
+    const writes = f.mutations();
+    if (owner === tag) {
+      expect(f.release(channel).assets).toEqual([]);
+      failed(() => f.run("publish"), "Missing channel metadata is not a new channel");
+      expect(f.release(channel).assets).toEqual([]);
+      expect(f.mutations()).toEqual(writes);
+    } else {
+      f.run("publish");
+      expect(f.bytes(tag)).toEqual(f.bytes(channel));
+      expect(f.calls("gh", { action: "upload", tag: owner, name })).toHaveLength(1);
+    }
+    expect(f.asset(owner, name)).toEqual(retained);
+  },
+);
 
 it("reports an interrupted legacy replacement and reconciles it without rebuilding", () => {
   const f = published({ advance: true });
@@ -1333,6 +1353,23 @@ it.each(["canonical", "canonical reread", "existing feed reread", "legacy asset"
   },
 );
 
+it("recovers API-confirmed metadata readback beyond the former convergence window", () => {
+  // Four stale responses exhaust the former convergence window.
+  const f = published({ advance: true });
+  const stale = staleFeed(nextTag, { remaining: 4 });
+  f.update((state) => {
+    state.calls = [];
+    state.staleAfterUpload = stale;
+  });
+  expect(f.run("mirror", nextTag)).toMatchObject({ state: "mirrored" });
+  expect(stale.remaining).toBe(0);
+  const waits = f.calls("sleep").map((call) => call.delay ?? 0);
+  const waited = waits.reduce((total, delay) => total + delay, 0);
+  expect(waited).toBeGreaterThan(17);
+  expect(waited).toBeLessThanOrEqual(120);
+  expect(f.mutations({ action: "upload", tag: nextTag, name: "latest.json" })).toHaveLength(1);
+});
+
 it.each(["stale public bytes", "wrong uploaded bytes", "asset replaced"])(
   "stops feed readback on %s with no repeat upload",
   (failure) => {
@@ -1367,7 +1404,8 @@ it.each(["stale public bytes", "wrong uploaded bytes", "asset replaced"])(
       expect(error.message).toContain(`asset=${uploaded.id}`);
       expect(error.message).toContain(`expected=${hash(f.bytes(channel))}`);
       expect(error.message).toContain(`observed=${hash(staleBytes)}`);
-      expect(f.calls("sleep")).toHaveLength(3);
+      const waits = f.calls("sleep").map((call) => call.delay ?? 0);
+      expect(waits.reduce((total, delay) => total + delay, 0)).toBe(120);
     } else if (failure === "wrong uploaded bytes") {
       expect(f.calls("sleep")).toEqual([]);
     }

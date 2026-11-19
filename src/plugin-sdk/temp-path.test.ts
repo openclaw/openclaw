@@ -20,26 +20,10 @@ function expectPathInsideTmpRoot(resultPath: string) {
 
 describe("buildRandomTempFilePath", () => {
   it.each([
-    ["deterministic path", "line-media", ".jpg", "/tmp", 123, "abc", "line-media-123-abc.jpg"],
-    [
-      "relative root, trimmed UUID, compound extension",
-      "archive",
-      "tar.gz",
-      "relative/tmp",
-      123.9,
-      " abc ",
-      "archive-123-abc.tar.gz",
-    ],
-    [
-      "sanitized traversal segments",
-      "../../channels/../media",
-      "/../.jpg",
-      undefined,
-      123,
-      "abc",
-      "channels-media-123-abc.jpg",
-    ],
-  ] as const)("%s", (_name, prefix, extension, tmpDir, now, uuid, basename) => {
+    ["line-media", ".jpg", "/tmp", 123, "abc", "line-media-123-abc.jpg"],
+    ["archive", "tar.gz", "relative/tmp", 123.9, " abc ", "archive-123-abc.tar.gz"],
+    ["../../channels/../media", "/../.jpg", undefined, 123, "abc", "channels-media-123-abc.jpg"],
+  ] as const)("builds a safe %s path", (prefix, extension, tmpDir, now, uuid, basename) => {
     const result = buildRandomTempFilePath({ prefix, extension, tmpDir, now, uuid });
     expect(path.basename(result)).toBe(basename);
     if (tmpDir === undefined) {

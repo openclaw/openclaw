@@ -9,13 +9,14 @@ import {
 } from "@modelcontextprotocol/core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import type { McpCatalogTool } from "../agents/agent-bundle-mcp-catalog.types.js";
 import { peekSessionMcpRuntime } from "../agents/agent-bundle-mcp-manager-api.js";
 import { completeDeferredSessionMcpRuntimeRetirement } from "../agents/agent-bundle-mcp-manager-cleanup.js";
 import {
   getSessionMcpRequestSignal,
   runWithSessionMcpRequestSignal,
 } from "../agents/agent-bundle-mcp-request-context.js";
-import type { McpCatalogTool, SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
+import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import {
   createMcpClientElicitationHandler,
   runWithMcpElicitationHandler,
@@ -87,6 +88,15 @@ export async function requireMcpAppInteraction(view: McpAppViewLease): Promise<v
   }
   if (view.authorizeAppInteraction && !(await view.authorizeAppInteraction())) {
     throw new Error("MCP App widget grant is no longer active");
+  }
+}
+
+export async function supportsMcpAppInteraction(view: McpAppViewLease): Promise<boolean> {
+  try {
+    await requireMcpAppInteraction(view);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -237,7 +247,7 @@ export async function prepareModelCreatedAppToolCall(
     { loadSessionMcpConfig },
     { buildBundleMcpToolsFromCatalog },
     { getPluginToolMeta },
-    { isMcpToolAllowed, normalizeMcpToolFilter },
+    { createMcpToolFilter, mcpCatalogToolFilterScope, normalizeMcpToolFilter },
     { requiresMcpCodexToolApproval, resolveProjectedMcpCodexToolApprovalMode },
     { getSessionRowProjection },
     { resolveSessionResourceToolPolicy },
@@ -329,15 +339,19 @@ export async function prepareModelCreatedAppToolCall(
       (entry) => entry.serverName === view.serverName && entry.toolName === request.toolName,
     );
     if (
+      !currentCatalog ||
       !currentTool ||
       !isAppCallableTool(view, currentTool) ||
       currentTool.deniedBySession ||
-      JSON.stringify({ server: currentCatalog?.servers[view.serverName], tool: currentTool }) !==
+      JSON.stringify({ server: currentCatalog.servers[view.serverName], tool: currentTool }) !==
         expectedToolPolicy ||
       live.entry.toolOverrides?.mcpServers?.[view.serverName] === false ||
       live.entry.toolOverrides?.mcpToolsDeny?.[view.serverName]?.includes(request.toolName) ||
       (rawServer &&
-        !isMcpToolAllowed(normalizeMcpToolFilter(rawServer.toolFilter), request.toolName))
+        !createMcpToolFilter(
+          normalizeMcpToolFilter(rawServer.toolFilter),
+          mcpCatalogToolFilterScope(currentCatalog, view.serverName),
+        )(request.toolName))
     ) {
       throw new Error("MCP App tool is denied by current policy");
     }

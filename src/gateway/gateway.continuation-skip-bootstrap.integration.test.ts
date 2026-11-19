@@ -11,23 +11,17 @@ import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-ss
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { sendChatAndWait } from "./gateway-chat-fixture.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { createPluginEnabledGatewayTestEnv } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 // Registered in gatewayDatabaseWorkerTestFiles: only that project's forked pool gives this Gateway a
 // host SQLite broker. One Gateway for the file, no handler or transport mocks.
-it("continuation-skip stops re-sending workspace instructions on the next turn", async () => {
+it("continuation-skip keeps the pinned workspace prompt without re-injecting it on the next turn", async () => {
   const state = await createOpenClawTestState({
     label: "continuation-skip-bootstrap",
-    env: {
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-    },
+    env: createPluginEnabledGatewayTestEnv(),
   });
   const sentinel = `BSKIP-${randomUUID()}`;
   const requests: string[] = [];
@@ -99,30 +93,24 @@ it("continuation-skip stops re-sending workspace instructions on the next turn",
     try {
       await server.startupSettled;
       const sessionKey = `agent:main:continuation-${randomUUID()}`;
-      const turn = async (message: string): Promise<string> => {
+      const turn = async (message: string): Promise<{ input: unknown[] }> => {
         const requestStart = requests.length;
-        const started = await client.request<{ runId: string; status: string }>("chat.send", {
-          sessionKey,
-          message,
-          deliver: false,
-          idempotencyKey: randomUUID(),
-        });
-        expect(started.status).toBe("started");
-        // Keep the client's deadline beyond the server-side wait on loaded runners.
-        await expect(
-          client.request<{ status: string }>(
-            "agent.wait",
-            { runId: started.runId, timeoutMs: 30_000 },
-            { timeoutMs: 35_000 },
-          ),
-        ).resolves.toMatchObject({ status: "ok" });
+        await sendChatAndWait(client, sessionKey, message);
         const sent = requests.slice(requestStart);
         expect(sent).toHaveLength(1);
-        return sent[0]!;
+        return JSON.parse(sent[0]!) as { input: unknown[] };
       };
 
-      expect(await turn("Name the workspace sentinel.")).toContain(sentinel);
-      expect(await turn("And now the sentinel again?")).not.toContain(sentinel);
+      const first = await turn("Name the workspace sentinel.");
+      expect(JSON.stringify(first.input[0])).toContain(sentinel);
+
+      const continuation = await turn("And now the sentinel again?");
+      const [initialSystemPrompt, ...appendedContext] = continuation.input;
+      expect(initialSystemPrompt).toMatchObject({ role: "system" });
+      // The initial prompt stays pinned; continuation-skip only withholds fresh injection.
+      expect(JSON.stringify(initialSystemPrompt)).toContain(sentinel);
+      expect(initialSystemPrompt).toEqual(first.input[0]);
+      expect(JSON.stringify(appendedContext)).not.toContain(sentinel);
     } finally {
       try {
         await disconnectGatewayClient(client);

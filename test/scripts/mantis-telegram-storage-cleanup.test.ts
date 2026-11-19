@@ -24,14 +24,13 @@ vi.mock("node:fs", async (original) => {
     readFileSync: (file: string) => {
       if (fixture.mode === "ready") {
         const mount = path.join(fixture.root, "volume");
-        const configs: Record<string, string> = {
-          "storage.conf": `[storage]\ndriver = "overlay"\nrunroot = "${mount}/runroot"\ngraphroot = "${mount}/graphroot"\n`,
-          "containers.conf":
-            '[containers]\nlog_driver = "k8s-file"\nlog_size_max = 1048576\n[network]\ndefault_rootless_network_cmd = "slirp4netns"\n',
-        };
-        const config = Object.keys(configs).find((suffix) => file.endsWith(suffix));
+        const config = file.endsWith("storage.conf")
+          ? `[storage]\ndriver = "overlay"\nrunroot = "${mount}/runroot"\ngraphroot = "${mount}/graphroot"\n`
+          : file.endsWith("containers.conf")
+            ? '[containers]\nlog_driver = "k8s-file"\nlog_size_max = 1048576\n[network]\ndefault_rootless_network_cmd = "slirp4netns"\n'
+            : undefined;
         if (config) {
-          return configs[config];
+          return config;
         }
       }
       if (!file.endsWith("manifest.json")) {
@@ -64,23 +63,19 @@ vi.mock("node:child_process", async (original) => {
       const command = ["podman", "sudo", "git", "findmnt"].includes(name)
         ? `${name} ${operation}`
         : name;
-      const failures: Record<string, string> = {
-        fallocate: "Allocation failed: no space left",
-        "sudo mount": "Mount reached without backing reservation",
-        "podman create": "Candidate creation reached without verified storage",
-        ...(fixture.fault === "helperMissing"
-          ? { slirp4netns: "Required networking helper unavailable" }
-          : {}),
-        ...(fixture.fault === "unmountFails" ? { "sudo umount": "Mount has live holders" } : {}),
-      };
-      if (failures[command]) {
-        throw new Error(failures[command]);
-      }
-      if (command === "sudo umount") {
-        return "";
-      }
+      const backing =
+        fixture.fault === "wrongBacking"
+          ? "/unrelated.img"
+          : path.join(fixture.root, "storage.img");
       const responses: Record<string, unknown> = {
-        slirp4netns: "slirp4netns version 1.3.3",
+        fallocate: new Error("Allocation failed: no space left"),
+        "sudo mount": new Error("Mount reached without backing reservation"),
+        "podman create": new Error("Candidate creation reached without verified storage"),
+        slirp4netns:
+          fixture.fault === "helperMissing"
+            ? new Error("Required networking helper unavailable")
+            : "slirp4netns version 1.3.3",
+        "sudo umount": fixture.fault === "unmountFails" ? new Error("Mount has live holders") : "",
         "mkfs.ext4": "",
         "git diff": "",
         "podman rm": "",
@@ -93,15 +88,7 @@ vi.mock("node:child_process", async (original) => {
           store: { graphRoot: `${mount}/graphroot`, runRoot: `${mount}/runroot` },
         },
         "sudo losetup": {
-          loopdevices: [
-            {
-              name: "/dev/loop7",
-              "back-file":
-                fixture.fault === "wrongBacking"
-                  ? "/unrelated.img"
-                  : path.join(fixture.root, "storage.img"),
-            },
-          ],
+          loopdevices: [{ name: "/dev/loop7", "back-file": backing }],
         },
         "findmnt --mountpoint": filesystems({
           target: mount,
@@ -118,6 +105,9 @@ vi.mock("node:child_process", async (original) => {
         throw new Error(`Unexpected cleanup command: ${name}`);
       }
       const response = responses[command];
+      if (response instanceof Error) {
+        throw response;
+      }
       return typeof response === "string" ? response : JSON.stringify(response);
     },
   };

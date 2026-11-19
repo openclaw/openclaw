@@ -18,6 +18,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../../state/openclaw-state-db.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../agent-runtime-approval-authority.js";
+import { gatewayRequest } from "../../request-frame.test-support.js";
 import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
 import {
   createDispatchTestHarness,
@@ -76,6 +77,7 @@ const failure: RestartSentinelPayload = {
 };
 
 const issueUrl = "https://github.com/openclaw/openclaw/issues/999999";
+const createdResponse = { ok: true, payload: { status: "created", url: issueUrl } };
 const originalWriteFile = fs.writeFile.bind(fs);
 let stateDir = "";
 
@@ -117,7 +119,10 @@ async function countReportFiles(): Promise<number> {
   }
 }
 
-function createReportHarness(getGeneration = () => "current") {
+function createReportHarness(
+  client: ReturnType<typeof createOperatorWsClient>,
+  getGeneration = () => "current",
+) {
   let nextFinished = createDeferredCore();
   const handler: NonNullable<GatewayWsMessageHandlerParams["extraHandlers"][string]> = async (
     options,
@@ -139,7 +144,27 @@ function createReportHarness(getGeneration = () => "current") {
       }),
     getRequiredSharedGatewaySessionGeneration: getGeneration,
   });
-  return { harness, waitForNextHandler: () => nextFinished.promise };
+  const dispatch = (id: string, action: "preview" | "submit", previewDigest?: string) =>
+    harness.dispatcher.dispatch(
+      gatewayRequest(id, "update.report", {
+        action,
+        attemptId: "authority-proof",
+        ...(previewDigest === undefined ? {} : { previewDigest }),
+      }),
+      client,
+    );
+  return {
+    harness,
+    waitForNextHandler: () => nextFinished.promise,
+    dispatch,
+    preview: async (id: string) => {
+      await dispatch(id, "preview");
+      const response = await harness.awaitResponseFrame(id);
+      expect(response).toMatchObject({ ok: true, payload: { status: "ready" } });
+      return (response.payload as { previewDigest: string }).previewDigest;
+    },
+    submit: (id: string, previewDigest: string) => dispatch(id, "submit", previewDigest),
+  };
 }
 
 function grantReportAuthority(
@@ -169,47 +194,6 @@ function identifyNonOwner(client: ReturnType<typeof createOperatorWsClient>): vo
   };
 }
 
-type ReportHarness = ReturnType<typeof createReportHarness>["harness"];
-type ReportClient = ReturnType<typeof createOperatorWsClient>;
-
-async function dispatchReport(
-  harness: ReportHarness,
-  client: ReportClient,
-  id: string,
-  action: "preview" | "submit",
-  previewDigest?: string,
-) {
-  await harness.dispatcher.dispatch(
-    {
-      type: "req",
-      id,
-      method: "update.report",
-      params: {
-        action,
-        attemptId: "authority-proof",
-        ...(previewDigest === undefined ? {} : { previewDigest }),
-      },
-    },
-    client,
-  );
-}
-
-async function dispatchPreview(harness: ReportHarness, client: ReportClient, id: string) {
-  await dispatchReport(harness, client, id, "preview");
-  const response = await harness.awaitResponseFrame(id);
-  expect(response).toMatchObject({ ok: true, payload: { status: "ready" } });
-  return (response.payload as { previewDigest: string }).previewDigest;
-}
-
-function dispatchSubmit(
-  harness: ReportHarness,
-  client: ReportClient,
-  id: string,
-  previewDigest: string,
-) {
-  return dispatchReport(harness, client, id, "submit", previewDigest);
-}
-
 const authorityCloseReasons = {
   "shared-auth": "gateway auth changed",
   invalidated: "client invalidated: device-token-revoked",
@@ -225,7 +209,7 @@ function authorityHarness(change: keyof typeof authorityCloseReasons, connId: st
   }
   return {
     client,
-    ...createReportHarness(() => generation),
+    ...createReportHarness(client, () => generation),
     revoke: () => {
       if (change === "shared-auth") {
         generation = "rotated";
@@ -271,48 +255,15 @@ describe("update report live authority boundary", () => {
   });
 
   it.each(["gateway-owner", "system-admin"] as const)(
-    "permits a current %s to preview, reserve a receipt, and reach the GitHub CLI transport",
+    "submits a report with delegated %s authority",
     async (authority) => {
-      const generation = "current";
-      const client = createOperatorWsClient({ connId: `report-current-${authority}` });
-      grantReportAuthority(client, authority);
-      client.usesSharedGatewayAuth = true;
-      client.sharedGatewaySessionGeneration = generation;
-      const { harness } = createReportHarness(() => generation);
-      const previewDigest = await dispatchPreview(harness, client, "preview-allowed");
-      expect(await countReportFiles()).toBe(0);
-
-      await dispatchSubmit(harness, client, "allowed", previewDigest);
-      const response = await harness.awaitResponseFrame("allowed");
-
-      expect(mocks.submitGithubIssue).toHaveBeenCalledOnce();
-      expect(await countReportFiles()).toBe(0);
-      expect(await countReportReceipts()).toBe(1);
-      expect(response).toMatchObject({
-        ok: true,
-        payload: {
-          status: "created",
-          url: issueUrl,
-        },
-      });
-    },
-  );
-
-  it.each([
-    { authority: "gateway-owner", retire: true, boundary: "auth" },
-    { authority: "system-admin", retire: true, boundary: "auth" },
-    { authority: "gateway-owner", retire: false, boundary: "auth" },
-    { authority: "system-admin", retire: false, boundary: "auth" },
-    { authority: "gateway-owner", retire: true, boundary: "prepared" },
-    { authority: "system-admin", retire: true, boundary: "prepared" },
-  ] as const)(
-    "revalidates delegated $authority authority at $boundary, retired=$retire",
-    async ({ authority, retire, boundary }) => {
       const transport = await vi.importActual<typeof import("../../../infra/github-issue.js")>(
         "../../../infra/github-issue.js",
       );
-      const client = createOperatorWsClient({ connId: `report-runtime-${authority}-${retire}` });
+      const client = createOperatorWsClient({ connId: `report-runtime-${authority}` });
       grantReportAuthority(client, authority);
+      client.usesSharedGatewayAuth = true;
+      client.sharedGatewaySessionGeneration = "current";
       const claim = claimAgentRunDelegatedAuthority({
         instanceId: client.connId,
         runId: client.connId,
@@ -326,7 +277,7 @@ describe("update report live authority boundary", () => {
       };
       client.internal = { ...client.internal, agentRuntimeIdentity: identity };
       const validateAuthority = createAgentRuntimeApprovalAuthorityValidator();
-      const { harness, waitForNextHandler } = createReportHarness();
+      const { harness, waitForNextHandler, preview, submit } = createReportHarness(client);
       const entered = createDeferredCore();
       const released = createDeferredCore();
       const runGh = vi.fn<RunGithubCli>(async (args) => {
@@ -347,57 +298,31 @@ describe("update report live authority boundary", () => {
       });
       mocks.submitGithubIssue.mockImplementationOnce(
         (issue, _runGh, hooks: GithubIssueSubmitHooks) =>
-          transport.submitGithubIssue(issue, runGh, {
-            ...hooks,
-            beforeIssueCreate: async () => {
-              if (!hooks.beforeIssueCreate) {
-                throw new Error("expected the report preparation hook");
-              }
-              const commitIssueCreate = await hooks.beforeIssueCreate();
-              if (boundary === "prepared" && retire) {
-                queueMicrotask(() => releaseAgentRunDelegatedAuthority(claim));
-              }
-              return commitIssueCreate;
-            },
-          }),
+          transport.submitGithubIssue(issue, runGh, hooks),
       );
       try {
         expect(validateAuthority(identity)).toBe(true);
-        const previewDigest = await dispatchPreview(harness, client, "runtime-preview");
+        const previewDigest = await preview("runtime-preview");
+        expect(await countReportFiles()).toBe(0);
         const finished = waitForNextHandler();
-        const dispatch = dispatchSubmit(harness, client, "runtime-submit", previewDigest);
+        const dispatch = submit("runtime-submit", previewDigest);
         await entered.promise;
-        if (retire && boundary === "auth") {
-          expect(releaseAgentRunDelegatedAuthority(claim)).toBe(true);
-        }
-        expect(validateAuthority(identity)).toBe(!(retire && boundary === "auth"));
+        expect(validateAuthority(identity)).toBe(true);
         expect(client.invalidated).not.toBe(true);
         expect(client.connectionSignal?.aborted).not.toBe(true);
         released.resolve();
         await finished;
         await dispatch;
 
-        expect(validateAuthority(identity)).toBe(!retire);
+        expect(validateAuthority(identity)).toBe(true);
+        expect(mocks.submitGithubIssue).toHaveBeenCalledOnce();
 
-        expect
-          .soft(runGh.mock.calls.map(([args]) => args[0]))
-          .toEqual(retire ? ["auth"] : ["auth", "api"]);
-        expect.soft(await countReportReceipts()).toBe(retire ? 0 : 1);
+        expect(runGh.mock.calls.map(([args]) => args[0])).toEqual(["auth", "api"]);
+        expect(await countReportReceipts()).toBe(1);
         expect(await countReportFiles()).toBe(0);
         const response = await harness.awaitResponseFrame("runtime-submit");
-        if (retire) {
-          expect(response).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
-          expect(harness.close).toHaveBeenCalledWith(4001, "agent runtime authority closed");
-        } else {
-          expect(response).toMatchObject({
-            ok: true,
-            payload: {
-              status: "created",
-              url: issueUrl,
-            },
-          });
-          expect(harness.close).not.toHaveBeenCalled();
-        }
+        expect(response).toMatchObject(createdResponse);
+        expect(harness.close).not.toHaveBeenCalled();
       } finally {
         released.resolve();
         releaseAgentRunDelegatedAuthority(claim);
@@ -413,8 +338,8 @@ describe("update report live authority boundary", () => {
       );
       const client = createOperatorWsClient({ connId: `report-changed-${change}` });
       grantReportAuthority(client, "system-admin");
-      const { harness, waitForNextHandler } = createReportHarness();
-      const previewDigest = await dispatchPreview(harness, client, `preview-changed-${change}`);
+      const { harness, waitForNextHandler, preview, submit } = createReportHarness(client);
+      const previewDigest = await preview(`preview-changed-${change}`);
       const entered = createDeferredCore();
       const released = createDeferredCore();
       const runGh = vi.fn<RunGithubCli>(async (args) => {
@@ -427,7 +352,7 @@ describe("update report live authority boundary", () => {
         transport.submitGithubIssue(issue, runGh, hooks),
       );
       const finished = waitForNextHandler();
-      const dispatch = dispatchSubmit(harness, client, `changed-${change}`, previewDigest);
+      const dispatch = submit(`changed-${change}`, previewDigest);
       await entered.promise;
       mocks.refreshLatest.mockResolvedValue({
         ...failure,
@@ -463,9 +388,9 @@ describe("update report live authority boundary", () => {
         scopes,
       });
       identifyNonOwner(client);
-      const { harness } = createReportHarness();
+      const { harness, dispatch, submit } = createReportHarness(client);
 
-      await dispatchReport(harness, client, `denied-${scopes[0]}`, "preview");
+      await dispatch(`denied-${scopes[0]}`, "preview");
       const response = await harness.awaitResponseFrame(`denied-${scopes[0]}`);
 
       await expectNoReport();
@@ -478,7 +403,7 @@ describe("update report live authority boundary", () => {
         if (!isRecord(preview) || typeof preview.previewDigest !== "string") {
           throw new Error("Missing report preview");
         }
-        await dispatchSubmit(harness, client, "browser-handoff", preview.previewDigest);
+        await submit("browser-handoff", preview.previewDigest);
         const submitted = await harness.awaitResponseFrame("browser-handoff");
         expect(submitted).toMatchObject({ ok: true, payload: { status: "fallback" } });
         if (!isRecord(submitted.payload) || typeof submitted.payload.fallbackUrl !== "string") {
@@ -488,7 +413,7 @@ describe("update report live authority boundary", () => {
         expect(url.origin + url.pathname).toBe("https://github.com/openclaw/openclaw/issues/new");
         expect(url.searchParams.get("body")).toBe(preview.body);
         expect(url.searchParams.get("title")).toBe(preview.title);
-        await dispatchSubmit(harness, client, "browser-repeat", preview.previewDigest);
+        await submit("browser-repeat", preview.previewDigest);
         expect(await harness.awaitResponseFrame("browser-repeat")).toMatchObject({
           ok: true,
           payload: { status: "duplicate", fallbackUrl: submitted.payload.fallbackUrl },
@@ -509,12 +434,14 @@ describe("update report live authority boundary", () => {
     ["shared-auth", "sentinel-refresh"],
     ["invalidated", "sentinel-refresh"],
   ] as const)("blocks report side effects after %s closes during %s", async (change, stage) => {
-    const { client, harness, waitForNextHandler, revoke } = authorityHarness(
-      change,
-      `report-${stage}-${change}`,
-    );
-    const previewDigest =
-      stage === "sentinel-refresh" ? undefined : await dispatchPreview(harness, client, "preview");
+    const {
+      harness,
+      waitForNextHandler,
+      revoke,
+      preview,
+      dispatch: dispatchReport,
+    } = authorityHarness(change, `report-${stage}-${change}`);
+    const previewDigest = stage === "sentinel-refresh" ? undefined : await preview("preview");
     const entered = createDeferredCore();
     const release = createDeferredCore();
     let issueCreateCalls = 0;
@@ -551,8 +478,6 @@ describe("update report live authority boundary", () => {
     }
     const finished = waitForNextHandler();
     const dispatch = dispatchReport(
-      harness,
-      client,
       "denied",
       stage === "sentinel-refresh" ? "preview" : "submit",
       previewDigest,

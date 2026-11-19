@@ -3,7 +3,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import type { HostDesktopStatus } from "../gateway/desktop/host-source.js";
 import { redactSecretDegradationReason } from "../secrets/runtime-degraded-state.js";
 import type { StatusSummary } from "../status/summary.js";
-import { redactStatusSecrets } from "./status-all/format.js";
+import { redactStatusSecrets } from "./status-redaction.js";
 
 export function formatHostDesktopStatus(status?: HostDesktopStatus): string {
   if (!status || status.state === "disabled") {
@@ -26,8 +26,9 @@ export function buildStatusSecretDiagnostics(
   owners: NonNullable<StatusSummary["degradedSecretOwners"]>,
   diagnostics: string[],
 ): string[] {
-  const safeText = (value: string) =>
-    truncateUtf16Safe(redactStatusSecrets(sanitizeTerminalText(redactStatusSecrets(value))), 160);
+  const redact = (value: string, limit: number) =>
+    truncateUtf16Safe(redactStatusSecrets(sanitizeTerminalText(redactStatusSecrets(value))), limit);
+  const safeText = (value: string) => redact(value, 160);
   const ownerPaths = new Set(owners.flatMap((owner) => owner.paths));
   const ownerDiagnostics = new Map(
     owners.map((owner) => [
@@ -41,7 +42,11 @@ export function buildStatusSecretDiagnostics(
       diagnostic.split(":", 1)[0];
     return ownerPath === undefined || !ownerPaths.has(ownerPath);
   });
-  return [...ownerDiagnostics.values(), ...new Set(localDiagnostics.map(safeText))];
+  return [
+    ...ownerDiagnostics.values(),
+    // Local diagnostics carry fix text; 400 fits the ~290-unit token conflict hint.
+    ...new Set(localDiagnostics.map((diagnostic) => redact(diagnostic, 400))),
+  ];
 }
 
 export function countActiveStatusAgents(params: {

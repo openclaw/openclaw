@@ -75,19 +75,6 @@ export async function initializeImapCursor(
   return { kind: existing ? "reset" : "baseline", cursor };
 }
 
-export async function advanceImapCursor(
-  state: ImapWatcherState,
-  accountId: string,
-  uidValidity: string,
-  uid: number,
-): Promise<void> {
-  await state.cursors.register(accountId, {
-    uidValidity,
-    lastSeenUid: uid,
-    updatedAt: Date.now(),
-  });
-}
-
 export async function recordImapAttempt(
   state: ImapWatcherState,
   messageKey: string,

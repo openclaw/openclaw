@@ -123,6 +123,113 @@ async function prepareFilePage(page: Page, content: string, options: FileOptions
 }
 
 suite.define(() => {
+  it("does not ask users to load agent files while the inventory read is already running", async () => {
+    await withFilePage(
+      "# Synthetic agent instructions",
+      async ({ page, gateway, editor }) => {
+        await gateway.waitForRequest("agents.files.list");
+        await page.getByRole("heading", { name: "Core files", exact: true }).waitFor();
+        const manualHints = await page
+          .getByText("Load the agent workspace files to edit core instructions.", { exact: true })
+          .count();
+        await gateway.resolveDeferred("agents.files.list", fileList("main"));
+        await expect.poll(() => editor.inputValue()).toBe("# Synthetic agent instructions");
+        expect(manualHints).toBe(0);
+      },
+      { deferredMethods: ["agents.files.list"] },
+    );
+  });
+
+  it("keeps failed inventory recovery and a genuinely empty workspace reachable", async () => {
+    await withFilePage(
+      "",
+      async ({ page, gateway, editor, refresh }) => {
+        await gateway.waitForRequest("agents.files.list");
+        await page.getByRole("heading", { name: "Core files", exact: true }).waitFor();
+        await gateway.rejectDeferred("agents.files.list", {
+          message: "Workspace inventory unavailable",
+        });
+        const error = page.locator(".agents-main").getByRole("alert");
+        await expect.poll(() => error.textContent()).toContain("Workspace inventory unavailable");
+        expect(await refresh.isEnabled()).toBe(true);
+        expect(await editor.count()).toBe(0);
+        const after = await gateway.deferNext("agents.files.list");
+        await refresh.click();
+        await gateway.waitForRequest("agents.files.list", { after });
+        await gateway.resolveDeferred("agents.files.list", { ...fileList("main"), files: [] });
+        await page.getByText("No files yet.", { exact: true }).waitFor();
+        expect(await error.count()).toBe(0);
+        expect(await editor.count()).toBe(0);
+        expect(await refresh.isEnabled()).toBe(true);
+      },
+      { deferredMethods: ["agents.files.list"] },
+    );
+  });
+
+  it.each([false, true])(
+    "announces a failed file save (conflict: %s) without losing the draft",
+    async (conflict) => {
+      const draft = "# Garden helper\n\nKeep these synthetic instructions.";
+      const message = conflict
+        ? "Synthetic workspace changed; Reload or Overwrite to recover."
+        : "Synthetic write rejected; retry Save.";
+      await withFilePage(
+        "Original synthetic instructions",
+        async ({ page, gateway, editor, save, confirmSave }) => {
+          await expect.poll(() => editor.inputValue()).toBe("Original synthetic instructions");
+          expect(await page.locator(".agents-main").getByRole("alert").count()).toBe(0);
+          await editor.fill(draft);
+          await gateway.deferNext("agents.files.set", { agentId: "main", name: "AGENTS.md" });
+          await save.click();
+          await gateway.waitForRequest("agents.files.set");
+          await editor.fill(draft + "\nA newer edit.");
+          await gateway.resolveDeferred("agents.files.set", {
+            __mockError: {
+              code: conflict ? "INVALID_REQUEST" : "UNAVAILABLE",
+              message,
+              ...(conflict ? { details: { type: "agent_file_conflict", name: "AGENTS.md" } } : {}),
+            },
+          });
+          await page.getByText(message, { exact: true }).waitFor();
+          expect(await editor.inputValue()).toBe(draft + "\nA newer edit.");
+          expect(await editor.isEnabled()).toBe(true);
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            page.locator(".agents-main"),
+            [editor, page.getByText(message, { exact: true })],
+            { animations: "disabled" },
+          );
+          writeFileSync(
+            path.join(suite.artifactDir, conflict ? "save-conflict.png" : "save-failure.png"),
+            frame.png,
+          );
+          writeFileSync(
+            path.join(
+              suite.artifactDir,
+              conflict ? "save-conflict.aria.txt" : "save-failure.aria.txt",
+            ),
+            await page.locator(".agents-main").ariaSnapshot(),
+          );
+          const alert = page.locator(".agents-main").getByRole("alert");
+          await expect.poll(() => alert.count()).toBe(1);
+          expect(await alert.textContent()).toContain(message);
+          if (conflict) {
+            expect(
+              await alert.getByRole("button", { name: "Reload", exact: true }).isEnabled(),
+            ).toBe(true);
+            expect(
+              await alert.getByRole("button", { name: "Overwrite", exact: true }).isEnabled(),
+            ).toBe(true);
+          }
+          await confirmSave(draft + "\nA newer edit.");
+          await save.click();
+          await expect.poll(() => save.isDisabled()).toBe(true);
+          expect(await alert.count()).toBe(0);
+          expect(await editor.inputValue()).toBe(draft + "\nA newer edit.");
+        },
+      );
+    },
+  );
   it("keeps preview tooltip aligned with its expand state", async () => {
     const content = "# Preview tooltip fixture\n\nSynthetic preview instructions.\n";
     await withFilePage(content, async ({ page, gateway, editor, preview }) => {

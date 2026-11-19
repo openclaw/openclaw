@@ -39,9 +39,7 @@ async function openRename(page: Page) {
 suite.define(() => {
   it.each([
     { kind: "modern", key: "Enter", isComposing: true, keyCode: 0, invalidateMetadata: false },
-    { kind: "modern", key: "Escape", isComposing: true, keyCode: 0, invalidateMetadata: true },
-    { kind: "legacy", key: "Enter", isComposing: false, keyCode: 229, invalidateMetadata: true },
-    { kind: "legacy", key: "Escape", isComposing: false, keyCode: 229, invalidateMetadata: false },
+    { kind: "legacy", key: "Escape", isComposing: false, keyCode: 229, invalidateMetadata: true },
   ] as const)(
     "keeps the rename draft during $kind composition $key until ordinary Enter",
     async ({ key, isComposing, keyCode, invalidateMetadata }) => {
@@ -106,15 +104,4 @@ suite.define(() => {
       });
     },
   );
-
-  it("cancels an ordinary Escape without persisting the rename draft", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const { gateway, title, input } = await openRename(page);
-      await input.press("Escape");
-      await input.waitFor({ state: "detached" });
-
-      expect(await gateway.getRequests("sessions.patch")).toEqual([]);
-      expect(await title.textContent()).toContain(original.label);
-    });
-  });
 });

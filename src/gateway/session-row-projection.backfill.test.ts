@@ -1,4 +1,5 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
@@ -8,6 +9,7 @@ import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteTranscriptReadScope,
@@ -45,7 +47,9 @@ import {
   appendProjectionMessages as appendTranscript,
   seedProjectionRow as seedTranscriptRow,
 } from "./session-row-projection.test-support.js";
+import { terminalAssistantMessage } from "./session-row-terminal-message.test-support.js";
 import * as transcriptBackfill from "./session-row-transcript-backfill.js";
+import { applyGatewaySessionRowMode } from "./session-utils-display.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -55,6 +59,48 @@ type TranscriptMessage = Parameters<
 
 const cfg = { agents: { entries: { main: {} } } };
 const display = { includeDerivedTitles: true, includeLastMessage: true };
+
+it.for(["native", "worker"] as const)(
+  "publishes empty and saved history facts from the transcript owner (%s)",
+  async (writer, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot(cfg);
+      const target = { agentId: "main", sessionKey: "agent:main:empty", sessionId: "empty" };
+      const query = { agentId: target.agentId, key: target.sessionKey };
+      const entry = { sessionId: target.sessionId, updatedAt: 1 };
+      if (writer === "worker") {
+        await upsertSessionEntryCore(target, entry);
+      } else {
+        replaceSessionEntrySync(target, entry);
+      }
+      const empty = observeSessionRowBackfill([target.sessionKey]);
+      using foreground = holdForeground();
+      const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
+      using projection = await createTestProjection({ cfg });
+      await projection.ensureMaterialized();
+      projection.describe(query);
+      // An empty window is authoritative on the first read, not an optional enrichment.
+      expect(projection.snapshot(query).row?.hasMessages).toBe(false);
+      foreground();
+      await withinTest(empty, signal);
+      expect(backfill).not.toHaveBeenCalled();
+      expect(projection.snapshot(query).row?.hasMessages).toBe(false);
+      const saved = observeSessionRowBackfill([target.sessionKey], projection);
+      await appendTranscript(target, { role: "user", content: "First saved message" });
+      await projection.ensureMaterialized();
+      await withinTest(saved, signal);
+      expect(projection.snapshot(query).row?.hasMessages).toBe(true);
+      for (const mode of ["sidebar", "dashboard", "compact"] as const) {
+        const row = { ...expectDefined(projection.snapshot(query).row, "saved session row") };
+        applyGatewaySessionRowMode(row, mode);
+        expect(row.hasMessages).toBe(true);
+      }
+      replaceSessionEntrySync(target, { sessionId: "replacement-empty", updatedAt: 2 });
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row?.hasMessages).toBe(false);
+    });
+  },
+);
 
 async function withStreamingProjection(
   run: (fixture: {
@@ -173,7 +219,11 @@ it("enriches a pre-assistant preview cache without changing settings or transcri
     await appendTranscript(
       target,
       { role: "user", content: "Existing question", timestamp: 100 },
-      { role: "assistant", content: "Existing reply", timestamp: 200 },
+      {
+        role: "assistant",
+        content: "| Color | Hex |\n| --- | --- |\n| Blue | #0000ff |",
+        timestamp: 200,
+      },
     );
     expect(setUserPreferences("existing-profile", { "ui.themeMode": "dark" }).ok).toBe(true);
     const settings = getUserPreferences("existing-profile");
@@ -195,8 +245,8 @@ it("enriches a pre-assistant preview cache without changing settings or transcri
         .prepare("SELECT row_transcript_json FROM session_windows WHERE session_id = ?")
         .get(target.sessionId)?.row_transcript_json as string | undefined;
     const preview = {
-      lastMessagePreview: "Existing reply",
-      lastAssistantMessage: { text: "Existing reply", timestamp: 200 },
+      lastMessagePreview: "Color Hex Blue #0000ff",
+      lastAssistantMessage: { text: "Color Hex Blue #0000ff", timestamp: 200 },
     };
     const stored = JSON.parse(readCache() ?? "null") as Record<string, unknown>;
     expect(stored).toMatchObject(preview);
@@ -207,7 +257,7 @@ it("enriches a pre-assistant preview cache without changing settings or transcri
     expect(JSON.parse(readCache() ?? "null")).not.toHaveProperty("lastAssistantMessage");
 
     const enriched = observeSessionRowBackfill([target.sessionKey], undefined, (row) =>
-      row.lastAssistantMessage?.text === "Existing reply" ? row.key : "",
+      row.lastAssistantMessage?.text === "Color Hex Blue #0000ff" ? row.key : "",
     );
     {
       using projection = await createTestProjection({ cfg, modelCatalog: [] });
@@ -781,14 +831,7 @@ it("backfills terminal fallback models and clears previews when the newest messa
         activeModel: "unit-test/fallback",
       },
     });
-    await appendTranscript(target, {
-      role: "assistant",
-      content: "Finished",
-      provider: "unit-test",
-      model: "fallback",
-      stopReason: "stop",
-      __openclaw: { runId: "terminal-run" },
-    });
+    await appendTranscript(target, terminalAssistantMessage("Finished", "fallback"));
     const initial = observeSessionRowBackfill([target.sessionKey]);
     const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
     using projection = await createTestProjection({ cfg });
@@ -812,13 +855,16 @@ it("backfills terminal fallback models and clears previews when the newest messa
       await withinTest(published, signal);
       expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject(expected);
     }
+    const retained = projection.describe(query)!.materialized;
+    expect(retained.row.lastMessagePreview).toBe("Finished");
     const appended = observeSessionRowBackfill([target.sessionKey]);
     await appendTranscript(target, { role: "assistant", content: "x".repeat(70 * 1024) });
     await withinTest(appended, signal);
-    expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
-      activeModel: undefined,
-      lastMessagePreview: undefined,
-      lastAssistantMessage: undefined,
-    });
+    expect(projection.describe(query)!.materialized.row).not.toHaveProperty("lastMessagePreview");
+    expect(retained.row.lastMessagePreview).toBe("Finished");
+    const cleared = projection.snapshot(query, { includeLastMessage: true }).row;
+    expect(cleared?.activeModel).toBeUndefined();
+    expect(cleared).not.toHaveProperty("lastMessagePreview");
+    expect(cleared).not.toHaveProperty("lastAssistantMessage");
   });
 });

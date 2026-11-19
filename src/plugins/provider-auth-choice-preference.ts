@@ -6,11 +6,9 @@ export async function resolvePreferredProviderForAuthChoice(params: {
   choice: string;
   config?: OpenClawConfig;
   workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
 }): Promise<string | undefined> {
-  const choice =
-    resolveLegacyOnboardAuthChoice(params.choice, { env: params.env }).authChoice ?? params.choice;
+  const choice = resolveLegacyOnboardAuthChoice(params.choice).authChoice ?? params.choice;
   const manifestResolved = resolveManifestProviderAuthChoice(choice, params);
   if (manifestResolved) {
     return manifestResolved.providerId;
@@ -21,7 +19,6 @@ export async function resolvePreferredProviderForAuthChoice(params: {
   const providers = resolvePluginProviders({
     config: params.config,
     workspaceDir: params.workspaceDir,
-    env: params.env,
     mode: "setup",
     includeUntrustedWorkspacePlugins: params.includeUntrustedWorkspacePlugins,
   });

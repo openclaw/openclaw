@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as pluginSetupModule from "../plugins/plugin-setup-module.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -209,20 +210,15 @@ it.each(["OPENCLAW_AGENT_DIR", "PI_CODING_AGENT_DIR"] as const)(
       PI_CODING_AGENT_DIR: undefined,
       [overrideKey]: externalAgentDir,
     };
+    const externalBeforePlanning = snapshotFiles(externalAgentDir);
     const plan = await fixture.plan({ env });
+    expect(snapshotFiles(externalAgentDir)).toEqual(externalBeforePlanning);
     for (const suffix of sqliteSuffixes) {
-      expect(fs.readFileSync(`${externalDatabasePath}${suffix}`, "utf8")).toBe(
-        `external${suffix}\n`,
-      );
       fs.writeFileSync(`${externalDatabasePath}${suffix}`, `changed${suffix}\n`);
     }
+    const externalBeforeRepeatedPlan = snapshotFiles(externalAgentDir);
     const repeatedPlan = await fixture.plan({ env });
-
-    for (const suffix of sqliteSuffixes) {
-      expect(fs.readFileSync(`${externalDatabasePath}${suffix}`, "utf8")).toBe(
-        `changed${suffix}\n`,
-      );
-    }
+    expect(snapshotFiles(externalAgentDir)).toEqual(externalBeforeRepeatedPlan);
     const externalAfterPlanning = snapshotFiles(externalAgentDir);
     let firstLiveRefusal: { id: string; files: Record<string, string> } | undefined;
 
@@ -265,15 +261,16 @@ it.each(["OPENCLAW_AGENT_DIR", "PI_CODING_AGENT_DIR"] as const)(
     }
     expect(repeatedPlan.snapshot.stateDigest).toBe(plan.snapshot.stateDigest);
     expect(repeatedPlan.planDigest).toBe(plan.planDigest);
-    for (const stepId of ["media-persistence", "transcript-directives", "shared-auth-store"]) {
+    for (const stepId of [
+      "session-entry-state-preparation",
+      "media-persistence",
+      "session-entry-state",
+      "transcript-directives",
+      "shared-auth-store",
+    ]) {
       const plannedSource = byId(plan.steps, stepId)?.source;
       if (overrideKey === "PI_CODING_AGENT_DIR") {
         expect(plannedSource).toEqual(byId(result.stepReceipts, stepId)?.source);
-      }
-      for (const suffix of sqliteSuffixes) {
-        expect(plannedSource).not.toContainEqual(
-          expect.objectContaining({ path: `${externalDatabasePath}${suffix}` }),
-        );
       }
       expect(
         plannedSource?.some(
@@ -329,26 +326,11 @@ it("keeps an unbound configured agent database unopened during copied-state plan
     const externalArtifactsBeforePlan = snapshotExternalArtifacts();
     expect(externalArtifactsBeforePlan["-wal"]).toBeDefined();
     expect(externalArtifactsBeforePlan["-shm"]).toBeDefined();
-    // Preserve the native method so the spy can inspect each opened database before delegating.
-    // oxlint-disable-next-line typescript/unbound-method
-    const originalPrepare = DatabaseSync.prototype.prepare;
     const externalQueries: string[] = [];
-    vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
-      this: DatabaseSync,
-      sql,
-    ) {
-      const databases = originalPrepare.call(this, "PRAGMA database_list").all() as Array<{
-        file?: unknown;
-      }>;
-      if (
-        databases.some(
-          (entry) =>
-            typeof entry.file === "string" && path.resolve(entry.file) === externalDatabasePath,
-        )
-      ) {
+    observeHostDataSql((sql, connection) => {
+      if (connection?.location() === externalDatabasePath) {
         externalQueries.push(sql);
       }
-      return originalPrepare.call(this, sql);
     });
     const plan = await fixture.plan();
     expect(snapshotExternalArtifacts()).toEqual(externalArtifactsBeforePlan);
@@ -369,7 +351,9 @@ it("keeps an unbound configured agent database unopened during copied-state plan
       });
     }
 
+    expect(externalQueries).toEqual([]);
     database.exec("INSERT INTO external_probe(value) VALUES ('wal-change')");
+    externalQueries.length = 0;
     const repeatedPlan = await fixture.plan();
     expect(repeatedPlan.planDigest).toBe(plan.planDigest);
     expect(repeatedPlan.snapshot.stateDigest).toBe(plan.snapshot.stateDigest);

@@ -3,7 +3,7 @@ import { buildFeishuConversationId, parseFeishuConversationId } from "./conversa
 import { normalizeFeishuTarget, stripFeishuProviderPrefix } from "./targets.js";
 import { getFeishuThreadBindingManager } from "./thread-bindings.js";
 
-type FeishuSubagentDeliveryTargetEvent = {
+export function handleFeishuSubagentDeliveryTarget(event: {
   expectsCompletionMessage?: boolean;
   requesterOrigin?: {
     channel?: string;
@@ -13,14 +13,7 @@ type FeishuSubagentDeliveryTargetEvent = {
   };
   childSessionKey: string;
   requesterSessionKey?: string;
-};
-
-type FeishuSubagentEndedEvent = {
-  accountId?: string;
-  targetSessionKey: string;
-};
-
-export function handleFeishuSubagentDeliveryTarget(event: FeishuSubagentDeliveryTargetEvent) {
+}) {
   if (!event.expectsCompletionMessage) {
     return undefined;
   }
@@ -43,11 +36,7 @@ export function handleFeishuSubagentDeliveryTarget(event: FeishuSubagentDelivery
 
     const requesterTo = requesterOrigin?.to;
     const requesterThreadId = requesterOrigin?.threadId;
-    const resolveFeishuRequesterConversation = (): {
-      accountId: string;
-      conversationId: string;
-      parentConversationId?: string;
-    } | null => {
+    const resolveFeishuRequesterConversation = () => {
       const rawTo = requesterTo?.trim();
       const withoutProviderPrefix = rawTo ? stripFeishuProviderPrefix(rawTo) : "";
       const normalizedTarget = rawTo ? normalizeFeishuTarget(rawTo) : null;
@@ -174,7 +163,7 @@ export function handleFeishuSubagentDeliveryTarget(event: FeishuSubagentDelivery
   };
 }
 
-export function handleFeishuSubagentEnded(event: FeishuSubagentEndedEvent) {
+export function handleFeishuSubagentEnded(event: { accountId?: string; targetSessionKey: string }) {
   const manager = getFeishuThreadBindingManager(event.accountId);
   manager?.unbindBySessionKey(event.targetSessionKey);
 }

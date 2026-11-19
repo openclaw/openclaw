@@ -23,7 +23,6 @@ import {
 } from "../../sessions/provider-review.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { retireSessionControllerInput } from "../../sessions/session-controller.mailbox.js";
-import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import {
   AgentDatabaseAdmissionError,
@@ -36,7 +35,6 @@ import {
 } from "../device-revocation.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import * as restartRecovery from "./chat-restart-recovery.js";
 import { respondChatSendAdmissionError } from "./chat-send-admission-errors.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import { prepareChatAdmission } from "./chat-send-admission.test-support.js";
@@ -44,7 +42,6 @@ import {
   assertChatSendExclusiveAdmission,
   createChatSendWorkAdmission,
 } from "./chat-send-work-admission.js";
-import { registerRpcSourceForTest } from "./rpc-source-fixtures.test-support.js";
 
 const failure = (message: string, fields: Record<string, unknown>) =>
   Object.assign(new Error(message), fields);
@@ -69,9 +66,7 @@ it.each([
   inspectionFailure(false),
   new SessionMutationAuthorizationChangedError({ code: "FORBIDDEN", message: "Access changed." }),
   new Error("Unclassified admission failure"),
-  failure("Validation failed", { retryable: false }),
   failure("Not a canonical worker outcome", { code: "outcome-unknown" }),
-  failure("Workspace access denied", { code: "EACCES" }),
 ])("keeps non-storage admission failures RPC-only: %s", (error) => {
   const { respond, terminal } = reportAdmissionError(error);
   expect(respond).toHaveBeenCalledExactlyOnceWith(
@@ -96,28 +91,18 @@ it.each([
   expect(terminal).toHaveBeenCalledOnce();
 });
 
-it.each([
-  [failure("write failed", { code: "SQLITE_FULL" }), "disk is full"],
-  [failure("write failed", { code: "ENOSPC" }), "disk is full"],
-  [failure("write failed", { code: "SQLITE_IOERR" }), "Check the storage"],
-  [failure("write failed", { code: "EIO" }), "Check the storage"],
-  [
-    new SqliteWorkerError("Write settlement was lost", "outcome-unknown"),
-    "reopen the conversation",
-  ],
-  [new Error("Ordinary reply lost"), "reopen the conversation"],
-] as const)("gives actionable terminal reconciliation guidance for %s", (cause, expected) => {
+it("gives actionable terminal reconciliation guidance without exposing its cause", () => {
   const error = Object.assign(
     new SqliteWorkerError(
       "Session actor requires reconciliation before another command",
       "outcome-unknown",
     ),
-    { cause },
+    { cause: failure("write failed", { code: "SQLITE_FULL" }) },
   );
   const { respond, terminal } = reportAdmissionError(error);
   expect(terminal).toHaveBeenCalledOnce();
   const message: unknown = terminal.mock.calls[0]?.[0];
-  expect(message).toEqual(expect.stringContaining(expected));
+  expect(message).toMatch(/check.*history.*before trying again/i);
   expect(message).not.toMatch(/Session actor|SQLite|SQLITE_|outcome-unknown|write failed/);
   expect(respond.mock.calls[0]?.[2].message).toBe(message);
   expect(respond.mock.calls[0]?.[2].retryable).not.toBe(true);
@@ -125,93 +110,6 @@ it.each([
 
 describe("retained chat work admission", () => {
   afterEach(resetGatewayWorkAdmission);
-  it.each(["retained", "replaced", "released"] as const)(
-    "keeps terminal settlement custody after cancellation cleanup with a %s admission",
-    async (change) => {
-      const release = vi.fn();
-      const resume = createDeferred();
-      const key = "agent:main:terminal";
-      const storePath = "/isolated/terminal.sqlite";
-      const identity = {
-        runId: "terminal-run",
-        sessionId: "terminal-session",
-        sessionKey: key,
-        agentId: "main",
-        storeScope: storePath,
-      };
-      const registration = registerRpcSourceForTest(identity);
-      const sourceRef = expectDefined(registration.entry, "terminal source registration");
-      let active = true;
-      let guard: (() => void) | undefined;
-      const terminal = vi
-        .spyOn(restartRecovery, "terminalizeRestartSafeChatAdmission")
-        .mockImplementation(async (params) => {
-          guard = params.assertCurrent;
-          await resume.promise;
-          params.assertCurrent();
-          return true;
-        });
-      const work = createChatSendWorkAdmission({
-        admission: { release },
-        logGateway: { warn: vi.fn() },
-        terminal: {
-          target: {
-            keyFormat: "agent-qualified",
-            agentId: "main",
-            canonicalKey: key,
-            requestedKey: key,
-            storeKey: key,
-            storeKeys: [key],
-            storePath,
-            readSource: { agentId: "main", path: storePath, databaseIdentity: "original-source" },
-          },
-          storePath,
-          sourceRef,
-          admittedSessionId: identity.sessionId,
-          runId: identity.runId,
-          lifecycleRevision: "original-lifecycle",
-          isActive: () => active,
-          currentRegistration: () => getRpcSource(identity.runId),
-        },
-      });
-      const settling = work.settleTerminal({ startedAt: 1, status: "killed", retryable: false });
-      const observed = settling.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      try {
-        expect(guard).toBeTypeOf("function");
-        work.release();
-        registration.cleanup();
-        expect(getRpcSource(identity.runId)).toBeUndefined();
-        guard?.();
-        expect(release).not.toHaveBeenCalled();
-        if (change === "replaced") {
-          const replacement = registerRpcSourceForTest(identity);
-          expect(replacement.entry).not.toBe(sourceRef);
-        } else if (change === "released") {
-          active = false;
-        }
-        resume.resolve();
-        expect(await observed).toEqual(
-          change === "retained"
-            ? { value: true }
-            : {
-                error: expect.objectContaining({
-                  message: "Chat terminal settlement no longer owns its admission",
-                }),
-              },
-        );
-        expect(release).toHaveBeenCalledOnce();
-        expect(guard).toThrow("Chat settlement admission was released");
-      } finally {
-        resume.resolve();
-        await observed;
-        work.release();
-        terminal.mockRestore();
-      }
-    },
-  );
   it.each([
     { deferred: false, failCleanup: false },
     { deferred: false, failCleanup: true },

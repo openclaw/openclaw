@@ -9,12 +9,6 @@ import { readConfiguredParsedLogTail } from "../../logging/log-tail.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
 import { defaultRuntime } from "../../runtime.js";
 
-type ChannelsLogsOptions = {
-  channel?: string;
-  lines?: string | number;
-  json?: boolean;
-};
-
 const DEFAULT_LIMIT = 200;
 const MAX_BYTES = 1_000_000;
 
@@ -25,7 +19,11 @@ function matchesChannelContext(value: string | undefined, channel: string) {
 }
 
 /** Print or serialize recent log lines matching one channel subsystem/module. */
-export async function channelsLogsCommand(opts: ChannelsLogsOptions) {
+export async function channelsLogsCommand(opts: {
+  channel?: string;
+  lines?: string | number;
+  json?: boolean;
+}) {
   let channel = opts.channel === undefined ? "all" : normalizeLowercaseStringOrEmpty(opts.channel);
   const pluginIds = new Set<string>();
   if (channel !== "all") {

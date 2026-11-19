@@ -73,6 +73,7 @@ import {
   disposeGatewayExtensionRelay,
   handleGatewayExtensionUpgrade,
 } from "./gateway-relay-route.js";
+import { maskedFrame } from "./relay-http.test-support.js";
 
 const TOKEN = "a".repeat(64);
 const ROTATED_TOKEN = "b".repeat(64);
@@ -139,17 +140,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
 });
-
-function oversizedMaskedTextFrame(): Buffer {
-  const payload = Buffer.alloc(18 * 1024, 0x20);
-  const mask = Buffer.from([0x12, 0x34, 0x56, 0x78]);
-  const header = Buffer.from([0x81, 0xfe, 0, 0, ...mask]);
-  header.writeUInt16BE(payload.length, 2);
-  for (let index = 0; index < payload.length; index += 1) {
-    payload[index] = payload[index]! ^ mask[index % 4]!;
-  }
-  return Buffer.concat([header, payload]);
-}
 
 async function mockSuccessfulUpgrade() {
   const wsMod = await import("openclaw/plugin-sdk/websocket-runtime");
@@ -235,7 +225,7 @@ describe("handleGatewayExtensionUpgrade", () => {
   });
 
   it("rejects oversized direct-Gateway upgrade-head data before ws auth or lazy startup", async () => {
-    const result = await upgrade(v2Req(), oversizedMaskedTextFrame());
+    const result = await upgrade(v2Req(), maskedFrame(Buffer.alloc(18 * 1024, 0x20)));
     const { response } = result;
     expect(result).toMatchObject({ handled: true, destroyed: true });
     expect(response.startsWith("HTTP/1.1 400 Bad Request\r\n")).toBe(true);

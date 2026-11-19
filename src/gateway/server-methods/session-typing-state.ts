@@ -1,5 +1,5 @@
 import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
-import { listSystemPresence } from "../../infra/system-presence.js";
+import type { PresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { presenceUserKey } from "../../shared/presence-user.js";
 
@@ -7,15 +7,14 @@ export const TYPING_THROTTLE_MS = 1_000;
 export const TYPING_PREVIEW_THROTTLE_MS = 250;
 const TYPING_ACTIVE_TTL_MS = 2_500;
 const MAX_TYPING_THROTTLE_KEYS = 2_048;
-type PendingTypingBroadcast = {
-  signature: string;
-  intervalMs: number;
-  emit: () => boolean;
-};
 type TypingBroadcastState = {
   at: number;
   signature: string;
-  pending?: PendingTypingBroadcast;
+  pending?: {
+    signature: string;
+    intervalMs: number;
+    emit: () => boolean;
+  };
   timer?: ReturnType<typeof setTimeout>;
 };
 type TypingConnectionState = { updatedAt: number; preview?: string; cursor?: number };
@@ -50,9 +49,12 @@ export function clearSessionTypingState(): void {
   clearSessionTypingStateValue(sessionTypingState);
 }
 
-export function liveViewerIdentities(sessionKeys: ReadonlySet<string>): Set<string> {
+export function liveViewerIdentities(
+  presence: readonly PresenceEntry[],
+  sessionKeys: ReadonlySet<string>,
+): Set<string> {
   return new Set(
-    listSystemPresence().flatMap((entry) =>
+    presence.flatMap((entry) =>
       entry.user?.id && entry.watchedSessions?.some((sessionKey) => sessionKeys.has(sessionKey))
         ? [presenceUserKey(entry.user)]
         : [],
@@ -128,8 +130,7 @@ export function broadcastTypingThrottled(params: {
         rememberTypingBroadcast(params.key, next);
       },
       params.intervalMs - (params.now - previous.at),
-    );
-    timer.unref?.();
+    ).unref();
     previous.timer = timer;
   }
   rememberTypingBroadcast(params.key, previous);
@@ -157,8 +158,7 @@ export function updateTypingConnections(params: {
     }
     const timer = setTimeout(() => {
       typingConnections.delete(params.key);
-    }, TYPING_ACTIVE_TTL_MS);
-    timer.unref?.();
+    }, TYPING_ACTIVE_TTL_MS).unref();
     bucket = { connections: new Map(), timer };
   }
   const { connections } = bucket;

@@ -54,8 +54,8 @@ beforeEach(() => {
   vi.spyOn(exec, "runExec").mockImplementation(async (executable) => ({
     stderr: "",
     stdout: JSON.stringify({
-      ...JSON.parse(nodeProbeOutput("26.8.1").stdout),
-      bunVersion: path.basename(executable) === "bun" ? "1.4.3" : null,
+      ...JSON.parse(nodeProbeOutput("26.12.1").stdout),
+      bunVersion: path.basename(executable) === "bun" ? "1.4.4" : null,
     }),
   }));
   vi.mocked(service.isLoaded).mockResolvedValue(true);
@@ -109,11 +109,13 @@ it.each([
       });
       return;
     }
-    expect(service.install).toHaveBeenCalledOnce();
     const installed = vi.mocked(service.install).mock.calls[0]?.[0];
-    const runtimeArgs = runtime === "bun" ? ["--no-install"] : [];
-    const prefix = [cli.executable, ...runtimeArgs, launcherPath, "node", "run"];
-    expect(installed?.programArguments.slice(0, prefix.length)).toEqual(prefix);
+    expect(installed?.programArguments).toEqual([
+      cli.executable,
+      ...(runtime === "bun" ? ["--no-install"] : []),
+      launcherPath,
+      ..."node run --host gateway.example --port 18789 --no-tls --auth-from-env".split(" "),
+    ]);
     expect(installed?.runtimePinUpdate).toEqual({
       expected: observed,
       pin: pinned ? { runtime, path: cli.executable } : undefined,
@@ -130,16 +132,15 @@ it.each([
   { status: "unknown" },
   { status: "migrationPending", nextStep: "run openclaw doctor" },
 ])("reports $status node runtime custody", async (runtimeIntent) => {
-  const { status } = runtimeIntent;
-  if (status === "unknown") {
+  if (runtimeIntent.status === "unknown") {
     vi.mocked(service.readCommand).mockRejectedValueOnce(new Error("inspection unavailable"));
   }
-  mocks.pending.mockReturnValue(status === "migrationPending");
+  mocks.pending.mockReturnValue(runtimeIntent.status === "migrationPending");
   await runNode("status --json");
   expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
     service: expect.objectContaining({ runtimeIntent }),
   });
-  if (status === "known") {
+  if (runtimeIntent.status === "known") {
     expect(mocks.pin).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "node" }),
       expect.objectContaining({ programArguments }),

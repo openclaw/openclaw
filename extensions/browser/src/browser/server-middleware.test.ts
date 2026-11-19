@@ -1,38 +1,14 @@
-import { EventEmitter, once } from "node:events";
-import http from "node:http";
+import { EventEmitter } from "node:events";
 import type { Express, NextFunction, Request, Response } from "express";
 import express from "express";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { withServer } from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it, vi } from "vitest";
 import {
   installBrowserAuthMiddleware,
   installBrowserCommonMiddleware,
 } from "./server-middleware.js";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
-let server: http.Server | undefined;
-
-async function startMiddlewareTestServer() {
-  const app = express();
-  let routeCalls = 0;
-  installBrowserCommonMiddleware(app);
-  installBrowserAuthMiddleware(app, { token: "test-token" });
-  app.post("/mutate", (req, res) => {
-    routeCalls += 1;
-    res.status(200).json({ body: req.body });
-  });
-  server = app.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected TCP test server address");
-  }
-  return { url: `http://127.0.0.1:${address.port}/mutate`, getRouteCalls: () => routeCalls };
-}
-
-afterEach(async () => {
-  await server?.[Symbol.asyncDispose]();
-  server = undefined;
-});
 
 describe("installBrowserCommonMiddleware", () => {
   it("shadows native request signals with the browser response-lifetime signal", () => {
@@ -69,25 +45,34 @@ describe("installBrowserCommonMiddleware", () => {
   });
 
   it.each([true, false])("guards JSON mutations (cross-site=%s)", async (crossSite) => {
-    const { url, getRouteCalls } = await startMiddlewareTestServer();
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(crossSite
-          ? { origin: "https://evil.example" }
-          : { authorization: "Bearer test-token" }),
-      },
-      body: crossSite ? "{not json" : JSON.stringify({ ok: true }),
+    const app = express();
+    let routeCalls = 0;
+    installBrowserCommonMiddleware(app);
+    installBrowserAuthMiddleware(app, { token: "test-token" });
+    app.post("/mutate", (req, res) => {
+      routeCalls += 1;
+      res.status(200).json({ body: req.body });
     });
-    expect({
-      status: response.status,
-      body: crossSite ? await response.text() : await response.json(),
-      routeCalls: getRouteCalls(),
-    }).toEqual(
-      crossSite
-        ? { status: 403, body: "Forbidden", routeCalls: 0 }
-        : { status: 200, body: { body: { ok: true } }, routeCalls: 1 },
-    );
+    await withServer(app, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/mutate`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(crossSite
+            ? { origin: "https://evil.example" }
+            : { authorization: "Bearer test-token" }),
+        },
+        body: crossSite ? "{not json" : JSON.stringify({ ok: true }),
+      });
+      expect({
+        status: response.status,
+        body: crossSite ? await response.text() : await response.json(),
+        routeCalls,
+      }).toEqual(
+        crossSite
+          ? { status: 403, body: "Forbidden", routeCalls: 0 }
+          : { status: 200, body: { body: { ok: true } }, routeCalls: 1 },
+      );
+    });
   });
 });

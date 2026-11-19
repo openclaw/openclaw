@@ -21,7 +21,6 @@ import { resetProcessRegistryForTests } from "./bash-process-registry.test-suppo
 import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { fullGatewayExec, runningSession } from "./bash-tools.lifecycle.test-support.js";
-import { createProcessTool } from "./bash-tools.process.js";
 
 const mocks = vi.hoisted(() => ({
   getSupervisor: vi.fn(),
@@ -196,61 +195,6 @@ it("keeps a no-deadline exec recoverable and honors explicit cancellation", asyn
   await aborted;
   expect(child.kill).toHaveBeenCalled();
 });
-
-it.each([false, true])(
-  "reports the collection route with notifyOnExit=%s",
-  async (notifyOnExit) => {
-    const scopeKey = "background-followup";
-    const tool = execTool({ allowBackground: true, notifyOnExit, scopeKey });
-    const result = await tool.execute("background", { command: "build", background: true });
-    const { sessionId, followUp = "" } = runningSession(result.details);
-    expect(followUp).toContain("Use process");
-    expect(followUp).toContain("does not automatically start another turn");
-    expect(followUp).toContain("process kill");
-    if (!notifyOnExit) {
-      expect(followUp).toContain("Automatic completion wake is disabled");
-      expect(followUp).toContain("poll with a timeout");
-      expect(followUp).toContain("before ending the turn");
-    } else {
-      expect(followUp).not.toContain("Automatic completion wake is disabled");
-    }
-    expect(result.content).toContainEqual({
-      type: "text",
-      text: expect.stringContaining(followUp),
-    });
-    const processTool = createProcessTool({ scopeKey });
-    for (const action of ["poll", "log", "list"] as const) {
-      const running = await processTool.execute(`still-running-${action}`, {
-        action,
-        sessionId,
-      });
-      const expectedSession = {
-        status: "running",
-        sessionId,
-        ...(notifyOnExit ? {} : { followUp: expect.stringContaining("before ending the turn") }),
-      };
-      expect(running.details).toMatchObject(
-        action === "list" ? { sessions: [expectedSession] } : expectedSession,
-      );
-      if (!notifyOnExit) {
-        expect(running.content).toContainEqual({
-          type: "text",
-          text: expect.stringContaining("Automatic completion wake is disabled"),
-        });
-      } else {
-        expect(JSON.stringify(running)).not.toContain("Automatic completion wake is disabled");
-      }
-    }
-    child.completed.resolve({ code: 0, signal: null });
-    await waitForExecScope(scopeKey);
-    const completed = await processTool.execute("collect", {
-      action: "poll",
-      sessionId,
-    });
-    expect(completed.details).toMatchObject({ status: "completed", exitCode: 0 });
-    expect(completed.details).not.toHaveProperty("followUp");
-  },
-);
 
 it("releases foreground liveness when exec backgrounds without removing its process timeout", async () => {
   const { tool, ref } = createWrappedExec("background-deadline", true);

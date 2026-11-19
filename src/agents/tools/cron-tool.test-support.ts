@@ -40,14 +40,6 @@ export function readGatewayCall(index = 0): { method?: string; params?: Record<s
   );
 }
 
-export function buildReminderAgentTurnJob() {
-  return {
-    name: "reminder",
-    schedule: { at: new Date(123).toISOString() },
-    payload: { kind: "agentTurn" as const, message: "hello" },
-  };
-}
-
 export function installCronToolTestFixture() {
   beforeEach(() => {
     const gatewaySpy = vi

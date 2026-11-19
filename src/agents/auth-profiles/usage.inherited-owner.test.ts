@@ -34,6 +34,7 @@ import {
   withEnvOnlyAuthProfileStore,
 } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
+import { isProfileInCooldown } from "./usage-state.js";
 import { markAuthProfileBlockedUntil, markAuthProfileFailure } from "./usage.js";
 
 const PRIMARY_ID = "openai:primary";
@@ -359,6 +360,44 @@ describe("inherited auth-profile usage persistence", () => {
     });
   });
 
+  it("honors an earlier authenticated quota reset without releasing other profiles", async () => {
+    const now = Date.now();
+    const resetAt = Math.ceil(now / 1000) + 60;
+    const mainStore = createMainStore();
+    mainStore.usageStats = {
+      [PRIMARY_ID]: {
+        blockedUntil: now + 6 * 60 * 60_000,
+        blockedReason: "subscription_limit",
+        blockedSource: "wham",
+      },
+    };
+    writeMainStore(mainStore);
+    const localUntil = now + 12 * 60 * 60_000;
+    const store = createChildStore(localUntil);
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      Response.json({
+        rate_limit: {
+          limit_reached: true,
+          primary_window: { used_percent: 100, reset_at: resetAt },
+        },
+      }),
+    );
+
+    await fail(store, PRIMARY_ID, "rate_limit");
+
+    clearRuntimeAuthProfileStoreSnapshots();
+    const next = ensureAuthProfileStore(childAgentDir);
+    expect(next.usageStats?.[PRIMARY_ID]?.blockedUntil).toBe(resetAt * 1000);
+    expect(isProfileInCooldown(next, PRIMARY_ID, resetAt * 1000 - 1)).toBe(true);
+    expect(isProfileInCooldown(next, PRIMARY_ID, resetAt * 1000)).toBe(false);
+    expect(isProfileInCooldown(next, LOCAL_ID, resetAt * 1000)).toBe(true);
+    expect(next.usageStats?.[LOCAL_ID]?.cooldownUntil).toBe(localUntil);
+    expect(resolveAuthProfileOrder({ store: next, provider: "openai" })[0]).toBe(BACKUP_ID);
+    vi.spyOn(Date, "now").mockReturnValue(resetAt * 1000);
+    expect(resolveAuthProfileOrder({ store: next, provider: "openai" })[0]).toBe(PRIMARY_ID);
+    expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles).toEqual(mainStore.profiles);
+  });
+
   it("clears inherited health without changing selection ownership", async () => {
     const lastUsed = Date.now() - 60_000;
     const mainStore = createMainStore();
@@ -367,7 +406,8 @@ describe("inherited auth-profile usage persistence", () => {
       [PRIMARY_ID]: {
         lastUsed,
         errorCount: 12,
-        failureCounts: { rate_limit: 12 },
+        failureCounts: { timeout: 12 },
+        lastRateLimitAt: lastUsed,
         cooldownUntil: Date.now() + 60_000,
         cooldownReason: "rate_limit",
         cooldownClassification: "wham_token_expired",
@@ -385,7 +425,12 @@ describe("inherited auth-profile usage persistence", () => {
       lastUsed,
       errorCount: 0,
     });
-    for (const field of ["failureCounts", "cooldownUntil", "cooldownClassification"]) {
+    for (const field of [
+      "failureCounts",
+      "lastRateLimitAt",
+      "cooldownUntil",
+      "cooldownClassification",
+    ]) {
       expect(persistedMain?.usageStats?.[PRIMARY_ID]).not.toHaveProperty(field);
     }
     expect(childStore.usageStats?.[LOCAL_ID]?.cooldownUntil).toBe(localCooldownUntil);

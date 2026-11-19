@@ -1,13 +1,18 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { materializePluginAutoEnableCandidates } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadGatewayPlugins } from "../gateway/server-plugins.js";
+import { resolveGatewayStartupPluginPlanFromRegistry } from "./gateway-startup-plugin-plan.js";
 import { collectConfiguredAgentModelProviderIds } from "./gateway-startup-plugin-providers.js";
+import { createInstalledPluginIndexFixture } from "./gateway-startup.test-helpers.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifest } from "./manifest.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
 import {
@@ -40,6 +45,87 @@ const configSchema = { type: "object", additionalProperties: false };
 function catalog(id: string, provider: ModelCatalogProvider) {
   return { id, modelCatalog: { providers: { [id]: provider } } };
 }
+
+function loadBundledManifest(pluginId: string) {
+  const result = loadPluginManifest(
+    fileURLToPath(new URL(`../../extensions/${pluginId}/`, import.meta.url)),
+  );
+  if (!result.ok) {
+    throw new Error(result.error);
+  }
+  return result.manifest;
+}
+const acpxManifest = loadBundledManifest("acpx");
+const codexManifest = loadBundledManifest("codex");
+type StartupPlugin = Pick<
+  PluginManifestRecord,
+  "id" | "enabledByDefault" | "activation" | "contracts"
+>;
+const startupRegistry = (plugin: StartupPlugin) =>
+  createManifestRegistry([
+    {
+      rootDir: `/fixture/${plugin.id}`,
+      source: `/fixture/${plugin.id}/index.ts`,
+      providers: [],
+      ...plugin,
+    },
+  ]);
+
+function plan(
+  activationSourceConfig: OpenClawConfig,
+  registry: PluginManifestRegistry,
+  candidates: Parameters<typeof materializePluginAutoEnableCandidates>[0]["candidates"],
+) {
+  const { config } = materializePluginAutoEnableCandidates({
+    config: activationSourceConfig,
+    candidates,
+    env: {},
+    manifestRegistry: registry,
+  });
+  return resolveGatewayStartupPluginPlanFromRegistry({
+    config,
+    activationSourceConfig,
+    env: {},
+    index: createInstalledPluginIndexFixture(registry),
+    manifestRegistry: registry,
+  }).pluginIds;
+}
+
+describe("auto-enabled plugin startup", () => {
+  const manifestRegistry = startupRegistry(acpxManifest);
+  it.each<[string, OpenClawConfig["plugins"], boolean]>([
+    ["without a policy", undefined, true],
+    ["excluded from allowlist", { allow: ["other"] }, false],
+    ["included in allowlist", { allow: ["other", "acpx"] }, true],
+    ["denied", { deny: ["acpx"] }, false],
+    ["explicitly disabled", { entries: { acpx: { enabled: false } } }, false],
+  ])("plans ACP %s", (_name, plugins, enabled) => {
+    const config = { acp: { enabled: true }, plugins };
+    const candidates = [{ pluginId: "acpx", kind: "setup-auto-enable" as const, reason: "ACP" }];
+    expect(plan(config, manifestRegistry, candidates)).toEqual(enabled ? ["acpx"] : []);
+  });
+  it.each([undefined, false])("starts default-enabled ACP with enabled=%s", (enabled) => {
+    const config = enabled === undefined ? {} : { acp: { enabled } };
+    expect(plan(config, manifestRegistry, [])).toEqual(["acpx"]);
+  });
+  const harnessCandidate = (pluginId: string) => [
+    {
+      pluginId,
+      kind: "agent-harness-runtime-configured" as const,
+      runtime: "codex",
+    },
+  ];
+  it.each([
+    [false, true],
+    [true, false],
+  ])("rejects ineligible startup: default=%s trigger=%s", (enabledByDefault, onStartup) => {
+    const plugin = { id: "optional", enabledByDefault, activation: { onStartup } };
+    expect(plan({}, startupRegistry(plugin), harnessCandidate(plugin.id))).toEqual([]);
+  });
+  it("starts an enabled Codex tool owner without a configured harness", () => {
+    expect(plan({}, startupRegistry(codexManifest), harnessCandidate("codex"))).toEqual(["codex"]);
+  });
+});
 
 describe("configured Gateway model provider ownership", () => {
   it("does not inspect model catalogs when no agent model refs are configured", () => {
@@ -232,12 +318,9 @@ describe("selected CLI backend Gateway startup", () => {
       plugins: {
         allow: owners.map((owner) => owner.id),
         load: { paths: pluginPaths },
-        entries: {
-          "selected-plugin": { enabled: true },
-          "disabled-plugin": { enabled: false },
-          "unused-plugin": { enabled: true },
-          "http-plugin": { enabled: true },
-        },
+        entries: Object.fromEntries(
+          owners.map(({ id }) => [id, { enabled: id !== "disabled-plugin" }]),
+        ),
         slots: { memory: "none" },
       },
     };
@@ -256,13 +339,9 @@ describe("selected CLI backend Gateway startup", () => {
       expect(
         registry.plugins.filter((plugin) => plugin.status === "loaded").map((plugin) => plugin.id),
       ).toEqual(["selected-plugin"]);
-      expect(
-        registry.cliBackends.map(({ pluginId, backend }) => ({
-          pluginId,
-          id: backend.id,
-          config: backend.config,
-        })),
-      ).toEqual([{ pluginId: "selected-plugin", id: "selected-cli", config: backendConfig }]);
+      expect(registry.cliBackends).toMatchObject([
+        { pluginId: "selected-plugin", backend: { id: "selected-cli", config: backendConfig } },
+      ]);
     } finally {
       loaded.retireGatewayRuntimeBindings();
       await disposePluginRegistryInstances(registry);

@@ -1,9 +1,5 @@
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
-import {
-  render,
-  renderChatThread,
-  renderTranscriptSearch,
-} from "../test-helpers/chat-transcript-native.tsx";
+import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import { resizeObservers, type TestContentRow } from "./chat-transcript.test-support.ts";
 
@@ -42,15 +38,4 @@ export function threadFixture(props: ChatThreadProps) {
   const container = transcriptContainer();
   const rerender = () => render(renderChatThread(props, transcript), container);
   return { transcript, container, rerender };
-}
-
-export function searchableThreadFixture(props: ChatThreadProps) {
-  const fixture = threadFixture(props);
-  const searchContainer = transcriptContainer();
-  const rerender = () => {
-    render(renderTranscriptSearch(props.paneId), searchContainer);
-    fixture.rerender();
-    fixture.transcript.update();
-  };
-  return { ...fixture, searchContainer, rerender };
 }

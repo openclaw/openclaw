@@ -168,14 +168,28 @@ describe.skipIf(!database.connection)("PostgreSQL memory_search product flows", 
 
   const search = (
     query: string,
-    options: { agentId?: string; corpus?: "memory" | "sessions"; maxResults?: number } = {},
+    options: {
+      agentId?: string;
+      agentSessionKey?: string;
+      visibility?: "agent" | "self";
+      corpus?: "memory" | "sessions";
+      maxResults?: number;
+    } = {},
   ) =>
     run(async () => {
       testing.resetMemorySearchToolCooldowns();
       const tool = createMemorySearchTool({
-        config,
+        config: options.visibility
+          ? {
+              ...config,
+              tools: {
+                ...config.tools,
+                sessions: { ...config.tools?.sessions, visibility: options.visibility },
+              },
+            }
+          : config,
         agentId: options.agentId ?? "main",
-        agentSessionKey: `agent:${options.agentId ?? "main"}:main`,
+        agentSessionKey: options.agentSessionKey ?? `agent:${options.agentId ?? "main"}:main`,
         runInBackgroundContext: run,
       });
       assert(tool, "Expected public memory_search tool");
@@ -206,8 +220,11 @@ describe.skipIf(!database.connection)("PostgreSQL memory_search product flows", 
       });
     });
 
-  const paths = async (query: string, options?: Parameters<typeof search>[1]) =>
-    (await search(query, options)).results.map((hit) => hit.path);
+  const paths = async (query: string, options?: Parameters<typeof search>[1]) => {
+    const result = await search(query, options);
+    expect(result).not.toMatchObject({ unavailable: true });
+    return result.results.map((hit) => hit.path);
+  };
   const semantic = async (corpus: "memory" | "sessions" = "memory") =>
     (await search("semantic-only", { agentId: "semantic", corpus, maxResults: 1 })).results;
 
@@ -252,6 +269,41 @@ describe.skipIf(!database.connection)("PostgreSQL memory_search product flows", 
     expect(await paths("sourcefilter", { agentId: "other", maxResults: 1 })).toEqual([
       "memory/agent-decoy.md",
     ]);
+  });
+
+  it("filters a higher-ranked denied transcript before the public one-result limit", async () => {
+    await transcript("main", "visibility-allowed", `visibilitymarker ${"filler ".repeat(30)}`);
+    await transcript("main", "visibility-denied", "visibilitymarker ".repeat(10));
+    const manager = await sync();
+    await run(() =>
+      manager.sync!({
+        reason: "cli",
+        sessions: ["visibility-allowed", "visibility-denied"].map((sessionId) => ({
+          agentId: "main",
+          sessionId,
+        })),
+      }),
+    );
+    const requester = {
+      corpus: "sessions" as const,
+      agentSessionKey: "agent:main:telegram:direct:visibility-allowed",
+    };
+    const broad = await search("visibilitymarker", { ...requester, maxResults: 2 });
+    expect(broad.unavailable).not.toBe(true);
+    expect(broad.results.map((hit) => hit.path)).toEqual([
+      "sessions/main/visibility-denied.jsonl",
+      "sessions/main/visibility-allowed.jsonl",
+    ]);
+    expect(broad.results[0]!.score).toBeGreaterThan(broad.results[1]!.score);
+    const restricted = await search("visibilitymarker", {
+      ...requester,
+      visibility: "self",
+      maxResults: 1,
+    });
+    expect(restricted.unavailable).not.toBe(true);
+    expect(restricted.results).toMatchObject([{ path: "sessions/main/visibility-allowed.jsonl" }]);
+    expect(restricted.results).toHaveLength(1);
+    expect(restricted.results[0]!.snippet).toContain("filler");
   });
 
   it("publishes vector updates, rebuilds and deletions through scoped public retrieval", async () => {

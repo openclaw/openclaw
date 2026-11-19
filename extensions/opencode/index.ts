@@ -63,6 +63,11 @@ function isModernOpencodeModel(modelId: string): boolean {
   return !matchesExactOrPrefix(lower, MINIMAX_MODERN_MODEL_MATCHERS);
 }
 
+function normalizeZenBaseUrl<T extends { api?: string | null; baseUrl?: string }>(value: T) {
+  const baseUrl = normalizeOpencodeZenBaseUrl(value);
+  return baseUrl && baseUrl !== value.baseUrl ? { ...value, baseUrl } : undefined;
+}
+
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "OpenCode Zen Provider",
@@ -93,33 +98,9 @@ export default defineSingleProviderPluginEntry({
       ].join("\n"),
       noteTitle: "OpenCode",
     },
-    normalizeConfig: ({ providerConfig }) => {
-      const normalizedBaseUrl = normalizeOpencodeZenBaseUrl({
-        api: providerConfig.api,
-        baseUrl: providerConfig.baseUrl,
-      });
-      return normalizedBaseUrl && normalizedBaseUrl !== providerConfig.baseUrl
-        ? { ...providerConfig, baseUrl: normalizedBaseUrl }
-        : undefined;
-    },
-    normalizeResolvedModel: ({ model }) => {
-      const normalizedBaseUrl = normalizeOpencodeZenBaseUrl({
-        api: model.api,
-        baseUrl: model.baseUrl,
-      });
-      return normalizedBaseUrl && normalizedBaseUrl !== model.baseUrl
-        ? { ...model, baseUrl: normalizedBaseUrl }
-        : undefined;
-    },
-    normalizeTransport: ({ api: apiLocal, baseUrl }) => {
-      const normalizedBaseUrl = normalizeOpencodeZenBaseUrl({ api: apiLocal, baseUrl });
-      return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
-        ? {
-            api: apiLocal,
-            baseUrl: normalizedBaseUrl,
-          }
-        : undefined;
-    },
+    normalizeConfig: ({ providerConfig }) => normalizeZenBaseUrl(providerConfig),
+    normalizeResolvedModel: ({ model }) => normalizeZenBaseUrl(model),
+    normalizeTransport: ({ api, baseUrl }) => normalizeZenBaseUrl({ api, baseUrl }),
     resolveDynamicModel: ({ modelId }) => resolveOpencodeZenModel(modelId),
     prepareDynamicModel: async (ctx) => {
       const profileProvider = ctx.authProfileId

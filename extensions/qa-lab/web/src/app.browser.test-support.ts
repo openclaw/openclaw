@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { QaBusStateSnapshot } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { afterEach, beforeEach, vi } from "vitest";
-import type { Bootstrap, EvidenceEnvelope, RunnerSelection } from "./ui-types.js";
+import type { Bootstrap, EvidenceEnvelope, RunnerSelection, UiState } from "./ui-types.js";
 
 const httpMock = vi.hoisted(() => {
   class QaLabHttpError extends Error {
@@ -162,6 +162,27 @@ export async function mountRunner(
   document.body.append(root);
   await createQaLabApp(root);
   return root;
+}
+
+export async function mountCapture(root: HTMLElement, events: UiState["captureEvents"] = []) {
+  const getJson = httpMock.getJson.getMockImplementation()!;
+  httpMock.getJson.mockImplementation(async (url: string) => {
+    if (url === "/api/capture/sessions") {
+      return {
+        sessions: [{ id: "capture-1", startedAt: 0, mode: "proxy", eventCount: events.length }],
+      };
+    }
+    if (url.startsWith("/api/capture/events?")) {
+      return { events };
+    }
+    if (url.startsWith("/api/capture/coverage?")) {
+      return { coverage: null };
+    }
+    return getJson(url);
+  });
+  await vi.advanceTimersByTimeAsync(1_000);
+  root.querySelector<HTMLButtonElement>('[data-tab="capture"]')!.click();
+  root.querySelector<HTMLButtonElement>("#capture-controls-toggle")!.click();
 }
 
 export function setupAppBrowserTests() {

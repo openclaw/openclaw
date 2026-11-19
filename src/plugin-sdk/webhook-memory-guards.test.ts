@@ -7,6 +7,9 @@ import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
 } from "./webhook-memory-guards.js";
 
+const createLimiter = (windowMs: number, maxRequests: number, maxTrackedKeys: number) =>
+  createFixedWindowRateLimiter({ windowMs, maxRequests, maxTrackedKeys });
+
 function loggedTracker(options: Parameters<typeof createWebhookAnomalyTracker>[0]) {
   const logs: string[] = [];
   const tracker = createWebhookAnomalyTracker(options);
@@ -30,13 +33,9 @@ it("createFixedWindowRateLimiter falls back for non-finite options", () => {
 });
 
 it("createFixedWindowRateLimiter resets counters after the window elapses", () => {
-  const limiter = createFixedWindowRateLimiter({
-    windowMs: 10,
-    maxRequests: 1,
-    maxTrackedKeys: 100,
-  });
+  const rateLimit = createLimiter(10, 1, 100);
 
-  expect([100, 101, 111].map((nowMs) => limiter.isRateLimited("k", nowMs))).toEqual([
+  expect([100, 101, 111].map((nowMs) => rateLimit.isRateLimited("k", nowMs))).toEqual([
     false,
     true,
     false,
@@ -44,17 +43,13 @@ it("createFixedWindowRateLimiter resets counters after the window elapses", () =
 });
 
 it("createFixedWindowRateLimiter caps tracked keys", () => {
-  const limiter = createFixedWindowRateLimiter({
-    windowMs: 60_000,
-    maxRequests: 10,
-    maxTrackedKeys: 5,
-  });
+  const rateLimit = createLimiter(60_000, 10, 5);
 
   for (let i = 0; i < 20; i += 1) {
-    limiter.isRateLimited(`key-${i}`, 1_000 + i);
+    rateLimit.isRateLimited(`key-${i}`, 1_000 + i);
   }
 
-  expect(limiter.size()).toBeLessThanOrEqual(5);
+  expect(rateLimit.size()).toBeLessThanOrEqual(5);
 });
 
 it("createBoundedCounter increments and returns per-key counts", () => {
@@ -64,11 +59,7 @@ it("createBoundedCounter increments and returns per-key counts", () => {
 });
 
 it("createBoundedCounter expires stale keys when ttl is set", () => {
-  const counter = createBoundedCounter({
-    maxTrackedKeys: 100,
-    ttlMs: 10,
-    pruneIntervalMs: 10,
-  });
+  const counter = createBoundedCounter({ maxTrackedKeys: 100, ttlMs: 10, pruneIntervalMs: 10 });
 
   counter.increment("old-1", 100);
   counter.increment("old-2", 100);

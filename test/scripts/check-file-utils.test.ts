@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -9,6 +8,7 @@ import {
   toPosixPath,
 } from "../../scripts/check-file-utils.js";
 import { createScriptTestHarness } from "./test-helpers.js";
+import { writeFixtureFiles } from "./z0632-fixtures.test-support.js";
 
 const execFileSyncMock = vi.hoisted(() => vi.fn(() => ""));
 
@@ -20,10 +20,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 const { createTempDir } = createScriptTestHarness();
 function fixture(...files: string[]) {
   const root = createTempDir("openclaw-check-file-utils-");
-  for (const file of files) {
-    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
-    fs.writeFileSync(path.join(root, file), "");
-  }
+  writeFixtureFiles(root, Object.fromEntries(files.map((file) => [file, ""])));
   return root;
 }
 const includeFile = (file: string) => file.endsWith(".ts");
@@ -48,7 +45,9 @@ it("renders repo-relative paths when possible", () => {
 });
 
 it("filters tracked source files and bounds the git lookup", () => {
-  execFileSyncMock.mockReturnValue("src/keep.ts\nsrc/keep.mjs\nsrc/skip.d.ts\n");
+  execFileSyncMock
+    .mockReturnValueOnce("")
+    .mockReturnValue("src/keep.ts\nsrc/keep.mjs\nsrc/skip.d.ts\n");
 
   expect(listRepoFilesSync("/fake/repo", { includeFile: isCodeFile })).toEqual([
     "src/keep.mjs",
@@ -70,7 +69,7 @@ it("falls back to filesystem traversal when git ls-files times out", () => {
     code: "ETIMEDOUT",
     signal: "SIGKILL",
   });
-  execFileSyncMock.mockImplementation(() => {
+  execFileSyncMock.mockReturnValueOnce("").mockImplementation(() => {
     throw error;
   });
   const rootDir = fixture("src/keep.ts");

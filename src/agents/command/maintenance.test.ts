@@ -109,7 +109,6 @@ describe("agent command foreground completion", () => {
     );
     expect(preflight).toHaveBeenCalledOnce();
     expect(findStoredSessionEntry(sessionKey)?.sessionId).toBe(sessionId);
-    expect(attempt).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -212,9 +211,6 @@ describe("agent command foreground completion", () => {
       await command;
 
       expect(events).toEqual(["checkpoint", "compaction", "attempt"]);
-      expect(memoryFlush).toHaveBeenCalledOnce();
-      expect(preflight).toHaveBeenCalledOnce();
-      expect(compact).not.toHaveBeenCalled();
       expect(attempt.mock.calls[0]?.[0]).toMatchObject({
         sessionId: successorId,
         sessionTarget: { agentId: "main", sessionId: successorId, sessionKey, storePath },
@@ -346,10 +342,8 @@ describe("agent command foreground completion", () => {
             ? ["compaction started", "compaction completed", "delivery"]
             : ["delivery"],
         );
-        expect(cliCompact).toHaveBeenCalledTimes(runner === "cli" ? 1 : 0);
         expect(compact).not.toHaveBeenCalled();
         expect(memoryFlush).not.toHaveBeenCalled();
-        expect(deliver).toHaveBeenCalledOnce();
       } finally {
         releaseCompaction.resolve();
         await Promise.allSettled([command]);

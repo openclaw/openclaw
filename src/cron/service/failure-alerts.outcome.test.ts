@@ -102,7 +102,6 @@ describe("cron failure alert outcome write-back", () => {
           expect.any(String),
           expect.objectContaining({ agentId: "alpha" }),
         );
-        expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
       } else {
         expect(settlement).toMatchObject({
           status: "rejected",
@@ -112,7 +111,6 @@ describe("cron failure alert outcome write-back", () => {
           }),
         });
         expect(state.deps.enqueueSessionEvent).not.toHaveBeenCalled();
-        expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
       }
     },
   );
@@ -176,13 +174,12 @@ describe("cron failure alert outcome write-back", () => {
       } else {
         expect(send).not.toHaveBeenCalled();
         expect(state.deps.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-          expect.stringContaining('Automation "alert-owned-without-default" failed 1 times'),
+          expect.stringContaining('Automation "alert-owned-without-default" failed'),
           expect.objectContaining({
             agentId: "session-owner",
             sessionKey: "agent:session-owner:main",
           }),
         );
-        expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
       }
     },
   );

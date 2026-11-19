@@ -1,22 +1,27 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
+  appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
-import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import * as sessionStorePaths from "../../../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import {
   bindInProcessSessionRun,
   takeInProcessFreshChildSession,
 } from "../../../gateway/in-process-session-run.js";
+import { initializeRepository } from "../../../gateway/server-methods/projects.test-support.js";
+import * as sessionProjectSource from "../../../gateway/session-project-source.js";
+import { registerProjectRegistry } from "../../../projects/project-registry.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { resolveAgentWorkspaceDir } from "../../agent-scope-config.js";
 import { prepareSubagentSessionContext } from "./subagent-spawn-context.js";
 import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
 import * as spawnRuntime from "./subagent-spawn.runtime.js";
@@ -29,6 +34,7 @@ type SpawnInput = Parameters<typeof createInitialSubagentSession>[0];
 async function spawn(patch: Partial<SpawnInput> = {}) {
   const input = {
     cfg: {},
+    projectRequester: { kind: "internal" as const },
     requesterAgentId: "main",
     targetAgentId: "main",
     childSessionKey,
@@ -50,6 +56,113 @@ async function spawn(patch: Partial<SpawnInput> = {}) {
     }));
   return createInitialSubagentSession({ ...input, parentTarget });
 }
+
+const INHERIT_REFUSAL = "The parent session's project is not available to this requester.";
+
+it.each([
+  { source: "an explicit private projectId", refusal: "unknown project id: org-private" },
+  { source: "an inherited private project checkout", refusal: INHERIT_REFUSAL },
+  { source: "an inherited agent-workspace worktree", refusal: undefined },
+] as const)("bounds a guest background spawn of $source", async ({ source, refusal }) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const repo = await initializeRepository(
+      state.root,
+      "org-private",
+      "https://github.com/openclaw/openclaworg.git",
+    );
+    const project = await registerProjectRegistry({ path: repo, name: "Org private" });
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    await upsertSessionEntryCore(
+      { agentId: "main", storePath, sessionKey },
+      { sessionId: "project-parent", projectId: project.id, sessionRoot: repo, spawnedCwd: repo },
+    );
+    const workspaceWorktree = source.includes("agent-workspace");
+    // The parent's checkout read itself is covered by the visible-spawn suite.
+    using _ = vi.spyOn(sessionProjectSource, "resolveSpawnParentWorktreeSource").mockResolvedValue({
+      kind: "worktree",
+      workspace: workspaceWorktree ? resolveAgentWorkspaceDir({}, "main") : repo,
+      ...(workspaceWorktree ? {} : { projectId: project.id }),
+      source: { kind: "project", id: project.id },
+      withCurrent: async () => {
+        throw new Error("inherited source preparation reached");
+      },
+    });
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () =>
+        new Response(JSON.stringify({ visibility: "private" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchImpl);
+    try {
+      const result = await spawn({
+        projectRequester: { kind: "operator", scopes: ["operator.sessions.write"] },
+        worktree: {
+          task: "Read README.md",
+          ...(source.includes("explicit") ? { projectId: project.id } : {}),
+        },
+      });
+      expect(readEntry(storePath, childSessionKey)).toBeUndefined();
+      if (refusal) {
+        expect(result).toEqual({
+          status: "error",
+          error: `child session patch failed: ${refusal}`,
+        });
+        expect(fetchImpl).toHaveBeenCalledOnce();
+      } else {
+        // Allowed: preparation proceeds to the inherited source instead of refusing it.
+        expect(JSON.stringify(result)).not.toContain(INHERIT_REFUSAL);
+        expect(fetchImpl).not.toHaveBeenCalled();
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+it.each(["disabled", "disabled during preparation"])(
+  "keeps an existing Draft usable without creating a child when Draft creation is %s",
+  async (policy) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      const parent = { agentId: "main", storePath, sessionKey };
+      await upsertSessionEntryCore(parent, {
+        sessionId: "draft-parent",
+        visibility: "draft",
+      });
+      const before = readEntry(storePath, sessionKey);
+      const cfg = { session: { sharing: { drafts: policy !== "disabled" } } };
+      setRuntimeConfigSnapshot(cfg);
+      const prepare = sessionStorePaths.preparePhysicalSessionStorePath;
+      using prepared = vi
+        .spyOn(sessionStorePaths, "preparePhysicalSessionStorePath")
+        .mockImplementation(async (...args) => {
+          const physical = await prepare(...args);
+          setRuntimeConfigSnapshot({ session: { sharing: { drafts: false } } });
+          return physical;
+        });
+      const result = await spawn({ cfg });
+      expect(result).toMatchObject({
+        status: "error",
+        error: expect.stringContaining("session visibility is disabled: draft"),
+      });
+      expect(readEntry(storePath, childSessionKey)).toBeUndefined();
+      expect(readEntry(storePath, sessionKey)).toEqual(before);
+      expect(prepared).toHaveBeenCalledTimes(policy === "disabled" ? 0 : 1);
+      await appendTranscriptMessage(
+        { ...parent, sessionId: "draft-parent" },
+        { message: { role: "user", content: "Continue this existing Draft." } },
+      );
+      expect(readEntry(storePath, sessionKey)?.visibility).toBe("draft");
+      expect(await loadTranscriptEvents({ ...parent, sessionId: "draft-parent" })).toContainEqual(
+        expect.objectContaining({
+          message: { role: "user", content: "Continue this existing Draft." },
+        }),
+      );
+    });
+  },
+);
 
 it.each(["creation", "fork"] as const)(
   "keeps the selected physical store when its alias changes before child %s",
@@ -73,28 +186,19 @@ it.each(["creation", "fork"] as const)(
           updatedAt: 1,
         });
         if (operation === "fork") {
-          await replaceTranscriptEvents(
-            { agentId, sessionKey, sessionId, storePath: database.path },
-            [
-              { type: "session", version: 3, id: sessionId, timestamp: "2026-09-26T00:00:00Z" },
-              {
-                type: "message",
-                id: "user-message",
-                parentId: null,
-                message: { role: "user", content: `${source} context` },
-              },
-              {
-                type: "message",
-                id: "assistant-message",
-                parentId: "user-message",
-                message: {
-                  role: "assistant",
-                  content: [{ type: "text", text: `${source} reply` }],
-                  stopReason: "stop",
-                },
-              },
-            ],
-          );
+          for (const message of [
+            { role: "user", content: `${source} context` },
+            {
+              role: "assistant",
+              content: [{ type: "text", text: `${source} reply` }],
+              stopReason: "stop",
+            },
+          ]) {
+            await appendTranscriptMessage(
+              { agentId, sessionKey, sessionId, storePath: database.path },
+              { message },
+            );
+          }
         }
       }
       if (operation === "fork") {
@@ -232,7 +336,7 @@ it("inherits admitted skill pins without overwriting a parent refresh", async ()
     });
     let refreshedParent: SessionEntry | null = null;
     const preparePhysical = sessionStorePaths.preparePhysicalSessionStorePath;
-    const prepare = vi
+    using _ = vi
       .spyOn(sessionStorePaths, "preparePhysicalSessionStorePath")
       .mockImplementation(async (...args) => {
         if (args[0].sessionKey === childSessionKey) {
@@ -244,26 +348,23 @@ it("inherits admitted skill pins without overwriting a parent refresh", async ()
         }
         return preparePhysical(...args);
       });
-    try {
-      const result = await spawn({
-        expectedParentSessionId: "parent-first",
-        senderIsOwner: true,
-      });
-      expect(result).toMatchObject({ status: "ok" });
-      const child = readEntry(storePath, childSessionKey);
-      expect(child).toMatchObject({
-        spawnedBySessionId: "parent-first",
-        spawnedBySenderIsOwner: true,
-        skillLibrarySelections,
-      });
-      expect(refreshedParent).toMatchObject({
-        totalTokens: 10,
-        skillLibrarySelections: [],
-      });
-      expect(loadSessionEntry(scope)).toEqual(refreshedParent);
-    } finally {
-      prepare.mockRestore();
-    }
+
+    const result = await spawn({
+      expectedParentSessionId: "parent-first",
+      senderIsOwner: true,
+    });
+    expect(result).toMatchObject({ status: "ok" });
+    const child = readEntry(storePath, childSessionKey);
+    expect(child).toMatchObject({
+      spawnedBySessionId: "parent-first",
+      spawnedBySenderIsOwner: true,
+      skillLibrarySelections,
+    });
+    expect(refreshedParent).toMatchObject({
+      totalTokens: 10,
+      skillLibrarySelections: [],
+    });
+    expect(loadSessionEntry(scope)).toEqual(refreshedParent);
   });
 });
 

@@ -6,6 +6,8 @@ import { writeFixtureFiles } from "./z0632-fixtures.test-support.js";
 
 const { createTempDir } = createScriptTestHarness();
 const scriptPath = path.resolve("scripts/check-composite-action-input-interpolation.py");
+const action = (steps: string, using = "composite") =>
+  `name: fixture\nruns:\n  using: ${using}\n  steps:\n${steps}`;
 
 function runCheck(actions: Record<string, string>) {
   const cwd = createTempDir("openclaw-composite-action-inputs-");
@@ -15,21 +17,12 @@ function runCheck(actions: Record<string, string>) {
       Object.entries(actions).map(([name, source]) => [`${name}/action.yml`, source]),
     ),
   );
-  return spawnSync("python3", [scriptPath], {
-    cwd,
-    encoding: "utf8",
-  });
+  return spawnSync("python3", [scriptPath], { cwd, encoding: "utf8" });
 }
 
 it("rejects direct inputs interpolation inside composite run blocks", () => {
   const result = runCheck({
-    unsafe: `name: unsafe
-runs:
-  using: composite
-  steps:
-    - shell: bash
-      run: |
-        echo "\${{ inputs.token }}"`,
+    unsafe: action('    - shell: bash\n      run: |\n        echo "${{ inputs.token }}"'),
   });
   expect(result.status).toBe(1);
   expect(result.stdout).toContain("Disallowed direct inputs interpolation");
@@ -44,15 +37,12 @@ it.each([
   { name: "quoted using with a comment", using: '"composite" # runtime', firstKey: true },
 ])("rejects direct interpolation with $name", ({ using, firstKey }) => {
   const result = runCheck({
-    unsafe: `name: unsafe
-runs:
-  using: ${using}
-  steps:
-${
-  firstKey
-    ? '    - run: |\n        echo "${{ inputs.value }}"\n      shell: bash'
-    : '    - shell: bash\n      run: echo "${{ inputs.value }}"'
-}`,
+    unsafe: action(
+      firstKey
+        ? '    - run: |\n        echo "${{ inputs.value }}"\n      shell: bash'
+        : '    - shell: bash\n      run: echo "${{ inputs.value }}"',
+      using,
+    ),
   });
   expect(result.status).toBe(1);
   expect(result.stdout).toContain(".github/actions/unsafe/action.yml:6");
@@ -61,21 +51,13 @@ ${
 
 it("allows env indirection and ignores non-composite actions", () => {
   const result = runCheck({
-    safe: `name: safe
-runs:
-  using: composite
-  steps:
-    - run: |
-        echo "$TOKEN"
-      shell: bash
-      env:
-        TOKEN: \${{ inputs.token }}`,
-    "non-composite": `name: non-composite
-runs:
-  using: node24
-  main: dist/index.js
-  steps:
-    - run: echo "\${{ inputs.token }}"`,
+    safe: action(
+      '    - run: |\n        echo "$TOKEN"\n      shell: bash\n      env:\n        TOKEN: ${{ inputs.token }}',
+    ),
+    "non-composite": action(
+      '    - run: echo "${{ inputs.token }}"',
+      "node24\n  main: dist/index.js",
+    ),
   });
   expect(result.status).toBe(0);
   expect(result.stdout).toContain("No direct inputs interpolation found");

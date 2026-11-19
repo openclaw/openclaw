@@ -46,46 +46,35 @@ describe("plugin install plan helpers", () => {
     expect(result).toBeNull();
   });
 
-  it("rejects npm-spec matches that resolve to a different plugin id", () => {
+  it.each([
+    [
+      "rejects npm-spec matches that resolve to a different plugin id",
+      "npmSpec",
+      { pluginId: "voice-call", npmSpec: "@openclaw/voice-call" },
+      { pluginId: "not-voice-call", npmSpec: "@openclaw/voice-call" },
+    ],
+    [
+      "rejects plugin-id bundled matches when the catalog npm spec was overridden",
+      "pluginId",
+      { pluginId: "whatsapp", npmSpec: "@vendor/whatsapp-fork" },
+      { pluginId: "whatsapp", npmSpec: "@openclaw/whatsapp" },
+    ],
+  ] as const)("%s", (_name, matchKind, catalog, bundled) => {
     const findBundledSource = vi
       .fn()
       .mockImplementation(({ kind }: { kind: "pluginId" | "npmSpec"; value: string }) => {
-        if (kind === "npmSpec") {
+        if (kind === matchKind) {
           return {
-            pluginId: "not-voice-call",
-            localPath: installedPluginRoot("/tmp", "not-voice-call"),
-            npmSpec: "@openclaw/voice-call",
+            pluginId: bundled.pluginId,
+            localPath: installedPluginRoot("/tmp", bundled.pluginId),
+            npmSpec: bundled.npmSpec,
           };
         }
         return undefined;
       });
 
     const result = resolveBundledInstallPlanForCatalogEntry({
-      pluginId: "voice-call",
-      npmSpec: "@openclaw/voice-call",
-      findBundledSource,
-    });
-
-    expect(result).toBeNull();
-  });
-
-  it("rejects plugin-id bundled matches when the catalog npm spec was overridden", () => {
-    const findBundledSource = vi
-      .fn()
-      .mockImplementation(({ kind }: { kind: "pluginId" | "npmSpec"; value: string }) => {
-        if (kind === "pluginId") {
-          return {
-            pluginId: "whatsapp",
-            localPath: installedPluginRoot("/tmp", "whatsapp"),
-            npmSpec: "@openclaw/whatsapp",
-          };
-        }
-        return undefined;
-      });
-
-    const result = resolveBundledInstallPlanForCatalogEntry({
-      pluginId: "whatsapp",
-      npmSpec: "@vendor/whatsapp-fork",
+      ...catalog,
       findBundledSource,
     });
 

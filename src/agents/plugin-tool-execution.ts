@@ -1,6 +1,8 @@
-import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "../infra/runtime-process-url.js";
+import { createPluginRequesterModels } from "../plugins/requester-models.js";
 import type { OpenClawPluginToolContext } from "../plugins/tool-types.js";
 import { runOutsideCommandProcessScope } from "../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -11,16 +13,14 @@ import {
 } from "./admitted-run-context.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./sandbox/constants.js";
-import { resolveProtectedSandboxDirectory } from "./sandbox/fs-paths.js";
 import { prepareSandboxProcessCleanup } from "./sandbox/process-cleanup.js";
 import { shellEscape } from "./sandbox/remote-shell-command.js";
 import type { SandboxContext } from "./sandbox/types.js";
 import { assertCompleteToolResult, resolveToolResultBudget } from "./tool-result-limits.js";
-import { canonicalizePath } from "./utils/paths.js";
 
 export type PluginToolExecutionCapabilities = Pick<
-  OpenClawPluginToolContext,
-  "sandbox" | "modelExecution" | "assertCompleteResult"
+  OpenClawPluginToolContext<2>,
+  "sandbox" | "modelExecution" | "assertCompleteResult" | "runtimeContext"
 >;
 
 /** Capture once at assembly; a retained plugin never resolves a later run's sandbox or identity. */
@@ -32,6 +32,8 @@ export function preparePluginToolExecutionCapabilities(params: {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   config?: OpenClawConfig;
   agentId?: string;
+  sessionKey?: string;
+  sessionId?: string;
   modelContextWindowTokens?: number;
 }): (assertInvocationCurrent: () => void, signal?: AbortSignal) => PluginToolExecutionCapabilities {
   const sandbox = params.sandbox;
@@ -66,18 +68,9 @@ export function preparePluginToolExecutionCapabilities(params: {
         continue;
       }
       const selectedSourceFile = source?.filePath ?? skill.filePath;
-      const sourceFile = canonicalizePath(selectedSourceFile);
-      const usage = sandbox.skillUsagePaths?.find(
-        (entry) => entry.skillName === skill.name && entry.skillFile === sourceFile,
-      );
-      if (!usage) {
-        continue;
-      }
-      const root = resolveProtectedSandboxDirectory(
-        sandbox,
-        path.dirname(usage.readPath),
-        path.dirname(selectedSourceFile),
-      );
+      const root = sandbox.fsPreparation?.protectedSkills.find(
+        (entry) => entry.name === skill.name && entry.sourceFile === selectedSourceFile,
+      )?.containerRoot;
       if (root) {
         installedSkillRoots[skill.name] = root;
       }
@@ -85,6 +78,17 @@ export function preparePluginToolExecutionCapabilities(params: {
   }
   const resultBudget = resolveToolResultBudget(params.modelContextWindowTokens);
   return (assertInvocationCurrent, pluginSignal) => ({
+    runtimeContext: {
+      models: authority
+        ? createPluginRequesterModels({
+            ...params,
+            assertCurrent: assertInvocationCurrent,
+            signal: AbortSignal.any(
+              [params.signal, pluginSignal].filter((value): value is AbortSignal => Boolean(value)),
+            ),
+          })
+        : undefined,
+    },
     assertCompleteResult(text) {
       assertInvocationCurrent();
       assertCompleteToolResult(text, resultBudget);
@@ -92,7 +96,9 @@ export function preparePluginToolExecutionCapabilities(params: {
     ...(authority && hostRoot
       ? {
           modelExecution: {
-            cliEntryPath: path.join(hostRoot, "openclaw.mjs"),
+            cliEntryPath: fileURLToPath(
+              resolveExternalPackageRuntimeEntrypointUrl("cliLauncher", hostRoot),
+            ),
             async run(selection, action, signal) {
               const callerSignal = AbortSignal.any(
                 [params.signal, pluginSignal, signal, authority.signal].filter(
@@ -235,12 +241,15 @@ export function preparePluginToolExecutionCapabilities(params: {
                   await runOutsideCommandProcessScope(() => cleanup.terminate());
                 }
               });
-              assertCurrent();
-              spec.assertCurrent?.();
               if (input !== undefined && spec.stdinMode !== "pipe-open") {
                 throw new Error("This sandbox backend does not support piped command input.");
               }
+              await spec.prepareCurrent?.();
+              assertCurrent();
+              spec.assertCurrent?.();
               const result = await runCommandWithTimeout(spec.argv, {
+                executionIntent: "agent-tool",
+                executionScopeKey: params.sessionKey,
                 cwd: spec.cwd,
                 baseEnv: spec.env,
                 input: input ?? "",

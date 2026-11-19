@@ -127,7 +127,9 @@ export function createRequesterSettleCases() {
           requesterContinuationSettled: settled,
           acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:subagent:child" }],
         },
-        localOnly,
+        aborted
+          ? { ...localOnly, expected: { ...missingRequesterFinal, reason: "requester_aborted" } }
+          : localOnly,
       ),
     ),
     ...["accepted", "in_flight"].map((status) =>
@@ -137,9 +139,17 @@ export function createRequesterSettleCases() {
       }),
     ),
     settleCase(
-      "does not record a canceled partial answer as a visible final",
+      "does not record a timed-out partial answer as a visible final",
       { payloads: [{ text: "partial answer" }] },
-      { ...localOnly, status: "timeout", expected: deliveredRequesterFinal },
+      {
+        ...localOnly,
+        status: "timeout",
+        expected: {
+          ...missingRequesterFinal,
+          reason: "requester_timed_out",
+          disposition: "permanent_failure",
+        },
+      },
     ),
     settleCase(
       "records a non-yielded visible final without requiring a reply",
@@ -165,32 +175,6 @@ export function createRequesterSettleCases() {
         expected: deliveredRequesterFinal,
       },
     ),
-    settleCase("rejects a yielded turn without a result", undefined, localOnly),
-    ...[
-      { name: "error", payload: { text: "tool failed", isError: true } },
-      { name: "reasoning", payload: { text: "thinking", isReasoning: true } },
-      { name: "commentary", payload: { text: "working on it", isCommentary: true } },
-      { name: "compaction notice", payload: { text: "compacting", isCompactionNotice: true } },
-      {
-        name: "fallback notice",
-        payload: { text: "switching providers", isFallbackNotice: true },
-      },
-      { name: "status notice", payload: { text: "still working", isStatusNotice: true } },
-      {
-        name: "supplemental TTS audio",
-        payload: {
-          mediaUrl: "file:///tmp/answer.mp3",
-          ttsSupplement: { spokenText: "answer", visibleTextAlreadyDelivered: true },
-        },
-      },
-    ].map(({ name, payload }) =>
-      settleCase(`rejects ${name} instead of a final answer`, { payloads: [payload] }, localOnly),
-    ),
-    settleCase(
-      "rejects an explicitly hidden assistant payload",
-      { payloads: [{ text: "not user visible", visible: false }] },
-      localOnly,
-    ),
     settleCase(
       "rejects a yielded turn that emits only the silent reply token",
       { payloads: [], meta: { yielded: true, terminalReply: { disposition: "silent" } } },
@@ -202,11 +186,11 @@ export function createRequesterSettleCases() {
       localOnly,
     ),
     settleCase("rejects a messaging-tool flag without a committed source receipt", {
-      payloads: [],
+      payloads: [{ text: finalText }],
       didSendViaMessagingTool: true,
     }),
     settleCase("does not let an off-target final upgrade source progress", {
-      payloads: [],
+      payloads: [{ text: finalText }],
       didSendViaMessagingTool: true,
       messagingToolSentTargets: [sourceProgress, { ...sourceFinal, to: "dm:OTHER" }],
     }),

@@ -114,6 +114,15 @@ Register each capability inside `register(api)` alongside your existing
     });
     ```
 
+    Forward the optional synchronous `assertCurrent` callback with the other
+    request callbacks. It checks the caller's current authority, not just the
+    authority held when audio was queued. The WebSocket session helper checks
+    it before opening a connection, sending frames, and graceful finalization.
+    If it throws, the helper discards queued audio and aborts without calling
+    `onClose`. Custom transports must enforce the same checks at their I/O
+    boundaries, including reconnects. Callers that omit the callback retain
+    the existing session behavior.
+
     Batch STT providers that POST multipart audio should use
     `buildAudioTranscriptionFormData(...)` from
     `openclaw/plugin-sdk/provider-http`. The helper normalizes upload
@@ -227,8 +236,11 @@ Register each capability inside `register(api)` alongside your existing
     Set `bridge.pacesInputAudio: true` when the provider buffers incoming PCM
     at its sample rate and supplies silence between microphone writes. This
     prevents transports such as Discord from appending an extra silence burst
-    at each capture boundary. GPT-Live Gateway WebRTC and WebSocket bridges
-    share that input clock; closing the bridge stops it.
+    at each capture boundary. GPT-Live Gateway WebRTC and WebSocket PCM bridges
+    share that input clock; closing the bridge stops it. Public GPT-Live
+    WebSocket input in mono G.711 mu-law at 8 kHz instead follows the carrier's
+    cadence. It drains retained capture at session readiness and forwards later
+    frames without an additional clock or injected silence.
     When native audio events identify an item, pass that identity alongside
     PCM as `req.onAudio(audio, { itemId })`; omit
     metadata for transports without native item IDs. If supplied,
@@ -422,6 +434,24 @@ Register each capability inside `register(api)` alongside your existing
 
   </Tab>
   <Tab title="Media understanding">
+    Media registrations should declare static capability metadata, not capture
+    `api.config` to calculate capabilities. A provider can opt into
+    `inheritConfiguredImageCapability: true` to add image support when the
+    **current request's** configured provider models include an image input.
+    The host projects this onto a fresh per-request provider without changing
+    the registered object. Omission or `false` preserves existing behavior;
+    this does not add a provider-specific image executor or bypass request auth.
+
+    `sharedEntryCapabilities` optionally narrows inference for entries in
+    `tools.media.models` that omit capabilities. Omission infers the provider's
+    effective capabilities as before; `[]` infers none. A supplied list is
+    intersected with effective capabilities, so it cannot grant unsupported
+    capabilities. Explicit entry capabilities, CLI entries, and runtime
+    overrides retain their existing precedence. For example, an audio provider
+    with `inheritConfiguredImageCapability: true` and
+    `sharedEntryCapabilities: ["image"]` preserves configured shared image
+    entries without turning legacy shared chat entries into audio selection.
+
     Audio providers with their own credential and endpoint contracts can
     implement `transcribeAudioWithContext(request)`. The host calls it after
     loading each audio file. The request includes the audio bytes, filename,

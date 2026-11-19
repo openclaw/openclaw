@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -40,6 +40,18 @@ export function readLines(stream: Duplex, receive: (line: string) => void) {
   });
 }
 
+export function waitForAnchorClosure<T>(child: ChildProcess, exited: Promise<T>) {
+  const waitFor = (source: EventEmitter, event: string) =>
+    new Promise<void>((resolve) => {
+      source.once(event, resolve);
+    });
+  return Promise.all([
+    exited,
+    waitFor(child, "disconnect"),
+    ...child.stdio.filter((stream) => stream != null).map((stream) => waitFor(stream, "close")),
+  ]).then(([result]) => result);
+}
+
 function observeMessages<Message extends { type: string }>(
   stream: Duplex,
   receive?: (message: Message) => void,
@@ -74,12 +86,15 @@ export function createHeldAnchorPreparation(
     process.on("message", () => process.disconnect());
     process.once("disconnect", () => process.exit(0));
   `;
+  const anchorArgv = resolveRuntimeWorkerArgv(
+    resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.serviceChildGroupAnchor),
+  );
   const preload = path.join(root, "held-lineage-loader.mjs");
   fs.writeFileSync(
     preload,
     `
       import childProcess from "node:child_process";
-      import { registerFixtureSourceTransform, syncFixtureBuiltinExports } from ${JSON.stringify(
+      import { fixtureSourceFileFilter, registerFixtureSourceTransform, syncFixtureBuiltinExports } from ${JSON.stringify(
         new URL("../../../test/scripts/fixtures/ci-fixture-runtime.cjs", import.meta.url).href,
       )};
       import { Socket } from "node:net";
@@ -95,6 +110,14 @@ export function createHeldAnchorPreparation(
       globalThis[Symbol.for("openclaw.anchor-preparation-test")] = {
         emit,
         released,
+        observeDuplicateStart() {
+          // Let the anchor install its handler before activating Bun IPC delivery.
+          process.on("message", message => {
+            if (message.type === "start" && message.generation === "held-lineage-preparation-replacement") {
+              emit({ type: "duplicate-start" });
+            }
+          });
+        },
       };
       const nativeSpawn = childProcess.spawn;
       childProcess.spawn = function(...args) {
@@ -106,14 +129,9 @@ export function createHeldAnchorPreparation(
         return child;
       };
       syncFixtureBuiltinExports(["node:child_process"]);
-      process.on("message", message => {
-        if (message.type === "start" && message.generation === "held-lineage-preparation-replacement") {
-          emit({ type: "duplicate-start" });
-        }
-      });
       registerFixtureSourceTransform({
         name: "held-lineage-preparation",
-        filter: /[/\\\\]service-child-group-anchor(?:-[A-Za-z0-9_-]+)?\\.[cm]?[jt]s$/,
+        filter: fixtureSourceFileFilter([${JSON.stringify(pathToFileURL(anchorArgv.at(-1)!).href)}]),
         transform(_url, readSource) {
           const original = readSource();
           const gate = 'globalThis[Symbol.for("openclaw.anchor-preparation-test")]';
@@ -122,15 +140,13 @@ export function createHeldAnchorPreparation(
           const preparation = /(lineageCompletion\\s*=\\s*)([\\s\\S]*?);/;
           if (!preparation.test(original)) throw new Error("Missing anchor lineage preparation");
           return original.replace(preparation, (_match, assignment, expression) =>
-            assignment + "await (async () => { " + gate + '.emit({type:"lineage-loading"}); await '
+            assignment + "await (async () => { " + gate + ".observeDuplicateStart(); "
+              + gate + '.emit({type:"lineage-loading"}); await '
               + gate + ".released; const loaded = " + expression + "; "
               + gate + '.emit({type:"lineage-loaded"}); return loaded; })();');
         },
       });
     `,
-  );
-  const anchorArgv = resolveRuntimeWorkerArgv(
-    resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.serviceChildGroupAnchor),
   );
   const child = spawn(
     process.execPath,
@@ -138,22 +154,10 @@ export function createHeldAnchorPreparation(
     { detached: true, stdio: ["ignore", "pipe", "pipe", "pipe", "pipe", "ipc", "pipe"] },
   );
   const exited = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
-  const disconnected = createDeferred();
   child.once("exit", (code, signal) => exited.resolve({ code, signal }));
   child.once("error", exited.reject);
-  child.once("disconnect", () => disconnected.resolve());
-  const pipesClosed = child.stdio
-    .filter((stream) => stream != null)
-    .map(
-      (stream) =>
-        new Promise<void>((resolve) => {
-          stream.once("close", () => resolve());
-        }),
-    );
   // Native Node can omit aggregate close after explicit IPC disconnect with extra pipes.
-  const closed = Promise.all([exited.promise, disconnected.promise, Promise.all(pipesClosed)]).then(
-    ([result]) => result,
-  );
+  const closed = waitForAnchorClosure(child, exited.promise);
   const control = child.stdio[3];
   const lineage = child.stdio[4];
   const probe = child.stdio.at(6);

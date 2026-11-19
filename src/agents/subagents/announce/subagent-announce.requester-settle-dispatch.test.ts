@@ -1,126 +1,87 @@
 import "./subagent-announce.requester-settle-dispatch-mocks.test-support.js";
+import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { GatewayClientRequestError } from "../../../../packages/gateway-client/src/request-error.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
-import type { RestartRecoveryTerminalDeliveryEvidence } from "../../../config/sessions/restart-recovery-types.js";
-import type { InternalSessionEntry } from "../../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { SessionWorkStartChangedError } from "../../../config/sessions/work-start-error.js";
+import { resolveGatewayAgentAbortStopReason } from "../../../gateway/agent-turn/agent-run-dispatch-outcome.js";
 import type { AgentTurnStartRequest } from "../../../gateway/agent-turn/agent-turn-start-request.types.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
-import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
+import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
-import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
-import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
+import { GatewayOperatorAccessUnavailableError } from "../../../infra/operator-authority-error.js";
 import {
-  captureSessionTarget,
-  getCurrentSessionControllerClaim,
-} from "../../../sessions/session-controller.lifecycle.js";
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../../plugins/runtime/gateway-request-scope.js";
+import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
+import { getCurrentSessionControllerClaim } from "../../../sessions/session-controller.lifecycle.js";
 import { getExistingSessionControllerMailbox } from "../../../sessions/session-controller.mailbox.js";
 import { markReplyOperationExecutionStarted } from "../../../sessions/session-controller.state.js";
 import { rpcSourceTesting } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { prepareEmbeddedAttemptTimeout } from "../../embedded-agent-runner/run/attempt-timeout-prepare.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
+import {
+  createAgentRunDirectAbortError,
+  resolveAgentRunAbortLifecycleFields,
+} from "../../run-termination.js";
+import { toSandboxProvisioningError } from "../../sandbox/provisioning-error.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
+import { SessionFollowupCompletion } from "../completion/session-followup-completion.js";
 import { consumeSubagentPauseNotice } from "../registry/subagent-delivery-state.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { retainedOperatorFixture } from "../registry/subagent-registry.completed-followup-authority.test-support.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   registerRequesterFinalAttachment,
   promoteRequesterFinalAttachment,
 } from "../requester-final-attachment.js";
-import { reserveRestoredSubagentControllerSources } from "./subagent-announce-controller-source.js";
 import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
-import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
 import {
   deliver,
-  loadRequester,
   registryRead,
+  readDescendantFacts,
   startTurn,
   REQUESTER_KEY,
+  REQUESTER_TARGET,
+  REQUESTER_TURN,
   settledChild,
-  publishWakeTransition,
+  wakeParams,
+  requesterSnapshot,
+  useDirectDelivery,
+  withGateway,
   useRequesterSettleDispatchFixture,
+  finishProcessedCompletion,
   createRequesterSettleContext as createContext,
 } from "./subagent-announce.requester-settle-dispatch.test-support.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.requester-settle-wake.js";
 
 afterEach(() => clearRuntimeConfigSnapshot());
 
-const REQUESTER_TARGET = captureSessionTarget({
-  storeScope: "/synthetic/requester-settle-dispatch/sessions.db",
-  sessionKey: REQUESTER_KEY,
-  incarnation: "requester-session",
-  agentId: "main",
-});
-const REQUESTER_TURN = {
-  target: REQUESTER_TARGET,
-  sessionKey: REQUESTER_KEY,
-  sessionId: "requester-session",
-  agentId: "main",
+type Wake = Parameters<typeof maybeWakeRequesterAfterAllChildrenSettled>[0];
+function dispatchFixture(child = settledChild()) {
+  registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
+  const completeBatch = vi.fn<Wake["completeBatch"]>(() => {
+    child.requesterSettleWake = undefined;
+  });
+  return { child, completeBatch, params: wakeParams(child, completeBatch) };
+}
+
+// The lifecycle owner records the transcript commit on the batch, as in production.
+const recordConsumption: Wake["recordRequesterDelivery"] = async (batch, fact) => {
+  for (const entry of batch) {
+    entry.delivery = { status: "pending", ...entry.delivery, requesterDelivery: fact };
+  }
 };
 
-type WakeParams = Parameters<typeof maybeWakeRequesterAfterAllChildrenSettled>[0];
-function wakeParams(settledEntry: SubagentRunRecord, completeBatch: WakeParams["completeBatch"]) {
-  return {
-    requesterSessionKey: REQUESTER_KEY,
-    isSourceCurrent: () => true,
-    settledEntry,
-    transitionBatch: publishWakeTransition,
-    completeBatch,
-  };
-}
-function withGateway(context: ReturnType<typeof createContext>, run: () => Promise<boolean>) {
-  return withPluginRuntimeGatewayRequestScope(
-    { context, client: createSyntheticPluginRuntimeClient(), isWebchatConnect: () => false },
-    run,
-  );
-}
-function requesterSnapshot(
-  cfg: OpenClawConfig = {},
-  entry: InternalSessionEntry = { sessionId: "requester-session", updatedAt: 1 },
-) {
-  return {
-    cfg,
-    canonicalKey: REQUESTER_KEY,
-    agentId: "main",
-    storePath: REQUESTER_TARGET.storeScope,
-    entry,
-  };
-}
-function useDirectDelivery(cfg: OpenClawConfig = {}, entry?: InternalSessionEntry) {
-  const requester = requesterSnapshot(cfg, entry);
-  setSubagentAnnounceDeliveryDepsForTest({
-    getRuntimeConfig: () => cfg,
-    loadRequesterSessionEntry: () => requester,
-    getRequesterSessionActivity: () => ({
-      sessionId: "requester-session",
-      target: REQUESTER_TARGET,
-      isActive: false,
-    }),
-  });
-  deliver.mockImplementation(sendSubagentAnnounceDirectly);
-  return requester;
-}
-function recoveryEvidence(
-  runId: string,
-  transcriptRunId: string,
-  failed = false,
-): RestartRecoveryTerminalDeliveryEvidence {
-  return {
-    runId,
-    transcriptRunId,
-    captured: true as const,
-    ...(failed
-      ? { meta: { error: true } }
-      : {
-          payloads: [{ visible: true }],
-          deliveryStatus: { status: "sent" as const, resultCount: 1 },
-        }),
-  };
-}
 type Turn = Pick<AgentTurnStartRequest, "preflight" | "io" | "controllerInput">;
 function acceptTurn({ preflight, io }: Turn, cached?: true) {
   const runId = preflight.request.idempotencyKey;
@@ -149,190 +110,520 @@ describe("requester settle dispatch deadline", () => {
 
   beforeEach(() => setRuntimeConfigSnapshot({}));
 
-  it("retains an expired completion until unrelated interrupted requester work recovers", async () => {
+  it.each([false, true])(
+    "delivers overlapping completions under their own invocations (frozen=%s)",
+    (frozen) =>
+      withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const context = createContext();
+        const source = await retainedOperatorFixture("settle-owner", context);
+        const children = ["first", "second"].map((name) => {
+          const child = settledChild();
+          child.runId = name;
+          child.childSessionKey = `agent:main:subagent:${name}`;
+          child.completion!.resultText = `${name} result`;
+          child.completion!.terminalReply = { disposition: "visible", text: `${name} result` };
+          child.delivery = { status: "pending" };
+          if (frozen) {
+            child.requesterSettleWake!.batchRunIds = ["first", "second"];
+          }
+          subagentRuns.set(child.runId, child);
+          return child;
+        });
+        const invocations = [{}, {}];
+        try {
+          for (const [index, child] of children.entries()) {
+            const client = {
+              ...source.client,
+              internal: {
+                operatorRunAuthority: createAdmittedRunOperatorAuthority({
+                  ...source.source.authority,
+                  invocation: invocations[index]!,
+                }),
+              },
+            };
+            const custody = await withPluginRuntimeGatewayRequestScope(
+              { ...source, client, isWebchatConnect: () => false },
+              () => captureOperatorToolGatewayContinuationContext(),
+            );
+            if (!custody) {
+              throw new Error("Missing completion custody");
+            }
+            subagentRuns.bindCompletionAuthority(child, custody);
+          }
+          registryRead.listSubagentRunsForRequester.mockReturnValue(children);
+          useDirectDelivery();
+          const received: string[] = [];
+          startTurn.mockImplementation(async (turn) => {
+            const index = received.length;
+            expect(
+              getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority
+                ?.invocation,
+            ).toBe(invocations[index]);
+            expect(turn.preflight.request.message).toContain(`${children[index]!.runId} result`);
+            expect(turn.preflight.request.message).not.toContain(
+              `${children[1 - index]!.runId} result`,
+            );
+            received.push(children[index]!.runId);
+            acceptTurn(turn);
+            finishTurn(turn.io, "Completion received.");
+          });
+          for (const child of children) {
+            await expect(
+              withGateway(context, () =>
+                maybeWakeRequesterAfterAllChildrenSettled(
+                  wakeParams(child, (batch, _generation, delivery) => {
+                    expect(delivery?.delivered).toBe(true);
+                    for (const entry of batch) {
+                      entry.requesterSettleWake = undefined;
+                    }
+                  }),
+                ),
+              ),
+            ).resolves.toBe(true);
+          }
+          expect(received).toEqual(["first", "second"]);
+        } finally {
+          for (const child of children) {
+            subagentRuns.releaseCompletionAuthority(child);
+            subagentRuns.delete(child.runId);
+          }
+          source.source.release();
+        }
+      }),
+  );
+
+  it.each([
+    { persistent: false, returned: false },
+    { persistent: true, returned: false },
+    { persistent: false, returned: true },
+    { persistent: true, returned: true },
+    { persistent: false, returned: true, aborted: true },
+    { persistent: true, returned: false, aborted: true },
+    { persistent: false, returned: false, failure: "preparation" },
+    { persistent: true, returned: false, failure: "preparation" },
+    { persistent: false, returned: false, failure: "worker" },
+    { persistent: true, returned: false, failure: "worker" },
+    { persistent: false, returned: true, failure: "timeout" },
+    { persistent: true, returned: true, failure: "timeout" },
+    { persistent: false, returned: false, failure: "sandbox" },
+    { persistent: false, returned: false, failure: "unavailable" },
+  ])(
+    "keeps interrupted settlement owed with no attempt limit ($persistent, returned=$returned, aborted=$aborted, failure=$failure)",
+    async ({ persistent, returned, aborted, failure }) => {
+      const failingAttempts = persistent ? 4 : 1;
+      const context = createContext();
+      const { child, completeBatch, params } = dispatchFixture();
+      useDirectDelivery();
+      const runIds: string[] = [];
+      startTurn.mockImplementation(async (turn) => {
+        acceptTurn(turn);
+        runIds.push(turn.preflight.request.idempotencyKey);
+        if (runIds.length <= failingAttempts) {
+          if (failure === "sandbox" || failure === "unavailable") {
+            throw failure === "sandbox"
+              ? toSandboxProvisioningError(new Error("Aborted"), "synthetic")
+              : new GatewayClientRequestError({
+                  code: "UNAVAILABLE",
+                  message: "Aborted | sandbox_provisioning",
+                });
+          }
+          if (failure === "timeout") {
+            turn.io.emitFinal([
+              true,
+              { status: "timeout", stopReason: "timeout", replaySafe: true },
+              undefined,
+            ]);
+            return;
+          }
+          if (failure === "preparation") {
+            throw new SessionWorkStartChangedError(
+              "Session target preparation outlived its attempt",
+            );
+          }
+          if (failure === "worker") {
+            throw new WorkerTaskError("worker task timed out", "timeout");
+          }
+          if (aborted) {
+            const registration = registerRequesterTurn(turn, 60_000);
+            try {
+              await withSessionTurn(
+                { ...REQUESTER_TURN, controllerInput: registration.entry?.input },
+                async () => registration.controller.abort(createAgentRunDirectAbortError()),
+              );
+              turn.io.emitFinal([
+                true,
+                {
+                  status: "timeout",
+                  replaySafe: true,
+                  ...(returned
+                    ? {
+                        result: {
+                          payloads: [],
+                          meta: resolveAgentRunAbortLifecycleFields(registration.controller.signal),
+                        },
+                      }
+                    : {
+                        stopReason: resolveGatewayAgentAbortStopReason(
+                          registration.controller.signal,
+                        ),
+                      }),
+                },
+                undefined,
+              ]);
+            } finally {
+              registration.cleanup();
+            }
+            return;
+          }
+          const error = {
+            kind: "incomplete_turn",
+            code: "item_conflict",
+            message: "Saved conversation state rejected",
+          };
+          if (returned) {
+            turn.io.emitFinal([
+              true,
+              { status: "ok", result: { payloads: [], meta: { error } } },
+              undefined,
+            ]);
+            return;
+          }
+          throw Object.assign(new Error(error.message), error);
+        }
+        finishTurn(turn.io, "Recovered child result.");
+      });
+      const run = () =>
+        withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
+      await expect(run()).resolves.toBe(false);
+      if (aborted || failure) {
+        expect(await deliver.mock.results[0]?.value).toMatchObject({
+          delivered: false,
+          reason: aborted
+            ? "requester_aborted"
+            : failure === "sandbox" || failure === "unavailable"
+              ? undefined
+              : failure === "preparation"
+                ? "requester_preparation_changed"
+                : "requester_timed_out",
+          disposition: "retryable",
+        });
+      }
+      expect(completeBatch).not.toHaveBeenCalled();
+      expect(child.requesterSettleWake?.nextAttemptAt).toBeTypeOf("number");
+      // Each failed attempt leaves the result owed; the next wake runs it again.
+      for (let attempt = 2; attempt <= failingAttempts; attempt++) {
+        await expect(run()).resolves.toBe(false);
+        expect(completeBatch).not.toHaveBeenCalled();
+        expect(child.requesterSettleWake).toMatchObject({ status: "pending" });
+      }
+      await expect(run()).resolves.toBe(true);
+      expect(runIds).toHaveLength(failingAttempts + 1);
+      expect(new Set(runIds).size).toBe(runIds.length);
+      expect(completeBatch).toHaveBeenCalledOnce();
+      expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
+      await expect(run()).resolves.toBe(false);
+      expect(startTurn).toHaveBeenCalledTimes(failingAttempts + 1);
+    },
+  );
+
+  it.each([
+    new WorkerTaskError("worker task timed out", "timeout"),
+    new SessionWorkStartChangedError("Session target preparation outlived its attempt"),
+  ])("does not repeat a committed turn that failed after execution ($name)", async (error) => {
     const context = createContext();
-    const child = settledChild();
-    child.completionTarget = "parent";
-    child.completionRequesterSessionId = "requester-session";
-    child.delivery = { status: "suspended", suspendedAt: 4_000, suspendedReason: "expiry" };
-    child.requesterSettleWake = { status: "pending", attemptCount: 0, batchRunIds: [child.runId] };
-    const retained = structuredClone(child);
-    const requester = useDirectDelivery(
-      {},
-      {
-        sessionId: "requester-session",
-        updatedAt: 1,
-        status: "interrupted",
-        abortedLastRun: true,
-        mainRestartRecovery: { cycleId: "interrupted-cycle", revision: 1, chargedAttempts: 0 },
-        restartRecoveryDeliveryRunId: "interrupted-requester-turn",
-        restartRecoveryDeliverySourceRunId: "unrelated-completion-wave",
-      },
+    const { child, completeBatch } = dispatchFixture();
+    const params = wakeParams(child, completeBatch, { recordRequesterDelivery: recordConsumption });
+    useDirectDelivery();
+    startTurn.mockImplementation(async (turn) => {
+      acceptTurn(turn);
+      await turn.controllerInput?.onTranscriptCommitted?.(turn.preflight.request.idempotencyKey);
+      turn.io.emitExecutionStarted?.();
+      throw error;
+    });
+    const run = () => withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
+    // The committed input is delivered once; the interrupted turn shows its own error.
+    await expect(run()).resolves.toBe(true);
+    expect(completeBatch).toHaveBeenCalledOnce();
+    expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
+    expect(child.requesterSettleWake).toBeUndefined();
+    await expect(run()).resolves.toBe(false);
+    expect(startTurn).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a result owed while cancellation refuses every dispatch", async () => {
+    const context = createContext();
+    const { child, completeBatch, params } = dispatchFixture();
+    useDirectDelivery();
+    deliver.mockImplementation((request) =>
+      sendSubagentAnnounceDirectly({ ...request, signal: AbortSignal.abort() }),
     );
-    loadRequester.mockResolvedValue(requester);
-    registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
+    const run = () => withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
+    using clock = vi.spyOn(Date, "now");
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      await expect(run()).resolves.toBe(false);
+      expect(startTurn).not.toHaveBeenCalled();
+      expect(completeBatch).not.toHaveBeenCalled();
+      expect(child.requesterSettleWake).toMatchObject({ status: "pending", attemptCount: attempt });
+      clock.mockReturnValue(child.requesterSettleWake!.nextAttemptAt!);
+    }
+  });
+
+  it("keeps a followup completion owed while its policy is unavailable", async () => {
+    const context = createContext();
+    const { child, completeBatch, params } = dispatchFixture();
+    let unavailable = false;
+    const owner = SessionFollowupCompletion.bind({
+      runId: "followup-before-yield",
+      requesterSessionKey: "agent:main:original-requester",
+      requesterSessionId: "original-requester",
+      requesterAgentId: "main",
+      targetAgentId: "main",
+      targetSessionKey: REQUESTER_KEY,
+      custody: {
+        signal: new AbortController().signal,
+        release() {},
+        assertCurrent() {
+          if (unavailable) {
+            throw new GatewayOperatorAccessUnavailableError();
+          }
+        },
+        run: (run) => run(),
+      },
+    });
+    onTestFinished(() => owner.close());
+    child.requesterSettleWake!.rearmGeneration = 1;
+    owner.promoteYield("followup-before-yield", [child], 1);
+    owner.finishExecution("followup-before-yield");
+    const run = () => withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
+    deliver.mockImplementationOnce(async () => {
+      unavailable = true;
+      return { delivered: false, path: "none", disposition: "retryable" };
+    });
+    await expect(run()).rejects.toThrow(GatewayOperatorAccessUnavailableError);
+    expect(completeBatch).not.toHaveBeenCalled();
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(child.requesterSettleWake).toBeDefined();
+    unavailable = false;
+    deliver.mockResolvedValue({ delivered: true, path: "direct" });
+    await expect(run()).resolves.toBe(true);
+    expect(completeBatch).toHaveBeenCalledOnce();
+  });
+
+  it("does not reserve a foreground-blocking source for a wholly superseded yielded cohort", async () => {
+    const context = createContext();
+    const { child, completeBatch, params } = dispatchFixture();
+    child.killReconciliation = { killedAt: 3_000, supersededAt: 4_000 };
+    child.suppressCompletionDelivery = true;
+    child.requesterSettleWake = {
+      ...child.requesterSettleWake!,
+      status: "dispatching",
+      attemptCount: 1,
+      batchRunIds: [child.runId],
+    };
+    useDirectDelivery();
     subagentRuns.set(child.runId, child);
     onTestFinished(() => {
       subagentRuns.delete(child.runId);
     });
-    const completeBatch = vi.fn(() => {
-      child.requesterSettleWake = undefined;
-    });
-    const params = wakeParams(child, completeBatch);
-    const run = () => withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
-    startTurn.mockImplementation(async ({ controllerInput, preflight, io }) => {
-      acceptTurn({ controllerInput, preflight, io });
-      await withSessionTurn({ ...REQUESTER_TURN, controllerInput }, async () => {
-        io.emitExecutionStarted?.();
-      });
-      io.emitFinal([
-        true,
-        {
-          status: "ok",
-          inputProcessingCompleted: true,
-          result: { payloads: [{ text: "Completion received." }] },
-        },
-        undefined,
-      ]);
-    });
 
-    expect(await reserveRestoredSubagentControllerSources([child])).toEqual([]);
-    await expect(run()).resolves.toBe(false);
+    await expect(
+      withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params)),
+    ).resolves.toBe(false);
     expect(startTurn).not.toHaveBeenCalled();
-    expect(completeBatch).not.toHaveBeenCalled();
-    expect(child).toEqual(retained);
-    expect(
-      getExistingSessionControllerMailbox(REQUESTER_KEY, REQUESTER_TARGET)?.entries ?? [],
-    ).toEqual([]);
-
-    requester.entry = { sessionId: "requester-session", updatedAt: 2, status: "done" };
-    await expect(run()).resolves.toBe(true);
-    await expect(run()).resolves.toBe(false);
-    expect(startTurn).toHaveBeenCalledOnce();
-    expect(completeBatch).toHaveBeenCalledOnce();
-    expect(child.completion?.resultText).toBe("child result");
+    expect(completeBatch).toHaveBeenCalledWith([child], 1, undefined, expect.any(Function));
+    const foreground = vi.fn(async () => "foreground completed");
+    await expect(withSessionTurn(REQUESTER_TURN, foreground)).resolves.toBe("foreground completed");
+    expect(foreground).toHaveBeenCalledOnce();
   });
 
-  it.each(["requester wake", "ordinary delivery"] as const)(
-    "keeps foreground admission available until restored %s is due",
-    async (kind) => {
+  it.each(["superseded sibling", "current killed child"] as const)(
+    "dispatches an owed yielded cohort with a %s",
+    async (scenario) => {
+      const context = createContext();
       const child = settledChild();
-      setSubagentAnnounceDeliveryDepsForTest({
-        getRuntimeConfig: () => ({}),
-        loadRequesterSessionEntry: () => requesterSnapshot(),
-      });
-      const due = Date.now() + 30_000;
-      if (kind === "requester wake") {
-        child.requesterSettleWake = {
-          ...child.requesterSettleWake!,
-          attemptCount: 1,
-          nextAttemptAt: due,
-          batchRunIds: [child.runId],
-        };
-      } else {
-        child.requesterSettleWake = undefined;
-        child.delivery = { status: "pending", attemptCount: 1, nextAttemptAt: due };
+      child.delivery = { status: "pending" };
+      const obsolete: SubagentRunRecord = {
+        ...settledChild(),
+        runId: "superseded-child",
+        childSessionKey: "agent:main:subagent:superseded-child",
+        completion: {
+          ...settledChild().completion,
+          required: true,
+          resultText: "OBSOLETE-FINDING",
+        },
+        delivery: { status: "pending" },
+        suppressCompletionDelivery: true,
+        killReconciliation: { killedAt: 3_000, supersededAt: 4_000 },
+      };
+      const rows = scenario === "superseded sibling" ? [child, obsolete] : [child];
+      if (scenario === "current killed child") {
+        child.killReconciliation = { killedAt: 3_000 };
+        child.suppressCompletionDelivery = true;
+        child.endedReason = SUBAGENT_ENDED_REASON_KILLED;
+        child.execution.outcome = { status: "error", error: "synthetic cancellation" };
       }
-      subagentRuns.set(child.runId, child);
-      onTestFinished(() => {
-        subagentRuns.delete(child.runId);
+      for (const row of rows) {
+        row.requesterSettleWake = {
+          ...row.requesterSettleWake!,
+          batchRunIds: rows.map((member) => member.runId).toSorted(),
+        };
+        subagentRuns.set(row.runId, row);
+        onTestFinished(() => {
+          subagentRuns.delete(row.runId);
+        });
+      }
+      registryRead.listSubagentRunsForRequester.mockReturnValue(rows);
+      const completeBatch = vi.fn<Wake["completeBatch"]>(
+        async (batch, _generation, _outcome, committed) => {
+          for (const row of batch) {
+            row.requesterSettleWake = undefined;
+          }
+          await committed?.();
+        },
+      );
+      const params = wakeParams(child, completeBatch);
+      const received: Array<{ message: string; runId: string }> = [];
+      startTurn.mockImplementation(async ({ controllerInput, preflight, io }) => {
+        acceptTurn({ controllerInput, preflight, io });
+        await withSessionTurn({ ...REQUESTER_TURN, controllerInput }, async () => {
+          io.emitExecutionStarted?.();
+          received.push({
+            message: preflight.request.message,
+            runId: preflight.request.idempotencyKey,
+          });
+        });
+        finishProcessedCompletion(io);
       });
-      expect(await reserveRestoredSubagentControllerSources([child])).toEqual([]);
-      expect(
-        getExistingSessionControllerMailbox(REQUESTER_KEY, REQUESTER_TARGET)?.entries ?? [],
-      ).toEqual([]);
+      useDirectDelivery();
+
+      await expect(
+        withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params)),
+      ).resolves.toBe(true);
+      expect(received).toHaveLength(1);
+      expect(received[0]!.message).not.toContain("OBSOLETE-FINDING");
+      expect(received[0]!.message).toContain(
+        scenario === "superseded sibling" ? "child result" : "synthetic cancellation",
+      );
+      expect(received[0]!.runId).toBe(
+        scenario === "superseded sibling"
+          ? "announce:requester-settle:main:agent:main:main:settled-child,superseded-child:yield-1"
+          : "announce:requester-settle:main:agent:main:main:settled-child:yield-1",
+      );
+      expect(completeBatch).toHaveBeenCalledWith(
+        rows,
+        1,
+        expect.objectContaining({ delivered: true }),
+        expect.any(Function),
+      );
+      await expect(
+        withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params)),
+      ).resolves.toBe(false);
+      expect(startTurn).toHaveBeenCalledOnce();
       const foreground = vi.fn(async () => "foreground completed");
       await expect(withSessionTurn(REQUESTER_TURN, foreground)).resolves.toBe(
         "foreground completed",
       );
       expect(foreground).toHaveBeenCalledOnce();
-      const clock = vi.spyOn(Date, "now").mockReturnValue(due);
-      try {
-        const restored = await reserveRestoredSubagentControllerSources([child]);
-        expect(restored).toHaveLength(1);
-        expect(restored[0]?.phase).toBe("preparing");
-        expect(await reserveRestoredSubagentControllerSources([child])).toEqual(restored);
-        expect(
-          getExistingSessionControllerMailbox(REQUESTER_KEY, REQUESTER_TARGET)?.entries,
-        ).toHaveLength(1);
-        expect(startTurn).not.toHaveBeenCalled();
-      } finally {
-        clock.mockRestore();
-      }
     },
   );
 
-  it.each([
-    "retry pending",
-    "obsolete original pending",
-    "retry settled",
-    "retry settled claim",
-  ] as const)("keeps restored retry custody with historical receipts: %s", async (scenario) => {
-    const stableRunId = "announce:requester-settle:main:agent:main:main:settled-child:yield-1";
-    const retryRunId =
-      "announce:requester-settle:main:agent:main:main:settled-child:yield-1:retry-1";
-    const obsoleteOriginalPending = scenario === "obsolete original pending";
-    const pendingRunId = obsoleteOriginalPending ? stableRunId : retryRunId;
-    const historicalRunId = obsoleteOriginalPending ? retryRunId : stableRunId;
-    const settled = scenario.startsWith("retry settled");
-    const reconciled = settled || obsoleteOriginalPending;
-    const requesterEntry: InternalSessionEntry = {
-      sessionId: "requester-session",
-      updatedAt: 1,
-      lifecycleRunId: settled ? "recovered-retry" : "recovering-wake",
-      ...(scenario === "retry settled claim" ? { abortedLastRun: true } : {}),
-      restartRecoveryTerminalRunIds: settled ? [historicalRunId, retryRunId] : [historicalRunId],
-      restartRecoveryTerminalDeliveryEvidence: [
-        recoveryEvidence(historicalRunId, "historical-attempt", obsoleteOriginalPending),
-        ...(settled ? [recoveryEvidence(retryRunId, "recovered-retry")] : []),
-      ],
-      ...(!settled || scenario === "retry settled claim"
-        ? {
-            restartRecoveryDeliveryRunId: "recovering-wake",
-            restartRecoveryDeliverySourceRunId: pendingRunId,
-          }
-        : {}),
-    };
-    const child = settledChild();
-    child.requesterSettleWake = {
-      ...child.requesterSettleWake!,
-      status: "dispatching",
-      attemptCount: 2,
-      batchRunIds: [child.runId],
-    };
-    registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
-    const requester = useDirectDelivery({}, requesterEntry);
-    loadRequester.mockResolvedValue(requester);
-    const completeBatch = vi.fn(() => {
-      child.requesterSettleWake = undefined;
+  it("does not dispatch findings whose child becomes superseded after preparation", async () => {
+    const context = createContext();
+    const { child, completeBatch, params } = dispatchFixture();
+    child.delivery = { status: "pending" };
+    child.requesterSettleWake!.batchRunIds = [child.runId];
+    const prepared = createDeferredCore();
+    const release = createDeferredCore();
+    readDescendantFacts
+      .mockImplementationOnce(async () => ({ unsettled: false, active: 0 }))
+      .mockImplementationOnce(async () => {
+        // This second read follows the real completion-findings preparation.
+        prepared.resolve();
+        await release.promise;
+        return { unsettled: false, active: 0 };
+      });
+    const transition = vi.fn(params.transitionBatch);
+    startTurn.mockImplementation(async ({ controllerInput, preflight, io }) => {
+      acceptTurn({ controllerInput, preflight, io });
+      await withSessionTurn({ ...REQUESTER_TURN, controllerInput }, async () => {
+        io.emitExecutionStarted?.();
+      });
+      finishProcessedCompletion(io);
     });
-    expect(await reserveRestoredSubagentControllerSources([child])).toEqual([]);
-    await expect(
-      maybeWakeRequesterAfterAllChildrenSettled(wakeParams(child, completeBatch)),
-    ).resolves.toBe(settled);
-    expect(startTurn).not.toHaveBeenCalled();
-    expect(completeBatch).toHaveBeenCalledTimes(reconciled ? 1 : 0);
-    if (reconciled) {
-      // Only the admitted retry's receipt can retire this wake; an obsolete
-      // original-key claim cannot retain it or turn its failed receipt into success.
-      expect(deliver).toHaveBeenCalledWith(
-        expect.objectContaining({
-          directIdempotencyKey: retryRunId,
-        }),
+    useDirectDelivery();
+    const pending = withGateway(context, () =>
+      maybeWakeRequesterAfterAllChildrenSettled({ ...params, transitionBatch: transition }),
+    );
+    try {
+      await prepared.promise;
+      // Keep the same row owner and terminal outcome: only latest-execution custody changes.
+      child.killReconciliation = { killedAt: 3_000, supersededAt: 4_000 };
+      release.resolve();
+      await expect(pending).rejects.toThrow(
+        "Requester completion source changed before continuation admission.",
       );
-      expect(completeBatch).toHaveBeenCalledWith(
-        [child],
-        1,
-        expect.objectContaining({ delivered: settled }),
-        expect.any(Function),
-      );
-    } else {
-      expect(deliver).not.toHaveBeenCalled();
-      expect(child.requesterSettleWake).toMatchObject({ status: "dispatching", attemptCount: 2 });
+      expect(startTurn).not.toHaveBeenCalled();
+      expect(transition).not.toHaveBeenCalled();
+      expect(completeBatch).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await pending.catch(() => {});
     }
-    const mailbox = getExistingSessionControllerMailbox(REQUESTER_KEY, REQUESTER_TARGET);
-    expect(mailbox?.entries ?? []).toEqual([]);
   });
+
+  it.each([
+    { name: "all consumed, NO_REPLY", undelivered: false, silent: true },
+    { name: "all consumed, empty reply", undelivered: false, silent: false },
+    { name: "one undelivered, NO_REPLY", undelivered: true, silent: true },
+  ])(
+    "settles a yielded cohort according to its remaining results: $name",
+    async ({ undelivered, silent }) => {
+      vi.useFakeTimers();
+      const context = createContext();
+      const consumed = settledChild();
+      const sibling = settledChild();
+      sibling.runId = "sibling";
+      sibling.childSessionKey = "agent:main:subagent:sibling";
+      sibling.delivery = { status: undelivered ? "pending" : "delivered" };
+      const children = [consumed, sibling];
+      for (const child of children) {
+        child.requesterSettleWake!.batchRunIds = children.map((entry) => entry.runId);
+      }
+      registryRead.listSubagentRunsForRequester.mockReturnValue(children);
+      const completeBatch = vi.fn<Wake["completeBatch"]>(() => {
+        for (const child of children) {
+          child.requesterSettleWake = undefined;
+        }
+      });
+      useDirectDelivery();
+      startTurn.mockImplementation(async ({ preflight, io }) => {
+        acceptTurn({ preflight, io });
+        io.emitFinal([
+          true,
+          {
+            status: "ok",
+            result: {
+              payloads: [],
+              meta: { terminalReply: { disposition: silent ? "silent" : "empty" } },
+            },
+          },
+          undefined,
+        ]);
+      });
+      const params = wakeParams(consumed, completeBatch);
+      const run = () =>
+        withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
+
+      await expect(run()).resolves.toBe(true);
+      expect(startTurn).toHaveBeenCalledOnce();
+      expect(completeBatch).toHaveBeenCalledOnce();
+      expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(run()).resolves.toBe(false);
+      expect(startTurn).toHaveBeenCalledOnce();
+      expect(completeBatch).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([false, true])(
     "wakes a nested yielded requester once (child completed before yield=%s)",
@@ -352,6 +643,7 @@ describe("requester settle dispatch deadline", () => {
             : undefined,
       );
       const child = settledChild();
+      child.delivery = { status: "pending" };
       child.requesterSessionKey = requesterSessionKey;
       child.requesterSettleWake = {
         status: "pending",
@@ -361,7 +653,7 @@ describe("requester settle dispatch deadline", () => {
         afterRequesterYield: afterRequesterYield ? true : undefined,
         rearmGeneration: 1,
       };
-      registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
+      const { completeBatch, params } = dispatchFixture(child);
       const append = vi.fn(() => true);
       const owner = {
         requesterAgentId: "main",
@@ -389,14 +681,6 @@ describe("requester settle dispatch deadline", () => {
         finalAssistantVisibleText: "consolidated final",
       } as const;
       deliver.mockResolvedValue(delivered);
-      const completeBatch = vi.fn<
-        Parameters<typeof maybeWakeRequesterAfterAllChildrenSettled>[0]["completeBatch"]
-      >((batch) => {
-        for (const entry of batch) {
-          entry.requesterSettleWake = undefined;
-        }
-      });
-      const params = { ...wakeParams(child, completeBatch), requesterSessionKey };
 
       await expect(maybeWakeRequesterAfterAllChildrenSettled(params)).resolves.toBe(true);
       expect(deliver).toHaveBeenCalledWith(
@@ -432,14 +716,10 @@ describe("requester settle dispatch deadline", () => {
     child.requesterSettleWake!.pauseNotice = { acknowledgment: "PAUSE-MARKER-mid-turn" };
     registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
     const accepted = createDeferredCore();
-    const releaseTurn = createDeferredCore();
-    const currentTurnStarted = createDeferredCore();
+    const turnGate = createEnteredGate();
     const received: string[] = [];
-    const currentTurn = withSessionTurn(REQUESTER_TURN, async () => {
-      currentTurnStarted.resolve();
-      await releaseTurn.promise;
-    });
-    await currentTurnStarted.promise;
+    const currentTurn = withSessionTurn(REQUESTER_TURN, turnGate.wait);
+    await turnGate.entered;
     startTurn.mockImplementation(async ({ controllerInput, preflight, io }) => {
       const request = preflight.request;
       acceptTurn({ controllerInput, preflight, io });
@@ -464,7 +744,7 @@ describe("requester settle dispatch deadline", () => {
         activeCount: Number(Boolean(mailbox?.claim)),
         queuedCount: mailbox?.entries.filter((entry) => entry.phase !== "claimed").length ?? 0,
       }).toEqual({ activeCount: 1, queuedCount: 1 });
-      releaseTurn.resolve();
+      turnGate.release();
       await currentTurn;
       await expect(wake).resolves.toBe(true);
       expect(received).toHaveLength(1);
@@ -474,24 +754,59 @@ describe("requester settle dispatch deadline", () => {
       await expect(maybeWakeRequesterAfterAllChildrenSettled(params)).resolves.toBe(false);
       expect(startTurn).toHaveBeenCalledOnce();
     } finally {
-      releaseTurn.resolve();
+      turnGate.release();
       await currentTurn;
       await wake;
     }
   });
 
+  it.each([
+    ["removed", "managed worktree was removed: /synthetic/requester", true],
+    ["removing", "managed worktree removal is in progress: /synthetic/requester", false],
+  ] as const)(
+    "settles a worktree refusal only when permanent: %s",
+    async (_state, message, permanent) => {
+      const context = createContext();
+      const { child, completeBatch, params } = dispatchFixture();
+      useDirectDelivery();
+      startTurn.mockRejectedValue(new GatewayClientRequestError({ code: "UNAVAILABLE", message }));
+      const run = () =>
+        withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
+
+      await expect(run()).resolves.toBe(false);
+      expect(await deliver.mock.results[0]?.value).toMatchObject({
+        error: message,
+        disposition: permanent ? "permanent_failure" : "retryable",
+      });
+      if (permanent) {
+        expect(completeBatch).toHaveBeenCalledOnce();
+        expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({
+          disposition: "permanent_failure",
+        });
+        expect(child.requesterSettleWake).toBeUndefined();
+        await expect(run()).resolves.toBe(false);
+        expect(startTurn).toHaveBeenCalledOnce();
+      } else {
+        expect(completeBatch).not.toHaveBeenCalled();
+        expect(child.requesterSettleWake).toMatchObject({ status: "pending", attemptCount: 1 });
+        expect(child.requesterSettleWake?.nextAttemptAt).toBeTypeOf("number");
+        startTurn.mockImplementation(async (turn) => {
+          acceptTurn(turn);
+          finishTurn(turn.io, "Completion received.");
+        });
+        await expect(run()).resolves.toBe(true);
+        expect(completeBatch).toHaveBeenCalledOnce();
+        expect(startTurn).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
+
   it.each(["unavailable", "admitted", "accepted replay", "ambiguous"] as const)(
-    "retains only a definite pre-admission refusal: %s",
+    "keeps a result no turn committed owed unless its refusal is permanent: %s",
     async (failure) => {
       const context = createContext();
       const createFacade = context.createAgentTurnFacade;
-      const child = settledChild();
-      registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
-      const initialWake = structuredClone(child.requesterSettleWake);
-      const completeBatch = vi.fn(() => {
-        child.requesterSettleWake = undefined;
-      });
-      const params = wakeParams(child, completeBatch);
+      const { child, completeBatch, params } = dispatchFixture();
       useDirectDelivery();
       startTurn.mockImplementation(async ({ controllerInput, preflight, io }) => {
         if (failure === "admitted") {
@@ -511,24 +826,26 @@ describe("requester settle dispatch deadline", () => {
       const run = () =>
         withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
       await expect(run()).resolves.toBe(false);
-      if (failure === "unavailable") {
-        expect(startTurn).not.toHaveBeenCalled();
-        expect(completeBatch).not.toHaveBeenCalled();
-        expect(child.requesterSettleWake).toEqual(initialWake);
-        context.createAgentTurnFacade = createFacade;
-        startTurn.mockImplementation(async ({ preflight, io }) => {
-          io.emitAcceptance([
-            true,
-            { runId: preflight.request.idempotencyKey, status: "accepted" },
-          ]);
-          finishTurn(io, "Continuation.");
-        });
-        await expect(run()).resolves.toBe(true);
-      } else {
+      expect(startTurn).toHaveBeenCalledTimes(failure === "unavailable" ? 0 : 1);
+      if (failure === "admitted" || failure === "accepted replay") {
+        // A refusal after admission is permanent: withheld once, never dispatched again.
         expect(completeBatch).toHaveBeenCalledOnce();
+        expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({
+          disposition: "permanent_failure",
+        });
         await expect(run()).resolves.toBe(false);
+        expect(startTurn).toHaveBeenCalledOnce();
+        return;
       }
-      expect(startTurn).toHaveBeenCalledOnce();
+      expect(completeBatch).not.toHaveBeenCalled();
+      expect(child.requesterSettleWake).toMatchObject({ status: "pending", attemptCount: 1 });
+      context.createAgentTurnFacade = createFacade;
+      startTurn.mockImplementation(async ({ preflight, io }) => {
+        io.emitAcceptance([true, { runId: preflight.request.idempotencyKey, status: "accepted" }]);
+        finishTurn(io, "Continuation.");
+      });
+      await expect(run()).resolves.toBe(true);
+      expect(startTurn).toHaveBeenCalledTimes(failure === "unavailable" ? 1 : 2);
       expect(completeBatch).toHaveBeenCalledOnce();
     },
   );
@@ -592,6 +909,7 @@ describe("requester settle dispatch deadline", () => {
               if (!operation) {
                 throw new Error("expected requester operation");
               }
+              await controllerInput?.onTranscriptCommitted?.(request.idempotencyKey);
               markReplyOperationExecutionStarted(operation);
               operation.setPhase("running");
               io.emitExecutionStarted?.();
@@ -632,10 +950,10 @@ describe("requester settle dispatch deadline", () => {
           await claim?.settlement.promise;
         }
       });
-      useDirectDelivery(cfg);
+      useDirectDelivery(requesterSnapshot(cfg));
       const wake = withGateway(context, () =>
         maybeWakeRequesterAfterAllChildrenSettled({
-          ...wakeParams(child, completeBatch),
+          ...wakeParams(child, completeBatch, { recordRequesterDelivery: recordConsumption }),
           signal: stop.signal,
         }),
       );
@@ -663,7 +981,8 @@ describe("requester settle dispatch deadline", () => {
         } else {
           stop.abort(new Error("requester stopped"));
         }
-        await expect(wake).resolves.toBe(outcome === "final");
+        // The turn committed its input: it settles once, whatever the turn did next.
+        await expect(wake).resolves.toBe(true);
         expect(startTurn).toHaveBeenCalledOnce();
         expect(deliver).toHaveBeenCalledOnce();
         expect(timedOut).toHaveBeenCalledTimes(outcome === "runtime timeout" ? 1 : 0);
@@ -675,16 +994,10 @@ describe("requester settle dispatch deadline", () => {
             expect.objectContaining({ delivered: true, requesterVisibleFinalDelivered: true }),
             expect.any(Function),
           );
-        } else if (outcome === "runtime timeout") {
-          // The requester consumed the continuation; its failed outcome is recorded once.
+        } else {
           expect(acceptedSignal?.aborted).toBe(true);
           expect(completeBatch).toHaveBeenCalledOnce();
-          expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: false });
-        } else {
-          // A stopped evaluation leaves the durable wake owed.
-          expect(acceptedSignal?.aborted).toBe(true);
-          expect(completeBatch).not.toHaveBeenCalled();
-          expect(child.requesterSettleWake).toBeDefined();
+          expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
         }
         const later = vi.fn();
         let laterClaim: ReturnType<typeof getCurrentSessionControllerClaim>;

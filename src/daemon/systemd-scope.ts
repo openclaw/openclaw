@@ -17,7 +17,7 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import { GATEWAY_SERVICE_KIND, isGatewayServiceEnv } from "./constants.js";
+import { GATEWAY_SERVICE_KIND, isGatewayServiceEnv, NODE_SERVICE_KIND } from "./constants.js";
 import { resolveDaemonHomeDir } from "./paths.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
@@ -49,6 +49,7 @@ import {
   DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS,
   resolveSystemdUnitLoadPaths,
 } from "./systemd-unit-load-paths.js";
+import { parseSystemdInlineEnvironment } from "./systemd-unit.js";
 
 type SystemdDiscoveryOptions = Pick<
   GatewayServiceReadOptions,
@@ -526,6 +527,16 @@ async function findSystemdGatewayScope(
         if (!hasErrnoCode(error, "ENOENT")) {
           throw error;
         }
+        continue;
+      }
+      // A legacy Gateway for profile node-<x> shares its name with profile <x>'s node.
+      if (
+        !env.OPENCLAW_SYSTEMD_UNIT?.trim() &&
+        name.startsWith("openclaw-node-") &&
+        parseSystemdInlineEnvironment(
+          await fs.readFile(unitPath, "utf8"),
+        ).OPENCLAW_SERVICE_KIND?.trim() === NODE_SERVICE_KIND
+      ) {
         continue;
       }
       return {

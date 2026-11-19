@@ -1,87 +1,11 @@
 import * as fs from "node:fs";
-import { getCapabilities } from "@earendil-works/pi-tui";
 import chalk from "chalk";
-import { type Static, Type } from "typebox";
-import { Compile } from "typebox/compile";
+import { Errors } from "typebox/schema";
 import type { SourceInfo } from "../../../sessions/source-info.js";
 import { highlight, supportsLanguage } from "../../../utils/syntax-highlight.js";
-
-const ColorValueSchema = Type.Union([
-  Type.String(), // hex "#ff0000", var ref "primary", or empty ""
-  Type.Integer({ minimum: 0, maximum: 255 }), // 256-color index
-]);
-
-type ColorValue = Static<typeof ColorValueSchema>;
-
-const ThemeJsonSchema = Type.Object({
-  $schema: Type.Optional(Type.String()),
-  name: Type.String(),
-  vars: Type.Optional(Type.Record(Type.String(), ColorValueSchema)),
-  colors: Type.Object({
-    accent: ColorValueSchema,
-    border: ColorValueSchema,
-    borderAccent: ColorValueSchema,
-    borderMuted: ColorValueSchema,
-    success: ColorValueSchema,
-    error: ColorValueSchema,
-    warning: ColorValueSchema,
-    muted: ColorValueSchema,
-    dim: ColorValueSchema,
-    text: ColorValueSchema,
-    thinkingText: ColorValueSchema,
-    selectedBg: ColorValueSchema,
-    userMessageBg: ColorValueSchema,
-    userMessageText: ColorValueSchema,
-    customMessageBg: ColorValueSchema,
-    customMessageText: ColorValueSchema,
-    customMessageLabel: ColorValueSchema,
-    toolPendingBg: ColorValueSchema,
-    toolSuccessBg: ColorValueSchema,
-    toolErrorBg: ColorValueSchema,
-    toolTitle: ColorValueSchema,
-    toolOutput: ColorValueSchema,
-    mdHeading: ColorValueSchema,
-    mdLink: ColorValueSchema,
-    mdLinkUrl: ColorValueSchema,
-    mdCode: ColorValueSchema,
-    mdCodeBlock: ColorValueSchema,
-    mdCodeBlockBorder: ColorValueSchema,
-    mdQuote: ColorValueSchema,
-    mdQuoteBorder: ColorValueSchema,
-    mdHr: ColorValueSchema,
-    mdListBullet: ColorValueSchema,
-    toolDiffAdded: ColorValueSchema,
-    toolDiffRemoved: ColorValueSchema,
-    toolDiffContext: ColorValueSchema,
-    syntaxComment: ColorValueSchema,
-    syntaxKeyword: ColorValueSchema,
-    syntaxFunction: ColorValueSchema,
-    syntaxVariable: ColorValueSchema,
-    syntaxString: ColorValueSchema,
-    syntaxNumber: ColorValueSchema,
-    syntaxType: ColorValueSchema,
-    syntaxOperator: ColorValueSchema,
-    syntaxPunctuation: ColorValueSchema,
-    thinkingOff: ColorValueSchema,
-    thinkingMinimal: ColorValueSchema,
-    thinkingLow: ColorValueSchema,
-    thinkingMedium: ColorValueSchema,
-    thinkingHigh: ColorValueSchema,
-    thinkingXhigh: ColorValueSchema,
-    bashMode: ColorValueSchema,
-  }),
-  export: Type.Optional(
-    Type.Object({
-      pageBg: Type.Optional(ColorValueSchema),
-      cardBg: Type.Optional(ColorValueSchema),
-      infoBg: Type.Optional(ColorValueSchema),
-    }),
-  ),
-});
-
-type ThemeJson = Static<typeof ThemeJsonSchema>;
-
-const validateThemeJson = Compile(ThemeJsonSchema);
+import { loadTuiRuntime } from "../tui-runtime.js";
+import { ThemeJsonSchema, type ColorValue, type ThemeJson } from "./theme-schema.js";
+import { isThemeJson } from "./theme-validator.generated.js";
 
 type ThemeColor = Exclude<keyof ThemeJson["colors"], ThemeBg>;
 
@@ -327,16 +251,14 @@ export class Theme {
 }
 
 function parseThemeJson(label: string, json: unknown): ThemeJson {
-  if (!validateThemeJson.Check(json)) {
-    const errors = Array.from(validateThemeJson.Errors(json));
+  if (!isThemeJson(json)) {
+    const errors = Errors(ThemeJsonSchema, json)[1];
     const missingColors = new Set<string>();
     const otherErrors: string[] = [];
 
     for (const error of errors) {
       if (error.keyword === "required" && error.instancePath === "/colors") {
-        const requiredProperties = (error.params as { requiredProperties?: string[] })
-          .requiredProperties;
-        for (const requiredProperty of requiredProperties ?? []) {
+        for (const requiredProperty of error.params.requiredProperties) {
           missingColors.add(requiredProperty);
         }
         continue;
@@ -378,7 +300,8 @@ function parseThemeJsonContent(label: string, content: string): ThemeJson {
 }
 
 function createTheme(themeJson: ThemeJson, mode?: ColorMode, sourcePath?: string): Theme {
-  const colorMode = mode ?? (getCapabilities().trueColor ? "truecolor" : "256color");
+  const colorMode =
+    mode ?? (loadTuiRuntime().getCapabilities().trueColor ? "truecolor" : "256color");
   const resolvedColors = resolveThemeColors(themeJson.colors, themeJson.vars);
   const fgColors: Record<ThemeColor, string | number> = {} as Record<ThemeColor, string | number>;
   const bgColors: Record<ThemeBg, string | number> = {} as Record<ThemeBg, string | number>;

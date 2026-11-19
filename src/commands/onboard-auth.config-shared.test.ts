@@ -8,17 +8,10 @@ import {
   applyOnboardAuthAgentModelsAndProviders,
   applyProviderConfigWithDefaultModels,
 } from "../plugin-sdk/provider-onboard.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
 
 function makeModel(id: string): ModelDefinitionConfig {
-  return {
-    id,
-    name: id,
-    contextWindow: 4096,
-    maxTokens: 1024,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    reasoning: false,
-  };
+  return createTestModelDefinition(id, { contextWindow: 4096, maxTokens: 1024 });
 }
 
 function makeProvider(
@@ -43,6 +36,11 @@ const preset = {
   defaultModels: [makeModel("model-b")],
   defaultModelId: "model-b",
 };
+const withProviders = (providers: Record<string, ModelProviderConfig>): OpenClawConfig => ({
+  models: { providers },
+});
+const modelIds = (cfg: OpenClawConfig, provider: string) =>
+  cfg.models?.providers?.[provider]?.models.map((model) => model.id);
 
 function patchProviders(
   providers: Record<string, ModelProviderConfig>,
@@ -67,50 +65,33 @@ function duplicateProviders() {
 }
 
 describe("onboard auth provider config merges", () => {
-  it("preserves provider-level settings when applying onboarding provider patches", () => {
-    const next = patchProviders(
-      {
-        custom: makeProvider(["model-a"], { timeoutSeconds: 900 }),
-        other: makeProvider(["other-a"], {
-          api: "openai-responses",
-          baseUrl: "https://other.example.com/v1",
-          timeoutSeconds: 300,
-        }),
-      },
-      {},
-      "merge",
-    );
-
-    expect(next.models?.providers?.custom?.timeoutSeconds).toBe(900);
-    expect(next.models?.providers?.custom?.baseUrl).toBe("https://new.example.com/v1");
-    expect(next.models?.providers?.custom?.models?.map((m) => m.id)).toEqual(["model-b"]);
-    expect(next.models?.providers?.other?.timeoutSeconds).toBe(300);
-  });
-
   it.each([{ Custom: makeProvider(["model-a"], { timeoutSeconds: 900 }) }, duplicateProviders()])(
     "preserves canonical settings and removes variant provider keys: %j",
     (providers) => {
-      const next = patchProviders(providers);
-      expect(Object.keys(next.models?.providers ?? {})).toEqual(["custom"]);
+      const next = patchProviders(
+        {
+          ...providers,
+          other: makeProvider(["other-a"], { timeoutSeconds: 300 }),
+        },
+        {},
+        "merge",
+      );
+      expect(Object.keys(next.models?.providers ?? {}).toSorted()).toEqual(["custom", "other"]);
       expect(next.models?.providers?.custom).toMatchObject({
         timeoutSeconds: 900,
         baseUrl: newBaseUrl,
       });
+      expect(modelIds(next, "custom")).toEqual(["model-b"]);
+      expect(next.models?.providers?.other?.timeoutSeconds).toBe(300);
     },
   );
 
   it("collapses duplicate provider keys when applying a provider preset", () => {
-    const next = applyProviderConfigWithDefaultModels(
-      { models: { providers: duplicateProviders() } },
-      preset,
-    );
+    const next = applyProviderConfigWithDefaultModels(withProviders(duplicateProviders()), preset);
 
     expect(Object.keys(next.models?.providers ?? {})).toEqual(["custom"]);
     expect(next.models?.providers?.custom?.timeoutSeconds).toBe(900);
-    expect(next.models?.providers?.custom?.models?.map((model) => model.id)).toEqual([
-      "canonical-a",
-      "model-b",
-    ]);
+    expect(modelIds(next, "custom")).toEqual(["canonical-a", "model-b"]);
   });
 
   it("lets onboarding provider patches clear omitted auth fields", () => {
@@ -133,12 +114,11 @@ describe("onboard auth provider config merges", () => {
       { api: "anthropic-messages" },
     );
 
-    expect(next.models?.providers?.custom?.apiKey).toBeUndefined();
-    expect(next.models?.providers?.custom?.auth).toBeUndefined();
-    expect(next.models?.providers?.custom?.authHeader).toBeUndefined();
-    expect(next.models?.providers?.custom?.headers).toBeUndefined();
+    for (const key of ["apiKey", "auth", "authHeader", "headers"] as const) {
+      expect(next.models?.providers?.custom?.[key]).toBeUndefined();
+    }
+    expect(next.models?.providers?.custom).toMatchObject({ timeoutSeconds: 900 });
     expect(next.models?.providers?.custom?.request).toEqual({ allowPrivateNetwork: true });
-    expect(next.models?.providers?.custom?.timeoutSeconds).toBe(900);
   });
 
   it("normalizes retired Google agent model keys when adding provider models", () => {
@@ -174,28 +154,21 @@ describe("onboard auth provider config merges", () => {
 
   it("normalizes retired Google provider catalog ids when applying only an agent default", () => {
     const next = applyAgentDefaultModelPrimary(
-      {
-        models: {
-          providers: {
-            google: makeProvider(["google/gemini-3-pro-preview"], {
-              api: "google-generative-ai",
-              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-            }),
-            kilocode: makeProvider(["google/gemini-3-pro-preview"], {
-              baseUrl: "https://kilocode.example.com/v1",
-            }),
-          },
-        },
-      },
+      withProviders({
+        google: makeProvider(["google/gemini-3-pro-preview"], {
+          api: "google-generative-ai",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        }),
+        kilocode: makeProvider(["google/gemini-3-pro-preview"], {
+          baseUrl: "https://kilocode.example.com/v1",
+        }),
+      }),
       "google/gemini-3.1-pro-preview",
     );
 
-    expect(next.models?.providers?.google?.models?.map((m) => m.id)).toEqual([
-      "google/gemini-3.1-pro-preview",
-    ]);
-    expect(next.models?.providers?.kilocode?.models?.map((m) => m.id)).toEqual([
-      "google/gemini-3.1-pro-preview",
-    ]);
+    for (const provider of ["google", "kilocode"]) {
+      expect(modelIds(next, provider)).toEqual(["google/gemini-3.1-pro-preview"]);
+    }
     expect(next.agents?.defaults?.model).toEqual({ primary: "google/gemini-3.1-pro-preview" });
   });
 });

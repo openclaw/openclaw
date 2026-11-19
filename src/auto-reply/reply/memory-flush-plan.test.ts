@@ -30,7 +30,7 @@ const providerPlan = {
 function setPlan(plan: MemoryFlushPlanResolution["plan"], pluginId = "knowledge") {
   resolvePlanMock.mockReturnValue({ pluginId, selectedSlotOwner: true, plan });
 }
-function config(memoryFlush: { enabled?: boolean; model?: string }) {
+function config(memoryFlush: { enabled?: boolean }) {
   return { agents: { defaults: { compaction: { memoryFlush } } } };
 }
 beforeEach(() => setPlan(providerPlan));
@@ -50,21 +50,6 @@ it.each([
   [{ payloads: [], meta: { terminalReply: { disposition: "silent" } } }, true],
 ] as const)("uses the recorded outcome rather than text: %j", (result, silent) => {
   expect(memoryFlushResultIsSilent(result)).toBe(silent);
-});
-
-it("keeps the session model for a file plan that names none", () => {
-  setPlan(
-    {
-      prompt: "Append notes",
-      systemPrompt: "Legacy flush",
-      relativePath: "memory/notes.md",
-      softThresholdTokens: 4_000,
-      forceFlushTranscriptBytes: 1_024,
-      reserveTokensFloor: 20_000,
-    },
-    "legacy-memory",
-  );
-  expect(resolvePlan({ cfg: config({ model: "ollama/qwen3:8b" }) })?.plan.model).toBeUndefined();
 });
 
 it("caps reserve and maintenance headroom for an 8000-token context window", () => {

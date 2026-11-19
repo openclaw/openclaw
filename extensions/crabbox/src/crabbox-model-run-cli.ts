@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { parseModelRef } from "openclaw/plugin-sdk/model-ref-parse";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { CommandOptions } from "openclaw/plugin-sdk/process-runtime";
 import {
@@ -77,10 +78,11 @@ export function registerCrabboxModelRunCommand({
           timeout: string;
         },
       ) => {
-        const seconds = Number(options.timeout);
-        if (!Number.isSafeInteger(seconds) || seconds < 1 || seconds > 86_400) {
+        const seconds = parseStrictPositiveInteger(options.timeout);
+        if (seconds === undefined || seconds > 86_400) {
           throw new Error("--timeout must be an integer between 1 and 86400 seconds");
         }
+        const cwd = process.cwd();
         const controller = new AbortController();
         const cancel = () => controller.abort(new Error("Crabbox model command interrupted"));
         process.once("SIGINT", cancel);
@@ -97,12 +99,17 @@ export function registerCrabboxModelRunCommand({
             throw new Error("--model must name an explicit provider/model");
           }
           const signal = AbortSignal.any([AbortSignal.timeout(timeoutMs), controller.signal]);
-          const { binary } = await ensureManagedCrabboxBinary({ binary: preferredBinary, signal });
+          const { binary } = await ensureManagedCrabboxBinary({
+            binary: preferredBinary,
+            cwd,
+            signal,
+          });
           const command = (
             args: string[],
             commandOptions: Pick<CommandOptions, "env" | "input" | "onOutputChunk"> = {},
           ) =>
             runCrabboxProcess([binary, "egress", "run", ...args], {
+              cwd,
               timeoutMs,
               maxOutputBytes: MAX_OUTPUT_BYTES,
               killProcessTree: true,

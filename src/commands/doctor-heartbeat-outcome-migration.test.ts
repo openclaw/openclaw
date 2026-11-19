@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Compilable } from "kysely";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
@@ -49,6 +50,9 @@ async function fixture(store: "canonical" | "shared" | "partitioned" = "canonica
   });
   const options = toDatabaseOptions(resolveSqliteScope(scope));
   const database = () => openOpenClawAgentDatabase(options).db;
+  const query = getNodeSqliteKysely<Pick<DB, "heartbeat_outcomes">>(database());
+  const execute = <Row>(statement: Compilable<Row>) =>
+    executeSqliteQuerySync(database(), statement);
   const row = {
     session_key: scope.sessionKey,
     run_session_key: scope.sessionKey,
@@ -66,24 +70,12 @@ async function fixture(store: "canonical" | "shared" | "partitioned" = "canonica
     updated_at: now,
   };
   const insert = (value: typeof row) =>
-    executeSqliteQuerySync(
-      database(),
-      getNodeSqliteKysely<Pick<DB, "heartbeat_outcomes">>(database())
-        .insertInto("heartbeat_outcomes")
-        .values(value),
-    );
+    execute(query.insertInto("heartbeat_outcomes").values(value));
   insert(row);
-  const pending = () =>
-    executeSqliteQuerySync(
-      database(),
-      getNodeSqliteKysely<Pick<DB, "heartbeat_outcomes">>(database())
-        .selectFrom("heartbeat_outcomes")
-        .selectAll(),
-    ).rows;
+  const pending = () => execute(query.selectFrom("heartbeat_outcomes").selectAll()).rows;
   const update = (values: Partial<typeof row>) =>
-    executeSqliteQuerySync(
-      database(),
-      getNodeSqliteKysely<Pick<DB, "heartbeat_outcomes">>(database())
+    execute(
+      query
         .updateTable("heartbeat_outcomes")
         .set(values)
         .where("session_key", "=", scope.sessionKey),

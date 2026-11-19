@@ -68,9 +68,7 @@ describe.skipIf(process.platform === "win32")("Codex stdio crash recovery", () =
 
   function releaseTree(tree: ProcessTree) {
     for (const pid of [tree.descendant, tree.child]) {
-      if (isAlive(pid)) {
-        killFixtureProcess(pid);
-      }
+      killFixtureProcess(pid);
     }
     retainedTrees.delete(tree);
   }
@@ -114,34 +112,31 @@ describe.skipIf(process.platform === "win32")("Codex stdio crash recovery", () =
   }
 
   async function request(parent: ChildProcess, message: OrphanFixtureRequest) {
-    return await new Promise<ProcessTree | "closed">((resolve, reject) => {
-      const cleanup = () => {
-        parent.off("error", onError);
-        parent.off("exit", onExit);
-        parent.off("message", onMessage);
-      };
-      const onError = (error: Error) => {
-        cleanup();
-        reject(error);
-      };
-      const onExit = () => onError(new Error(`Fixture exited: ${stderr.get(parent) ?? ""}`));
-      const onMessage = (response: ProcessTree | "closed" | { error: string }) => {
-        cleanup();
-        if (typeof response === "object" && "error" in response) {
-          reject(new Error(response.error));
-        } else {
-          resolve(response);
-        }
-      };
-      parent.once("error", onError);
-      parent.once("exit", onExit);
-      parent.once("message", onMessage);
-      parent.send!(message, (error) => {
-        if (error) {
-          onError(error);
-        }
-      });
-    });
+    const abort = new AbortController();
+    const { signal } = abort;
+    try {
+      const response = await Promise.race([
+        once(parent, "message", { signal }).then(
+          ([value]): ProcessTree | "closed" | { error: string } => value,
+        ),
+        once(parent, "exit", { signal }).then(() => {
+          throw new Error(`Fixture exited: ${stderr.get(parent) ?? ""}`);
+        }),
+        new Promise<never>((_resolve, reject) => {
+          parent.send!(message, (error) => {
+            if (error) {
+              reject(error);
+            }
+          });
+        }),
+      ]);
+      if (typeof response === "object" && "error" in response) {
+        throw new Error(response.error);
+      }
+      return response;
+    } finally {
+      abort.abort();
+    }
   }
 
   async function start(
@@ -214,9 +209,7 @@ describe.skipIf(process.platform === "win32")("Codex stdio crash recovery", () =
 
   it(
     "reaps dead native and Node trees before a fresh spawn and preserves live owners",
-    {
-      timeout: 60_000,
-    },
+    { timeout: 60_000 },
     async () => {
       // Only this doomed owner needs a cold process: registration verifies its actual OS parent.
       const owner = await startOwner();

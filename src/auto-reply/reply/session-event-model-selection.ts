@@ -42,7 +42,7 @@ export async function resolveScheduledSessionModelSelection(params: {
   const selection = await resolveCronModelSelection({
     ...params,
     owner,
-    payload,
+    payloadModel: payload.model,
     isGmailHook,
     agentConfigOverride: resolveAgentConfig(params.cfg, params.agentId),
   });

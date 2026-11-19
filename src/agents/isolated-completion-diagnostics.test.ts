@@ -9,12 +9,14 @@ import {
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
-  isolatedAssistant,
+  isolatedReply as reply,
+  isolatedErrorReply,
   isolatedCompletionMocks as mocks,
   isolatedRequest,
-  nativeAuthPlan,
+  prepareQuotaProfiles,
   preparedModelRuntime,
   registerIsolatedHarness,
+  registerIsolatedRuntime,
   releaseRuntimeLease,
   resetIsolatedCompletionTestState,
   runIsolatedCompletion,
@@ -50,7 +52,6 @@ afterEach(async () => {
   stop();
   vi.restoreAllMocks();
 });
-const reply = (text = "done") => ({ assistant: isolatedAssistant([{ type: "text", text }]) });
 function advance<T>(elapsed: number, result: T): T {
   clock += elapsed;
   return result;
@@ -85,11 +86,7 @@ it.each(["cli", "v1", "v2"] as const)("times the %s lifecycle", async (runtime) 
     mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
     mocks.runCliAgent.mockImplementation(async () => advance(30, { payloads: [{ text: "done" }] }));
   } else {
-    registerIsolatedHarness(
-      runtime === "v1"
-        ? { runIsolatedCompletion: complete }
-        : { runIsolatedCompletionV2: complete },
-    );
+    registerIsolatedRuntime(runtime, complete);
   }
   await run({ ...isolatedRequest(), purpose: "conversation-label" });
   await drain();
@@ -187,27 +184,13 @@ it("records release failure separately without changing the completed result", a
 });
 
 it("aggregates profile attempts into one phase without duplicate completion observations", async () => {
-  const profileIds = ["openai:first", "openai:backup"];
-  const profiles = Object.fromEntries(
-    profileIds.map((id) => [id, { type: "token", provider: "openai", token: id }]),
-  );
-  const authAttempts = profileIds.map((profileId) => ({
-    kind: "profile",
-    profileId,
-    plan: { ...nativeAuthPlan, forwardedAuthProfileId: profileId },
-  }));
-  mocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles });
-  mocks.prepareAgentRuntimeAuth.mockReturnValue({ plan: nativeAuthPlan, attempts: authAttempts });
+  prepareQuotaProfiles();
   let attempts = 0;
   registerIsolatedHarness({
     authBootstrap: "harness",
     runIsolatedCompletionV2: async () => {
       clock += 20;
-      return ++attempts === 1
-        ? {
-            assistant: { ...isolatedAssistant([], "error"), errorMessage: "429 Too many requests" },
-          }
-        : reply();
+      return ++attempts === 1 ? isolatedErrorReply("429 Too many requests") : reply();
     },
   });
   await run();

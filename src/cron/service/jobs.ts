@@ -189,6 +189,7 @@ export function createJob(
   state: { deps: { nowMs: () => number; cronConfig?: CronConfig; defaultAgentId?: string } },
   input: CronJobCreate,
   opts?: DeliveryValidationOptions & {
+    createdAtMs?: number;
     scheduledToolPolicy?: CronScheduledToolPolicy;
     toolsAllowProvenance?: CronToolsAllowProvenance;
     toolsAllowExecTarget?: CronToolsAllowExecTarget;
@@ -215,6 +216,8 @@ export function createJob(
   delete initialState.scheduleActivatedAtMs;
   delete initialState.runningScheduleChangeId;
   delete initialState.autoDisabled;
+  delete initialState.admissionDeferred;
+  delete initialState.lastMeaningfulResult;
   delete initialState.sourceIdentity;
   delete initialState.streamSourceIdentity;
   assertCronJobStateTimestamps(initialState);
@@ -237,12 +240,15 @@ export function createJob(
     description: normalizeOptionalString(input.description),
     enabled,
     deleteAfterRun,
-    createdAtMs: now,
+    createdAtMs: opts?.createdAtMs ?? now,
     updatedAtMs: now,
     schedule,
     ...(input.pacing !== undefined ? { pacing: structuredClone(input.pacing) } : {}),
     ...(input.activeHours !== undefined ? { activeHours: structuredClone(input.activeHours) } : {}),
     ...(input.idleOnly !== undefined ? { idleOnly: input.idleOnly } : {}),
+    ...(input.cyberAccessProgram !== undefined
+      ? { cyberAccessProgram: input.cyberAccessProgram }
+      : {}),
     sessionTarget: input.sessionTarget,
     wakeMode: input.wakeMode,
     payload:
@@ -305,6 +311,9 @@ export function applyJobPatch(
   const previouslyUsedToolRuntime = cronJobUsesToolRuntime(job);
   const explicitlyClearsToolsAllow = patch.payload?.toolsAllow === null;
   const previousScheduleKind = job.schedule.kind;
+  if (patch.ownerProfileId !== undefined) {
+    job.ownerProfileId = patch.ownerProfileId;
+  }
   if ("name" in patch) {
     job.name = normalizeRequiredName(patch.name);
   }
@@ -363,6 +372,13 @@ export function applyJobPatch(
       delete job.activeHours;
     } else {
       job.activeHours = structuredClone(patch.activeHours);
+    }
+  }
+  if ("cyberAccessProgram" in patch) {
+    if (patch.cyberAccessProgram == null) {
+      delete job.cyberAccessProgram;
+    } else {
+      job.cyberAccessProgram = patch.cyberAccessProgram;
     }
   }
   if ("idleOnly" in patch) {
@@ -440,6 +456,8 @@ export function applyJobPatch(
     delete statePatch.scheduleActivatedAtMs;
     delete statePatch.runningScheduleChangeId;
     delete statePatch.autoDisabled;
+    delete statePatch.admissionDeferred;
+    delete statePatch.lastMeaningfulResult;
     delete statePatch.sourceIdentity;
     delete statePatch.streamSourceIdentity;
     assertCronJobStateTimestamps(statePatch);
@@ -523,6 +541,11 @@ export function applyDeclarativeJobSpec(
     job.activeHours = structuredClone(input.activeHours);
   } else {
     delete job.activeHours;
+  }
+  if (input.cyberAccessProgram !== undefined) {
+    job.cyberAccessProgram = input.cyberAccessProgram;
+  } else {
+    delete job.cyberAccessProgram;
   }
   if (input.idleOnly !== undefined) {
     job.idleOnly = input.idleOnly;

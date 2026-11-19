@@ -1,4 +1,8 @@
-import type { SessionCleanupSummary } from "../config/sessions.js";
+import type { runSessionsCleanup } from "../config/sessions.js";
+
+type SessionCleanupSummary = Awaited<
+  ReturnType<typeof runSessionsCleanup>
+>["appliedSummaries"][number];
 
 export function cleanupSummary(overrides: Partial<SessionCleanupSummary>): SessionCleanupSummary {
   return {

@@ -1,6 +1,7 @@
 import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, expect, it, vi } from "vitest";
+import { trackPromiseFulfillment as track } from "../../test-support/async-gate.test-support.js";
 import {
   discordComponentRegistryState as registry,
   type DiscordRegistryStore,
@@ -34,17 +35,6 @@ function gate<T = void>() {
 
 function register(entries: DiscordComponentEntry[], modals: DiscordModalEntry[] = []) {
   return registerDiscordComponentEntries({ entries, modals });
-}
-
-function track<T>(promise: Promise<T>) {
-  const work = {
-    completed: false,
-    promise: promise.then((value) => {
-      work.completed = true;
-      return value;
-    }),
-  };
-  return work;
 }
 
 it("retires unclicked expired component and modal entries during registration", async () => {
@@ -84,11 +74,14 @@ function store<T extends { id: string }>() {
   } satisfies DiscordRegistryStore<T>;
 }
 
+function persistentStores() {
+  const components = (registry.persistentComponentStore = store<DiscordComponentEntry>());
+  const modals = (registry.persistentModalStore = store<DiscordModalEntry>());
+  return { components, modals };
+}
+
 it("waits for both component and modal registration before completing", async () => {
-  const components = store<DiscordComponentEntry>();
-  const modals = store<DiscordModalEntry>();
-  registry.persistentComponentStore = components;
-  registry.persistentModalStore = modals;
+  const { components, modals } = persistentStores();
   const componentDone = gate();
   const modalDone = gate();
   vi.spyOn(components, "register").mockImplementation(componentDone.wait);
@@ -98,11 +91,11 @@ it("waits for both component and modal registration before completing", async ()
     for (const pending of [componentDone, modalDone]) {
       await pending.started;
       await setImmediate();
-      expect(registration.completed).toBe(false);
+      expect(registration.settled).toBe(false);
       pending.resolve();
     }
     await registration.promise;
-    expect(registration.completed).toBe(true);
+    expect(registration.settled).toBe(true);
   } finally {
     componentDone.resolve();
     modalDone.resolve();
@@ -137,7 +130,7 @@ it.each([false, true])(
       await deleted.started;
       sibling = resolveComponent({ id: "cancel" });
       await setImmediate();
-      expect(first.completed).toBe(false);
+      expect(first.settled).toBe(false);
       deleted.resolve();
       expect((await first.promise)?.id).toBe("confirm");
       expect(await sibling).toBeNull();
@@ -159,7 +152,7 @@ it("awaits modal deletion and keeps in-memory fallback when persistence rejects"
   try {
     await deletion.started;
     await setImmediate();
-    expect(consumed.completed).toBe(false);
+    expect(consumed.settled).toBe(false);
     deletion.reject(new Error("synthetic persistence failure"));
     expect((await consumed.promise)?.id).toBe("modal");
     expect(registry.persistentRegistryDisabled).toBe(true);
@@ -171,10 +164,7 @@ it("awaits modal deletion and keeps in-memory fallback when persistence rejects"
 });
 
 it("captures registration entries and message id before waiting for earlier persistence", async () => {
-  const components = store<DiscordComponentEntry>();
-  const modals = store<DiscordModalEntry>();
-  registry.persistentComponentStore = components;
-  registry.persistentModalStore = modals;
+  const { components, modals } = persistentStores();
   const release = gate();
   vi.spyOn(components, "register").mockImplementationOnce(release.wait);
   const earlier = register([button("earlier")]);
@@ -194,14 +184,13 @@ it("captures registration entries and message id before waiting for earlier pers
     await Promise.all([earlier, queued]);
     const expectedButton = { label: "Captured", messageId: "captured-message" };
     const expectedModal = { title: "Captured modal", messageId: "captured-message" };
-    expect(await resolveComponent({ id: "captured", consume: false })).toMatchObject(
-      expectedButton,
-    );
-    expect(await components.lookup("captured")).toMatchObject({ entry: expectedButton });
-    expect(await resolveModal({ id: "captured-modal", consume: false })).toMatchObject(
-      expectedModal,
-    );
-    expect(await modals.lookup("captured-modal")).toMatchObject({ entry: expectedModal });
+    for (const [id, resolve, persisted, expected] of [
+      ["captured", resolveComponent, components, expectedButton],
+      ["captured-modal", resolveModal, modals, expectedModal],
+    ] as const) {
+      expect(await resolve({ id, consume: false })).toMatchObject(expected);
+      expect(await persisted.lookup(id)).toMatchObject({ entry: expected });
+    }
     expect(await resolveComponent({ id: "late", consume: false })).toBeNull();
   } finally {
     release.resolve();

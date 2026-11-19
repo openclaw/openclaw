@@ -101,7 +101,7 @@ function isWebSearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolea
   if (enabled === true) {
     return true;
   }
-  return hasConfiguredWebSearchCredential({ config: cfg, env, origin: "bundled" });
+  return hasConfiguredWebSearchCredential({ config: cfg, env });
 }
 
 function isBrowserEnabled(cfg: OpenClawConfig): boolean {
@@ -215,7 +215,7 @@ export function collectCrossAgentSessionAccessFindings(
         ? "session tools removed by agent tool policy"
         : "sandboxed sessions clamped to their spawn tree";
       nonReachers.push(
-        `- ${agentId}: ${reason}; its transcripts remain readable by the agents above.`,
+        `- ${agentId}: ${reason}; its chat history remains readable by the agents above.`,
       );
     }
     const restrictions = (["profile", "allow", "deny"] as const).filter(

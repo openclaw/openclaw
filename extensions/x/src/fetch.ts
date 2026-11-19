@@ -4,7 +4,6 @@ export async function fetchXService(
   host: "api.x.com" | "api.github.com",
   path: string,
   init: RequestInit,
-  fetchImpl?: (url: string, init?: RequestInit) => Promise<Response>,
   assertActive?: XAssertActive,
   onDispatch?: () => void,
 ): Promise<Response> {
@@ -18,9 +17,6 @@ export async function fetchXService(
       onDispatch?.();
       return dispatch(input, prepared);
     };
-  if (fetchImpl) {
-    return authorize((_input, prepared) => fetchImpl(url, prepared))(url, init);
-  }
   const [{ fetchWithSsrFGuard }, { responseWithRelease }, { fetchWithRuntimeDispatcher }] =
     await Promise.all([
       import("openclaw/plugin-sdk/ssrf-runtime"),

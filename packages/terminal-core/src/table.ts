@@ -193,11 +193,6 @@ function applySgrSequence(active: Map<SgrCategory, string>, value: string): void
 
 type Osc8Link = { params: string; uri: string };
 
-function parseOsc8Sequence(value: string): Osc8Link | undefined {
-  const match = OSC8_SEQUENCE_RE.exec(value);
-  return match ? { params: match[1] ?? "", uri: match[2] ?? "" } : undefined;
-}
-
 function wrapLine(text: string, width: number): string[] {
   // Fitting edge-trimmed ASCII is one column per code unit and needs no ANSI/grapheme scan.
   // Keep edge whitespace on the full path, where wrapping preserves its trimming semantics.
@@ -233,7 +228,8 @@ function wrapLine(text: string, width: number): string[] {
         continue;
       }
       applySgrSequence(sgr, token.value);
-      const link = parseOsc8Sequence(token.value);
+      const match = OSC8_SEQUENCE_RE.exec(token.value);
+      const link = match ? { params: match[1] ?? "", uri: match[2] ?? "" } : undefined;
       if (link) {
         activeOsc8 = link.uri === "" ? undefined : link;
       }

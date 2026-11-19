@@ -1,13 +1,16 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, onCleanup, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { CompactAttachmentFile } from "./chat-attachment-file.tsx";
 import { AttachmentPreviewChip } from "./chat-attachment-preview-chip.tsx";
 import { readAttachmentText } from "./chat-attachment-text-reader.ts";
 import type { AttachmentAdmission } from "./chat-message-attachment-admission-model.ts";
 
-type PastedTextProps = {
+registerEnglishCatalog(registerChatComposerEnglish);
+
+export function ChatPastedText(props: {
   src?: string;
   sizeBytes?: number;
   scope: string;
@@ -15,9 +18,7 @@ type PastedTextProps = {
   composerAction?: SolidJSX.Element;
   composerRemoveAction?: SolidJSX.Element;
   admission?: AttachmentAdmission;
-};
-
-export function ChatPastedText(props: PastedTextProps) {
+}) {
   const source = createMemo(
     () => ({ src: props.src, sizeBytes: props.sizeBytes, scope: props.scope }),
     {

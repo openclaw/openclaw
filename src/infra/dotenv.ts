@@ -135,6 +135,7 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "APPDATA",
   "LOCALAPPDATA",
   "MATTERMOST_URL",
+  "MISE_DATA_DIR",
   "NODE_TLS_REJECT_UNAUTHORIZED",
   "NO_PROXY",
   "NPM_CONFIG_PREFIX",
@@ -152,7 +153,6 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "AWS_ACCOUNT_ID",
   "AWS_ACCOUNT_ID_ENDPOINT_MODE",
   "AWS_BEARER_TOKEN_BEDROCK",
-  "AWS_BEDROCK_SKIP_AUTH",
   "AWS_CONFIG_FILE",
   "AWS_CREDENTIAL_EXPIRATION",
   "AWS_CREDENTIAL_SCOPE",
@@ -170,13 +170,13 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "AWS_WEB_IDENTITY_TOKEN_FILE",
   "BUZZ_RELAY_URL",
   "SMS_ALLOWED_USERS",
-  "SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION",
   "SMS_PUBLIC_WEBHOOK_URL",
   "SLACK_API_URL",
   "SYNOLOGY_CHAT_INCOMING_URL",
   "SYNOLOGY_ALLOWED_USER_IDS",
   "SYNOLOGY_NAS_HOST",
   "UV_PYTHON",
+  "XDG_BIN_HOME",
   "ZALO_API_URL",
 ]);
 
@@ -261,7 +261,6 @@ export function loadWorkspaceDotEnvFile(filePath: string, opts?: { env?: NodeJS.
     entryFilter: (key) =>
       !shouldBlockWorkspaceStaticDotEnvKey(key) &&
       !getProviderAuthBlockedKeys().has(key.toUpperCase()),
-    quiet: true,
   });
   if (!parsed) {
     return;
@@ -283,7 +282,6 @@ async function loadWorkspaceDotEnvFileAsync(
   const parsed = await readDotEnvFileAsync({
     filePath,
     entryFilter: (key) => !shouldBlockWorkspaceStaticDotEnvKey(key),
-    quiet: true,
   });
   if (!parsed?.entries.length) {
     return;

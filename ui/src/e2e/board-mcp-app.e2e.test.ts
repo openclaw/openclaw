@@ -1,10 +1,12 @@
 import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/ext-apps/app-bridge";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import {
   installMockGateway,
+  reconnectMockGateway,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createBoardE2eSuite } from "./board-browser.test-support.ts";
@@ -173,6 +175,74 @@ async function expectRetainedBoardPresentation(
 }
 
 suite.define(() => {
+  it.each(["session", "view", "scope", "reconnect", "retirement"] as const)(
+    "keeps pending setup through ready publications and replaces it on %s",
+    async (change) => {
+      const page = await newPage();
+      const gateway = await installApp(page, appLease("pending-view"), {
+        deferredMethods: ["mcp.app.view"],
+        presenceUsers: [{ id: "operator-one", name: "Operator One", self: true }],
+      });
+      await suite.openDashboard(page, sessionKey);
+      await gateway.waitForRequest("mcp.app.view");
+      const initialView = await page.locator("mcp-app-view").elementHandle();
+      await page.evaluate(() => {
+        const view = document.querySelector("mcp-app-view");
+        if (!view) {
+          throw new Error("Pending App is missing");
+        }
+        view.restartAfterTeardown();
+        view.restartAfterTeardown();
+      });
+      expect(await gateway.getRequests("mcp.app.view")).toHaveLength(1);
+
+      if (change === "reconnect") {
+        await reconnectMockGateway(page, gateway);
+      } else if (change === "scope") {
+        await gateway.setMethodResponse("users.self", {
+          profile: { id: "operator-two", displayName: "Operator Two", emails: [] },
+        });
+        await page.evaluate(async () => {
+          const pane = document.querySelector("openclaw-chat-pane");
+          const context = pane && (Reflect.get(pane, "context") as ApplicationContext);
+          if (!context) {
+            throw new Error("Dashboard context is missing");
+          }
+          await context.gateway.loadSelfProfile();
+        });
+      } else {
+        await page.evaluate(async (bindingChange) => {
+          const view = document.querySelector("mcp-app-view");
+          if (!view) {
+            throw new Error("Pending App is missing");
+          }
+          if (bindingChange === "session") {
+            view.sessionKey = "agent:main:replacement";
+          } else if (bindingChange === "view") {
+            view.viewId = "replacement-view";
+          } else {
+            await view.teardown();
+            view.restartAfterTeardown();
+          }
+        }, change);
+      }
+      const replacement = await gateway.waitForRequest("mcp.app.view", { after: 1 });
+      expect(replacement.params).toEqual({
+        sessionKey: change === "session" ? "agent:main:replacement" : sessionKey,
+        viewId: change === "view" ? "replacement-view" : "pending-view",
+      });
+      await gateway.resolveDeferred("mcp.app.view");
+      await appFrame(page).getByText("Dashboard app", { exact: true }).waitFor();
+      expect(await page.locator("mcp-app-view iframe").count()).toBe(1);
+      if (change === "scope") {
+        // A scope change retires the whole page, including its previous view owner.
+        expect(await initialView?.evaluate((element) => element.isConnected)).toBe(false);
+      } else {
+        expect(await gateway.getRequests("mcp.app.view")).toHaveLength(2);
+      }
+    },
+  );
+
   it("closes Inbox when a dashboard frame receives an outside click without stealing focus", async () => {
     const page = await newPage();
     await installApp(page, appLease("inbox-focus-view"), {

@@ -38,6 +38,70 @@ async function acceptConnect(
 describe("GatewayBrowserClient shared-auth handshake", () => {
   let client: GatewayBrowserClient;
 
+  it.each([
+    ["access-record-inactive", false],
+    ["profile-invalidated", false],
+    ["policy-check-failed", false],
+    ["future-cause", false],
+    ["policy-unavailable", true],
+    ["plugin-lifetime-retired", true],
+  ] as const)(
+    "handles post-hello access close %s without a reconnect loop",
+    async (cause, retry) => {
+      vi.spyOn(Math, "random").mockReturnValue(0);
+      const onClose = vi.fn();
+      const connection = await startConnect(createClient({ onClose }));
+      await acceptConnect(connection, { role: "operator", scopes: ["operator.read"] });
+      connection.ws.emitClose(
+        4001,
+        `Gateway access stopped [access-cause=${cause}]; synthetic guidance`,
+      );
+      expect(onClose).toHaveBeenCalledWith(
+        expect.objectContaining({
+          code: 4001,
+          willRetry: retry,
+          error: expect.objectContaining({
+            details: {
+              code: "OPERATOR_ACCESS_DENIED",
+              accessCause: cause === "future-cause" ? "policy-check-failed" : cause,
+            },
+          }),
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(wsInstances).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(wsInstances).toHaveLength(retry ? 2 : 1);
+    },
+  );
+
+  it.each([
+    { code: "PROTOCOL_MISMATCH" },
+    { minProtocol: PROTOCOL_VERSION + 1, maxProtocol: PROTOCOL_VERSION + 2 },
+    { minProtocol: 1, maxProtocol: MIN_CLIENT_PROTOCOL_VERSION - 1 },
+    { expectedProtocol: PROTOCOL_VERSION + 1 },
+  ])("does not auto-reconnect on an incompatible protocol: %j", async (details) => {
+    const { ws: ws1, connectFrame: connect } = await startConnect(
+      createClient({ token: "shared-auth-token" }),
+    );
+
+    ws1.emitMessage({
+      type: "res",
+      id: connect.id,
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Versions differ",
+        details,
+      },
+    });
+    await vi.waitFor(() => expect(ws1.readyState).toBe(3), { interval: 1, timeout: 50 });
+    ws1.emitClose(4008, "connect failed");
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(wsInstances).toHaveLength(1);
+  });
+
   it("releases cached view work after connect is sent, before hello", async () => {
     client = createClient({ url: "ws://scopes.example.test" });
     client.start();
@@ -50,11 +114,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     ws.emitOpen();
     await vi.advanceTimersByTimeAsync(0);
     expect(dispatch).not.toHaveBeenCalled();
-    ws.emitMessage({
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce: "handshake-challenge", ts: 1_800_000_000_000 },
-    });
+    ws.emitConnectChallenge({ nonce: "handshake-challenge", ts: 1_800_000_000_000 });
     await dispatched;
     expect(dispatch).toHaveBeenCalledOnce();
   });
@@ -138,6 +198,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       await vi.advanceTimersByTimeAsync(60_000);
       expect(wsInstances).toHaveLength(1);
       expect(client.needsWakeReconnect).toBe(false);
+      expect(client.needsReachabilityReconnect).toBe(false);
       expect(onClose).toHaveBeenLastCalledWith(
         expect.objectContaining({
           willRetry: false,
@@ -179,6 +240,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       GATEWAY_CLIENT_CAPS.TERMINAL_UPLOAD_PATH_STYLE,
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
       GATEWAY_CLIENT_CAPS.CHAT_ONLY_ASSISTANT_TEXT,
+      GATEWAY_CLIENT_CAPS.CHAT_QUEUE_STATUS,
       GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND,
       GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY,
       GATEWAY_CLIENT_CAPS.HELLO_PRESENCE_SELF,
@@ -190,12 +252,26 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
       GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY,
       GATEWAY_CLIENT_CAPS.MODEL_WAIT_STATUS,
+      GATEWAY_CLIENT_CAPS.UI_AGENT_GITHUB_SETTINGS,
       GATEWAY_CLIENT_CAPS.UI_COMMANDS,
       GATEWAY_CLIENT_CAPS.ULTRAFAST,
       GATEWAY_CLIENT_CAPS.USAGE_REFRESHING,
     ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
   });
+
+  it.each(["ios", "android"])(
+    "does not offer agent UI commands from native %s",
+    async (platform) => {
+      Object.assign(window, {
+        __OPENCLAW_NATIVE_EMBED__: { platform, formFactor: "phone" },
+      });
+      const { connectFrame } = await startConnect(createClient({ token: "shared-auth-token" }));
+
+      expect(connectFrame.params.caps).not.toContain(GATEWAY_CLIENT_CAPS.UI_COMMANDS);
+      expect(connectFrame.params.caps).not.toContain(GATEWAY_CLIENT_CAPS.UI_AGENT_GITHUB_SETTINGS);
+    },
+  );
 
   it("leaves the native-auth capability list unchanged", async () => {
     client = createClient({
@@ -253,6 +329,8 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     });
     expect(onReconnectScheduled).toHaveBeenCalledExactlyOnceWith(delayMs);
     expect(wsInstances).toHaveLength(1);
+    expect(client.needsWakeReconnect).toBe(false);
+    expect(client.needsReachabilityReconnect).toBe(false);
     await vi.advanceTimersByTimeAsync(delayMs - 1);
     expect(wsInstances).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1);

@@ -56,7 +56,7 @@ type CreateAcpxRuntimeServiceParams = {
   backendLifecycle: AcpxBackendLifecycle;
   pluginConfig?: unknown;
   getAllowedAgents?: () => readonly string[] | undefined;
-  openKeyedStore?: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
+  openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
 };
 
 function resolveAcpxTimerTimeoutMs(timeoutSeconds: number | undefined): number | undefined {
@@ -222,9 +222,6 @@ export function createAcpxRuntimeService(
         return;
       }
       const openKeyedStore = params.openKeyedStore;
-      if (!openKeyedStore) {
-        throw new Error("ACPX runtime service requires plugin keyed state");
-      }
 
       const basePluginConfig = await measureAcpxStartup(ctx, "config.resolve", () =>
         resolveAcpxPluginConfig({
@@ -306,6 +303,8 @@ export function createAcpxRuntimeService(
         return new AcpxRuntime({
           cwd: pluginConfig.cwd,
           agentProcessEnv: resolveAgentProcessEnv(),
+          agentProcessEnvAllow: pluginConfig.agentProcessEnvAllow,
+          agentProcessEnvBlock: pluginConfig.agentProcessEnvBlock,
           openclawLegacyBareSessionKeys: legacyBareSessionKeys,
           openclawGatewayInstanceId: gatewayInstanceId,
           openclawProcessLeaseStore: processLeaseStore,

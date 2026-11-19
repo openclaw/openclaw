@@ -196,7 +196,6 @@ export function createDiscordExecApprovalButtonContext(params: {
   cfg: OpenClawConfig;
   accountId: string;
   config: DiscordExecApprovalConfig;
-  gatewayUrl?: string;
 }): ExecApprovalButtonContext {
   return {
     getApprovers: () =>
@@ -215,7 +214,6 @@ export function createDiscordExecApprovalButtonContext(params: {
           channel: "discord",
           accountId: params.accountId,
           senderId,
-          gatewayUrl: params.gatewayUrl,
         });
         return { ok: true, resolution };
       } catch (err) {

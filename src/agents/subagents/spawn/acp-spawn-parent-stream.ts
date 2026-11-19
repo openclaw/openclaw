@@ -189,7 +189,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
     flushTimer = setTimeout(flushPending, STREAM_FLUSH_MS);
-    flushTimer.unref?.();
+    flushTimer.unref();
   };
 
   const appendVisibleProgress = (delta: string, kind: string) => {
@@ -263,7 +263,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     stallNotified = true;
     emit(buildNoOutputNotice(), `${contextPrefix}:stall`);
   }, NO_OUTPUT_POLL_MS);
-  noOutputWatcherTimer.unref?.();
+  noOutputWatcherTimer.unref();
 
   const relayLifetimeTimer = setTimeout(() => {
     if (disposed) {
@@ -275,7 +275,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     );
     void dispose();
   }, MAX_RELAY_LIFETIME_MS);
-  relayLifetimeTimer.unref?.();
+  relayLifetimeTimer.unref();
 
   const unsubscribe = onAgentEventForRun(runId, (event) => {
     if (disposed || event.runId !== runId) {

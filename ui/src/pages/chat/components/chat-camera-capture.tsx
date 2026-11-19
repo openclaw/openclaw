@@ -1,13 +1,13 @@
 import { createStore, For, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatCameraEnglish } from "../../../i18n/locales/en-chat-camera.ts";
-import "../../../components/modal-dialog.ts";
+import "../../../components/modal-dialog.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import type { ElementProperties } from "../../../types/solid-elements.d.ts";
 import { useNativeAttachmentCapture } from "./chat-attachment-picker-policy.ts";
-import "./chat-camera-capture.css";
 
 registerEnglishCatalog(registerChatComposerEnglish);
 
@@ -458,7 +458,7 @@ function CameraCaptureContent(_props: CameraProps, host: OpenClawChatCameraCaptu
   );
 }
 
-export const ChatCameraCapture = defineSolidBridge<CameraProps, { show(): void }>(
+defineSolidBridge<CameraProps, { show(): void }>(
   "openclaw-chat-camera-capture",
   CameraCaptureContent,
   {
@@ -482,5 +482,14 @@ export const ChatCameraCapture = defineSolidBridge<CameraProps, { show(): void }
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-chat-camera-capture": OpenClawChatCameraCapture;
+  }
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-chat-camera-capture": HTMLAttributes<OpenClawChatCameraCapture> &
+        ElementProperties<CameraProps>;
+    }
   }
 }

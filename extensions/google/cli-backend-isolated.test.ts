@@ -7,23 +7,10 @@ import {
   type GeminiPrepareContext,
   type GeminiPreparedExecution,
   stageGeminiPreparedExecution,
+  buildGeminiApiKeyPrepareContext,
+  buildGeminiIsolatedPrepareContext,
 } from "./cli-backend-auth.test-helpers.js";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
-
-function buildGeminiApiKeyPrepareContext(workspaceDir: string): GeminiPrepareContext {
-  return {
-    workspaceDir,
-    agentDir: path.join(workspaceDir, "agent"),
-    provider: "google-gemini-cli",
-    modelId: "gemini-3.1-flash-lite",
-    authProfileId: "google:api-key",
-    authCredential: {
-      type: "api_key",
-      provider: "google",
-      key: "gemini-api-key",
-    },
-  };
-}
 
 function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) {
@@ -37,25 +24,11 @@ async function writeJson(file: string, value: unknown): Promise<void> {
   await fs.writeFile(file, JSON.stringify(value));
 }
 
-function isolatedContext(workspaceDir: string): GeminiPrepareContext {
-  return {
-    workspaceDir,
-    provider: "google-gemini-cli",
-    modelId: "gemini-3.1-flash-preview",
-    toolAvailability: { native: [], openClaw: [] },
-    isolatedCompletionModelId: "gemini-3.1-flash-preview",
-    isolatedCompletionSystemPrompt: "Return only JSON.",
-  };
-}
-
 describe("Gemini CLI isolated completion", () => {
   it("keeps an incompatible explicit profile out of shared auth health", async () => {
     await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
       const preparation = buildGoogleGeminiCliBackend().prepareExecution?.({
-        workspaceDir,
-        agentDir: path.join(workspaceDir, "agent"),
-        provider: "google-gemini-cli",
-        modelId: "gemini-3.1-flash-lite",
+        ...buildGeminiApiKeyPrepareContext(workspaceDir),
         authProfileId: "vercel-ai-gateway:default",
         authCredential: {
           type: "api_key",
@@ -303,14 +276,9 @@ describe("Gemini CLI isolated completion", () => {
       process.env.GEMINI_CLI_HOME = ambientHome;
       try {
         await expect(
-          buildGoogleGeminiCliBackend().prepareExecution?.({
-            workspaceDir,
-            provider: "google-gemini-cli",
-            modelId: "gemini-3.1-flash-preview",
-            toolAvailability: { native: [], openClaw: [] },
-            isolatedCompletionModelId: "gemini-3.1-flash-preview",
-            isolatedCompletionSystemPrompt: "Return only JSON.",
-          } as GeminiPrepareContext),
+          buildGoogleGeminiCliBackend().prepareExecution?.(
+            buildGeminiIsolatedPrepareContext(workspaceDir) as GeminiPrepareContext,
+          ),
         ).rejects.toMatchObject({
           code: "unsupported",
           message: expect.stringContaining(
@@ -335,7 +303,7 @@ describe("Gemini CLI isolated completion", () => {
 
       await expect(
         buildGoogleGeminiCliBackend().prepareExecution?.({
-          ...isolatedContext(workspaceDir),
+          ...buildGeminiIsolatedPrepareContext(workspaceDir),
           env: {
             GEMINI_CLI_HOME: ambientHome,
             GEMINI_CLI_SYSTEM_SETTINGS_PATH: systemSettingsPath,
@@ -372,7 +340,7 @@ describe("Gemini CLI isolated completion", () => {
       let prepared: GeminiPreparedExecution | null | undefined;
       try {
         prepared = await buildGoogleGeminiCliBackend().prepareExecution?.({
-          ...isolatedContext(workspaceDir),
+          ...buildGeminiIsolatedPrepareContext(workspaceDir),
           env: { GEMINI_CLI_HOME: preparedHome },
         } as GeminiPrepareContext);
         expect(prepared?.env?.GEMINI_API_KEY).toBe("prepared-key");

@@ -29,7 +29,8 @@ import {
   extractToolOutput,
   extractLatestToolOutput,
   buildSlackMpimHistoryReply,
-  extractAllUserTexts,
+  extractCurrentRuntimeContextTexts,
+  hasCurrentGeneratedMediaDelivery,
   extractUserTurnTexts,
   extractAllRequestTexts,
   extractCurrentImageRequest,
@@ -46,7 +47,10 @@ import {
 } from "./mock-openai-tooling.js";
 
 function readCompletedImageGenerationMediaPath(prompt: string): string | undefined {
-  const eventStart = prompt.lastIndexOf("[Internal task completion event]");
+  const eventStart = Math.max(
+    prompt.lastIndexOf("[Internal task completion event]"),
+    prompt.lastIndexOf("A background task completed."),
+  );
   if (eventStart < 0) {
     return undefined;
   }
@@ -132,12 +136,26 @@ export function buildImageInspectionReply(
   return undefined;
 }
 
+export function buildImageGenerationCompletionReply(input: ResponsesInputItem[]) {
+  const { current } = splitMockConversationContext(extractLastUserText(input));
+  const completionContexts = [current, ...extractCurrentRuntimeContextTexts(input).toReversed()];
+  const completedImageMediaPath = completionContexts
+    .map(readCompletedImageGenerationMediaPath)
+    .find(Boolean);
+  if (!completedImageMediaPath) {
+    return undefined;
+  }
+  const reply = "Protocol note: generated the QA lighthouse image successfully.";
+  return hasCurrentGeneratedMediaDelivery(input)
+    ? reply
+    : `${reply}\nMEDIA:${completedImageMediaPath}`;
+}
+
 export function buildAssistantText(input: ResponsesInputItem[], body: Record<string, unknown>) {
   const prompt = extractLastUserText(input);
-  const latestRawUserText = extractAllUserTexts(input).at(-1) ?? "";
-  const completedImageMediaPath = readCompletedImageGenerationMediaPath(latestRawUserText);
-  if (completedImageMediaPath) {
-    return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${completedImageMediaPath}`;
+  const imageCompletionReply = buildImageGenerationCompletionReply(input);
+  if (imageCompletionReply) {
+    return imageCompletionReply;
   }
   const toolOutput = extractToolOutput(input);
   const scenarioToolOutput =

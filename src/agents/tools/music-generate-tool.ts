@@ -142,7 +142,6 @@ export function createMusicGenerateTool(
           model,
           options,
           signal,
-          findDuplicate: createMusicGenerateDuplicateGuardResult,
           acquire: async (config) =>
             options?.preparedModelRuntime?.acquireMediaCapabilityProviders
               ? acquireMediaGenerationToolProviders("musicGenerationProviders", {
@@ -312,6 +311,8 @@ export function createMusicGenerateTool(
                   musicGenerationTaskLifecycle.recordTaskProgress({
                     handle: taskHandle,
                     progressSummary: "Saving generated music",
+                    provider: result.provider,
+                    model: result.model,
                   });
                   const savedTracks = await persistGeneratedMediaBuffers({
                     assets: result.tracks,

@@ -345,6 +345,7 @@ export async function runQaFlowSuiteStandard(
             scenarioResult: runtimeParityScenario,
             ...runtimeParityCellTiming,
             mockBaseUrl: activeMock?.baseUrl,
+            pendingToolResultWaitMs: params.forcedRuntime === "codex" ? 10_000 : 0,
           })
         : undefined;
     const scenarioFinishedAt = new Date();

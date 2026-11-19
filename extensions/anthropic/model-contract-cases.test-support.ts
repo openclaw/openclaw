@@ -1,4 +1,7 @@
-import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  ProviderResolveDynamicModelContext,
+  ProviderRuntimeModel,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect } from "vitest";
 
@@ -59,7 +62,10 @@ export const claude5ContractCases: Claude5ContractCase[] = [
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
-type TestModel = ProviderRuntimeModel & { api: "anthropic-messages" };
+type TestModel = ProviderRuntimeModel & {
+  api: "anthropic-messages";
+  headers?: Record<string, string>;
+};
 export function makeModel(id: string, overrides: Partial<TestModel> = {}): TestModel {
   return {
     id,
@@ -76,21 +82,17 @@ export function makeModel(id: string, overrides: Partial<TestModel> = {}): TestM
   };
 }
 
-export function createModelRegistry(models: ProviderRuntimeModel[]) {
-  return {
-    find: (providerId: string, modelId: string) =>
-      models.find(
-        (model) =>
-          model.provider === providerId && model.id.toLowerCase() === modelId.toLowerCase(),
-      ) ?? null,
-  };
-}
+type ModelRegistry = ProviderResolveDynamicModelContext["modelRegistry"];
+export const createModelRegistry = (models: ProviderRuntimeModel[]): ModelRegistry => ({
+  getAll: () => models,
+  getAvailable: () => models,
+  hasConfiguredAuth: () => true,
+  find: (providerId, modelId) =>
+    models.find((m) => m.provider === providerId && m.id.toLowerCase() === modelId.toLowerCase()),
+});
 
 export function expectFields(value: unknown, fields: Record<string, unknown>) {
-  const record = requireRecord(value, "record");
-  for (const [key, expected] of Object.entries(fields)) {
-    expect(record[key]).toEqual(expected);
-  }
+  expect(requireRecord(value, "record")).toEqual(expect.objectContaining(fields));
 }
 
 export function levelIds(profile: unknown): Array<unknown> {

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Api, Model, StreamFn, StreamOptions } from "@openclaw/llm-core";
+import type { Api, Model, ModelRequestHeaders, StreamFn, StreamOptions } from "@openclaw/llm-core";
 import type { ApiRegistry } from "../api-registry.js";
 import {
   getAiTransportHost,
@@ -19,7 +19,7 @@ import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 export function prepareHeadersForSimpleCompletion(
   model: Pick<Model, "baseUrl" | "headers">,
   options?: Pick<StreamOptions, "sessionId" | "headers">,
-): Record<string, string> | undefined {
+): ModelRequestHeaders | undefined {
   // Keep the synthetic identity in the required header only: a stream sessionId
   // would also enable unrelated cache and WebSocket session ownership.
   return resolveOpencodeSessionHeaders(model, {

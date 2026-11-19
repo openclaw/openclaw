@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const buildStatusReply = vi.fn(async (params: unknown) => params);
+const buildStatusReply = vi.fn<(params: unknown) => Promise<unknown>>();
 const loadSessionEntry = vi.fn();
 const resolveCurrentDirectiveLevels = vi.fn();
 
@@ -80,23 +80,15 @@ const statusReply = (senderIsOwner: boolean, isAuthorizedSender: boolean) =>
 
 describe("resolveDirectStatusReplyForSessionCore", () => {
   beforeEach(() => {
-    buildStatusReply.mockReset();
-    loadSessionEntry.mockReset();
-    resolveCurrentDirectiveLevels.mockReset();
-
-    buildStatusReply.mockImplementation(async (params: unknown) => params);
-    loadSessionEntry.mockResolvedValue(
-      loadedSession({ agents: { defaults: { reasoningDefault: "off" } } }),
-    );
-    resolveCurrentDirectiveLevels.mockResolvedValue(directiveLevels("off"));
+    buildStatusReply.mockReset().mockImplementation(async (params: unknown) => params);
+    loadSessionEntry
+      .mockReset()
+      .mockResolvedValue(loadedSession({ agents: { defaults: { reasoningDefault: "off" } } }));
+    resolveCurrentDirectiveLevels.mockReset().mockResolvedValue(directiveLevels("off"));
   });
 
   it("treats agentCfg reasoningDefault as explicit for direct /status", async () => {
-    const result = await statusReply(true, true);
-
-    expect(buildStatusReply).toHaveBeenCalledOnce();
-    expect(buildStatusReply.mock.calls[0]?.[0]).toMatchObject({ resolvedReasoningLevel: "off" });
-    expect(result).toMatchObject({ resolvedReasoningLevel: "off" });
+    expect(await statusReply(true, true)).toMatchObject({ resolvedReasoningLevel: "off" });
   });
 
   it.each([

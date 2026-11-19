@@ -5,6 +5,7 @@ import {
   jsonResult,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -40,7 +41,9 @@ export async function executeScreenshotAction({
   signal,
   onTabActivity,
   opts,
+  getConfig = getRuntimeConfig,
 }: {
+  getConfig?: () => OpenClawConfig;
   input: Record<string, unknown>;
   target: BrowserClientTarget;
   profile?: string;
@@ -86,8 +89,8 @@ export async function executeScreenshotAction({
     });
   }
   const screenshotPath = result.path;
-  const screenshotCfg = getRuntimeConfig();
-  const imageSanitization = resolveRuntimeImageSanitization();
+  const screenshotCfg = getConfig();
+  const imageSanitization = resolveRuntimeImageSanitization(getConfig);
   let shareHint = SCREENSHOT_SHARE_UNAVAILABLE;
   try {
     // The original result remains private. Only this bounded outbound

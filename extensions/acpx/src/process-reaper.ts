@@ -209,16 +209,20 @@ function parseProcessList(stdout: string): AcpxProcessInfo[] {
   return processes;
 }
 
-async function listPlatformProcesses(): Promise<AcpxProcessInfo[]> {
+async function listPlatformProcesses(): Promise<AcpxProcessInfo[] | undefined> {
   if (process.platform === "win32") {
     return [];
   }
-  const { stdout } = await runExec("ps", ["-axo", "pid=,ppid=,command="], {
-    logOutput: false,
-    maxBuffer: 8 * 1024 * 1024,
-    timeoutMs: ACPX_PROCESS_LIST_TIMEOUT_MS,
-  });
-  return parseProcessList(stdout);
+  try {
+    const { stdout } = await runExec("ps", ["-axo", "pid=,ppid=,command="], {
+      logOutput: false,
+      maxBuffer: 8 * 1024 * 1024,
+      timeoutMs: ACPX_PROCESS_LIST_TIMEOUT_MS,
+    });
+    return parseProcessList(stdout);
+  } catch {
+    return undefined;
+  }
 }
 
 function collectProcessTree(processes: AcpxProcessInfo[], rootPid: number): AcpxProcessInfo[] {
@@ -307,10 +311,8 @@ export async function cleanupOpenClawOwnedAcpxProcessTree(params: {
     return { terminatedPids: [], skippedReason: "unsupported-platform" };
   }
 
-  let processes: AcpxProcessInfo[];
-  try {
-    processes = await listPlatformProcesses();
-  } catch {
+  const processes = await listPlatformProcesses();
+  if (!processes) {
     return {
       terminatedPids: [],
       skippedReason: "process-list-unavailable",
@@ -372,10 +374,8 @@ export async function cleanupOpenClawOwnedAcpxPendingLease(params: {
     return { terminatedPids: [], skippedReason: "unverified-root" };
   }
 
-  let processes: AcpxProcessInfo[];
-  try {
-    processes = await listPlatformProcesses();
-  } catch {
+  const processes = await listPlatformProcesses();
+  if (!processes) {
     return {
       terminatedPids: [],
       skippedReason: "process-list-unavailable",
@@ -417,10 +417,8 @@ export async function reapStaleOpenClawOwnedAcpxOrphans(params: {
     return { terminatedPids: [], skippedReason: "unsupported-platform" };
   }
 
-  let processes: AcpxProcessInfo[];
-  try {
-    processes = await listPlatformProcesses();
-  } catch {
+  const processes = await listPlatformProcesses();
+  if (!processes) {
     return { terminatedPids: [], skippedReason: "process-list-unavailable" };
   }
 

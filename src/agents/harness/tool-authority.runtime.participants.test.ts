@@ -37,6 +37,7 @@ import { withPreparedEmbeddedRunToolAuthority } from "./tool-authority.runtime.j
 import {
   attempt,
   admitted,
+  expectOutcome,
   interceptMessages,
   published,
   sessionId,
@@ -216,10 +217,7 @@ it("preserves requester ownership across reconnect and release", async () => {
           );
         pending = await inject(incoming);
         await expect(pending.acceptance).resolves.toBe(false);
-        await expect(pending.outcome).resolves.toMatchObject({
-          status: "rejected",
-          reason: "tool_authority_mismatch",
-        });
+        await expectOutcome(pending.outcome, "rejected", "tool_authority_mismatch");
         expect(getGatewayToolCallerIdentity()?.personalToolParticipants?.resolve()?.profileId).toBe(
           "alice",
         );
@@ -245,7 +243,7 @@ it("preserves requester ownership across reconnect and release", async () => {
         );
         expect(queueReturned).toBe(false);
         releaseQueue.resolve();
-        await expect(pending.outcome).resolves.toMatchObject({ status: "accepted" });
+        await expectOutcome(pending.outcome, "accepted");
       } finally {
         releaseQueue.resolve();
         await pending?.outcome;

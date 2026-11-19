@@ -31,6 +31,23 @@ export function retirePreparedModelRuntimeGeneration(
   }
 }
 
+// A remote catalog commit may replace rows without revoking the request's authority.
+// Key by the captured generation predicate, which catalog projections preserve.
+const catalogReplacements = new WeakMap<() => boolean, () => boolean>();
+
+export function recordPreparedModelCatalogReplacement(
+  previous: { isCurrent: () => boolean },
+  replacement: { isCurrent: () => boolean },
+): void {
+  catalogReplacements.set(previous.isCurrent, replacement.isCurrent);
+}
+
+export function hasCurrentPreparedModelCatalogReplacement(owner: {
+  isCurrent: () => boolean;
+}): boolean {
+  return !owner.isCurrent() && catalogReplacements.get(owner.isCurrent)?.() === true;
+}
+
 type ModelRuntimeClose = (error: Error) => Promise<void>;
 class ProcessModelRuntimeLifetimes {
   readonly closeCallbacks = new Set<ModelRuntimeClose>();

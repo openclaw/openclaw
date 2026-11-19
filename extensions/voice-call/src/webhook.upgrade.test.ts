@@ -14,6 +14,7 @@ import { TwilioProvider } from "./providers/twilio.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
 import { RealtimeCallHandler } from "./webhook/realtime-handler.js";
+import { makeRequest } from "./webhook/realtime-handler.lifecycle.test-helpers.js";
 import { StreamDisconnectGrace } from "./webhook/stream-disconnect-grace.js";
 
 vi.mock("./realtime-transcription.runtime.js", () => ({
@@ -211,36 +212,25 @@ describe("VoiceCallWebhookServer shutdown lifecycle", () => {
     streamLifecycle.disconnect("provider-call", "stream-1");
 
     const firstStop = server.stop();
-    const secondStop = server.stop();
-    let stopped = false;
-    void firstStop.then(() => {
-      stopped = true;
-    });
+    const stopped = vi.fn();
+    void firstStop.then(stopped);
 
     try {
-      expect(secondStop).toBe(firstStop);
+      expect(server.stop()).toBe(firstStop);
       expect(handlerClose).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(2_100);
-      expect(stopped).toBe(false);
+      expect(stopped).not.toHaveBeenCalled();
       expect(delayedHangup).not.toHaveBeenCalled();
     } finally {
       handlerClosed.resolve();
       await firstStop;
       vi.useRealTimers();
     }
-    expect(stopped).toBe(true);
+    expect(stopped).toHaveBeenCalledOnce();
   });
 });
 
-function makeRequest(url: string, host = "gateway.ts.net"): http.IncomingMessage {
-  const req = new http.IncomingMessage(null as never);
-  req.url = url;
-  req.method = "POST";
-  req.headers = host ? { host } : {};
-  return req;
-}
-
-function rejectedUpgradeHarness() {
+function rejectedUpgradeHarness(closing = false) {
   const config = normalizeVoiceCallConfig({ realtime: { enabled: true } });
   const resolveRegistration = vi.fn((): never => {
     throw new Error("Rejected upgrades must not acquire a provider");
@@ -253,13 +243,6 @@ function rejectedUpgradeHarness() {
     "/voice/webhook",
     streamDisconnectLifecycle,
   );
-  onTestFinished(async () => {
-    try {
-      await handler.close();
-    } finally {
-      streamDisconnectLifecycle.close();
-    }
-  });
   let flush = () => {};
   let response = "";
   const socket = new Duplex({
@@ -269,8 +252,20 @@ function rejectedUpgradeHarness() {
       flush = callback;
     },
   });
+  const shutdown = createDeferred<void>();
+  const pendingClose = closing ? handler.close(shutdown.promise) : undefined;
+  onTestFinished(async () => {
+    flush();
+    socket.destroy();
+    shutdown.resolve();
+    try {
+      await pendingClose;
+      await handler.close();
+    } finally {
+      streamDisconnectLifecycle.close();
+    }
+  });
   return {
-    handler,
     resolveRegistration,
     socket,
     flush: () => flush(),
@@ -291,39 +286,24 @@ describe("realtime upgrade rejection", () => {
   ] as const)(
     "flushes HTTP %s before closing without acquiring a provider",
     async (status, reason) => {
-      const { handler, resolveRegistration, socket, response, flush, reject } =
-        rejectedUpgradeHarness();
-      const shutdown = createDeferred<void>();
-      const closing = status === 503 ? handler.close(shutdown.promise) : undefined;
+      const { resolveRegistration, socket, response, flush, reject } = rejectedUpgradeHarness(
+        status === 503,
+      );
       const closed = once(socket, "close");
-      try {
-        reject();
-        expect(response()).toBe(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`);
-        expect(socket.destroyed).toBe(false);
-        expect(resolveRegistration).not.toHaveBeenCalled();
-        flush();
-        await closed;
-        expect(socket.destroyed).toBe(true);
-      } finally {
-        flush();
-        socket.destroy();
-        shutdown.resolve();
-        await closing;
-        await handler.close();
-      }
+      reject();
+      expect(response()).toBe(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`);
+      expect(socket.destroyed).toBe(false);
+      expect(resolveRegistration).not.toHaveBeenCalled();
+      flush();
+      await closed;
+      expect(socket.destroyed).toBe(true);
     },
   );
 
   it("owns raw socket errors while rejection bytes are buffered", async () => {
-    const { handler, socket, flush, reject } = rejectedUpgradeHarness();
-    try {
-      reject();
-      expect(() => socket.emit("error", new Error("synthetic raw socket failure"))).not.toThrow();
-      expect(socket.destroyed).toBe(true);
-    } finally {
-      flush();
-      socket.destroy();
-      await handler.close();
-    }
+    const { socket, reject } = rejectedUpgradeHarness();
+    reject();
+    expect(() => socket.emit("error", new Error("synthetic raw socket failure"))).not.toThrow();
+    expect(socket.destroyed).toBe(true);
   });
 });

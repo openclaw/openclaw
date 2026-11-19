@@ -7,6 +7,8 @@ import type { AgentCommandGatewayIngressOpts } from "../../agents/command/types.
 import { registerConfigCli } from "../../cli/config-cli.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import * as configLock from "../../config/write-lock.js";
+import { setLoggerOverride } from "../../logging/logger.js";
+import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -100,6 +102,14 @@ describe("models.authLogout with a concurrent registered config set", () => {
       const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
       await using gateway = await startModelsGateway(state, cfg, token, { hotReloadRecovery });
       const { client } = gateway;
+      const logoutProvider = (selection: Record<string, unknown> = {}) =>
+        client.request("models.authLogout", { provider: "fixture", agentId: "main", ...selection });
+      const saveKey = () =>
+        client.request<{ profileId: string }>("models.authSetApiKey", {
+          provider: "fixture",
+          apiKey: "synthetic-held-run-key",
+          agentId: "main",
+        });
       const acquired = createDeferredCore();
       const save = createDeferredCore();
       const attempted = createDeferredCore();
@@ -147,13 +157,7 @@ describe("models.authLogout with a concurrent registered config set", () => {
             },
           );
         // Observe scheduling only; both registered commands retain the real write owners.
-        logout = settleModelsWork(
-          client.request("models.authLogout", {
-            provider: "fixture",
-            agentId: "main",
-            credentialType: "api_key",
-          }),
-        );
+        logout = settleModelsWork(logoutProvider({ credentialType: "api_key" }));
         await withTimeout(attempted.promise, 10_000, "pending removal config lock");
         observation.mockRestore();
         performSave = true;
@@ -246,32 +250,17 @@ describe("models.authLogout with a concurrent registered config set", () => {
               });
               await turns.get(runId)!.entered.promise;
             }
-            const saved = await client.request<{ profileId: string }>("models.authSetApiKey", {
-              provider: "fixture",
-              apiKey: "synthetic-held-run-key",
-              agentId: "main",
-            });
-            await expect(
-              client.request("models.authLogout", {
-                provider: "fixture",
-                agentId: "main",
-                profileIds: ["fixture:unavailable"],
-              }),
-            ).rejects.toThrow("unavailable auth profiles");
+            const saved = await saveKey();
+            await expect(logoutProvider({ profileIds: ["fixture:unavailable"] })).rejects.toThrow(
+              "unavailable auth profiles",
+            );
             expect(turns.get("fixture")!.signal?.aborted).toBe(false);
-            await expect(
-              client.request("models.authLogout", {
-                provider: "fixture",
-                agentId: "main",
-                profileIds: [saved.profileId],
-              }),
-            ).resolves.toMatchObject({ removedProfiles: [saved.profileId], abortedRunIds: [] });
-            expect(turns.get("fixture")!.signal?.aborted).toBe(false);
-            await client.request("models.authSetApiKey", {
-              provider: "fixture",
-              apiKey: "synthetic-held-run-key",
-              agentId: "main",
+            await expect(logoutProvider({ profileIds: [saved.profileId] })).resolves.toMatchObject({
+              removedProfiles: [saved.profileId],
+              abortedRunIds: [],
             });
+            expect(turns.get("fixture")!.signal?.aborted).toBe(false);
+            await saveKey();
             const agentDir = resolveAgentDir({ agents: cfg.agents }, "main");
             for (const [profileId, credential] of [
               [
@@ -296,45 +285,45 @@ describe("models.authLogout with a concurrent registered config set", () => {
             ] as const) {
               upsertAuthProfile({ agentDir, profileId, credential });
             }
+            const warnings = createWarnLogCapture("models-auth-removal");
+            try {
+              const apiKeyLogout = await logoutProvider({ credentialType: "api_key" });
+              expect(apiKeyLogout).toMatchObject({
+                removedProfiles: [saved.profileId],
+                abortedRunIds: [],
+              });
+              expect(turns.get("fixture")!.signal?.aborted).toBe(false);
+              const status = await client.request<{
+                providers: Array<{ provider: string; profiles: Array<{ profileId: string }> }>;
+              }>("models.authStatus", { agentId: "main" });
+              expect(
+                status.providers
+                  .find((provider) => provider.provider === "fixture")
+                  ?.profiles.map((profile) => profile.profileId)
+                  .toSorted(),
+                JSON.stringify({ logout: apiKeyLogout, status }),
+              ).toEqual(["fixture:oauth", "fixture:ref", "fixture:token"]);
+            } catch (error) {
+              if (error instanceof Error) {
+                const warning = await warnings.findText(
+                  "credential change saved but auth refresh failed:",
+                );
+                error.message += `\nAuth refresh warning: ${warning?.replaceAll(state.root, "<test-state>").slice(0, 6000) ?? "not captured"}`;
+              }
+              throw error;
+            } finally {
+              warnings.cleanup();
+              setLoggerOverride({ level: "silent", consoleLevel: "silent" });
+            }
             await expect(
-              client.request("models.authLogout", {
-                provider: "fixture",
-                agentId: "main",
-                credentialType: "api_key",
-              }),
-            ).resolves.toMatchObject({ removedProfiles: [saved.profileId], abortedRunIds: [] });
-            expect(turns.get("fixture")!.signal?.aborted).toBe(false);
-            const status = await client.request<{
-              providers: Array<{ provider: string; profiles: Array<{ profileId: string }> }>;
-            }>("models.authStatus", { agentId: "main" });
-            expect(
-              status.providers
-                .find((provider) => provider.provider === "fixture")
-                ?.profiles.map((profile) => profile.profileId)
-                .toSorted(),
-            ).toEqual(["fixture:oauth", "fixture:ref", "fixture:token"]);
-            await expect(
-              client.request("models.authLogout", {
-                provider: "fixture",
-                agentId: "main",
-                profileIds: [" fixture:token ", "fixture:oauth", "fixture:token"],
-              }),
+              logoutProvider({ profileIds: [" fixture:token ", "fixture:oauth", "fixture:token"] }),
             ).resolves.toMatchObject({
               removedProfiles: ["fixture:token", "fixture:oauth"],
               abortedRunIds: [],
             });
             expect(turns.get("fixture")!.signal?.aborted).toBe(false);
-            await client.request("models.authSetApiKey", {
-              provider: "fixture",
-              apiKey: "synthetic-held-run-key",
-              agentId: "main",
-            });
-            await expect(
-              client.request("models.authLogout", {
-                provider: "fixture",
-                agentId: "main",
-              }),
-            ).resolves.toMatchObject({
+            await saveKey();
+            await expect(logoutProvider()).resolves.toMatchObject({
               removedProfiles: expect.arrayContaining([saved.profileId, "fixture:ref"]),
               abortedRunIds: ["fixture"],
             });
@@ -352,12 +341,10 @@ describe("models.authLogout with a concurrent registered config set", () => {
               idempotencyKey: "external",
             });
             await turns.get("external")!.entered.promise;
-            await expect(
-              client.request("models.authLogout", {
-                provider: "fixture",
-                agentId: "main",
-              }),
-            ).resolves.toMatchObject({ removedProfiles: [], abortedRunIds: ["external"] });
+            await expect(logoutProvider()).resolves.toMatchObject({
+              removedProfiles: [],
+              abortedRunIds: ["external"],
+            });
             await turns.get("external")!.cancelled.promise;
             expect(turns.get("writer")!.signal?.aborted).toBe(false);
           } finally {

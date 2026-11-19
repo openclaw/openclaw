@@ -5,7 +5,7 @@ import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import type { CronService } from "../cron/service.js";
 import type { CronServiceDeps } from "../cron/service/state.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
-import type { CronJob, CronPayload } from "../cron/types.js";
+import type { CronJob, CronPayload, CronStoredJob } from "../cron/types.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -24,14 +24,30 @@ type ResolveCronTarget = (opts?: {
   sessionKey?: string;
 };
 
+/** Admits a stored job's occurrence with the agent and config its executors resolve. */
+export async function admitGatewayCronOccurrence(
+  job: CronStoredJob,
+  resolveAgent: (requested?: string | null) => { agentId: string; cfg: OpenClawConfig },
+) {
+  const { agentId, cfg } = resolveAgent(job.agentId);
+  const { admitScheduledOccurrence } = await import("../cron/execution-context-admission.js");
+  return await admitScheduledOccurrence({ cfg, job, agentId, trigger: "cron" });
+}
+
 export async function runGatewayCronSessionEvent(
   request: Parameters<NonNullable<CronServiceDeps["runSessionEvent"]>>[0],
   resolveTarget: ResolveCronTarget,
+  cronStorePath?: string,
 ) {
   const sessionKey = resolveCronSessionTargetSessionKey(request.job.sessionTarget);
   const target = resolveTarget({ agentId: request.job.agentId, sessionKey });
   if (!target.agentId || !target.sessionKey) {
-    return { status: "error" as const, error: "Automation has no valid session destination" };
+    return {
+      status: "error" as const,
+      error: "Automation has no valid session destination",
+      errorClassification: { kind: "permanent" as const },
+      failureNotificationDetail: { kind: "invalid-target" as const },
+    };
   }
   const canonicalRequest = sessionKey
     ? canonicalizeMainSessionAlias({
@@ -44,6 +60,8 @@ export async function runGatewayCronSessionEvent(
   if (sessionAgentId && normalizeAgentId(sessionAgentId) !== normalizeAgentId(target.agentId)) {
     return {
       status: "error" as const,
+      errorClassification: { kind: "permanent" as const },
+      failureNotificationDetail: { kind: "invalid-target" as const },
       error:
         "Automation session target belongs to another agent; update agentId or sessionTarget before retrying",
     };
@@ -52,6 +70,7 @@ export async function runGatewayCronSessionEvent(
   return await runCronSessionTurn({
     ...request,
     cfg: target.runtimeConfig,
+    cronStorePath,
     agentId: target.agentId,
     sessionKey: target.sessionKey,
   });

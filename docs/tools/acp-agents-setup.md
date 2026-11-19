@@ -109,6 +109,50 @@ and [Copilot billing guide](https://docs.github.com/en/copilot/concepts/billing-
 for account and plan requirements. Native chat permission and sandbox boundaries
 below still apply.
 
+## Grok Build in native chat
+
+Install [Grok Build](https://docs.x.ai/build/overview) on the Gateway host and run
+`grok login` under the Gateway's OS account. The native picker launches
+`grok agent stdio`, the vendor's [ACP command](https://docs.x.ai/build/cli/headless-scripting#acp).
+Grok owns authentication, model access, and billing; OpenClaw does not forward an
+OpenClaw xAI provider credential to it.
+
+Refresh the model catalog, then choose an `acp-grok-build/<advertised-model-id>`
+entry. OpenClaw preserves the model IDs advertised by the installed CLI. The
+`grok-build` agent target is not a model ID, and the native picker does not use
+the OpenClaw xAI API provider's model list.
+
+Grok's [model-switch implementation](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/agent/handlers/model_switch.rs)
+can reject a switch to an incompatible agent type after a turn has run. Start a
+new chat for that selection; OpenClaw does not discard the existing conversation
+to retry it. Native chat permission and sandbox boundaries below still apply.
+
+To prevent new native Grok turns and catalog discovery, set
+`plugins.entries.acpx.config.nativeAgents.grok-build` to `false`. Classic
+`/acp spawn grok-build` sessions and `acp.allowedAgents` remain separate.
+
+## Qoder CLI in native chat
+
+Install Qoder CLI and sign in under the OS account that runs the Gateway, then
+refresh the model catalog and choose an `acp-qoder/<model-id>` entry. Qoder CLI
+1.1.81 exposes its account model catalog and model selection over ACP. OpenClaw
+uses each advertised ID unchanged, including any slashes;
+it does not supply a static model list or an OpenClaw API credential.
+
+The pinned acpx launcher is `qodercli --acp`. Make `qodercli` available on `PATH`
+for the OS account that runs the Gateway. Configure custom providers and billing
+choices in Qoder itself. Qoder CLI is separate from QoderWork.
+
+Set `plugins.entries.acpx.config.nativeAgents.qoder` to `false` to disable new
+native Qoder turns and catalog discovery. Classic `/acp spawn qoder` sessions
+and `acp.allowedAgents` keep their existing behavior. Installation detection does
+not prove sign-in, model entitlement, or successful execution.
+
+See Qoder's [ACP guide](https://docs.qoder.com/cli/acp) and
+[custom model guide](https://docs.qoder.com/cli/custom-models).
+The native permission and sandbox boundaries below still apply, including
+Qoder's subagents, scheduled tasks, and media tools.
+
 Installed native agents keep their own sign-in. During discovery, `/models` can
 report **Checking native agent** without requiring an OpenClaw API key. If
 availability is unconfirmed, check the native app on the Gateway host and run
@@ -132,7 +176,7 @@ Remove the runtime ID from `agents.entries.<agentId>.nativeRuntimeConsent` to
 revoke remembered consent. Disabling and re-enabling the app does not erase it.
 
 For a runtime configured manually without remembered consent, the Control UI
-still offers **Continue for this chat** to an administrator when selecting the
+still offers **Continue for this session** to an administrator when selecting the
 runtime or sending a message with that selection. This fallback changes only
 that chat's permissions.
 
@@ -412,6 +456,60 @@ openclaw config set plugins.entries.acpx.config.probeAgent claude
 
 With the default hybrid reload mode, this change automatically reloads the plugin.
 Run `/acp doctor` to check the updated backend.
+
+<a id="agent-process-environment" />
+
+### Agent process environment
+
+By default, ACP agents, their command probes, and the terminals they open
+inherit the whole Gateway environment, including the Gateway's own credentials.
+Two optional plugin settings narrow what they inherit. Both are unset by
+default, which keeps that behavior unchanged.
+
+- `agentProcessEnvAllow`: when set, children inherit only process essentials
+  (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LANGUAGE`, `TZ`,
+  `TMPDIR`, `TMP`, `TEMP`, every `LC_*` and `XDG_*`, plus the Windows system
+  and profile variables on Windows) and the listed names. An empty list keeps
+  essentials only.
+- `agentProcessEnvBlock`: names children do not inherit.
+
+They apply in this order: the allowlist first, then the blocklist removes names
+from the result, then explicit grants apply last and always win. Explicit grants
+are `ACPX_AUTH_*` variables, credentials the runtime injects for an agent, and
+variables OpenClaw sets itself (such as the default `TOKIO_WORKER_THREADS`
+cap). Names are case-sensitive except on Windows, and must not contain `=` or
+whitespace.
+
+Example that keeps OpenClaw's own credentials away from ACP agents while they
+still inherit everything else:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "acpx": {
+        "config": {
+          "agentProcessEnvBlock": [
+            "OPENCLAW_GATEWAY_TOKEN",
+            "OPENCLAW_HOOK_TOKEN",
+            "OP_CONNECT_TOKEN",
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY"
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+Block a provider key only when the ACP agent does not need it: an agent that
+authenticates with that key can no longer start. MCP servers the agent launches,
+including the OpenClaw tool bridges, normally inherit the agent's environment
+too. With an allowlist, also list what they need, such as `OPENCLAW_STATE_DIR`
+or `OPENCLAW_CONFIG_PATH` when the Gateway uses them, and any variable your
+config references. New settings apply to agents started after the plugin
+reloads.
 
 ## Permission configuration
 

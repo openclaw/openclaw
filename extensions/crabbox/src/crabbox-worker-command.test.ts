@@ -3,6 +3,7 @@ import timers from "node:timers/promises";
 import { inspect as inspectValue } from "node:util";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, expect, it, vi } from "vitest";
+import { commandResult } from "../../test-support/command-result.test-support.js";
 import * as processRunner from "./crabbox-process.js";
 import {
   isUnrecognizedLease,
@@ -15,14 +16,7 @@ const LEASE_ID = "cbx_0123456789ab";
 const readError = `coordinator GET /v1/leases/${LEASE_ID}: http 404: {"error":"not_found"}`;
 const releaseError = `coordinator POST /v1/leases/${LEASE_ID}/release: http 404: {"error":"not_found"}`;
 const absentOutput = `warning: could not inspect lease before release: ${readError}\n${releaseError}`;
-const absentResult: SpawnResult = {
-  stdout: "",
-  stderr: absentOutput,
-  code: 1,
-  signal: null,
-  killed: false,
-  termination: "exit",
-};
+const absentResult: SpawnResult = commandResult({ stderr: absentOutput, code: 1 });
 
 const leaseTimeout = `Get "https://coordinator.example/v1/leases/${LEASE_ID}?providerMetadata=authoritative": context deadline exceeded`;
 const transportFailure = { ...absentResult, stderr: leaseTimeout };

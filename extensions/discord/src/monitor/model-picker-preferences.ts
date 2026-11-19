@@ -19,11 +19,10 @@ type ModelPickerPreferencesEntry = {
   updatedOrder?: number;
 };
 
-function openPreferenceStore(env?: NodeJS.ProcessEnv) {
+function openPreferenceStore() {
   return getDiscordRuntime().state.openKeyedStore<ModelPickerPreferencesEntry>({
     namespace: "model-picker-preferences",
     maxEntries: PREFERENCE_MAX_ENTRIES,
-    ...(env ? { env } : {}),
   });
 }
 
@@ -114,14 +113,13 @@ function nextPreferenceTimestamp(): {
 export async function readDiscordModelPickerRecentModels(params: {
   scope: DiscordModelPickerPreferenceScope;
   allowedModelRefs?: Set<string>;
-  env?: NodeJS.ProcessEnv;
 }): Promise<string[]> {
   const key = buildDiscordModelPickerPreferenceKey(params.scope);
   if (!key) {
     return [];
   }
   try {
-    const store = openPreferenceStore(params.env);
+    const store = openPreferenceStore();
     const recent = scopedPreferenceEntries(await store.entries(), key)
       .toSorted(comparePreferenceEntries)
       .map((entry) => entry.value.modelRef);
@@ -139,7 +137,6 @@ export async function readDiscordModelPickerRecentModels(params: {
 export async function recordDiscordModelPickerRecentModel(params: {
   scope: DiscordModelPickerPreferenceScope;
   modelRef: string;
-  env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   const key = buildDiscordModelPickerPreferenceKey(params.scope);
   const normalizedModelRef = normalizeModelRef(params.modelRef);
@@ -148,7 +145,7 @@ export async function recordDiscordModelPickerRecentModel(params: {
   }
 
   try {
-    const store = openPreferenceStore(params.env);
+    const store = openPreferenceStore();
     const existingEntries = scopedPreferenceEntries(await store.entries(), key);
     const timestamp = nextPreferenceTimestamp();
     const modelKey = buildPreferenceModelKey(key, normalizedModelRef);

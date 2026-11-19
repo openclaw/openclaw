@@ -505,11 +505,7 @@ export class LogbookService {
       startMs: lookbackStart,
       endMs: batch.endMs,
     });
-    const observations = await store.observationsInRange(
-      batch.day,
-      Math.min(lookbackStart, batch.startMs),
-      batch.endMs,
-    );
+    const observations = await store.observationsInRange(batch.day, lookbackStart, batch.endMs);
     const window = revisionWindow({
       batchStartMs: batch.startMs,
       batchEndMs: batch.endMs,

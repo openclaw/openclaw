@@ -164,6 +164,9 @@ it("publishes changed provisional rollout metadata alongside a concurrent native
       return handle;
     });
     await writeCatalogRollout(root, { ...original, cwd: "/workspace/changed" });
+    // Exercise metadata authority independently of asynchronous watcher delivery.
+    const changedAt = new Date("2030-01-01T00:00:00.000Z");
+    await fs.utimes(path.dirname(file), changedAt, changedAt);
     const reconciling = index.reconcile();
     await opened.promise;
     harness.send({
@@ -194,6 +197,9 @@ it("retries a failed rollout read after access recovers without a fingerprint ch
   await vi.advanceTimersByTimeAsync(0);
   await index.reconcile();
   await writeCatalogRollout(root, { ...original, cwd: "/workspace/changed" });
+  // Exercise metadata authority independently of asynchronous watcher delivery.
+  const changedAt = new Date("2030-01-01T00:00:00.000Z");
+  await fs.utimes(path.dirname(file), changedAt, changedAt);
   const changed = await fs.stat(file);
   const realOpen = fs.open;
   let readable = false;

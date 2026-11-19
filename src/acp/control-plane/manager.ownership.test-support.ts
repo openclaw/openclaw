@@ -3,10 +3,12 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import {
   type AcpSessionManager,
+  baseCfg,
   managerFixture,
   mockMutableSession,
   mockParentedAcpSessionEntries,
   readySessionMeta,
+  type OpenClawConfig,
   type SessionAcpMeta,
 } from "./manager.test-helpers.js";
 
@@ -33,9 +35,15 @@ export function createAcceptedFixture({
   sessionKey = "agent:codex:acp:accepted-ownership",
   parented = false,
   meta = {},
-}: { sessionKey?: string; parented?: boolean; meta?: Partial<SessionAcpMeta> } = {}) {
+  cfg = baseCfg,
+}: {
+  sessionKey?: string;
+  parented?: boolean;
+  meta?: Partial<SessionAcpMeta>;
+  cfg?: OpenClawConfig;
+} = {}) {
   const metadata = { currentMeta: readySessionMeta(meta) };
-  const { runtimeState, ...fixture } = managerFixture(sessionKey, metadata.currentMeta);
+  const { runtimeState, ...fixture } = managerFixture(sessionKey, metadata.currentMeta, cfg);
   mockMutableSession(sessionKey, metadata);
   if (parented) {
     mockParentedAcpSessionEntries({

@@ -38,7 +38,7 @@ it.each([
           ["sessions.compact", "operator.admin", "sessions", handler],
         ]).getGatewayMethodRegistry,
       });
-      const commit = { current: true, active: false, count: 0, checks: 0 };
+      const commit = { current: true, active: false, checks: 0 };
       const assertCurrent = () => {
         commit.checks += Number(commit.active);
         if (!commit.current) {
@@ -61,7 +61,6 @@ it.each([
           callback(request, grant);
           return;
         }
-        commit.count++;
         commit.current = !revoke;
         commit.active = true;
         try {
@@ -96,12 +95,7 @@ it.each([
           );
         }
         expect(commit.checks).toBe(authority === "prepared" ? 1 : 0);
-        if (authority === "prepared") {
-          expect(commit.count).toBe(1);
-        }
-        expect(observation.queries.filter((query) => /\btranscript_events\b/i.test(query))).toEqual(
-          [],
-        );
+        expect(observation.queries.join("\n")).not.toMatch(/\btranscript_events\b/i);
       }
       if (revoke || authority === "opaque") {
         expect({ entry: f.read(), events: readEvents() }).toEqual(before);

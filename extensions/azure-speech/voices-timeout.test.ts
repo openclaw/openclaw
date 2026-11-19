@@ -26,10 +26,7 @@ describe("listAzureSpeechVoices timeout", () => {
       let requestCount = 0;
       let requestSignal: AbortSignal | undefined;
       const cleanupController = new AbortController();
-      let notifyRequest = () => {};
-      const requestReceived = new Promise<void>((resolve) => {
-        notifyRequest = resolve;
-      });
+      const { promise: requestReceived, resolve: notifyRequest } = Promise.withResolvers<void>();
       await withServer(
         (_request, _response) => {
           requestCount += 1;

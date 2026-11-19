@@ -14,7 +14,6 @@ import {
   GitHubPublicationDetails,
   GitHubPublicationMobileRefresh,
 } from "./chat-github-publication.tsx";
-import "../../../styles/chat/github-publication-mobile.css";
 
 export type GitHubPublicationMobileProps = {
   publication: GitHubPublicationView;
@@ -22,10 +21,6 @@ export type GitHubPublicationMobileProps = {
   branch?: ControlUiSessionBranch | null;
   repository?: ControlUiSessionPullRequests["repository"];
   onDismissBranch?: (branch: ControlUiSessionBranch) => void;
-  /** The pull-request host resolves this exact receipt; omission retains the native GitHub link. */
-  onOpenPublished?: (
-    result: Extract<NonNullable<GitHubPublicationView["result"]>, { status: "published" }>,
-  ) => void;
 };
 
 /** Sheet body only. The mobile host owns its header, history, focus and scrollport. */
@@ -123,7 +118,6 @@ export function GitHubPublicationMobile(props: GitHubPublicationMobileProps) {
               publication={props.publication}
               presented={props.presented}
               mobile
-              onOpenPublished={props.onOpenPublished}
             />
           </div>
         </Show>

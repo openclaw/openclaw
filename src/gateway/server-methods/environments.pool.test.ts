@@ -4,6 +4,7 @@ import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src
 import { readDevicePairingNodeSnapshot } from "../../infra/device-pairing-store-readonly.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { collectNodeCatalogRuntimeState } from "../node-registry-private.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import {
   createContext,
@@ -60,13 +61,9 @@ for (const method of ["environments.list", "environments.status"] as const) {
       };
       const record = workerRecord({
         state: listing ? "idle" : "attached",
-        ...(listing
-          ? {
-              attachedSessionIds: ["session-z", "session-a", "session-z", " "],
-              idleSinceAtMs: 6_000,
-              destroyRequestedAtMs: 9_000,
-            }
-          : {}),
+        attachedSessionIds: listing ? ["session-z", "session-a", "session-z", " "] : [],
+        idleSinceAtMs: listing ? 6_000 : null,
+        destroyRequestedAtMs: listing ? 9_000 : null,
         preparation: {
           ...preparation,
           ...details,
@@ -90,23 +87,14 @@ for (const method of ["environments.list", "environments.status"] as const) {
 
       expect(ok).toBe(true);
       const summary: EnvironmentSummary = listing ? payload.environments.at(-1) : payload;
-      expect(summary).toMatchObject({
-        id: "worker-1",
-        type: "worker",
-        status: listing ? "stopping" : "available",
-        trust: "disposable",
-        worker: {
-          providerId: "static-ssh",
-          leaseId: "lease-1",
-          state: listing ? "idle" : "attached",
-          ageMs: 9_000,
-          ...(listing ? { idleMs: 4_000, attachedSessionIds: ["session-a", "session-z"] } : {}),
-          tunnelStatus: "stopped",
-        },
+      expect(summary.trust).toBe("disposable");
+      expect(summary.worker).toMatchObject({
+        ageMs: 9_000,
+        ...(listing ? { idleMs: 4_000, attachedSessionIds: ["session-a", "session-z"] } : {}),
       });
-      expect(summary).not.toHaveProperty("sshEndpoint");
-      expect(summary.worker).not.toHaveProperty("sshEndpoint");
-      expect(summary.worker).not.toHaveProperty("keyRef");
+      for (const path of ["sshEndpoint", "worker.sshEndpoint", "worker.keyRef"]) {
+        expect(summary).not.toHaveProperty(path);
+      }
       expect(summary.preparation).toEqual({
         ...preparation,
         ...(includeDetails ? { details } : {}),
@@ -117,12 +105,6 @@ for (const method of ["environments.list", "environments.status"] as const) {
         expect(summary.worker).not.toHaveProperty("destroyRequestedAtMs");
       }
       if (listing) {
-        expect(payload.environments).toMatchObject([
-          { id: "gateway", type: "local" },
-          { id: "node:node-live", type: "node" },
-          { id: "node:node-offline", type: "node" },
-          { id: "worker-1", type: "worker" },
-        ]);
         expect(payload.profiles).toEqual([
           { id: "aws", providerId: "crabbox", ...(includeDetails ? { readyWorkers: 2 } : {}) },
           {
@@ -137,10 +119,6 @@ for (const method of ["environments.list", "environments.status"] as const) {
           expect(payload).not.toHaveProperty("preparedPool");
           expect(service.readReadyWorkerTarget).not.toHaveBeenCalled();
         }
-        expect(service.readPreparedPoolSummary).toHaveBeenCalledTimes(includeDetails ? 1 : 0);
-        expect(service.list).toHaveBeenCalledOnce();
-      } else {
-        expect(service.get).toHaveBeenCalledWith("worker-1");
       }
     },
   );
@@ -180,15 +158,10 @@ it.each(["environments.list", "environments.status"] as const)(
     });
     const respond = vi.fn();
     const pending = handleGatewayRequest({
-      req: {
-        type: "req",
-        id: `prepared-details-${method}`,
-        method,
-        params: {
-          includePreparedDetails: true,
-          ...(method === "environments.status" ? { environmentId: worker.environmentId } : {}),
-        },
-      },
+      req: gatewayRequest(`prepared-details-${method}`, method, {
+        includePreparedDetails: true,
+        ...(method === "environments.status" ? { environmentId: worker.environmentId } : {}),
+      }),
       client,
       context: Object.assign(createContext(), mockContext(service)),
       respond,

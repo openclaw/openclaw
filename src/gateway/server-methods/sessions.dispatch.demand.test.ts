@@ -8,13 +8,13 @@ import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/g
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { createDevicePlacementDemandReader } from "../worker-environments/device-placement-demand.js";
 import { bindDeviceWorkerAvailability } from "../worker-environments/device-provider.js";
 import { createNodeWorkerBundleTestNode } from "../worker-environments/node-worker-bundle.test-support.js";
-import { coordinateWorkerPlacementDispatch } from "../worker-environments/placement-dispatch-coordinator.js";
 import {
   ACTIVE_PLACEMENT,
-  createCoordinatorTestService,
+  coordinate,
 } from "../worker-environments/placement-dispatch-coordinator.test-support.js";
 import { createDispatchEnvironmentFixtures } from "../worker-environments/placement-dispatch-test-fixtures.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
@@ -35,25 +35,22 @@ type DispatchService = NonNullable<GatewayRequestContext["workerPlacementDispatc
 const dispatchTestMocks = getDispatchTestMocks();
 
 function connectedNode(deviceId: string): NodeWorkerSupervisorNodeProof {
-  const node = createNodeWorkerBundleTestNode();
-  return {
-    ...node,
+  return createNodeWorkerBundleTestNode({
     nodeId: deviceId,
     connId: `conn-${deviceId}`,
     pairingIdentity: `identity-${deviceId}`,
     pairingGeneration: `generation-${deviceId}`,
     workerHost: {
-      ...node.workerHost,
       capturedExecPolicy: true,
       promptContext: 1,
     },
     commands: ["system.run"],
-  };
+  });
 }
 
 async function withDemandFixture(
   run: (fixture: {
-    dispatch: (sessionId: string, deviceId?: string) => Promise<string>;
+    dispatch: (sessionId: string) => Promise<string>;
     send: (sessionId: string) => Promise<HeldTurn>;
     nodes: NodeWorkerSupervisorNodeProof[];
     placements: Map<string, WorkerSessionPlacementRecord>;
@@ -113,31 +110,28 @@ async function withDemandFixture(
       available: true,
       node: nodes.find((node) => node.nodeId === deviceId),
     }));
-    const service: DispatchService = coordinateWorkerPlacementDispatch(
-      createCoordinatorTestService({
-        dispatch: async (request) => {
-          const deviceId = expectDefined(request.deviceId, "selected device");
-          const placement: WorkerSessionPlacementRecord = {
-            ...ACTIVE_PLACEMENT,
-            sessionId: request.sessionId,
-            sessionKey: request.sessionKey,
-            agentId: request.agentId,
-            environmentId: `worker:${request.sessionId}`,
-          };
-          placements.set(request.sessionId, placement);
-          environments.set(placement.environmentId, {
-            ...createDispatchEnvironmentFixtures().attached,
-            environmentId: placement.environmentId,
-            providerId: "device",
-            nodeDeviceId: deviceId,
-            ownerEpoch: placement.activeOwnerEpoch,
-            attachedSessionIds: [placement.sessionId],
-          });
-          return placement;
-        },
-      }),
-      async (_request, dispatch) => await dispatch(),
-    );
+    const service: DispatchService = coordinate({
+      dispatch: async (request) => {
+        const deviceId = expectDefined(request.deviceId, "selected device");
+        const placement: WorkerSessionPlacementRecord = {
+          ...ACTIVE_PLACEMENT,
+          sessionId: request.sessionId,
+          sessionKey: request.sessionKey,
+          agentId: request.agentId,
+          environmentId: `worker:${request.sessionId}`,
+        };
+        placements.set(request.sessionId, placement);
+        environments.set(placement.environmentId, {
+          ...createDispatchEnvironmentFixtures().attached,
+          environmentId: placement.environmentId,
+          providerId: "device",
+          nodeDeviceId: deviceId,
+          ownerEpoch: placement.activeOwnerEpoch,
+          attachedSessionIds: [placement.sessionId],
+        });
+        return placement;
+      },
+    });
     const context = makeDispatchTestContext({
       chatRunState: createChatRunState(),
       dedupe: new Map(),
@@ -159,13 +153,10 @@ async function withDemandFixture(
     });
     const client: GatewayClient = {
       connId: "demand-operator",
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        role: "operator",
-        scopes: ["operator.read", "operator.write", "operator.admin"],
-        client: { id: "cli", version: "test", platform: "test", mode: "cli" },
-      },
+      connect: gatewayConnect(["operator.read", "operator.write", "operator.admin"], {
+        id: "cli",
+        mode: "cli",
+      }),
     };
     const heldTurns = new Map<string, HeldTurn>();
     // Preserve the real admission/ACK; the simulated node has not published a physical launch yet.
@@ -196,7 +187,7 @@ async function withDemandFixture(
       );
       return respond;
     };
-    const dispatch = async (sessionId: string, deviceId?: string) => {
+    const dispatch = async (sessionId: string) => {
       const key = sessionKey(sessionId);
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: key },
@@ -208,11 +199,7 @@ async function withDemandFixture(
           worktree: { id: key, branch: "test", repoRoot: state.workspaceDir },
         },
       );
-      const respond = await invoke(
-        "dispatch",
-        sessionId,
-        deviceId ? { deviceId } : { autoDevice: true },
-      );
+      const respond = await invoke("dispatch", sessionId, { autoDevice: true });
       expect(respond).toHaveBeenCalledWith(
         true,
         expect.objectContaining({
@@ -239,11 +226,6 @@ async function withDemandFixture(
       return expectDefined(heldTurns.get(sessionId), "admitted session turn");
     };
     try {
-      for (const [index, node] of nodes.entries()) {
-        const id = `explicit-${index + 1}`;
-        expect(await dispatch(id, node.nodeId)).toBe(node.nodeId);
-        await send(id);
-      }
       nodes[0]!.workerHost.capacity = { total: 2, available: 1 };
       nodes[1]!.workerHost.capacity = { total: 2, available: 1 };
       await run({ dispatch, send, nodes, placements, service });

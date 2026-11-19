@@ -1,3 +1,4 @@
+import type { AutomationResult } from "../../packages/gateway-protocol/src/schema/cron-automation-result.js";
 import type { VerboseLevel } from "../auto-reply/thinking.shared.js";
 import type {
   AgentRunApprovalLeases,
@@ -9,10 +10,7 @@ export type AgentRunModel = { provider: string; model: string };
 
 export type AgentRunEventState = { seq: number; terminalPublication?: symbol };
 
-export type AutomationResult = {
-  outcome: "no_change" | "progress" | "done" | "blocked" | "needs_attention";
-  summary: string;
-};
+export type { AutomationResult } from "../../packages/gateway-protocol/src/schema/cron-automation-result.js";
 
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
 export type AgentRunContext = {
@@ -35,11 +33,15 @@ export type AgentRunContext = {
   eventState?: AgentRunEventState;
   /** Model request numbering survives provider fallback within this registered run. */
   modelCallSequence?: { value: number };
+  /** Accepted human input owns a reply even when the run began as an optional wake. */
+  acceptedUserReply?: {
+    operationalRunInstance: AgentRunDelegatedAuthority["operationalRunInstance"];
+    expectation: "required" | "result-required";
+  };
   /** Active provider-owned local wait; cleared on first response or call settlement. */
   localModelWait?: { requestId: string };
   activeModel?: AgentRunModel;
   verboseLevel?: VerboseLevel;
-  isHeartbeat?: boolean;
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
   projectSessionActive?: boolean;

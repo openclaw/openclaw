@@ -1,10 +1,11 @@
-import { mkdir, realpath, symlink, unlink, writeFile } from "node:fs/promises";
+import { mkdir, symlink, unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { isBunRuntime } from "../daemon/runtime-binary.js";
+import { standaloneManifestFixture } from "../daemon/standalone-manifest.test-support.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { resolveCurrentOpenClawCliInvocation } from "./openclaw-cli-invocation.js";
 
@@ -16,41 +17,45 @@ const trustedTsxLoader = pathToFileURL(requireFromHere.resolve("tsx", { paths: [
 const sourceEnv = { TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json") };
 const commandArgs = ["sessions", "export-trajectory"];
 type Invocation = ReturnType<typeof resolveCurrentOpenClawCliInvocation>;
-type Options = Parameters<typeof resolveCurrentOpenClawCliInvocation>[1];
-const invoke = (options: Options) =>
-  resolveCurrentOpenClawCliInvocation(commandArgs, {
-    cwd: repoRoot,
-    execPath: "/usr/bin/node",
-    ...options,
-  });
+type Options = {
+  argv1?: string;
+  cwd?: string;
+  execArgv?: readonly string[];
+  execPath?: string;
+  moduleUrl?: string;
+};
+afterEach(() => vi.restoreAllMocks());
+const invoke = (options: Options, args = commandArgs) => {
+  const versions = { ...process.versions };
+  versions.bun = isBunRuntime(options.execPath ?? "/usr/bin/node") ? "fixture" : undefined;
+  vi.spyOn(process, "versions", "get").mockReturnValue(versions);
+  vi.spyOn(process, "execPath", "get").mockReturnValue(options.execPath ?? "/usr/bin/node");
+  vi.spyOn(process, "argv", "get").mockReturnValue([process.execPath, options.argv1 ?? ""]);
+  vi.spyOn(process, "execArgv", "get").mockReturnValue([...(options.execArgv ?? [])]);
+  vi.spyOn(process, "cwd").mockReturnValue(options.cwd ?? repoRoot);
+  return resolveCurrentOpenClawCliInvocation(args, { moduleUrl: options.moduleUrl });
+};
 function expectInvocation(options: Options, expected: Partial<Invocation>) {
   expect(invoke(options)).toEqual({ command: "/usr/bin/node", cwd: repoRoot, ...expected });
 }
 const writePackage = (root: string) =>
   writeFile(path.join(root, "package.json"), '{"name":"openclaw"}');
 
-it.each([true, false])("uses standalone sidecar (sidecar cwd=%s)", async (sidecarCwd) => {
+it("uses the standalone sidecar from outside its installation", async () => {
   const root = tempDirs.make("openclaw-cli-standalone-");
   const packageRoot = path.join(root, "runtime");
   await mkdir(packageRoot);
   const execPath = path.join(root, "openclaw");
   await writeFile(
     path.join(root, "manifest.json"),
-    JSON.stringify({
-      schemaVersion: 1,
-      mode: "aot",
-      executable: { path: "openclaw" },
-      runtime: { path: "runtime" },
-      openclaw: { version: "2026.10.15" },
-      bun: { version: "1.3.0" },
-    }),
+    JSON.stringify(standaloneManifestFixture("aot", "openclaw", "2026.10.15", "1.3.0")),
   );
   expectInvocation(
     {
       execPath,
-      argv1: sidecarCwd ? path.join(packageRoot, "openclaw.mjs") : "/$bunfs/root/cli.js",
+      argv1: "/$bunfs/root/cli.js",
       execArgv: ["--trace-warnings"],
-      cwd: sidecarCwd ? root : repoRoot,
+      cwd: repoRoot,
     },
     { command: execPath, args: commandArgs, cwd: packageRoot },
   );
@@ -58,17 +63,15 @@ it.each([true, false])("uses standalone sidecar (sidecar cwd=%s)", async (sideca
 
 it.each([false, true])("pins TSX but not debugger ownership (equals=%s)", (equals) => {
   const runtimeArgs = ["--trace-warnings", "--import", "/other-loader.mjs"];
+  const debuggerArgs =
+    "--inspect 127.0.0.1:9231 --inspect-brk=0 --inspect-wait=0 --inspect-port 9230 --inspect-port=9232".split(
+      " ",
+    );
   const invocation = invoke({
     argv1: repoSourceEntry,
     execArgv: [
       ...runtimeArgs,
-      "--inspect",
-      "127.0.0.1:9231",
-      "--inspect-brk=0",
-      "--inspect-wait=0",
-      "--inspect-port",
-      "9230",
-      "--inspect-port=9232",
+      ...debuggerArgs,
       ...(equals ? ["--import=tsx"] : ["--import", "tsx"]),
     ],
     execPath: resolveTestNodeExecPath(),
@@ -100,17 +103,19 @@ it.each(["openclaw.mjs", path.join("dist", "index.js")])(
       execPath: resolveTestNodeExecPath(),
       execArgv: [],
     };
-    const prepared = resolveCurrentOpenClawCliInvocation(["--version"], options);
+    const prepared = invoke(options, ["--version"]);
 
     await unlink(current);
     await symlink(releaseB, current, "junction");
 
-    const expectRelease = async (invocation: Invocation, release: string) => {
-      const entry = await realpath(expectDefined(invocation.args[0], "CLI entry"));
-      expect([entry, invocation.cwd]).toEqual([path.join(release, entryName), release]);
-    };
-    await expectRelease(prepared, releaseA);
-    await expectRelease(resolveCurrentOpenClawCliInvocation(["--version"], options), releaseB);
+    expect(prepared).toMatchObject({
+      args: [path.join(releaseA, entryName), "--version"],
+      cwd: releaseA,
+    });
+    expect(invoke(options, ["--version"])).toMatchObject({
+      args: [path.join(releaseB, entryName), "--version"],
+      cwd: releaseB,
+    });
   },
 );
 

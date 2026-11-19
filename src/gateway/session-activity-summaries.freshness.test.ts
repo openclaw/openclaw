@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import * as utilityCompletion from "../agents/utility-completion.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly,
@@ -8,7 +8,6 @@ import {
 import { readSessionTranscriptWatermark } from "../config/sessions/session-accessor.sqlite-transcript-watermark.js";
 import { appendTranscriptEvent } from "../config/sessions/session-accessor.transcript.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
-import { readSessionTranscriptWatermarkAsync } from "../config/sessions/session-transcript-watermark.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -38,11 +37,13 @@ const recap = "Completed the requested work.";
 const complete = vi.fn<typeof defaultCompleteModel>();
 const changed = vi.fn();
 const read = () => loadSessionEntryReadOnly(scope);
-const view = (
-  entry = read(),
-  watermark = readSessionTranscriptWatermark(scope),
-  enabled?: boolean,
-) => projectSessionActivitySummary({ ...target, cfg, entry, watermark, enabled });
+const view = () =>
+  projectSessionActivitySummary({
+    ...target,
+    cfg,
+    entry: read(),
+    watermark: readSessionTranscriptWatermark(scope),
+  });
 const createService = () =>
   createSessionActivitySummaries({
     scheduler: createTestGatewayScheduler(),
@@ -68,6 +69,7 @@ beforeEach(async () => {
   cfg = { agents: { defaults: { utilityModel: "test/utility" } } };
   testState = await createActivityRecapSessionFixture(cfg);
   complete.mockReset().mockResolvedValue(activityRecapResult(recap));
+  vi.spyOn(utilityCompletion, "hasAvailableUtilityCompletionAuth").mockResolvedValue(true);
   vi.spyOn(observerModel, "defaultPrepareModel").mockResolvedValue(preparedActivityRecapModel);
   vi.spyOn(observerModel, "defaultCompleteModel").mockImplementation(complete);
   changed.mockReset();
@@ -81,19 +83,15 @@ afterEach(async () => {
 
 it("keeps committed recap progress across stale requests and summarizes new activity once", async () => {
   await messages(1);
+  await ensure();
+  complete.mockClear();
+  const initialSummary = read()!.activitySummary!;
   await patchSessionEntryCore(scope, () => ({
     activitySummary: {
-      version: 1,
+      ...initialSummary,
       formatRevision: 1,
       text: "Earlier work.",
       updatedAt: 1,
-      sessionId: scope.sessionId,
-      lifecycleRevision: "lifecycle-1",
-      ...readSessionTranscriptWatermark(scope),
-      leafEntryId: "message-0",
-      coveredMessages: 1,
-      totalMessages: 1,
-      omittedContent: false,
     },
   }));
   // A batched ensure can retain this entry while another request finishes its recap.
@@ -103,43 +101,30 @@ it("keeps committed recap progress across stale requests and summarizes new acti
 
   changed.mockClear();
   const sourceReads = vi.spyOn(summarySource, "readActivitySummarySource");
-  for (let request = 0; request < 3; request += 1) {
-    const response = await ensure(requestedEntry);
-    expect(response.text).toBe(recap);
-    expect(complete).toHaveBeenCalledTimes(1);
-  }
+  expect((await ensure(requestedEntry)).text).toBe(recap);
+  const notify = async (reasons: Array<"archive" | "unarchive">) => {
+    const work = new AsyncWorkScope();
+    work.run(() => {
+      for (const reason of reasons) {
+        service.handleLifecycle({ sessionKey: target.key, agentId: target.agentId, reason });
+      }
+    });
+    await work.drain();
+  };
+  await notify(["archive", "unarchive", "archive"]);
+  expect(complete).toHaveBeenCalledTimes(1);
   expect(changed).not.toHaveBeenCalled();
   expect(sourceReads).not.toHaveBeenCalled();
 
   await messages(1, 1);
-  await ensure(requestedEntry);
+  await notify(["archive", "unarchive", "archive"]);
   expectPrompt(2, recap, ["assistant: Outcome 1"]);
-  expect(sourceReads).toHaveBeenCalledTimes(1);
-  await ensure(requestedEntry);
-  expect(complete).toHaveBeenCalledTimes(2);
+  expect(view()?.state).toBe("current");
   expect(read()?.activitySummary).toMatchObject({ coveredMessages: 2, totalMessages: 2 });
-});
-
-it("prepares recap freshness off thread and observes an in-process transcript append", async () => {
-  await messages(1);
-  await ensure();
-  const entry = read()!;
-  cfg = { agents: { defaults: {} } };
-  const observed = observeHostDataSql();
-  try {
-    await service.ensure(target, entry);
-    const before = await readSessionTranscriptWatermarkAsync(scope);
-    expect(view(entry, before, true)?.state).toBe("current");
-    await messages(1, 1);
-    const after = await readSessionTranscriptWatermarkAsync(scope);
-    expect(after.maxSeq).toBeGreaterThan(before.maxSeq!);
-    expect(view(entry, after, true)?.state).toBe("stale");
-    expect(observed.queries.join("\n")).not.toMatch(
-      /transcript_events|transcript_rewrite_watermarks|session_transcript_cold_archives/i,
-    );
-  } finally {
-    observed.restore();
-  }
+  const completedSourceReads = sourceReads.mock.calls.length;
+  await ensure(requestedEntry);
+  expect(sourceReads).toHaveBeenCalledTimes(completedSourceReads);
+  expect(complete).toHaveBeenCalledTimes(2);
 });
 
 it("invalidates cached projection after an offline branch change without changing activity ordering", async () => {

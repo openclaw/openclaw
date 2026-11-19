@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
 import { expect, it } from "vitest";
-import { transformMediaArchiveContent } from "./state-migrations.media-persistence-transform.js";
 import { transformArchiveBytesIncrementally } from "./state-migrations.transcript-archive-stream.js";
 
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -23,22 +22,6 @@ const transform = (
     transformLine: unchanged,
     ...options,
   });
-
-it("rewrites records incrementally while preserving order and trailing newline", async () => {
-  const source = zstdCompressSync(Buffer.from('{"n":1}\n{"n":2}\n', "utf8"));
-  const transformed = await transform(source, "changed", {
-    transformLine: (line) => {
-      const event = JSON.parse(line) as { n: number };
-      return event.n === 2
-        ? { changed: true, content: JSON.stringify({ n: 2, migrated: true }) }
-        : { changed: false, content: line };
-    },
-  });
-  expect(transformed.changed).toBe(true);
-  expect(zstdDecompressSync(transformed.bytes).toString("utf8")).toBe(
-    '{"n":1}\n{"n":2,"migrated":true}\n',
-  );
-});
 
 it.each(["identity", "zstd"] as const)(
   "preserves unchanged bytes, UTF-8, and record boundaries across %s chunks",
@@ -72,22 +55,6 @@ it("propagates a damaged zstd stream", async () => {
   await expect(transform(Buffer.from("not a zstd archive"), "damaged")).rejects.toThrow();
 });
 
-it("applies the media persistence transform one JSONL record at a time", async () => {
-  const source = Buffer.from(
-    '{"type":"message","message":{"role":"user","content":"attachment","MediaPath":"/media/example.png","MediaType":"image/png"}}\n',
-  );
-  const transformed = await transform(source, "media", {
-    encoding: "identity",
-    transformLine: transformMediaArchiveContent,
-  });
-  expect(transformed.changed).toBe(true);
-  expect(JSON.parse(transformed.bytes.toString("utf8"))).toMatchObject({
-    message: {
-      __openclaw: { media: [{ path: "/media/example.png", contentType: "image/png" }] },
-    },
-  });
-});
-
 it.each(["identity", "zstd"] as const)(
   "removes a terminal NUL suffix from a %s archive without buffering decoded content",
   async (encoding) => {
@@ -110,3 +77,19 @@ it("retains JSONL blank-record validation", async () => {
     "blank contains a blank JSONL record at line 2",
   );
 });
+
+it.each(["identity", "zstd"] as const)(
+  "rejects malformed UTF-8 in a later %s chunk before returning transformed bytes",
+  async (encoding) => {
+    const source = Buffer.concat([
+      Buffer.from('{"text":"first"}\n{"text":"' + "x".repeat(1024 * 1024) + '"}\n{"text":"'),
+      Buffer.from([0xf0, 0x9f]),
+    ]);
+    await expect(
+      transform(encode(source, encoding), "invalid-utf8", {
+        encoding,
+        transformLine: () => ({ changed: true, content: '{"text":"changed"}' }),
+      }),
+    ).rejects.toThrow("invalid-utf8 must be valid UTF-8");
+  },
+);

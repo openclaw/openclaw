@@ -5,10 +5,8 @@ import {
   observeHostDataSql,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { invokeHandler } from "./sessions-rewind.handler.test-support.js";
 import {
@@ -68,8 +66,9 @@ it.each(mutationMethods)("acquires memory history for unbound %s", (method) =>
       if (method === "sessions.fork") {
         expect(current?.sessionId).toBe(scope.sessionId);
       } else {
-        expect(current?.previousSessionId).toBe(scope.sessionId);
-        expect(current?.sessionId).not.toBe(scope.sessionId);
+        // In-place cuts keep the transcript identity; no generation is retired.
+        expect(current?.previousSessionId).toBeUndefined();
+        expect(current?.sessionId).toBe(scope.sessionId);
         await expectBranches([
           [method === "sessions.rewind" ? "assistant-1" : "alternate-user", true],
         ]);

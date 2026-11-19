@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
+import { withEnv } from "../test-utils/env.js";
 import {
   formatCommandOwnerFromChannelSender,
   formatCommandOwnerHint,
@@ -12,7 +13,6 @@ const owners = (...ownerAllowFrom: string[]) => ({ commands: { ownerAllowFrom } 
 // mock-isolation: Capture command-owner diagnostics without writing to the operator's terminal.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
-afterEach(() => vi.unstubAllEnvs());
 beforeEach(() => note.mockClear());
 
 it("formats pairing senders as channel-scoped command owners", () => {
@@ -23,41 +23,40 @@ it("formats pairing senders as channel-scoped command owners", () => {
   ).toEqual(["telegram:123", "telegram:123"]);
 });
 
-it("explains missing command owners in plain language", () => {
-  const missing = [{}, owners(), owners("*"), owners("telegram:*")];
-  missing.forEach(noteCommandOwnerHealth);
-  expect(note.mock.calls).toEqual(
-    missing.map(() => [
-      [
-        "No command owner is configured.",
-        "A command owner is your trusted human operator account, allowed to update OpenClaw with /update, restart the Gateway, change configuration, and approve commands. Chat allowlists do not grant this authority.",
-        "Run openclaw channels add and complete a channel's setup to choose your operator account, including servers and groups without DM pairing.",
-        "CLI pairing approval records the first command owner. Control UI pairing approval has a separate owner checkbox.",
-        "Fix: set commands.ownerAllowFrom to your channel user id, for example openclaw config set commands.ownerAllowFrom '[\"telegram:123456789\"]'",
-        "Restart the gateway after changing this if it is already running.",
-      ].join("\n"),
-      "Command owner",
-    ]),
-  );
-});
+it.each([{}, { channels: {} }, owners(), owners("*"), owners("telegram:*")])(
+  "explains local administrator recovery without requiring a channel: %j",
+  (cfg) => {
+    noteCommandOwnerHealth(cfg);
+
+    const message = note.mock.calls[0]?.[0];
+    expect(message).toContain("No channel command owner is configured.");
+    expect(message).toContain("operator.admin");
+    expect(message).toContain("no channel is required");
+    expect(message).toContain("openclaw dashboard");
+    expect(message).toContain("Inbox > System > Limited access > Request admin");
+    expect(message).toContain("openclaw devices approve <requestId>");
+    expect(message).toContain("For external channels");
+    expect(message).toContain("commands.ownerAllowFrom");
+  },
+);
 
 it.skipIf(process.platform === "win32")(
   "quotes a sender id without overriding the selected profile",
-  () => {
-    vi.stubEnv("OPENCLAW_PROFILE", "owner-proof");
-    const id = "@o'brien$(printf injected) --profile decoy:example.org";
-    const hint = formatCommandOwnerHint({ cfg: {}, channel: "matrix", id });
-    const command = hint.slice(hint.indexOf("`") + 1, hint.lastIndexOf("`"));
-    const shellCommand = command.replace(/^openclaw /, "printf '%s\\n' ");
-    const args = execFileSync("/bin/sh", ["-c", shellCommand], { encoding: "utf8" })
-      .trim()
-      .split("\n");
-    expect(args).toEqual(
-      "--profile owner-proof config set commands.ownerAllowFrom"
-        .split(" ")
-        .concat(JSON.stringify([`matrix:${id}`])),
-    );
-  },
+  () =>
+    withEnv({ OPENCLAW_PROFILE: "owner-proof" }, () => {
+      const id = "@o'brien$(printf injected) --profile decoy:example.org";
+      const hint = formatCommandOwnerHint({ cfg: {}, channel: "matrix", id });
+      const command = hint.slice(hint.indexOf("`") + 1, hint.lastIndexOf("`"));
+      const shellCommand = command.replace(/^openclaw /, "printf '%s\\n' ");
+      const args = execFileSync("/bin/sh", ["-c", shellCommand], { encoding: "utf8" })
+        .trim()
+        .split("\n");
+      expect(args).toEqual(
+        "--profile owner-proof config set commands.ownerAllowFrom"
+          .split(" ")
+          .concat(JSON.stringify([`matrix:${id}`])),
+      );
+    }),
 );
 
 it.each<[Parameters<typeof formatCommandOwnerHint>[0], string]>([

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -74,9 +74,7 @@ describe("requestSessionUsage", () => {
     const filters = {
       query: "provider:openai",
       selectedDays: ["2026-07-14"],
-      selectedHours: [12],
       selectedSessions: ["agent:main:chosen"],
-      recentKeys: ["agent:main:chosen"],
       offset: 50,
       sort: "cost",
       sortDirection: "asc",

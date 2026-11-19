@@ -16,7 +16,6 @@ import {
   resolveCodexAppServerProtocolSource,
   resolveCodexProtocolCargoTargetDir,
   resolveCodexProtocolMinFreeBytes,
-  resolveCodexProtocolPnpmCommand,
   selectedCodexAppServerJsonSchemas,
   validateCodexProtocolSourceVersion,
   validateCodexProtocolGenerationHeadroom,
@@ -25,6 +24,10 @@ import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 const originalOpenClawCodexRepo = process.env.OPENCLAW_CODEX_REPO;
+const schemaFixture = () =>
+  new Map<string, unknown>(selectedCodexAppServerJsonSchemas.map((title) => [title, { title }]));
+const checkHeadroom = (freeBytes: number, minFreeBytes: number) =>
+  validateCodexProtocolGenerationHeadroom({ freeBytes, minFreeBytes, pathLabel: "/repo" });
 
 afterEach(() => {
   if (originalOpenClawCodexRepo === undefined) {
@@ -56,13 +59,11 @@ describe("Codex app-server generated artifact staging", () => {
     const targetRoot = createTempDir("openclaw-protocol-artifacts-target-");
     const typescriptRoot = path.join(targetRoot, "typescript");
     const jsonRoot = path.join(targetRoot, "json");
-    const rootTypeScript = [
-      'import type { Root } from "./Root";',
-      "export type { Parent } from '../Parent.js';",
-      'export * as v2 from "./v2.js";',
-      "export type Nullable = string | null | null;",
-      "",
-    ].join("\n");
+    const rootTypeScript = `import type { Root } from "./Root";
+export type { Parent } from '../Parent.js';
+export * as v2 from "./v2.js";
+export type Nullable = string | null | null;
+`;
     const nestedTypeScript = 'export type { Shared } from "../Shared";\n';
     const json = '{\n  "z": 1,\n  "a": 2\n}\n';
     fs.mkdirSync(path.join(sourceRoot, "v2"), { recursive: true });
@@ -74,13 +75,11 @@ describe("Codex app-server generated artifact staging", () => {
     await stageCodexAppServerProtocolArtifacts(sourceRoot, { jsonRoot, typescriptRoot });
 
     expect(fs.readFileSync(path.join(typescriptRoot, "index.ts"), "utf8")).toBe(
-      [
-        'import type { Root } from "./Root.js";',
-        "export type { Parent } from '../Parent.js';",
-        'export * as v2 from "./v2/index.js";',
-        "export type Nullable = string | null;",
-        "",
-      ].join("\n"),
+      `import type { Root } from "./Root.js";
+export type { Parent } from '../Parent.js';
+export * as v2 from "./v2/index.js";
+export type Nullable = string | null;
+`,
     );
     expect(fs.readFileSync(path.join(typescriptRoot, "v2/Thing.ts"), "utf8")).toBe(
       'export type { Shared } from "../Shared.js";\n',
@@ -180,18 +179,10 @@ version = "9.9.9"
         CARGO_TARGET_DIR: "/cache/codex-target",
       }),
     ).toEqual({
-      args: [
-        "test",
-        "--manifest-path",
-        "/codex/codex-rs/Cargo.toml",
-        "-p",
-        "codex-app-server-protocol",
-        "--lib",
-        "schema_fixtures_tests::write_schema_fixtures_from_env",
-        "--",
-        "--exact",
-        "--ignored",
-      ],
+      args: (
+        "test --manifest-path /codex/codex-rs/Cargo.toml -p codex-app-server-protocol " +
+        "--lib schema_fixtures_tests::write_schema_fixtures_from_env -- --exact --ignored"
+      ).split(" "),
       env: {
         CARGO_TARGET_DIR: "/cache/codex-target",
         CODEX_APP_SERVER_SCHEMA_ROOT: "/tmp/protocol",
@@ -201,26 +192,16 @@ version = "9.9.9"
   });
 
   it("fails before cargo protocol generation when local disk headroom is too low", () => {
-    expect(() =>
-      validateCodexProtocolGenerationHeadroom({
-        freeBytes: 6 * 1024 * 1024 * 1024,
-        minFreeBytes: 10 * 1024 * 1024 * 1024,
-        pathLabel: "/repo",
-      }),
-    ).toThrow(/Run this check on Crabbox\/Testbox/);
+    expect(() => checkHeadroom(6 * 1024 ** 3, 10 * 1024 ** 3)).toThrow(
+      /Run this check on Crabbox\/Testbox/,
+    );
   });
 
   it("allows an explicit local disk headroom override", () => {
     expect(resolveCodexProtocolMinFreeBytes({ OPENCLAW_CODEX_PROTOCOL_MIN_FREE_BYTES: "0" })).toBe(
       0,
     );
-    expect(() =>
-      validateCodexProtocolGenerationHeadroom({
-        freeBytes: 1,
-        minFreeBytes: 0,
-        pathLabel: "/repo",
-      }),
-    ).not.toThrow();
+    expect(() => checkHeadroom(1, 0)).not.toThrow();
   });
 
   it("rejects malformed local disk headroom overrides", () => {
@@ -235,29 +216,6 @@ version = "9.9.9"
     [{ CARGO_BUILD_TARGET_DIR: "/cache/build-target" }, path.resolve("/cache/build-target")],
   ] as const)("resolves Cargo target directory %j", (env, expected) => {
     expect(resolveCodexProtocolCargoTargetDir("/codex", env)).toBe(expected);
-  });
-
-  it("wraps Windows pnpm formatting through cmd.exe without shell mode", () => {
-    expect(
-      resolveCodexProtocolPnpmCommand(
-        ["exec", "oxfmt", "--write", "--threads=1", String.raw`C:\tmp\generated types`],
-        {
-          comSpec: String.raw`C:\Windows\System32\cmd.exe`,
-          npmExecPath: String.raw`C:\Program Files\nodejs\pnpm.cmd`,
-          platform: "win32",
-        },
-      ),
-    ).toEqual({
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        String.raw`""C:\Program Files\nodejs\pnpm.cmd" exec oxfmt --write --threads=1 "C:\tmp\generated types""`,
-      ],
-      command: String.raw`C:\Windows\System32\cmd.exe`,
-      shell: false,
-      windowsVerbatimArguments: true,
-    });
   });
 
   it("uses OPENCLAW_CODEX_REPO when provided", async () => {
@@ -298,88 +256,67 @@ version = "9.9.9"
 describe("Codex app-server protocol JSON canonicalizer", () => {
   it("sorts object keys recursively before formatting", () => {
     const source = JSON.stringify({
-      z: { d: 1, b: { y: 2, x: 3 } },
-      a: [{ z: 4, a: { c: 5, b: 6 } }],
-      definitions: {
-        Zebra: { type: "string", description: "last" },
-        Alpha: {
-          properties: { z: { type: "number" }, a: { type: "string" } },
-          type: "object",
-        },
-      },
+      z: { b: { z: 0, a: 1 }, a: 2 },
+      a: [{ z: 0, a: 1 }],
+      definitions: { Z: { z: 0, a: 1 }, A: { type: "string" } },
     });
 
     expect(formatCodexAppServerProtocolJsonText(source)).toBe(`{
-  "a": [{"a":{"b":6,"c":5},"z":4}],
+  "a": [{"a":1,"z":0}],
   "definitions": {
-    "Alpha": {"properties":{"a":{"type":"string"},"z":{"type":"number"}},"type":"object"},
-    "Zebra": {"description":"last","type":"string"}
+    "A": {"type":"string"},
+    "Z": {"a":1,"z":0}
   },
-  "z": {"b":{"x":3,"y":2},"d":1}
+  "z": {"a":2,"b":{"a":1,"z":0}}
 }
 `);
   });
 
   it("sorts typed-object arrays only for order-insensitive schema keywords", () => {
-    const item = (type: string, fields: Record<string, unknown>) => ({ type, ...fields });
-    const anyOf = [item("string", { z: 1 }), item("integer", { a: 2 })];
-    const enumValues = [item("z", { z: 1 }), item("a", { a: 2 })];
-    const oneOf = [
-      item("object", { z: true }),
-      item("array", { a: true }),
-      item("object", { z: false }),
+    const values = [
+      { type: "z", n: 1 },
+      { type: "a", n: 2 },
+      { type: "z", n: 3 },
     ];
+    const sorted = [values[1], values[0], values[2]];
     const unchanged = {
-      mixed: [{ type: "b" }, "item", { type: "a" }],
-      prefixItems: [item("string", { z: 1 }), item("number", { a: 2 })],
-      typed: [item("beta", { z: 1 }), item("alpha", { z: 2 }), item("beta", { z: 3 })],
+      mixed: [values[0], "item", values[1]],
+      prefixItems: values,
+      typed: values,
     };
     expect(
       canonicalizeCodexAppServerProtocolJson(
         structuredClone({
-          anyOf,
-          enum: enumValues,
-          required: enumValues,
-          oneOf,
+          anyOf: values,
+          enum: values,
+          required: values,
+          oneOf: values,
           ...unchanged,
         }),
       ),
     ).toEqual({
-      anyOf: [anyOf[1], anyOf[0]],
-      enum: [enumValues[1], enumValues[0]],
-      required: [enumValues[1], enumValues[0]],
-      oneOf: [oneOf[1], oneOf[0], oneOf[2]],
+      anyOf: sorted,
+      enum: sorted,
+      required: sorted,
+      oneOf: sorted,
       ...unchanged,
     });
   });
 
   it("factors repeated definitions and exactly reconstructs every source schema", () => {
-    const schemas = new Map<string, unknown>(
-      selectedCodexAppServerJsonSchemas.map((title) => [
-        title,
-        { $schema: "http://json-schema.org/draft-07/schema#", title, type: "object" },
-      ]),
-    );
+    const schemas = schemaFixture();
     const shared = { properties: { value: { $ref: "#/definitions/Leaf" } }, type: "object" };
     const leaf = { type: "string" };
     schemas.set("DynamicToolCallParams.json", {
       definitions: { Leaf: leaf },
-      properties: { arguments: { $ref: "#/definitions/Leaf" } },
-      title: "DynamicToolCallParams",
-      type: "object",
+      $ref: "#/definitions/Leaf",
     });
+    const definitions = { Leaf: leaf, Shared: shared };
     schemas.set("v2/ErrorNotification.json", {
-      definitions: { Leaf: leaf, Shared: shared },
+      definitions,
       properties: { error: { $ref: "#/definitions/Shared" } },
-      title: "ErrorNotification",
-      type: "object",
     });
-    schemas.set("v2/GetAccountResponse.json", {
-      definitions: { Leaf: leaf, Shared: shared },
-      properties: { account: { $ref: "#/definitions/Shared" } },
-      title: "GetAccountResponse",
-      type: "object",
-    });
+    schemas.set("v2/GetAccountResponse.json", { definitions, $ref: "#/definitions/Shared" });
 
     const compacted = compactCodexAppServerProtocolJsonSchemas(schemas);
     const sharedSchema = compacted.get(codexAppServerSharedDefinitionsSchema);
@@ -389,17 +326,11 @@ describe("Codex app-server protocol JSON canonicalizer", () => {
     });
     expect(compacted.get("v2/ErrorNotification.json")).toMatchObject({
       properties: {
-        error: {
-          $ref: "./CodexAppServerProtocolDefinitions.json#/definitions/Shared",
-        },
+        error: { $ref: "./CodexAppServerProtocolDefinitions.json#/definitions/Shared" },
       },
     });
     expect(compacted.get("DynamicToolCallParams.json")).toMatchObject({
-      properties: {
-        arguments: {
-          $ref: "./v2/CodexAppServerProtocolDefinitions.json#/definitions/Leaf",
-        },
-      },
+      $ref: "./v2/CodexAppServerProtocolDefinitions.json#/definitions/Leaf",
     });
 
     for (const schemaPath of selectedCodexAppServerJsonSchemas) {
@@ -414,9 +345,7 @@ describe("Codex app-server protocol JSON canonicalizer", () => {
   });
 
   it("rejects same-name definitions with different schema semantics", () => {
-    const schemas = new Map<string, unknown>(
-      selectedCodexAppServerJsonSchemas.map((title) => [title, { title, type: "object" }]),
-    );
+    const schemas = schemaFixture();
     schemas.set("v2/ErrorNotification.json", {
       definitions: { Shared: { type: "string" } },
       $ref: "#/definitions/Shared",

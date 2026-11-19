@@ -2,16 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { tryProcessCwd } from "./safe-cwd.js";
 
-type IsMainModuleOptions = {
-  currentFile: string;
-  argv?: string[];
-  env?: NodeJS.ProcessEnv;
-  wrapperEntryPairs?: Array<{
-    wrapperBasename: string;
-    entryBasename: string;
-  }>;
-};
-
 function normalizePathCandidate(candidate: string | undefined, cwd: string): string | undefined {
   if (!candidate) {
     return undefined;
@@ -32,7 +22,15 @@ export function isMainModule({
   argv = process.argv,
   env = process.env,
   wrapperEntryPairs = [],
-}: IsMainModuleOptions): boolean {
+}: {
+  currentFile: string;
+  argv?: string[];
+  env?: NodeJS.ProcessEnv;
+  wrapperEntryPairs?: Array<{
+    wrapperBasename: string;
+    entryBasename: string;
+  }>;
+}): boolean {
   const resolvedCwd = tryProcessCwd() ?? path.dirname(currentFile);
   const normalizedCurrent = normalizePathCandidate(currentFile, resolvedCwd);
   const normalizedArgv1 = normalizePathCandidate(argv[1], resolvedCwd);

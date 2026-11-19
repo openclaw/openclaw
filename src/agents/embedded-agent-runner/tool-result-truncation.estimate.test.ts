@@ -1,22 +1,11 @@
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import type { ToolResultMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import {
   estimateToolResultReductionPotential,
   truncateOversizedToolResultsInMessages,
 } from "./tool-result-truncation.js";
-
-function makeToolResult(text: string, toolCallId: string, timestamp: number): ToolResultMessage {
-  return {
-    role: "toolResult",
-    toolCallId,
-    toolName: "read",
-    content: [{ type: "text", text }],
-    isError: false,
-    timestamp,
-  };
-}
 
 function getFirstToolResultText(message: AgentMessage): string {
   if (message.role !== "toolResult") {
@@ -78,7 +67,9 @@ describe("estimateToolResultReductionPotential", () => {
       },
     },
   ])("estimates $kind recovery savings", ({ texts, check, ...budgets }) => {
-    const messages = texts.map((text, index) => makeToolResult(text, `call_${index}`, index + 1));
+    const messages = texts.map((text, index) =>
+      makeTextToolResult(`call_${index}`, "read", text, false, index + 1),
+    );
     const estimate = estimateToolResultReductionPotential({ ...budgets, messages });
     const projected = truncateOversizedToolResultsInMessages(
       messages,

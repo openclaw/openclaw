@@ -8,6 +8,7 @@ import {
   dockerReleaseArtifactName,
   preparedDockerEvidenceFromFullRelease,
   publishDockerRelease,
+  readDockerGithubJson,
   sealDockerRelease,
   validateDockerReleaseIdentity,
   validateDockerReleaseManifest,
@@ -277,6 +278,7 @@ async function createPublicationRetry(conclusion = "failure") {
   return {
     ...fixture,
     publisher: {
+      ...qualificationForDocker(fixture.manifest),
       publisherSha: toolingSha,
       publisherRunId: runId,
       publisherRunAttempt: String(fixture.run.run_attempt),
@@ -392,7 +394,18 @@ async function createCandidateDockerPublication(recovered = false) {
     publisherSha: fixture.p,
     publisherFullRef: fixture.publisherFullRef,
     fullReleaseManifest: fixture.manifest,
-    evidenceClient: fixture.client,
+    evidenceClient: {
+      ...fixture.client,
+      verifyRetainedPublicationArtifacts() {
+        throw new Error("Docker producer fixture does not recover publication artifacts");
+      },
+      downloadArtifactArchive() {
+        throw new Error("Docker producer fixture does not download artifact archives");
+      },
+      getRunArtifacts() {
+        throw new Error("Docker producer fixture does not list run artifacts");
+      },
+    },
     readApi: (endpoint: string) =>
       endpoint.endsWith("/actions/runs/" + fixture.runId)
         ? currentRun
@@ -434,9 +447,30 @@ function publishPrepared(
   });
 }
 
+function qualificationForDocker(manifest: PreparedRelease["manifest"]) {
+  const qualification = candidatePublicationFixture({
+    candidateSha: manifest.sourceSha,
+    qualificationSha: manifest.toolingSha,
+    candidateVersion: manifest.version,
+    runId: "500",
+  });
+  qualification.manifest.publicationArtifacts.docker = {
+    preparedRunId: manifest.producer.runId,
+    preparedRunAttempt: manifest.producer.runAttempt,
+    preparedArtifactName: manifest.artifactName,
+    preparedManifestSha256: hash(JSON.stringify(manifest, null, 2) + "\n"),
+  };
+  return {
+    publisherSha: qualification.p,
+    publisherFullRef: qualification.publisherFullRef,
+    fullReleaseManifest: qualification.manifest,
+    evidenceClient: qualification.client,
+  };
+}
+
 function verifyPrepared(fixture: Awaited<ReturnType<typeof createPreparedRelease>>) {
   return verifyDockerReleaseProducer(fixture.manifest, {
-    publisherSha: toolingSha,
+    ...qualificationForDocker(fixture.manifest),
     readApi: fixture.readApi,
   });
 }
@@ -458,6 +492,57 @@ function expectLines(value: unknown, lines: string[]) {
 }
 
 describe("prepared Docker publication", () => {
+  it("retries transient GitHub 5xx identity reads with a fresh request", () => {
+    const responses = [new Error("gh: Server Error (HTTP 502)"), '{"head_sha":"fresh"}'];
+    const runCommand = vi.fn(() => {
+      const response = responses.shift();
+      if (response instanceof Error) {
+        throw response;
+      }
+      return response!;
+    });
+    const sleep = vi.fn();
+
+    expect(
+      readDockerGithubJson("repos/openclaw/openclaw/actions/runs/100", {
+        runCommand,
+        sleep,
+        retryDelaysMs: [25],
+      }),
+    ).toEqual({ head_sha: "fresh" });
+    expect(runCommand).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(25);
+  });
+
+  it("does not retry Docker identity reads after an authorization failure", () => {
+    const failure = new Error("gh: Resource not accessible by integration (HTTP 403)");
+    const runCommand = vi.fn(() => {
+      throw failure;
+    });
+
+    expect(() =>
+      readDockerGithubJson("repos/openclaw/openclaw/actions/runs/100", {
+        runCommand,
+        sleep: vi.fn(),
+        retryDelaysMs: [0],
+      }),
+    ).toThrow(failure);
+    expect(runCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry an invalid Docker identity response", () => {
+    const runCommand = vi.fn(() => "not-json");
+
+    expect(() =>
+      readDockerGithubJson("repos/openclaw/openclaw/actions/runs/100", {
+        runCommand,
+        sleep: vi.fn(),
+        retryDelaysMs: [0],
+      }),
+    ).toThrow(SyntaxError);
+    expect(runCommand).toHaveBeenCalledTimes(1);
+  });
+
   it("adopts successful architecture producers across a failed-job retry", async () => {
     const fixture = await createPreparedRelease(false, defaultVersion, {
       artifactAttempt: "1",
@@ -664,7 +749,26 @@ describe("prepared Docker publication", () => {
     fixture.manifest.producer.workflowRef = workflowRef("docker-image-refresh");
     fixture.run.path = workflowPath("docker-image-refresh");
     fixture.run.event = "schedule";
-    expect((await verifyPrepared(fixture)).manifest).toBe(fixture.manifest);
+    expect(
+      (
+        await verifyDockerReleaseProducer(fixture.manifest, {
+          publisherSha: toolingSha,
+          readApi: fixture.readApi,
+        })
+      ).manifest,
+    ).toBe(fixture.manifest);
+  });
+
+  it("rejects supplied FRV without authenticated admission instead of using ancestry", async () => {
+    const fixture = await createPreparedRelease(false);
+    const qualification = qualificationForDocker(fixture.manifest);
+    await expect(
+      verifyDockerReleaseProducer(fixture.manifest, {
+        ...qualification,
+        fullReleaseManifest: { ...qualification.fullReleaseManifest, sourceAdmission: undefined },
+        readApi: fixture.readApi,
+      }),
+    ).rejects.toThrow(/requires authenticated P admission/u);
   });
 
   it("rejects missing provenance and mismatched source labels in actual OCI bytes", async () => {

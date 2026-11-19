@@ -211,7 +211,23 @@ function readResponseEntry(value, label) {
   if (typeof value.text !== "string" || value.text.length === 0 || value.text.length > 100_000) {
     throw new Error(`${label} text is invalid`);
   }
-  return { text: value.text, chunkDelayMs };
+  if (value.toolCall === undefined) {
+    return { text: value.text, chunkDelayMs };
+  }
+  // Chat Completions only: stream this tool call first, then `text` once the tool result arrives.
+  const { name, arguments: args, argumentChunkChars } = value.toolCall ?? {};
+  if (
+    typeof name !== "string" ||
+    !name ||
+    !args ||
+    typeof args !== "object" ||
+    Array.isArray(args) ||
+    (argumentChunkChars !== undefined &&
+      (!Number.isSafeInteger(argumentChunkChars) || argumentChunkChars < 1))
+  ) {
+    throw new Error(`${label} toolCall is invalid`);
+  }
+  return { text: value.text, chunkDelayMs, toolCall: { name, args, argumentChunkChars } };
 }
 
 function readResponseControl() {
@@ -562,7 +578,14 @@ function writeChatCompletion(res, stream, text = successMarker) {
 }
 
 /** Streams assistant content, then a tool call, in one chat-completions turn. */
-function writeChatCompletionPreambleToolCall(res, stream, preamble, name, args) {
+function writeChatCompletionPreambleToolCall(
+  res,
+  stream,
+  preamble,
+  name,
+  args,
+  argumentChunkChars = Number.POSITIVE_INFINITY,
+) {
   const serialized = JSON.stringify(args);
   const callId = `call_mock_${name}_${createHash("sha256").update(name).update(serialized).digest("hex").slice(0, 10)}`;
   if (!stream) {
@@ -579,16 +602,29 @@ function writeChatCompletionPreambleToolCall(res, stream, preamble, name, args) 
     );
     return;
   }
+  // Real providers stream arguments a few characters per chunk; the first chunk opens the call.
+  const argumentChunks = [];
+  for (let index = 0; index < serialized.length; index += argumentChunkChars) {
+    argumentChunks.push(serialized.slice(index, index + argumentChunkChars));
+  }
   writeChatCompletionChunks(res, [
     { delta: { role: "assistant", content: "" } },
     ...splitResponseText(preamble).map((content) => ({ delta: { content } })),
     {
       delta: {
         tool_calls: [
-          { index: 0, id: callId, type: "function", function: { name, arguments: serialized } },
+          {
+            index: 0,
+            id: callId,
+            type: "function",
+            function: { name, arguments: argumentChunks[0] ?? "" },
+          },
         ],
       },
     },
+    ...argumentChunks.slice(1).map((chunk) => ({
+      delta: { tool_calls: [{ index: 0, function: { arguments: chunk } }] },
+    })),
     { delta: {}, finish_reason: "tool_calls" },
   ]);
 }
@@ -930,6 +966,21 @@ const server = http.createServer((req, res) => {
         requests.selections.automaticText += 1;
         await delay(readPositiveIntEnv("MOCK_DRAFTPROOF_FINAL_DELAY_MS", 6000));
         writeChatCompletion(res, body.stream !== false, "OPENCLAW_E2E_DRAFTPROOF");
+        return;
+      }
+      const toolCall = selectedResponse?.response.toolCall;
+      if (
+        toolCall &&
+        !hasCurrentTurnToolOutput(Array.isArray(body.messages) ? body.messages : [])
+      ) {
+        writeChatCompletionPreambleToolCall(
+          res,
+          body.stream !== false,
+          "",
+          toolCall.name,
+          toolCall.args,
+          toolCall.argumentChunkChars,
+        );
         return;
       }
       if (!selectedResponse) {

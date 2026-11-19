@@ -425,7 +425,11 @@ private class FileAttachmentGateway : AutoCloseable {
           when (method) {
             "connect" -> {
               val role = params.getValue("role").jsonPrimitive.content
-              Json.parseToJsonElement("""{"type":"hello-ok","protocol":3,"server":{"host":"file-proof","version":"proof"},"features":{"methods":["artifacts.download","chat.history","chat.metadata","models.list","health","sessions.list"],"events":[],"capabilities":["session-scoped-model-catalog"]},"auth":{"role":"$role","scopes":${if (role == "operator") "[\"operator.read\",\"operator.write\"]" else "[]"}},"snapshot":{"sessionDefaults":{"mainSessionKey":"agent:main:main"}}}""")
+              Json.parseToJsonElement("""{"type":"hello-ok","protocol":3,"server":{"host":"file-proof","version":"proof"},"features":{"methods":["agents.list","artifacts.download","chat.history","chat.metadata","models.list","health","sessions.list"],"events":[],"capabilities":["session-scoped-model-catalog"]},"auth":{"role":"$role","scopes":${if (role == "operator") "[\"operator.read\",\"operator.write\"]" else "[]"}},"snapshot":{"sessionDefaults":{"mainSessionKey":"agent:main:main"}}}""")
+            }
+
+            "agents.list" -> {
+              Json.parseToJsonElement("""{"defaultId":"main","mainKey":"main","agents":[{"id":"main"}]}""")
             }
 
             "chat.history" -> {

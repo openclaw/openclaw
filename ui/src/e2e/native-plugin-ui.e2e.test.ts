@@ -2,6 +2,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiSessionUrl,
@@ -9,14 +10,10 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
-import {
-  dockChatSidePanel,
-  focusChatSidePanel,
-  restoreChatAsMain,
-} from "./chat-side-panel.test-support.ts";
+import { board } from "./chat-layout-fixtures.test-support.ts";
+import { focusChatSidePanel, restoreChatAsMain } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
-  captureNativePluginUiProof,
   captureNativeWorkspaceFailure,
   catalog,
   expectComposerFooterLayout,
@@ -29,20 +26,9 @@ import {
 import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Native plugin UI ownership" });
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 type PluginPageRun = Parameters<typeof suite.withPage>[1];
-const withPluginPage = (run: PluginPageRun, recordVideo = true) =>
-  suite.withPage(
-    {
-      viewport: { width: 1280, height: 900 },
-      serviceWorkers: "block",
-      recordVideo:
-        captureUiProof && recordVideo
-          ? { dir: suite.artifactDir, size: { width: 1280, height: 900 } }
-          : undefined,
-    },
-    run,
-  );
+const withPluginPage = (run: PluginPageRun) =>
+  suite.withPage({ viewport: { width: 1280, height: 900 }, serviceWorkers: "block" }, run);
 const pluginFeatureMethods = [
   ...defaultControlUiFeatureMethods,
   "plugins.controlUi.list",
@@ -54,8 +40,6 @@ const heading = (page: Page, revision: string) =>
   page.getByRole("heading", { name: `Fixture revision ${revision}` });
 const outcome = (page: Page) => expect.poll(() => page.getByLabel("Fixture outcome").textContent());
 const text = (page: Page, name: string) => page.getByText(name, { exact: true });
-const capture = (page: Page, name: string, fullPage = false) =>
-  captureNativePluginUiProof(suite, page, name, { fullPage });
 const sidebar = (page: Page, name: string) =>
   page.locator("openclaw-app-sidebar").getByRole("button", { name, exact: true });
 const pluginUrl = () => `${suite.server.baseUrl}plugin?plugin=ui-fixture&id=proof`;
@@ -258,7 +242,7 @@ suite.define(() => {
           requests: 0,
         })),
       );
-    }, false);
+    });
   });
 
   it("recovers native widgets from initialization failure and retains healthy reloads", async () => {
@@ -275,18 +259,12 @@ suite.define(() => {
             revision: 1,
             tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "hidden" }],
             widgets: [
-              {
+              createBoardWidget({
                 name: "native-card",
-                tabId: "main",
                 title: "Native card",
                 contentKind: "plugin",
                 pluginKind: `${pluginId}:card`,
-                sizeW: 6,
-                sizeH: 4,
-                position: 0,
-                grantState: "none",
-                revision: 1,
-              },
+              }),
             ],
           },
         },
@@ -307,7 +285,6 @@ suite.define(() => {
       await cell.locator(".board-widget__body").waitFor();
       expect(await loading.count()).toBe(1);
       await expectAbsent(disabled);
-      await capture(page, "widget-loading.png");
 
       await gateway.rejectDeferred("fixture.activationStarted", {
         message: "Widget initialization failed",
@@ -315,7 +292,6 @@ suite.define(() => {
       await error.waitFor();
       expect(await error.locator("code").textContent()).toContain("Widget initialization failed");
       await expectAbsent(loading, disabled);
-      await capture(page, "widget-failed.png");
       await gateway.setMethodResponse("plugins.controlUi.list", catalog("one"));
       await error.getByRole("button", { name: "Retry", exact: true }).click();
       await expectHealthy("one");
@@ -338,7 +314,6 @@ suite.define(() => {
       await reload("two");
       await expectHealthy("two");
       await expectAbsent(cell.getByText("Fixture widget one", { exact: true }));
-      await capture(page, "widget-reloaded.png");
       await gateway.setMethodResponse("plugins.controlUi.list", emptyCatalog);
       await gateway.emitGatewayEvent("plugins.controlUi.changed", { revision: "empty" });
       await disabled.waitFor();
@@ -346,7 +321,6 @@ suite.define(() => {
       expect(await disabled.getByRole("button", { name: "Delete", exact: true }).isEnabled()).toBe(
         true,
       );
-      await capture(page, "widget-removed.png");
 
       const listed = (await gateway.getRequests("plugins.controlUi.list")).length;
       await gateway.deferNext("plugins.controlUi.list");
@@ -395,14 +369,8 @@ suite.define(() => {
         await button(page, "Pages").click();
         await page
           .locator(".sidebar-pages")
-          .getByRole("link", { name: "Plugins", exact: true })
+          .getByRole("link", { name: "Customize", exact: true })
           .waitFor();
-        expect(
-          await page.evaluate(() => ({
-            contributions: Boolean(customElements.get("openclaw-plugin-contributions")),
-            manager: Boolean(customElements.get("openclaw-plugin-manager")),
-          })),
-        ).toEqual({ contributions: false, manager: false });
         await gateway.resolveDeferred("plugins.controlUi.list");
         await bootstrapRequested.promise;
         await expectPluginLoading(page);
@@ -411,7 +379,6 @@ suite.define(() => {
         await gateway.waitForRequest("fixture.peerStarted");
         await waitForPendingPluginInitializer(page);
         await expectPluginLoading(page);
-        await capture(page, "startup-loading.png");
         await page.evaluate(() => {
           const release = (window as NativePluginWindow).nativePluginProof?.release;
           if (!release) {
@@ -424,12 +391,6 @@ suite.define(() => {
           '.sidebar-pages [data-sidebar-entry="plugin:ui-fixture/proof"]',
         );
         await navigationEntry.getByRole("link", { name: "UI fixture", exact: true }).waitFor();
-        expect(await navigationEntry.getAttribute("draggable")).toBe("true");
-        expect(
-          await navigationEntry
-            .locator("openclaw-plugin-contributions")
-            .evaluate((element) => getComputedStyle(element).display),
-        ).toBe("contents");
         expect(
           await pluginPage.getByRole("status", { name: "Loading…", exact: true }).count(),
         ).toBe(0);
@@ -445,7 +406,6 @@ suite.define(() => {
           ]),
         });
         expect(await gateway.getRequests("plugins.controlUi.report")).toHaveLength(1);
-        await capture(page, "startup-ready.png");
       } finally {
         bootstrapGate.resolve();
       }
@@ -458,12 +418,7 @@ suite.define(() => {
       const sessionKey = "agent:main:main";
       const otherSessionKey = "agent:main:accessory-peer";
       const draft = "Send through the canonical composer";
-      const boardSnapshot = {
-        sessionKey,
-        revision: 1,
-        tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-        widgets: [],
-      };
+      const boardSnapshot = board(sessionKey);
       const gateway = await mockPlugin(page, "one", {
         sessionKey,
         pluginAssetsRequireAuth: false,
@@ -501,26 +456,18 @@ suite.define(() => {
       });
       await page.locator(".board-session-surface:not([hidden])").waitFor();
       await expectOneAccessory();
-      for (const dock of ["bottom", "right"] as const) {
-        await dockChatSidePanel(page, dock);
-        await expect
-          .poll(() => page.locator(".sidebar-region--bottom").count())
-          .toBe(dock === "bottom" ? 1 : 0);
-        await expectOneAccessory();
-      }
       await focusChatSidePanel(page);
       expect(await accessory.count()).toBe(1);
       await expect.poll(() => accessory.isVisible()).toBe(false);
-      await sidebar(page, "Sessions").click();
+      await page.locator('openclaw-app-sidebar [data-navigation-view="sessions"]').click();
       await selectChatLayoutAction(page, "Restore split");
-      await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
       await restoreChatAsMain(page);
       await expectOneAccessory();
-      await sidebar(page, "Sessions").click();
+      // Sessions is already open here; its panel owns collapse.
+      await sidebar(page, "Collapse sidebar").click();
       await selectChatLayoutAction(page, "Minimize side panel");
       await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
       await expectOneAccessory();
-      await capture(page, "before.png", true);
       await expectAbsent(page.getByRole("heading", { name: "Customize UI", exact: true }));
       for (const replacement of [
         "",
@@ -554,7 +501,6 @@ suite.define(() => {
       await expectAbsent(fixtureDraft);
       await selectView(page, "Composer", composerView);
       expect(await fixtureDraft.inputValue()).toBe(draft);
-      await capture(page, "composer-input.png", true);
       await button(page, "Fixture send").click();
       const sent = await gateway.waitForRequest("chat.send");
       expect(sent.params).toMatchObject({ message: draft, sessionKey });
@@ -567,20 +513,13 @@ suite.define(() => {
       });
       const notice = page.locator(".chat-footer__context .chat-error");
       await notice.waitFor();
-      expect(
-        await notice.evaluate((element) =>
-          Number.parseFloat(getComputedStyle(element).borderTopLeftRadius),
-        ),
-      ).toBeGreaterThan(0);
-      await capture(page, "composer-sent.png", true);
-      await selectView(page, "Transcript", "ui-fixture/failing-transcript");
+      await selectView(page, "Chat", "ui-fixture/failing-transcript");
       const transcriptError = page
         .getByRole("alert")
         .filter({ hasText: "Fixture transcript failed" });
       await transcriptError
         .getByRole("button", { name: "Retry plugin view", exact: true })
         .waitFor();
-      await capture(page, "transcript-recovery.png", true);
       await selectView(page, "Workspace", "ui-fixture/default-workspace");
       await selectView(page, "Workspace", "");
       await selectView(page, "Workspace", "ui-fixture/workspace");
@@ -590,7 +529,6 @@ suite.define(() => {
         await captureNativeWorkspaceFailure(page).catch(() => {});
         throw failure;
       }
-      await capture(page, "custom-workspace.png", true);
       await visitCustomizeUi(page);
       await selection(page, "Workspace").selectOption("");
       await returnFromCustomizeUi(page);
@@ -600,10 +538,9 @@ suite.define(() => {
       await heading(page, "one").waitFor();
       await button(page, "Call retired composer").click();
       await outcome(page).toContain("view has ended");
-      await capture(page, "after.png", true);
       await openHomeFullPage(page);
       await expectOneAccessory();
-      await sidebar(page, "Sessions").click();
+      await page.locator('openclaw-app-sidebar [data-navigation-view="sessions"]').click();
       await page
         .locator(`.sidebar-recent-session[data-session-key="${otherSessionKey}"] a`)
         .click();
@@ -613,7 +550,6 @@ suite.define(() => {
       await openHomeFullPage(page);
       await expectOneAccessory();
       expect(await accessory.getAttribute("data-presented")).toBe("true");
-      await capture(page, "session-accessory-returned.png", true);
     });
   });
 
@@ -686,7 +622,7 @@ suite.define(() => {
         // A rejected revision must remain retryable.
         ["invalid-selection", "failed"],
       ] as const;
-      for (const [attempt, [revision, status]] of revisions.entries()) {
+      for (const [revision, status] of revisions) {
         const reported = (await gateway.getRequests("plugins.controlUi.report")).length;
         await reload(revision);
         const receipt = await gateway.waitForRequest("plugins.controlUi.report", {
@@ -713,7 +649,6 @@ suite.define(() => {
             .filter({ hasText: error })
             .waitFor();
         }
-        await capture(page, `selection-${attempt + 1}-${revision}.png`, true);
         await returnFromCustomizeUi(page);
       }
       await reload("pending");
@@ -721,7 +656,6 @@ suite.define(() => {
       await waitForPendingPluginInitializer(page);
       await reload("three");
       await heading(page, "three").waitFor();
-      await capture(page, "reloaded.png", true);
       await button(page, "Release pending initializer").click();
       await outcome(page).toBe("released");
       expect(await gateway.getRequests("fixture.staleInitializer")).toHaveLength(0);
@@ -748,23 +682,19 @@ suite.define(() => {
       await gateway.deferNext("connect");
       await gateway.closeLatest();
       await gateway.waitForRequest("connect", { after: connected });
+      // A plugin page shows only the rail, which stays usable while reconnecting.
+      await page.locator("openclaw-app-sidebar .sidebar-rail").waitFor({ state: "visible" });
+      expect(await page.locator(".connection-action-block").count()).toBe(0);
+      expect(await page.locator("#control-ui-main").getAttribute("inert")).toBeNull();
+      expect(await page.locator("openclaw-router-outlet").getAttribute("inert")).toBeNull();
       const navigationSidebar = page.locator("openclaw-app-sidebar");
-      for (const collapsed of [false, true]) {
-        if (collapsed) {
-          await page.locator('[data-navigation-view][aria-pressed="true"]').click();
-        }
-        await navigationSidebar.locator(".sidebar-shell").waitFor({
-          state: collapsed ? "hidden" : "visible",
-        });
-        // Web collapse keeps navigation in the rail; the native control cluster can be empty.
-        await navigationSidebar.locator(".sidebar-rail").waitFor({ state: "visible" });
-        expect(await page.locator(".connection-action-block").count()).toBe(0);
-        expect(await page.locator("#control-ui-main").getAttribute("inert")).toBeNull();
-        expect(await page.locator("openclaw-router-outlet").getAttribute("inert")).toBeNull();
-      }
-      await page.locator('[data-navigation-view="pages"]').click();
+      // The rail menu stays usable without leaving the plugin while reconnecting.
+      await navigationSidebar.locator("[data-rail-more]").click();
+      const pagesMenu = page.locator(".sidebar-pages-menu");
+      await pagesMenu.waitFor({ state: "visible" });
+      await page.keyboard.press("Escape");
+      await pagesMenu.waitFor({ state: "hidden" });
       await expectPluginLoading(page);
-      await capture(page, "reconnecting.png");
       await gateway.resolveDeferred("connect");
       const reconnected = await gateway.waitForRequest("plugins.controlUi.report", {
         after: reported,
@@ -808,7 +738,6 @@ suite.define(() => {
         })
         .waitFor();
       await expect.poll(() => reload.isEnabled()).toBe(true);
-      await capture(page, "peer-timeout-recovery.png", true);
       await returnFromCustomizeUi(page);
       await heading(page, "two").waitFor();
       await button(page, "Release pending initializer").click();

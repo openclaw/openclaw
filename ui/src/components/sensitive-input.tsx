@@ -3,7 +3,11 @@ import { t } from "../lib/reactive/i18n.ts";
 import { Icon } from "./solid/icon.tsx";
 import "./tooltip.ts";
 
-type SensitiveInputProps = {
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+const maskedValue = (value: string) =>
+  "*".repeat(Array.from(graphemeSegmenter.segment(value)).length);
+
+export function SensitiveInput(props: {
   id: string;
   value: string;
   revealed: boolean;
@@ -14,13 +18,7 @@ type SensitiveInputProps = {
   label?: string;
   onInput: (value: string) => void;
   onToggle: () => void;
-};
-
-const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-const maskedValue = (value: string) =>
-  "*".repeat(Array.from(graphemeSegmenter.segment(value)).length);
-
-export function SensitiveInput(props: SensitiveInputProps) {
+}) {
   let maskText: HTMLSpanElement | undefined;
   const value = createMemo(() => props.value);
   const visibilityLabel = () =>
@@ -75,20 +73,18 @@ export function SensitiveInput(props: SensitiveInputProps) {
         onFocus={(event) => syncMask(event.currentTarget)}
         onScroll={(event) => syncMask(event.currentTarget)}
       />
-      <openclaw-tooltip prop:content={visibilityLabel()}>
-        <button
-          type="button"
-          class="oc-sensitive-toggle"
-          aria-label={visibilityLabel()}
-          aria-controls={props.id}
-          aria-pressed={props.revealed ? "true" : "false"}
-          data-sensitive-icon={props.revealed ? "eye-off" : "eye"}
-          disabled={props.disabled}
-          onClick={() => props.onToggle()}
-        >
-          <Icon name={props.revealed ? "eyeOff" : "eye"} />
-        </button>
-      </openclaw-tooltip>
+      <button
+        type="button"
+        class="oc-sensitive-toggle"
+        aria-label={visibilityLabel()}
+        aria-controls={props.id}
+        aria-pressed={props.revealed ? "true" : "false"}
+        data-sensitive-icon={props.revealed ? "eye-off" : "eye"}
+        disabled={props.disabled}
+        onClick={() => props.onToggle()}
+      >
+        <Icon name={props.revealed ? "eyeOff" : "eye"} />
+      </button>
     </span>
   );
 }

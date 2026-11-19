@@ -3,13 +3,22 @@ import {
   readSqliteTranscriptPayload,
   sqliteTranscriptPayloadColumns,
 } from "../../scripts/lib/sqlite-transcript-payload.mjs";
+import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
 import { deriveTranscriptPredicateFields } from "../config/sessions/transcript-predicate-fields.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
 export type FixtureEvent = Record<string, unknown>;
 
-export function messageEvent(params: {
+export const textEvent = (
+  id: string,
+  text: string,
+  timestamp = 1,
+  role: "assistant" | "toolResult" | "user" = "assistant",
+  parentId?: string,
+) => messageEvent({ id, timestamp, role, parentId, content: [{ type: "text", text }] });
+
+function messageEvent(params: {
   content: unknown;
   id: string;
   parentId?: string | null;
@@ -29,14 +38,7 @@ export function messageEvent(params: {
             api: "messages",
             provider: "anthropic",
             model: "sonnet-4.6",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsageFixture(),
             stopReason: "stop",
           }
         : {}),
@@ -105,22 +107,16 @@ export function readEventJson(databasePath: string, sessionId: string, seq: numb
   return readSqliteTranscriptPayload(row);
 }
 
-export function readGeneration(databasePath: string, sessionId: string): string {
+export function readDatabaseRow(databasePath: string, sql: string, ...values: SQLInputValue[]) {
   const { DatabaseSync } = requireNodeSqlite();
   using database = new DatabaseSync(databasePath, { readOnly: true });
-  const row = database
-    .prepare("SELECT generation FROM transcript_rewrite_watermarks WHERE session_id = ?")
-    .get(sessionId) as { generation: string };
-  return row.generation;
+  return database.prepare(sql).get(...values);
 }
 
 export function readMigrationCursor(databasePath: string): unknown {
-  const { DatabaseSync } = requireNodeSqlite();
-  using database = new DatabaseSync(databasePath, { readOnly: true });
-  const row = database
-    .prepare(
-      "SELECT app_version FROM schema_meta WHERE meta_key = 'historical-transcript-directives-v1'",
-    )
-    .get() as { app_version: string } | undefined;
+  const row = readDatabaseRow(
+    databasePath,
+    "SELECT app_version FROM schema_meta WHERE meta_key = 'historical-transcript-directives-v1'",
+  ) as { app_version: string } | undefined;
   return row ? JSON.parse(row.app_version) : undefined;
 }

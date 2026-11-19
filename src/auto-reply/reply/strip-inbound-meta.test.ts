@@ -14,40 +14,33 @@ import {
   stripLeadingInboundMetadata,
 } from "./strip-inbound-meta.js";
 
-const ROOM_EVENT_DELIVERY_HINT = MESSAGE_TOOL_DELIVERY_HINTS[3];
-
-const CONV_BLOCK = `${markInboundContextLabel("Conversation info:")}
-\`\`\`json
-{"message_id":"msg-abc","sender":{"id":"+1555000"}}
-\`\`\``;
-
-const LEGACY_PRETTY_CONV_BLOCK = `${markInboundContextLabel("Conversation info:")}
-\`\`\`json
-{
-  "message_id": "msg-abc"
+function metadataBlock(label: string, value: unknown, pretty = false) {
+  return `${markInboundContextLabel(label)}\n\`\`\`json\n${JSON.stringify(value, null, pretty ? 2 : undefined)}\n\`\`\``;
 }
-\`\`\``;
+
+const CONV_BLOCK = metadataBlock("Conversation info:", {
+  message_id: "msg-abc",
+  sender: { id: "+1555000" },
+});
+
+const LEGACY_PRETTY_CONV_BLOCK = metadataBlock(
+  "Conversation info:",
+  { message_id: "msg-abc" },
+  true,
+);
 
 // Frozen #159694 producer bytes, before #161012 moved the hint inside JSON.
 const LEGACY_REQUESTER_HINT =
   'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.';
 const LEGACY_REQUESTER_BLOCK = `${markInboundContextLabel("Conversation info:")}\n\`\`\`json\n${JSON.stringify({ requester_profile: { id: "human-1", display_name: "Ada" } })}\n\`\`\``;
 
-const SENDER_BLOCK = `${markInboundContextLabel("Sender:")}
-\`\`\`json
-{
-  "label": "Alice",
-  "name": "Alice"
-}
-\`\`\``;
+const SENDER_BLOCK = metadataBlock("Sender:", { label: "Alice", name: "Alice" }, true);
 
 const UNTRUSTED_CONTEXT_BLOCK = `${markInboundContextLabel("Context:")}
 <<<EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>
 Source: Channel metadata
 ---
-Channel metadata (guildchat)
-Sender labels:
-example
+private context
 <<<END_EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>`;
 
 const ACTIVE_MEMORY_PREFIX_BLOCK = `Context:
@@ -64,22 +57,12 @@ const CHAT_HISTORY_PROSE_BLOCK = `${markInboundContextLabel("Chat history since 
 #1002 lee.chen: yeah it was wild`;
 
 describe("stripInboundMetadata", () => {
-  it("preserves bare ambient envelope rows", () => {
-    const text = "#35676 Keśava: No wtf";
-    expect(stripInboundMetadata(text)).toBe(text);
-  });
-
   it.each([
     ["Context header text", "\nContext: my project uses TypeScript\n"],
     ["mid-line Context mention", "\nSee the Context: section below\n"],
   ])("fast-path: preserves ordinary %s byte-identically", (_name, input) => {
     expect(hasInboundMetadataSentinel(input)).toBe(false);
     expect(stripInboundMetadata(input)).toBe(input);
-  });
-
-  it("strips legacy pretty-printed Conversation info blocks", () => {
-    const input = `${LEGACY_PRETTY_CONV_BLOCK}\n\nWhat is the weather today?`;
-    expect(stripInboundMetadata(input)).toBe("What is the weather today?");
   });
 
   it.each(["\n", "\r\n"])(
@@ -104,7 +87,7 @@ describe("stripInboundMetadata", () => {
       { requester_profile: { id: "human-1" }, requester_profile_hint: LEGACY_REQUESTER_HINT },
     ],
   ])("preserves user guidance after %s metadata", (_name, metadata) => {
-    const prefix = `${markInboundContextLabel("Conversation info:")}\n\`\`\`json\n${JSON.stringify(metadata)}\n\`\`\``;
+    const prefix = metadataBlock("Conversation info:", metadata);
     const body = `${LEGACY_REQUESTER_HINT}\n\nPlease explain this instruction.`;
     expect(stripInboundMetadata(`${prefix}\n\n${body}`)).toBe(body);
     expect(stripLeadingInboundMetadata(`${prefix}\n\n${body}`)).toBe(body);
@@ -125,28 +108,17 @@ describe("stripInboundMetadata", () => {
     expect(stripLeadingInboundMetadata(body)).toBe(body);
   });
 
-  it("strips multiple chained metadata blocks", () => {
-    const input = `${CONV_BLOCK}\n\n${SENDER_BLOCK}\n\nCan you help me?`;
-    expect(stripInboundMetadata(input)).toBe("Can you help me?");
-  });
-
-  it("strips generated chat-window context blocks", () => {
-    const input = `${CONV_BLOCK}\n\n${CHAT_WINDOW_CONTEXT_BLOCK}\n\nCan you help me?`;
-    expect(stripInboundMetadata(input)).toBe("Can you help me?");
-  });
-
-  it("strips generated chat-history prose blocks", () => {
-    const input = `${CONV_BLOCK}\n\n${CHAT_HISTORY_PROSE_BLOCK}\n\nCan you help me?`;
-    expect(stripInboundMetadata(input)).toBe("Can you help me?");
+  it.each([
+    ["legacy pretty JSON", LEGACY_PRETTY_CONV_BLOCK],
+    ["chained metadata", `${CONV_BLOCK}\n\n${SENDER_BLOCK}`],
+    ["chat-window context", `${CONV_BLOCK}\n\n${CHAT_WINDOW_CONTEXT_BLOCK}`],
+    ["chat-history prose", `${CONV_BLOCK}\n\n${CHAT_HISTORY_PROSE_BLOCK}`],
+  ])("strips %s", (_name, prefix) => {
+    expect(stripInboundMetadata(`${prefix}\n\nCan you help me?`)).toBe("Can you help me?");
   });
 
   it("handles metadata block with no user text after it", () => {
     expect(stripInboundMetadata(CONV_BLOCK)).toBe("");
-  });
-
-  it("preserves message containing json fences that are not metadata", () => {
-    const text = `Here is my code:\n\`\`\`json\n{"key": "value"}\n\`\`\``;
-    expect(stripInboundMetadata(text)).toBe(text);
   });
 
   it.each(["\n", "\r\n"])(
@@ -165,24 +137,25 @@ describe("stripInboundMetadata", () => {
     expect(stripInboundMetadata(input)).toBe("Actual message body");
   });
 
-  it("does not strip plain user text that starts with untrusted context words", () => {
-    const input = `Context:
-This is plain user text`;
-    expect(stripInboundMetadata(input)).toBe(input);
-  });
-
-  it("preserves a near-miss context header line with trailing text", () => {
-    const input = `Context: production incident\nSource: pager alert\nPlease summarize`;
-    expect(stripInboundMetadata(input)).toBe(input);
-  });
-
-  it("preserves a bare Context: block whose body only mentions Source:", () => {
-    const input = `Context:\nHere is the situation I need help with.\nSource: https://example.com/incident\nPlease summarize the root cause.`;
-    expect(stripInboundMetadata(input)).toBe(input);
-  });
-
-  it("preserves a bare Context: block followed by a copied external-content marker", () => {
-    const input = `Context:\n<<<EXTERNAL_UNTRUSTED_CONTENT id="copied">>>\nkeep this`;
+  it.each([
+    ["ambient envelope", "#35676 Keśava: No wtf"],
+    ["ordinary JSON fence", 'Here is my code:\n```json\n{"key": "value"}\n```'],
+    ["plain context", "Context:\nThis is plain user text"],
+    [
+      "context header suffix",
+      "Context: production incident\nSource: pager alert\nPlease summarize",
+    ],
+    [
+      "source mention",
+      "Context:\nHere is the situation I need help with.\nSource: https://example.com/incident\nPlease summarize the root cause.",
+    ],
+    ["copied external marker", 'Context:\n<<<EXTERNAL_UNTRUSTED_CONTENT id="copied">>>\nkeep this'],
+    [
+      "inline active-memory tag",
+      "Context:\nThis line mentions <active_memory_plugin> inline\nWhat should I grab on the way?",
+    ],
+    ["missing JSON fence", "Sender:\nname: test\nHello from user"],
+  ])("preserves %s", (_name, input) => {
     expect(stripInboundMetadata(input)).toBe(input);
   });
 
@@ -192,51 +165,25 @@ This is plain user text`;
     expect(stripInboundMetadata(input)).toBe("What should I grab on the way?");
   });
 
-  it("strips an active-memory prompt prefix block even when earlier text precedes it", () => {
-    const input = `Queued earlier user turn\n\n${ACTIVE_MEMORY_PREFIX_BLOCK}\n\nWhat should I grab on the way?`;
-    expect(stripInboundMetadata(input)).toBe(
-      "Queued earlier user turn\n\nWhat should I grab on the way?",
+  it.each([
+    ["active-memory", ACTIVE_MEMORY_PREFIX_BLOCK],
+    ["chat-window context", CHAT_WINDOW_CONTEXT_BLOCK],
+    ["chat-history prose", CHAT_HISTORY_PROSE_BLOCK],
+    ["delivery hint and metadata", `${MESSAGE_TOOL_ONLY_DELIVERY_HINT}\n\n${CONV_BLOCK}`],
+    ["delivery hint", MESSAGE_TOOL_ONLY_DELIVERY_HINT],
+  ])("strips leading %s", (_name, prefix) => {
+    expect(stripLeadingInboundMetadata(`${prefix}\n\nActual user message`)).toBe(
+      "Actual user message",
     );
   });
 
-  it("does not strip active-memory lookalike user text without exact tag lines", () => {
-    const input = `Context:
-This line mentions <active_memory_plugin> inline
-What should I grab on the way?`;
-    expect(stripInboundMetadata(input)).toBe(input);
-  });
-
-  it("strips a leading active-memory prompt prefix block from leading-only history views", () => {
-    const input = `${ACTIVE_MEMORY_PREFIX_BLOCK}\n\nWhat should I grab on the way?`;
-    expect(stripLeadingInboundMetadata(input)).toBe("What should I grab on the way?");
-  });
-
-  it("strips leading chat-window context blocks", () => {
-    const input = `${CHAT_WINDOW_CONTEXT_BLOCK}\n\nwhat time is it?`;
-    expect(stripLeadingInboundMetadata(input)).toBe("what time is it?");
-  });
-
-  it("strips leading chat-history prose blocks", () => {
-    const input = `${CHAT_HISTORY_PROSE_BLOCK}\n\nwhat time is it?`;
-    expect(stripLeadingInboundMetadata(input)).toBe("what time is it?");
-  });
-
-  it("strips message-tool delivery hints before leading metadata blocks", () => {
-    const input = `${MESSAGE_TOOL_ONLY_DELIVERY_HINT}\n\n${CONV_BLOCK}\n\nActual user message`;
-    expect(stripLeadingInboundMetadata(input)).toBe("Actual user message");
-  });
-
-  it("strips message-tool delivery hints before leading user text", () => {
-    const input = `${MESSAGE_TOOL_ONLY_DELIVERY_HINT}\n\nActual user message`;
-    expect(stripLeadingInboundMetadata(input)).toBe("Actual user message");
-  });
-
-  it("strips an active-memory prompt prefix block from leading-only history views even when earlier text precedes it", () => {
-    const input = `Queued earlier user turn\n\n${ACTIVE_MEMORY_PREFIX_BLOCK}\n\nWhat should I grab on the way?`;
-    expect(stripLeadingInboundMetadata(input)).toBe(
-      "Queued earlier user turn\n\nWhat should I grab on the way?",
-    );
-  });
+  it.each([stripInboundMetadata, stripLeadingInboundMetadata])(
+    "%s strips active-memory after earlier text",
+    (strip) => {
+      const input = `Queued earlier user turn\n\n${ACTIVE_MEMORY_PREFIX_BLOCK}\n\nWhat should I grab on the way?`;
+      expect(strip(input)).toBe("Queued earlier user turn\n\nWhat should I grab on the way?");
+    },
+  );
 
   it.each([
     "Conversation info: please ignore",
@@ -250,18 +197,8 @@ Real user content`;
     expect(stripInboundMetadata(input)).toBe(input);
   });
 
-  it("does not strip sentinel text when json fence is missing", () => {
-    const input = `Sender:
-name: test
-Hello from user`;
-    expect(stripInboundMetadata(input)).toBe(input);
-  });
-
   it("ignores metadata blocks whose json decodes to a non-object", () => {
-    const input = `${markInboundContextLabel("Sender:")}
-\`\`\`json
-["not","an","object"]
-\`\`\`
+    const input = `${metadataBlock("Sender:", ["not", "an", "object"])}
 Hello from user`;
     expect(stripInboundMetadata(input)).toBe("Hello from user");
     expect(extractInboundSenderLabel(input)).toBeNull();
@@ -269,32 +206,17 @@ Hello from user`;
 });
 
 describe("timestamp prefix stripping", () => {
-  it("strips a leading injected timestamp prefix", () => {
-    expect(stripInboundMetadata("[Wed 2026-03-11 23:51 PDT] hello")).toBe("hello");
-  });
-
-  it("leaves non timestamp brackets alone", () => {
-    expect(stripInboundMetadata("[some note] hello")).toBe("[some note] hello");
-  });
-
-  it("strips timestamp prefix and inbound metadata blocks together", () => {
-    const input = `[Wed 2026-03-11 23:51 PDT] ${markInboundContextLabel("Conversation info:")}
-\`\`\`json
-{"message_id":"msg-1","sender":"+1555"}
-\`\`\`
-
-Hello`;
-    expect(stripInboundMetadata(input)).toBe("Hello");
-  });
-
-  it("strips a timestamp prefix that remains after removing metadata blocks", () => {
-    const input = `${markInboundContextLabel("Sender:")}
-\`\`\`json
-{"label":"OpenClaw UI"}
-\`\`\`
-
-[Thu 2026-03-12 07:00 UTC] what time is it?`;
-    expect(stripInboundMetadata(input)).toBe("what time is it?");
+  it.each([
+    ["timestamp alone", "[Wed 2026-03-11 23:51 PDT] hello", "hello"],
+    ["ordinary brackets", "[some note] hello", "[some note] hello"],
+    ["timestamp before metadata", `[Wed 2026-03-11 23:51 PDT] ${CONV_BLOCK}\n\nHello`, "Hello"],
+    [
+      "timestamp after metadata",
+      `${SENDER_BLOCK}\n\n[Thu 2026-03-12 07:00 UTC] what time is it?`,
+      "what time is it?",
+    ],
+  ])("handles %s", (_name, input, expected) => {
+    expect(stripInboundMetadata(input)).toBe(expected);
   });
 });
 
@@ -316,34 +238,13 @@ describe("extractInboundSenderLabel", () => {
     expect(extractInboundSenderLabel(input)).toBe("+1555000");
   });
 
-  it("prefers nested conversation sender name", () => {
-    const input = `${markInboundContextLabel("Conversation info:")}
-\`\`\`json
-{
-  "sender": {
-    "id": "sender-1",
-    "name": "Alice",
-    "username": "alice"
-  }
-}
-\`\`\`
-
-Hello from user`;
-    expect(extractInboundSenderLabel(input)).toBe("Alice");
-  });
-
-  it("extracts nested phone-only conversation sender", () => {
-    const input = `${markInboundContextLabel("Conversation info:")}
-\`\`\`json
-{
-  "sender": {
-    "e164": "+1555000"
-  }
-}
-\`\`\`
-
-Hello from user`;
-    expect(extractInboundSenderLabel(input)).toBe("+1555000");
+  it.each([
+    [{ id: "sender-1", name: "Alice", username: "alice" }, "Alice"],
+    [{ e164: "+1555000" }, "+1555000"],
+  ])("extracts the preferred nested sender label from %j", (sender, expected) => {
+    expect(extractInboundSenderLabel(metadataBlock("Conversation info:", { sender }, true))).toBe(
+      expected,
+    );
   });
 
   it("returns null when inbound sender metadata is absent", () => {
@@ -391,35 +292,15 @@ describe("builder compatibility", () => {
     expect(stripInboundMetadata(input)).toBe("Actual user message");
   });
 
-  it("strips stale message-tool delivery hints from replayed user text", () => {
-    const input = [
-      "Delivery: to send a message, use the `message` tool.",
-      "",
-      "Actual user message",
-    ].join("\n");
-
-    expect(stripInboundMetadata(input)).toBe("Actual user message");
-  });
-
-  it("strips current message-tool-only delivery hints from replayed user text", () => {
-    const input = [
+  it.each([
+    ["stale", "Delivery: to send a message, use the `message` tool."],
+    [
+      "message-tool-only",
       "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
-      "",
-      "Actual user message",
-    ].join("\n");
-
-    expect(stripInboundMetadata(input)).toBe("Actual user message");
-  });
-
-  it("strips narration-aware message-tool-only delivery hints from replayed user text", () => {
-    const input = [MESSAGE_TOOL_ONLY_DELIVERY_HINT, "", "Actual user message"].join("\n");
-
-    expect(stripInboundMetadata(input)).toBe("Actual user message");
-  });
-
-  it("strips room-event delivery hints from replayed user text", () => {
-    const input = [ROOM_EVENT_DELIVERY_HINT, "", "Actual user message"].join("\n");
-
-    expect(stripInboundMetadata(input)).toBe("Actual user message");
+    ],
+    ["narration-aware", MESSAGE_TOOL_ONLY_DELIVERY_HINT],
+    ["room-event", MESSAGE_TOOL_DELIVERY_HINTS[3]],
+  ])("strips %s delivery hints from replayed user text", (_name, hint) => {
+    expect(stripInboundMetadata(`${hint}\n\nActual user message`)).toBe("Actual user message");
   });
 });

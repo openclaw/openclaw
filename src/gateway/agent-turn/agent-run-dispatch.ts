@@ -13,9 +13,9 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
+import { findReplaySafeRunAbort } from "../../agents/embedded-agent-runner/transcript-conflict.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
-import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-store.js";
-import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
+import { isHostMissingReplyNoticeText } from "../../agents/reply-completion.js";
 import type {
   FollowupCompletionOwner,
   FollowupReply,
@@ -26,7 +26,11 @@ import {
 } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { agentCommandFromGatewayIngress } from "../../commands/agent.js";
 import { isAbortError } from "../../infra/abort-signal.js";
-import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
+import { isAgentEventLifecycleGenerationCurrent } from "../../infra/agent-events.js";
+import {
+  clearAgentRunContext,
+  validateAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import {
@@ -34,12 +38,14 @@ import {
   getRpcSourceForGateway,
   getRpcSourceIdentity,
   getRpcSourceLifecycleGeneration,
+  getRpcSourceStartedAt,
   hasRpcSource,
   isRpcSourceRegistered,
   type RpcSourceRef,
 } from "../../sessions/session-controller.rpc-sources.js";
 import { readWithdrawnUserTurnInputId } from "../../sessions/user-turn-transcript-admission.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { errorShapeFromError } from "../error-shape.js";
 import type { createAssistantCommentaryMediaCustody } from "../server-methods/chat-send-commentary-media.js";
 import type { GatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
@@ -56,7 +62,6 @@ import {
   resolveGatewayAgentAbortStopReason,
   resolveResolvedAgentTimeoutStopReason,
 } from "./agent-run-dispatch-outcome.js";
-import { bindGatewayAgentTerminalProducer } from "./agent-run-terminal-producer.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
 type AgentRunMediaCustody = Pick<
@@ -84,11 +89,9 @@ export function dispatchAgentRunFromGateway(params: {
    * touching a same-runId entry owned by a concurrent chat.send.
    */
   abortController: Pick<AbortController, "signal" | "abort">;
-  cleanupAbortController: () => void | Promise<void>;
+  cleanupAbortController: (failure?: unknown) => void | Promise<void>;
   io: AgentTurnIo;
   context: AgentTurnContext;
-  canonicalSkillWorkspaceDir?: string;
-  restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
   commandRuntimeContext?: PreparedAgentCommandRuntimeContext;
   /** Privacy classification carried from the resolved session entry. */
   isIncognito?: boolean;
@@ -198,6 +201,7 @@ export function dispatchAgentRunFromGateway(params: {
   };
   let runOwnerCleanedUp = false;
   let runOwnerCleanup: Promise<void> | undefined;
+  let runFailure: unknown;
   const cleanupRunOwner = () => {
     if (runOwnerCleanedUp) {
       return runOwnerCleanup;
@@ -210,18 +214,21 @@ export function dispatchAgentRunFromGateway(params: {
     if (ownsGlobalRegistration && ownsRunRegistration()) {
       clearAgentRunContext(params.runId, params.ingressOpts.lifecycleGeneration);
     }
-    return (runOwnerCleanup = Promise.resolve(params.cleanupAbortController()).then(() => {
-      runOwnerSettled = true;
-      // Recovery can replace the replay while finish is pending; publish through this same owner.
-      if (pendingReplay) {
-        const entry = pendingReplay;
-        pendingReplay = undefined;
-        publishReplay(entry);
-      }
-    }));
+    return (runOwnerCleanup = Promise.resolve(params.cleanupAbortController(runFailure)).then(
+      () => {
+        runOwnerSettled = true;
+        // Recovery can replace the replay while finish is pending; publish through this same owner.
+        if (pendingReplay) {
+          const entry = pendingReplay;
+          pendingReplay = undefined;
+          publishReplay(entry);
+        }
+      },
+    ));
   };
   const cronCreatorAuthorityCapability = params.cronCreatorAuthority
-    ? createCronCreatorAuthorityCapability(
+    ? (params.cronCreatorAuthority.boundRunScope ??
+      createCronCreatorAuthorityCapability(
         params.cronCreatorAuthority.runId,
         params.cronCreatorAuthority.callerOrigin,
         params.cronCreatorAuthority.managementEntitlement,
@@ -229,18 +236,86 @@ export function dispatchAgentRunFromGateway(params: {
         undefined,
         params.cronCreatorAuthority.requesterOwner,
         params.cronCreatorAuthority.callerScopedCreation,
-      )
+      ))
     : undefined;
-  if (cronCreatorAuthorityCapability) {
+  if (cronCreatorAuthorityCapability && !params.cronCreatorAuthority?.boundRunScope) {
     params.cronCreatorAuthority?.bindRunScope?.(cronCreatorAuthorityCapability);
   }
-  const terminalProducer = bindGatewayAgentTerminalProducer({
-    runId: params.runId,
-    entry: registeredRunEntry,
-    controller: params.abortController,
-    ingressOpts: params.ingressOpts,
-    isOwnerReleased: () => runOwnerCleanedUp,
-  });
+  /** Binds canonical transcript settlement to the exact registered API producer. */
+  const entry = registeredRunEntry;
+  const controller = params.abortController;
+  const ingressOpts = params.ingressOpts;
+  const producerRunInstance = entry?.adapter.operationalRunInstance;
+  const producerLifecycleGeneration = entry && getRpcSourceLifecycleGeneration(entry);
+  const producerSessionKey = entry && getRpcSourceIdentity(entry).sessionKey;
+  const producerCompletion = createDeferredCore<unknown>();
+  let terminalSettlement: Promise<void> | undefined;
+  if (entry && ingressOpts.abortSignal === controller.signal) {
+    entry.adapter.resolveTerminalProducer = () => {
+      const { sessionId, sessionKey } = getRpcSourceIdentity(entry);
+      const isCurrent = () => {
+        const authority = entry.adapter.agentRunDelegatedAuthority;
+        return (
+          !runOwnerCleanedUp &&
+          !controller.signal.aborted &&
+          ingressOpts.abortSignal === controller.signal &&
+          isRpcSourceRegistered(entry) &&
+          entry.input.abortSignal === controller.signal &&
+          entry.adapter.operationalRunInstance === producerRunInstance &&
+          getRpcSourceLifecycleGeneration(entry) === producerLifecycleGeneration &&
+          getRpcSourceIdentity(entry).sessionId === sessionId &&
+          getRpcSourceIdentity(entry).sessionKey === sessionKey &&
+          sessionKey === producerSessionKey &&
+          !entry.input.retirementRequested &&
+          (!producerLifecycleGeneration ||
+            isAgentEventLifecycleGenerationCurrent(producerLifecycleGeneration)) &&
+          (getRpcSourceStartedAt(entry) === undefined || authority !== undefined) &&
+          (!authority ||
+            (authority.operationalRunInstance === producerRunInstance &&
+              validateAgentRunDelegatedAuthority(authority)))
+        );
+      };
+      if (!isCurrent()) {
+        return undefined;
+      }
+      return {
+        sessionId,
+        sessionKey,
+        handoff: (settleProducer) => {
+          if (!isCurrent()) {
+            return false;
+          }
+          const settlement = settleProducer(producerCompletion.promise);
+          terminalSettlement = terminalSettlement
+            ? Promise.all([terminalSettlement, settlement]).then(() => undefined)
+            : settlement;
+          return true;
+        },
+      };
+    };
+  }
+  const complete = async (producerError?: unknown) => {
+    producerCompletion.resolve(producerError);
+    let joined: Promise<void> | undefined;
+    do {
+      joined = terminalSettlement;
+      await joined;
+    } while (joined !== terminalSettlement);
+  };
+  const terminalProducer = {
+    complete,
+    async settle<T>(execution: Promise<T>): Promise<T> {
+      let producerError: unknown;
+      try {
+        return await execution;
+      } catch (error) {
+        producerError = error;
+        throw error;
+      } finally {
+        await complete(producerError);
+      }
+    },
+  };
   const activateAgent = (media?: AgentRunMediaCustody) => {
     assertCurrent();
     const ingressOptsWithSpawnFacts = withAgentCommandExecutionIdentitySpawnFacts(
@@ -262,16 +337,13 @@ export function dispatchAgentRunFromGateway(params: {
       readAgentRunDispatchExecutionIdentity(params),
     );
     const invoke = () =>
-      runWithCanonicalSkillWorkspace(params.canonicalSkillWorkspaceDir, () =>
-        agentCommandFromGatewayIngress(
-          cronCreatorAuthorityCapability
-            ? { ...ingressOptsWithSpawnFacts, cronCreatorAuthorityCapability }
-            : ingressOptsWithSpawnFacts,
-          diagnostics.runtime,
-          params.context.deps,
-          { restoreAdmittedRecovery: params.restoreAdmittedRecovery },
-          params.commandRuntimeContext,
-        ),
+      agentCommandFromGatewayIngress(
+        cronCreatorAuthorityCapability
+          ? { ...ingressOptsWithSpawnFacts, cronCreatorAuthorityCapability }
+          : ingressOptsWithSpawnFacts,
+        diagnostics.runtime,
+        params.context.deps,
+        params.commandRuntimeContext,
       );
     if (followupCompletion) {
       if (
@@ -308,6 +380,7 @@ export function dispatchAgentRunFromGateway(params: {
           agentId: registeredRunEntry && getRpcSourceIdentity(registeredRunEntry).agentId,
           ownerConnId: registeredRunEntry?.adapter.requester?.connectionId,
           ownerDeviceId: registeredRunEntry?.adapter.requester?.deviceId,
+          initiatingPersonalOperator: registeredRunEntry?.adapter.initiatingPersonalOperator,
           controlUiVisible: registeredRunEntry?.adapter.controlUiVisible,
           turnKind: registeredRunEntry?.adapter.turnKind,
         },
@@ -387,7 +460,9 @@ export function dispatchAgentRunFromGateway(params: {
         endedAt: terminalOutcome.endedAt ?? Date.now(),
         yielded: result?.meta?.yielded === true,
         terminalReply,
-        ...(terminalReply?.disposition === "visible" ? { replyText: terminalReply.text } : {}),
+        ...(terminalReply?.disposition === "visible"
+          ? { replyText: result?.meta?.finalAssistantVisibleText ?? terminalReply.text }
+          : {}),
         ...(receipt?.runId === params.runId && receipt.sourceReplyDelivered
           ? { sourceReplyDelivered: true as const }
           : {}),
@@ -403,6 +478,10 @@ export function dispatchAgentRunFromGateway(params: {
             : responseStatus === "error"
               ? "failed"
               : "completed",
+        // agent.wait reads this replay. Keep the host's retry guidance, never arbitrary diagnostics.
+        ...(responseStatus === "error" && isHostMissingReplyNoticeText(terminalOutcome.error)
+          ? { error: terminalOutcome.error }
+          : {}),
         ...(responseStatus !== "ok" && terminalOutcome.stopReason
           ? { stopReason: terminalOutcome.stopReason }
           : {}),
@@ -450,17 +529,20 @@ export function dispatchAgentRunFromGateway(params: {
       return { terminalOutcome, settled };
     })
     .catch(async (cause: unknown) => {
+      runFailure = cause;
+      const replaySafeAbort = findReplaySafeRunAbort(cause);
+      const abortCause = replaySafeAbort?.cause ?? cause;
       const operation = params.admittedRunEntry?.input.claim?.operation;
       const controllerAbortCommitted =
         operation?.result?.kind === "aborted" &&
         isGatewayAgentAbortRejection(operation.abortSignal.reason, operation.abortSignal);
       const aborted =
         controllerAbortCommitted ||
-        isGatewayAgentAbortRejection(cause, params.abortController.signal);
+        isGatewayAgentAbortRejection(abortCause, params.abortController.signal);
       const error = errorShapeFromError(ErrorCodes.UNAVAILABLE, cause);
       const renderedErr = error.message;
       const stopReason = aborted
-        ? resolveGatewayAgentAbortStopReason(params.abortController.signal, cause)
+        ? resolveGatewayAgentAbortStopReason(params.abortController.signal, abortCause)
         : isAbortError(cause)
           ? "aborted"
           : undefined;
@@ -497,6 +579,7 @@ export function dispatchAgentRunFromGateway(params: {
         ...(aborted
           ? {
               stopReason,
+              ...(replaySafeAbort ? { replaySafe: true } : {}),
               ...(terminalOutcome.timeoutPhase
                 ? { timeoutPhase: terminalOutcome.timeoutPhase }
                 : {}),

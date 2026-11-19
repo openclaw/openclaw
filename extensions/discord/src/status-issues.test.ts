@@ -6,19 +6,23 @@ const collect = (fields: Record<string, unknown>) =>
   collectDiscordStatusIssues([
     { accountId: "ops", enabled: true, configured: true, ...fields } as ChannelAccountSnapshot,
   ]);
+const issue = (kind: string, message: string, fix: string) => ({
+  channel: "discord",
+  accountId: "ops",
+  kind,
+  message,
+  fix,
+});
 
 describe("collectDiscordStatusIssues", () => {
   it("reports an empty guild allowlist with the resolved account config path", () => {
     const issues = collect({ groupPolicy: "allowlist", guildsConfigured: 0 });
     expect(issues).toEqual([
-      {
-        channel: "discord",
-        accountId: "ops",
-        kind: "config",
-        message:
-          'Discord guild messages are blocked: effective groupPolicy is "allowlist", but no guilds are configured.',
-        fix: "Add your server under channels.discord.accounts.ops.guilds. Refresh channel status after the configuration reload applies.",
-      },
+      issue(
+        "config",
+        'Discord guild messages are blocked: effective groupPolicy is "allowlist", but no guilds are configured.',
+        "Add your server under channels.discord.accounts.ops.guilds. Refresh channel status after the configuration reload applies.",
+      ),
     ]);
   });
 
@@ -39,21 +43,16 @@ describe("collectDiscordStatusIssues", () => {
     });
 
     expect(issues).toEqual([
-      {
-        channel: "discord",
-        accountId: "ops",
-        kind: "intent",
-        message: "Message Content Intent is disabled. Bot may not see normal channel messages.",
-        fix: "Enable Message Content Intent in Discord Dev Portal → Bot → Privileged Gateway Intents, or require mention-only operation.",
-      },
-      {
-        channel: "discord",
-        accountId: "ops",
-        kind: "config",
-        message:
-          "Some configured guild channels are not numeric IDs (unresolvedChannels=2). Permission audit can only check numeric channel IDs.",
-        fix: "Use numeric channel IDs as keys in channels.discord.guilds.*.channels (then rerun channels status --probe).",
-      },
+      issue(
+        "intent",
+        "Message Content Intent is disabled. Bot may not see normal channel messages.",
+        "Enable Message Content Intent in Discord Dev Portal → Bot → Privileged Gateway Intents, or require mention-only operation.",
+      ),
+      issue(
+        "config",
+        "Some configured guild channels are not numeric IDs (unresolvedChannels=2). Permission audit can only check numeric channel IDs.",
+        "Use numeric channel IDs as keys in channels.discord.guilds.*.channels (then rerun channels status --probe).",
+      ),
     ]);
   });
 
@@ -74,14 +73,11 @@ describe("collectDiscordStatusIssues", () => {
     });
 
     expect(issues).toEqual([
-      {
-        channel: "discord",
-        accountId: "ops",
-        kind: "permissions",
-        message:
-          "Channel 123 permission check failed. missing ViewChannel, SendMessages: 403 (matchKey=alerts matchSource=guilds.ops.channels)",
-        fix: "Check that the bot role can view + send in this channel (and that channel overrides don't deny it).",
-      },
+      issue(
+        "permissions",
+        "Channel 123 permission check failed. missing ViewChannel, SendMessages: 403 (matchKey=alerts matchSource=guilds.ops.channels)",
+        "Check that the bot role can view + send in this channel (and that channel overrides don't deny it).",
+      ),
     ]);
   });
 });

@@ -2,7 +2,6 @@ import { applyToolAvailabilityDescriptions } from "../../agents/agent-tools.defe
 import { resolveEffectiveToolPolicy } from "../../agents/agent-tools.policy.js";
 import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
 import { resolveConversationQuestionInputMode } from "../../agents/conversation-capability-profile.js";
-import { filterRequesterYieldTools } from "../../agents/openclaw-tools.requester-yield.js";
 import { resolveRequesterToolPolicies } from "../../agents/requester-tool-policy.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
@@ -163,7 +162,12 @@ export async function resolveSkillDispatchTools(params: {
         },
       }
     : undefined;
+  let messageToolAvailable = true;
   const tools = await createOpenClawToolsAsync({
+    retainUnavailableMessageTool: true,
+    onMessageToolAvailability: (available) => {
+      messageToolAvailable = available;
+    },
     gatewayConfigReadAllowed,
     agentSessionKey: params.sessionKey,
     agentChannel: channel,
@@ -240,6 +244,8 @@ export async function resolveSkillDispatchTools(params: {
     getPluginToolMeta,
   );
   return applyToolAvailabilityDescriptions(
-    filterRequesterYieldTools(policyFiltered, params.sessionKey),
+    messageToolAvailable
+      ? policyFiltered
+      : policyFiltered.filter((tool) => tool.name !== "message"),
   );
 }

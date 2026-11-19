@@ -15,7 +15,6 @@ import {
 } from "../../agents/model-catalog-view.js";
 import { resolveLogicalModelCatalogEntryState } from "../../agents/model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
 import { resolveCompatibleAgentRuntimeForProvider } from "../../agents/session-runtime-compat.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -29,7 +28,10 @@ export function prepareModelPickerRuntimeChoices(params: {
   variants: readonly ModelCatalogEntry[];
   requestedRuntimes: readonly string[];
   baseEvaluation: ModelAuthAvailabilityEvaluation;
-  decisions: Pick<CatalogDecisions, "runtimeChoices" | "evaluateEntry" | "pluginRegistry">;
+  decisions: Pick<
+    CatalogDecisions,
+    "runtimeChoices" | "evaluateEntry" | "pluginRegistry" | "resolveOpenAIProviderRoutes"
+  >;
   evaluateNative: CatalogDecisions["evaluateNative"];
   projectPublic: (
     entry: ModelCatalogEntry,
@@ -54,6 +56,7 @@ export function prepareModelPickerRuntimeChoices(params: {
     entry,
     evaluation: baseEvaluation,
     pluginRegistry: decisions.pluginRegistry,
+    resolveOpenAIProviderRoutes: decisions.resolveOpenAIProviderRoutes,
   });
   const alternatives = requestedRuntimes
     .filter((runtimeId) => runtimeId !== (selected?.id ?? "openclaw"))
@@ -90,7 +93,6 @@ export function prepareModelPickerRuntimeChoices(params: {
           runtimeEntry,
           resolveLogicalModelCatalogEntryState({
             evaluation,
-            routePolicy: openAIModelCatalogRoutePolicy,
           }).routeProjection,
         ).runtimeEntry;
         const {

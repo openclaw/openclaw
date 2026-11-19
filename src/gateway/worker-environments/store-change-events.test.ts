@@ -28,12 +28,8 @@ const SESSION = {
 const subscribe = (listener: Parameters<typeof sessionChanges.subscribe>[0]) =>
   onTestFinished(sessionChanges.subscribe(listener));
 
-it.each([
-  "reopening the store",
-  "reconciling an unchanged host",
-  "revoking an absent credential",
-] as const)(
-  "keeps session lists resident when %s changes no environment rows",
+it.each(["reopen", "reconcile", "revoke"] as const)(
+  "keeps session lists resident after a no-op %s",
   async (operation) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
@@ -62,9 +58,9 @@ it.each([
       await projection.ensureMaterialized();
       const before = projection.materializedCount;
       const environment = store.get(environmentId);
-      if (operation === "reopening the store") {
+      if (operation === "reopen") {
         await createWorkerEnvironmentStore({ database, now: () => 1_000 });
-      } else if (operation === "reconciling an unchanged host") {
+      } else if (operation === "reconcile") {
         await store.reconcileSharedHost(host);
       } else {
         await store.revokeEnvironmentCredential(environmentId);
@@ -90,15 +86,13 @@ describe("worker store session change publications", () => {
 
   it("publishes committed environment changes and discards rolled-back writes", async () => {
     const store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
-    const transactions: boolean[] = [];
-    const committedStates: unknown[] = [];
+    const publications: unknown[] = [];
     const committedState = database.db.prepare(
       "SELECT state FROM worker_environments WHERE environment_id = ?",
     );
     subscribe((change) => {
       if ("all" in change && change.scope === "worker-environments") {
-        transactions.push(database.db.isTransaction);
-        committedStates.push(committedState.get("worker-1"));
+        publications.push([database.db.isTransaction, committedState.get("worker-1")]);
       }
     });
     const intent = {
@@ -110,7 +104,8 @@ describe("worker store session change publications", () => {
       provisionOperationId: "provision:worker-1",
     };
     await store.createSessionAttachmentIntent(intent, () => {});
-    expect(transactions).toEqual([false]);
+    const requested = [false, { state: "requested" }];
+    expect(publications).toEqual([requested]);
     database.db.exec(`CREATE TRIGGER reject_environment_error
         AFTER UPDATE OF last_error ON worker_environments
         BEGIN SELECT RAISE(ABORT, 'rollback environment'); END`);
@@ -118,24 +113,28 @@ describe("worker store session change publications", () => {
       store.recordError({ environmentId: "worker-1", state: "requested", error: "rollback" }),
     ).rejects.toThrow("rollback environment");
     database.db.exec("DROP TRIGGER reject_environment_error");
-    expect(transactions).toEqual([false]);
+    expect(publications).toEqual([requested]);
     expect(store.get("worker-1")?.lastError).toBeNull();
     await store.closeSessionAttachment(SESSION.sessionId);
-    expect(transactions).toEqual([false, false]);
+    expect(publications).toEqual([requested, requested]);
     await store.closeSessionAttachment(SESSION.sessionId);
-    expect(transactions).toEqual([false, false]);
+    expect(publications).toEqual([requested, requested]);
     await store.transition({ environmentId: "worker-1", from: "requested", to: "failed" });
     expect(await store.pruneTerminalEnvironments({ nowMs: 8 * 24 * 60 * 60 * 1_000 })).toBe(1);
-    expect(transactions).toEqual([false, false, false, false]);
-    const requested = { state: "requested" };
-    expect(committedStates).toEqual([requested, requested, { state: "failed" }, undefined]);
+    expect(publications).toEqual([
+      requested,
+      requested,
+      [false, { state: "failed" }],
+      [false, undefined],
+    ]);
   });
 
   it("publishes pending-only and conflict changes after their owner commits", async () => {
     const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
     const dispatch = { ...SESSION, executionMode: "remote-exec" as const };
-    const fixture = { seedEnvironment: "before-dispatch" as const };
-    const active = await advancePlacementFixtureToActive(store, database, dispatch, fixture);
+    const active = await advancePlacementFixtureToActive(store, database, dispatch, {
+      seedEnvironment: "before-dispatch",
+    });
     const { environmentId, activeOwnerEpoch: ownerEpoch } = active;
     const claim = await store.claimWorkspaceMutationResult({
       ...SESSION,
@@ -146,25 +145,23 @@ describe("worker store session change publications", () => {
     const previousObservation = await store.prepareRuntimeRefresh(claim.sessionId);
     previousObservation.release();
     const observation = await store.prepareRuntimeRefresh(claim.sessionId);
-    previousObservation.release();
     onTestFinished(authority.release);
     onTestFinished(observation.release);
-    const observed: Array<{ reconciling: boolean; conflict: boolean; transaction: boolean }> = [];
+    const observed: Array<[reconciling: boolean, conflict: boolean, transaction: boolean]> = [];
     subscribe((change) => {
       if (
         "sessionKey" in change &&
         change.sessionKey === SESSION.sessionKey &&
         change.agentId === SESSION.agentId
       ) {
-        observed.push({
-          reconciling: Boolean(store.preparedWorkspaceResult(claim)?.stagedResultRef),
-          conflict: Boolean(store.get(SESSION.sessionId)?.workspaceResultConflict),
-          transaction: database.db.isTransaction,
-        });
+        observed.push([
+          Boolean(store.preparedWorkspaceResult(claim)?.stagedResultRef),
+          Boolean(store.get(SESSION.sessionId)?.workspaceResultConflict),
+          database.db.isTransaction,
+        ]);
       }
     });
     const ref = "refs/openclaw/worker-results/pending-row-change";
-    let refused = 0;
     let current = true;
     const assertCurrent = () => {
       if (!current) {
@@ -178,7 +175,6 @@ describe("worker store session change publications", () => {
       request.facts.placement.sessionId === claim.sessionId;
     const admission = probe.admission(operationAdmission, (request, grant, admit) => {
       if (isClaimCommit(request)) {
-        refused++;
         expect(observed).toEqual([]);
         current = false;
       }
@@ -188,17 +184,17 @@ describe("worker store session change publications", () => {
       store.recordStagedWorkspaceResult(claim, ref, undefined, assertCurrent),
     ).rejects.toThrow("rollback pending row");
     admission.mockRestore();
-    expect(refused).toBe(1);
     expect(observed).toEqual([]);
-    const pending = await store.listPendingWorkspaceResultsAsync();
-    expect(pending).toMatchObject([{ stagedResultRef: null }]);
+    expect(await store.listPendingWorkspaceResultsAsync()).toMatchObject([
+      { stagedResultRef: null },
+    ]);
     expect(authority.isCurrent()).toBe(true);
     expect(() => observation.assertCurrent()).not.toThrow();
-    let commitGrants = 0;
+    let checkedCommit = false;
     const successfulAdmission = probe.admission(operationAdmission, (request, grant, admit) => {
       admit(request, () => {
         if (isClaimCommit(request)) {
-          commitGrants++;
+          checkedCommit = true;
           expect(authority.isCurrent()).toBe(true);
           expect(() => observation.assertCurrent()).toThrow("placement authority changed");
           expect(observed).toEqual([]);
@@ -208,16 +204,16 @@ describe("worker store session change publications", () => {
     });
     await store.recordStagedWorkspaceResult(claim, ref);
     successfulAdmission.mockRestore();
-    expect(commitGrants).toBe(1);
+    expect(checkedCommit).toBe(true);
     expect(authority.isCurrent()).toBe(true);
     expect(() => observation.assertCurrent()).toThrow("placement authority changed");
-    expect(observed.at(-1)).toEqual({ reconciling: true, conflict: false, transaction: false });
+    expect(observed.at(-1)).toEqual([true, false, false]);
     store.recordWorkspaceResultConflict(claim, { paths: ["conflict.txt"], stagedResultRef: ref });
-    expect(observed.at(-1)).toEqual({ reconciling: true, conflict: true, transaction: false });
+    expect(observed.at(-1)).toEqual([true, true, false]);
     store.recordWorkspaceResultConflict(claim, undefined);
-    expect(observed.at(-1)).toEqual({ reconciling: true, conflict: false, transaction: false });
+    expect(observed.at(-1)).toEqual([true, false, false]);
     await store.acceptWorkspaceResult(claim);
     await store.completeWorkspaceResultAndReleaseTurn(claim);
-    expect(observed.at(-1)).toEqual({ reconciling: false, conflict: false, transaction: false });
+    expect(observed.at(-1)).toEqual([false, false, false]);
   });
 });

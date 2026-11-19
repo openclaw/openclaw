@@ -5,6 +5,7 @@ import {
   WINDOWS_TASK_SUPERVISOR_FLAG,
 } from "../daemon/windows-task-supervisor-contract.js";
 import {
+  consumeKnownOptionToken,
   consumeRootCommandOptionToken,
   getCommandArgsWithRootOptions,
   getCommandPositionalsWithRootOptions,
@@ -14,22 +15,7 @@ import {
 export { isForegroundGatewayRunArgv } from "../../gateway-run-argv.mjs";
 
 export function consumeGatewayRunOptionToken(args: ReadonlyArray<string>, index: number): number {
-  const arg = args[index];
-  if (!arg || arg === "--" || !arg.startsWith("-")) {
-    return 0;
-  }
-  const equalsIndex = arg.indexOf("=");
-  const flag = equalsIndex === -1 ? arg : arg.slice(0, equalsIndex);
-  if (GATEWAY_RUN_BOOLEAN_FLAGS.has(flag)) {
-    return equalsIndex === -1 ? 1 : 0;
-  }
-  if (!GATEWAY_RUN_VALUE_FLAGS.has(flag)) {
-    return 0;
-  }
-  if (equalsIndex !== -1) {
-    return arg.slice(equalsIndex + 1).trim() ? 1 : 0;
-  }
-  return isValueToken(args[index + 1]) ? 2 : 0;
+  return consumeKnownOptionToken(args, index, GATEWAY_RUN_BOOLEAN_FLAGS, GATEWAY_RUN_VALUE_FLAGS);
 }
 
 export function consumeGatewayFastPathRootOptionToken(

@@ -3,6 +3,7 @@ import path from "node:path";
 import { constants, DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { ensureMemoryChunkFtsTriggers } from "../../../../src/infra/database-engine/sqlite-search-schema.js";
 import { openNodeSqliteDatabase } from "../../../../src/infra/node-sqlite.js";
 import { trackSqliteStatementExecutions } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
@@ -586,6 +587,49 @@ describe("memory storage migration", () => {
     expect(snapshot(db)).toEqual(before);
   });
 
+  it("converts legacy chunks while canonical body FTS triggers still address chunk_rowid", () => {
+    const db = legacyDatabase();
+    ensureMemoryChunkFtsTriggers(db);
+    migrateMemoryIndexStorage(db);
+    expect(
+      db
+        .prepare(
+          "SELECT text FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'saffronquasar'",
+        )
+        .get(),
+    ).toEqual({ text: "saffronquasar" });
+    db.exec("UPDATE memory_index_chunks SET text = 'ambercomet' WHERE id = 'logical-id'");
+    expect(
+      db
+        .prepare(
+          "SELECT text FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'ambercomet'",
+        )
+        .get(),
+    ).toEqual({ text: "ambercomet" });
+    expect(
+      db
+        .prepare(
+          "SELECT text FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'saffronquasar'",
+        )
+        .get(),
+    ).toBeUndefined();
+  });
+
+  it("refuses a drifted body FTS trigger before converting legacy chunk storage", () => {
+    const db = legacyDatabase();
+    db.exec(`
+      CREATE TRIGGER memory_index_chunks_fts_after_insert
+      AFTER INSERT ON memory_index_chunks
+      BEGIN SELECT 1; END
+    `);
+    const before = snapshot(db);
+    expect(() => migrateMemoryIndexStorage(db)).toThrow(/memory_index_chunks_fts_after_insert/);
+    expect(snapshot(db)).toEqual(before);
+    expect(db.prepare("SELECT typeof(embedding) AS kind FROM memory_index_chunks").get()).toEqual({
+      kind: "text",
+    });
+  });
+
   it("preserves existing revision triggers and indexes without relying on the outer schema ensure", () => {
     const db = legacyDatabase();
     db.exec(`
@@ -619,7 +663,7 @@ describe("memory storage migration", () => {
     expect(db.prepare("SELECT revision FROM memory_index_state").get()).toEqual({ revision: 12 });
   });
 
-  it("renews long synchronous conversion work periodically and releases the callback afterward", () => {
+  it.each([0, 1_100])("spaces renewals after %i ms and releases the callback", (delay) => {
     const db = legacyDatabase();
     const insert =
       db.prepare(`INSERT INTO memory_index_chunks(id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
@@ -629,12 +673,21 @@ describe("memory storage migration", () => {
     }
     let clock = 0;
     const now = vi.spyOn(performance, "now").mockImplementation(() => (clock += 250));
-    const renewals: number[] = [];
+    const renewals: { startedAt: number; finishedAt: number }[] = [];
     try {
-      migrateMemoryIndexStorage(db, { renewAuthority: () => renewals.push(clock) });
+      migrateMemoryIndexStorage(db, {
+        renewAuthority: () => {
+          const startedAt = clock;
+          clock += delay;
+          renewals.push({ startedAt, finishedAt: clock });
+        },
+      });
       expect(renewals.length).toBeGreaterThan(1);
       expect(
-        renewals.every((instant, index) => index === 0 || instant - renewals[index - 1]! >= 1_000),
+        renewals.every(
+          (renewal, index) =>
+            index === 0 || renewal.startedAt - renewals[index - 1]!.finishedAt >= 1_000,
+        ),
       ).toBe(true);
       const count = renewals.length;
       db.prepare("SELECT openclaw_memory_embedding_from_json(?)").get("[2]");

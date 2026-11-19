@@ -11,29 +11,10 @@ import { sendMessageSignal } from "./send.js";
 import {
   signalJsonServer,
   listenSignalServer,
-  closeSignalServer,
   type SignalRpcEnvelope,
 } from "./signal-rpc.test-support.js";
 
-const reactionStores = vi.hoisted(() => new Set<{ clearForTest(): void }>());
-
-vi.mock("openclaw/plugin-sdk/approval-reaction-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/approval-reaction-runtime")>();
-  return {
-    ...actual,
-    createApprovalReactionTargetStore: <TTarget>(
-      params: Parameters<typeof actual.createApprovalReactionTargetStore<TTarget>>[0],
-    ) => {
-      const store = actual.createApprovalReactionTargetStore<TTarget>(params);
-      if (params.namespace === "signal.approval-reactions.v2") {
-        reactionStores.add(store);
-      }
-      return store;
-    },
-  };
-});
-
+const reactionStores = await vi.hoisted(() => import("./approval-reactions.test-support.js"));
 const SIGNAL_IMAGE = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
   "base64",
@@ -72,15 +53,19 @@ describe("Signal host-owned outbound media access", () => {
   let requests: Array<{ envelope: SignalRpcEnvelope; attachment: Buffer | undefined }>;
   let onRequest: (() => void) | undefined;
   let rejectQuotes: boolean;
+  let caller: AbortController;
+  const close = () => caller.abort(new Error("Signal caller closed"));
 
   beforeEach(async () => {
     state = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-signal-media-access-",
     });
+    await fs.writeFile(path.join(state.workspaceDir, "chart.png"), SIGNAL_IMAGE);
     requests = [];
     onRequest = undefined;
     rejectQuotes = false;
+    caller = new AbortController();
     server = signalJsonServer(async (envelope, _request, response) => {
       const attachmentPath = envelope.params?.attachments?.[0];
       requests.push({
@@ -106,17 +91,17 @@ describe("Signal host-owned outbound media access", () => {
   afterEach(async () => {
     try {
       if (server?.listening) {
-        await closeSignalServer(server);
+        await server[Symbol.asyncDispose]();
       }
     } finally {
-      reactionStores.forEach((store) => store.clearForTest());
+      reactionStores.clearSignalApprovalReactionStoresForTest();
       vi.restoreAllMocks();
       await state?.cleanup();
     }
   });
 
   function createContext(overrides: Partial<SignalMediaContext> = {}): SignalMediaContext {
-    return { cfg, to: "+15551234567", text: "attachment", mediaUrl: "chart.png", ...overrides };
+    return { ...textContext(), text: "attachment", mediaUrl: "chart.png", ...overrides };
   }
 
   function workspaceAccess(readFile?: OutboundMediaAccess["readFile"]): OutboundMediaAccess {
@@ -131,7 +116,7 @@ describe("Signal host-owned outbound media access", () => {
       body: "original message",
     });
   }
-  function textContext(caller: AbortController) {
+  function textContext() {
     return {
       cfg,
       to: "+15551234567",
@@ -139,18 +124,20 @@ describe("Signal host-owned outbound media access", () => {
       assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
     };
   }
+  async function rejectedBeforeSend(delivery: Promise<unknown>, error = "Signal caller closed") {
+    await expect(delivery).rejects.toThrow(error);
+    expect(requests).toHaveLength(0);
+  }
 
   it.each(SIGNAL_MEDIA_ADAPTERS)(
-    "delivers approved workspace bytes through the real $name and preserves native quotes",
+    "sends approved media with quotes via $name",
     async ({ deliver }) => {
       const sourcePath = path.join(state.workspaceDir, "chart.png");
       const conflictingRoot = state.path("conflicting-root");
       await fs.mkdir(conflictingRoot);
-      await fs.writeFile(sourcePath, SIGNAL_IMAGE);
       const approvedReader = vi.fn(async (filePath: string) => await fs.readFile(filePath));
       const conflictingReader = vi.fn(async () => Buffer.from("untrusted bytes"));
       const mediaAccess = workspaceAccess(approvedReader);
-      const send = vi.fn(sendMessageSignal);
       await registerQuote();
 
       const result = await deliver(
@@ -159,15 +146,11 @@ describe("Signal host-owned outbound media access", () => {
           mediaLocalRoots: [conflictingRoot],
           mediaReadFile: conflictingReader,
           replyToId: "1700000000001",
-          deps: { signal: send },
+          deps: { signal: sendMessageSignal },
         }),
       );
 
       expect(result).toMatchObject(SENT_MESSAGE);
-      expect(send).toHaveBeenCalledOnce();
-      expect(send.mock.calls[0]?.[2].mediaAccess).toBe(mediaAccess);
-      expect(send.mock.calls[0]?.[2].mediaLocalRoots).toEqual([conflictingRoot]);
-      expect(send.mock.calls[0]?.[2].mediaReadFile).toBe(conflictingReader);
       expect(approvedReader).toHaveBeenCalledExactlyOnceWith(sourcePath);
       expect(conflictingReader).not.toHaveBeenCalled();
       expect(requests).toHaveLength(1);
@@ -190,9 +173,6 @@ describe("Signal host-owned outbound media access", () => {
       ["during read", "after transmission"].map((phase) => ({ name, deliver, phase })),
     ),
   )("settles the $name when its caller closes $phase", async ({ deliver, phase }) => {
-    await fs.writeFile(path.join(state.workspaceDir, "chart.png"), SIGNAL_IMAGE);
-    const caller = new AbortController();
-    const close = () => caller.abort(new Error("Signal caller closed"));
     const readFile = vi.fn(async (filePath: string) => {
       const bytes = await fs.readFile(filePath);
       close();
@@ -204,13 +184,11 @@ describe("Signal host-owned outbound media access", () => {
     const delivery = deliver(
       createContext({
         mediaAccess: workspaceAccess(phase === "during read" ? readFile : undefined),
-        assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
       }),
     );
     if (phase === "during read") {
-      await expect(delivery).rejects.toThrow("Signal caller closed");
+      await rejectedBeforeSend(delivery);
       expect(readFile).toHaveBeenCalledOnce();
-      expect(requests).toHaveLength(0);
     } else {
       await expect(delivery).resolves.toMatchObject(SENT_MESSAGE);
       expect(requests).toHaveLength(1);
@@ -218,28 +196,21 @@ describe("Signal host-owned outbound media access", () => {
     }
   });
 
-  it.each(SIGNAL_MEDIA_ADAPTERS)(
-    "checks the current caller after preparation for $name text delivery",
-    async ({ text: send }) => {
-      const caller = new AbortController();
-      const delivery = send(textContext(caller));
-      caller.abort(new Error("Signal caller closed"));
-
-      await expect(delivery).rejects.toThrow("Signal caller closed");
-      expect(requests).toHaveLength(0);
-    },
-  );
+  it.each(SIGNAL_MEDIA_ADAPTERS)("gates prepared $name text", async ({ text: send }) => {
+    const delivery = send(textContext());
+    close();
+    await rejectedBeforeSend(delivery);
+  });
 
   it.each([false, true])("keeps quote fallback on the same caller (closed=%s)", async (closed) => {
     const send = requireAdapter(signalPlugin.message?.send?.text);
     await registerQuote();
-    const caller = new AbortController();
     rejectQuotes = true;
     if (closed) {
-      onRequest = () => caller.abort(new Error("Signal caller closed"));
+      onRequest = close;
     }
     const delivery = send({
-      ...textContext(caller),
+      ...textContext(),
       text: "A quoted reply",
       replyToId: "1700000000001",
     });
@@ -257,11 +228,10 @@ describe("Signal host-owned outbound media access", () => {
 
   it("preserves a reported text chunk and stops later chunks when its caller closes", async () => {
     const send = requireAdapter(signalPlugin.outbound?.sendFormattedText);
-    const caller = new AbortController();
     const delivered: unknown[] = [];
     await expect(
       send({
-        ...textContext(caller),
+        ...textContext(),
         cfg: {
           ...cfg,
           channels: { signal: { ...cfg.channels?.signal, textChunkLimit: 4 } },
@@ -279,9 +249,8 @@ describe("Signal host-owned outbound media access", () => {
 
   it.each([false, true])("stops a closed caller's reaction (remove=%s)", async (remove) => {
     const react = requireAdapter(signalPlugin.actions?.handleAction);
-    const caller = new AbortController();
-    caller.abort(new Error("Signal caller closed"));
-    await expect(
+    close();
+    await rejectedBeforeSend(
       react({
         channel: "signal",
         action: "react",
@@ -289,45 +258,39 @@ describe("Signal host-owned outbound media access", () => {
         params: { to: "+15551234567", messageId: "1700000000001", emoji: "👍", remove },
         assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
       }),
-    ).rejects.toThrow("Signal caller closed");
+    );
+  });
+
+  it.each(SIGNAL_MEDIA_ADAPTERS)("rejects traversal before I/O via $name", async ({ deliver }) => {
+    await fs.writeFile(state.path("outside.png"), SIGNAL_IMAGE);
+    const approvedReader = vi.fn(async (filePath: string) => await fs.readFile(filePath));
+    const conflictingReader = vi.fn(async (filePath: string) => await fs.readFile(filePath));
+
+    const delivery = deliver(
+      createContext({
+        mediaUrl: "../outside.png",
+        mediaLocalRoots: [state.root],
+        mediaReadFile: conflictingReader,
+        mediaAccess: workspaceAccess(approvedReader),
+      }),
+    );
+    await expect(delivery).rejects.toMatchObject({ code: "path-not-allowed" });
+
+    expect(approvedReader).not.toHaveBeenCalled();
+    expect(conflictingReader).not.toHaveBeenCalled();
     expect(requests).toHaveLength(0);
   });
 
-  it.each(SIGNAL_MEDIA_ADAPTERS)(
-    "rejects traversal before reading or contacting Signal through the $name",
-    async ({ deliver }) => {
-      await fs.writeFile(state.path("outside.png"), SIGNAL_IMAGE);
-      const approvedReader = vi.fn(async (filePath: string) => await fs.readFile(filePath));
-      const conflictingReader = vi.fn(async (filePath: string) => await fs.readFile(filePath));
-
-      await expect(
-        deliver(
-          createContext({
-            mediaUrl: "../outside.png",
-            mediaLocalRoots: [state.root],
-            mediaReadFile: conflictingReader,
-            mediaAccess: workspaceAccess(approvedReader),
-          }),
-        ),
-      ).rejects.toMatchObject({ code: "path-not-allowed" });
-
-      expect(approvedReader).not.toHaveBeenCalled();
-      expect(conflictingReader).not.toHaveBeenCalled();
-      expect(requests).toHaveLength(0);
-    },
-  );
-
   it("propagates host-reader failures without contacting Signal", async () => {
-    await fs.writeFile(path.join(state.workspaceDir, "chart.png"), SIGNAL_IMAGE);
     const deniedReader = vi.fn(async (): Promise<Buffer> => {
       throw new Error("host denied this attachment");
     });
-    await expect(
+    await rejectedBeforeSend(
       SIGNAL_MEDIA_ADAPTERS[0].deliver(
         createContext({ mediaAccess: workspaceAccess(deniedReader) }),
       ),
-    ).rejects.toThrow("host denied this attachment");
+      "host denied this attachment",
+    );
     expect(deniedReader).toHaveBeenCalledOnce();
-    expect(requests).toHaveLength(0);
   });
 });

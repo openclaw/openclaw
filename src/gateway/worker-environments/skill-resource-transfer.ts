@@ -200,7 +200,7 @@ export async function transferSkillResources(params: {
         .map((skill) => skill.sourcePath)
         .filter((sourcePath): sourcePath is string => sourcePath !== undefined),
     );
-    const resolvedSkills = structuredClone(params.snapshot.resolvedSkills ?? []).filter(
+    const resolvedSkills = (params.snapshot.resolvedSkills ?? []).filter(
       (skill) => skill.filePath.startsWith("node://") || deliveredSourcePaths.has(skill.filePath),
     );
     const skippedSkillNames = new Set(
@@ -215,7 +215,7 @@ export async function transferSkillResources(params: {
       ...resolvedSkills.map((skill) => skill.name),
       ...delivery.skills.map((skill) => skill.name),
     ]);
-    const skills = structuredClone(params.snapshot.skills).filter(
+    const skills = params.snapshot.skills.filter(
       (skill) => !skippedSkillNames.has(skill.name) || retainedSkillNames.has(skill.name),
     );
     const deliveredSkills: NonNullable<SkillSnapshot["resolvedSkills"]> = [];
@@ -253,7 +253,10 @@ export async function transferSkillResources(params: {
           }
         } while (offset < file.bytes.length);
       }
-      const selected = resolvedSkills.find((candidate) => candidate.filePath === skill.sourcePath);
+      const selectedIndex = resolvedSkills.findIndex(
+        (candidate) => candidate.filePath === skill.sourcePath,
+      );
+      const selected = resolvedSkills[selectedIndex];
       const sourceBase =
         selected?.baseDir ?? (skill.sourcePath ? path.dirname(skill.sourcePath) : undefined);
       if (!sourceBase) {
@@ -285,9 +288,7 @@ export async function transferSkillResources(params: {
       delete delivered.locationNote;
       deliveredSkills.push(delivered);
       if (selected) {
-        Object.assign(selected, delivered);
-        delete selected.fileHost;
-        delete selected.locationNote;
+        resolvedSkills[selectedIndex] = delivered;
       }
     }
     await flush();

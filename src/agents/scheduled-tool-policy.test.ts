@@ -1,128 +1,72 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
-  resolveScheduledToolCallerContext,
-  resolveScheduledToolPolicyContext,
+  resolveScheduledToolCallerContext as callerContext,
+  resolveScheduledToolPolicyContext as resolvePolicy,
 } from "./scheduled-tool-policy.js";
 
-const localAccount = {
+const account = {
   version: 1,
   mode: "account",
   ownerSessionKey: "agent:main:main",
   ownerAccountId: "creator",
 } as const;
+const policy = (params: Parameters<typeof resolvePolicy>[0] = {}) =>
+  resolvePolicy({ toolsAllow: ["exec"], scheduledToolPolicy: account, ...params });
 
-describe("resolveScheduledToolPolicyContext", () => {
-  it("requires both a persisted cap and valid server provenance", () => {
-    for (const params of [
-      { scheduledToolPolicy: { version: 1, mode: "trusted" } },
-      { toolsAllow: ["write"] },
-      { toolsAllow: ["write"], scheduledToolPolicy: { version: 2, mode: "trusted" } },
-      { toolsAllow: ["write"], scheduledToolPolicy: {} },
-    ]) {
-      expect(resolveScheduledToolPolicyContext(params)).toBeUndefined();
-    }
-  });
+it("requires both a persisted cap and valid server provenance", () => {
+  for (const params of [
+    { scheduledToolPolicy: { version: 1, mode: "trusted" } },
+    { toolsAllow: ["write"] },
+    { toolsAllow: ["write"], scheduledToolPolicy: { version: 2, mode: "trusted" } },
+    { toolsAllow: ["write"], scheduledToolPolicy: {} },
+  ]) {
+    expect(resolvePolicy(params)).toBeUndefined();
+  }
+});
 
-  it.each([
-    [
-      "external",
-      " agent:main:discord:group:ops ",
-      " work ",
-      { kind: "external", channel: " Discord " },
-      { kind: "external", channel: "discord" },
-      "agent:main:discord:group:ops",
-    ],
-    ["local", "agent:main:main", "work", { kind: "local" }, { kind: "local" }, "agent:main:main"],
-    ["unknown", "agent:main:main", "work", undefined, { kind: "unknown" }, "agent:main:main"],
-  ] as const)(
-    "normalizes %s account provenance",
-    (_name, ownerSessionKey, ownerAccountId, callerOrigin, ownerOrigin, sessionKey) => {
-      expect(
-        resolveScheduledToolPolicyContext({
-          toolsAllow: [],
-          callerOrigin,
-          scheduledToolPolicy: { version: 1, mode: "account", ownerSessionKey, ownerAccountId },
-        }),
-      ).toEqual({
-        version: 1,
-        mode: "account",
-        ownerSessionKey: sessionKey,
-        ownerAccountId: "work",
-        ownerOrigin,
-      });
-    },
+it.each([
+  [{ kind: "external", channel: " Discord " }, { kind: "external", channel: "discord" }, "discord"],
+  [{ kind: "local" }, { kind: "local" }, undefined],
+  [undefined, { kind: "unknown" }, null],
+] as const)(
+  "normalizes provenance %j and preserves creator authority",
+  (origin, ownerOrigin, channel) => {
+    const sessionKey = channel ? "agent:main:discord:group:ops" : account.ownerSessionKey;
+    const resolved = policy({
+      toolsAllow: [],
+      callerOrigin: origin,
+      scheduledToolPolicy: {
+        ...account,
+        ownerSessionKey: ` ${sessionKey} `,
+        ownerAccountId: " creator ",
+      },
+    });
+    expect(resolved).toEqual({ ...account, ownerSessionKey: sessionKey, ownerOrigin });
+    expect(
+      callerContext({ scheduledToolPolicy: resolved, accountId: "delivery", channel: "telegram" }),
+    ).toEqual({
+      accountId: "creator",
+      channel,
+      scheduled: true,
+      ...(ownerOrigin.kind === "local" ? { local: true } : {}),
+    });
+  },
+);
+
+it("preserves the pin when re-resolving an already-resolved context", () => {
+  const pin = { host: "gateway", ask: "always" } as const;
+  const first = policy({ execTarget: { version: 1, ...pin } });
+  expect(first?.execTarget).toEqual(pin);
+  expect(policy({ scheduledToolPolicy: first, execTarget: first?.execTarget })?.execTarget).toEqual(
+    pin,
   );
 });
 
-describe("resolveScheduledToolCallerContext", () => {
-  it.each([
-    [
-      "external",
-      { kind: "external", channel: "discord" },
-      "agent:main:discord:group:ops",
-      "telegram",
-      { accountId: "creator", channel: "discord", scheduled: true },
-    ],
-    [
-      "unknown",
-      { kind: "unknown" },
-      "agent:main:main",
-      "telegram",
-      { accountId: "creator", channel: null, scheduled: true },
-    ],
-    [
-      "local",
-      { kind: "local" },
-      "agent:main:main",
-      "discord",
-      { accountId: "creator", channel: undefined, local: true, scheduled: true },
-    ],
-  ] as const)(
-    "preserves %s creator authority independently of delivery",
-    (_name, ownerOrigin, ownerSessionKey, channel, expected) => {
-      expect(
-        resolveScheduledToolCallerContext({
-          scheduledToolPolicy: {
-            ...localAccount,
-            ownerSessionKey,
-            ownerOrigin,
-          },
-          accountId: "delivery",
-          channel,
-        }),
-      ).toEqual(expected);
-    },
-  );
-
-  it("preserves the pin when re-resolving an already-resolved context", () => {
-    const first = resolveScheduledToolPolicyContext({
-      toolsAllow: ["exec"],
-      scheduledToolPolicy: localAccount,
-      execTarget: { version: 1, host: "gateway", ask: "always" },
-    });
-    expect(first?.execTarget).toEqual({ host: "gateway", ask: "always" });
-    const again = resolveScheduledToolPolicyContext({
-      toolsAllow: ["exec"],
-      scheduledToolPolicy: first,
-      execTarget: first?.execTarget,
-    });
-    expect(again?.execTarget).toEqual({ host: "gateway", ask: "always" });
-  });
-
-  it("ignores invalid exec pin shapes instead of widening or failing", () => {
-    for (const execTarget of [
-      { version: 2, host: "gateway" },
-      { version: 1, host: "node" },
-      "gateway",
-      null,
-    ]) {
-      expect(
-        resolveScheduledToolPolicyContext({
-          toolsAllow: ["exec"],
-          scheduledToolPolicy: { version: 1, mode: "trusted" },
-          execTarget,
-        })?.execTarget,
-      ).toBeUndefined();
-    }
-  });
-});
+it.each([{ version: 2, host: "gateway" }, { version: 1, host: "node" }, "gateway", null])(
+  "ignores invalid exec pin %j instead of widening or failing",
+  (execTarget) => {
+    expect(
+      policy({ scheduledToolPolicy: { version: 1, mode: "trusted" }, execTarget })?.execTarget,
+    ).toBeUndefined();
+  },
+);

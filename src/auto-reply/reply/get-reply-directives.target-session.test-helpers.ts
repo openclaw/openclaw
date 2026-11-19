@@ -25,7 +25,6 @@ export function replyDirectiveParams(
     conversation: prepareReplyConversation({
       ctx: overrides.sessionCtx,
       sessionEntry: sessionStore[sessionKey] ?? overrides.sessionEntry,
-      isHeartbeat: overrides.opts?.isHeartbeat,
     }),
     isGroup: false,
     triggerBodyNormalized: "hello",
@@ -36,7 +35,7 @@ export function replyDirectiveParams(
     aliasIndex: { byAlias: new Map(), byKey: new Map() },
     provider: "openai",
     model: "gpt-4o-mini",
-    hasResolvedHeartbeatModelOverride: false,
+
     typing: makeTypingController(),
     ...overrides,
   };

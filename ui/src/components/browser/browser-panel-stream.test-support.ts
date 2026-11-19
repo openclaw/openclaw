@@ -3,6 +3,7 @@ import {
   createBrowserClient,
   createBrowserPanelTestMetrics,
   createBrowserPanelTestTab,
+  createView,
   flushBrowserResponses,
   setupBrowserPanelTestCleanup,
   stubScreenshotMedia,
@@ -34,6 +35,16 @@ export async function flush() {
   }
 }
 
+export async function receive(socket: TestScreencastSocket, data: string | ArrayBuffer) {
+  socket.receive(data);
+  await flush();
+}
+
+export async function decoded(image: EventTarget) {
+  image.dispatchEvent(new Event("load"));
+  await flush();
+}
+
 export function deferImages() {
   const images: EventTarget[] = [];
   vi.stubGlobal("Image", function () {
@@ -42,6 +53,50 @@ export function deferImages() {
     return image;
   });
   return images;
+}
+
+/** Act bodies, with operator input bursts expanded into one act-shaped entry per input. */
+export function browserRequestActions(
+  envelope: { path?: unknown; body?: Record<string, unknown> } | undefined,
+): Array<Record<string, unknown> | undefined> {
+  if (envelope?.path !== "/operator/input") {
+    return envelope?.path === "/act" ? [envelope.body] : [];
+  }
+  const inputs = Array.isArray(envelope.body?.inputs) ? envelope.body.inputs : [];
+  const targetId = envelope.body?.targetId;
+  return inputs.map((input: Record<string, unknown>) => Object.assign({}, input, { targetId }));
+}
+
+// Strict dispatch keeps each scenario's permitted requests explicit.
+export function panelScenario(
+  targetId: string | undefined,
+  url: string | undefined,
+  routes: Record<string, (request: Envelope) => unknown>,
+) {
+  const gateway = createBrowserClient(async (request) => {
+    const route =
+      routes[request.path] ??
+      (request.path === "/act" ? routes[String(request.body?.kind)] : undefined);
+    if (!route) {
+      throw new Error(`Unexpected browser route: ${request.path}`);
+    }
+    return await route(request);
+  });
+  const host = new TestBrowserPanelHost(gateway.client);
+  const controller = host.createPanel();
+  if (targetId !== undefined) {
+    controller.activeTargetId = targetId;
+    controller.view = createView(targetId, url);
+  }
+  const calls = (path: string) =>
+    gateway.request.mock.calls
+      .map(([, envelope]) => envelope as Envelope)
+      .filter((envelope) => envelope.path === path);
+  const actions = (kind: string) =>
+    gateway.request.mock.calls
+      .flatMap(([, envelope]) => browserRequestActions(envelope as Envelope))
+      .filter((body) => body?.kind === kind);
+  return { ...gateway, host, controller, calls, actions };
 }
 
 export function streamFixture<Socket extends TestScreencastSocket>(

@@ -2,11 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { WhatsAppQaDriverSession } from "@openclaw/whatsapp/api.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { buildQaTarget } from "openclaw/plugin-sdk/qa-channel-protocol";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { createQaPollingErrorState } from "../../qa-transport.js";
 import { releaseQaCredentialLease } from "../shared/credential-lease-cleanup.js";
 import {
   acquireQaCredentialLease,
@@ -26,12 +26,10 @@ import { startWhatsAppQaDriverSessionWithRetry } from "./whatsapp-live.driver.js
 import { unpackWhatsAppAuthArchive, waitForWhatsAppChannelStable } from "./whatsapp-live.setup.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
-type FactoryContext = Parameters<AdapterFactory["create"]>[0];
-type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 
 export async function createWhatsAppQaTransportAdapter(
-  context: FactoryContext,
-): Promise<AdapterDefinition> {
+  context: Parameters<AdapterFactory["create"]>[0],
+): Promise<Awaited<ReturnType<AdapterFactory["create"]>>> {
   const options = context.adapterOptions ?? {};
   const lease = await acquireQaCredentialLease<WhatsAppQaRuntimeEnv>({
     kind: "whatsapp",
@@ -80,7 +78,7 @@ export async function createWhatsAppQaTransportAdapter(
   });
   let observedCount = driver.getObservedMessages().length;
   let stopped = false;
-  let pollingError: Error | undefined;
+  const pollingError = createQaPollingErrorState(() => stopped);
   let logicalConversationId = dmTargets.gatewayTarget;
   let logicalConversationKind: "direct" | "group" = "direct";
   const nativeMessageIds = new Map<string, string>();
@@ -112,11 +110,7 @@ export async function createWhatsAppQaTransportAdapter(
       }
       await sleep(500);
     }
-  })().catch((error: unknown) => {
-    if (!stopped) {
-      pollingError = toStringifiedError(error);
-    }
-  });
+  })().catch(pollingError.capture);
 
   return {
     id: "whatsapp",
@@ -125,9 +119,7 @@ export async function createWhatsAppQaTransportAdapter(
     requiredPluginIds: ["whatsapp"],
     supportedActions: [],
     assertTransportHealthy() {
-      if (pollingError) {
-        throw pollingError;
-      }
+      pollingError.assertHealthy();
       heartbeat.throwIfFailed();
     },
     async sendInbound(input) {

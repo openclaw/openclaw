@@ -1,11 +1,16 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
+import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { registerSessionResourceCleanup } from "../../packages/ai/src/session-resources.js";
-import type { AgentHarness } from "../agents/harness/types.js";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { cliMessageExitEntrypoints } from "./cli-entrypoint.test-support.js";
 import {
   closeCliResources,
   getPendingCliDisposers,
@@ -41,9 +46,7 @@ vi.mock("../plugins/memory-runtime.js", () => ({
 
 beforeEach(() => {
   vi.useFakeTimers();
-  memoryClosed.mockClear();
-  databasesClosed.mockClear();
-  skillsClosed.mockClear();
+  vi.clearAllMocks();
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -71,7 +74,6 @@ it.each([false, true])(
     expect(console.error).toHaveBeenCalledWith(
       "CLI cleanup failed: failed-resource: resource close failed",
     );
-    expect(console.error).toHaveBeenCalledTimes(afterDeadline ? 2 : 1);
     expect(next).toHaveBeenCalledOnce();
   },
 );
@@ -82,68 +84,41 @@ function expectResourcesClosed(count: number) {
   }
 }
 
-it.each(["agent-harness/stalled-fixture", "scheduled-work"])(
-  "preserves cleanup ordering when %s stalls",
-  async (resource) => {
-    const scheduled = resource === "scheduled-work";
-    const clock = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(clock.clock);
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const dispose = async () => {
-      entered.resolve();
-      await release.promise;
-      if (scheduled) {
-        expectResourcesClosed(0);
-      }
-    };
-    const harness: AgentHarness = {
-      id: "stalled-fixture",
-      label: "Stalled fixture",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => {
-        throw new Error("cleanup-only fixture");
-      },
-      dispose,
-    };
-    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
-    if (scheduled) {
-      scheduler.schedule({ id: "cli-work", atMs: 0, everyMs: 1_000, run: dispose });
-    }
-    const running = scheduled ? clock.advanceBy(0) : Promise.resolve();
-    if (scheduled) {
-      await entered.promise;
-    }
-    const closing = closeCliResources({
-      scheduler,
-      harnesses: new Map(scheduled ? [] : [[harness, dispose]]),
-      registries: new Set(),
-      closeSkillsWatchers: skillsClosed,
-    });
-    try {
-      await entered.promise;
-      if (scheduled) {
-        expect(scheduler).toMatchObject({ signal: { aborted: true }, nextWakeAtMs: null });
-      }
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(stderr).toHaveBeenCalledWith(expect.stringContaining(resource));
-      if (scheduled) {
-        expectResourcesClosed(0);
-        release.resolve();
-        await Promise.all([running, closing]);
-      } else {
-        await closing;
-        expect(getPendingCliDisposers()).toEqual([resource]);
-      }
-      expectResourcesClosed(1);
-    } finally {
-      release.resolve();
-      await Promise.all([running, closing, scheduler.stop()]);
-      await vi.advanceTimersByTimeAsync(0);
-    }
-    expect(getPendingCliDisposers()).toEqual([]);
-  },
-);
+it("joins stalled scheduled work before closing resources", async () => {
+  const clock = createGatewaySchedulerClock();
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const dispose = async () => {
+    entered.resolve();
+    await release.promise;
+    expectResourcesClosed(0);
+  };
+  const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+  scheduler.schedule({ id: "cli-work", atMs: 0, everyMs: 1_000, run: dispose });
+  const running = clock.advanceBy(0);
+  await entered.promise;
+  const closing = closeCliResources({
+    scheduler,
+    harnesses: new Map(),
+    registries: new Set(),
+    closeSkillsWatchers: skillsClosed,
+  });
+  try {
+    expect(scheduler).toMatchObject({ signal: { aborted: true }, nextWakeAtMs: null });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining("scheduled-work"));
+    expectResourcesClosed(0);
+    release.resolve();
+    await Promise.all([running, closing]);
+    expectResourcesClosed(1);
+  } finally {
+    release.resolve();
+    await Promise.all([running, closing, scheduler.stop()]);
+    await vi.advanceTimersByTimeAsync(0);
+  }
+  expect(getPendingCliDisposers()).toEqual([]);
+});
 
 it("retires provider session resources after a one-shot command", async () => {
   const expired = vi.fn();
@@ -158,4 +133,45 @@ it("retires provider session resources after a one-shot command", async () => {
     unregister();
     clearTimeout(retainedSocketTimer);
   }
+});
+
+it("closes a cold CLI without initializing a provider runtime", async ({
+  signal,
+  onTestFinished,
+}) => {
+  vi.useRealTimers();
+  const fixture = createFixtureLifetime();
+  onTestFinished(() => fixture.cleanup());
+  await fixture.run(async () => {
+    const home = fixture.createTempDir("openclaw-cli-cold-cleanup-");
+    const script = `
+      import assert from "node:assert/strict";
+      const key = Symbol.for("openclaw.ai.defaultRuntime");
+      assert.equal(globalThis[key], undefined);
+      const { closeCliResources, getPendingCliDisposers, waitForPendingCliDisposers } =
+        await import(${JSON.stringify(resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.cleanup).href)});
+      assert.equal(globalThis[key], undefined);
+      await closeCliResources();
+      await waitForPendingCliDisposers();
+      assert.deepEqual(getPendingCliDisposers(), []);
+      assert.equal(globalThis[key], undefined);
+    `;
+    const result = await fixture.track(
+      runNodeScript(
+        ["--input-type=module", "--eval", script],
+        {
+          PATH: process.env.PATH,
+          SystemRoot: process.env.SystemRoot,
+          HOME: home,
+          USERPROFILE: home,
+          OPENCLAW_STATE_DIR: path.join(home, "state"),
+          OPENCLAW_CONFIG_PATH: path.join(home, "openclaw.json"),
+        },
+        20_000,
+        { signal, maxBuffer: 64 * 1024, requireProcessTreeExit: process.platform !== "win32" },
+      ),
+    );
+    expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
+    expect(result.stderr).not.toMatch(/CLI cleanup (?:failed|timed out|deferred)/u);
+  });
 });

@@ -16,32 +16,16 @@ function expectParsed(result: ChannelConfigSchema, input: unknown, data: unknown
   expect(result.runtime?.safeParse(input)).toEqual({ success: true, data });
 }
 
-it("builds canonical and channel-extended group entries", () => {
-  const extended = buildGroupEntrySchema({ topic: z.boolean().optional() });
-  expect(
-    ChannelGroupEntrySchema.safeParse({
-      requireMention: true,
-      tools: { allow: ["read"] },
-      toolsBySender: { U1: { deny: ["write"] } },
-      skills: ["search"],
-      enabled: true,
-      allowFrom: ["U1", 2],
-      systemPrompt: "Be concise",
-    }).success,
-  ).toBe(true);
-  expect(extended.safeParse({ topic: true }).success).toBe(true);
-  expectTypeOf<z.infer<typeof extended>["tools"]>().toEqualTypeOf<
-    z.infer<typeof ChannelGroupEntrySchema>["tools"]
-  >();
-  expectTypeOf<z.infer<typeof extended>["topic"]>().toEqualTypeOf<boolean | undefined>();
-  expect(ChannelGroupEntrySchema.safeParse({ unknown: true }).success).toBe(false);
-});
-
 it("can omit canonical group leaves without duplicating the remaining shape", () => {
   const schema = buildGroupEntrySchema({ topic: z.boolean().optional() }, { omit: ["skills"] });
 
+  expectTypeOf<z.infer<typeof schema>["tools"]>().toEqualTypeOf<
+    z.infer<typeof ChannelGroupEntrySchema>["tools"]
+  >();
+  expectTypeOf<z.infer<typeof schema>["topic"]>().toEqualTypeOf<boolean | undefined>();
   expect(schema.safeParse({ topic: true, allowFrom: ["U1"] }).success).toBe(true);
   expect(schema.safeParse({ skills: ["search"] }).success).toBe(false);
+  expect(ChannelGroupEntrySchema.safeParse({ unknown: true }).success).toBe(false);
 });
 
 it("applies one shared refinement to root and account entries", () => {

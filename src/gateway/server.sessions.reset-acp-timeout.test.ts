@@ -59,6 +59,20 @@ const {
 
 afterEach(closeOpenClawStateDatabaseForTest);
 
+type ResetOptions = Parameters<
+  typeof import("./session-reset-service.js").performGatewaySessionReset
+>[0];
+async function resetSession(options: Partial<ResetOptions> = {}) {
+  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+  return performGatewaySessionReset({
+    key: "main",
+    reason: "reset",
+    commandSource: "gateway:sessions.reset",
+    workerPlacementContext: {},
+    ...options,
+  });
+}
+
 describe("ACP reset", () => {
   const sessionKey = "agent:main:main";
   const readSession = (storePath: string) => loadSessionEntry({ storePath, sessionKey });
@@ -67,20 +81,6 @@ describe("ACP reset", () => {
     new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "owner repair required", {
       detailCode: "SESSION_OWNER_MIGRATION_REQUIRED",
     });
-  type ResetOptions = Parameters<
-    typeof import("./session-reset-service.js").performGatewaySessionReset
-  >[0];
-  async function resetSession(options: Partial<ResetOptions> = {}) {
-    const { performGatewaySessionReset } = await import("./session-reset-service.js");
-    return performGatewaySessionReset({
-      key: "main",
-      reason: "reset",
-      commandSource: "gateway:sessions.reset",
-      workerPlacementContext: {},
-      ...options,
-    });
-  }
-
   const acpMeta = () =>
     resolvedAcpMeta({
       recordId: sessionKey,
@@ -88,15 +88,26 @@ describe("ACP reset", () => {
       runtimeOptions: { runtimeMode: "auto", timeoutSeconds: 30 },
     });
 
-  function accelerateAcpCleanupTimeout() {
-    const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
-    return vi
-      .spyOn(globalThis, "setTimeout")
-      .mockImplementation(((
-        callback: (...args: unknown[]) => void,
-        delay?: number,
-        ...args: unknown[]
-      ) => nativeSetTimeout(callback, delay === 15_000 ? 0 : delay, ...args)) as typeof setTimeout);
+  async function accelerateAcpCleanupTimeout() {
+    const acpCleanup = await import("./session-reset-acp.js");
+    const closeRuntime = acpCleanup.closeAcpRuntimeForSession;
+    return vi.spyOn(acpCleanup, "closeAcpRuntimeForSession").mockImplementation(async (params) => {
+      // Session preemption also uses 15 seconds; only shorten ACP's cleanup clock.
+      const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
+      const timeout = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementation(((
+          callback: (...args: unknown[]) => void,
+          delay?: number,
+          ...args: unknown[]
+        ) =>
+          nativeSetTimeout(callback, delay === 15_000 ? 0 : delay, ...args)) as typeof setTimeout);
+      try {
+        return await closeRuntime(params);
+      } finally {
+        timeout.mockRestore();
+      }
+    });
   }
 
   async function seedAcpSession() {
@@ -220,7 +231,7 @@ describe("ACP reset", () => {
       const stalled = createDeferredCore();
       const cleanup = acpManagerMocks[step];
       cleanup.mockImplementation(async () => await stalled.promise);
-      const timeoutSpy = accelerateAcpCleanupTimeout();
+      const timeoutSpy = await accelerateAcpCleanupTimeout();
 
       try {
         const reset = await directSessionReq<{ ok: true }>("sessions.reset", { key: "main" });
@@ -304,7 +315,7 @@ describe("ACP reset", () => {
       const before = readSession(storePath);
       const error =
         failure === "owner-repair" ? ownerRepairError() : new Error("force discard failed");
-      const timeoutSpy = accelerateAcpCleanupTimeout();
+      const timeoutSpy = await accelerateAcpCleanupTimeout();
       const stalled = createDeferredCore();
       try {
         if (failure === "owner-repair") {
@@ -469,12 +480,9 @@ describe("concurrency", () => {
           lifecycleRevision: "replacement-revision",
         });
       });
-      const { performGatewaySessionReset } = await import("./session-reset-service.js");
-      const reset = await performGatewaySessionReset({
-        key: "main",
+      const reset = await resetSession({
         reason: "new",
         commandSource: "gateway:agent",
-        workerPlacementContext: {},
         assertCurrent: () => {
           if (!lifecycleCurrent) {
             throw new Error("stale lifecycle");
@@ -529,18 +537,14 @@ describe("concurrency", () => {
         return { ok: true as const, value: {} };
       };
       using _ = { [Symbol.dispose]: () => admission?.release() };
-      const { performGatewaySessionReset } = await import("./session-reset-service.js");
       const reset =
         point === "admission"
           ? await directSessionReq("sessions.reset", {
               key: sessionKey,
               expectedSessionId: "sess-stale",
             })
-          : await performGatewaySessionReset({
+          : await resetSession({
               key: sessionKey,
-              reason: "reset",
-              commandSource: "gateway:sessions.reset",
-              workerPlacementContext: {},
               expectedSessionId: observedSessionId,
               assertCurrent: point === "interrupt" ? replace : undefined,
               prepareLifecycle: point === "drain" ? async () => replace() : undefined,

@@ -9,19 +9,13 @@ const textBlock = (text: string) => ({ type: "text", text });
 const withStructured = { includeStructured: true };
 
 it.each([
-  [{ text: "   \n\t", isError: false }, "(no tool output)"],
-  [{ text: "", mediaPlaceholder: "(see attached image)", isError: false }, "(see attached image)"],
-  [{ text: "  failed  ", isError: true }, "[tool error]   failed  "],
-  [
-    { text: "line   ", omittedMediaPlaceholder: "[tool image omitted]", isError: false },
-    "line   \n[tool image omitted]",
-  ],
-] satisfies [Parameters<typeof formatToolResultText>[0], string][])(
-  "formats blank and nonblank tool output: %j",
-  (input, expected) => {
-    expect(formatToolResultText(input)).toBe(expected);
-  },
-);
+  ["   \n\t", {}, "(no tool output)"],
+  ["", { mediaPlaceholder: "(see attached image)" }, "(see attached image)"],
+  ["  failed  ", { isError: true }, "[tool error]   failed  "],
+  ["line   ", { omittedMediaPlaceholder: "[tool image omitted]" }, "line   \n[tool image omitted]"],
+] as const)("formats tool output %j", (text, options, expected) => {
+  expect(formatToolResultText({ text, isError: false, ...options })).toBe(expected);
+});
 
 it("keeps structured fallback and inclusion after block sanitation", () => {
   const structured = { type: "json", value: "😀漢" };
@@ -32,16 +26,10 @@ it("keeps structured fallback and inclusion after block sanitation", () => {
   ]).toEqual([expected, `head\n${expected}`]);
 });
 
-it("preserves explicit continuation text beyond 8000 UTF-16 units", () => {
-  const text = `${"x".repeat(8_000)}😀\n[More content follows. Use offset=225 to continue.]\n`;
-  const blocks = [textBlock(text)];
-  expect(extract(blocks, withStructured)).toBe(text);
-  expect(extract(blocks)).toBe(text);
-});
-
 it("bounds and redacts aggregate structured additions without truncating explicit text", () => {
   const explicit = `${"numbered file row\n".repeat(900)}[Use offset=225 to continue.]\n`;
   const tail = "  final explicit block 😀  ";
+  expect(extract([textBlock(explicit), textBlock(tail)])).toBe(`${explicit}\n${tail}`);
   const result = extract(
     [
       {
@@ -66,8 +54,7 @@ it("bounds and redacts aggregate structured additions without truncating explici
   expect(structured).toContain("[omitted bytes]");
   expect(structured).toContain("[omitted encrypted_content]");
   expect(structured).toContain("[inline data URI:");
-  expect(structured).not.toContain("opaque-ciphertext");
-  expect(structured).not.toContain("AAECAwQFBgc=");
+  expect(structured).not.toMatch(/opaque-ciphertext|AAECAwQFBgc=/);
   expect(() => encodeURIComponent(result)).not.toThrow();
 });
 

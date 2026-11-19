@@ -22,17 +22,16 @@ export function windowsFixture() {
   const generation = "12345678-1234-4234-8234-123456789abc";
   const dir = path.win32.join(
     identity.localAppData,
-    "OpenClawTray",
-    "browser-native",
-    "generations",
+    "OpenClawTray/browser-native/generations",
     generation,
   );
+  const installed = (name: string) => path.win32.join(dir, name);
   const installation = {
     generation,
-    manifestPath: path.win32.join(dir, win.WINDOWS_MANIFEST),
-    launcherPath: path.win32.join(dir, win.WINDOWS_NATIVE_EXE),
-    bindingPath: path.win32.join(dir, win.WINDOWS_BINDING),
-    receiptPath: path.win32.join(dir, win.WINDOWS_RECEIPT),
+    manifestPath: installed(win.WINDOWS_MANIFEST),
+    launcherPath: installed(win.WINDOWS_NATIVE_EXE),
+    bindingPath: installed(win.WINDOWS_BINDING),
+    receiptPath: installed(win.WINDOWS_RECEIPT),
   };
   const executable = "C:\\OpenClaw\\" + win.WINDOWS_NATIVE_EXE;
   const files = new Map<string, Buffer>();
@@ -115,15 +114,5 @@ export function windowsFixture() {
     store: "missing",
     installation,
   };
-  return {
-    context,
-    identity,
-    installation,
-    executable,
-    files,
-    prepare,
-    ops,
-    request,
-    response,
-  };
+  return { context, identity, installation, executable, files, prepare, ops, request, response };
 }

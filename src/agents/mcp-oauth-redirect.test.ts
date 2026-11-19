@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { completeMcpOAuthAuthorization, resolveMcpOAuthAccessToken } from "./mcp-oauth.js";
@@ -17,9 +18,15 @@ class TestDispatcher {
   constructor(readonly options: unknown) {}
 }
 
-vi.mock("node:dns/promises", () => ({
-  lookup: lookupMock,
-}));
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
+    lookup: lookupMock,
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 
 function installRedirectingRuntime(status: number) {
   const runtimeFetchMock = vi
@@ -119,7 +126,17 @@ describe("MCP OAuth redirects", () => {
       });
       const runtimeFetchMock = installRedirectingRuntime(307);
 
-      await expect(resolveMcpOAuthAccessToken({ identity })).rejects.toThrow(redirectRefusal);
+      const error = await resolveMcpOAuthAccessToken({ identity }).catch(
+        (failure: unknown) => failure,
+      );
+      // A redirected token POST may already have been accepted, so the owner fences the grant.
+      expect(error).toMatchObject({
+        message: "MCP OAuth refresh outcome is uncertain; sign in again.",
+        oauthRefreshOutcome: { phase: "after-token-response", outcome: "unknown" },
+        cause: expect.objectContaining({ message: expect.stringContaining(redirectRefusal) }),
+      });
+      expect(formatErrorMessage(error)).toContain(redirectRefusal);
+      await expect(resolveMcpOAuthAccessToken({ identity })).rejects.toThrow(/uncertain/);
       expect(runtimeFetchMock).toHaveBeenCalledTimes(1);
     }, homeOptions);
   });

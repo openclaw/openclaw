@@ -73,6 +73,9 @@ export interface ProviderResponse {
   headers: Record<string, string>;
 }
 
+/** Runtime header overrides; null preserves an SDK's default-header deletion sentinel. */
+export type ModelRequestHeaders = Record<string, string | null>;
+
 export interface StreamOptions {
   temperature?: number;
   maxTokens?: number;
@@ -151,7 +154,7 @@ export interface StreamOptions {
    * Merged with provider defaults; can override default headers.
    * Not supported by all providers (e.g., AWS Bedrock uses SDK auth).
    */
-  headers?: Record<string, string>;
+  headers?: ModelRequestHeaders;
   /**
    * HTTP request timeout in milliseconds for providers/SDKs that support it.
    * For example, OpenAI and Anthropic SDK clients default to 10 minutes.
@@ -306,6 +309,8 @@ export interface ToolCall {
    * `toolcall_end` or terminal cleanup; it never appears in final messages or transcripts.
    */
   partialJson?: string;
+  /** Provider argument bytes paired with their normalized value for exact replay. */
+  argumentsSignature?: { value: string; raw: string };
   thoughtSignature?: string; // Google-specific: opaque signature for reusing thought context
   executionMode?: "sequential" | "parallel";
 }
@@ -319,6 +324,8 @@ export interface Usage {
   cacheTelemetry?: { state: "available" | "unavailable" };
   /** Subset of `cacheWrite` written with 1-hour retention when reported. */
   cacheWrite1h?: number;
+  /** Subset of `cacheWrite` written with 5-minute retention when reported. */
+  cacheWrite5m?: number;
   /**
    * Whether usage is complete for this provider response. Missing terminal usage
    * and provisional stream counters are unavailable, including after interruption.
@@ -526,6 +533,8 @@ export interface AssistantMessage {
     mediaUrls?: string[];
     replyToCurrent?: true;
     replyToId?: string;
+    /** Consumed transport input; implicit reply policy still applies. */
+    sourceMessageId?: string;
     /** @deprecated Ignored; omit this field. Retained until the next Plugin SDK major. */
     textPhaseRequiresTerminal?: true;
     /** Parsed once at the assistant write boundary; delivery resolves policy from these facts. */
@@ -535,6 +544,8 @@ export interface AssistantMessage {
   provider: Provider;
   model: string;
   responseModel?: string; // Concrete `chunk.model` when different from the requested `model` (e.g. OpenRouter `auto` -> `anthropic/...`)
+  /** Provider-reported access only; absent/null never confirms a requested program. */
+  responseAccessProgram?: "standard" | "daybreak_blue" | "daybreak_red" | null;
   responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
   providerReplay?: ProviderReplayState; // Opaque provider state carried into a compatible later request.
   turnId?: string; // Runtime-assigned stable turn identity when the provider does not expose one
@@ -545,6 +556,8 @@ export interface AssistantMessage {
   endTurn?: boolean;
   errorMessage?: string;
   errorCode?: string;
+  /** Transport-owned repair outcome; execution owns whether a deferred request can replay. */
+  itemConflictRecovery?: "deferred" | "recovered" | "failed";
   errorType?: string;
   errorBody?: string;
   /** Provider retry floor before diagnostic clipping; null means too large to represent. */
@@ -596,8 +609,16 @@ export interface Tool<TParameters extends TSchema = TSchema> {
   async?: false;
 }
 
+/** Derived prompt bytes belong to this exact immutable text revision. */
+export interface PreparedSystemPrompt {
+  readonly text: string;
+  readonly stripped: string;
+  readonly instructions: string;
+}
+
 export interface Context {
   systemPrompt?: string;
+  preparedSystemPrompt?: PreparedSystemPrompt;
   messages: Message[];
   tools?: Tool[];
 }
@@ -711,10 +732,14 @@ export interface OpenAIResponsesCompat {
   supportsTemperature?: boolean;
   /** Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when caching is enabled. Default: true. */
   sendSessionIdHeader?: boolean;
+  /** Whether to send `prompt_cache_key`. Default: true for Azure; endpoint-detected for OpenAI. */
+  supportsPromptCacheKey?: boolean;
   /** Whether the provider supports `prompt_cache_retention: "24h"`. Default: true. */
   supportsLongCacheRetention?: boolean;
   /** Whether the provider honors top-level `instructions`. Defaults to true only for verified native routes (OpenAI, xAI); every other route defaults to false and embeds the system prompt in `input` unless set true here after verifying against that endpoint. */
   supportsInstructions?: boolean;
+  /** Whether the model caches top-level `instructions`. False sends the system prompt as a cacheable input item placed after the last compaction item. Default: true. */
+  cachesInstructions?: boolean;
   /**
    * Explicit opt-in for HTTP continuation (client-side delta + `previous_response_id`)
    * on a custom/proxy OpenAI-Responses-compatible endpoint. A native `api.openai.com`
@@ -829,10 +854,12 @@ export interface Model<TApi extends Api = Api> {
   contextTokens?: number;
   /** Provider/catalog-declared total parameter count, including inactive experts. */
   parameterCount?: number;
+  /** Provider/catalog-declared canonical developer lineage, such as `anthropic`. */
+  family?: string;
   maxTokens: number;
   /** Provider-specific request/runtime parameters passed through to provider plugins. */
   params?: Record<string, unknown>;
-  headers?: Record<string, string>;
+  headers?: ModelRequestHeaders;
   /** Sends runtime credentials as Authorization: Bearer instead of provider-specific key headers. */
   authHeader?: boolean;
   /** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */

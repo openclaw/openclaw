@@ -1,6 +1,6 @@
 // OpenClaw audit helpers persist approved local-state changes.
 import { randomUUID } from "node:crypto";
-import { registerSqliteAuditRecordAsync } from "../infra/sqlite-audit-record-store.async.js";
+import { createSqliteAuditRecordWriter } from "../infra/sqlite-audit-record-store.async.js";
 import { redactSecrets } from "../logging/redact.js";
 
 /**
@@ -33,17 +33,10 @@ export async function appendSystemAgentAuditEntry(
     timestamp: new Date().toISOString(),
     ...entry,
   } satisfies SystemAgentAuditEntry);
-  await registerSqliteAuditRecordAsync(
-    {
-      scope: SYSTEM_AGENT_AUDIT_SCOPE,
-      maxEntries: SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
-      env: opts.env,
-    },
-    {
-      key: `${record.timestamp}:${randomUUID()}`,
-      value: record,
-      createdAt: Date.parse(record.timestamp),
-    },
-  );
+  await createSqliteAuditRecordWriter<SystemAgentAuditEntry>({
+    scope: SYSTEM_AGENT_AUDIT_SCOPE,
+    maxEntries: SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
+    env: opts.env,
+  }).register(`${record.timestamp}:${randomUUID()}`, record, Date.parse(record.timestamp));
   return SYSTEM_AGENT_AUDIT_STORE_LABEL;
 }

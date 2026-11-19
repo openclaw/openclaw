@@ -1,9 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { applyBootstrapHookOverrides } from "../agents/bootstrap-hooks.js";
+import { resolveBootstrapFilesForRun } from "../agents/bootstrap-files.js";
 import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
-import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { getContextEngineRegistration } from "../context-engine/registry.js";
@@ -2037,16 +2036,8 @@ describe("loadOpenClawPlugins", () => {
       },
     });
 
-    const updated = await applyBootstrapHookOverrides({
-      files: [
-        {
-          name: "AGENTS.md",
-          path: "/tmp/base-AGENTS.md",
-          content: "base bootstrap rules",
-          missing: false,
-        } satisfies WorkspaceBootstrapFile,
-      ],
-      workspaceDir: "/tmp",
+    const updated = await resolveBootstrapFilesForRun({
+      workspaceDir: plugin.dir,
       sessionKey: "agent:main:subagent:test-bootstrap",
     });
 

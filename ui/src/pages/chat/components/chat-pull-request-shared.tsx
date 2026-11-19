@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { Errored, For, latest, Show } from "solid-js";
 import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
@@ -6,11 +6,12 @@ import type {
 } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import "../../../components/tooltip.ts";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
+import "../../../components/tooltip.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
+import type { createPullRequestCopy } from "./chat-pull-request-copy.ts";
 registerGitHubEnglish();
 
 export type ChatPullRequestsProps = {
@@ -30,6 +31,8 @@ export type ChatPullRequestsProps = {
   publication?: GitHubPublicationView;
   /** Compact row in the user-opened Details surface; actions keep their owners. */
   compact?: boolean;
+  /** Keep publication work in Environment; only completed receipts and PRs belong here. */
+  publishedOnly?: boolean;
 };
 export const STATE_LABEL_KEYS = {
   merged: "chat.pullRequests.merged",
@@ -43,6 +46,24 @@ const CHECK_ROW_LABELS = {
   running: "chat.pullRequests.checksRunning",
   skipped: "chat.pullRequests.checksSkipped",
 } as const;
+
+export function PullRequestCopyError(props: {
+  clipboard: ReturnType<typeof createPullRequestCopy>;
+}) {
+  return (
+    <Show when={!props.clipboard.copying()}>
+      <Errored
+        fallback={
+          <p class="chat-pr-menu__error" role="alert">
+            {t("chat.pullRequests.copyFailed")}
+          </p>
+        }
+      >
+        {latest(props.clipboard.outcome)}
+      </Errored>
+    </Show>
+  );
+}
 
 export function ChecksRows(props: {
   checks: ControlUiSessionPullRequest["checks"];

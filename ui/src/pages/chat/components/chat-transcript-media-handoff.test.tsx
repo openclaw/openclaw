@@ -13,6 +13,7 @@ import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { releaseChatAttachmentPayloads } from "../attachment-payload-store.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { admitChatSubmission, reduceChatSessionProjection } from "../history-merge.ts";
+import { settleChatMount } from "../test-helpers/chat-mount-frames.ts";
 import { buildInitialChatSubmission, buildLocalUserMessage } from "../user-message-content.ts";
 import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
@@ -95,13 +96,15 @@ function mountTranscriptPane(props: ChatThreadProps) {
   const renderPane = () => {
     setCurrent({ ...props, mediaOwner: renderPane });
     flush();
-    root ??= mountSolid(
-      () => (
-        <ContentPresentation value={presented}>
-          <ChatThread props={current()} transcript={transcript} />
-        </ContentPresentation>
+    root ??= settleChatMount(() =>
+      mountSolid(
+        () => (
+          <ContentPresentation value={presented}>
+            <ChatThread props={current()} transcript={transcript} />
+          </ContentPresentation>
+        ),
+        { container },
       ),
-      { container },
     );
     transcript.update();
     flush();
@@ -212,15 +215,12 @@ async function imageFixture(
       fileName: `image-${index}.png`,
     };
   });
-  const props = {
-    ...threadProps(
-      `pane-${crypto.randomUUID()}`,
-      owner.sessionKey,
-      origin === "canonical" ? [cached] : owner.chatMessages,
-    ),
-    assistantAttachmentAuthToken: "test-auth-token",
-    connectionEpoch: 1,
-  };
+  const props = threadProps(
+    `pane-${crypto.randomUUID()}`,
+    owner.sessionKey,
+    origin === "canonical" ? [cached] : owner.chatMessages,
+    { assistantAttachmentAuthToken: "test-auth-token", connectionEpoch: 1 },
+  );
   if (origin === "queued") {
     props.queue = [
       { ...input, id: input.runId, sendRunId: input.runId, sendState: "sending", sendAttempts: 1 },
@@ -600,7 +600,7 @@ it.each(["native load error", "display load deadline"] as const)(
         view.container.querySelector(".chat-assistant-attachment-card--recoverable"),
         "recoverable image failure",
       );
-      expect(card.textContent).toContain("Could not load this image. Try again.");
+      expect(card.textContent).toContain("Couldn’t load this image. Try again.");
       const retry = expectDefined(
         card.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__retry"),
         "explicit Retry button",

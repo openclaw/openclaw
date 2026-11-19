@@ -9,8 +9,9 @@ const to = "+15551230000";
 const context = { baseUrl: "http://127.0.0.1:18080", account: "+15550001111" };
 const manualText =
   "Exec approval required\nID: exec-1\n\nReply with: /approve exec-1 allow-once|deny";
-const reactionText =
-  "Exec approval required\nID: exec-1\n\nReact with:\n\n👍 Allow Once\n👎 Deny\n\nReply with: /approve exec-1 allow-once|deny";
+const reactionHint = "React with:\n\n👍 Allow Once\n👎 Deny";
+const reactionText = manualText.replace("Reply with:", `${reactionHint}\n\nReply with:`);
+type SignalConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["signal"]>;
 
 function prepare(
   cfg: OpenClawConfig | undefined,
@@ -55,35 +56,29 @@ describe("Signal approval native runtime", () => {
     });
   });
 
-  it("resolves aliases before delivering native approval prompts", async () => {
-    const cfg = { channels: { signal: { allowFrom: [to], aliases: { me: to } } } };
-    const prepared = await prepare(cfg, "signal:me", "default");
-    const options = { cfg, accountId: "default", ...context };
-    expect(prepared?.target).toMatchObject({ to, accountId: "default", ...context });
-    expect(await deliver(cfg, prepared)).toMatchObject({ to, conversationKey: to });
-    expect(sendMocks.sendTypingSignal).toHaveBeenCalledWith(to, options);
-    expect(sendMocks.sendMessageSignal).toHaveBeenCalledWith(to, "approval", {
-      ...options,
-      textMode: "markdown",
-    });
-  });
-
-  it("resolves default-account aliases before delivering native approval prompts", async () => {
-    const cfg = {
-      channels: {
-        signal: { defaultAccount: "work", accounts: { work: { aliases: { ops: to } } } },
-      },
-    };
-    const prepared = await prepare(cfg, "signal:ops");
-    expect(prepared?.target).toMatchObject({ to, accountId: "work", ...context });
-    await deliver(cfg, prepared);
-    expect(sendMocks.sendMessageSignal).toHaveBeenCalledWith(to, "approval", {
-      cfg,
-      accountId: "work",
-      ...context,
-      textMode: "markdown",
-    });
-  });
+  it.each<[SignalConfig, string, string | undefined, string]>([
+    [{ allowFrom: [to], aliases: { me: to } }, "me", "default", "default"],
+    [
+      { defaultAccount: "work", accounts: { work: { aliases: { ops: to } } } },
+      "ops",
+      undefined,
+      "work",
+    ],
+  ])(
+    "resolves aliases for %s before delivering approval prompts",
+    async (signal, alias, explicit, accountId) => {
+      const cfg = { channels: { signal } };
+      const prepared = await prepare(cfg, `signal:${alias}`, explicit);
+      const options = { cfg, accountId, ...context };
+      expect(prepared?.target).toMatchObject({ to, accountId, ...context });
+      expect(await deliver(cfg, prepared)).toMatchObject({ to, conversationKey: to });
+      expect(sendMocks.sendTypingSignal).toHaveBeenCalledWith(to, options);
+      expect(sendMocks.sendMessageSignal).toHaveBeenCalledWith(to, "approval", {
+        ...options,
+        textMode: "markdown",
+      });
+    },
+  );
 
   it("only renders reaction hints when the Signal target author can be bound", async () => {
     const cfg = { channels: { signal: { allowFrom: [to] } } };
@@ -96,7 +91,7 @@ describe("Signal approval native runtime", () => {
     await deliver(cfg, await prepare(undefined, to, "default"), manualText);
     expect(sendMocks.sendMessageSignal).toHaveBeenLastCalledWith(
       to,
-      expect.stringContaining("React with:\n\n👍 Allow Once\n👎 Deny"),
+      expect.stringContaining(reactionHint),
       expect.any(Object),
     );
   });

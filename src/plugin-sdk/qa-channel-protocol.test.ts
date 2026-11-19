@@ -15,9 +15,9 @@ import {
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const execute = promisify(execFile);
 const targets: Array<[string, QaTargetParts["chatType"], string, string?]> = [
-  ["dm:Alice", "direct", "Alice"],
-  ["group:Room", "group", "Room"],
-  ["channel:CaseSensitive", "channel", "CaseSensitive"],
+  ["dm:Case/Room", "direct", "Case/Room"],
+  ["group:Case/Room", "group", "Case/Room"],
+  ["channel:Case/Room", "channel", "Case/Room"],
   ["thread:Room/Topic", "channel", "Room", "Topic"],
   ["thread:/v1/dm/Alice/Topic", "direct", "Alice", "Topic"],
   ["thread:/v1/group/Room%2FOne/Topic%2FTwo", "group", "Room/One", "Topic/Two"],
@@ -56,14 +56,9 @@ it("loads natively when the private QA SDK alias selects its source", async () =
   });
 });
 
-it("builds canonical targets", () => {
+it("builds and parses canonical targets without folding ids", () => {
   for (const [target, chatType, conversationId, threadId] of targets) {
     expect(buildQaTarget({ chatType, conversationId, threadId })).toBe(target);
-  }
-});
-
-it("parses canonical targets without folding ids or prefix casing", () => {
-  for (const [target, chatType, conversationId, threadId] of targets) {
     expect(parseQaTarget(target)).toEqual({
       chatType,
       conversationId,
@@ -77,6 +72,8 @@ it("parses canonical targets without folding ids or prefix casing", () => {
   expect(() => parseQaTarget("CHANNEL:CaseSensitive")).toThrow(
     "qa-channel target prefixes must be lowercase",
   );
+  expect(() => parseQaTarget("")).toThrow("qa-channel target is required");
+  expect(() => parseQaTarget("dm:")).toThrow("invalid qa-channel dm target");
   const invalidThread = "invalid qa-channel thread target";
   expect(() => parseQaTarget("thread:Room/")).toThrow(invalidThread);
   expect(() => parseQaTarget("thread:/v1/group/Room/%GG")).toThrow(invalidThread);
@@ -84,15 +81,11 @@ it("parses canonical targets without folding ids or prefix casing", () => {
 
 it("preserves QA bus tool-call arguments while normalizing calls", () => {
   const args = {
-    command: "cat README.md",
     apiToken: "secret-token",
     headers: { Authorization: "Bearer sk_test_12345678901234567890" },
-    headerPairs: [
-      ["X-API-Key", "secret"],
-      ["Accept", "application/json"],
-    ],
-    argv: ["gh", "api", "--token", "secret-token", "repos/openclaw/openclaw"],
-    values: ["ok", { password: "hunter2" }],
+    headerPairs: [["X-API-Key", "secret"]],
+    argv: ["--token", "secret-token"],
+    values: [{ password: "hunter2" }],
   };
   const expectedArgs = structuredClone(args);
   expect(
@@ -101,9 +94,7 @@ it("preserves QA bus tool-call arguments while normalizing calls", () => {
 });
 
 it("caps QA bus tool-call sanitization before processing the tail", () => {
-  const toolCalls = Array.from({ length: 50 }, (_, index) => ({
-    name: `tool-${index}`,
-  }));
+  const toolCalls = Array.from({ length: 50 }, (_, index) => ({ name: `tool-${index}` }));
   toolCalls.push({
     get name(): string {
       throw new Error("tail should not be sanitized");

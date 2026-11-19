@@ -9,6 +9,11 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  findDecisionReason,
+  summarizeDecisionReason,
+} from "../../packages/media-understanding-common/src/format.js";
+import type { MediaUnderstandingDecision } from "../../packages/media-understanding-common/src/types.js";
 import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveCronStyleNow } from "../agents/current-time.js";
@@ -16,6 +21,7 @@ import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveExtraParams } from "../agents/embedded-agent-runner/extra-params.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
+import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import {
   areRuntimeModelRefsEquivalent,
   shouldPreferActiveRuntimeAliasAuthLabel,
@@ -23,18 +29,15 @@ import {
 import { buildModelAliasIndex, resolveModelRefFromString } from "../agents/model-selection.js";
 import { resolveOpenAITextVerbosity } from "../agents/openai-text-verbosity.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
-import type { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { formatCompactionStatus } from "../auto-reply/reply/compaction-notice.js";
 import type {
   ElevatedLevel,
   ReasoningLevel,
   ThinkLevel,
-  ThinkingCatalogEntry,
   VerboseLevel,
 } from "../auto-reply/thinking.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import {
-  resolveFreshSessionTotalTokens,
   resolveProjectedSessionContextTokens,
   resolveProjectedSessionContextBudgetStatus,
   resolveSessionPluginStatusLines,
@@ -49,7 +52,6 @@ import {
   hasUserPinnedModelSelection,
 } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SessionTranscriptUsageSnapshot } from "../gateway/session-transcript-derived-readers.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import type {
@@ -57,26 +59,22 @@ import type {
   MessagePresentationBlock,
   MessagePresentationTableCell,
 } from "../interactive/payload.js";
-import {
-  findDecisionReason,
-  summarizeDecisionReason,
-} from "../media-understanding/runner.entries.js";
-import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { formatFastModeStatusValue } from "../shared/fast-mode.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
-import {
-  estimateAggregateUsageCost,
-  formatTokenCount,
-  formatUsd,
-  resolveModelCostConfig,
-} from "../utils/usage-format.js";
+import { formatTokenCount, formatUsd } from "../utils/usage-format.js";
 import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
+import { formatContextTokensValue } from "./status-context-format.js";
 import { formatModelEndpointUrl } from "./status-model-endpoint.js";
-import { formatTokensPairValue, formatCacheHitValue } from "./status-usage-format.js";
+import {
+  formatTokensPairValue,
+  formatCacheHitValue,
+  resolveStatusMessageUsage,
+  type StatusMessageUsageArgs,
+} from "./status-usage-format.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
 type AgentConfig = Partial<AgentDefaults> & {
@@ -92,19 +90,17 @@ type QueueStatus = {
   showDetails?: boolean;
 };
 
-type StatusArgs = {
-  config: OpenClawConfig;
+type StatusArgs = StatusMessageUsageArgs & {
+  preparedUsage?: ReturnType<typeof resolveStatusMessageUsage>;
+  estimatedCostUsd?: number;
   preparedTtsPreferences?: PreparedTtsPreferences;
-  modelRefs: ReturnType<typeof resolveSelectedAndActiveModel>;
   agent: AgentConfig;
   agentId?: string;
   configuredDefaultModelLabel?: string;
   selectedContextWindow?: number;
   selectedContextTokens?: number;
-  thinkingCatalog?: ThinkingCatalogEntry[];
   runtimeContextProvider?: string;
   runtimeContextTokens?: number;
-  sessionEntry?: SessionEntry;
   preparedSandboxRuntime?: ReturnType<typeof resolveSandboxRuntimeStatus>;
   sessionKey?: string;
   parentSessionKey?: string;
@@ -121,17 +117,13 @@ type StatusArgs = {
   modelAuth?: string;
   selectedEndpoint?: string;
   activeModelAuth?: string;
-  activeModel?: { modelProvider: string; model: string };
   usageLine?: string;
-  timeLine?: string;
   uptimeValue?: string;
   queue?: QueueStatus;
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
   subagentsLine?: string;
   pluginHealthLine?: string;
   channelFeatureLine?: string;
-  transcriptUsage?: SessionTranscriptUsageSnapshot | null;
-  now?: number;
 };
 
 function normalizeAuthMode(value?: string) {
@@ -148,27 +140,6 @@ function normalizeAuthMode(value?: string) {
     return "unknown";
   }
   return undefined;
-}
-
-function resolveConfiguredTextVerbosity(params: {
-  config?: OpenClawConfig;
-  agentId?: string;
-  provider?: string | null;
-  model?: string | null;
-}): "low" | "medium" | "high" | undefined {
-  const provider = params.provider?.trim();
-  const model = params.model?.trim();
-  if (!provider || !model || provider !== "openai") {
-    return undefined;
-  }
-  return resolveOpenAITextVerbosity(
-    resolveExtraParams({
-      cfg: params.config,
-      provider,
-      modelId: model,
-      agentId: params.agentId,
-    }),
-  );
 }
 
 function resolveExecutionLabel(
@@ -202,16 +173,6 @@ function resolveExecutionLabel(
   return sandboxMode === "off" ? "direct" : `unknown/${sandboxMode}`;
 }
 
-const formatTokens = (total: number | null | undefined, contextTokens: number | null) => {
-  const ctxLabel = contextTokens ? formatTokenCount(contextTokens) : "?";
-  if (total == null) {
-    return `?/${ctxLabel}`;
-  }
-  const pct = contextTokens ? Math.min(999, Math.round((total / contextTokens) * 100)) : null;
-  const totalLabel = formatTokenCount(total);
-  return `${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}%)` : ""}`;
-};
-
 const formatEstimatedContextBudgetTokens = (
   status: SessionEntry["contextBudgetStatus"] | undefined,
   contextTokens: number | null | undefined,
@@ -234,7 +195,7 @@ const formatEstimatedContextBudgetTokens = (
 export const formatContextUsageShort = (
   total: number | null | undefined,
   contextTokens: number | null | undefined,
-) => `Context ${formatTokens(total, contextTokens ?? null)}`;
+) => `Context ${formatContextTokensValue(total, contextTokens ?? null)}`;
 
 const formatQueueDetails = (queue?: QueueStatus) => {
   if (!queue) {
@@ -261,35 +222,6 @@ const formatQueueDetails = (queue?: QueueStatus) => {
     detailParts.push(`drop ${queue.dropPolicy}`);
   }
   return detailParts.length ? ` (${detailParts.join(" · ")})` : "";
-};
-
-const formatTranscriptUsage = (snapshot: SessionTranscriptUsageSnapshot) => {
-  const input = snapshot.inputTokens ?? 0;
-  const output = snapshot.outputTokens ?? 0;
-  const cacheRead = snapshot.cacheRead;
-  const cacheWrite = snapshot.cacheWrite;
-  const promptTokens = snapshot.totalTokens ?? input + (cacheRead ?? 0) + (cacheWrite ?? 0);
-  const total = promptTokens + output;
-  if (promptTokens === 0 && total === 0 && !snapshot.usageReport) {
-    return undefined;
-  }
-  const model = snapshot.modelProvider
-    ? snapshot.model
-      ? `${snapshot.modelProvider}/${snapshot.model}`
-      : snapshot.modelProvider
-    : snapshot.model;
-
-  return {
-    usageReport: snapshot.usageReport,
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-    promptTokens,
-    total,
-    totalTokensFresh: snapshot.totalTokensFresh === true,
-    model,
-  };
 };
 
 const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandingDecision>) => {
@@ -389,70 +321,13 @@ const formatVoiceModeLine = (
   return parts.join(" · ");
 };
 
-function resolveChannelModelNote(params: {
-  config?: OpenClawConfig;
-  entry?: SessionEntry;
-  selectedProvider: string;
-  selectedModel: string;
-  parentSessionKey?: string;
-}): string | undefined {
-  if (!params.config || !params.entry) {
-    return undefined;
-  }
-  if (
-    normalizeOptionalString(params.entry.modelOverride) ||
-    normalizeOptionalString(params.entry.providerOverride)
-  ) {
-    return undefined;
-  }
-  const channelOverride = resolveChannelModelOverride({
-    cfg: params.config,
-    channel: sessionDeliveryChannel(params.entry),
-    groupId: params.entry.groupId,
-    groupChatType: params.entry.chatType ?? sessionDeliveryOrigin(params.entry)?.chatType,
-    groupChannel: params.entry.groupChannel,
-    groupSubject: params.entry.subject,
-    parentSessionKey: params.parentSessionKey,
-    directUserIds: [
-      sessionDeliveryOrigin(params.entry)?.nativeDirectUserId,
-      sessionDeliveryOrigin(params.entry)?.from,
-      sessionDeliveryOrigin(params.entry)?.to,
-    ],
-  });
-  if (!channelOverride) {
-    return undefined;
-  }
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.config,
-    defaultProvider: DEFAULT_PROVIDER,
-    allowPluginNormalization: false,
-  });
-  const resolvedOverride = resolveModelRefFromString({
-    raw: channelOverride.model,
-    defaultProvider: DEFAULT_PROVIDER,
-    aliasIndex,
-    allowPluginNormalization: false,
-  });
-  if (!resolvedOverride) {
-    return undefined;
-  }
-  if (
-    resolvedOverride.ref.provider !== params.selectedProvider ||
-    resolvedOverride.ref.model !== params.selectedModel
-  ) {
-    return undefined;
-  }
-  return "channel override";
-}
-
 export type StatusMessageParts = ReturnType<typeof buildStatusMessageParts>;
 
 export function buildStatusMessageParts(args: StatusArgs) {
-  const now = args.now ?? Date.now();
+  const now = Date.now();
   // Derive the live wall clock here so both /status and session_status expose
   // the same configured timezone without duplicating formatting at each caller.
   const cronNow = resolveCronStyleNow(args.config, now);
-  const timeLine = args.timeLine ?? cronNow?.timeLine;
   const uptimeLine = args.uptimeValue ? `⏱️ Uptime: ${args.uptimeValue}` : undefined;
   const entry = args.sessionEntry;
   const contextConfig = {
@@ -463,117 +338,22 @@ export function buildStatusMessageParts(args: StatusArgs) {
     },
   };
   const { modelRefs } = args;
-  const selectedLookupProvider = modelRefs.selected.provider;
-  const selectedLookupModel = modelRefs.selected.model;
-  const initialFallbackState = resolveActiveFallbackState({
-    selectedModelRef: modelRefs.selected.label || "unknown",
-    activeModelRef: modelRefs.active.label || "unknown",
-    config: args.config,
-    state: entry,
-  });
-  let activeProvider = modelRefs.active.provider;
-  let activeModel = modelRefs.active.model;
-  let contextLookupProvider: string | undefined = activeProvider;
-  let contextLookupModel = activeModel;
-  const runtimeModelRaw = normalizeOptionalString(args.activeModel?.model ?? entry?.model) ?? "";
-  const runtimeProviderRaw =
-    normalizeOptionalString(args.activeModel?.modelProvider ?? entry?.modelProvider) ?? "";
-
-  if (runtimeModelRaw && !runtimeProviderRaw && runtimeModelRaw.includes("/")) {
-    const slashIndex = runtimeModelRaw.indexOf("/");
-    const embeddedProvider =
-      normalizeOptionalLowercaseString(runtimeModelRaw.slice(0, slashIndex)) ?? "";
-    const fallbackMatchesRuntimeModel =
-      initialFallbackState.active &&
-      normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
-        normalizeLowercaseStringOrEmpty(entry?.fallbackNotice?.activeModel);
-    const runtimeMatchesSelectedModel =
-      normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
-      normalizeLowercaseStringOrEmpty(modelRefs.selected.label || "unknown");
-    // A slash can be part of a provider-local model ID. Prefer its current
-    // catalog identity before interpreting a legacy provider-qualified ID.
-    if (findModelInCatalog(args.thinkingCatalog ?? [], activeProvider, runtimeModelRaw)) {
-      contextLookupModel = runtimeModelRaw;
-    } else if (
-      (!fallbackMatchesRuntimeModel && !runtimeMatchesSelectedModel) ||
-      embeddedProvider !== normalizeLowercaseStringOrEmpty(activeProvider)
-    ) {
-      contextLookupProvider = undefined;
-      contextLookupModel = runtimeModelRaw;
-    }
-  }
-
-  let inputTokens = entry?.inputTokens;
-  let outputTokens = entry?.outputTokens;
-  let cacheRead = entry?.cacheRead;
-  let cacheWrite = entry?.cacheWrite;
-  let usageReport = entry?.usageReport;
-  const freshTotalTokens = resolveFreshSessionTotalTokens(entry);
-  const allowTranscriptContextUsage =
-    entry?.totalTokensFresh !== false && freshTotalTokens === undefined;
-  let totalTokens = freshTotalTokens;
-
-  // Explicitly stale session/cache usage can still hydrate Tokens/Cache lines
-  // but must not become Context.
-  if (args.transcriptUsage) {
-    const logUsage = formatTranscriptUsage(args.transcriptUsage);
-    if (logUsage) {
-      usageReport ??= logUsage.usageReport;
-      const candidate =
-        logUsage.totalTokensFresh && logUsage.usageReport?.state !== "unavailable"
-          ? logUsage.promptTokens || logUsage.total
-          : undefined;
-      if (
-        allowTranscriptContextUsage &&
-        candidate !== undefined &&
-        candidate >= 0 &&
-        (!totalTokens || candidate > totalTokens)
-      ) {
-        totalTokens = candidate;
-      }
-      if (!entry?.model && !args.activeModel && logUsage.model) {
-        const slashIndex = logUsage.model.indexOf("/");
-        if (
-          slashIndex > 0 &&
-          !findModelInCatalog(args.thinkingCatalog ?? [], activeProvider, logUsage.model)
-        ) {
-          const provider = logUsage.model.slice(0, slashIndex).trim();
-          const model = logUsage.model.slice(slashIndex + 1).trim();
-          if (provider && model) {
-            const catalogEntry = findModelInCatalog(args.thinkingCatalog ?? [], provider, model);
-            activeProvider = provider;
-            activeModel = model;
-            // Bind exact catalog identities; keep cross-route namespaced ids raw.
-            contextLookupProvider = catalogEntry ? provider : undefined;
-            contextLookupModel = catalogEntry ? model : logUsage.model;
-          }
-        } else {
-          activeModel = logUsage.model;
-          // Bare IDs and catalog-owned slash IDs retain the known provider.
-          contextLookupProvider = activeProvider;
-          contextLookupModel = logUsage.model;
-        }
-      }
-      if (entry?.usageReport?.state !== "available") {
-        if (!inputTokens) {
-          inputTokens = logUsage.input;
-        }
-        if (!outputTokens) {
-          outputTokens = logUsage.output;
-        }
-        if (cacheRead === undefined || cacheRead <= 0) {
-          cacheRead = logUsage.cacheRead ?? cacheRead;
-        }
-        if (cacheWrite === undefined || cacheWrite <= 0) {
-          cacheWrite = logUsage.cacheWrite ?? cacheWrite;
-        }
-      }
-    }
-  }
-
-  if (usageReport?.state === "unavailable") {
-    inputTokens = outputTokens = cacheRead = cacheWrite = undefined;
-  }
+  const {
+    selectedLookupProvider,
+    selectedLookupModel,
+    initialFallbackState,
+    activeProvider,
+    activeModel,
+    contextLookupProvider,
+    contextLookupModel,
+    inputTokens,
+    outputTokens,
+    cacheRead,
+    cacheWrite,
+    usageReport,
+    totalTokens,
+    estimatedCostUsd,
+  } = args.preparedUsage ?? resolveStatusMessageUsage(args);
 
   const activeModelLabel = buildModelCatalogRef(activeProvider, activeModel) || "unknown";
   const runtimeDiffersFromSelected = activeModelLabel !== (modelRefs.selected.label || "unknown");
@@ -585,18 +365,38 @@ export function buildStatusMessageParts(args: StatusArgs) {
   const activeModelProvider = runtimeAliasModelEquivalent
     ? selectedLookupProvider
     : contextLookupProvider;
-  const selectedContextTokens = resolveContextTokensForModel({
+  const selectedCatalogEntry = findModelInCatalog(
+    args.thinkingCatalog ?? [],
+    selectedLookupProvider,
+    selectedLookupModel,
+  );
+  const selectedWindow = resolveModelContextWindowProfile({
+    catalogEntry: selectedCatalogEntry ?? { contextWindow: args.selectedContextWindow },
+    selected: entry?.contextWindow,
+  });
+  const resolvedSelectedContextTokens = resolveContextTokensForModel({
     cfg: contextConfig,
     provider: selectedLookupProvider,
     model: selectedLookupModel,
-    modelContextWindow: args.selectedContextWindow,
+    modelContextWindow: selectedWindow.contextTokens,
     modelContextTokens: args.selectedContextTokens,
     allowAsyncLoad: false,
     allowCacheLookup: false,
   });
+  const selectedContextTokens =
+    selectedWindow.contextWindow && selectedWindow.contextTokens !== undefined
+      ? Math.min(
+          resolvedSelectedContextTokens ?? selectedWindow.contextTokens,
+          selectedWindow.contextTokens,
+        )
+      : resolvedSelectedContextTokens;
   const activeCatalogEntry = contextLookupProvider
     ? findModelInCatalog(args.thinkingCatalog ?? [], contextLookupProvider, contextLookupModel)
     : undefined;
+  const activeWindow = resolveModelContextWindowProfile({
+    catalogEntry: activeCatalogEntry,
+    selected: entry?.contextWindow,
+  });
   const activeModelMatchesPreparedIdentity =
     normalizeLowercaseStringOrEmpty(contextLookupProvider) ===
       normalizeLowercaseStringOrEmpty(modelRefs.active.provider) &&
@@ -608,12 +408,12 @@ export function buildStatusMessageParts(args: StatusArgs) {
       normalizeLowercaseStringOrEmpty(modelRefs.active.provider)
       ? (args.runtimeContextProvider ?? contextLookupProvider)
       : contextLookupProvider;
-  const activeContextTokens = resolveContextTokensForModel({
+  const resolvedActiveContextTokens = resolveContextTokensForModel({
     cfg: contextConfig,
     ...(activeContextProvider ? { provider: activeContextProvider } : {}),
     modelProvider: contextLookupProvider,
     model: contextLookupModel,
-    modelContextWindow: activeCatalogEntry?.contextWindow,
+    modelContextWindow: activeWindow.contextTokens,
     modelContextTokens:
       activeCatalogEntry?.contextTokens ??
       (activeCatalogEntry || activeModelMatchesPreparedIdentity
@@ -622,13 +422,53 @@ export function buildStatusMessageParts(args: StatusArgs) {
     allowAsyncLoad: false,
     allowCacheLookup: false,
   });
-  const channelModelNote = resolveChannelModelNote({
-    config: args.config,
-    entry,
-    selectedProvider: selectedLookupProvider,
-    selectedModel: selectedLookupModel,
-    parentSessionKey: args.parentSessionKey,
-  });
+  const activeContextTokens =
+    activeWindow.contextWindow && activeWindow.contextTokens !== undefined
+      ? Math.min(
+          resolvedActiveContextTokens ?? activeWindow.contextTokens,
+          activeWindow.contextTokens,
+        )
+      : resolvedActiveContextTokens;
+  const channelOverride =
+    args.config &&
+    entry &&
+    !normalizeOptionalString(entry.modelOverride) &&
+    !normalizeOptionalString(entry.providerOverride)
+      ? resolveChannelModelOverride({
+          cfg: args.config,
+          channel: sessionDeliveryChannel(entry),
+          groupId: entry.groupId,
+          groupChatType: entry.chatType ?? sessionDeliveryOrigin(entry)?.chatType,
+          groupChannel: entry.groupChannel,
+          groupSubject: entry.subject,
+          parentSessionKey: args.parentSessionKey,
+          directUserIds: [
+            sessionDeliveryOrigin(entry)?.nativeDirectUserId,
+            sessionDeliveryOrigin(entry)?.from,
+            sessionDeliveryOrigin(entry)?.to,
+          ],
+        })
+      : undefined;
+  const channelModelAliasIndex = channelOverride
+    ? buildModelAliasIndex({
+        cfg: args.config,
+        defaultProvider: DEFAULT_PROVIDER,
+        allowPluginNormalization: false,
+      })
+    : undefined;
+  const resolvedChannelOverride = channelOverride
+    ? resolveModelRefFromString({
+        raw: channelOverride.model,
+        defaultProvider: DEFAULT_PROVIDER,
+        aliasIndex: channelModelAliasIndex,
+        allowPluginNormalization: false,
+      })
+    : undefined;
+  const channelModelNote =
+    resolvedChannelOverride?.ref.provider === selectedLookupProvider &&
+    resolvedChannelOverride.ref.model === selectedLookupModel
+      ? "channel override"
+      : undefined;
   const projectedActiveContextTokens = resolveProjectedSessionContextTokens({
     entry,
     provider: contextLookupProvider,
@@ -720,8 +560,8 @@ export function buildStatusMessageParts(args: StatusArgs) {
   const contextUsageLabel =
     totalTokens == null || (totalTokens === 0 && usageReport?.state !== "available")
       ? (formatEstimatedContextBudgetTokens(contextBudgetStatus, contextTokens) ??
-        formatTokens(totalTokens, contextTokens ?? null))
-      : formatTokens(totalTokens, contextTokens ?? null);
+        formatContextTokensValue(totalTokens, contextTokens ?? null))
+      : formatContextTokensValue(totalTokens, contextTokens ?? null);
   const queueMode = args.queue?.mode ?? "unknown";
   const queueDetails = formatQueueDetails(args.queue);
   const verboseLabel =
@@ -739,12 +579,19 @@ export function buildStatusMessageParts(args: StatusArgs) {
         ? "elevated"
         : `elevated:${elevatedLevel}`
       : null;
-  const textVerbosity = resolveConfiguredTextVerbosity({
-    config: args.config,
-    agentId: args.agentId,
-    provider: activeProvider,
-    model: activeModel,
-  });
+  const textVerbosityProvider = activeProvider?.trim();
+  const textVerbosityModel = activeModel?.trim();
+  const textVerbosity =
+    textVerbosityProvider === "openai" && textVerbosityModel
+      ? resolveOpenAITextVerbosity(
+          resolveExtraParams({
+            cfg: args.config,
+            provider: textVerbosityProvider,
+            modelId: textVerbosityModel,
+            agentId: args.agentId,
+          }),
+        )
+      : undefined;
   const fastModeValue = formatFastModeStatusValue({
     mode: fastMode,
     fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
@@ -790,34 +637,8 @@ export function buildStatusMessageParts(args: StatusArgs) {
     config: args.config,
     state: entry,
   });
-  const hasUsage =
-    inputTokens !== undefined ||
-    outputTokens !== undefined ||
-    cacheRead !== undefined ||
-    cacheWrite !== undefined;
-  const costConfig = hasUsage
-    ? resolveModelCostConfig({
-        provider: activeProvider,
-        model: activeModel,
-        config: args.config,
-        allowPluginNormalization: false,
-      })
-    : undefined;
   const cost =
-    usageReport?.state === "unavailable"
-      ? undefined
-      : (asNonNegativeFiniteNumber(entry?.estimatedCostUsd) ??
-        (hasUsage
-          ? estimateAggregateUsageCost({
-              usage: {
-                input: inputTokens,
-                output: outputTokens,
-                cacheRead,
-                cacheWrite,
-              },
-              cost: costConfig,
-            })
-          : undefined));
+    usageReport?.state === "unavailable" ? undefined : (estimatedCostUsd ?? args.estimatedCostUsd);
   const costLabel = formatUsd(cost);
 
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
@@ -891,9 +712,10 @@ export function buildStatusMessageParts(args: StatusArgs) {
   );
 
   const text = [
-    [versionLine, timeLine, uptimeLine],
+    [versionLine, cronNow?.timeLine, uptimeLine],
     [
       `🧠 Model: ${modelValue}`,
+      entry?.cyberAccessProgram ? `🔐 Access: ${entry.cyberAccessProgram}` : null,
       `🌐 Endpoint: ${selectedEndpoint ?? "unknown"}`,
       selectedAuthLabelValue ? `🔑 Auth: ${selectedAuthLabelValue}` : null,
       configuredFallbacksLine,
@@ -935,6 +757,9 @@ export function buildStatusMessageParts(args: StatusArgs) {
     }
   };
   pushStatusRow("🧠 Model", modelValue);
+  if (entry?.cyberAccessProgram) {
+    pushStatusRow("🔐 Access", entry.cyberAccessProgram);
+  }
   pushStatusRow("🌐 Endpoint", selectedEndpoint ?? "unknown");
   pushStatusRow("🔑 Auth", selectedAuthLabelValue);
   pushStatusRow("🔄 Fallbacks", configuredFallbacks?.join(", "));
@@ -958,7 +783,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
   // renders keep one compact time-and-uptime line under the table.
   const presentationClockValue = cronNow
     ? `${cronNow.formattedTime} (${cronNow.userTimezone})`
-    : args.timeLine;
+    : undefined;
   const clockUptimeValue = [
     presentationClockValue,
     args.uptimeValue ? `⏱️ ${args.uptimeValue}` : null,

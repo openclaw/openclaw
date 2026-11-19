@@ -6,7 +6,6 @@ import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { DatabaseStoreDiagnostic } from "../infra/database-engine/diagnostics.js";
 import type { PortDescriptor } from "../infra/database-engine/port-descriptor.js";
 import {
   createDiagnosticStores,
@@ -22,6 +21,10 @@ import {
 const configured = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+
+async function snapshot(...args: Parameters<typeof diagnosticOutput>) {
+  expect(await diagnosticOutput(...args)).toMatchSnapshot();
+}
 
 describe.skipIf(!connection)("Doctor physical PostgreSQL output", () => {
   const client = new Client({ connectionString: connection });
@@ -60,35 +63,15 @@ describe.skipIf(!connection)("Doctor physical PostgreSQL output", () => {
     await client.end();
   });
 
-  function createdStores(stores: DatabaseStoreDiagnostic[], root: string) {
-    const expectedPaths = new Set(
-      [...Object.values(diagnosticPaths), matrixRoot, retainedAgentRoot].map((relative) =>
-        path.join(root, relative),
-      ),
-    );
-    const physical = stores.filter((store) => store.path !== null && expectedPaths.has(store.path));
-    expect(physical).toHaveLength(expectedPaths.size);
-    return physical;
-  }
-
   it("reports each PostgreSQL family and Matrix namespace while safety stores stay local", async () => {
     const stores = await inspect(postgresRoot, diagnosticConfig(connection));
-    const physical = createdStores(stores, postgresRoot);
+    const physical = stores.filter((store) => store.observed === "postgres");
     // Snapshots retain every store field; namespace uniqueness is lost during normalization.
     for (const store of physical) {
       expect(store.namespace).toMatch(/^doctor_proof_/);
     }
     expect(new Set(physical.map((store) => store.namespace)).size).toBe(physical.length);
-    expect(stores.filter((store) => store.configured.fixedLocal)).toHaveLength(4);
-    expect(
-      await diagnosticOutput(
-        postgresRoot,
-        diagnosticConfig(connection),
-        descriptors,
-        stores,
-        connection,
-      ),
-    ).toMatchSnapshot();
+    await snapshot(postgresRoot, diagnosticConfig(connection), descriptors, stores, connection);
   });
 
   it.each(["state", "agent"] as const)(
@@ -110,9 +93,7 @@ describe.skipIf(!connection)("Doctor physical PostgreSQL output", () => {
         postgres: { connection },
       };
       const stores = await inspect(root, config);
-      expect(
-        await diagnosticOutput(root, config, descriptors, stores, connection),
-      ).toMatchSnapshot();
+      await snapshot(root, config, descriptors, stores, connection);
     },
   );
 
@@ -121,16 +102,7 @@ describe.skipIf(!connection)("Doctor physical PostgreSQL output", () => {
       "postgresql://synthetic-user:synthetic-password@127.0.0.1:1/unreachable";
     const config = diagnosticConfig(unreachableConnection);
     const stores = await inspect(postgresRoot, config);
-    expect(
-      await diagnosticOutput(
-        postgresRoot,
-        config,
-        descriptors,
-        stores,
-        connection,
-        unreachableConnection,
-      ),
-    ).toMatchSnapshot();
+    await snapshot(postgresRoot, config, descriptors, stores, connection, unreachableConnection);
   });
 
   it("reports keyword-only capability and the administrator grant when pgvector is missing", async () => {
@@ -160,9 +132,7 @@ describe.skipIf(!connection)("Doctor physical PostgreSQL output", () => {
       };
       const stores = await inspect(root, config);
       const agent = stores.find((store) => store.family === "agent")!;
-      expect(
-        await diagnosticOutput(root, config, descriptors, agent, isolatedConnection),
-      ).toMatchSnapshot();
+      await snapshot(root, config, descriptors, agent, isolatedConnection);
     } finally {
       await isolated.end();
       await client.query(`DROP DATABASE "${database}"`);

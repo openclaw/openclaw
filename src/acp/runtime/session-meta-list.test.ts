@@ -38,8 +38,8 @@ async function listWithoutHostSql(scope: Parameters<typeof listAcpSessionEntries
   }
 }
 
-it("lists SQLite ACP rows while joining current session-store entries", async () => {
-  await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
+it("lists SQLite ACP rows while joining current session-store entries", () =>
+  withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
     const storePath = path.join(dir, "agents", "codex", "sessions", "sessions.json");
     const databasePath = path.join(dir, "state", "openclaw.sqlite");
@@ -86,11 +86,10 @@ it("lists SQLite ACP rows while joining current session-store entries", async ()
       entry: { skillsSnapshot: { skills: [{ name: "fixture-skill" }] } },
       acp: { runtimeSessionName: "updated-runtime" },
     });
-  });
-});
+  }));
 
-it("loads cold runtime config and joins entries without main-thread SQL", async () => {
-  await withOpenClawTestState({ label: "acp-list-cold-config" }, async (state) => {
+it("loads cold runtime config and joins entries without main-thread SQL", () =>
+  withOpenClawTestState({ label: "acp-list-cold-config" }, async (state) => {
     const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { codex: {} } } };
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
@@ -111,11 +110,10 @@ it("loads cold runtime config and joins entries without main-thread SQL", async 
         acp: { runtimeSessionName: "cold-config" },
       },
     ]);
-  });
-});
+  }));
 
-it.each(["state", "agent"] as const)("does not create a missing %s store", async (missing) => {
-  await withTestDir({ prefix: "openclaw-acp-list-missing-" }, async (dir) => {
+it.each(["state", "agent"] as const)("does not create a missing %s store", (missing) =>
+  withTestDir({ prefix: "openclaw-acp-list-missing-" }, async (dir) => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(dir, "missing") };
     if (missing === "agent") {
       seedCanonicalAcpSessionMeta({
@@ -131,5 +129,5 @@ it.each(["state", "agent"] as const)("does not create a missing %s store", async
     if (missing === "state") {
       expect(fs.existsSync(env.OPENCLAW_STATE_DIR)).toBe(false);
     }
-  });
-});
+  }),
+);

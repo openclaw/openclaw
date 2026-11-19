@@ -27,10 +27,35 @@ vi.mock("../session-utils.js", async () => ({
   }),
 }));
 
+const storeScope = "/synthetic/chat-abort/session-controller.sqlite";
+const singleContext = () => createSingleAbortContext({ storeScope });
+
+function expectResult(
+  respond: Awaited<ReturnType<typeof invokeAbort>>,
+  runIds: string[],
+  aborted = true,
+) {
+  expectAbortPayload(requireLastRespondCall(respond)[1], { aborted, runIds });
+}
+
+function invokeLifecycle(
+  context: Parameters<typeof invokeChatAbortHandler>[0]["context"],
+  request: Parameters<typeof invokeChatAbortHandler>[0]["request"] = { sessionKey: "main" },
+  options: Partial<Parameters<typeof invokeChatAbortHandler>[0]> = {},
+) {
+  return invokeChatAbortHandler({
+    handler: handleChatAbortRequestWithLifecycle,
+    context,
+    request,
+    client: { connect: { scopes: ["operator.admin"] } },
+    ...options,
+  });
+}
+
 function createActiveRun(...[sessionKey, options]: Parameters<typeof createUnscopedRun>) {
   return createUnscopedRun(sessionKey, {
     ...(sessionKey === "main" ? { agentId: "main" } : {}),
-    storeScope: "/synthetic/chat-abort/session-controller.sqlite",
+    storeScope,
     ...options,
   });
 }
@@ -39,17 +64,27 @@ function abortAsOwner(params: Omit<Parameters<typeof invokeAbort>[0], "connId" |
   return invokeAbort({ ...params, connId: "conn-owner", deviceId: "dev-owner" });
 }
 
-function queuedTurn(controller: AbortController, owner?: string): RpcSourceRef {
-  const source = createActiveRun("main", {
+function queuedTurn(owner?: string): RpcSourceRef {
+  return createActiveRun("main", {
     queued: true,
-    sessionId: "main-session",
     owner:
       owner === "none"
         ? undefined
         : { connId: `conn-${owner ?? "owner"}`, deviceId: `dev-${owner ?? "owner"}` },
   });
-  source.input.abortSignal.addEventListener("abort", () => controller.abort(), { once: true });
-  return source;
+}
+
+function workerContext(
+  cancel: Parameters<typeof createWorkerInferenceCancellationService>[2],
+  runIds = ["worker-run"],
+  context = createChatAbortContext(),
+) {
+  context.workerEnvironmentService = createWorkerInferenceCancellationService(
+    "main-session",
+    runIds,
+    cancel,
+  );
+  return context;
 }
 
 function abortAsOther(params: Omit<Parameters<typeof invokeAbort>[0], "connId" | "deviceId">) {
@@ -81,9 +116,7 @@ describe("chat.abort authorization", () => {
       message: "unavailable in incognito sessions",
     },
   ])("requires an exact discard target ($sessionKey, $runId)", async (target) => {
-    const context = createSingleAbortContext({
-      storeScope: "/synthetic/chat-abort/session-controller.sqlite",
-    });
+    const context = singleContext();
     const active = rpcSourceTesting.get("run-1");
     const respond = await invokeChatAbortHandler({
       handler: handleChatAbortRequestWithLifecycle,
@@ -120,14 +153,7 @@ describe("chat.abort authorization", () => {
         },
       ),
     });
-    const respond = await abortAsAdmin({
-      context,
-      runId: "worker-run",
-    });
-    expectAbortPayload(requireLastRespondCall(respond)[1], {
-      aborted: true,
-      runIds: ["worker-run"],
-    });
+    expectResult(await abortAsAdmin({ context, runId: "worker-run" }), ["worker-run"]);
     expect(cancel).toHaveBeenCalledWith({
       sessionId: "original-worker-session",
       runId: "worker-run",
@@ -136,31 +162,15 @@ describe("chat.abort authorization", () => {
 
   it("rejects non-admin worker-only inference aborts", async () => {
     const cancelInferenceForSession = vi.fn(() => ["worker-run"]);
-    const context = createChatAbortContext({
-      workerEnvironmentService: createWorkerInferenceCancellationService(
-        "main-session",
-        ["worker-run"],
-        cancelInferenceForSession,
-      ),
-    });
+    const context = workerContext(cancelInferenceForSession);
     for (const runId of [undefined, "worker-run"]) {
-      const respond = await abortAsOther({
-        context,
-        runId,
-      });
+      const respond = await abortAsOther({ context, runId });
       expect(requireLastRespondCall(respond)[0]).toBe(false);
       expect(requireLastRespondCall(respond)[2]?.message).toBe("unauthorized");
     }
     expect(cancelInferenceForSession).not.toHaveBeenCalled();
 
-    const admin = await abortAsAdmin({
-      context,
-      runId: "worker-run",
-    });
-    expectAbortPayload(requireLastRespondCall(admin)[1], {
-      aborted: true,
-      runIds: ["worker-run"],
-    });
+    expectResult(await abortAsAdmin({ context, runId: "worker-run" }), ["worker-run"]);
     expect(cancelInferenceForSession).toHaveBeenCalledWith({
       sessionId: "main-session",
       runId: "worker-run",
@@ -170,43 +180,26 @@ describe("chat.abort authorization", () => {
   it("does not let a local run owner cancel worker inference", async () => {
     for (const runId of [undefined, "run-1"]) {
       const cancelInferenceForSession = vi.fn(() => ["run-1"]);
-      const context = createSingleAbortContext({
-        storeScope: "/synthetic/chat-abort/session-controller.sqlite",
-      });
-      context.workerEnvironmentService = createWorkerInferenceCancellationService(
-        "main-session",
-        ["run-1"],
-        cancelInferenceForSession,
-      );
-      const respond = await abortAsOwner({
-        context,
-        ...(runId ? { runId } : {}),
-      });
-      expectAbortPayload(requireLastRespondCall(respond)[1], {
-        aborted: true,
-        runIds: ["run-1"],
-      });
+      const context = workerContext(cancelInferenceForSession, ["run-1"], singleContext());
+      expectResult(await abortAsOwner({ context, runId }), ["run-1"]);
       expect(cancelInferenceForSession).not.toHaveBeenCalled();
     }
   });
 
-  it("rejects explicit run aborts from other clients", async () => {
-    const context = createSingleAbortContext({
-      storeScope: "/synthetic/chat-abort/session-controller.sqlite",
-    });
-
-    const respond = await abortAsOther({
-      context,
-      runId: "run-1",
-      scopes: ["operator.write"],
-    });
-
+  it.each([
+    { requester: "other client", invoke: abortAsOther, allowed: false },
+    { requester: "operator.admin", invoke: abortAsAdmin, allowed: true },
+  ])("applies exact-run ownership to $requester", async ({ invoke, allowed }) => {
+    const respond = await invoke({ context: singleContext(), runId: "run-1" });
     const [ok, payload, error] = requireLastRespondCall(respond);
-    expect(ok).toBe(false);
-    expect(payload).toBeUndefined();
-    expect(error?.code).toBe("INVALID_REQUEST");
-    expect(error?.message).toBe("unauthorized");
-    expect(rpcSourceTesting.has("run-1")).toBe(true);
+    expect(ok).toBe(allowed);
+    if (allowed) {
+      expectAbortPayload(payload, { aborted: true, runIds: ["run-1"] });
+    } else {
+      expect(payload).toBeUndefined();
+      expect(error).toMatchObject({ code: "INVALID_REQUEST", message: "unauthorized" });
+      expect(rpcSourceTesting.has("run-1")).toBe(true);
+    }
   });
 
   it("does not reveal a foreign hidden run to ordinary session aborts", async () => {
@@ -214,13 +207,9 @@ describe("chat.abort authorization", () => {
       controlUiVisible: false,
       owner: { connId: "conn-hidden", deviceId: "dev-hidden" },
     });
-    const context = createChatAbortContext({
-      sources: [["run-hidden", hidden]],
-    });
+    const context = createChatAbortContext({ sources: [["run-hidden", hidden]] });
 
-    const respond = await abortAsOther({
-      context,
-    });
+    const respond = await abortAsOther({ context });
 
     const [ok, payload] = requireLastRespondCall(respond);
     expect(ok).toBe(true);
@@ -228,28 +217,13 @@ describe("chat.abort authorization", () => {
     expect(hidden.input.abortSignal.aborted).toBe(false);
     expect(rpcSourceTesting.has("run-hidden")).toBe(true);
   });
-
-  it("allows operator.admin clients to bypass owner checks", async () => {
-    const context = createSingleAbortContext({
-      storeScope: "/synthetic/chat-abort/session-controller.sqlite",
-    });
-
-    const respond = await abortAsAdmin({
-      context,
-      runId: "run-1",
-    });
-
-    const [ok, payload] = requireLastRespondCall(respond);
-    expect(ok).toBe(true);
-    expectAbortPayload(payload, { aborted: true, runIds: ["run-1"] });
-  });
 });
 
 describe("chat.abort queued-turn contract", () => {
   it("cancels queued inputs before active cancellation", async () => {
     const order: string[] = [];
-    const queuedController = new AbortController();
-    queuedController.signal.addEventListener("abort", () => order.push("queued-abort"));
+    const queued = queuedTurn();
+    queued.input.abortSignal.addEventListener("abort", () => order.push("queued-abort"));
     const active = createActiveRun("main", {
       owner: { connId: "conn-owner", deviceId: "dev-owner" },
     });
@@ -257,91 +231,47 @@ describe("chat.abort queued-turn contract", () => {
     const context = createChatAbortContext({
       sources: [
         ["active-1", active],
-        ["queued-1", queuedTurn(queuedController)],
+        ["queued-1", queued],
       ],
     });
     const respond = await abortAsOwner({ context });
     expect(requireLastRespondCall(respond)[0]).toBe(true);
-    expectAbortPayload(requireLastRespondCall(respond)[1], {
-      aborted: true,
-      runIds: ["queued-1", "active-1"],
-    });
+    expectResult(respond, ["queued-1", "active-1"]);
     expect(order).toEqual(["queued-abort", "active-abort"]);
   });
 
   it("cancels a waiting channel input outside the RPC registry", async () => {
-    const waiting = createActiveRun("main", {
-      queued: true,
-      sessionId: "main-session",
-      storeScope: "/synthetic/chat-abort/session-controller.sqlite",
-    });
-    const respond = await abortAsAdmin({ context: createChatAbortContext() });
-    expectAbortPayload(requireLastRespondCall(respond)[1], { aborted: true, runIds: [] });
+    const waiting = createActiveRun("main", { queued: true });
+    expectResult(await abortAsAdmin({ context: createChatAbortContext() }), []);
     expect(waiting.input.abortSignal.aborted).toBe(true);
   });
 
   it("aborts a queued turn by runId after active registration is gone", async () => {
-    const controller = new AbortController();
-    const context = createChatAbortContext({
-      sources: [["queued-1", queuedTurn(controller)]],
-    });
+    const queued = queuedTurn();
+    const context = createChatAbortContext({ sources: [["queued-1", queued]] });
 
-    const respond = await abortAsOwner({
-      context,
-      runId: "queued-1",
-    });
+    const respond = await abortAsOwner({ context, runId: "queued-1" });
     const call = requireLastRespondCall(respond);
     expect(call[0]).toBe(true);
     expectAbortPayload(call[1], { aborted: true, runIds: ["queued-1"] });
-    expect(controller.signal.aborted).toBe(true);
+    expect(queued.input.abortSignal.aborted).toBe(true);
     expect(rpcSourceTesting.has("queued-1")).toBe(false);
   });
 
-  it("rejects queued-turn abort from other clients", async () => {
-    const controller = new AbortController();
-    const context = createChatAbortContext({
-      sources: [["queued-1", queuedTurn(controller)]],
-    });
-
-    const respond = await abortAsOther({
-      context,
-      runId: "queued-1",
-    });
-    const call = requireLastRespondCall(respond);
+  it.each([
+    { name: "explicit foreign run", runId: "queued-1" },
+    { name: "foreign session", runId: undefined },
+    { name: "mismatched ownerless session", runId: "queued-1", sessionKey: "other", owner: "none" },
+  ])("rejects $name without clearing queued input", async ({ runId, sessionKey, owner }) => {
+    const queued = queuedTurn(owner);
+    const context = createChatAbortContext({ sources: [["queued-1", queued]] });
+    const call = requireLastRespondCall(await abortAsOther({ context, runId, sessionKey }));
     expect(call[0]).toBe(false);
-    expect(controller.signal.aborted).toBe(false);
+    if (sessionKey) {
+      expect(call[2]?.message).toBe("runId does not match sessionKey");
+    }
+    expect(queued.input.abortSignal.aborted).toBe(false);
     expect(rpcSourceTesting.has("queued-1")).toBe(true);
-  });
-
-  it("rejects a mismatched session for ownerless queued turns", async () => {
-    const controller = new AbortController();
-    const context = createChatAbortContext({
-      sources: [["queued-ownerless", queuedTurn(controller, "none")]],
-    });
-
-    const respond = await abortAsOther({
-      context,
-      sessionKey: "other",
-      runId: "queued-ownerless",
-    });
-    const call = requireLastRespondCall(respond);
-    expect(call[0]).toBe(false);
-    expect(call[2]?.message).toBe("runId does not match sessionKey");
-    expect(controller.signal.aborted).toBe(false);
-    expect(rpcSourceTesting.has("queued-ownerless")).toBe(true);
-  });
-
-  it("session abort does not clear another owner's queued turns", async () => {
-    const foreign = new AbortController();
-    const context = createChatAbortContext({
-      sources: [["queued-foreign", queuedTurn(foreign)]],
-    });
-
-    const respond = await abortAsOther({ context });
-    const call = requireLastRespondCall(respond);
-    expect(call[0]).toBe(false);
-    expect(foreign.signal.aborted).toBe(false);
-    expect(rpcSourceTesting.has("queued-foreign")).toBe(true);
   });
 
   it.each([
@@ -402,6 +332,8 @@ function createDeferredWorkerCancellation() {
     resolveSessionTargetForRunId: () => undefined,
     captureSessionCancellation: () => ({
       runIds: ["worker-run"],
+      settled: Promise.resolve(),
+      executing: false,
       cancel: (control) => {
         control?.assertCurrent?.();
         control?.onCancelled?.("worker-run");
@@ -438,37 +370,26 @@ describe("chat.abort original authority and registration", () => {
     const descendantFailure = new Error("descendant cancellation failed");
     const partialFailure = new Error("partial persistence failed");
     const context = createChatAbortContext();
-    const run = createActiveRun("main", { sessionId: "main-session", agentId: "main" });
+    const run = createActiveRun("main");
     rpcSourceTesting.set("parent-run", run);
     context.chatRunState.getOrCreate("parent-run").buffer = "captured parent output";
-    const descendants = vi
+    using _ = vi
       .spyOn(abortDescendants, "abortControlledSubagents")
       .mockImplementationOnce(async (params) => {
         await params.prepareSelection?.prepare();
         await params.beforeKill?.(() => {});
         throw descendantFailure;
       });
-    const persist = vi
+    using persist = vi
       .spyOn(persistence, "persistAbortedPartials")
       .mockRejectedValueOnce(partialFailure);
     const respond = vi.fn();
-    try {
-      await expect(
-        invokeChatAbortHandler({
-          handler: handleChatAbortRequestWithLifecycle,
-          context,
-          request: { sessionKey: "main", runId: "parent-run" },
-          client: { connect: { scopes: ["operator.admin"] } },
-          respond,
-        }),
-      ).rejects.toMatchObject({ errors: [descendantFailure, partialFailure] });
-      expect(run.input.abortSignal.aborted).toBe(true);
-      expect(persist).toHaveBeenCalledOnce();
-      expect(respond).not.toHaveBeenCalled();
-    } finally {
-      descendants.mockRestore();
-      persist.mockRestore();
-    }
+    await expect(
+      invokeLifecycle(context, { sessionKey: "main", runId: "parent-run" }, { respond }),
+    ).rejects.toMatchObject({ errors: [descendantFailure, partialFailure] });
+    expect(run.input.abortSignal.aborted).toBe(true);
+    expect(persist).toHaveBeenCalledOnce();
+    expect(respond).not.toHaveBeenCalled();
   });
 
   it.each([undefined, "worker-run"])(
@@ -476,13 +397,11 @@ describe("chat.abort original authority and registration", () => {
     async (runId) => {
       const { cancelled, workerPersistence, service } = createDeferredWorkerCancellation();
       const respond = vi.fn();
-      const stopping = invokeChatAbortHandler({
-        handler: handleChatAbortRequestWithLifecycle,
-        context: createChatAbortContext({ workerEnvironmentService: service }),
-        request: { sessionKey: "main", ...(runId ? { runId } : {}) },
-        client: { connect: { scopes: ["operator.admin"] } },
-        respond,
-      });
+      const stopping = invokeLifecycle(
+        createChatAbortContext({ workerEnvironmentService: service }),
+        { sessionKey: "main", ...(runId ? { runId } : {}) },
+        { respond },
+      );
       try {
         await cancelled.promise;
         expect(respond).not.toHaveBeenCalled();
@@ -490,10 +409,7 @@ describe("chat.abort original authority and registration", () => {
         workerPersistence.resolve(["worker-run"]);
         await stopping;
       }
-      expectAbortPayload(requireLastRespondCall(respond)[1], {
-        aborted: true,
-        runIds: ["worker-run"],
-      });
+      expectResult(respond, ["worker-run"]);
     },
   );
 
@@ -502,20 +418,14 @@ describe("chat.abort original authority and registration", () => {
     const workerFailure = new Error("worker cancellation write failed");
     const partialFailure = new Error("partial output write failed");
     const context = createChatAbortContext({ workerEnvironmentService: service });
-    const run = createActiveRun("main", { sessionId: "main-session", agentId: "main" });
+    const run = createActiveRun("main");
     rpcSourceTesting.set("worker-run", run);
     context.chatRunState.getOrCreate("worker-run").buffer = "captured output";
-    const persist = vi
+    using persist = vi
       .spyOn(persistence, "persistAbortedPartials")
       .mockRejectedValue(partialFailure);
     const respond = vi.fn();
-    const stopping = invokeChatAbortHandler({
-      handler: handleChatAbortRequestWithLifecycle,
-      context,
-      request: { sessionKey: "main" },
-      client: { connect: { scopes: ["operator.admin"] } },
-      respond,
-    });
+    const stopping = invokeLifecycle(context, { sessionKey: "main" }, { respond });
     const rejected = expect(stopping).rejects.toMatchObject({
       errors: [workerFailure, partialFailure],
     });
@@ -530,7 +440,6 @@ describe("chat.abort original authority and registration", () => {
     } finally {
       workerPersistence.resolve([]);
       await stopping.catch(() => undefined);
-      persist.mockRestore();
     }
   });
 
@@ -539,23 +448,9 @@ describe("chat.abort original authority and registration", () => {
     async (firstEffect) => {
       let current = true;
       const cancelInferenceForSession = vi.fn(() => ["worker"]);
-      const context = createChatAbortContext({
-        workerEnvironmentService: createWorkerInferenceCancellationService(
-          "main-session",
-          ["worker"],
-          cancelInferenceForSession,
-        ),
-      });
-      const first = createActiveRun("main", {
-        sessionId: "main-session",
-        agentId: "main",
-        queued: firstEffect === "queued",
-      });
-      const second = createActiveRun("main", {
-        sessionId: "main-session",
-        agentId: "main",
-        queued: true,
-      });
+      const context = workerContext(cancelInferenceForSession, ["worker"]);
+      const first = createActiveRun("main", { queued: firstEffect === "queued" });
+      const second = createActiveRun("main", { queued: true });
       rpcSourceTesting.set("first", first);
       rpcSourceTesting.set("second", second);
       if (firstEffect === "active") {
@@ -575,57 +470,46 @@ describe("chat.abort original authority and registration", () => {
       );
       setPendingRegistrations(context);
       const pending = [...context.dedupe];
-      const persist = vi.spyOn(persistence, "persistAbortedPartials").mockResolvedValue(undefined);
-      try {
-        await expect(
-          invokeChatAbortHandler({
-            handler: (options) =>
-              handleChatAbortRequestWithLifecycle({
-                ...options,
-                hasCurrentClientAuthority: () => current,
-              }),
-            context,
-            request: { sessionKey: "main" },
-            client: { connect: { scopes: ["operator.admin"] } },
-          }),
-        ).rejects.toMatchObject({
-          message: "Chat cancellation and persistence failed",
-          errors: [
-            expect.objectContaining({ message: "Gateway requester authority changed" }),
-            expect.objectContaining({ message: "Gateway requester authority changed" }),
-          ],
-        });
-        expect(first.input.abortSignal.aborted).toBe(true);
-        // A successor waits behind the active first turn, so Stop withdraws it
-        // before the first turn revokes authority. Two pending inputs keep FIFO order.
-        expect(second.input.abortSignal.aborted).toBe(firstEffect === "active");
-        expect([...context.dedupe]).toEqual(pending);
-        expect(cancelInferenceForSession).not.toHaveBeenCalled();
-        if (firstEffect === "active") {
-          expect(persist).toHaveBeenCalledOnce();
-          expect(persist.mock.calls[0]?.[0].snapshots.map((snapshot) => snapshot.runId)).toEqual([
-            "first",
-          ]);
-          expect(secondPartialAtRevocation).toBe("");
-          expect(context.chatRunState.resolveBuffer("second", { final: true }).text).toBe("");
-        } else {
-          expect(persist.mock.calls.flatMap(([call]) => call.snapshots)).toEqual([]);
-          expect(persist).not.toHaveBeenCalled();
-        }
-      } finally {
-        persist.mockRestore();
+      using persist = vi.spyOn(persistence, "persistAbortedPartials").mockResolvedValue(undefined);
+      await expect(
+        invokeLifecycle(context, undefined, {
+          handler: (options) =>
+            handleChatAbortRequestWithLifecycle({
+              ...options,
+              hasCurrentClientAuthority: () => current,
+            }),
+        }),
+      ).rejects.toMatchObject({
+        message: "Chat cancellation and persistence failed",
+        errors: [
+          expect.objectContaining({ message: "Gateway requester authority changed" }),
+          expect.objectContaining({ message: "Gateway requester authority changed" }),
+        ],
+      });
+      expect(first.input.abortSignal.aborted).toBe(true);
+      // A successor waits behind the active first turn, so Stop withdraws it
+      // before the first turn revokes authority. Two pending inputs keep FIFO order.
+      expect(second.input.abortSignal.aborted).toBe(firstEffect === "active");
+      expect([...context.dedupe]).toEqual(pending);
+      expect(cancelInferenceForSession).not.toHaveBeenCalled();
+      if (firstEffect === "active") {
+        expect(persist).toHaveBeenCalledOnce();
+        expect(persist.mock.calls[0]?.[0].snapshots.map((snapshot) => snapshot.runId)).toEqual([
+          "first",
+        ]);
+        expect(secondPartialAtRevocation).toBe("");
+        expect(context.chatRunState.resolveBuffer("second", { final: true }).text).toBe("");
+      } else {
+        expect(persist.mock.calls.flatMap(([call]) => call.snapshots)).toEqual([]);
+        expect(persist).not.toHaveBeenCalled();
       }
     },
   );
 
   it("withdraws selected pending input without adopting reentrant replacement registrations", async () => {
     const context = createChatAbortContext();
-    const first = createActiveRun("main", { sessionId: "main-session", agentId: "main" });
-    const stale = createActiveRun("main", {
-      sessionId: "main-session",
-      agentId: "main",
-      queued: true,
-    });
+    const first = createActiveRun("main");
+    const stale = createActiveRun("main", { queued: true });
     let replacement: RpcSourceRef | undefined;
     rpcSourceTesting.set("first", first);
     rpcSourceTesting.set("reused", stale);
@@ -634,28 +518,14 @@ describe("chat.abort original authority and registration", () => {
     first.input.abortSignal.addEventListener(
       "abort",
       () => {
-        replacement = createActiveRun("main", {
-          sessionId: "main-session",
-          agentId: "main",
-          queued: true,
-        });
+        replacement = createActiveRun("main", { queued: true });
         rpcSourceTesting.set("reused", replacement);
         setPendingRegistrations(context, 2, "new");
         pending = [...context.dedupe];
       },
       { once: true },
     );
-    const response = await invokeAbort({
-      context,
-      sessionKey: "main",
-      connId: "owner",
-      deviceId: "device",
-      scopes: ["operator.admin"],
-    });
-    expectAbortPayload(requireLastRespondCall(response)[1], {
-      aborted: true,
-      runIds: ["reused", "first"],
-    });
+    expectResult(await abortAsAdmin({ context }), ["reused", "first"]);
     expect(stale.input.abortSignal.aborted).toBe(true);
     expect(replacement).toBeDefined();
     expect(replacement?.input.abortSignal.aborted).toBe(false);
@@ -672,16 +542,11 @@ describe("chat.abort original authority and registration", () => {
           agentId: "main",
           queued: kind === "queued",
         });
-        const context = createChatAbortContext({
-          workerEnvironmentService: createWorkerInferenceCancellationService(
-            "main-session",
-            kind === "worker" ? ["run-1"] : [],
-            cancelInferenceForSession,
-          ),
-        });
-        if (kind === "active") {
-          rpcSourceTesting.set("run-1", run);
-        } else if (kind === "queued") {
+        const context = workerContext(
+          cancelInferenceForSession,
+          kind === "worker" ? ["run-1"] : [],
+        );
+        if (kind === "active" || kind === "queued") {
           rpcSourceTesting.set("run-1", run);
         } else if (kind !== "worker") {
           context.dedupe.set(`${kind}:run-1`, {
@@ -736,14 +601,7 @@ describe("chat.abort original authority and registration", () => {
       },
     });
     for (const runId of [undefined, "worker-run"]) {
-      const response = await invokeAbort({
-        context,
-        runId,
-        connId: "admin",
-        deviceId: "admin",
-        scopes: ["operator.admin"],
-      });
-      expectAbortPayload(requireLastRespondCall(response)[1], { aborted: false, runIds: [] });
+      expectResult(await abortAsAdmin({ context, runId }), [], false);
     }
     expect(captureSessionCancellation).not.toHaveBeenCalled();
   });

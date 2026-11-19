@@ -19,7 +19,6 @@ function createProvider(
 }
 
 const audioResult = { success: true, audioBuffer: Buffer.alloc(2), sampleRate: 8000 };
-const createSynthesis = () => vi.fn(async () => audioResult);
 
 describe("createTelephonyTtsProvider", () => {
   it("passes through Gradium 8 kHz mu-law output", async () => {
@@ -69,22 +68,15 @@ describe("createTelephonyTtsProvider", () => {
   });
 
   it.each([
-    {
-      name: "directive-stripped text",
-      input: "[[tts]]Hello caller[[/tts]]",
-      cleanedText: "Hello caller",
-      ttsText: undefined,
-      expected: { text: "Hello caller" },
-    },
-    {
-      name: "hidden directive text and overrides",
-      input: "Visible text [[tts:text]]Speak this instead[[/tts:text]]",
-      cleanedText: "Visible text ",
-      ttsText: "Speak this instead",
-      expected: { text: "Speak this instead", overrides: { ttsText: "Speak this instead" } },
-    },
-  ])("uses prepared $name for synthesis", async ({ input, cleanedText, ttsText, expected }) => {
-    const textToSpeechTelephony = createSynthesis();
+    ["[[tts]]Hello caller[[/tts]]", "Hello caller", undefined, { text: "Hello caller" }],
+    [
+      "Visible text [[tts:text]]Speak this instead[[/tts:text]]",
+      "Visible text ",
+      "Speak this instead",
+      { text: "Speak this instead", overrides: { ttsText: "Speak this instead" } },
+    ],
+  ] as const)("uses prepared text for %s", async (input, cleanedText, ttsText, expected) => {
+    const textToSpeechTelephony = vi.fn(async () => audioResult);
     const provider = await createProvider(textToSpeechTelephony, async ({ cfg, text }) => ({
       cfg,
       directives: {

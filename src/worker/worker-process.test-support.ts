@@ -4,7 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { withinTest } from "../../test/helpers/promise.js";
 import { resolveRuntimeWorkerUrl, resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
-import { createCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
+import { testWorkerDescriptor } from "../node-host/node-worker-supervisor.test-support.js";
+import { prepareCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
 import { prepareSecretInputStdio, type SpawnStdioEntry } from "../process/spawn-secret-input.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import {
@@ -20,6 +21,42 @@ const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const fixtureEntry = resolveRuntimeWorkerUrl(nativeWorkerTestEntrypoint);
 export type WorkerProcessTestExit = { code: number | null; stdout: string; stderr: string };
 
+export function createWorkerLaunchDescriptorForTest({
+  admission,
+  assignment,
+  connectionEndpoint,
+}: {
+  admission?: Partial<WorkerLaunchDescriptor["admission"]>;
+  assignment?: Partial<
+    Omit<WorkerLaunchDescriptor["assignment"], "permissionMode" | "workerContainmentRoot">
+  >;
+  connectionEndpoint?: WorkerLaunchDescriptor["connectionEndpoint"];
+} = {}): WorkerLaunchDescriptor {
+  const descriptor = testWorkerDescriptor(
+    "/tmp/openclaw-worker/workspace",
+    "Inspect the workspace.",
+  );
+  return {
+    ...descriptor,
+    connectionEndpoint: connectionEndpoint ?? {
+      kind: "unix",
+      socketPath: "/tmp/openclaw-worker/gateway.sock",
+    },
+    admission: {
+      ...descriptor.admission,
+      credential: "worker-fixture-value",
+      ownerEpoch: 1,
+      handshake: { ...descriptor.admission.handshake, openclawVersion: "2026.7.12" },
+      ...admission,
+    },
+    assignment: {
+      ...descriptor.assignment,
+      operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
+      ...assignment,
+    },
+  };
+}
+
 export function createWorkerProcessTestHarness(makeTempDir: (prefix: string) => string) {
   const children: Array<(signal: AbortSignal) => Promise<void>> = [];
   const launch = async (options: {
@@ -29,14 +66,13 @@ export function createWorkerProcessTestHarness(makeTempDir: (prefix: string) => 
     diagnostics?: () => Record<string, unknown>;
   }) => {
     const { descriptor, startup, signal, diagnostics } = options;
-    const sdkHost = createCompiledSdkHost(
+    const sdkHost = prepareCompiledSdkHost(
       [
         workerBackgroundExecEntrypoints.providerModelMetadata,
         workerBackgroundExecEntrypoints.stringCoerceRuntime,
       ],
-      makeTempDir,
       { mode: "link" },
-    );
+    )(makeTempDir);
     const home = makeTempDir("oc-native-child-");
     const temp = path.join(home, "tmp");
     await mkdir(temp);

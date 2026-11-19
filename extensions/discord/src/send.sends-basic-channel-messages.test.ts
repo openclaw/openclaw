@@ -365,15 +365,20 @@ it.each(["media follow-up", "text retry", "dispatch refresh"] as const)(
   },
 );
 
-it("uses configured defaultAccount for cached mention rewriting when accountId is omitted", async () => {
+it("preserves ambiguous and unknown mentions while rewriting the configured account's known users", async () => {
   rememberDiscordDirectoryUser({
     accountId: "work",
     userId: "222333444555666777",
-    handles: ["Alice"],
+    handles: ["Alice#1234", "Reviewer"],
+  });
+  rememberDiscordDirectoryUser({
+    accountId: "work",
+    userId: "333444555666777888",
+    handles: ["Reviewer"],
   });
   const { send, postMock } = sendHarness(["msg1"], ChannelType.GuildText);
   const work = { token: "Bot work-token", suppressEmbeds: true }; // pragma: allowlist secret
-  await send("ping @Alice.", {
+  await send("ping @Alice. @Reviewer @Alice#9999 @Unknown", {
     cfg: {
       channels: {
         discord: {
@@ -386,7 +391,7 @@ it("uses configured defaultAccount for cached mention rewriting when accountId i
   });
   expect(requestPath(postMock, 0)).toBe(Routes.channelMessages("789"));
   expect(requestBody(postMock)).toMatchObject({
-    content: "ping <@222333444555666777>.",
+    content: "ping <@222333444555666777>. @Reviewer @Alice#9999 @Unknown",
     flags: MessageFlags.SuppressEmbeds,
   });
 });
@@ -467,8 +472,6 @@ it.each([
   await expect(
     sendMessageDiscord("channel:chan1", "hello", clientOptions(rest)),
   ).rejects.toMatchObject({
-    missingPermissions: missing,
-    discordCode: 50013,
     status: 403,
     message: expect.stringContaining(
       missing[0] ?? "permission check did not identify missing ViewChannel/SendMessages",
@@ -557,7 +560,10 @@ it("reports blocked DMs from a native Discord REST error", async () => {
   });
   await expect(
     sendMessageDiscord("user:123", "hello", clientOptions(loopback.rest)),
-  ).rejects.toMatchObject({ kind: "dm-blocked", discordCode: 50007, status: 403 });
+  ).rejects.toMatchObject({
+    message: "discord dm failed: user blocks dms or privacy settings disallow it (code=50007)",
+    status: 403,
+  });
 });
 
 it("does not mask unrelated media upload failures", async () => {
@@ -766,30 +772,27 @@ it("fails closed when the channel belongs to a different guild", async () => {
 });
 
 it.each([
-  { pinCount: 250, pageSize: 50 },
-  { pinCount: 6, pageSize: 1 },
-])("lists all $pinCount pins across $pageSize-item pages", async ({ pinCount, pageSize }) => {
+  [250, 50, undefined, [50, 50, 50, 50, 50]],
+  [6, 1, undefined, [50, 50, 50, 50, 50, 50]],
+  [250, 50, 3, [3]],
+  [250, 50, 60, [50, 10]],
+] as const)("lists pins (%s, %s/page, limit %s)", async (pinCount, pageSize, limit, limits) => {
   const pins = Array.from({ length: pinCount }, (_, index) => ({
-    pinned_at: new Date(Date.UTC(2026, 0, 1, 0, 0, pinCount - index))
-      .toISOString()
-      .replace("Z", "000+00:00"),
+    pinned_at: new Date(pinCount - index).toISOString().replace("Z", "000+00:00"),
     message: { id: String(index + 1) },
   }));
   const loopback = await loopbackRest({
     respond: ({ path }) => {
       const url = new URL(path ?? "/", "http://localhost");
-      if (url.pathname === "/v10/channels/789/pins") {
-        return pins.slice(0, 50).map((pin) => pin.message);
-      }
       const before = url.searchParams.get("before");
       const start = before === null ? 0 : pins.findIndex((pin) => pin.pinned_at === before) + 1;
-      const items = pins.slice(start, start + pageSize);
+      const size = Math.min(pageSize, Number(url.searchParams.get("limit")));
+      const items = pins.slice(start, start + size);
       return { items, has_more: start + items.length < pins.length };
     },
   });
-
-  await expect(listPinsDiscord("789", clientOptions(loopback.rest))).resolves.toEqual(
-    pins.map((pin) => pin.message),
+  await expect(listPinsDiscord("789", clientOptions(loopback.rest), limit)).resolves.toEqual(
+    pins.slice(0, limit).map((pin) => pin.message),
   );
   expect(
     loopback.requests.map(({ method, path }) => {
@@ -802,10 +805,10 @@ it.each([
       };
     }),
   ).toEqual(
-    Array.from({ length: Math.ceil(pinCount / pageSize) }, (_, index) => ({
+    limits.map((requestLimit, index) => ({
       method: "GET",
       path: "/v10/channels/789/messages/pins",
-      limit: "50",
+      limit: String(requestLimit),
       before: index === 0 ? null : pins[index * pageSize - 1]!.pinned_at,
     })),
   );

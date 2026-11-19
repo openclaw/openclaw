@@ -14,7 +14,9 @@ import {
 import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import {
   buildPluginMetadataSnapshot,
+  cachePluginMetadataSnapshot,
   projectPluginMetadataSnapshot,
+  readPluginMetadataSnapshotCache,
   resolvePluginMetadataSnapshot,
   resolvePluginMetadataSnapshotInput,
   resolvePluginMetadataSnapshotCacheKey,
@@ -139,17 +141,6 @@ export async function resolveConfigWidePluginMetadataSnapshotAsync(
           })
         : await prepareBundledDiscoveryMode(captured.env);
     activateDiscovery();
-    const preparedCurrent = resolveReusableGatewayPluginMetadataSnapshot(captured);
-    if (preparedCurrent) {
-      return preparedCurrent;
-    }
-    const { key } = resolveConfigWideMetadataSelection(captured);
-    const existing = cache.metadata.snapshots.get(key);
-    if (existing) {
-      activateDiscovery();
-      return existing;
-    }
-    activateDiscovery();
     // Parsing, recovery, trust checks and persisted/derived selection retain one owner.
     return resolveConfigWidePluginMetadataSnapshot(captured);
   });
@@ -189,13 +180,12 @@ export function resolveConfigWidePluginMetadataSnapshot(
       });
     }
     const { key, workspaceDirs } = resolveConfigWideMetadataSelection(params);
-    const cache = getPluginCache();
-    const cached = cache.metadata.snapshots.get(key);
+    const cached = readPluginMetadataSnapshotCache(key);
     if (cached) {
       return cached;
     }
     const snapshot = resolveConfigWidePluginMetadataSnapshotImpl(params, workspaceDirs);
-    cache.metadata.snapshots.set(key, snapshot);
+    cachePluginMetadataSnapshot(key, snapshot);
     return snapshot;
   });
 }

@@ -338,8 +338,8 @@ export type ContextEngineRuntimeContext = Record<string, unknown> & {
   /** LLM completion capability for engines that need model inference. */
   llm?: {
     complete: (
-      params: import("../plugins/runtime/types-core.js").LlmCompleteParams,
-    ) => Promise<import("../plugins/runtime/types-core.js").LlmCompleteResult>;
+      params: import("../plugins/runtime/runtime-llm.types.js").LlmCompleteParams,
+    ) => Promise<import("../plugins/runtime/runtime-llm.types.js").LlmCompleteResult>;
   };
 };
 
@@ -394,8 +394,6 @@ export interface ContextEngine {
     sessionId: string;
     sessionKey?: string;
     message: AgentMessage;
-    /** True when the message belongs to a heartbeat run. */
-    isHeartbeat?: boolean;
   }): Promise<IngestResult>;
 
   /**
@@ -405,8 +403,6 @@ export interface ContextEngine {
     sessionId: string;
     sessionKey?: string;
     messages: AgentMessage[];
-    /** True when the batch belongs to a heartbeat run. */
-    isHeartbeat?: boolean;
   }): Promise<IngestBatchResult>;
 
   /**
@@ -425,8 +421,6 @@ export interface ContextEngine {
     prePromptMessageCount: number;
     /** Optional auto-compaction summary emitted by the runtime. */
     autoCompactionSummary?: string;
-    /** True when this turn belongs to a heartbeat run. */
-    isHeartbeat?: boolean;
     /** Optional model context token budget for proactive compaction. */
     tokenBudget?: number;
     /** Optional runtime-owned context for engines that need caller state. */
@@ -449,7 +443,6 @@ export interface ContextEngine {
     sessionTarget?: ContextEngineSessionTarget;
     runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
-    isHeartbeat?: boolean;
   }): Promise<{ status: "committed" | "duplicate" }>;
 
   /**

@@ -593,6 +593,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
             deferredPluginMigrations: params.deferredPluginMigrations,
             configPath: params.snapshot.path,
             includePath,
+            includeBoundaryPath: boundaryPath,
             allowedRoots,
             expectedTargetPath: expectedIncludeTarget,
             value: includedValueToWrite,
@@ -604,7 +605,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
               },
               targets: {
                 ...params.writeOptions?.includeFileTargetsForWrite,
-                [params.snapshot.path]: fsNode.realpathSync(params.snapshot.path),
+                [params.snapshot.path]: fsNode.realpathSync.native(params.snapshot.path),
               },
             },
             assertIncludeGraphForWrite,
@@ -1053,11 +1054,8 @@ export async function mutateConfigFile<T = void>(
 }
 
 export async function mutateConfigFileWithRetry<T = void>(
-  params: MutateConfigFileParams<T> & { maxAttempts?: number },
+  params: MutateConfigFileParams<T>,
 ): Promise<ConfigMutationResult<T>> {
-  return await transformConfigFileWithRetry<T>({
-    ...configMutationTransform(params),
-    maxAttempts: params.maxAttempts,
-  });
+  return await transformConfigFileWithRetry<T>(configMutationTransform(params));
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

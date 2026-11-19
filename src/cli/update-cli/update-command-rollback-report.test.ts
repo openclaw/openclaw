@@ -1,8 +1,9 @@
 import { confirm as clackConfirm, isCancel } from "@clack/prompts";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withTriageTerminal } from "../../commands/triage.test-support.js";
 import { prepareGithubIssue } from "../../infra/github-issue.js";
+import * as ledger from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { stepFixture } from "./update-command-fixtures.test-support.js";
 import {
@@ -13,7 +14,8 @@ import {
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 
 const mocks = vi.hoisted(() => ({
-  select: vi.fn<(options: unknown) => Promise<string | symbol>>(),
+  select:
+    vi.fn<(options: { options: { value: string; label: string }[] }) => Promise<string | symbol>>(),
   confirm: vi.fn<() => Promise<boolean | symbol>>(),
   prepare:
     vi.fn<typeof import("../../infra/update-failure-report.js").prepareUpdateFailureReport>(),
@@ -183,4 +185,98 @@ it("does not prompt after a successful update", async () => {
   await f.invoke(async () => {});
 
   expectUnused("select", "triage");
+});
+
+describe("interactive report actions", () => {
+  function action(actions = ["report"], confirmed = true) {
+    vi.spyOn(ledger, "getUpdateRun").mockReturnValue(undefined);
+    Object.assign(f.prepared, {
+      browserFallback: {
+        status: "available",
+        url: "https://github.com/openclaw/openclaw/issues/new",
+      },
+    });
+    mocks.select.mockImplementation(async () => actions.shift() ?? "dismiss");
+    mocks.confirm.mockResolvedValue(confirmed);
+    return f.run;
+  }
+
+  it("shows the sanitized preview and honors cancellation without submission", async () => {
+    await action(["report"], false)();
+    expect(mocks.prepare).toHaveBeenCalledOnce();
+    expect(defaultRuntime.log).toHaveBeenCalledWith(f.prepared.body);
+    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: false }));
+    expect(defaultRuntime.log).toHaveBeenCalledWith("Update failure report cancelled.");
+    expect(mocks.submit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: "duplicate", url: "https://github.com/openclaw/openclaw/issues/123" },
+    { status: "pending" },
+    { status: "fallback", fallbackUrl: "https://github.com/openclaw/openclaw/issues/new" },
+  ] as const)("renders $status guidance without unsolicited browser navigation", async (result) => {
+    const run = action();
+    const message = "Report outcome details";
+    mocks.submit.mockResolvedValue({
+      ...result,
+      message,
+      savedReportPath: f.prepared.savedReportPath,
+    });
+    await run();
+    if (result.status !== "fallback") {
+      expect(defaultRuntime.log).toHaveBeenCalledWith(message);
+    }
+    if (result.status === "duplicate") {
+      expect(defaultRuntime.log).toHaveBeenCalledWith(`Existing issue: ${result.url}`);
+    }
+    if (result.status === "fallback") {
+      expect(mocks.select).toHaveBeenCalledTimes(2);
+      expect(defaultRuntime.log).not.toHaveBeenCalledWith(`Prefilled issue: ${result.fallbackUrl}`);
+      expect(defaultRuntime.log).toHaveBeenCalledWith(
+        `Saved sanitized report: ${f.prepared.savedReportPath}`,
+      );
+    } else {
+      expect(defaultRuntime.log).not.toHaveBeenCalledWith(
+        expect.stringContaining("Saved sanitized report:"),
+      );
+    }
+  });
+
+  it("retires a browser retry choice after submission errors while retaining the report", async () => {
+    const run = action(["report", "report", "report", "report"]);
+    mocks.submit
+      .mockResolvedValueOnce({
+        status: "retryable",
+        message: "GitHub authentication is unavailable.",
+        savedReportPath: f.prepared.savedReportPath,
+      })
+      .mockRejectedValueOnce(new Error("transport failed"))
+      .mockRejectedValueOnce(new Error("still unavailable"));
+    await run();
+    expect(mocks.select).toHaveBeenCalledTimes(4);
+    expect(
+      mocks.select.mock.calls.map(([params]) =>
+        params.options.some((option) => option.value === "browser"),
+      ),
+    ).toEqual([false, true, false, false]);
+    expect(mocks.prepare).toHaveBeenCalledOnce();
+    expect(mocks.submit).toHaveBeenCalledTimes(4);
+    expect(mocks.confirm).toHaveBeenCalledTimes(4);
+    expect(defaultRuntime.error).toHaveBeenCalledTimes(2);
+    for (const [report, digest] of mocks.submit.mock.calls) {
+      expect(report).toBe(f.prepared);
+      expect(digest).toBe(f.prepared.previewDigest);
+    }
+  });
+
+  it("requires a fresh explicit choice before diagnosing after a report failure", async () => {
+    const run = action(["report", "triage"]);
+    mocks.submit.mockRejectedValueOnce(new Error("report unavailable"));
+    await run();
+    expect(mocks.triage).toHaveBeenCalledOnce();
+    expect(mocks.select).toHaveBeenCalledTimes(2);
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("report unavailable"),
+    );
+  });
 });

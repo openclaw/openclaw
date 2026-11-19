@@ -5,12 +5,17 @@ import {
   type MessageReceiptSourceResult,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
+import {
+  buildOutboundMediaLoadOptions,
+  type OutboundMediaAccess,
+} from "openclaw/plugin-sdk/media-runtime";
 import type { ChunkMode, ReplyPayload } from "openclaw/plugin-sdk/reply-chunking";
 import {
   isReasoningReplyPayload,
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import {
   listWhatsAppSendResultMessageIds,
   mergeWhatsAppAcceptedSendError,
@@ -21,7 +26,6 @@ import {
   type WhatsAppSendResult,
 } from "../inbound/send-result.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
-import { loadWebMedia } from "../media.js";
 import {
   type DeliverableWhatsAppOutboundPayload,
   normalizeWhatsAppOutboundPayload,
@@ -103,6 +107,7 @@ type WhatsAppReplyDeliveryParams = {
   normalizedReplyResult?: DeliverableWhatsAppOutboundPayload<ReplyPayload>;
   transport: WhatsAppReplyTransportContext;
   mediaLocalRoots?: readonly string[];
+  mediaAccess?: OutboundMediaAccess;
   maxMediaBytes: number;
   textLimit: number;
   chunkMode?: ChunkMode;
@@ -273,9 +278,11 @@ async function deliverWebReplyInActivityScope(params: WhatsAppReplyDeliveryParam
     caption: leadingCaption,
     send: async ({ mediaUrl, caption }) => {
       const media = await prepareWhatsAppOutboundMedia(
+        // Keep raw localRoots ([] still denies local reads); only add the remote deny list.
         await loadWebMedia(mediaUrl, {
           maxBytes: maxMediaBytes,
           localRoots: params.mediaLocalRoots,
+          ssrfPolicy: buildOutboundMediaLoadOptions({ mediaAccess: params.mediaAccess }).ssrfPolicy,
         }),
         mediaUrl,
       );

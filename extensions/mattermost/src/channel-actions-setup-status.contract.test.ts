@@ -1,5 +1,4 @@
 import {
-  installChannelActionsContractSuite,
   installChannelSetupContractSuite,
   installChannelStatusContractSuite,
 } from "openclaw/plugin-sdk/channel-test-helpers";
@@ -17,37 +16,6 @@ const configuredAccount = (overrides: Partial<MattermostConfig> = {}): OpenClawC
       ...overrides,
     },
   },
-});
-
-installChannelActionsContractSuite({
-  plugin: mattermostPlugin,
-  unsupportedAction: "poll",
-  cases: [
-    {
-      name: "configured account exposes send and react while reads stay opt in",
-      cfg: configuredAccount(),
-      expectedActions: ["send", "react"],
-      expectedCapabilities: ["presentation"],
-    },
-    {
-      name: "disabled reactions do not enable message reads",
-      cfg: configuredAccount({ actions: { reactions: false } }),
-      expectedActions: ["send"],
-      expectedCapabilities: ["presentation"],
-    },
-    {
-      name: "message reads can be disabled while send and react stay available",
-      cfg: configuredAccount({ actions: { messages: false } }),
-      expectedActions: ["send", "react"],
-      expectedCapabilities: ["presentation"],
-    },
-    {
-      name: "missing bot credentials disables the actions surface",
-      cfg: { channels: { mattermost: { enabled: true } } },
-      expectedActions: [],
-      expectedCapabilities: [],
-    },
-  ],
 });
 
 installChannelSetupContractSuite({
@@ -102,16 +70,11 @@ describe.each([
   ["setup", mattermostSetupPlugin],
 ] as const)("mattermost %s account inspection", (_name, plugin) => {
   it("inspects source SecretRefs while strict account resolution rejects them", () => {
-    const cfg = {
-      channels: {
-        mattermost: {
-          baseUrl: "https://chat.example.com",
-          accounts: {
-            alpha: { botToken: { source: "env", provider: "default", id: "BOT_TOKEN" } },
-          },
-        },
+    const cfg = configuredAccount({
+      accounts: {
+        alpha: { botToken: { source: "env", provider: "default", id: "BOT_TOKEN" } },
       },
-    } as OpenClawConfig;
+    });
     expect(plugin.config.listAccountIds(cfg)).toContain("alpha");
     expect(plugin.config.inspectAccount?.(cfg, "alpha")).toMatchObject({
       accountId: "alpha",

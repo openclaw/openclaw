@@ -22,8 +22,9 @@ const SIGNAL_TEST_CFG = { channels: { signal: { accounts: { default: {} } } } };
 const uuid = "123E4567-E89B-12D3-A456-426614174000";
 
 function expectRpc(params: Record<string, unknown>) {
-  expect(rpcMock.mock.calls[0]?.[1]).toStrictEqual(params);
-  expect(rpcMock).toHaveBeenCalledWith("sendReaction", params, {
+  const expected = { emoji: "✅", targetTimestamp: 123, account: "+15550001111", ...params };
+  expect(rpcMock.mock.calls[0]?.[1]).toStrictEqual(expected);
+  expect(rpcMock).toHaveBeenCalledWith("sendReaction", expected, {
     baseUrl: "http://signal.local",
     timeoutMs: undefined,
     transportKind: "managed-native",
@@ -42,13 +43,10 @@ it.each([
   ["mixed-case Signal and UUID prefixes", `  SiGnAl:  UuId:${uuid}  `, uuid],
   ["Signal-prefixed phone number", " SiGnAl: +15551230000 ", "+15551230000"],
 ])("uses recipients and targetAuthor for %s DMs", async (_name, recipient, expectedRecipient) => {
-  await sendReactionSignal(recipient, 123, "🔥", { cfg: SIGNAL_TEST_CFG });
+  await sendReactionSignal(recipient, 123, "✅", { cfg: SIGNAL_TEST_CFG });
   expectRpc({
-    emoji: "🔥",
-    targetTimestamp: 123,
     targetAuthor: expectedRecipient,
     recipients: [expectedRecipient],
-    account: "+15550001111",
   });
 });
 
@@ -59,9 +57,6 @@ it("uses groupIds array and maps targetAuthorUuid", async () => {
     targetAuthorUuid: ` SiGnAl: UuId:${uuid} `,
   });
   expectRpc({
-    emoji: "✅",
-    targetTimestamp: 123,
-    account: "+15550001111",
     groupIds: ["group-id"],
     targetAuthor: uuid,
   });
@@ -89,7 +84,6 @@ it("defaults targetAuthor to recipient for removals", async () => {
   expectRpc({
     emoji: "❌",
     targetTimestamp: 456,
-    account: "+15550001111",
     recipients: ["+15551230000"],
     targetAuthor: "+15551230000",
     remove: true,

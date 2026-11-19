@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { createServer } from "node:http";
-import { basename, join } from "node:path";
+import { basename, delimiter, join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect } from "vitest";
 import { parse } from "yaml";
@@ -54,7 +54,7 @@ describe("pinned pnpm cold bootstrap", () => {
       );
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout.trim()).not.toBe("");
-      const root = join(result.stdout.trim(), "v1/pnpm/12.12.1");
+      const root = join(result.stdout.trim(), "v1/pnpm/12.15.0");
       expect(read(join(root, "pnpm"))).toBe("wrapper-fixture\n");
       expect(read(join(root, "node_modules/@pnpm/exe.linux-x64/pnpm"))).toBe("native-fixture\n");
       expect(JSON.parse(read(join(root, ".corepack")))).toEqual({
@@ -101,7 +101,7 @@ describe("pinned pnpm cold bootstrap", () => {
         let wrapperAttempts = 0;
         server.on("request", (request, response) => {
           const name = basename(request.url ?? "");
-          if (name === "pnpm-12.12.1.tgz" && ++wrapperAttempts <= failures) {
+          if (name === "pnpm-12.15.0.tgz" && ++wrapperAttempts <= failures) {
             if (status === null) {
               request.socket.destroy();
               return;
@@ -115,11 +115,11 @@ describe("pinned pnpm cold bootstrap", () => {
         expect(wrapperAttempts).toBe(attempts);
         if (failures === 1) {
           expect(result.status, result.stderr).toBe(0);
-          expect(read(join(result.stdout.trim(), "v1/pnpm/12.12.1/pnpm"))).toBe(
+          expect(read(join(result.stdout.trim(), "v1/pnpm/12.15.0/pnpm"))).toBe(
             "wrapper-fixture\n",
           );
-          expect(fs.readFileSync(join(f.store, "toolchain/pnpm-12.12.1.tgz"))).toEqual(
-            fs.readFileSync(join(f.registry, "pnpm-12.12.1.tgz")),
+          expect(fs.readFileSync(join(f.store, "toolchain/pnpm-12.15.0.tgz"))).toEqual(
+            fs.readFileSync(join(f.registry, "pnpm-12.15.0.tgz")),
           );
         } else {
           expect(result.status).not.toBe(0);
@@ -139,7 +139,7 @@ describe("pinned pnpm cold bootstrap", () => {
     });
   });
 
-  it.for(["pnpm-12.12.1.tgz", "exe.linux-x64-12.12.1.tgz"])(
+  it.for(["pnpm-12.15.0.tgz", "exe.linux-x64-12.15.0.tgz"])(
     "rejects substituted %s without incomplete state",
     async (name, { command }) => {
       const f = createPnpmArchiveFixture(command);
@@ -164,13 +164,71 @@ describe("pinned pnpm cold bootstrap", () => {
 
   it("ignores unknown versions and mismatched integrity", async ({ command }) => {
     const f = createPnpmArchiveFixture(command);
-    for (const spec of [f.spec.replace("12.12.1", "12.11.2"), f.spec.replace(/.$/u, "z")]) {
+    for (const spec of [f.spec.replace("12.15.0", "12.11.2"), f.spec.replace(/.$/u, "z")]) {
       const result = await f.run({}, spec);
       expect(result.status).toBe(0);
       expect(result.stdout).toBe("");
     }
     expect(fs.existsSync(f.calls)).toBe(false);
     expect(fs.readdirSync(f.runner)).toEqual([]);
+  });
+});
+
+describe("pnpm shim installation", () => {
+  it.for([
+    { runnerOS: "Linux", configured: false },
+    { runnerOS: "Windows", configured: false },
+    { runnerOS: "Linux", configured: true },
+  ])("uses a writable job directory: %j", async ({ runnerOS, configured }, { command }) => {
+    const root = command.createTempDir("pnpm-shims-");
+    const bin = join(root, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(
+      join(bin, "corepack"),
+      `#!/bin/sh
+set -eu
+if [ "$1" = enable ]; then
+  destination="$FIXTURE_SYSTEM_BIN"
+  if [ "\${2:-}" = --install-directory ]; then destination="$3"; fi
+  ln -s "$FIXTURE_PNPM" "$destination/pnpm"
+fi
+`,
+      { mode: 0o755 },
+    );
+    const pnpm = join(root, "pnpm");
+    fs.writeFileSync(pnpm, "#!/bin/sh\necho 12.15.0\n", { mode: 0o755 });
+    fs.chmodSync(bin, 0o555);
+    const envFile = join(root, "env");
+    const pathFile = join(root, "path");
+    const configuredHome = join(root, "configured-pnpm");
+    const step = action.runs.steps.find(
+      (entry: { name: string }) => entry.name === "Setup pnpm from packageManager",
+    );
+    const result = await command
+      .run("bash", ["-eu", "-c", step.run], {
+        cwd: root,
+        env: {
+          PATH: `${bin}${delimiter}${process.env.PATH}`,
+          RUNNER_OS: runnerOS,
+          RUNNER_TEMP: root,
+          GITHUB_ACTION_PATH: join(process.cwd(), ".github/actions/setup-pnpm-store-cache"),
+          GITHUB_ENV: envFile,
+          GITHUB_PATH: pathFile,
+          COREPACK_ENABLE_NETWORK: "0",
+          PACKAGE_MANAGER: "pnpm@12.15.0",
+          FIXTURE_SYSTEM_BIN: bin,
+          FIXTURE_PNPM: pnpm,
+          ...(configured ? { PNPM_HOME: configuredHome } : {}),
+        },
+      })
+      .finally(() => fs.chmodSync(bin, 0o755));
+    expect(result.status, result.stderr).toBe(0);
+    const home = read(pathFile).trim();
+    expect(home).toEqual(
+      configured ? configuredHome : expect.stringMatching(/^.+[/\\]openclaw-pnpm-bin-/u),
+    );
+    expect(read(envFile)).toContain(`PNPM_HOME=${home}\n`);
+    expect(fs.existsSync(join(home, "pnpm"))).toBe(true);
   });
 });
 
@@ -213,18 +271,62 @@ describe("pnpm version output owns its failure", () => {
     const output = join(root, "outputs");
     fs.writeFileSync(output, "");
     const step = action.runs.steps.find((entry: { id?: string }) => entry.id === "pnpm-version");
-    const run = `pnpm() { if [ ${status} -eq 0 ]; then printf '12.9.0\\n'; else return ${status}; fi; }\n${step.run}`;
+    const calls = join(root, "pnpm-calls");
+    const pnpm = `pnpm() { echo called >> "$PNPM_CALLS"; if [ ${status} -eq 0 ]; then printf '12.9.0\\n'; else return ${status}; fi; }`;
+    const run = `${pnpm}\n${step.run}`;
     const result = await command.run(
       "bash",
       ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", run],
       {
         encoding: "utf8",
         cwd: root,
-        env: { PATH: process.env.PATH, PROJECT_DIR: root, GITHUB_OUTPUT: output },
+        env: {
+          PATH: process.env.PATH,
+          PROJECT_DIR: root,
+          GITHUB_OUTPUT: output,
+          PNPM_CALLS: calls,
+        },
       },
     );
     expect(result.error, "pnpm version action subprocess").toBeUndefined();
     expect(result.status, result.stderr).toBe(status);
     expect(read(output)).toBe(status === 0 ? "pnpm-version=12.9.0\n" : "");
+    if (status === 0) {
+      const nodeAction = parse(read(".github/actions/setup-node-env/action.yml"));
+      const diagnostic = nodeAction.runs.steps.find(
+        (entry: { name?: string }) => entry.name === "Runtime versions",
+      );
+      const outputs = Object.fromEntries(
+        read(output)
+          .trim()
+          .split("\n")
+          .map((line) => line.split("=")),
+      );
+      const env = Object.fromEntries(
+        Object.entries(diagnostic.env ?? {}).map(([key, expression]) => [
+          key,
+          String(expression).replace(
+            /\$\{\{ steps\.setup-pnpm\.outputs\.([^ ]+) \}\}/g,
+            (_, name) => expectDefined(outputs[name], `recorded pnpm output ${name}`),
+          ),
+        ]),
+      );
+      const versions = await command.run(
+        "bash",
+        [
+          "--noprofile",
+          "--norc",
+          "-e",
+          "-o",
+          "pipefail",
+          "-c",
+          `${pnpm}\nnode() { echo fixture-node; }\nnpm() { echo fixture-npm; }\nbun() { echo fixture-bun; }\n${diagnostic.run}`,
+        ],
+        { encoding: "utf8", cwd: root, env: { PATH: process.env.PATH, PNPM_CALLS: calls, ...env } },
+      );
+      expect(versions.status, versions.stderr).toBe(0);
+      expect(versions.stdout).toBe("fixture-node\nfixture-npm\n12.9.0\nfixture-bun\n");
+    }
+    expect(read(calls)).toBe("called\n");
   });
 });

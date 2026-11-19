@@ -4,8 +4,6 @@ import path from "node:path";
 import { readPackageManagerSpec } from "./package-json.js";
 import { canAccess } from "./path-existence.js";
 
-type DetectedPackageManager = "pnpm" | "bun" | "npm";
-
 export type BunGlobalInstallOwner = {
   globalRoot: string;
   globalProjectRoot: string;
@@ -13,6 +11,11 @@ export type BunGlobalInstallOwner = {
 };
 
 /** Resolves Bun's global project from its installed owner rather than unrelated caller settings. */
+export function resolveBunGlobalInstallOwner(): BunGlobalInstallOwner;
+export function resolveBunGlobalInstallOwner(
+  pkgRoot?: string | null,
+  env?: NodeJS.ProcessEnv,
+): BunGlobalInstallOwner | null;
 export function resolveBunGlobalInstallOwner(
   pkgRoot?: string | null,
   env: NodeJS.ProcessEnv = process.env,
@@ -85,7 +88,7 @@ async function isPnpmOwnedPackageRoot(root: string): Promise<boolean> {
 }
 
 /** Detects the package manager that owns a package root from manifests, locks, and install layout. */
-export async function detectPackageManager(root: string): Promise<DetectedPackageManager | null> {
+export async function detectPackageManager(root: string): Promise<"pnpm" | "bun" | "npm" | null> {
   const pm = (await readPackageManagerSpec(root))?.split("@")[0]?.trim();
   const files = await fs.readdir(root).catch((): string[] => []);
   const hasNpmShrinkwrap = files.includes("npm-shrinkwrap.json");

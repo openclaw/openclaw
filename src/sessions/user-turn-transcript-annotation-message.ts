@@ -25,23 +25,32 @@ export function prepareUserTurnTranscriptAnnotation(
   ) {
     throw new Error("native prompt annotation requires complete provenance");
   }
-  const fingerprint = sha256HexPrefixCore(
-    JSON.stringify({
-      role: "user",
-      content: message.content,
-      upstreamUserText: fields.upstreamUserText || undefined,
-    }),
-    32,
-  );
-  if (fingerprint !== fields.mirrorSourceFingerprint) {
+  const fingerprint = (upstreamUserText: string) =>
+    sha256HexPrefixCore(
+      JSON.stringify({
+        role: "user",
+        content: message.content,
+        upstreamUserText: upstreamUserText || undefined,
+      }),
+      32,
+    );
+  if (fingerprint(fields.upstreamUserText) !== fields.mirrorSourceFingerprint) {
     throw new Error("native prompt annotation does not match admitted content");
   }
   const metadata = message["__openclaw"] ?? {};
+  const previous = readUserTurnTranscriptAnnotation(message, runId);
+  // A replay starts a new native turn while retaining the exact admitted input.
+  const replacesOwnAttempt = Boolean(
+    previous?.mirrorIdentity &&
+    previous.mirrorOrigin === fields.mirrorOrigin &&
+    fingerprint(previous.upstreamUserText) === previous.mirrorSourceFingerprint,
+  );
   if (
     metadata.runTerminal !== undefined ||
-    Object.entries(fields).some(
-      ([key, value]) => metadata[key] !== undefined && metadata[key] !== value,
-    )
+    (!replacesOwnAttempt &&
+      Object.entries(fields).some(
+        ([key, value]) => metadata[key] !== undefined && metadata[key] !== value,
+      ))
   ) {
     throw new Error("native prompt annotation conflicts with recorded provenance");
   }

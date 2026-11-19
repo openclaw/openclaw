@@ -20,7 +20,8 @@ const generation = "a".repeat(32);
 const store = "sessions.json";
 const storeBackup = "sessions.json.bak.1737420882";
 const trajectory = "abc.trajectory.jsonl";
-const storeTemp = (name: string) => isSessionStoreTempArtifactName(name, store);
+const storeTemp = (basename: string) => (name: string) =>
+  isSessionStoreTempArtifactName(name, basename);
 
 it.each([
   [
@@ -34,27 +35,19 @@ it.each([
     ["abc.jsonl.migrated.tmp", "abc.jsonl.MIGRATED"],
   ],
   [
-    storeTemp,
+    storeTemp(store),
     [`sessions.json.12345.${uuid}.tmp`, `sessions.json.${uuid}.tmp`],
     [store, "sessions.json.tmp", `my-store.json.99.${uuid}.tmp`, `sessionsXjson.99.${uuid}.tmp`],
   ],
+  [storeTemp("my-store.json"), [`my-store.json.99.${uuid}.tmp`], [`sessions.json.99.${uuid}.tmp`]],
   [trajectoryName, [trajectory, "abc.trajectory-path.json"], ["abc.jsonl"]],
 ] satisfies [(name: string) => boolean, string[], string[]][])(
-  "classifies $0.name",
+  "classifies artifact family %#",
   (classify, accepted, rejected) => {
     expect(accepted.map(classify)).toEqual(accepted.map(() => true));
     expect(rejected.map(classify)).toEqual(rejected.map(() => false));
   },
 );
-
-it("matches only the custom store's temp files", () => {
-  expect(isSessionStoreTempArtifactName(`my-store.json.99.${uuid}.tmp`, "my-store.json")).toBe(
-    true,
-  );
-  expect(isSessionStoreTempArtifactName(`sessions.json.99.${uuid}.tmp`, "my-store.json")).toBe(
-    false,
-  );
-});
 
 it("parses usage-counted session ids from file names", () => {
   const cases = [

@@ -7,7 +7,6 @@ export function bindHarnessTrajectory(
     EmbeddedRunAttemptParams,
     "trajectoryRecorder" | "admittedRunContext" | "abortSignal"
   >,
-  assertActive: () => void,
   assertScopeCurrent: () => void,
 ): Pick<AgentHarnessHostCapabilities, "trajectory"> {
   const recorder = attempt.trajectoryRecorder;
@@ -31,7 +30,6 @@ export function bindHarnessTrajectory(
       recordEvent: (type: string, data?: Record<string, unknown>) => {
         workSignal?.throwIfAborted();
         attemptSignal?.throwIfAborted();
-        assertActive();
         assertCleanupActive();
         recorder.recordEvent(type, data);
       },

@@ -4,28 +4,33 @@ import type { AgentSelectionCapability } from "../app/agent-selection.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../lib/agents/display.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
-import type { AgentSelectOption } from "./agent-select.ts";
+import type { AgentSelectOption } from "./agent-select-types.ts";
 import "./agent-select-registration.ts";
 
-type AgentScopeControlProps = {
+export function AgentScopeControl(params: {
   agents: readonly GatewayAgentRow[];
   additionalAgentIds?: readonly string[];
   selection: AgentSelectionCapability;
   allowAll?: boolean;
   selectedId?: string | null;
-};
-
-export function AgentScopeControl(params: AgentScopeControlProps) {
+}) {
+  const roster = createMemo(() => params.agents);
+  const additionalAgentIds = createMemo(() => params.additionalAgentIds);
+  const requestedSelected = createMemo(
+    () => params.selectedId ?? params.selection.state.scopeId ?? "",
+  );
+  const includeAll = createMemo(() => params.allowAll !== false);
   const selection = createMemo(() => {
-    const requestedSelected = params.selectedId ?? params.selection.state.scopeId ?? "";
-    const selectedId = requestedSelected ? normalizeAgentId(requestedSelected) : "";
-    const allowAll = params.allowAll !== false;
+    const configuredAgents = roster();
+    const requestedId = requestedSelected();
+    const selectedId = requestedId ? normalizeAgentId(requestedId) : "";
+    const allowAll = includeAll();
     // Do not let historical or selected IDs reintroduce a typed system row.
     const isSystemAgentId = (agentId: string) =>
-      params.agents.some(
+      configuredAgents.some(
         (agent) => agent.kind === "system" && normalizeAgentId(agent.id) === agentId,
       );
-    const selectableAgents = listSelectableAgents(params.agents);
+    const selectableAgents = listSelectableAgents(configuredAgents);
     if (selectableAgents.length <= 1) {
       return undefined;
     }
@@ -35,7 +40,7 @@ export function AgentScopeControl(params: AgentScopeControlProps) {
         return [agentId, agentId === agent.id ? agent : { ...agent, id: agentId }] as const;
       }),
     );
-    for (const value of params.additionalAgentIds ?? []) {
+    for (const value of additionalAgentIds() ?? []) {
       if (!value.trim()) {
         continue;
       }

@@ -34,25 +34,17 @@ async function reset(storePath: string, writer: "single" | "batched", sessionKey
   }
 }
 
-// The prior session's workspace must survive callers that know only the agent workspace.
 test.for([
-  { writer: "single" as const, previous: {}, expectedCwd: "/tmp/reset-session-workspace" },
-  {
-    writer: "single" as const,
-    previous: {
-      spawnedWorkspaceDir: "/tmp/custom-session-workspace",
-      spawnedCwd: "/tmp/custom-session-workspace/task",
-    },
-    expectedCwd: "/tmp/custom-session-workspace/task",
-  },
-  {
-    writer: "batched" as const,
-    previous: { spawnedWorkspaceDir: "/tmp/custom-projection-workspace" },
-    expectedCwd: "/tmp/custom-projection-workspace",
-  },
-])(
-  "preserves the prior workspace for a $writer reset",
-  async ({ writer, previous, expectedCwd }, { store }) => {
+  ["single", {}, "/tmp/reset-session-workspace"],
+  [
+    "single",
+    { spawnedWorkspaceDir: "/tmp/custom", spawnedCwd: "/tmp/custom/task" },
+    "/tmp/custom/task",
+  ],
+  ["batched", { spawnedWorkspaceDir: "/tmp/custom-projection" }, "/tmp/custom-projection"],
+] as const)(
+  "preserves the prior workspace for a %s reset",
+  async ([writer, previous, cwd], { store }) => {
     const {
       database,
       scope: { sessionKey, storePath },
@@ -64,6 +56,7 @@ test.for([
 
     await reset(storePath, writer, sessionKey);
 
+    const expectedHeader = { version: CURRENT_SESSION_VERSION, cwd };
     expect(
       SessionManager.open({
         agentId: "main",
@@ -71,16 +64,12 @@ test.for([
         sessionId: "custom-window",
         storePath,
       }).getHeader(),
-    ).toMatchObject({ version: CURRENT_SESSION_VERSION, cwd: expectedCwd });
+    ).toMatchObject(expectedHeader);
     const events: { type?: unknown; version?: unknown; cwd?: unknown }[] = readTranscriptEventRows(
       database,
       "custom-window",
     ).map((row) => JSON.parse(row.eventJson));
-    expect(events[0]).toMatchObject({
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      cwd: expectedCwd,
-    });
+    expect(events[0]).toMatchObject({ type: "session", ...expectedHeader });
     expect(events[1]?.type).toBe("reset");
   },
 );

@@ -11,6 +11,8 @@ entry="$(openclaw_e2e_package_entrypoint "$package_root")"
 probe="scripts/e2e/lib/plugin-update/probe.mjs"
 export PATH="/tmp/npm-prefix/bin:$PATH"
 
+# Initialize the canonical state schema before the fixture writes its install record.
+node "$entry" config set plugins.enabled true
 node "$probe" seed
 
 registry_port_file=/tmp/openclaw-e2e-registry.port

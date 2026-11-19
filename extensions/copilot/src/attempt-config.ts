@@ -45,6 +45,7 @@ export function createResult(
     nativeReplayInvalid?: boolean;
     promptError: Error | undefined;
     resumeFailureRecovered?: boolean;
+    runtimeArtifact?: AgentHarnessAttemptResult["runtimeArtifact"];
     sdkSessionId?: string;
     timedOut?: boolean;
     timedOutDuringCompaction?: boolean;
@@ -93,6 +94,7 @@ export function createResult(
     promptError !== undefined ? withPromptFailure(interruption, promptError) : interruption;
   return {
     terminal,
+    ...(state.runtimeArtifact ? { runtimeArtifact: state.runtimeArtifact } : {}),
     ...(state.acceptedSessionSpawns?.length
       ? { acceptedSessionSpawns: state.acceptedSessionSpawns }
       : {}),

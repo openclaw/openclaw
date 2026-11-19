@@ -1,11 +1,11 @@
 import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
-import { isHeartbeatTaskCronJob } from "../cron/heartbeat-task.js";
 import type { DefaultProactiveJobReceipt } from "../cron/proactive-job-receipt.types.js";
 import type { CronStoredJob } from "../cron/types.js";
 import type { DoctorCronJob } from "./doctor-heartbeat-jobs.js";
 import { resolveLegacyHeartbeatAgents } from "./doctor-heartbeat-legacy.js";
+import { isHeartbeatTaskCronJob } from "./doctor-heartbeat-task-identity.js";
 
 export function isGeneratedHeartbeatMonitor(job: DoctorCronJob): boolean {
   return job.payload.kind === "heartbeat" && job.declarationKey === `heartbeat:${job.agentId}`;

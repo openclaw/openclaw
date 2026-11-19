@@ -33,7 +33,7 @@ describe("OpenClaw shell event lifecycle", () => {
   });
   it("retires palette targets and keyboard actions on disconnect and reconnects once", () => {
     const shell = createShellOwner();
-    const navigate = vi.spyOn(shell, "navigate").mockImplementation(() => {});
+    const navigate = vi.spyOn(shell.shellNavigation, "navigate").mockImplementation(() => {});
     const onSlashCommand = vi.fn();
     const target = { owner: shell.element, onSlashCommand };
     const dispatchActions = () => {

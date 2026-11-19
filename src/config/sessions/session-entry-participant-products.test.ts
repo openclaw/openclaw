@@ -19,16 +19,16 @@ it.each(["cohort", "children"] as const)(
       const sessionKey = "agent:main:child";
       const siblingKey = "agent:main:sibling";
       const scope = { agentId: "main", env, sessionKey };
-      replaceSessionEntrySync(scope, {
-        sessionId: "child",
-        updatedAt: 1,
-        parentSessionKey: parent,
-      });
-      replaceSessionEntrySync(
-        { ...scope, sessionKey: siblingKey },
-        { sessionId: "sibling", updatedAt: 1, parentSessionKey: parent },
-      );
-      recordSessionParticipant(scope, { identity: { type: "agent", id: "first" }, promptedAt: 1 });
+      for (const sessionId of ["child", "sibling"]) {
+        replaceSessionEntrySync(
+          { ...scope, sessionKey: `agent:main:${sessionId}` },
+          { sessionId, updatedAt: 1, parentSessionKey: parent },
+        );
+      }
+      const participant = (id: string) => ({ identity: { type: "agent" as const, id } });
+      const record = (id: string, promptedAt: number) =>
+        recordSessionParticipant(scope, { ...participant(id), promptedAt });
+      record("first", 1);
       const database = openOpenClawAgentDatabase(scope);
       const read = () =>
         mode === "cohort"
@@ -37,25 +37,16 @@ it.each(["cohort", "children"] as const)(
           : readSessionChildEntriesInDatabase(database, parent, "list")[0]?.entry;
       listSessionEntriesCore({ ...scope, projection: "list" });
       const sql = observeSqliteReadSql(StatementSync.prototype);
-      try {
-        const first = read();
-        expect(first?.participants).toEqual([{ identity: { type: "agent", id: "first" } }]);
-        expect(
-          sql.queries.filter((query) => query.includes('from "session_participants"')),
-        ).toEqual([]);
-        first!.participants![0]!.identity.id = "caller-owned";
-        expect(read()?.participants?.[0]?.identity.id).toBe("first");
-        recordSessionParticipant(scope, {
-          identity: { type: "agent", id: "second" },
-          promptedAt: 2,
-        });
-        expect(read()?.participants).toEqual([
-          { identity: { type: "agent", id: "first" } },
-          { identity: { type: "agent", id: "second" } },
-        ]);
-      } finally {
-        sql.restore();
-      }
+      using _ = { [Symbol.dispose]: sql.restore };
+      const first = read();
+      expect(first?.participants).toEqual([participant("first")]);
+      expect(sql.queries.filter((query) => query.includes('from "session_participants"'))).toEqual(
+        [],
+      );
+      first!.participants![0]!.identity.id = "caller-owned";
+      expect(read()?.participants?.[0]?.identity.id).toBe("first");
+      record("second", 2);
+      expect(read()?.participants).toEqual([participant("first"), participant("second")]);
     });
   },
 );

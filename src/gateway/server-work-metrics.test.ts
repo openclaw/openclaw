@@ -13,9 +13,11 @@ import { setDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import {
+  getSessionRowSelectionMetrics,
   onGatewayWorkMetrics,
   type GatewayWorkMetricsSnapshot,
 } from "../infra/gateway-work-metrics.js";
+import { createMainThreadStallMonitor, runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { markReplyOperationExecutionStarted } from "../sessions/session-controller.js";
 import {
@@ -68,7 +70,25 @@ it("bounds live projection over idle history through admission, progress, drain,
     });
     await sessionReads.initializeSessionReadContext(context);
     const projection = getSessionRowProjection(context)!;
-    expect(projection.selectEntries({ sortBy: null }, true)).toHaveLength(514);
+    const beforeSelection = getSessionRowSelectionMetrics().selections.find(
+      (selection) => selection.kind === "broad" && selection.task === "sessions.list",
+    );
+    const monitor = createMainThreadStallMonitor();
+    try {
+      expect(
+        runWithMainThreadTask("gateway:rpc:sessions.list", () =>
+          projection.selectEntries({ sortBy: null }, true),
+        ),
+      ).toHaveLength(514);
+    } finally {
+      monitor.stop();
+    }
+    expect(getSessionRowSelectionMetrics().selections).toContainEqual({
+      kind: "broad",
+      task: "sessions.list",
+      calls: (beforeSelection?.calls ?? 0) + 1,
+      rows: (beforeSelection?.rows ?? 0) + 514,
+    });
     const prepareOriginal = projection.prepareSelection.bind(projection);
     const prepare = vi.spyOn(projection, "prepareSelection");
     const inspectors = createGatewayServerActiveWorkInspectors({ ...context, cron: {} });

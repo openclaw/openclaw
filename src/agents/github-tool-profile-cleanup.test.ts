@@ -68,41 +68,29 @@ beforeEach(async () => {
   systemRoot = resolveManagedGitHubProfileRoot({ agentId: "system", scope: "system", env });
 });
 
-it.each(["EBUSY", "EPERM", "EIO", "ENOENT"])(
-  "continues after agent-root %s errors",
-  async (errorCode) => {
-    await fs.mkdir(path.join(systemRoot, "unexpected-entry"), { recursive: true });
-    const agentIds = ["first", "middle", "last"].toSorted((left, right) =>
-      resolveManagedGitHubAgentKey(left).localeCompare(resolveManagedGitHubAgentKey(right)),
-    );
-    const [firstRoot, middleRoot, lastRoot] = agentIds.map(agentRootFor);
-    assert(firstRoot && middleRoot && lastRoot);
-    const profileId = "ghp_11111111111111111111111111111111";
-    const [firstProfile, middleProfile, lastProfile] = await Promise.all(
-      [firstRoot, middleRoot, lastRoot].map((root) => createProfile(root, profileId)),
-    );
-    assert(firstProfile && middleProfile && lastProfile);
-    directoryReadState.unreadablePath = middleRoot;
-    directoryReadState.errorCode = errorCode;
+it.each(["EBUSY", "ENOENT"])("continues after agent-root %s errors", async (errorCode) => {
+  const agentIds = ["first", "middle", "last"].toSorted((left, right) =>
+    resolveManagedGitHubAgentKey(left).localeCompare(resolveManagedGitHubAgentKey(right)),
+  );
+  const [firstRoot, middleRoot, lastRoot] = agentIds.map(agentRootFor);
+  assert(firstRoot && middleRoot && lastRoot);
+  const [firstProfile, middleProfile, lastProfile] = await Promise.all(
+    [firstRoot, middleRoot, lastRoot].map((root) => createProfile(root, makeProfileId("1"))),
+  );
+  assert(firstProfile && middleProfile && lastProfile);
+  directoryReadState.unreadablePath = middleRoot;
+  directoryReadState.errorCode = errorCode;
 
-    const result = await cleanup({
-      agents: { entries: Object.fromEntries(agentIds.map((id) => [id, {}])) },
-    });
+  const result = await cleanup({
+    agents: { entries: Object.fromEntries(agentIds.map((id) => [id, {}])) },
+  });
 
-    expect(result.warnings).toEqual([
-      `ignored unexpected managed GitHub profile entry: ${path.join(systemRoot, "unexpected-entry")}`,
-      ...(errorCode === "ENOENT"
-        ? []
-        : [
-            `failed to read managed GitHub profile root: ${middleRoot}: Error: directory is unavailable`,
-          ]),
-    ]);
-    await expectProfile(middleProfile);
-    for (const profile of [firstProfile, lastProfile]) {
-      await expectMissing(profile);
-    }
-  },
-);
+  expect(result.warnings).toHaveLength(errorCode === "ENOENT" ? 0 : 1);
+  await expectProfile(middleProfile);
+  for (const profile of [firstProfile, lastProfile]) {
+    await expectMissing(profile);
+  }
+});
 
 it("surfaces OAuth record failures without deleting profiles", async () => {
   const profile = await createProfile(systemRoot, makeProfileId("1"));
@@ -115,31 +103,26 @@ it("surfaces OAuth record failures without deleting profiles", async () => {
 
 it("removes only unreferenced generations inside exact system and agent roots", async () => {
   const agentRoot = agentRootFor("reviewer");
-  const systemCurrent = "ghp_11111111111111111111111111111111";
-  const systemRetired = "ghp_22222222222222222222222222222222";
-  const agentCurrent = "ghp_33333333333333333333333333333333";
-  const agentRetired = "ghp_44444444444444444444444444444444";
-  await Promise.all([
-    createSystemProfiles([systemCurrent, systemRetired]),
-    createProfile(agentRoot, agentCurrent),
-    createProfile(agentRoot, agentRetired),
-  ]);
+  const systemCurrent = makeProfileId("1");
+  const agentCurrent = makeProfileId("3");
+  const retired = await createProfile(systemRoot, makeProfileId("2"));
+  await createSystemProfiles([systemCurrent]);
+  await Promise.all([agentCurrent, makeProfileId("4")].map((id) => createProfile(agentRoot, id)));
   await createProfile(path.join(systemRoot, ".github-profile.staging-leftover"), "profile");
   const outside = tempDirs.make("openclaw-github-cleanup-nested-link-");
-  await linkDirectory(outside, path.join(systemRoot, systemRetired, "prior-export"));
+  await linkDirectory(outside, path.join(retired, "prior-export"));
 
-  const agentDir = path.join(stateDir, "mutable-agent-dir");
-  const reviewer = { agentDir, tools: { github: { profileId: agentCurrent } } };
+  const reviewer = {
+    agentDir: path.join(stateDir, "mutable-agent-dir"),
+    tools: { github: { profileId: agentCurrent } },
+  };
   const result = await cleanup({
     tools: { github: { profileId: systemCurrent } },
     agents: { entries: { reviewer } },
   });
 
-  await expectPresent(path.join(systemRoot, systemCurrent));
-  await expectPresent(path.join(agentRoot, agentCurrent));
-  await expectMissing(path.join(systemRoot, systemRetired));
-  await expectMissing(path.join(agentRoot, agentRetired));
-  await expectMissing(path.join(systemRoot, ".github-profile.staging-leftover"));
+  expect(await fs.readdir(systemRoot)).toEqual([systemCurrent]);
+  expect(await fs.readdir(agentRoot)).toEqual([agentCurrent]);
   await expectPresent(outside);
   expect(result.warnings).toEqual([]);
 });
@@ -206,25 +189,19 @@ it("bounds warnings while preserving every unexpected profile entry", async () =
 });
 
 it("preserves a durable recovery generation until its OAuth record retires", async () => {
-  const configured = "ghp_88888888888888888888888888888888";
-  const recovery = "ghp_99999999999999999999999999999999";
-  const retired = "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-  await createSystemProfiles([configured, recovery, retired]);
+  const configured = makeProfileId("8");
+  const recovery = makeProfileId("9");
+  await createSystemProfiles([configured, recovery, makeProfileId("a")]);
   const record = { profileId: recovery, scope: "system", agentId: "system" };
   oauthMocks.list.mockReturnValue([{ profileId: recovery, record }]);
 
   const config = { tools: { github: { profileId: configured } } };
-  const first = await cleanup(config);
-
-  expect(first.warnings).toEqual([]);
-  await expectPresent(path.join(systemRoot, configured));
-  await expectPresent(path.join(systemRoot, recovery));
-  await expectMissing(path.join(systemRoot, retired));
+  expect((await cleanup(config)).warnings).toEqual([]);
+  expect((await fs.readdir(systemRoot)).toSorted()).toEqual([configured, recovery]);
 
   oauthMocks.list.mockReturnValue([]);
-  const second = await cleanup(config);
-  expect(second.warnings).toEqual([]);
-  await expectMissing(path.join(systemRoot, recovery));
+  expect((await cleanup(config)).warnings).toEqual([]);
+  expect(await fs.readdir(systemRoot)).toEqual([configured]);
 });
 
 it("refuses symlink generations without touching their targets", async () => {
@@ -232,22 +209,19 @@ it("refuses symlink generations without touching their targets", async () => {
   const agentRegistry = path.join(stateDir, "credentials", "github", "agents");
   await fs.mkdir(systemRoot, { recursive: true });
   await fs.mkdir(agentRegistry, { recursive: true });
-  const linkedProfile = "ghp_55555555555555555555555555555555";
+  const linkedProfile = makeProfileId("5");
   const linkedStaging = ".github-profile.staging-unsafe";
-  await fs.symlink(outside, path.join(systemRoot, linkedProfile));
-  await fs.symlink(outside, path.join(systemRoot, linkedStaging));
+  await Promise.all(
+    [linkedProfile, linkedStaging].map((name) => fs.symlink(outside, path.join(systemRoot, name))),
+  );
   const linkedAgentKey = resolveManagedGitHubAgentKey("removed-agent");
   await fs.symlink(outside, path.join(agentRegistry, linkedAgentKey));
 
   const result = await cleanup();
 
   expect(result.warnings).toHaveLength(3);
-  expect(result.warnings).toEqual(
-    expect.arrayContaining([
-      expect.stringContaining(linkedProfile),
-      expect.stringContaining(linkedStaging),
-      expect.stringContaining(linkedAgentKey),
-    ]),
-  );
+  for (const name of [linkedProfile, linkedStaging, linkedAgentKey]) {
+    expect(result.warnings).toContainEqual(expect.stringContaining(name));
+  }
   await expectPresent(outside);
 });

@@ -1,3 +1,4 @@
+import { serialize } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
@@ -6,13 +7,9 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import {
-  observeHostDataSql,
-  trackSqliteStatementExecutions,
-} from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { isSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -24,11 +21,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import {
-  ensureSessionInputCompletionsSchema,
-  ensureSessionPendingInputsSchema,
-} from "../../state/openclaw-agent-pending-inputs-schema.js";
-import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import { ensureSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
@@ -169,10 +162,9 @@ it("supports synchronous recorder completion during compatibility", () =>
     await recorder.waitForPendingInputSettlement!();
   }));
 
-it("shares transaction rows, returns the staging postimage and rejects stale custody", () =>
+it("reads current membership at staging admission and rejects a replaced session", () =>
   withFixture(async ({ database }) => {
     ensureSessionPendingInputsSchema(database.db);
-    ensureSessionInputCompletionsSchema(database.db);
     const identity = {
       ...scope,
       idempotencyKey: "cohort:user",
@@ -181,127 +173,103 @@ it("shares transaction rows, returns the staging postimage and rejects stale cus
       lifecycleGeneration: "cohort-generation",
       authorityAgentId: "main",
     };
-    const read = () => {
-      const snapshot = runSqliteReadSnapshotSync(database.db, () =>
-        readPendingInput(database, { ...identity, kind: "stage", trackCompletion: true }),
-      );
-      if (snapshot.kind !== "stage") {
-        throw new Error("Expected staging snapshot");
-      }
-      return snapshot;
-    };
-    const grants: unknown[] = [];
-    const mutate = (input: PendingInputMutation) =>
-      mutatePendingInput(
-        input,
-        {
-          admit: (stage, facts) => grants.push({ stage, facts: structuredClone(facts) }),
-          writeTransaction: (_label, _owner, run) =>
-            runOpenClawAgentWriteTransaction(run, { agentId: "main" }),
-        },
-        () => {},
-      );
-    const stage = (expected = read()): PendingInputMutation => ({
+    const expected = readPendingInput(database, {
+      ...identity,
+      kind: "stage",
+      trackCompletion: false,
+    });
+    if (expected.kind !== "stage") {
+      throw new Error("Expected staging snapshot");
+    }
+    const input: PendingInputMutation = {
       ...identity,
       kind: "stage",
       expected,
-      trackCompletion: true,
+      trackCompletion: false,
       inputId: "cohort-input",
       messageJson: JSON.stringify(message("cohort")),
-    });
-    const input = stage();
+    };
     database.db
       .prepare(
         "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, ?, ?, ?)",
       )
       .run(scope.sessionKey, "new-member", "owner", 2);
-    const buckets = [
-      [/\bfrom "session_nodes"/iu, "entry"],
-      [/\bfrom "session_members"/iu, "members"],
-      [/\bfrom "session_pending_inputs"/iu, "pending"],
-      [/\bfrom "session_input_completions"/iu, "completion"],
-    ] as const;
-    const counter = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(database.db),
-      ["entry", "members", "pending", "completion"],
-      (sql) => buckets.find(([pattern]) => pattern.test(sql))?.[1] ?? null,
-    );
-    let staged;
-    try {
-      staged = mutate(input);
-      expect(counter.counts).toEqual({ entry: 1, members: 1, pending: 1, completion: 0 });
-    } finally {
-      counter.restore();
-    }
-    expect(staged.stagedInput).toEqual(
-      database.db
-        .prepare("SELECT * FROM session_pending_inputs WHERE input_id = ?")
-        .get("cohort-input"),
-    );
-    expect(grants).toMatchObject([
-      {
-        stage: "transaction",
-        facts: {
-          candidate: undefined,
-          authority: {
-            entry: { sessionId: scope.sessionId },
-            members: [{ identityId: "new-member" }],
+    const admissions: unknown[] = [];
+    const mutate = () =>
+      mutatePendingInput(
+        input,
+        {
+          admit: (stage, facts) => {
+            if (stage === "transaction") {
+              admissions.push(facts);
+            }
           },
+          writeTransaction: (_label, _owner, run) =>
+            runOpenClawAgentWriteTransaction(run, { agentId: "main" }),
+        },
+        () => {},
+      );
+    expect(mutate().stagedInput).toMatchObject({ input_id: "cohort-input", state: "queued" });
+    expect(admissions).toMatchObject([
+      {
+        authority: {
+          entry: { sessionId: scope.sessionId },
+          members: [{ identityId: "new-member" }],
         },
       },
-      {
-        stage: "commit",
-        facts: { receipt: { stagedInput: { input_id: "cohort-input", state: "queued" } } },
-      },
     ]);
-
-    expect(mutate(stage()).stagedInput).toEqual(staged.stagedInput);
-
-    const completionCounter = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(database.db),
-      ["completion"],
-      (sql) => (/\bfrom "session_input_completions"/iu.test(sql) ? "completion" : null),
-    );
-    const outcome = ok();
-    try {
-      expect(mutate({ ...identity, kind: "complete", outcome }).outcome).toEqual(outcome);
-      expect(completionCounter.counts.completion).toBe(1);
-    } finally {
-      completionCounter.restore();
-    }
-    expect(() => mutate({ ...identity, requestHash: "other", kind: "complete", outcome })).toThrow(
-      "Input completion conflicts with the accepted input",
-    );
-    const previous = read();
     writeSessionEntry(database, scope.sessionKey, {
       sessionId: "replacement-session",
       updatedAt: 2,
     });
-    expect(() => mutate(stage(previous))).toThrow("no longer owns the admitted session");
+    expect(mutate).toThrow("no longer owns the admitted session");
   }));
 
-it("stages and settles user turns without caller-thread SQL", () =>
-  withFixture(async ({ database, stage, pending, rows }) => {
+it("stages and settles user turns without caller-thread SQL or duplicate receipt replies", () =>
+  withFixture(async ({ database, pending, rows }) => {
     const recorder = makeRecorder("completed", database.path, true);
     let cancelled: SessionPendingInputReceipt | undefined;
+    const replyBytes = new Map<string, number[]>();
+    const replies = interceptPendingInputWorker((worker) => ({
+      execute: async (command, options) => {
+        const result = await worker.execute(command, options);
+        if (command.type === "session.pendingInputs.mutate" && isRecord(command.input)) {
+          const kind = String(command.input.kind);
+          replyBytes.set(kind, [...(replyBytes.get(kind) ?? []), serialize(result).byteLength]);
+        }
+        return result;
+      },
+    }));
     const sql = observeHostDataSql();
     try {
       expect(await recorder.stageApproved?.({ runId: "completed", assertCurrent() {} })).toBe(true);
       expect(sql.queries).toEqual([]);
-      cancelled = await stage("cancelled");
+      cancelled = expectDefined(
+        await stageSessionPendingInput(scope, {
+          runId: "cancelled",
+          message: { ...message("cancelled"), content: "Synthetic input. ".repeat(2048) },
+          assertCurrent() {},
+        }),
+        "Expected accepted input custody",
+      );
       const outcome = ok();
       expect(await completeUserTurnProcessing(recorder, outcome)).toEqual(outcome);
       expect(recorder.getProcessingCompletion?.()).toEqual(outcome);
-      recorder.finishPendingInput?.("interrupted");
-      cancelled.finish("cancelled");
+      recorder.finishPendingInput?.("interrupted", "failed");
+      cancelled.finish("cancelled", "failed");
       expect(() => cancelled?.run(() => {})).toThrow(SessionPendingInputCustodyError);
       await Promise.all([recorder.waitForPendingInputSettlement?.(), cancelled.settled?.()]);
       expect(sql.queries).toEqual([]);
+      expect([...replyBytes.keys()].toSorted()).toEqual(["complete", "finish", "stage"]);
+      for (const sizes of replyBytes.values()) {
+        expect(Math.max(...sizes)).toBeLessThan(32);
+      }
     } finally {
       sql.restore();
-      recorder.finishPendingInput?.("interrupted");
-      cancelled?.finish("interrupted");
+      recorder.finishPendingInput?.("interrupted", "failed");
+      cancelled?.finish("interrupted", "failed");
       await Promise.all([recorder.waitForPendingInputSettlement?.(), cancelled?.settled?.()]);
+      replies.mockRestore();
     }
     expect(pending()).toMatchObject([{ run_id: "cancelled", state: "cancelled" }]);
     expect(rows("session_input_completions", "run_id, succeeded")).toEqual([
@@ -329,7 +297,7 @@ it.each(["cancelled", "consumed", "failed"] as const)(
         }
       });
       try {
-        recorder.finishPendingInput?.("cancelled");
+        recorder.finishPendingInput?.("cancelled", "failed");
         expect(readWithdrawnUserTurnInputId(recorder)).toBeUndefined();
         if (result === "failed") {
           await expect(recorder.waitForPendingInputSettlement?.()).rejects.toThrow(
@@ -348,7 +316,7 @@ it.each(["cancelled", "consumed", "failed"] as const)(
         );
       } finally {
         spy.mockRestore();
-        recorder.finishPendingInput?.("interrupted");
+        recorder.finishPendingInput?.("interrupted", "failed");
         await Promise.allSettled([recorder.waitForPendingInputSettlement?.()]);
       }
     }),
@@ -383,7 +351,7 @@ it("retains cancellation custody while completion waits", ({ signal }) =>
         awaitGateBeforeSettlement(entered.promise, completion, "Completion skipped its worker"),
         signal,
       );
-      receipt.finish("cancelled");
+      receipt.finish("cancelled", "failed");
       expect(() => receipt.run(() => {})).toThrow(SessionPendingInputCustodyError);
       expect(await withinTest(listSessionPendingInputs(scope), signal)).toMatchObject({
         items: [{ id: receipt.inputId, state: "queued" }],
@@ -397,7 +365,7 @@ it("retains cancellation custody while completion waits", ({ signal }) =>
     } finally {
       release.resolve();
       spy.mockRestore();
-      receipt.finish("cancelled");
+      receipt.finish("cancelled", "failed");
       await Promise.allSettled([completion, receipt.settled?.()]);
     }
   }));
@@ -448,7 +416,7 @@ it("preserves custody errors for worker-side request-hash mismatches", () =>
       database.db
         .prepare("UPDATE session_pending_inputs SET request_hash = ? WHERE input_id = ?")
         .run(originalHash ?? null, receipt.inputId);
-      receipt.finish("interrupted");
+      receipt.finish("interrupted", "failed");
       await expect(receipt.settled?.()).rejects.toBeInstanceOf(SessionPendingInputCustodyError);
     }
   }));
@@ -469,7 +437,7 @@ it("refuses completion after a lifecycle change during the worker wait", () =>
       expect(completions()).toEqual([]);
     } finally {
       spy.mockRestore();
-      receipt.finish("interrupted");
+      receipt.finish("interrupted", "failed");
       await expect(receipt.settled?.()).rejects.toThrow();
     }
   }));
@@ -541,7 +509,7 @@ it.each(["lost reply", "unknown settlement", "independent committed write"] as c
       } finally {
         restoreSettlement?.();
         spy.mockRestore();
-        receipt?.finish("interrupted");
+        receipt?.finish("interrupted", "failed");
         await receipt?.settled?.();
       }
     }),

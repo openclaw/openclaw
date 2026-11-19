@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import type { JsonSchemaValue } from "../plugins/schema-validator.js";
 import type { CodeModeApiVirtualFile } from "./code-mode-mcp-api.js";
 import { readToolOutputSchemaVariants } from "./schema/tool-output-schema.js";
@@ -52,7 +52,7 @@ export async function createCodeModeToolApiFile(
   }
   const content = [
     "// Generated from the effective tool contract. Unsupported shapes stay unknown.",
-    "// JSON Schema validation owns constraints; describe() exposes the original schema.",
+    "// JSON Schema validation owns constraints; describe() exposes the original input schema.",
     "// Values enter the guest intact or reject when program-data admission is full.",
     ...declarations,
   ].join("\n");
@@ -78,9 +78,7 @@ function readObjectDeclaration(name: string, schema: unknown): ObjectDeclaration
     Object.keys(schema).some(
       (key) => !["type", "properties", "required", "additionalProperties"].includes(key),
     ) ||
-    (schema.required !== undefined &&
-      (!Array.isArray(schema.required) ||
-        !schema.required.every((key): key is string => typeof key === "string")))
+    (schema.required !== undefined && !isStringArray(schema.required))
   ) {
     return undefined;
   }

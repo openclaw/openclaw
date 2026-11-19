@@ -1,6 +1,8 @@
 /** Formats stable cron timeout and execution error messages. */
 import { formatEmbeddedAgentExecutionPhase } from "../../agents/embedded-agent-runner/execution-phase.js";
+import { renderStorageFailureSummary } from "../../agents/failover/assistant-request-failure-copy.js";
 import { extractErrorCode, formatErrorMessageWithCode } from "../../infra/errors.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import {
   CRON_JOB_EXECUTION_TIMEOUT_ERROR,
   CRON_PRE_EXECUTION_TIMEOUT_ERROR,
@@ -69,6 +71,10 @@ export function cronAbortErrorClassification(signal?: AbortSignal): CronRunError
 
 /** Normalizes thrown cron run failures into stable log/run-history text. */
 export function normalizeCronRunErrorText(err: unknown): string {
+  const storageMessage = renderStorageFailureSummary(classifyGatewayStorageFailure(err));
+  if (storageMessage) {
+    return storageMessage;
+  }
   if (
     err instanceof Error &&
     (err.name === "AbortError" || err.message.trim() === timeoutErrorMessage())

@@ -91,7 +91,7 @@ describe.skipIf(!connection)("PostgreSQL Git backup discovery and verification",
   const backup = (
     repositoryPath: string,
     options: Partial<Parameters<typeof createGitBackup>[0]> = {},
-  ) => createGitBackup({ repositoryPath, stateDir, databases, gitEnv, ...options });
+  ) => createGitBackup({ repositoryPath, stateDir, databases, ...options });
   async function commitFixture(repository: string, message: string) {
     await git(repository, ["add", "."]);
     await git(repository, ["commit", "-m", message]);
@@ -108,6 +108,7 @@ describe.skipIf(!connection)("PostgreSQL Git backup discovery and verification",
       "SELECT value_json FROM config_machine_state WHERE state_key='ordinary.fixture'",
     );
   const fixtureEnvironment = () => ({
+    ...gitEnv,
     HOME: root,
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),

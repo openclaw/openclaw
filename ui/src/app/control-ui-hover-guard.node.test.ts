@@ -23,7 +23,11 @@ describe("Control UI hover guard", () => {
     const [original, guard] = result.root.nodes;
 
     expect(requireRule(original).selector).toBe(".b:focus");
+    expect(requireRule(original).nodes).toMatchObject([{ prop: "color", value: "red" }]);
     expect(requireRule(requireAtRule(guard).first).selector).toBe(".a:hover");
+    expect(requireRule(requireAtRule(guard).first).nodes).toMatchObject([
+      { prop: "color", value: "red" },
+    ]);
   });
 
   it("does not double-wrap an already guarded hover rule", async () => {
@@ -40,6 +44,7 @@ describe("Control UI hover guard", () => {
     expect(outer.params).toBe("(max-width: 768px)");
     expect(guard.params).toBe("(hover: hover)");
     expect(requireRule(guard.first).selector).toBe(".a:hover");
+    expect(requireRule(guard.first).nodes).toMatchObject([{ prop: "color", value: "red" }]);
   });
 
   it("passes CSS without hover selectors through byte-identically", async () => {

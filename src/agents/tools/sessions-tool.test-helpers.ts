@@ -1,4 +1,5 @@
 import { expect } from "vitest";
+import type { AgentPatchedSessionModelFallback } from "../../config/sessions/session-model-fallback.js";
 import {
   prepareSystemAgentRunAdmission,
   type AdmittedRunOperatorAuthority,
@@ -9,6 +10,13 @@ import {
 } from "./gateway-caller-context.js";
 
 const overlongUnicode = (unit: string, maxLength: number) => `${unit.repeat(maxLength - 1)}🦞tail`;
+
+export function makeAgentPatchFallback(
+  prevModel: string,
+  ts: number,
+): AgentPatchedSessionModelFallback {
+  return { prevModel, prevProvider: "openai", ts, source: "agent-patch" };
+}
 
 function resolvedFixture(escaped = false) {
   const text = escaped ? () => "\0".repeat(10_000) : overlongUnicode;

@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveGitHubToolIdentityStatus } from "../agents/github-tool-identity.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createFactoryGitHubReadClaim } from "./factory-github-proof.test-support.js";
 import { prepareGatewayProjectGitHubIdentity } from "./project-github-identity.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { coreGatewayHandlers } from "./server-methods/core-handlers.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 
 const catalog = vi.hoisted(() => ({ emails: ["github:engineering.ghe.com:42"] }));
 // Resident catalog facts replace storage only; all admission decisions remain production code.
@@ -26,36 +28,15 @@ const apiBaseUrl = `https://api.${host}`;
 const admissionPath = "/__factory__/github/repository-admission";
 const admissionRequest = `GET ${admissionPath}`;
 const issueUrl = `${apiBaseUrl}/repos/example/project/issues/1`;
-const claim = {
-  purpose: "session-item-read" as const,
-  binding: {
-    kind: "session" as const,
-    agentId: "main",
-    sessionKey: "agent:main:room",
-    sessionId: "session-1",
-    lifecycleRevision: "revision-1",
-    requestDigest: "synthetic-item-digest",
-  },
-};
+const claim = createFactoryGitHubReadClaim("synthetic-item-digest");
 const permissions = { contents: "read" as const, metadata: "read" as const };
 function client(): GatewayClient {
   return {
     connId: "human-connection",
     authenticatedFactoryGitHubAccountId: 42,
     authenticatedUserId: `github:${host}:42`,
-    authenticatedUserProfile: {
-      profileId: "person-1",
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "cli", version: "test", platform: "test", mode: "cli" },
-      role: "operator",
-      scopes: ["operator.read"],
-    },
+    authenticatedUserProfile: gatewayProfile("person-1"),
+    connect: gatewayConnect(["operator.read"], { id: "cli", mode: "cli" }),
     internal: { authenticatedOperator: true },
   };
 }

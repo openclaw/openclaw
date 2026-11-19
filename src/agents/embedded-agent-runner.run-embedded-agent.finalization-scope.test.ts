@@ -1,5 +1,3 @@
-// Exercises a child turn after its launching parent has closed, through the real
-// run loop, harness selection, active-run registration, and transcript writer.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
@@ -10,6 +8,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import { installScriptedRunnerMocks } from "./embedded-agent-runner.mock-test-support.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -17,13 +16,8 @@ import type {
 import {
   buildEmbeddedRunnerAssistant,
   createEmbeddedAgentRunnerOpenAiConfig,
-  createResolvedEmbeddedRunnerModel,
   makeEmbeddedRunnerAttempt,
 } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import {
-  installEmbeddedRunnerBaseE2eMocks,
-  installEmbeddedRunnerFastRunE2eMocks,
-} from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 import { drainScenarioDatabase } from "./test-helpers/embedded-run-scenario.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "nested-finalization-");
@@ -34,17 +28,13 @@ beforeAll(async () => {
 });
 
 async function loadRuntime() {
-  installEmbeddedRunnerBaseE2eMocks({ hookRunner: "full" });
-  installEmbeddedRunnerFastRunE2eMocks({ runEmbeddedAttempt: (params) => runAttempt(params) });
   // Keep the real harness boundary, including its temporary tool-authority scope.
-  vi.doUnmock("./harness/selection.js");
-  vi.doMock("./models-config.js", () => ({
-    ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),
-  }));
-  vi.doMock("./embedded-agent-runner/model.js", () => ({
-    resolveModelAsync: async (provider: string, modelId: string) =>
-      createResolvedEmbeddedRunnerModel(provider, modelId),
-  }));
+  installScriptedRunnerMocks({
+    runEmbeddedAttempt: (params) => runAttempt(params),
+    hookRunner: "full",
+    realHarness: true,
+    modelsConfig: "mock",
+  });
   return {
     run: (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
     prepare: (await import("./admitted-run-context.js")).prepareSystemAgentRunAdmission,
@@ -116,13 +106,6 @@ it.each(
     let finalizerRuns = 0;
     // Each attempt, including the tool-free finalizer, must arrive under the child's own turn.
     const attemptTurns: Array<EmbeddedRunAttemptParams["replyOperation"]> = [];
-    const expectFinalizerBorrowsChildTurn = () => {
-      expect(attemptTurns).toHaveLength(finalization === "empty" ? 3 : 2);
-      expect(attemptTurns[0]).toBeDefined();
-      for (const turn of attemptTurns) {
-        expect(turn).toBe(attemptTurns[0]);
-      }
-    };
     runAttempt.mockImplementation(async (params: EmbeddedRunAttemptParams) => {
       attemptTurns.push(params.replyOperation);
       const handle = runtime.handle({
@@ -253,7 +236,9 @@ it.each(
           : await child;
       expect(toolRuns).toBe(1);
       expect(finalizerRuns).toBe(finalization === "empty" ? 2 : 1);
-      expectFinalizerBorrowsChildTurn();
+      expect(attemptTurns).toHaveLength(finalization === "empty" ? 3 : 2);
+      expect(attemptTurns[0]).toBeDefined();
+      expect(new Set(attemptTurns).size).toBe(1);
       const transcript = await readMessages(target);
       if (finalization === "answer") {
         expect(result?.payloads).toEqual([

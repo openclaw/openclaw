@@ -1,134 +1,223 @@
 import fs from "node:fs";
 import path from "node:path";
+import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
-import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
-import {
-  listGitTrackedFiles,
-  toRepoPath,
-  toRepoRelativePath,
-} from "../../test-utils/repo-files.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
+import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
+import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
+import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../../..");
-const extensionsRoot = path.join(repoRoot, "extensions");
+const CODE_MODE_TIER_LITERAL = /codeMode:\s*"(?:preferred|capable)"/;
+// Minimax resolves cost per provider surface, so its rows cannot live in one
+// manifest catalog and remain invisible to the manifest scan below.
+const UNCONVERTED_SOURCE_CATALOG_PLUGINS = ["minimax"];
 
-function isProductionSourcePath(filePath: string): boolean {
-  const normalized = toRepoPath(filePath);
-  return (
-    /\.(?:ts|tsx|js|mjs|cjs)$/.test(normalized) &&
-    !/(^|\/)(?:node_modules|dist|\.[^/]+)(?:\/|$)/.test(normalized) &&
-    !/(\.test\.|\.spec\.|\/__tests__\/|\/test-support\/)/.test(normalized)
-  );
-}
+type CatalogEntry = {
+  ref: string;
+  groupKey: string;
+  upstreamModel?: string;
+  codeMode?: string;
+};
 
-function walkProductionSourceFiles(dir: string): string[] {
-  const relativeRoot = toRepoRelativePath(repoRoot, dir);
-  const gitFiles =
-    relativeRoot && !relativeRoot.startsWith("..") && !path.isAbsolute(relativeRoot)
-      ? listGitTrackedFiles({ repoRoot, pathspecs: relativeRoot })
-      : null;
-  if (gitFiles) {
-    return gitFiles
-      .filter(isProductionSourcePath)
-      .map((line) => path.join(repoRoot, ...line.split("/")))
-      .filter((filePath) => fs.existsSync(filePath))
-      .toSorted();
-  }
-
-  const files: string[] = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === "node_modules" || entry.name === "dist" || entry.name.startsWith(".")) {
-      continue;
-    }
-    const entryPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...walkProductionSourceFiles(entryPath));
-      continue;
-    }
-    if (isProductionSourcePath(entryPath)) {
-      files.push(entryPath);
-    }
+function listBundledPluginFiles(): string[] {
+  const files = listGitTrackedFiles({ repoRoot, pathspecs: "extensions" });
+  if (!files) {
+    throw new Error("unable to list bundled plugin files from git");
   }
   return files;
 }
 
-function readBalancedBlock(source: string, openIndex: number): string | undefined {
-  let depth = 0;
-  let quote: '"' | "'" | "`" | undefined;
-  let escaped = false;
-  // The caller's pattern always ends at an opening parenthesis or brace.
-  const closer = source[openIndex] === "(" ? ")" : "}";
-
-  for (let index = openIndex; index < source.length; index += 1) {
-    const char = source[index];
-    if (quote) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-    if (char === '"' || char === "'" || char === "`") {
-      quote = char;
-      continue;
-    }
-    if (char === "(" || char === "{" || char === "[") {
-      depth += 1;
-      continue;
-    }
-    if (char === ")" || char === "}" || char === "]") {
-      depth -= 1;
-      if (depth === 0 && char === closer) {
-        return source.slice(openIndex + 1, index);
-      }
-    }
-  }
-  return undefined;
+function readManifests() {
+  return listBundledPluginFiles()
+    .filter((file) => /^extensions\/[^/]+\/openclaw\.plugin\.json$/.test(file))
+    .map(
+      (file) =>
+        [
+          file,
+          JSON.parse(fs.readFileSync(path.join(repoRoot, file), "utf8")) as Record<string, unknown>,
+        ] as const,
+    );
 }
 
-function listProviderPluginObjects(source: string): string[] {
-  const objects: string[] = [];
-  const pattern = /\bregisterProvider\s*\(|:\s*[A-Za-z0-9_]*ProviderPlugin\s*=\s*\{/g;
-  for (const match of source.matchAll(pattern)) {
-    const object = readBalancedBlock(source, match.index + match[0].length - 1);
-    if (object !== undefined) {
-      objects.push(object);
-    }
-  }
-  return objects;
+// Group aggregator aliases with first-party rows, ignoring namespace and case.
+function normalizeSharedModelId(modelId: string): string {
+  return modelId.slice(modelId.indexOf("/") + 1).toLowerCase();
 }
 
-describe("bundled provider catalog deprecation guard", () => {
-  it("lists production extension sources from git without walking extension roots", () => {
-    expectNoReaddirSyncDuring(() => {
-      const files = walkProductionSourceFiles(extensionsRoot);
-
-      expect(files.length).toBeGreaterThan(0);
-      expect(files.every((file) => path.relative(repoRoot, file).startsWith("extensions"))).toBe(
-        true,
-      );
-      expect(files.some((file) => file.endsWith(".test.ts"))).toBe(false);
-    });
-  });
-
-  it("keeps bundled provider plugins off the deprecated discovery hook", () => {
-    const offenders: string[] = [];
-    for (const filePath of walkProductionSourceFiles(extensionsRoot)) {
-      const source = fs.readFileSync(filePath, "utf8");
-      for (const candidate of listProviderPluginObjects(source)) {
-        const match = /\bdiscovery\s*:/.exec(candidate);
-        if (!match) {
+function collectCatalogEntries(): CatalogEntry[] {
+  const entries: CatalogEntry[] = [];
+  for (const [, manifest] of readManifests()) {
+    const providers = readRecord(readRecord(manifest.modelCatalog)?.providers) ?? {};
+    // CLI backends run their own harness, so catalog code-mode tiers never reach them.
+    const cliBackends = new Set(
+      Array.isArray(manifest.cliBackends) ? (manifest.cliBackends as string[]) : [],
+    );
+    for (const [providerId, provider] of Object.entries(providers)) {
+      if (cliBackends.has(providerId)) {
+        continue;
+      }
+      const models = readRecord(provider)?.models;
+      if (!Array.isArray(models)) {
+        continue;
+      }
+      for (const rawModel of models) {
+        const model = readRecord(rawModel);
+        const id = typeof model?.id === "string" ? model.id : undefined;
+        if (!id) {
           continue;
         }
-        const absoluteOffset = source.indexOf(candidate) + match.index;
-        offenders.push(
-          `${path.relative(repoRoot, filePath)}:${source.slice(0, absoluteOffset).split("\n").length}`,
-        );
+        const upstreamModel =
+          typeof model?.upstreamModel === "string" ? model.upstreamModel : undefined;
+        const codeMode = readRecord(model?.compat)?.codeMode;
+        entries.push({
+          ref: `${providerId}/${id}`,
+          groupKey: normalizeSharedModelId(
+            upstreamModel ? upstreamModel.slice(upstreamModel.indexOf("/") + 1) : id,
+          ),
+          ...(upstreamModel ? { upstreamModel } : {}),
+          ...(typeof codeMode === "string" ? { codeMode } : {}),
+        });
+      }
+    }
+  }
+  return entries;
+}
+
+describe("bundled shared upstream model catalogs", () => {
+  // Read lazily: the non-isolated contract runner shares one process, so manifest
+  // IO belongs inside the tests rather than in collection.
+  let cached: CatalogEntry[] | undefined;
+  const readEntries = (): CatalogEntry[] => (cached ??= collectCatalogEntries());
+
+  it("resolves every declared upstream model ref to another bundled catalog row", () => {
+    const entries = readEntries();
+    const refs = new Set(entries.map((entry) => entry.ref));
+    const unresolved = entries
+      .filter(
+        ({ upstreamModel, ref }) =>
+          upstreamModel && (upstreamModel === ref || !refs.has(upstreamModel)),
+      )
+      .map(({ ref, upstreamModel }) => `${ref} -> ${upstreamModel}`)
+      .toSorted();
+
+    expect(unresolved).toEqual([]);
+  });
+
+  it("declares the code-mode tier on every catalog row that ships a shared model", () => {
+    // A silent sibling would change tools.codeMode: "auto" for the same model.
+    const silent: string[] = [];
+    const groups = new Map<string, CatalogEntry[]>();
+    for (const entry of readEntries()) {
+      const group = groups.get(entry.groupKey);
+      if (group) {
+        group.push(entry);
+      } else {
+        groups.set(entry.groupKey, [entry]);
+      }
+    }
+    for (const [groupKey, group] of groups) {
+      if (group.length < 2 || !group.some((entry) => entry.codeMode)) {
+        continue;
+      }
+      for (const entry of group.filter((candidate) => !candidate.codeMode)) {
+        silent.push(`${entry.ref} (shared model ${groupKey})`);
       }
     }
 
-    expect(offenders).toEqual([]);
+    expect(silent.toSorted()).toEqual([]);
+  });
+
+  it("keeps code-mode tiers out of plugin source so shared-model checks can see them", () => {
+    const plugins = listBundledPluginFiles()
+      .filter((file) => file.endsWith(".ts") && !file.includes(".test."))
+      .filter((file) =>
+        CODE_MODE_TIER_LITERAL.test(fs.readFileSync(path.join(repoRoot, file), "utf8")),
+      )
+      .map((file) => file.split("/")[1] as string);
+
+    expect([...new Set(plugins)].toSorted()).toEqual(UNCONVERTED_SOURCE_CATALOG_PLUGINS);
+  });
+});
+
+describe("bundled channel-provider skill contracts", () => {
+  const configured = (plugin: "discord" | "slack", named = false): OpenClawConfig => {
+    const credentials =
+      plugin === "discord"
+        ? { token: "test-discord-token" }
+        : { botToken: "xoxb-test-token", appToken: "xapp-test-token" };
+    return { channels: { [plugin]: named ? { accounts: { support: credentials } } : credentials } };
+  };
+  type SkillCase = [string, "discord" | "slack", OpenClawConfig, boolean, boolean?];
+  it.each<SkillCase>([
+    ["Discord named-account token", "discord", configured("discord", true), true],
+    ["Discord root token", "discord", configured("discord"), true],
+    ["Discord unconfigured", "discord", {}, false],
+    [
+      "Discord explicitly disabled",
+      "discord",
+      {
+        ...configured("discord"),
+        skills: { entries: { discord: { enabled: false } } },
+      },
+      false,
+      true,
+    ],
+    ["Slack named-account credentials", "slack", configured("slack", true), true],
+  ])("%s", async (_label, pluginId, config, eligible, disabled = false) => {
+    const workspaceDir = path.join(repoRoot, "extensions", pluginId);
+    const entries = loadWorkspaceSkills(workspaceDir, { config, workspaceOnly: true });
+    const report = buildWorkspaceSkillStatus(workspaceDir, {
+      config,
+      entries,
+      managedSkillsDir: path.join(workspaceDir, "skills"),
+    });
+    expect(report.skills.find((skill) => skill.name === pluginId)).toMatchObject({
+      eligible,
+      disabled,
+      modelVisible: eligible,
+    });
+    const snapshot = await buildSkillSnapshot(workspaceDir, { config, entries });
+    expect(snapshot.prompt.includes(`<name>${pluginId}</name>`)).toBe(eligible);
+  });
+
+  it("does not teach retired tool, action, parameter, or install contracts", () => {
+    const files = listBundledPluginFiles();
+    const skills = readManifests().flatMap(([file, manifest]) => {
+      if (!Array.isArray(manifest.channels) || !Array.isArray(manifest.skills)) {
+        return [];
+      }
+      return manifest.skills.flatMap((root) => {
+        if (typeof root !== "string" || root.includes("node_modules")) {
+          return [];
+        }
+        const prefix = path
+          .relative(repoRoot, path.resolve(repoRoot, path.dirname(file), root))
+          .replaceAll("\\", "/");
+        return files.filter(
+          (candidate) => candidate.startsWith(`${prefix}/`) && candidate.endsWith(".md"),
+        );
+      });
+    });
+    const retired = [
+      /use\s+the\s+[`'"]slack[`'"]\s+tool/iu,
+      /["']action["']\s*:\s*["'](?:sendMessage|readMessages|editMessage|deleteMessage|pinMessage|unpinMessage|listPins|memberInfo|emojiList)["']/u,
+      /owner_open_id/u,
+      /feishu_doc_list_blocks/u,
+      /feishu_doc_update_block/u,
+      /feishu_doc_delete_block/u,
+      /["']components["']\s*:\s*["']\[Carbon v2 components\]["']/u,
+      /## 备用方案（直接使用 `cron` 工具）/u,
+      /github\.com\/steipete\/wacli\/cmd\/wacli@latest/u,
+    ];
+    expect(skills.length).toBeGreaterThan(0);
+    const failures = [...new Set(skills)].flatMap((file) => {
+      const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
+      return retired
+        .filter((pattern) => pattern.test(source))
+        .map((pattern) => `${file}: retired contract ${pattern.source}`);
+    });
+    expect(failures).toStrictEqual([]);
   });
 });

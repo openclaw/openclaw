@@ -12,7 +12,7 @@ import {
 } from "../../gateway/in-process-subagent-resume.js";
 import { requestSessionCommunicationApproval } from "../../gateway/session-communication-approval.js";
 import { withSessionSendDelivery } from "../../gateway/session-send-delivery.js";
-import { assertParentSubagentResumeSuccessorCurrent } from "../../gateway/session-subagent-resume.js";
+import { resolveSessionChildController } from "../../gateway/session-utils-core.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   communicationEndpointBinding,
@@ -45,12 +45,12 @@ import {
   resolveSessionToolAccess,
 } from "./sessions-access.js";
 import {
-  matchesSessionCommunicationParent,
+  readSessionCommunicationLineage,
   readSessionCommunicationEndpoint,
 } from "./sessions-send-communication-endpoint.js";
 
 /** A current permission decision rejected delivery, rather than an unavailable dependency. */
-export class SessionCommunicationDeniedError extends Error {}
+class SessionCommunicationDeniedError extends Error {}
 
 /** A host-held return route minted only after the original request was accepted. */
 export type SessionSendReplyAdmission = (
@@ -73,10 +73,13 @@ export async function prepareSessionsSendCommunication(params: {
     requesterOwned?: boolean;
     authorizationTargetSessionKey?: string;
     expectedSessionId?: string;
+    controllerOnly?: boolean;
   };
   /** Creates empty metadata through the caller's existing creation owner, never model input. */
   ensureTarget?: (assertCurrent: () => void) => Promise<CommunicationEndpoint>;
   signal?: AbortSignal;
+  /** A retained send whose target had a task refuses once that task has ended. */
+  expectTask?: boolean;
   /** Recovery cannot ask for fresh consent on behalf of an ended sender turn. */
   allowApproval?: boolean;
   assertSourceCurrent?: () => void;
@@ -137,6 +140,15 @@ export async function prepareSessionsSendCommunication(params: {
     assertCaller?.();
     params.assertSourceCurrent?.();
     params.assertAccessCurrent?.();
+    const targetEntry = currentTarget.entry;
+    const controller =
+      targetEntry &&
+      resolveSessionChildController(targetSessionKey, targetEntry, params.source.sessionKey);
+    if (controller && controller !== params.source.sessionKey) {
+      throw new SessionCommunicationDeniedError(
+        "Child is controlled by another active session; wait for that work to finish before continuing it.",
+      );
+    }
     params.acceptedReply?.(params.source, currentTarget);
     if (currentPolicyConfig() !== currentConfig) {
       throw new Error("Communication policy changed; send the message again for a new decision.");
@@ -221,33 +233,6 @@ export async function prepareSessionsSendCommunication(params: {
       endpoint,
       assertCurrent: assertSource,
     });
-  const lineage = async (endpoint: CommunicationEndpoint) => {
-    const chain = [endpoint];
-    while (chain.at(-1)?.entry?.spawnedBy) {
-      const child = chain.at(-1)!;
-      const key = child.entry!.spawnedBy!;
-      if (chain.length >= 32 || chain.some((entry) => entry.sessionKey === key)) {
-        throw new Error("Session communication ancestry is invalid.");
-      }
-      const parent = await read({
-        agentId: parseAgentSessionKey(key)?.agentId ?? child.agentId,
-        sessionKey: key,
-        storePath: "",
-        entry: undefined,
-      });
-      if (
-        !(await matchesSessionCommunicationParent(
-          parent,
-          child.entry?.parentSessionId,
-          assertSource,
-        ))
-      ) {
-        throw new Error("The child's parent session lineage changed; re-spawn the child.");
-      }
-      chain.push(parent);
-    }
-    return chain;
-  };
   const task = getLatestLiveSubagentRunByChildSessionKey(
     params.target.sessionKey,
     undefined,
@@ -261,53 +246,56 @@ export async function prepareSessionsSendCommunication(params: {
     task.requesterSessionKey === params.source.sessionKey &&
     task.requesterAgentId === params.source.agentId &&
     (!task.controllerSessionKey || task.controllerSessionKey === params.source.sessionKey) &&
-    (!task.execution?.transcriptTarget ||
-      task.execution.transcriptTarget.sessionId === params.target.entry?.sessionId) &&
     params.target.entry?.spawnedBy === params.source.sessionKey &&
-    params.target.entry.parentSessionId === params.source.entry?.sessionId &&
     !task.killIntent &&
     !task.killReconciliation &&
-    !task.terminalOwner &&
     task.cleanupCompletedAt === undefined,
   );
-  const taskRunId = task?.runId;
-  const taskGeneration = task?.generation;
-  let resumedTask:
-    | { resume: NonNullable<ReturnType<typeof readInProcessSubagentResume>>; runId: string }
-    | undefined;
+  // The chat key addresses the task: it continues whichever run is current.
+  // Only an ended or cancelled task, or a new controller, refuses the send.
   const assertTask = () => {
     if (
-      ownedTask &&
-      (getLatestLiveSubagentRunByChildSessionKey(
-        params.target.sessionKey,
-        undefined,
-        params.target.agentId,
-      ) !== task ||
-        task?.runId !== taskRunId ||
-        task?.generation !== taskGeneration ||
-        (task?.controllerSessionKey && task.controllerSessionKey !== params.source.sessionKey) ||
-        task?.killIntent ||
-        task?.killReconciliation ||
-        task?.terminalOwner ||
-        task?.cleanupCompletedAt !== undefined)
+      params.access?.controllerOnly &&
+      (!currentTarget.entry ||
+        resolveSessionChildController(targetSessionKey, currentTarget.entry) !==
+          params.source.sessionKey)
     ) {
-      if (resumedTask) {
-        assertParentSubagentResumeSuccessorCurrent(resumedTask.resume, resumedTask.runId);
-        return;
-      }
-      throw new Error("Owned task communication authority changed.");
+      throw new SessionCommunicationDeniedError("Child controller access changed before delivery.");
+    }
+    if (!ownedTask && !params.expectTask) {
+      return;
+    }
+    const current = getLatestLiveSubagentRunByChildSessionKey(
+      targetSessionKey,
+      undefined,
+      targetAgentId,
+    );
+    if (
+      !current ||
+      current.killIntent ||
+      current.killReconciliation ||
+      (ownedTask && current.cleanupCompletedAt !== undefined)
+    ) {
+      throw new Error("The target task ended or was cancelled; no message was sent.");
+    }
+    if (current.controllerSessionKey && current.controllerSessionKey !== params.source.sessionKey) {
+      throw new SessionCommunicationDeniedError(
+        "The target task is controlled by another session.",
+      );
     }
   };
   const close = () => {
     if (!closed) {
       closed = true;
       unsubscribe();
+      params.signal?.removeEventListener("abort", close);
     }
   };
+  params.signal?.addEventListener("abort", close, { once: true });
   try {
     assertSource();
-    let source = await lineage(params.source);
-    let target = await lineage(params.target);
+    let source = await readSessionCommunicationLineage(params.source, read, assertSource);
+    let target = await readSessionCommunicationLineage(params.target, read, assertSource);
     endpoints = [...source, ...target];
     let bindings = endpoints.map(communicationEndpointBinding);
     const assertAccess = async () => {
@@ -467,7 +455,7 @@ export async function prepareSessionsSendCommunication(params: {
       ) {
         throw new Error("Created target differs from the approved communication operation.");
       }
-      target = await lineage(created);
+      target = await readSessionCommunicationLineage(created, read, assertSource);
       // An initially absent main alias can name both sides of this creation.
       if (
         !source[0]!.entry &&
@@ -552,24 +540,9 @@ export async function prepareSessionsSendCommunication(params: {
       const runId = request.params.idempotencyKey;
       const hasRunId = typeof runId === "string";
       const resume = readInProcessSubagentResume(request);
-      if (ownedTask && resume && hasRunId) {
-        if (
-          resume.childSessionKey !== targetSessionKey ||
-          resume.childSessionId !== target[0]!.entry?.sessionId ||
-          resume.previousRunId !== taskRunId ||
-          resume.generation !== taskGeneration
-        ) {
-          throw new Error("Task resume differs from the captured communication owner.");
-        }
-        resumedTask = { resume, runId };
-      }
       const endpoint = target[0]!;
-      if (
-        !endpoint.entry ||
-        (request.params.expectedExistingSessionId !== undefined &&
-          request.params.expectedExistingSessionId !== endpoint.entry.sessionId)
-      ) {
-        throw new Error("Communication target incarnation changed before admission.");
+      if (!endpoint.entry) {
+        throw new Error("The target session was deleted; no message was sent.");
       }
       let input: Record<string, unknown> = {
         ...request.params,

@@ -11,18 +11,17 @@ import {
 import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "../../../agents/agent-bundle-mcp-names.js";
 import { listAgentEntriesWithSource } from "../../../agents/agent-scope-config.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../../../agents/glob-pattern.js";
+import { resolveDefaultModelForAgent } from "../../../agents/model-selection-config.js";
 import { resolveProviderToolPolicy } from "../../../agents/provider-tool-policy.js";
 import {
   mergeAlsoAllowPolicy,
   normalizeToolPolicyName,
   resolveToolProfilePolicy,
 } from "../../../agents/tool-policy.js";
-import type { AgentModelConfig } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.js";
-import { resolveDoctorPrimaryModelRef } from "./primary-model-ref.js";
 
 type ToolAllowlistSource = {
   label: string;
@@ -288,10 +287,11 @@ function nonSandboxToolPoliciesBlockMcp(params: {
 }): boolean {
   const globalTools = params.cfg.tools;
   const agentTools = asOptionalRecord(params.agent?.tools);
-  const modelRef = resolveDoctorPrimaryModelRef(
-    params.cfg,
-    params.agent?.model as AgentModelConfig,
-  );
+  const modelRef = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: typeof params.agent?.id === "string" ? params.agent.id : undefined,
+    allowPluginNormalization: false,
+  });
   const [globalProviderPolicy, agentProviderPolicy] = [
     globalTools?.byProvider,
     asOptionalRecord(agentTools?.byProvider),

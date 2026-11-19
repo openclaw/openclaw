@@ -17,7 +17,7 @@
   align-items: center;
   gap: 10px;
   padding: 12px 14px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--mobile-list-surface, var(--bg-hover));
 }
 
@@ -56,7 +56,7 @@
   gap: 10px;
   min-height: 56px;
   padding: 12px 14px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--mobile-list-surface, var(--bg-hover));
   text-align: start;
 }
@@ -73,7 +73,7 @@
 
 .github-publication-mobile__login {
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 
@@ -88,6 +88,13 @@
   color: var(--muted);
   font-size: 10px;
   font-weight: 500;
+  overflow: hidden;
+}
+
+.github-publication-mobile__avatar > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .github-publication-mobile__account-row > svg {
@@ -102,7 +109,7 @@
   width: 100%;
   padding: 0;
   border: 0;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: transparent;
   color: inherit;
   font: inherit;
@@ -238,6 +245,11 @@
 
 .github-publication-mobile__actions .chat-pr__create:hover:not(:disabled) {
   background: var(--primary-hover);
+  color: var(--primary-foreground);
+}
+
+.github-publication-mobile__actions .chat-pr__create:active:not(:disabled) {
+  background: var(--primary-active);
   color: var(--primary-foreground);
 }
 

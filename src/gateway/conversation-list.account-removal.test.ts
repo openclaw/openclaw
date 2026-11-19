@@ -9,7 +9,7 @@ import {
   prepareConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveOutboundSessionRoute } from "../infra/outbound/outbound-session.js";
+import * as channelResolution from "../infra/outbound/channel-resolution.js";
 import {
   registerSessionBindingAdapter,
   testing as sessionBindingTesting,
@@ -48,6 +48,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  vi.spyOn(channelResolution, "resolveOutboundChannelPlugin").mockReturnValue(undefined);
   resetPluginRuntimeStateForTest();
   setActivePluginRegistry(
     createTestRegistry(plugins.map((plugin) => ({ pluginId: plugin.id, source: "test", plugin }))),
@@ -61,6 +62,7 @@ beforeEach(() => {
 
 const tempDirs = useSessionStoreTempDirs(afterEach, "channel-conversation-list-");
 afterEach(() => {
+  vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
   vi.unstubAllEnvs();
@@ -80,13 +82,6 @@ async function createConversationStore(channels: ChannelFixture[]) {
   };
   return { config, scope: await prepareConversationRegistryScope({ config, agentId: "main" }) };
 }
-
-const deps = {
-  listConversations,
-  registerConversationAddresses,
-  resolveOutboundChannelPlugin: () => undefined,
-  resolveOutboundSessionRoute,
-};
 
 it.each([false, true])("preserves retired history (Discord search: %s)", async (search) => {
   const channels: ChannelFixture[] = search ? [["discord", discordPeer]] : CHANNELS;
@@ -111,15 +106,12 @@ it.each([false, true])("preserves retired history (Discord search: %s)", async (
   await registerConversationAddresses(scope, identities);
   const before = await listConversations(scope);
   expect(before).toHaveLength(search ? 3 : identities.length);
-  const { conversations } = await runGatewayConversationList(
-    {
-      config,
-      agentId: "main",
-      limit: 10,
-      ...(search ? { channel: "discord", query: discordPeer } : {}),
-    },
-    deps,
-  );
+  const { conversations } = await runGatewayConversationList({
+    config,
+    agentId: "main",
+    limit: 10,
+    ...(search ? { channel: "discord", query: discordPeer } : {}),
+  });
   expect(conversations.map(({ channel, accountId }) => ({ channel, accountId }))).toEqual(
     channels
       .filter(([channel]) => channel !== "slack")

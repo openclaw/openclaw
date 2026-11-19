@@ -1,11 +1,34 @@
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { WebSocket } from "ws";
+import { buildDeviceAuthPayloadV3 } from "../packages/gateway-client/src/device-auth.js";
+import { rawDataToString } from "../packages/gateway-client/src/websocket-data.js";
+import type { ResponseFrame } from "../packages/gateway-protocol/src/schema/frames.js";
+import { isRetryableGatewayStartupUnavailableError } from "../packages/gateway-protocol/src/startup-unavailable.js";
+import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/version.js";
 import type { OpenClawConfig } from "../src/config/config.js";
+import type { GatewayClientOptions } from "../src/gateway/client.js";
 import type { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
+import {
+  loadOrCreateDeviceIdentity,
+  publicKeyRawBase64UrlFromPem,
+  signDevicePayload,
+} from "../src/infra/device-identity.js";
 import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
+import { VERSION } from "../src/version.js";
+import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
 import { readRequestText, respondJson } from "./helpers/gateway-integration-fixtures.js";
+import {
+  acquireGatewayTestWebSocket,
+  closeGatewayTestWebSocket,
+} from "./helpers/gateway-websocket.js";
 import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
+import type { OpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
+import { createDeferred } from "./helpers/promise.js";
 
 export const restartEnv = {
   OPENAI_API_KEY: undefined,
@@ -15,6 +38,49 @@ export const restartEnv = {
   OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
 };
 
+export function connectRestartClient(
+  instance: OpenClawTestInstance,
+  options: Omit<GatewayClientOptions, "url" | "token" | "onConnectError"> = {},
+  signal?: AbortSignal,
+  timeoutMs = 30_000,
+) {
+  return acquireGatewayTestClient(
+    {
+      url: instance.url,
+      token: instance.gatewayToken,
+      clientName: "gateway-client",
+      mode: "backend",
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+      deviceIdentity:
+        options.deviceIdentity === undefined
+          ? loadOrCreateDeviceIdentity({
+              path: instance.state.path("device", "client", "credentials.sqlite"),
+            })
+          : options.deviceIdentity,
+      ...options,
+    },
+    {
+      timeoutMs,
+      timeoutMessage: "restart client did not connect",
+      closeMessage: "restart client closed",
+      signal,
+    },
+  );
+}
+
+export async function writeRestartPlugin(
+  pluginDir: string,
+  manifest: object,
+  source: string,
+  entry = "index.mjs",
+) {
+  await mkdir(pluginDir, { recursive: true });
+  await Promise.all([
+    writeFile(path.join(pluginDir, "openclaw.plugin.json"), JSON.stringify(manifest)),
+    writeFile(path.join(pluginDir, entry), source),
+  ]);
+}
+
 export function restartProviderServer(
   failed: { reject(error: unknown): void },
   handle: (
@@ -22,12 +88,15 @@ export function restartProviderServer(
     response: ServerResponse,
     body: Record<string, unknown>,
   ) => Promise<void>,
+  options: { ignoreAborted?: boolean } = {},
 ) {
   return createServer((request, response) => {
     void (async () => {
       await handle(request, response, asRecord(JSON.parse(await readRequestText(request))));
     })().catch((error: unknown) => {
-      failed.reject(error);
+      if (!options.ignoreAborted || !request.aborted) {
+        failed.reject(error);
+      }
       response.destroy(error instanceof Error ? error : undefined);
     });
   });
@@ -49,6 +118,52 @@ function completedResponse(id: string, output: object[]) {
   };
 }
 
+type ToolCall = {
+  type: string;
+  id: string;
+  call_id: string;
+  name: string;
+  arguments: string;
+  status?: string;
+};
+
+export function writeRestartToolCalls(
+  response: ServerResponse,
+  responseId: string,
+  items: ToolCall[],
+  options: {
+    argumentEvent?: "delta" | "done";
+    usage?: { input_tokens: number; output_tokens: number; total_tokens: number };
+  } = {},
+) {
+  const done = options.argumentEvent === "done";
+  writeOpenAiResponsesSse(response, [
+    ...items.flatMap((item, output_index) => [
+      {
+        type: "response.output_item.added",
+        output_index,
+        item: { ...item, ...(item.status ? { status: "in_progress" } : {}), arguments: "" },
+      },
+      {
+        type: done
+          ? "response.function_call_arguments.done"
+          : "response.function_call_arguments.delta",
+        output_index,
+        item_id: item.id,
+        ...(done ? { arguments: item.arguments } : { delta: item.arguments }),
+      },
+      { type: "response.output_item.done", output_index, item },
+    ]),
+    {
+      type: "response.completed",
+      response: {
+        ...completedResponse(responseId, items),
+        ...(options.usage ? { usage: options.usage } : {}),
+      },
+    },
+  ]);
+}
+
 export function writeRestartToolCall(
   response: ServerResponse,
   key: string,
@@ -56,46 +171,43 @@ export function writeRestartToolCall(
   args: unknown,
   ordinal: number,
 ) {
-  const item = {
-    type: "function_call",
-    id: `fc_${key}_${ordinal}`,
-    call_id: `call_${key}_${ordinal}`,
-    name,
-    arguments: JSON.stringify(args),
-  };
-  writeOpenAiResponsesSse(response, [
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
+  writeRestartToolCalls(response, `resp_${key}_${ordinal}`, [
     {
-      type: "response.function_call_arguments.delta",
-      output_index: 0,
-      item_id: item.id,
-      delta: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: completedResponse(`resp_${key}_${ordinal}`, [item]),
+      type: "function_call",
+      id: `fc_${key}_${ordinal}`,
+      call_id: `call_${key}_${ordinal}`,
+      name,
+      arguments: JSON.stringify(args),
     },
   ]);
 }
 
-export function writeRestartTitle(response: ServerResponse, text: string) {
+export function writeRestartJsonText(
+  response: ServerResponse,
+  text: string,
+  key: string,
+  options: { object?: boolean; completed?: boolean } = {},
+) {
   respondJson(response, {
-    object: "response",
-    ...completedResponse("resp_title", [
+    ...(options.object ? { object: "response" } : {}),
+    ...completedResponse(`resp_${key}`, [
       {
         type: "message",
-        id: "msg_title",
+        id: `msg_${key}`,
         role: "assistant",
-        status: "completed",
+        ...(options.completed ? { status: "completed" } : {}),
         content: [{ type: "output_text", text, annotations: [] }],
       },
     ]),
   });
 }
 
-export function readRestartSession(agentDir: string, sessionKey: string) {
-  const database = openNodeSqliteDatabase(path.join(agentDir, "openclaw-agent.sqlite"), {
+export function readRestartSession(
+  agentDir: string,
+  sessionKey: string,
+  storePath = path.join(agentDir, "openclaw-agent.sqlite"),
+) {
+  const database = openNodeSqliteDatabase(storePath, {
     readOnly: true,
   });
   try {
@@ -110,12 +222,15 @@ export function readRestartSession(agentDir: string, sessionKey: string) {
 
 export function restartModelConfig(
   model: ReturnType<typeof buildMockOpenAiResponsesProvider>,
-  workspace: string,
+  workspace: string | undefined,
+  defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> = {},
+  models: Omit<NonNullable<OpenClawConfig["models"]>, "providers"> = {},
 ): Pick<OpenClawConfig, "models" | "agents"> {
   const { modelRef, providerId, config } = model;
   return {
     models: {
       mode: "replace",
+      ...models,
       providers: {
         [providerId]: { ...config, request: { allowPrivateNetwork: true } },
       },
@@ -134,8 +249,133 @@ export function restartModelConfig(
         skipBootstrap: true,
         skills: [],
         timeoutSeconds: 120,
+        ...defaults,
       },
       entries: { main: {} },
     },
   };
+}
+
+export async function readRestartTrace(tracePath: string): Promise<string[]> {
+  try {
+    return (await readFile(tracePath, "utf8")).split("\n").filter(Boolean);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
+
+/**
+ * Connect as a trusted-proxy person over a raw socket: the Gateway client refuses edge
+ * identity headers on plain ws://, while restart fixtures serve loopback HTTP.
+ */
+export async function connectProxiedRestartOperator(
+  instance: OpenClawTestInstance,
+  params: { user: string; origin: string; scopes: string[]; signal: AbortSignal },
+) {
+  const identity = loadOrCreateDeviceIdentity({
+    path: instance.state.path("proxied", params.user, "client", "credentials.sqlite"),
+  });
+  const socket = new WebSocket(instance.url, {
+    headers: {
+      origin: params.origin,
+      "x-forwarded-user": params.user,
+      "x-forwarded-proto": "https",
+      "x-forwarded-for": "198.51.100.40",
+    },
+  });
+  const challenge = createDeferred<string>();
+  void challenge.promise.catch(() => {});
+  const pending = new Map<string, ReturnType<typeof createDeferred<ResponseFrame>>>();
+  const fail = (error: Error) => {
+    challenge.reject(error);
+    for (const result of pending.values()) {
+      result.reject(error);
+    }
+    pending.clear();
+  };
+  const abort = () => fail(new Error("Proxied restart operator canceled"));
+  params.signal.addEventListener("abort", abort, { once: true });
+  socket.on("error", fail);
+  socket.on("close", () => fail(new Error("Proxied restart operator connection closed")));
+  socket.on("message", (data) => {
+    const frame = JSON.parse(rawDataToString(data)) as
+      | ResponseFrame
+      | { type: "event"; event: string; payload?: { nonce?: string } };
+    if (frame.type === "event" && frame.event === "connect.challenge" && frame.payload?.nonce) {
+      challenge.resolve(frame.payload.nonce);
+    } else if (frame.type === "res") {
+      pending.get(frame.id)?.resolve(frame);
+      pending.delete(frame.id);
+    }
+  });
+  // Startup-unavailable answers retry after their advertised delay; other errors fail.
+  const call = async <T = unknown>(method: string, payload: unknown): Promise<T> => {
+    for (;;) {
+      params.signal.throwIfAborted();
+      const id = randomUUID();
+      const result = createDeferred<ResponseFrame>();
+      pending.set(id, result);
+      socket.send(JSON.stringify({ type: "req", id, method, params: payload }));
+      const frame = await result.promise;
+      if (frame.ok) {
+        return frame.payload as T;
+      }
+      const retryAfterMs = frame.error?.retryAfterMs;
+      if (
+        !isRetryableGatewayStartupUnavailableError(frame.error) ||
+        typeof retryAfterMs !== "number"
+      ) {
+        throw new Error(`${method}: ${JSON.stringify(frame.error)}`);
+      }
+      await delay(retryAfterMs, undefined, { signal: params.signal });
+    }
+  };
+  const close = async () => {
+    params.signal.removeEventListener("abort", abort);
+    await closeGatewayTestWebSocket(socket);
+  };
+  try {
+    await acquireGatewayTestWebSocket(socket, 30_000, async () => {
+      const nonce = await challenge.promise;
+      const signedAt = Date.now();
+      const client = {
+        id: "openclaw-control-ui" as const,
+        version: VERSION,
+        platform: "web",
+        mode: "webchat" as const,
+      };
+      const payload = buildDeviceAuthPayloadV3({
+        deviceId: identity.deviceId,
+        clientId: client.id,
+        clientMode: client.mode,
+        platform: client.platform,
+        role: "operator",
+        scopes: params.scopes,
+        token: null,
+        nonce,
+        signedAtMs: signedAt,
+      });
+      await call("connect", {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client,
+        role: "operator",
+        scopes: params.scopes,
+        device: {
+          id: identity.deviceId,
+          publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+          signature: signDevicePayload(identity.privateKeyPem, payload),
+          signedAt,
+          nonce,
+        },
+      });
+    });
+    return { call, close };
+  } catch (error) {
+    await close();
+    throw error;
+  }
 }

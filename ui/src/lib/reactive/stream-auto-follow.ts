@@ -5,31 +5,44 @@ export function useStreamAutoFollow(options: {
   enabled: () => boolean;
   identity: () => unknown;
   content?: () => unknown;
+  /** Virtualized streams own convergence as estimated row heights settle. */
+  scrollToEnd?: () => void;
 }) {
   let atBottom = true;
-  let frame: number | undefined;
+  let frame: { id: number; atBottom: boolean } | undefined;
   onCleanup(() => {
     if (frame !== undefined) {
-      cancelAnimationFrame(frame);
+      cancelAnimationFrame(frame.id);
     }
   });
   function schedule(identity: unknown, force = false) {
+    // Preserve admitted following across coalesced updates and native anchor scrolls.
+    const wasAtBottom = atBottom || frame?.atBottom === true;
     if (frame !== undefined) {
-      cancelAnimationFrame(frame);
+      cancelAnimationFrame(frame.id);
     }
-    frame = requestAnimationFrame(() => {
+    const id = requestAnimationFrame(() => {
       frame = undefined;
       const container = options.container();
       if (!container?.isConnected || options.identity() !== identity) {
         return;
       }
-      const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
-      if (!force && (!options.enabled() || (!atBottom && distance >= 120))) {
+      if (
+        !force &&
+        (!options.enabled() ||
+          (!wasAtBottom &&
+            container.scrollHeight - container.scrollTop - container.clientHeight >= 120))
+      ) {
         return;
       }
-      container.scrollTop = container.scrollHeight;
+      if (options.scrollToEnd) {
+        options.scrollToEnd();
+      } else {
+        container.scrollTop = container.scrollHeight;
+      }
       atBottom = true;
     });
+    frame = { id, atBottom: wasAtBottom };
   }
   const follow = {
     reset() {
@@ -38,9 +51,9 @@ export function useStreamAutoFollow(options: {
     schedule(force = false) {
       schedule(options.identity(), force);
     },
-    handleScroll: (event: Event) => {
-      const container = event.currentTarget;
-      if (container instanceof HTMLElement) {
+    handleScroll: () => {
+      const container = options.container();
+      if (container) {
         atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
       }
     },

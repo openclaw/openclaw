@@ -34,12 +34,7 @@ async function resolveNativeInstall(): Promise<{ buildId: string; capture: strin
     const buildIdFile = resolve(directory, "FaceTimeHelper.build-id");
     const protocolFile = resolve(directory, "native-protocol.env");
     try {
-      await Promise.all([
-        access(capture, constants.X_OK),
-        access(helper, constants.R_OK),
-        access(buildIdFile, constants.R_OK),
-        access(protocolFile, constants.R_OK),
-      ]);
+      await Promise.all([access(capture, constants.X_OK), access(helper, constants.R_OK)]);
       const [buildId, protocol] = await Promise.all([
         readFile(buildIdFile, "utf8").then((value) => value.trim()),
         readFile(protocolFile, "utf8").then((value) => value.trim()),
@@ -62,14 +57,7 @@ export async function inspectFaceTimeNativePackage(): Promise<boolean> {
   );
 }
 
-export async function inspectFaceTimeArtifacts(): Promise<{
-  nativeInstall: boolean;
-  stagedHelper: boolean;
-  helperKey: boolean;
-  helperBuildStamp: boolean;
-  stagedHelperDylibs: number;
-  cachedDriver: boolean;
-}> {
+export async function inspectFaceTimeArtifacts() {
   const readable = async (file: string, mode: number) => {
     try {
       await access(file, mode);
@@ -78,8 +66,13 @@ export async function inspectFaceTimeArtifacts(): Promise<{
       return false;
     }
   };
-  const helperTempDirs = ["com.apple.FaceTime", "com.apple.mobilephone"].map((bundle) =>
-    resolve(homedir(), "Library", "Containers", bundle, "Data", "tmp"),
+  const helperTempDir = resolve(
+    homedir(),
+    "Library",
+    "Containers",
+    "com.apple.FaceTime",
+    "Data",
+    "tmp",
   );
   const countHelpers = async (directory: string) => {
     try {
@@ -102,9 +95,7 @@ export async function inspectFaceTimeArtifacts(): Promise<{
     readable(resolveHelperDylib(), constants.R_OK),
     readable(resolveHelperStateFile("helper-ipc-key"), constants.R_OK),
     readable(resolveHelperStateFile("helper-build.sha256"), constants.R_OK),
-    Promise.all(helperTempDirs.map(countHelpers)).then((counts) =>
-      counts.reduce((total, count) => total + count, 0),
-    ),
+    countHelpers(helperTempDir),
     readable(
       resolve(
         homedir(),

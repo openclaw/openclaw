@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveGatewayInteractiveSurfaceAuth as interactiveAuth,
@@ -10,32 +10,56 @@ const ambientAuth: NodeJS.ProcessEnv = {
   OPENCLAW_GATEWAY_PASSWORD: "ambient-password", // pragma: allowlist secret
 };
 
-function missingSecretRef(id: string) {
-  return { source: "env", provider: "default", id } as const;
-}
+const missingSecretRef = (id: string) => ({ source: "env", provider: "default", id }) as const;
 
 function params(
   gateway: NonNullable<OpenClawConfig["gateway"]>,
   surface: "local" | "remote" = "local",
-  env = ambientAuth,
 ) {
-  const config: OpenClawConfig = {
-    gateway,
-    secrets: { providers: { default: { source: "env" } } },
+  return {
+    config: { gateway, secrets: { providers: { default: { source: "env" as const } } } },
+    surface,
+    env: ambientAuth,
   };
-  return { config, surface, env };
 }
 
 const token = missingSecretRef("MISSING_LOCAL_TOKEN");
 const password = missingSecretRef("MISSING_LOCAL_PASSWORD");
-const remoteToken = params(
-  { remote: { token: missingSecretRef("MISSING_REMOTE_TOKEN") } },
-  "remote",
-);
-const remotePassword = params(
-  { remote: { password: missingSecretRef("MISSING_REMOTE_PASSWORD") } },
-  "remote",
-);
+const remoteTokenRef = missingSecretRef("MISSING_REMOTE_TOKEN");
+const remotePasswordRef = missingSecretRef("MISSING_REMOTE_PASSWORD");
+const remoteToken = params({ remote: { token: remoteTokenRef } }, "remote");
+const remotePassword = params({ remote: { password: remotePasswordRef } }, "remote");
+
+it("loads secret providers only when selected Gateway credentials use a ref", async () => {
+  const loadProviders = vi.fn(() => ({
+    resolveSecretRefValues: vi.fn(async () => new Map([["env:default:TEST_TOKEN", "ref-token"]])),
+  }));
+  vi.resetModules();
+  // mock-isolation: Observe provider initialization without loading the real provider graph.
+  vi.doMock("../secrets/resolve.js", loadProviders);
+  try {
+    const { resolveGatewayInteractiveSurfaceAuth } = await import("./auth-surface-resolution.js");
+    await expect(
+      resolveGatewayInteractiveSurfaceAuth(
+        params({ auth: { mode: "token", token: "plain-token" } }),
+      ),
+    ).resolves.toMatchObject({ token: "plain-token" });
+    await expect(
+      resolveGatewayInteractiveSurfaceAuth(params({ auth: { mode: "token" } })),
+    ).resolves.toMatchObject({ token: "ambient-token" });
+    expect(loadProviders).not.toHaveBeenCalled();
+
+    await expect(
+      resolveGatewayInteractiveSurfaceAuth(
+        params({ auth: { mode: "token", token: missingSecretRef("TEST_TOKEN") } }),
+      ),
+    ).resolves.toMatchObject({ token: "ref-token" });
+    expect(loadProviders).toHaveBeenCalledOnce();
+  } finally {
+    vi.doUnmock("../secrets/resolve.js");
+    vi.resetModules();
+  }
+});
 
 it.each([
   ["local token mode", params({ auth: { mode: "token", token } }), "gateway.auth.token"],
@@ -63,21 +87,13 @@ it("preserves a healthy configured remote password when its sibling token ref fa
   const request = params(
     {
       remote: {
-        token: missingSecretRef("MISSING_REMOTE_TOKEN"),
+        token: remoteTokenRef,
         password: "configured-password", // pragma: allowlist secret
       },
     },
     "remote",
   );
-  const [probe, interactive] = await Promise.all([probeAuth(request), interactiveAuth(request)]);
-
-  expect(probe).toEqual({
-    token: undefined,
-    password: "configured-password", // pragma: allowlist secret
-    source: "config",
-    diagnostics: [expect.stringContaining("gateway.remote.token SecretRef is unresolved")],
-  });
-  expect(interactive).toEqual({
+  await expect(interactiveAuth(request)).resolves.toEqual({
     token: undefined,
     password: "configured-password", // pragma: allowlist secret
   });
@@ -89,17 +105,17 @@ it.each([
 ] as const)(
   "ignores an unavailable $inactiveCredential ref when explicit $mode mode selects its sibling",
   async ({ mode, inactiveCredential }) => {
-    await expect(
-      probeAuth(
-        params({
-          auth: {
-            mode,
-            [mode]: `configured-${mode}`,
-            [inactiveCredential]: missingSecretRef("MISSING_INACTIVE_CREDENTIAL"),
-          },
-        }),
-      ),
-    ).resolves.toEqual({ [mode]: `configured-${mode}`, source: "config" });
+    const request = params({
+      auth: {
+        mode,
+        [mode]: `configured-${mode}`,
+        [inactiveCredential]: missingSecretRef("MISSING_INACTIVE_CREDENTIAL"),
+      },
+    });
+    await expect(probeAuth(request)).resolves.toEqual({
+      [mode]: `configured-${mode}`,
+      source: "config",
+    });
   },
 );
 
@@ -115,10 +131,7 @@ it.each([
   "keeps explicit %s authoritative over unavailable configured refs",
   async (_name, request, kind, value) => {
     await expect(interactiveAuth({ ...request, explicitAuth: { [kind]: value } })).resolves.toEqual(
-      {
-        token: kind === "token" ? value : undefined,
-        password: kind === "password" ? value : undefined,
-      },
+      { token: undefined, password: undefined, [kind]: value },
     );
   },
 );

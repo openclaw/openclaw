@@ -93,6 +93,12 @@ export async function handleDirFetch(params: DirFetchParams) {
     return directory;
   }
   const { canonicalPath: canonical, identity } = directory;
+  const failure = (code: string, message: string) => ({
+    ok: false as const,
+    code,
+    message,
+    canonicalPath: canonical,
+  });
 
   let preflightEntries: string[] | undefined;
   if (preflightOnly) {
@@ -103,20 +109,10 @@ export async function handleDirFetch(params: DirFetchParams) {
       const errorCode = err && typeof err === "object" && "code" in err ? err.code : undefined;
       const code =
         errorCode === "CANONICAL_PATH_CHANGED" ? "CANONICAL_PATH_CHANGED" : classifyFsError(err);
-      return {
-        ok: false as const,
-        code,
-        message: `preflight readdir failed: ${String(err)}`,
-        canonicalPath: canonical,
-      };
+      return failure(code, `preflight readdir failed: ${String(err)}`);
     }
     if (entries === "TOO_MANY") {
-      return {
-        ok: false as const,
-        code: "TREE_TOO_LARGE",
-        message: "directory tree exceeds 5000 entries during preflight",
-        canonicalPath: canonical,
-      };
+      return failure("TREE_TOO_LARGE", "directory tree exceeds 5000 entries during preflight");
     }
 
     preflightEntries = entries;
@@ -132,28 +128,19 @@ export async function handleDirFetch(params: DirFetchParams) {
   );
 
   if (tarBuffer === "TOO_LARGE") {
-    return {
-      ok: false as const,
-      code: "TREE_TOO_LARGE",
-      message: `tarball exceeded ${maxBytes} byte limit ${preflightOnly ? "during preflight" : "mid-stream"}`,
-      canonicalPath: canonical,
-    };
+    return failure(
+      "TREE_TOO_LARGE",
+      `tarball exceeded ${maxBytes} byte limit ${preflightOnly ? "during preflight" : "mid-stream"}`,
+    );
   }
   if (tarBuffer === "TIMEOUT") {
-    return {
-      ok: false as const,
-      code: "READ_ERROR",
-      message: "tar command exceeded 60s wall-clock timeout (slow filesystem or symlink loop?)",
-      canonicalPath: canonical,
-    };
+    return failure(
+      "READ_ERROR",
+      "tar command exceeded 60s wall-clock timeout (slow filesystem or symlink loop?)",
+    );
   }
   if (tarBuffer === "CANONICAL_PATH_CHANGED") {
-    return {
-      ok: false as const,
-      code: "CANONICAL_PATH_CHANGED",
-      message: "resolved path differs from the authorized target",
-      canonicalPath: canonical,
-    };
+    return failure("CANONICAL_PATH_CHANGED", "resolved path differs from the authorized target");
   }
   if (tarBuffer === "ERROR") {
     // Preflight preserves filesystem error classification after a tar race;
@@ -164,12 +151,7 @@ export async function handleDirFetch(params: DirFetchParams) {
         return currentDirectory;
       }
     }
-    return {
-      ok: false as const,
-      code: "READ_ERROR",
-      message: "tar command failed",
-      canonicalPath: canonical,
-    };
+    return failure("READ_ERROR", "tar command failed");
   }
 
   if (preflightEntries) {
@@ -193,12 +175,10 @@ export async function handleDirFetch(params: DirFetchParams) {
   try {
     entries = await inspectDirFetchArchive(tarBuffer, 10_000);
   } catch (error) {
-    return {
-      ok: false as const,
-      code: error instanceof ArchiveLimitError ? "TREE_TOO_LARGE" : "READ_ERROR",
-      message: `archive inspection failed: ${formatErrorMessage(error)}`,
-      canonicalPath: canonical,
-    };
+    return failure(
+      error instanceof ArchiveLimitError ? "TREE_TOO_LARGE" : "READ_ERROR",
+      `archive inspection failed: ${formatErrorMessage(error)}`,
+    );
   }
 
   return {

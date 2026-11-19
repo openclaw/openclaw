@@ -47,7 +47,10 @@ function fixture() {
   writeJson(path.join(state, "session-sqlite-migration-runs/import.json"), {
     completedAt: 1,
     targets: [
-      { completedMoves: [{ kind: "legacy-store", sourcePath: storePath, archivePath: archive }] },
+      {
+        validationBeforeArchive: "passed",
+        completedMoves: [{ kind: "legacy-store", sourcePath: storePath, archivePath: archive }],
+      },
     ],
   });
   using seedDb = new DatabaseSync(database);

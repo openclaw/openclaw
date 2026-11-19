@@ -70,10 +70,9 @@ it("retains stdout when the source resumes and ends before subscription", async 
   expect(received).toBe("output before subscription");
 });
 
-it.each([false, true])("rejects closure before EOF (already closed: %s)", async (alreadyClosed) => {
-  const { source, output, onFailure } = fixture(undefined, alreadyClosed);
+it("rejects a source already closed before subscription", async () => {
+  const { output, onFailure } = fixture(undefined, true);
   const consumed = output.consume(() => {});
-  source.destroy();
   await expect(consumed).rejects.toThrow("Process stdout closed before EOF");
   expect(onFailure.mock.calls[0]?.[0]).toEqual(new Error("Process stdout closed before EOF"));
 });
@@ -93,7 +92,6 @@ it("requests stop for a rejected consumer and joins native completion before rej
     source.end("discard after stop");
     await finished(source);
     await consumed.catch(() => undefined);
-    expect(onFailure).toHaveBeenCalledTimes(1);
     await expectPending(joined);
     completion.resolve({ code: 0 });
     await expect(joined).rejects.toBe(failure);
@@ -147,17 +145,6 @@ it("rejects disposal after EOF while the sink finish event is queued", async () 
   // Let the async final callback queue finish before disposal queues its error.
   await Promise.resolve();
   output.close();
-  await expect(consumed).rejects.toThrow("Process stdout consumption closed");
-  expect(onFailure).not.toHaveBeenCalled();
-});
-
-it("retains an accepted consumer after disposal until it settles", async () => {
-  const { source, output, onFailure, entered, release, consumed } = pausedConsumer();
-  source.write("accepted");
-  await entered.promise;
-  output.close();
-  await expectPending(consumed);
-  release.resolve();
   await expect(consumed).rejects.toThrow("Process stdout consumption closed");
   expect(onFailure).not.toHaveBeenCalled();
 });

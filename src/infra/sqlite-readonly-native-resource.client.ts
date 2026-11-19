@@ -6,7 +6,7 @@ import {
   retainOpenClawStateWorkerErrorPayload,
   type OpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
-import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
+import { SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
 import type {
   SqliteNativeCommand,
   SqliteNativeOwnerReply,
@@ -203,7 +203,7 @@ export function createSqliteReadOnlyNativeResourceClient(port: MessagePort) {
       pathname: string,
       options: {
         mode: "sync" | "async";
-        stagingRoot?: string;
+        stagingRoot: string;
         signal?: AbortSignal;
         expectedSourceIdentity?: DatabaseFileIdentity;
       },

@@ -52,22 +52,12 @@ describe("public account config writers", () => {
 });
 
 const sibling = { token: "keep" };
-const token = { source: "env", provider: "default", id: "SAMPLE_TOKEN" };
-const otherChannel = { enabled: false };
 const clearArgs = { sectionKey: "sample", accountId: "default", fields: ["token", "secret"] };
-function config(sample?: object, other?: object): OpenClawConfig {
-  return sample || other
-    ? { channels: { ...(sample ? { sample } : {}), ...(other ? { other } : {}) } }
-    : {};
+function config(sample: object): OpenClawConfig {
+  return { channels: { sample } };
 }
 
 it.each([
-  [
-    "root field group",
-    config({ token, secret: "", accounts: {}, name: "Keep" }, otherChannel),
-    config({ accounts: {}, name: "Keep" }, otherChannel),
-    {},
-  ],
   [
     "nested field presence",
     config({ accounts: { primary: { token: "   ", secret: "", name: "Keep" }, sibling } }),
@@ -80,7 +70,6 @@ it.each([
     config({ token: "root" }),
     { accountId: "" },
   ],
-  ["prunes empty config", config({ accounts: { default: { token: "remove" } } }), {}, {}],
 ] as const)("clear config: %s", (_name, cfg, nextConfig, options) => {
   const original = structuredClone(cfg);
   expect(

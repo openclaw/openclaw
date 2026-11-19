@@ -1,6 +1,6 @@
-import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { getSlackRuntime } from "../../runtime.js";
 import { truncateSlackText } from "../../truncate.js";
 
 const SLACK_INTERACTION_EVENT_PREFIX = "Slack interaction: ";
@@ -154,19 +154,56 @@ function formatSlackInteractionSystemEvent(payload: Record<string, unknown>): st
   });
 }
 
-export function enqueueSlackInteractionEvent(
+type SessionEventOptions = Parameters<PluginRuntime["system"]["enqueueSessionEvent"]>[1];
+export type SlackInteractionEventRoute = Pick<SessionEventOptions, "agentId" | "sessionKey"> &
+  Required<Pick<SessionEventOptions, "expectedTarget">>;
+
+export async function captureSlackInteractionEventRoute(
+  route: Pick<SessionEventOptions, "agentId" | "sessionKey">,
+  log?: (message: string) => void,
+): Promise<SlackInteractionEventRoute | undefined> {
+  try {
+    const expectedTarget = await getSlackRuntime().system.captureSessionEventTarget(
+      route.agentId,
+      route.sessionKey,
+    );
+    return { agentId: route.agentId, sessionKey: route.sessionKey, expectedTarget };
+  } catch (error) {
+    log?.(`slack:interaction follow-up capture refused: ${String(error)}`);
+    return undefined;
+  }
+}
+
+export async function enqueueSlackInteractionEvent(
   payload: Record<string, unknown>,
-  route: Parameters<typeof enqueueRoutedSystemEvent>[1],
-  options: Parameters<typeof enqueueRoutedSystemEvent>[2],
-): void {
-  if (enqueueRoutedSystemEvent(formatSlackInteractionSystemEvent(payload), route, options)) {
-    requestHeartbeat({
-      source: "hook",
-      intent: "immediate",
-      reason: "hook:slack-interaction",
-      agentId: route.agentId,
-      sessionKey: route.sessionKey,
-      heartbeat: { target: "last" },
+  route: SlackInteractionEventRoute,
+  options: Omit<SessionEventOptions, keyof SlackInteractionEventRoute>,
+  log?: (message: string) => void,
+): Promise<boolean> {
+  try {
+    const receipt = getSlackRuntime().system.enqueueSessionEvent(
+      formatSlackInteractionSystemEvent(payload),
+      {
+        ...options,
+        createIfMissing: true,
+        expectedTarget: route.expectedTarget,
+        agentId: route.agentId,
+        sessionKey: route.sessionKey,
+      },
+    );
+    const accepted = await receipt.accepted;
+    if (!accepted.ok) {
+      log?.(`slack:interaction follow-up refused: ${accepted.error}`);
+      return false;
+    }
+    void receipt.settled.then((outcome) => {
+      if (outcome.status !== "completed") {
+        log?.(`slack:interaction follow-up ${outcome.status}: ${outcome.error ?? "cancelled"}`);
+      }
     });
+    return true;
+  } catch (error) {
+    log?.(`slack:interaction follow-up refused: ${String(error)}`);
+    return false;
   }
 }

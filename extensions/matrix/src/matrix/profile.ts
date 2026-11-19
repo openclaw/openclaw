@@ -18,7 +18,6 @@ type MatrixProfileLoadResult = {
 };
 
 export type MatrixProfileSyncResult = {
-  skipped: boolean;
   displayNameUpdated: boolean;
   avatarUpdated: boolean;
   resolvedAvatarUrl: string | null;
@@ -81,7 +80,6 @@ export async function syncMatrixOwnProfile(params: {
 
   if (!desiredDisplayName && !desiredAvatarUrl) {
     return {
-      skipped: true,
       displayNameUpdated: false,
       avatarUpdated: false,
       ...avatar,
@@ -112,7 +110,6 @@ export async function syncMatrixOwnProfile(params: {
   }
 
   return {
-    skipped: false,
     displayNameUpdated,
     avatarUpdated,
     ...avatar,

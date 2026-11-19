@@ -50,10 +50,6 @@ import {
   isRecord,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
-  resolveLiveToolResultMaxChars,
-} from "openclaw/plugin-sdk/text-utility-runtime";
-import {
   computerFrameImageIdentity,
   invalidateCodexComputerFrame,
   type CodexComputerContextEpoch,
@@ -68,7 +64,7 @@ import {
   type CodexDynamicToolSchemaQuarantine,
   type CodexToolDescriptor,
 } from "./dynamic-tool-catalog.js";
-import { convertToolContents, enforceWholeSkillResult } from "./dynamic-tool-content.js";
+import { convertToolContents, createCodexToolResultPresentation } from "./dynamic-tool-content.js";
 import {
   type CodexDynamicToolHookContextBase,
   projectCodexExecutableDynamicToolSurface,
@@ -97,6 +93,8 @@ import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reaso
 type CodexDynamicToolHookContext = CodexDynamicToolHookContextBase & {
   remoteWorkspaceRoot?: string;
   remoteWorkspaceRequestTimeoutMs?: number;
+  /** Gateway-only skill name to Gateway directory, when the app-server is remote. */
+  gatewayOnlySkillDirs?: ReadonlyMap<string, string>;
   currentChannelProvider?: string;
   contextWindowTokens?: number;
   currentChannelId?: string;
@@ -121,6 +119,7 @@ export type CodexDynamicToolBridge = {
   specs: CodexDynamicToolSpec[];
   resultContentSourceForTool: (toolName: string) => AnyAgentTool["resultContentSource"];
   sideEffectOwnerKeyForTool: (toolName: string) => string | undefined;
+  hideFromChannelProgressForTool: (toolName: string) => boolean | undefined;
   handleToolCall: (
     params: CodexDynamicToolCallParams,
     options?: {
@@ -148,8 +147,8 @@ export type CodexDynamicToolBridge = {
 export function createCodexDynamicToolBridge(params: {
   tools: AnyAgentTool[];
   registeredTools?: readonly CodexToolDescriptor[];
-  registeredFallbackTools?: AnyAgentTool[];
   registeredSpecs?: readonly CodexDynamicToolSpec[];
+  requireExactRegisteredDefinitions?: boolean;
   signal: AbortSignal;
   assertCurrent?: () => void;
   assertCurrentAsync?: () => Promise<void>;
@@ -160,11 +159,9 @@ export function createCodexDynamicToolBridge(params: {
   directToolNames?: Iterable<string>;
 }): CodexDynamicToolBridge {
   const toolResultHookContext = toToolResultHookContext(params.hookContext);
-  const contextWindowTokens = params.hookContext?.contextWindowTokens;
-  const toolResultMaxChars =
-    contextWindowTokens !== undefined && contextWindowTokens > 0
-      ? Math.max(1, resolveLiveToolResultMaxChars({ contextWindowTokens }))
-      : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
+  const { maxChars: toolResultMaxChars, presentSkillResult } = createCodexToolResultPresentation(
+    params.hookContext,
+  );
   const availableProjection = projectCodexExecutableDynamicToolSurface(
     params.tools,
     params.hookContext,
@@ -182,15 +179,9 @@ export function createCodexDynamicToolBridge(params: {
     inheritedNames ?? new Set(registeredProjection.tools.map((entry) => entry.name));
   const finalized = finalizeCodexToolAvailability(
     availableProjection.tools.filter((entry) => registrationNames.has(entry.name)),
+    params.requireExactRegisteredDefinitions ? inheritedSpecs : undefined,
   );
   const availableTools = finalized.tools;
-  const registeredFallbackProjection = projectCodexExecutableDynamicToolSurface(
-    params.registeredFallbackTools ?? [],
-    params.hookContext,
-  );
-  const registeredFallbackTools = registeredFallbackProjection.tools.filter(
-    (entry) => registrationNames.has(entry.name) && !finalized.preparedNames.has(entry.name),
-  );
   const pluginLocalMediaTrustByToolName = new Map<string, ReadonlySet<string>>();
   for (const { name, tool } of availableTools) {
     const pluginMeta = getPluginToolMeta(tool);
@@ -203,9 +194,8 @@ export function createCodexDynamicToolBridge(params: {
     }
   }
   availableProjection.quarantinedTools.push(...finalized.quarantinedTools);
-  const toolMap = new Map(availableTools.map((entry) => [entry.name, entry]));
-  const executionToolMap = new Map(
-    [...registeredFallbackTools, ...availableTools].map((entry) => [
+  const toolMap = new Map(
+    availableTools.map((entry) => [
       entry.name,
       {
         ...entry,
@@ -228,7 +218,6 @@ export function createCodexDynamicToolBridge(params: {
     inheritedNames ?? new Set(registeredSpecTools.map((entry) => entry.name));
   const quarantinedTools = dedupeQuarantinedDynamicTools([
     ...availableProjection.quarantinedTools,
-    ...registeredFallbackProjection.quarantinedTools,
     ...registeredProjection.quarantinedTools,
   ]);
   reportQuarantinedDynamicTools({
@@ -308,6 +297,8 @@ export function createCodexDynamicToolBridge(params: {
       const tool = toolMap.get(toolName)?.tool;
       return tool ? getPluginToolSideEffectOwnerKey(tool) : undefined;
     },
+    hideFromChannelProgressForTool: (toolName) =>
+      toolMap.get(toolName)?.tool.hideFromChannelProgress,
     telemetry,
     setRemoteWorkspaceFileReader: (reader) => {
       readRemoteWorkspaceFile = reader;
@@ -328,7 +319,7 @@ export function createCodexDynamicToolBridge(params: {
           toolName,
           toolCallOrdinal: options?.toolCallOrdinal,
         });
-      const toolEntry = executionToolMap.get(call.tool);
+      const toolEntry = toolMap.get(call.tool);
       if (!toolEntry) {
         const executedArguments = asNonArrayRecord(call.arguments);
         const message = registeredToolNames.has(call.tool)
@@ -339,7 +330,7 @@ export function createCodexDynamicToolBridge(params: {
         notifyAgentToolResult(options?.onAgentToolResult, call.tool, result, true);
         return createFailedDynamicToolResponse(message, {
           executedArguments,
-          executionStarted: false,
+          unknownTool: true,
         });
       }
       const { tool, name: toolName } = toolEntry;
@@ -512,7 +503,7 @@ export function createCodexDynamicToolBridge(params: {
             isError: rawIsErrorForPresentation,
             result: event.result,
           });
-          const result = enforceWholeSkillResult(toolName, middlewareResult, toolResultMaxChars);
+          const result = await presentSkillResult(toolName, middlewareResult);
           presentationIsError = rawIsErrorForPresentation || isToolResultError(result);
           // A successful spawn is durable before presentation middleware can rewrite details.
           const acceptedSessionSpawn =
@@ -704,13 +695,11 @@ export function projectCodexExecutableDynamicTools(params: {
   hookContext?: CodexDynamicToolHookContext;
 }): {
   availableTools: AnyAgentTool[];
-  quarantinedTools: CodexDynamicToolSchemaQuarantine[];
 } {
   const projected = projectCodexExecutableDynamicToolSurface(params.tools, params.hookContext);
   const finalized = finalizeCodexToolAvailability(projected.tools);
   return {
     availableTools: finalized.tools.map((entry) => entry.tool),
-    quarantinedTools: [...projected.quarantinedTools, ...finalized.quarantinedTools],
   };
 }
 

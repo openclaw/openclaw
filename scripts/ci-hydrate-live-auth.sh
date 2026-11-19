@@ -34,24 +34,26 @@ write_secret_file() {
 
 activate_claude_oauth_access_token() {
   local credentials="${OPENCLAW_CLAUDE_CREDENTIALS_JSON:-}"
-  if [[ -z "$credentials" ]]; then
-    return
-  fi
-
-  local access_token expires_at now_ms
+  local access_token="${ANTHROPIC_OAUTH_TOKEN:-${CLAUDE_CODE_OAUTH_TOKEN:-}}"
+  local expires_at now_ms candidate
   local min_remaining_ms="$(( 90 * 60 * 1000 ))"
-  access_token="$(jq -r '.claudeAiOauth.accessToken // empty' <<<"$credentials" 2>/dev/null || true)"
-  expires_at="$(jq -r '.claudeAiOauth.expiresAt // 0' <<<"$credentials" 2>/dev/null || true)"
-  now_ms="$(( $(date +%s) * 1000 ))"
+  if [[ -n "$credentials" ]]; then
+    candidate="$(jq -r '.claudeAiOauth.accessToken // empty' <<<"$credentials" 2>/dev/null || true)"
+    expires_at="$(jq -r '.claudeAiOauth.expiresAt // 0' <<<"$credentials" 2>/dev/null || true)"
+    now_ms="$(( $(date +%s) * 1000 ))"
 
-  if [[ "$access_token" != sk-ant-oat* ]]; then
-    echo "::warning::Claude credentials JSON has no usable OAuth access token; keeping the configured Anthropic fallback." >&2
-    return
+    if [[ "$candidate" != sk-ant-oat* ]]; then
+      echo "::warning::Claude credentials JSON has no usable OAuth access token; keeping the configured Anthropic fallback." >&2
+    # Stable live shards can run for an hour, so never shadow the fallback with
+    # a token that could expire before setup, retries, and cleanup complete.
+    elif ! [[ "$expires_at" =~ ^[0-9]+$ ]] || (( expires_at <= now_ms + min_remaining_ms )); then
+      echo "::warning::Claude credentials JSON OAuth access token lacks 90 minutes of remaining life; keeping the configured Anthropic fallback." >&2
+    else
+      access_token="$candidate"
+    fi
   fi
-  # Stable live shards can run for an hour, so never shadow the fallback with
-  # a token that could expire before setup, retries, and cleanup complete.
-  if ! [[ "$expires_at" =~ ^[0-9]+$ ]] || (( expires_at <= now_ms + min_remaining_ms )); then
-    echo "::warning::Claude credentials JSON OAuth access token lacks 90 minutes of remaining life; keeping the configured Anthropic fallback." >&2
+
+  if [[ -z "$access_token" ]]; then
     return
   fi
 
@@ -65,6 +67,7 @@ activate_claude_oauth_access_token() {
 activate_claude_oauth_access_token
 
 for env_key in \
+  ABLITERATION_API_KEY \
   AZURE_SPEECH_KEY \
   AZURE_SPEECH_REGION \
   BASETEN_API_KEY \

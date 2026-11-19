@@ -5,7 +5,6 @@ import {
   sqliteStringSet,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { chunkItems } from "../utils/chunk-items.js";
 import type { PersistedPluginModelCatalog } from "./plugin-model-catalog-read.types.js";
@@ -25,8 +24,9 @@ export type PluginModelCatalogReplacement = {
   catalogs: PersistedPluginModelCatalog[];
 };
 
+/** The caller owns read admission and connection cleanup. */
 export function readPluginModelCatalogEntries(
-  options: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
+  db: EngineConnection,
   scope: string,
   pluginIds?: readonly string[],
 ): PersistedPluginModelCatalog[] {
@@ -34,24 +34,21 @@ export function readPluginModelCatalogEntries(
     return [];
   }
   const allowed = pluginIds && new Set(pluginIds);
-  const result = withOpenClawAgentDatabaseReadOnly(({ db }) => {
-    let query = getNodeSqliteKysely<PluginModelCatalogDatabase>(db)
-      .selectFrom("cache_entries")
-      .select(["key", "value_json"])
-      .where("scope", "=", scope)
-      .orderBy("key");
-    if (pluginIds) {
-      query = query.where("key", "in", sqliteStringSet(pluginIds));
-    }
-    // SQLite binding normalizes lone surrogates; retain exact JS membership so
-    // such a selector cannot return a replacement-character catalog.
-    return executeSqliteQuerySync(db, query).rows.flatMap((row) =>
-      row.value_json === null || (allowed && !allowed.has(row.key))
-        ? []
-        : [{ pluginId: row.key, contents: row.value_json }],
-    );
-  }, options);
-  return result.found ? result.value : [];
+  let query = getNodeSqliteKysely<PluginModelCatalogDatabase>(db)
+    .selectFrom("cache_entries")
+    .select(["key", "value_json"])
+    .where("scope", "=", scope)
+    .orderBy("key");
+  if (pluginIds) {
+    query = query.where("key", "in", sqliteStringSet(pluginIds));
+  }
+  // SQLite binding normalizes lone surrogates; retain exact JS membership so
+  // such a selector cannot return a replacement-character catalog.
+  return executeSqliteQuerySync(db, query).rows.flatMap((row) =>
+    row.value_json === null || (allowed && !allowed.has(row.key))
+      ? []
+      : [{ pluginId: row.key, contents: row.value_json }],
+  );
 }
 
 /** The admitted worker or Doctor transaction owns the connection and commit. */

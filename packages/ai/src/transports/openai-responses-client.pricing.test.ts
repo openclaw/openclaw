@@ -8,32 +8,16 @@ import {
   responsesServiceTierObserver,
   type ResponsesServiceTierObservation,
 } from "./openai-responses-contracts.js";
-
-type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
+import type { SdkResponse } from "./openai-responses-sdk.test-support.js";
 
 const sseState = vi.hoisted(() => ({
   outcomes: [] as Array<Error | SdkResponse>,
   requests: [] as Array<Record<string, unknown>>,
 }));
 
-vi.mock("openai", () => {
-  class MockOpenAI {
-    responses = {
-      create: (request: Record<string, unknown>) => {
-        sseState.requests.push(request);
-        const outcome = sseState.outcomes.shift() ?? new Error("Unexpected SSE request");
-        return {
-          withResponse: async () => {
-            if (outcome instanceof Error) {
-              throw outcome;
-            }
-            return outcome;
-          },
-        };
-      },
-    };
-  }
-  return { default: MockOpenAI, AzureOpenAI: MockOpenAI };
+vi.mock("openai", async () => {
+  const { createResponsesSdkMock } = await import("./openai-responses-sdk.test-support.js");
+  return createResponsesSdkMock(sseState);
 });
 
 vi.mock("openai/resources/responses/ws.js", () => ({
@@ -42,22 +26,17 @@ vi.mock("openai/resources/responses/ws.js", () => ({
   },
 }));
 
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 
 // Cost figures are per million tokens; usage below uses 1M input + 1M output
 // so the expected totals read directly off the multiplied unit prices.
-const model = {
-  id: "gpt-5.5",
+const model = makeProviderModel("openai-responses", "openai", "gpt-5.5", {
   name: "GPT 5.5",
-  api: "openai-responses",
-  provider: "openai",
   baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
   cost: { input: 2, output: 10, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 200_000,
-  maxTokens: 8192,
-} satisfies Model<"openai-responses">;
+}) satisfies Model<"openai-responses">;
 
 function completedResponse(
   serviceTier: string | null | undefined,

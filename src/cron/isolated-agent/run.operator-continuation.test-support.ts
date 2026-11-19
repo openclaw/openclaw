@@ -21,9 +21,11 @@ export function createOperatorContinuationService(params: {
   resolveGatewayContext: () => GatewayRequestContext;
   runIsolated: typeof runCronIsolatedAgentTurn;
   onEvent: CronServiceDeps["onEvent"];
+  evaluateCronTrigger?: CronServiceDeps["evaluateCronTrigger"];
 }) {
   return createCronServiceWithStateForTest({
     onEvent: params.onEvent,
+    evaluateCronTrigger: params.evaluateCronTrigger,
     scheduler: createTestGatewayScheduler(params.clock),
     nowMs: params.clock.now,
     storePath: path.join(params.stateDir, "cron", "jobs.json"),
@@ -31,7 +33,6 @@ export function createOperatorContinuationService(params: {
     defaultAgentId: "main",
     log: createNoopLogger(),
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runSchedulerOwned: createScheduledGatewayRunner(params.resolveGatewayContext),
     runSessionEvent: (request) =>
       runCronSessionTurn({

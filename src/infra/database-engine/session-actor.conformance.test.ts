@@ -4,6 +4,7 @@ import { appendSessionManagerActor } from "../../agents/sessions/session-manager
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
+  readTranscriptMutationAtSync,
   replaceSessionEntry,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
@@ -182,12 +183,14 @@ describe
           appendSessionManagerActor({
             actor,
             toolResult: false,
+            message: input.kind === "message" ? { role: "user" } : null,
             assertCurrent() {},
             append: input,
           });
         return {
           actor,
           scope,
+          readMutationAt: () => withEngineStoreAdmission(() => readTranscriptMutationAtSync(scope)),
           append: (content: string, initialize = false) =>
             append({
               kind: "message",
@@ -304,12 +307,22 @@ describe
         ]);
         const beforePartialPair = first.actor.snapshot(authority);
         assert(beforePartialPair);
+        expect(beforePartialPair.transcript.version).toMatchObject({
+          generation: afterRefusal.transcript.version.generation,
+          rawSeq: (afterRefusal.transcript.version.rawSeq ?? -1) + 2,
+        });
+        expect(beforePartialPair.transcript.version.updatedAt).toBeGreaterThan(
+          afterRefusal.transcript.version.updatedAt!,
+        );
+        expect(first.readMutationAt()).toBe(beforePartialPair.transcript.version.updatedAt);
         await expect(first.appendInitialMetadata("refused-model")).rejects.toThrow(
           "Initial thinking metadata was not persisted: transcript-event-not-appended",
         );
         expect(readRows()).toEqual(rowsBeforePartialPair);
         const afterPartialPair = await first.actor.read(authority);
         expect(afterPartialPair.entry).toEqual(beforePartialPair.entry);
+        expect(afterPartialPair.transcript.version).toEqual(beforePartialPair.transcript.version);
+        expect(first.readMutationAt()).toBe(beforePartialPair.transcript.version.updatedAt);
         expect(afterPartialPair.transcript.watermark).toEqual(
           beforePartialPair.transcript.watermark,
         );

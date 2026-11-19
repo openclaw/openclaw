@@ -29,12 +29,18 @@ import {
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGoogleApiClientHeaders } from "../google-api-client-header.js";
-import {
-  resolveGeminiConfig,
-  resolveGeminiBaseUrl,
-  resolveGeminiModel,
-  type GeminiConfig,
-} from "./gemini-web-search-provider.shared.js";
+import { normalizeGoogleApiBaseUrl } from "./google-api-base-url.js";
+
+const DEFAULT_GEMINI_WEB_SEARCH_MODEL = "gemini-3.6-flash";
+
+type GeminiConfig = {
+  apiKey?: unknown;
+  baseUrl?: unknown;
+  headers?: unknown;
+  model?: unknown;
+  providerApiKey?: unknown;
+  providerBaseUrl?: unknown;
+};
 
 type GeminiFreshness = "day" | "week" | "month" | "year";
 
@@ -194,7 +200,8 @@ export async function executeGeminiSearch(
     };
   }
 
-  const geminiConfig = resolveGeminiConfig(searchConfig);
+  const gemini = searchConfig?.gemini;
+  const geminiConfig: GeminiConfig = isRecord(gemini) ? gemini : {};
   const apiKey = resolveGeminiRuntimeApiKey(geminiConfig);
   if (!apiKey) {
     return {
@@ -210,10 +217,12 @@ export async function executeGeminiSearch(
     max: MAX_SEARCH_COUNT,
     message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
   });
-  const model = resolveGeminiModel(geminiConfig);
-  const baseUrl = resolveGeminiBaseUrl(geminiConfig);
+  const model = normalizeOptionalString(geminiConfig?.model) ?? DEFAULT_GEMINI_WEB_SEARCH_MODEL;
+  const baseUrl = normalizeGoogleApiBaseUrl(
+    normalizeOptionalString(geminiConfig?.baseUrl) ??
+      normalizeOptionalString(geminiConfig?.providerBaseUrl),
+  );
   const operatorHeaders = resolveGeminiWebSearchHeaders(geminiConfig);
-  const headersCacheKey = sha256Hex(JSON.stringify([apiKey, operatorHeaders]));
   const cacheKey = buildSearchCacheKey([
     "gemini",
     query,
@@ -222,7 +231,7 @@ export async function executeGeminiSearch(
     freshness,
     dateAfter,
     dateBefore,
-    headersCacheKey,
+    sha256Hex(JSON.stringify([apiKey, operatorHeaders])),
   ]);
   const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
   const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
@@ -249,13 +258,9 @@ export async function executeGeminiSearch(
       transport: "http",
     }),
   };
-  let requestHeaders: HeadersInit = providerHeaders;
-  if (operatorHeaders) {
-    const mergedHeaders = new Headers(operatorHeaders);
-    for (const [name, value] of Object.entries(providerHeaders)) {
-      mergedHeaders.set(name, value);
-    }
-    requestHeaders = mergedHeaders;
+  const requestHeaders = new Headers(operatorHeaders);
+  for (const [name, value] of Object.entries(providerHeaders)) {
+    requestHeaders.set(name, value);
   }
 
   const result = await withTrustedWebSearchEndpoint(
@@ -352,7 +357,7 @@ export async function executeGeminiSearch(
         const detail = reason ? ` (${truncateErrorDetail(reason, 120)})` : "";
         throw new Error(`Gemini search returned no final answer${detail}.`);
       }
-      const rawCitations = (groundingChunks ?? []).flatMap((chunk) => {
+      const citations = (groundingChunks ?? []).flatMap((chunk) => {
         if (!isRecord(chunk) || !isRecord(chunk.web) || typeof chunk.web.uri !== "string") {
           return [];
         }
@@ -364,15 +369,12 @@ export async function executeGeminiSearch(
         ];
       });
 
-      const citations: Array<{ url: string; title?: string }> = [];
-      for (let index = 0; index < rawCitations.length; index += 10) {
-        const batch = rawCitations.slice(index, index + 10);
-        const resolved = await Promise.all(
-          batch.map(async (citation) =>
-            Object.assign({}, citation, { url: await resolveCitationRedirectUrl(citation.url) }),
-          ),
+      for (let index = 0; index < citations.length; index += 10) {
+        await Promise.all(
+          citations.slice(index, index + 10).map(async (citation) => {
+            citation.url = await resolveCitationRedirectUrl(citation.url, signal);
+          }),
         );
-        citations.push(...resolved);
       }
 
       return { content, citations };

@@ -2,6 +2,7 @@ import type { BrowserContext, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { NativeBrowserMessage, NativeBrowserReply } from "../app/native-browser-bridge.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createLightDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -11,12 +12,7 @@ const suite = createControlUiE2eSuite({
 });
 
 async function newBrowserContext() {
-  const context = await suite.newBrowserContext({
-    colorScheme: "light",
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport: { height: 800, width: 1180 },
-  });
+  const context = await suite.newBrowserContext(createLightDesktopControlUiContextOptions());
   await context.route("https://example.com/**", (route) =>
     route.fulfill({ contentType: "text/html", body: "<!doctype html><title>Report</title>" }),
   );

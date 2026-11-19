@@ -17,6 +17,36 @@ function stubChannelPlugin(message: string) {
 }
 
 describe("security audit channel read-only resolution", () => {
+  it("reports both failed account checks in order without auditing the disabled account", async () => {
+    const plugin = stubChannelPlugin("unused resolver");
+    const checks: string[] = [];
+    plugin.config.inspectAccount = () => ({});
+    plugin.config.isEnabled = function () {
+      expect(this).toBe(plugin.config);
+      checks.push("enabled");
+      throw new Error("enabled unavailable");
+    };
+    plugin.config.isConfigured = async function () {
+      expect(this).toBe(plugin.config);
+      checks.push("configured");
+      await Promise.resolve();
+      throw new Error("configured unavailable");
+    };
+    plugin.security = {
+      collectWarnings: () => {
+        throw new Error("disabled accounts must not be audited");
+      },
+    };
+
+    const findings = await collectChannelSecurityFindingsCore({ cfg: {}, plugins: [plugin] });
+
+    expect(checks).toEqual(["enabled", "configured"]);
+    expect(findings.map((finding) => finding.detail)).toEqual([
+      "zalouser:default: failed to evaluate enabled state (enabled unavailable).",
+      "zalouser:default: failed to evaluate configured state (configured unavailable).",
+    ]);
+  });
+
   it("audits the DM policy of an asynchronously prepared account", async () => {
     const plugin = stubChannelPlugin("legacy account resolution");
     const account = { accountId: "default", enabled: true, configured: true };

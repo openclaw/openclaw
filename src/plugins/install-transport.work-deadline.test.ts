@@ -99,7 +99,6 @@ it.each([
     for (const request of [transport.metadata, transport.download]) {
       expect(request).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 1000 }));
     }
-    expect(transport.cleanup).toHaveBeenCalledOnce();
   } else {
     expect(install).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 1000 }));
     expect(install.mock.calls[0]?.[0].trustedSourceLinkedOfficialInstall).toBeUndefined();

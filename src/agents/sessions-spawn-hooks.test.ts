@@ -2,22 +2,15 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
+  installSessionStoreCaptureMock,
   loadSubagentSpawnModuleForTest,
+  setupAcceptedSubagentGatewayMock,
 } from "./subagents/spawn/subagent-spawn.test-helpers.js";
 
 type GatewayRequest = { method?: string; params?: Record<string, unknown> };
-type TestBindingRequest = {
-  targetSessionKey: string;
-  targetKind?: string;
-  conversation: {
-    channel: string;
-    accountId?: string;
-    conversationId: string;
-    parentConversationId?: string;
-  };
-  placement: "current" | "child";
-  metadata?: Record<string, unknown>;
-};
+type LoadOptions = Parameters<typeof loadSubagentSpawnModuleForTest>[0];
+type BindingService = ReturnType<NonNullable<LoadOptions["getSessionBindingService"]>>;
+type TestBindingRequest = Parameters<NonNullable<BindingService["bind"]>>[0];
 
 const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
@@ -120,19 +113,10 @@ function hookArg(mock: { mock: { calls: readonly (readonly unknown[])[] } }, ind
   return requireRecord(mock.mock.calls[0]?.[index], "hook argument");
 }
 
-function expectErrorResultMessage(
-  result: { error?: string; status: string },
-  pattern: RegExp,
-): void {
-  expect(result.status).toBe("error");
-  expect(result.error).toMatch(pattern);
-}
-
 function expectThreadBindFailureCleanup(
   result: { childSessionKey?: string; error?: string },
   pattern: RegExp,
 ): void {
-  // Failed child-thread binding must delete the child before agent startup.
   expect(result.error).toMatch(pattern);
   expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
   expectSessionsDeleteWithoutAgentStart();
@@ -189,34 +173,14 @@ beforeEach(async () => {
       },
     },
   });
-  const store: Record<string, Record<string, unknown>> = {};
-  hoisted.updateSessionStoreMock.mockImplementation(
-    async (_storePath: unknown, mutator: unknown) => {
-      if (typeof mutator !== "function") {
-        throw new Error("missing session store mutator");
-      }
-      await mutator(store);
-      return store;
-    },
-  );
-  hoisted.callGatewayMock.mockImplementation(async (opts: unknown) => {
-    const request = opts as { method?: string };
-    if (request.method === "sessions.patch") {
-      return { ok: true };
-    }
-    if (request.method === "sessions.delete") {
-      return { ok: true };
-    }
-    if (request.method === "agent") {
-      return { runId: "run-1", status: "accepted", acceptedAt: 1_001 };
-    }
-    return {};
-  });
+  installSessionStoreCaptureMock(hoisted.updateSessionStoreMock);
+  setupAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
 });
 
 afterEach(() => resetSubagentRegistryForTests());
 
 it("binds the subagent thread in core and emits subagent_spawned with requester metadata", async () => {
+  const requester = { channel: "discord", accountId: "work", to: "channel:123", threadId: 456 };
   const result = await spawn({
     label: "research",
     model: "openai/gpt-5.4",
@@ -243,16 +207,16 @@ it("binds the subagent thread in core and emits subagent_spawned with requester 
   });
   expect(bindingMocks.bind).toHaveBeenCalledTimes(1);
   const bindingRequest = requireRecord(bindingMocks.bind.mock.calls[0]?.[0], "binding request");
-  expect(bindingRequest.targetSessionKey).toEqual(expect.stringMatching(/^agent:main:subagent:/));
   expect(bindingRequest).toMatchObject({
+    targetSessionKey: expect.stringMatching(/^agent:main:subagent:/),
     targetKind: "subagent",
     placement: "child",
-  });
-  expect(bindingRequest.conversation).toMatchObject({
-    channel: "discord",
-    accountId: "work",
-    conversationId: "456",
-    parentConversationId: "123",
+    conversation: {
+      channel: "discord",
+      accountId: "work",
+      conversationId: "456",
+      parentConversationId: "123",
+    },
   });
 
   expect(hookRunnerMocks.runSubagentSpawned).toHaveBeenCalledTimes(1);
@@ -266,14 +230,9 @@ it("binds the subagent thread in core and emits subagent_spawned with requester 
     threadRequested: true,
     resolvedModel: "openai/gpt-5.4",
     resolvedProvider: "openai",
+    requester,
+    childSessionKey: expect.stringMatching(/^agent:main:subagent:/),
   });
-  expect(event.requester).toMatchObject({
-    channel: "discord",
-    accountId: "work",
-    to: "channel:123",
-    threadId: 456,
-  });
-  expect(event.childSessionKey).toEqual(expect.stringMatching(/^agent:main:subagent:/));
   expect(ctx).toMatchObject({
     runId: "run-1",
     requesterSessionKey: "main",
@@ -285,10 +244,8 @@ it("binds the subagent thread in core and emits subagent_spawned with requester 
       runId: "run-1",
       childSessionKey: event.childSessionKey,
       requester: {
-        channel: "discord",
-        accountId: "work",
+        ...requester,
         to: "channel:source",
-        threadId: 456,
         channelId: "source-native",
         messageId: "message-789",
       },
@@ -314,10 +271,7 @@ it("emits subagent_spawned with threadRequested=false when not requested", async
   expect(event).toMatchObject({
     mode: "run",
     threadRequested: false,
-  });
-  expect(event.requester).toMatchObject({
-    channel: "discord",
-    to: "channel:123",
+    requester: { channel: "discord", to: "channel:123" },
   });
 });
 
@@ -353,7 +307,10 @@ it("rejects mode=session when thread=true is not requested", async () => {
     agentTo: "channel:123",
   });
 
-  expectErrorResultMessage(result, /requires thread=true/i);
+  expect(result).toMatchObject({
+    status: "error",
+    error: expect.stringMatching(/requires thread=true/i),
+  });
   expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
   expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
 });
@@ -372,10 +329,12 @@ it("rejects thread=true on channels without thread support", async () => {
     context: "isolated",
   });
 
-  expectErrorResultMessage(
-    result,
-    /only available on channels that open a separate thread for the worker/i,
-  );
+  expect(result).toMatchObject({
+    status: "error",
+    error: expect.stringMatching(
+      /only available on channels that open a separate thread for the worker/i,
+    ),
+  });
   expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
   expectSessionsDeleteWithoutAgentStart();
 });

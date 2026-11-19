@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import {
   createDoctorHealthFlowContext,
@@ -9,7 +10,8 @@ import {
 } from "./doctor-health-contributions.test-support.js";
 import type { HealthFinding } from "./health-checks.js";
 
-vi.mock("../infra/openclaw-root.js", () => ({
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
   resolveOpenClawPackageRoot: vi.fn(),
 }));
 
@@ -33,12 +35,7 @@ function packageRoot(...segments: string[]) {
 }
 
 beforeEach(async () => {
-  globalRoot = path.join(
-    dirs.make("doctor-update-snapshots-"),
-    "operator's prefix",
-    "lib",
-    "node_modules",
-  );
+  globalRoot = path.join(dirs.make("snapshots-"), "operator's prefix", "lib", "node_modules");
   await fs.mkdir(path.join(globalRoot, "openclaw"), { recursive: true });
   packageRoot("openclaw");
 });
@@ -68,8 +65,8 @@ it("reports dotted and retired dashed snapshots with sizes and quoted commands, 
   for (const directory of [first, second]) {
     const command =
       process.platform === "win32"
-        ? `Remove-Item -LiteralPath '${directory.replaceAll("'", "''")}' -Recurse -Force`
-        : `rm -rf -- '${directory.replaceAll("'", "'\\''")}'`;
+        ? `Remove-Item -LiteralPath '\\\\?\\${directory.replaceAll("'", "''")}' -Recurse -Force`
+        : `rm -rf -- ${quoteCliArg(directory)}`;
     expect(message).toContain(command);
     expect((await fs.stat(directory)).isDirectory()).toBe(true);
   }

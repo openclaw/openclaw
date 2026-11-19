@@ -6,7 +6,6 @@ import type { AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
-import { log } from "../logger.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   handleEmbeddedAttemptMidTurnPrecheck,
@@ -16,7 +15,13 @@ import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   estimateLlmBoundaryTokenPressure,
   estimateToolSchemaTokenPressure,
+  shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
+import {
+  beginRunAttempt,
+  createRunRetryBudget,
+  isRunRetryBudgetExhausted,
+} from "./retry-budget.js";
 
 const attempt = {
   provider: "test-provider",
@@ -45,12 +50,11 @@ const request = {
 };
 
 const makeToolResult = (text: string) => makeTextToolResult("call-1", "read", text, false, 1);
-
-function createSessionManagerWithMessage(message: AgentMessage): SessionManager {
-  const sessionManager = SessionManager.inMemory();
-  sessionManager.appendMessage(message as Parameters<typeof sessionManager.appendMessage>[0]);
-  return sessionManager;
-}
+const makeToolCall = () =>
+  makeAgentAssistantMessage({
+    content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+    stopReason: "toolUse",
+  });
 
 function preflight(
   overrides: Partial<Parameters<typeof prepareEmbeddedAttemptPromptPreflight>[0]>,
@@ -105,6 +109,45 @@ function checkpoint(discarded: boolean, windowText?: string) {
 }
 
 describe("attempt prompt preflight", () => {
+  it("compacts on the second precheck when a projected result outlives its persisted reduction", async () => {
+    const sessionManager = SessionManager.inMemory();
+    const projected = makeToolResult("synthetic tool output ".repeat(25_000));
+    const toolCall = makeToolCall();
+    await sessionManager.appendMessageAsync(toolCall);
+    await sessionManager.appendMessageAsync(projected);
+    const projectionState = createToolResultPromptProjectionState();
+    const budget = createRunRetryBudget(32);
+    const routes: string[] = [];
+    while (!isRunRetryBudgetExhausted(budget)) {
+      beginRunAttempt(budget);
+      const decision = shouldPreemptivelyCompactBeforePrompt({
+        messages: [toolCall, projected],
+        contextTokenBudget: 1_000_000,
+        reserveTokens: 78_000,
+        prompt: "",
+        toolResultMaxChars: 64_000,
+        llmBoundaryTokenPressure: { estimatedPromptTokens: 932_476, source: "synthetic" },
+      });
+      expect(decision.route).toBe("truncate_tool_results_only");
+      expect(decision.toolResultReducibleChars).toBeGreaterThan(0);
+      const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
+        attempt: { ...attempt, contextTokenBudget: 1_000_000 },
+        request: { ...decision, pressure: "overflow", route: "truncate_tool_results_only" },
+        sessionAgentId: "test",
+        sessionManager,
+        toolResultPromptProjectionState: projectionState,
+        prePromptMessageCount: 2,
+        replaceSessionMessages: () => {},
+      });
+      routes.push(outcome.preflightRecovery.route);
+      if (outcome.promptError) {
+        break;
+      }
+    }
+    expect(routes).toEqual(["truncate_tool_results_only", "compact_only"]);
+    expect(isRunRetryBudgetExhausted(budget)).toBe(false);
+  });
+
   it.each([
     "oversized",
     "unwindowed-tools",
@@ -133,7 +176,6 @@ describe("attempt prompt preflight", () => {
           ? "small retained window"
           : "retained content ".repeat(8_000),
     );
-    const discardedInvalid = checkpoint(true);
     let unwindowedMessages: AgentMessage[] | undefined;
     if (discarded) {
       unwindowedMessages = [owner];
@@ -146,7 +188,7 @@ describe("attempt prompt preflight", () => {
       ];
     } else if (fitting) {
       unwindowedMessages = [
-        ...(variant === "fitting-with-discarded-invalid" ? [owner, discardedInvalid] : []),
+        ...(variant === "fitting-with-discarded-invalid" ? [owner, checkpoint(true)] : []),
         { role: "user", content: "raw history ".repeat(40_000), timestamp: 1 },
       ];
     }
@@ -161,9 +203,11 @@ describe("attempt prompt preflight", () => {
           : undefined,
     });
     if (discarded || fitting) {
-      expect(result.skipPromptSubmission).toBe(false);
-      expect(result.promptError).toBeNull();
-      expect(result.preflightRecovery).toBeUndefined();
+      expect(result).toMatchObject({
+        skipPromptSubmission: false,
+        promptError: null,
+        preflightRecovery: undefined,
+      });
       if (fitting) {
         expect(result.contextBudgetStatus?.estimatedPromptTokens).toBeGreaterThan(20_000);
       }
@@ -194,20 +238,22 @@ describe("attempt prompt preflight", () => {
   it.each([
     ["compaction", "compact_only", "", undefined, undefined],
     ["fallback", "truncate_tool_results_only", "", undefined, undefined],
-    ["capped", "truncate_tool_results_only", "already capped tool output", undefined, 0],
+    ["capped", "truncate_tool_results_only", "already capped tool output", undefined, undefined],
     ["truncation", "truncate_tool_results_only", "large tool output ".repeat(5_000), 100, 1],
   ] as const)(
     "handles mid-turn %s",
     async (_name, route, text, contextTokenBudget, truncatedCount) => {
-      const sessionManager = text
-        ? createSessionManagerWithMessage(makeToolResult(text))
-        : SessionManager.inMemory();
+      const sessionManager = SessionManager.inMemory();
+      if (text) {
+        await sessionManager.appendMessageAsync(makeToolCall());
+        await sessionManager.appendMessageAsync(makeToolResult(text));
+      }
       const messagesBefore = sessionManager.buildSessionContext().messages;
       const replaceMessages = vi.fn();
       const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
         toolResultPromptProjectionState: createToolResultPromptProjectionState(),
         attempt: { ...attempt, contextTokenBudget },
-        request: { ...request, route },
+        request: { ...request, pressure: "overflow", route },
         sessionAgentId: "test",
         sessionManager,
         prePromptMessageCount: 4,
@@ -217,6 +263,7 @@ describe("attempt prompt preflight", () => {
         expect(outcome).toEqual({
           preflightRecovery: {
             route: "compact_only",
+            pressure: "overflow",
             source: "mid-turn",
             estimatedPromptTokens: 150,
             promptBudgetBeforeReserve: 100,
@@ -242,18 +289,14 @@ describe("attempt prompt preflight", () => {
     },
   );
 
-  it("warns and keeps client recovery when V2 pending input exceeds the hard budget", async () => {
-    using warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+  it("keeps client recovery when V2 pending input exceeds the hard budget", async () => {
     const result = await preflight({
       providerCompactionAtRequestBoundary: true,
       contextTokenBudget: 100,
       pendingInputTokens: 101,
     });
-    expect(result.preflightRecovery).toEqual({ route: "compact_only" });
+    expect(result.preflightRecovery).toEqual({ route: "compact_only", pressure: "overflow" });
     expect(result.skipPromptSubmission).toBe(true);
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("falling back to client compaction: pending input exceeds"),
-    );
   });
 
   it("admits heuristic tool-result pressure without recovery or mutating history", async () => {

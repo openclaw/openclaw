@@ -5,8 +5,6 @@ import { extractFeishuApiErrorMeta } from "./comment-shared.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 export type FeishuPermissionError = {
-  code: number;
-  message: string;
   grantUrl?: string;
 };
 
@@ -31,6 +29,7 @@ const FEISHU_USER_LOOKUP_UNAUTHORIZED_CODE = 41050;
 const SENDER_NAME_TTL_MS = 10 * 60 * 1000;
 const SENDER_NAME_NEGATIVE_TTL_MS = 30 * 60 * 1000;
 const SENDER_NAME_CACHE_MAX_SIZE = 500;
+// Process-local deadlines use elapsed time, never persisted epochs.
 const senderNameCache = new Map<string, SenderNameCacheEntry>();
 
 function extractPermissionError(feishuErr: FeishuApiError | null): FeishuPermissionError | null {
@@ -39,8 +38,6 @@ function extractPermissionError(feishuErr: FeishuApiError | null): FeishuPermiss
   }
   const urlMatch = feishuErr.message.match(/https:\/\/[^\s,]+\/app\/[^\s,]+/);
   return {
-    code: feishuErr.code,
-    message: feishuErr.message,
     grantUrl: urlMatch?.[0]
       ?.replaceAll(
         encodeURIComponent(STALE_CONTACT_SCOPE),
@@ -73,7 +70,7 @@ export async function resolveFeishuSenderName(params: {
 
   const cacheKey = `${account.accountId}:${normalizedSenderId}`;
   const cached = senderNameCache.get(cacheKey);
-  if (cached && cached.expireAt > Date.now()) {
+  if (cached && cached.expireAt > performance.now()) {
     return cached.kind === "resolved" ? { name: cached.name } : {};
   }
   if (cached) {
@@ -98,7 +95,7 @@ export async function resolveFeishuSenderName(params: {
       writeSenderNameCache(cacheKey, {
         kind: "resolved",
         name,
-        expireAt: Date.now() + SENDER_NAME_TTL_MS,
+        expireAt: performance.now() + SENDER_NAME_TTL_MS,
       });
       return { name };
     }
@@ -108,11 +105,11 @@ export async function resolveFeishuSenderName(params: {
     const feishuErr = typeof code === "number" ? { code, message } : null;
     const permErr = extractPermissionError(feishuErr);
     if (permErr) {
-      if (normalizeLowercaseStringOrEmpty(permErr.message).includes(STALE_CONTACT_SCOPE)) {
-        log(`feishu: ignoring stale permission scope error: ${permErr.message}`);
+      if (normalizeLowercaseStringOrEmpty(message).includes(STALE_CONTACT_SCOPE)) {
+        log(`feishu: ignoring stale permission scope error: ${message}`);
         return {};
       }
-      log(`feishu: permission error resolving sender name: code=${permErr.code}`);
+      log(`feishu: permission error resolving sender name: code=${code}`);
       return { permissionError: permErr };
     }
     if (feishuErr?.code === FEISHU_USER_LOOKUP_UNAUTHORIZED_CODE) {
@@ -120,7 +117,7 @@ export async function resolveFeishuSenderName(params: {
       // so later messages avoid repeating the same failing API request and SDK log.
       writeSenderNameCache(cacheKey, {
         kind: "unavailable",
-        expireAt: Date.now() + SENDER_NAME_NEGATIVE_TTL_MS,
+        expireAt: performance.now() + SENDER_NAME_NEGATIVE_TTL_MS,
       });
       return {};
     }

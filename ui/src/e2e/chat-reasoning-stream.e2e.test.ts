@@ -1,4 +1,6 @@
 import { expect, it } from "vitest";
+import type { ChatState } from "../pages/chat/chat-state-contract.ts";
+import { rethrowWithControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { newChatPage } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -160,14 +162,14 @@ suite.define(() => {
         await expect.poll(() => pane.locator(".chat-thinking").count()).toBe(visible ? 3 : 0);
       }
 
-      const rawDetails = pane.locator(".chat-activity-group__summary", {
-        hasText: "Raw details",
-      });
+      const toolSummary = pane.locator(
+        ".chat-activity-group:not(.chat-work-group) > .chat-activity-group__summary",
+      );
       for (const index of [0, 1, 2]) {
         await persist(index);
         // Enabled persisted reasoning stays visible between tool steps.
         if (reasoningLevel === "on" && index === 1) {
-          await expect.poll(() => rawDetails.count()).toBe(0);
+          await expect.poll(() => toolSummary.count()).toBe(0);
         }
         await expect.poll(() => reasoning(index).count()).toBe(1);
         expect(await pane.locator(".chat-thinking").count()).toBe(3);
@@ -177,17 +179,56 @@ suite.define(() => {
       const finalAnswer = pane.locator(".chat-text").getByText(answer, { exact: true });
       await finalAnswer.waitFor();
       await expect
-        .poll(() => page.getByRole("button", { name: "Stop generating" }).count())
+        .poll(() => page.getByRole("button", { name: "Stop", exact: true }).count())
         .toBe(0);
       const worked = pane.locator(".chat-work-group > .chat-activity-group__summary");
       await worked.waitFor();
       await worked.click();
       await expect.poll(() => worked.getAttribute("aria-expanded")).toBe("true");
-      await rawDetails.waitFor();
-      if ((await rawDetails.getAttribute("aria-expanded")) === "false") {
-        await rawDetails.click();
+      try {
+        if (reasoningLevel === "on") {
+          await expect.poll(() => toolSummary.count()).toBe(0);
+          await expectStepOrder();
+        } else {
+          await toolSummary.waitFor();
+          if ((await toolSummary.getAttribute("aria-expanded")) === "false") {
+            await toolSummary.click();
+          }
+          await expect.poll(() => toolSummary.getAttribute("aria-expanded")).toBe("true");
+        }
+      } catch (error) {
+        await rethrowWithControlUiE2eFailureFacts(page, error, "reasoningFactsRead", () =>
+          toolSummary.evaluateAll((summaries) => {
+            const paneElement = document.querySelector<HTMLElement & { state?: ChatState }>(
+              'openclaw-chat-pane[aria-hidden="false"]',
+            );
+            const state = paneElement?.state;
+            const items = state?.chatReasoning?.items ?? [];
+            const receipts = items.slice(0, 8).filter((item) => item.receipt);
+            const workedSummary = paneElement?.querySelector(
+              ".chat-work-group > .chat-activity-group__summary",
+            );
+            return {
+              stateAvailable: Boolean(state),
+              messages: state?.chatMessages.length ?? 0,
+              toolMessages: state?.chatToolMessages.length ?? 0,
+              toolStreams: state?.toolStreamById.size ?? 0,
+              reasoningItems: items.length,
+              reasoningScanTruncated: items.length > 8,
+              receipts: receipts.length,
+              persistedReceipts: receipts.filter((item) => item.receipt?.persisted).length,
+              hasRun: Boolean(state?.chatRunId),
+              toolGroups: paneElement?.querySelectorAll(".chat-group.tool").length ?? 0,
+              toolCards: paneElement?.querySelectorAll(".chat-tool-msg-summary").length ?? 0,
+              workedCount: paneElement?.querySelectorAll(".chat-work-group").length ?? 0,
+              workedExpanded: workedSummary?.getAttribute("aria-expanded") === "true",
+              rawMatches: summaries.length,
+              rawVisible: summaries[0]?.checkVisibility() ?? false,
+              rawExpanded: summaries[0]?.getAttribute("aria-expanded") === "true",
+            };
+          }),
+        );
       }
-      await expect.poll(() => rawDetails.getAttribute("aria-expanded")).toBe("true");
       for (const index of [0, 1]) {
         await expect
           .poll(() =>

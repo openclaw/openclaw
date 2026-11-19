@@ -1,4 +1,5 @@
 /** Tests CLI runner prompt/image/system-prompt helper utilities. */
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -38,6 +39,14 @@ function pngImage(data: string | Buffer): ImageContent {
   };
 }
 
+const codexImages = { command: "codex", imageArg: "--image", imageMode: "repeat" as const };
+const geminiImages = { command: "gemini", imageArg: "@", imagePathScope: "workspace" as const };
+
+async function writePng(filePath: string, image: Buffer) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, image);
+}
+
 describe("prepareCliPromptImagePayload prompt references", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -70,10 +79,8 @@ describe("prepareCliPromptImagePayload prompt references", () => {
     const imagePath = path.join(workspaceDir, "media", "inbound", "photo.png");
     const siblingImagePath = path.join(siblingWorkspaceDir, "media", "inbound", "photo.png");
     const image = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
-    await fs.mkdir(path.dirname(imagePath), { recursive: true });
-    await fs.mkdir(path.dirname(siblingImagePath), { recursive: true });
-    await fs.writeFile(imagePath, image);
-    await fs.writeFile(siblingImagePath, image);
+    await writePng(imagePath, image);
+    await writePng(siblingImagePath, image);
     const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     const config = {
@@ -146,7 +153,9 @@ describe("prepareCliPromptImagePayload prompt references", () => {
 });
 
 describe("writeCliImages", () => {
-  it("uses stable hashed file paths so repeated image hydration reuses the same path", async () => {
+  it("uses stable hashed file paths without synchronous fsync when rehydrating images", async ({
+    onTestFinished,
+  }) => {
     const image = pngImage("c29tZS1pbWFnZQ==");
     const params = {
       backend: { command: "codex" },
@@ -154,6 +163,8 @@ describe("writeCliImages", () => {
       workspaceDir: imageWorkspace(),
       images: [image],
     };
+    const fsync = vi.spyOn(fsSync, "fsyncSync");
+    onTestFinished(() => fsync.mockRestore());
     const first = await prepareCliPromptImagePayload(params);
     const second = await prepareCliPromptImagePayload(params);
 
@@ -169,6 +180,7 @@ describe("writeCliImages", () => {
       await expect(
         fs.readFile(expectDefined(first.imagePaths?.[0], "first image path test invariant")),
       ).resolves.toEqual(Buffer.from(image.data, "base64"));
+      expect(fsync).not.toHaveBeenCalled();
     } finally {
       await fs.rm(expectDefined(first.imagePaths?.[0], "first image path test invariant"), {
         force: true,
@@ -216,12 +228,7 @@ describe("writeCliImages", () => {
     const explicitImage = pngImage("c29tZS1leHBsaWNpdC1pbWFnZQ==");
 
     const prepared = await prepareCliPromptImagePayload({
-      backend: {
-        command: "gemini",
-        imageArg: "@",
-        imagePathScope: "workspace",
-        input: "arg",
-      },
+      backend: { ...geminiImages, input: "arg" },
       prompt: "What is in this image?",
       workspaceDir: tempDir,
       images: [explicitImage],
@@ -235,11 +242,7 @@ describe("writeCliImages", () => {
     );
 
     const argv = buildCliArgs({
-      backend: {
-        command: "gemini",
-        imageArg: "@",
-        imagePathScope: "workspace",
-      },
+      backend: geminiImages,
       baseArgs: ["--output-format", "json", "--prompt", "{prompt}"],
       modelId: "gemini-3.1-pro-preview",
       promptArg: prepared.prompt,
@@ -257,22 +260,13 @@ describe("writeCliImages", () => {
     const explicitImage = pngImage("c29tZS1leHBsaWNpdC1pbWFnZQ==");
 
     const prepared = await prepareCliPromptImagePayload({
-      backend: {
-        command: "codex",
-        imageArg: "--image",
-        imageMode: "repeat",
-        input: "arg",
-      },
+      backend: { ...codexImages, input: "arg" },
       prompt: `[media attached: ${sourceImage} (image/png)]\n\n<media:image>`,
       workspaceDir: tempDir,
       images: [explicitImage],
     });
     const argv = buildCliArgs({
-      backend: {
-        command: "codex",
-        imageArg: "--image",
-        imageMode: "repeat",
-      },
+      backend: codexImages,
       baseArgs: ["exec", "--json"],
       modelId: "gpt-5.4",
       imagePaths: prepared.imagePaths,
@@ -295,22 +289,15 @@ describe("writeCliImages", () => {
     const offloadedImage = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
     const inlineImage = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
     const historyImage = createSolidPngBuffer(1, 1, { r: 0, g: 255, b: 0 });
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.mkdir(inboundDir, { recursive: true });
-    await fs.writeFile(path.join(inboundDir, mediaId), offloadedImage);
-    await fs.writeFile(historyImagePath, historyImage);
+    await writePng(path.join(inboundDir, mediaId), offloadedImage);
+    await writePng(historyImagePath, historyImage);
     const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     const currentTurn = `compare these\n[media attached: media://inbound/${mediaId}]`;
 
     try {
       const prepared = await prepareCliPromptImagePayload({
-        backend: {
-          command: "codex",
-          imageArg: "--image",
-          imageMode: "repeat",
-          input: "arg",
-        },
+        backend: { ...codexImages, input: "arg" },
         prompt: `[Earlier history: ${historyImagePath}]\n\n[Retry after failure]\n\n${currentTurn}`,
         imagePrompt: currentTurn,
         workspaceDir,
@@ -330,30 +317,91 @@ describe("writeCliImages", () => {
       envSnapshot.restore();
     }
   });
+
+  it("re-sweeps stale workspace images across long-running invocations", async () => {
+    vi.useFakeTimers();
+    try {
+      const baseNow = new Date("2026-11-01T00:00:00Z");
+      vi.setSystemTime(baseNow);
+      const baseNowMs = baseNow.getTime();
+
+      const workspaceDir = tempDirs.make("cli-image-resweep-");
+      const imageRoot = path.join(workspaceDir, ".openclaw-cli-images");
+      await fs.mkdir(imageRoot, { recursive: true });
+
+      // First stale file: mtime 8 days ago (beyond the 7-day TTL).
+      // fs.utimes takes seconds (Unix timestamp) while Date.now() is ms, hence /1000.
+      const staleBefore = path.join(imageRoot, "stale-before.png");
+      await fs.writeFile(staleBefore, Buffer.from("fake-stale-before"));
+      const eightDaysAgoMs = baseNowMs - 8 * 24 * 60 * 60 * 1000;
+      await fs.utimes(staleBefore, eightDaysAgoMs / 1000, eightDaysAgoMs / 1000);
+
+      const backend = { command: "test", imagePathScope: "workspace" as const };
+      const image = pngImage("dGVzdA==");
+
+      // First call sweeps, removing staleBefore.
+      await prepareCliPromptImagePayload({
+        backend,
+        prompt: "hi",
+        workspaceDir,
+        images: [image],
+      });
+      await expect(fs.access(staleBefore)).rejects.toMatchObject({ code: "ENOENT" });
+
+      // Advance fake time 25h (beyond the 24h recurrence window).
+      vi.advanceTimersByTime(25 * 60 * 60 * 1000);
+
+      // A file written later in the process that would now be 8 days old.
+      const staleAfter = path.join(imageRoot, "stale-after.png");
+      await fs.writeFile(staleAfter, Buffer.from("fake-stale-after"));
+      const afterBaseMs = baseNowMs + 25 * 60 * 60 * 1000;
+      const afterMtimeMs = afterBaseMs - 8 * 24 * 60 * 60 * 1000;
+      await fs.utimes(staleAfter, afterMtimeMs / 1000, afterMtimeMs / 1000);
+
+      // Second call: the 24h window has elapsed, so sweep runs again and removes staleAfter.
+      await prepareCliPromptImagePayload({
+        backend,
+        prompt: "hi again",
+        workspaceDir,
+        images: [image],
+      });
+      await expect(fs.access(staleAfter)).rejects.toMatchObject({ code: "ENOENT" });
+
+      // Inside the recurrence window a stale file must survive the next write.
+      // pre-fix (Set guard): every call skips the sweep, so staleWithin survives too;
+      // the throttle direction is what pins the recurrence window rather than "always sweep".
+      const staleWithin = path.join(imageRoot, "stale-within.png");
+      await fs.writeFile(staleWithin, Buffer.from("fake-stale-within"));
+      await fs.utimes(staleWithin, afterMtimeMs / 1000, afterMtimeMs / 1000);
+      vi.advanceTimersByTime(60 * 60 * 1000);
+      await prepareCliPromptImagePayload({
+        backend,
+        prompt: "within window",
+        workspaceDir,
+        images: [image],
+      });
+      await expect(fs.access(staleWithin)).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
-describe("resolveCliRunQueueKey", () => {
-  it("disables serialization when serialize=false", () => {
-    expect(
-      resolveCliRunQueueKey({
-        backendId: "claude-cli",
-        serialize: false,
-        runId: "run-4",
-        workspaceDir: "/tmp/project-a",
-      }),
-    ).toBe("claude-cli:run-4");
-  });
-
-  it("keeps third-party live sessions serialized on their exact owner even when serialize=false", () => {
-    expect(
-      resolveCliRunQueueKey({
-        backendId: "acme-cli",
-        liveSession: "claude-stdio",
-        serialize: false,
-        runId: "run-third-party-live",
-        workspaceDir: "/tmp/project-a",
-        ownerKey: "third-party-owner",
-      }),
-    ).toBe("acme-cli:owner:third-party-owner");
-  });
+it.each([
+  { backendId: "claude-cli", expected: "claude-cli:run-4" },
+  {
+    backendId: "acme-cli",
+    liveSession: "claude-stdio" as const,
+    ownerKey: "third-party-owner",
+    expected: "acme-cli:owner:third-party-owner",
+  },
+])("serializes $backendId only when its live owner requires it", ({ expected, ...backend }) => {
+  expect(
+    resolveCliRunQueueKey({
+      ...backend,
+      serialize: false,
+      runId: "run-4",
+      workspaceDir: "/tmp/project-a",
+    }),
+  ).toBe(expected);
 });

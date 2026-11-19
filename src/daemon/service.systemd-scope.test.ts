@@ -22,16 +22,12 @@ vi.mock("./inspect.js", async (importOriginal) => {
 
 import { discoverManagedGatewayBindings } from "./managed-gateway-bindings.js";
 import { readGatewayServiceState, resolveGatewayService } from "./service.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 const property = (type: string, data: unknown) => ({ type, data });
-const success = (stdout: string): ExecResult => ({
-  code: 0,
-  termination: "exit",
-  stdout,
-  stderr: "",
-});
+const success = (stdout: string): ExecResult => nativeExit(stdout);
 const failure = (stderr: string): ExecResult => ({ ...success(""), code: 1, stderr });
 const jsonProperty = (type: string, data: unknown) => success(JSON.stringify(property(type, data)));
 const unitObject = "/org/freedesktop/systemd1/unit/openclaw_2eservice";
@@ -307,55 +303,38 @@ it.each([
       env: { OPENCLAW_SYSTEMD_UNIT: target.unitName },
     });
     if (file === "openclaw.service") {
-      const actualInstallationDiscovery = systemdScope.findSystemdGatewayInstallation;
       const installationDiscovery = vi.spyOn(systemdScope, "findSystemdGatewayInstallation");
-      try {
-        for (const selection of [
-          "discovered",
-          "supplied",
-          "delegated",
-          "none",
-          "dueling",
-          "explicit",
-        ] as const) {
-          const supplied: SystemdGatewayInstallation | undefined =
-            selection === "none" || selection === "explicit"
-              ? { kind: "none" }
-              : selection === "dueling"
-                ? { kind: "dueling", user: { ...target, scope: "user" }, system: target }
-                : selection === "discovered"
-                  ? undefined
-                  : { kind: "system", system: target };
-          const service = { ...resolveGatewayService() };
-          if (selection === "delegated") {
-            const readCommand = service.readCommand;
-            service.readCommand = (...args) => readCommand(...args);
-          }
-          const shouldDiscover =
-            selection === "discovered" || selection === "none" || selection === "dueling";
-          installationDiscovery.mockReset();
-          if (shouldDiscover) {
-            installationDiscovery.mockImplementation(actualInstallationDiscovery);
-          } else {
-            installationDiscovery.mockRejectedValue(
-              new Error("Supplied target must retain its scope"),
-            );
-          }
-          const selectedState = await readGatewayServiceState(service, {
+      const system: SystemdGatewayInstallation = { kind: "system", system: target };
+      // The initial read above covers discovery. Invalid selections must rediscover;
+      // concrete selections must also work with a delegated readCommand adapter.
+      for (const supplied of [
+        { kind: "none" },
+        { kind: "dueling", user: { ...target, scope: "user" }, system: target },
+      ] satisfies SystemdGatewayInstallation[]) {
+        expect(
+          await readGatewayServiceState(resolveGatewayService(), {
             ...strictRead,
             systemdInstallation: supplied,
-            systemdReadTarget: selection === "explicit" ? target : undefined,
-          });
-          expect(installationDiscovery, selection).toHaveBeenCalledTimes(shouldDiscover ? 1 : 0);
-          expect(selectedState, selection).toMatchObject({
-            ...expectedState,
-            systemdInstallation:
-              selection === "explicit" ? { kind: "none" } : { kind: "system", system: target },
-          });
-        }
-      } finally {
-        installationDiscovery.mockRestore();
+          }),
+        ).toMatchObject({ ...expectedState, systemdInstallation: system });
       }
+      installationDiscovery.mockRejectedValue(new Error("Supplied target must retain its scope"));
+      for (const explicit of [false, true]) {
+        const service = { ...resolveGatewayService() };
+        const readCommand = service.readCommand;
+        service.readCommand = (...args) => readCommand(...args);
+        expect(
+          await readGatewayServiceState(service, {
+            ...strictRead,
+            systemdInstallation: explicit ? { kind: "none" } : system,
+            systemdReadTarget: explicit ? target : undefined,
+          }),
+        ).toMatchObject({
+          ...expectedState,
+          systemdInstallation: explicit ? { kind: "none" } : system,
+        });
+      }
+      installationDiscovery.mockRestore();
     }
     const admitted = await maybeStopManagedServiceBeforeMutableUpdate({
       root,

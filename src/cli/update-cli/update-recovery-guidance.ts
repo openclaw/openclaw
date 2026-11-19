@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
+import { updateRepairRefusalNextAction } from "../../infra/update-preflight-details.js";
 import {
   isUpdateGatewayReadinessPending,
   isUpdatePostInstallVerificationDeferred,
@@ -51,6 +52,12 @@ export function resolveUpdateResultNextAction(params: {
     return UPDATE_INSTALL_SKIP_GUIDANCE[result.reason];
   }
   if (result.status === "error") {
+    const refusalNextAction = updateRepairRefusalNextAction(result.reason, (command) =>
+      formatCliCommand(command, env),
+    );
+    if (refusalNextAction) {
+      return refusalNextAction;
+    }
     const triageGuidance = `Run \`${formatCliCommand("openclaw triage", env)}\` on this machine to open a coding agent that can diagnose and repair the installation.`;
     const doctorSettlement = result.steps.findLast(
       (step) => step.name === "doctor process settlement",
@@ -68,7 +75,7 @@ export function resolveUpdateResultNextAction(params: {
         rollback?.status === "not-attempted" || rollback?.status === "failed"
           ? `Rollback ${rollback.status === "failed" ? "failed" : "not attempted"}: ${rollback.reason}. `
           : "";
-      return `${rollbackDetail}The installed Gateway is healthy and running on the retained state, but update maintenance is unfinished. Keep the recovery snapshots; stop the Gateway first (\`${formatCliCommand("openclaw gateway stop", env)}\`), then run \`${formatCliCommand("openclaw update repair", env)}\` to finish maintenance.`;
+      return `${rollbackDetail}The installed Gateway is healthy and running on the retained state, but update maintenance is unfinished. Keep the recovery snapshots; stop the Gateway through its service owner first (\`${formatCliCommand("openclaw gateway stop --force", env)}\` for the managed service), then run \`${formatCliCommand("openclaw update repair", env)}\` to finish maintenance.`;
     }
     if (
       result.reason === "update-failed" &&

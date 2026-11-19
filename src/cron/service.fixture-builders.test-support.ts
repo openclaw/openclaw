@@ -14,7 +14,6 @@ export function cronTestDeps(
     log: createNoopLogger(),
     enqueueSystemEvent: vi.fn(),
     enqueueSessionEvent: vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     runSessionEvent: vi.fn(async () => ({ status: "ok" as const })),
     ...overrides,

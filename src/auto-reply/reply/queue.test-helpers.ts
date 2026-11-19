@@ -3,9 +3,8 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { defaultRuntime } from "../../runtime.js";
 import { deferSessionControllerClaimBeforeExecution } from "../../sessions/session-controller.mailbox-claim.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
-
-const slackRoute = { originatingChannel: "slack", originatingTo: "channel:A" };
+import { scheduleFollowupDrain } from "./queue.js";
+import type { InternalFollowupRun } from "./queue/types.js";
 
 export function createQueueTestRun(
   params: Pick<FollowupRun, "prompt"> & Partial<Omit<FollowupRun, "run">>,
@@ -27,6 +26,27 @@ export function createQueueTestRun(
       timeoutMs: 10_000,
       blockReplyBreak: "text_end",
       ...execution,
+    },
+  };
+}
+
+export function createOffloadedImageQueueRun(prompt: string, index: number): InternalFollowupRun {
+  return {
+    ...createQueueTestRun({ prompt, originatingChannel: "slack", originatingTo: "channel:A" }),
+    currentTurnImagesPrepared: true,
+    images: [],
+    imageOrder: ["offloaded"],
+    media: [
+      { path: `/tmp/offloaded-${index}.png`, contentType: "image/png" },
+      {
+        path: `/tmp/missing-${index}.png`,
+        contentType: "image/png",
+        hydrationSuppressed: true,
+      },
+    ],
+    mediaImageLayout: {
+      slots: [{ kind: "offloaded", factIndex: 0 }],
+      suppressedFactIndexes: [1],
     },
   };
 }
@@ -67,25 +87,6 @@ export async function drainRecordedQueue(
 ) {
   scheduleFollowupDrain(key, runFollowup);
   await done.promise;
-}
-
-export function enqueueTestRun(
-  key: string,
-  params: Parameters<typeof createQueueTestRun>[0],
-  settings: QueueSettings,
-  runOverrides?: Partial<FollowupRun["run"]>,
-) {
-  return enqueueFollowupRun(key, createQueueTestRun(params, runOverrides), settings);
-}
-
-export function enqueueSlackRun(
-  key: string,
-  settings: QueueSettings,
-  prompt: string,
-  run: Partial<FollowupRun["run"]>,
-  route: Partial<Parameters<typeof createQueueTestRun>[0]> = {},
-) {
-  return enqueueTestRun(key, { prompt, ...slackRoute, ...route }, settings, run);
 }
 
 /** Synthetic preparation owner: the callback has not entered a model/tool effect. */

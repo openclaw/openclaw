@@ -17,7 +17,7 @@ import { createUpdateCommandExecutionGuards } from "./update-command-execution-g
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { updateExecutorNativeEntrypoints as native } from "./update-command-executor-native-runtime.test-support.js";
 
-const { bindExecutionGuards, executionParams, mocks, successfulUpdate } =
+const { bindExecutionGuards, executionParams, inspectOrStopService, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 
 const temporary = useAutoCleanupTempDirTracker(afterAll);
@@ -96,22 +96,10 @@ async function fixture() {
   return { root, env, runId, opts, guard };
 }
 
-it("reproduces native recovery refusal and proceeds only after the real foreign owner releases", async () => {
-  const f = await fixture();
-  f.guard.assertCurrent();
-  await request({ acquire: f.env });
-  expect(() => f.guard.assertCurrent()).toThrow("undergoing offline maintenance");
-  const wait = vi.spyOn(sleeping, "sleep").mockImplementation(async () => {
-    await request({ release: true });
-  });
-  await f.guard.waitForCurrent();
-  expect(wait).toHaveBeenCalledOnce();
-  f.guard.assertCurrent();
-});
-
-it.each(["before-stop", "before-checkout", "held-before-checkout"] as const)(
+it.each(["before-stop", "during-stop", "before-checkout", "held-before-checkout"] as const)(
   "defers a held owner %s and waits for a transient owner before checkout",
   async (arrival) => {
+    const duringStop = arrival === "during-stop";
     const f = await fixture();
     let now = 0;
     vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -128,6 +116,20 @@ it.each(["before-stop", "before-checkout", "held-before-checkout"] as const)(
       await request({ acquire: f.env });
       expect(() => f.guard.assertCurrent()).toThrow("undergoing offline maintenance");
     };
+    if (duringStop) {
+      mocks.maybeStopService.mockImplementation(async (params) => {
+        if (params.phase === "inspect") {
+          return inspectOrStopService("inspect");
+        }
+        await acquire();
+        const cause = await Promise.resolve()
+          .then(() => f.guard.assertCurrent())
+          .catch((error: unknown) => error);
+        throw new AggregateError([cause], "Update executor was lost during native preparation", {
+          cause,
+        });
+      });
+    }
     mocks.runGitUpdate.mockImplementation(async (options) => {
       await options.validateCandidate("/candidate");
       if (arrival === "before-stop") {
@@ -146,16 +148,24 @@ it.each(["before-stop", "before-checkout", "held-before-checkout"] as const)(
     );
     if (arrival !== "before-checkout") {
       expect(result?.result, result?.failure?.detail).toMatchObject({
-        reason: "state-maintenance-busy",
+        reason: duringStop ? "managed-service-stop-failed" : "state-maintenance-busy",
         recovery: { serviceRestartSafe: true },
       });
       expect(result?.failure?.detail).toContain(`sqlite-maintenance process ${child.pid}`);
-      expect(result?.failure?.detail).toContain("retry openclaw update");
+      if (duringStop) {
+        expect(result?.result.steps[0]?.failureFacts?.[0]?.message).toContain(
+          `sqlite-maintenance process ${child.pid}`,
+        );
+      } else {
+        expect(result?.failure?.detail).toContain("retry openclaw update");
+      }
     } else {
       expect(result?.result.status, result?.failure?.detail).toBe("ok");
     }
-    expect(wait).toHaveBeenCalled();
-    expect(mocks.serviceStopped).toBe(arrival !== "before-stop");
+    if (!duringStop) {
+      expect(wait).toHaveBeenCalled();
+    }
+    expect(mocks.serviceStopped).toBe(arrival !== "before-stop" && !duringStop);
     expect(checkedOut).toBe(arrival === "before-checkout");
   },
 );

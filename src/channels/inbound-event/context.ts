@@ -271,7 +271,9 @@ export function finalizeChannelInboundContext<T extends Record<string, unknown>>
     const suppressSelfQuoteMedia = suppressSelfQuoteMediaOption ?? true;
     const finalizeQuote = (quoteMedia?: readonly InboundMediaFacts[] | null) => {
       if (!(selfQuote && suppressSelfQuoteMedia)) {
-        media.push(...(quoteMedia ?? []));
+        for (const fact of quoteMedia ?? []) {
+          media.push({ ...fact, source: "quote" });
+        }
       }
       const { media: _media, isSelf: _isSelf, ...stripped } = quote;
       const visibleQuote =
@@ -304,17 +306,15 @@ export function finalizeChannelInboundContext<T extends Record<string, unknown>>
   const finish = (result: Awaited<typeof prepared>): FinalizeChannelInboundContextResult<T> => {
     const { context: originalContext, finalize: customFinalize, finalizeOptions } = params;
     const { rawSupplemental, supplemental, media } = result;
-    const mediaPayload = media
-      ? Object.fromEntries(
-          Object.entries(buildChannelInboundMediaPayload(media)).filter(
-            ([, value]) => value !== undefined,
-          ),
-        )
-      : {};
+    const mediaPayload = Object.fromEntries(
+      Object.entries(buildChannelInboundMediaPayload(media)).filter(
+        ([, value]) => value !== undefined,
+      ),
+    );
     const baseContext = {
       ...originalContext,
       SupplementalContext: supplemental,
-      ...(media ? { media: [...media] } : {}),
+      media: [...media],
       ...mediaPayload,
     };
     const entries: ChannelStructuredContextEntries = [];

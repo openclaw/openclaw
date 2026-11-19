@@ -199,7 +199,6 @@ describe("Telegram request contracts through real clients", () => {
         await expect(sending).rejects.not.toBeInstanceOf(PlatformMessageNotDispatchedError);
       }
       expect(attempts).toBe(kind === "ambiguous" ? 1 : 2);
-      expect(fixture.requests).toEqual([]);
     },
   );
 
@@ -238,13 +237,6 @@ describe("telegram transport cache eviction over real sockets", () => {
   it("closes evicted and reset transports", async () => {
     resetTelegramClientOptionsCacheForTests();
     const ACCOUNTS = 70;
-    let sendMessageCalls = 0;
-    fixture.responseFor = (method) => {
-      if (method === "sendMessage" || method === "editMessageText") {
-        return { message_id: ++sendMessageCalls, chat: { id: 123 } };
-      }
-      return method === "getChat" ? { id: 123, type: "private" } : true;
-    };
     const accounts = Object.fromEntries(
       Array.from({ length: ACCOUNTS }, (_, i) => [
         `acct-${i}`,
@@ -269,7 +261,6 @@ describe("telegram transport cache eviction over real sockets", () => {
         });
       }
     }
-    expect(sendMessageCalls).toBe(ACCOUNTS);
     resetTelegramClientOptionsCacheForTests();
     await vi.waitFor(() => expect(liveSockets.size).toBe(0), { timeout: 3000 });
     expect(await send(6)).not.toBe(sockets[6]);

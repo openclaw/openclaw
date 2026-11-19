@@ -236,17 +236,10 @@ describe("memory index", () => {
   });
 
   it("fails closed when fallback initialization fails for an explicit provider", async () => {
-    const cfg = createCfg({
-      provider: "openai",
-      fallback: "fallback-provider",
-    });
-    const manager = await getPersistentManager(cfg);
-    await manager.sync({ reason: "test" });
-    const fields = manager as unknown as {
-      provider: {
-        embed: (text: string) => Promise<number[]>;
-      } | null;
-    };
+    const { manager, fields } = await open(
+      { provider: "openai", fallback: "fallback-provider" },
+      true,
+    );
     if (!fields.provider) {
       throw new Error("Expected a test embedding provider");
     }
@@ -264,17 +257,7 @@ describe("memory index", () => {
   });
 
   it("retries the optional primary after fallback initialization fails", async () => {
-    const cfg = createCfg({
-      fallback: "fallback-provider",
-    });
-    const manager = await getPersistentManager(cfg);
-    await manager.sync({ reason: "test" });
-    const fields = manager as unknown as {
-      provider: {
-        id: string;
-        embed: (text: string) => Promise<number[]>;
-      } | null;
-    };
+    const { manager, fields } = await open({ fallback: "fallback-provider" }, true);
     if (!fields.provider) {
       throw new Error("Expected a test embedding provider");
     }
@@ -314,14 +297,7 @@ describe("memory index", () => {
   });
 
   it("retries an optional primary after a null fallback result", async () => {
-    const cfg = createCfg({
-      fallback: "fallback-provider",
-    });
-    const manager = await getPersistentManager(cfg);
-    await manager.sync({ reason: "test" });
-    const fields = manager as unknown as {
-      provider: { id: string; embed: (text: string) => Promise<number[]> } | null;
-    };
+    const { manager, fields } = await open({ fallback: "fallback-provider" }, true);
     if (!fields.provider) {
       throw new Error("Expected a test embedding provider");
     }

@@ -18,7 +18,7 @@ import { sendDiscordComponentMessage } from "../send.components.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
 import * as discordMessagingActionRuntime from "../send.js";
 import type { DiscordSendComponents, DiscordSendEmbeds } from "../send.shared.js";
-import { resolveDiscordChannelId } from "../targets.js";
+import { resolveDiscordChannelId } from "../target-parsing.js";
 import type { DiscordMessagingActionContext } from "./runtime.messaging.shared.js";
 import { readDiscordAutoArchiveDurationParam } from "./runtime.shared.js";
 

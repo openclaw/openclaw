@@ -1,9 +1,8 @@
 import { createComponent } from "solid-js";
 import { vi } from "vitest";
-import {
-  ChatSessionSharing,
-  type ChatSessionSharingProps,
-} from "../pages/chat/components/chat-session-sharing.solid.tsx";
+import type { SessionMemberPermission } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
+import type { ChatSessionSharingProps } from "../pages/chat/components/chat-session-sharing-shared.tsx";
+import { ChatSessionSharing } from "../pages/chat/components/chat-session-sharing.solid.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 
 export function mountPeopleSharing(
@@ -14,13 +13,18 @@ export function mountPeopleSharing(
   const key = "agent:main:people";
   return mountSolid(() =>
     createComponent(ChatSessionSharing, {
-      session: { key, kind: "direct", updatedAt: 1, sharingRole: "owner" },
+      session: { key, kind: "direct", updatedAt: 1, sharingRole: "owner", visibility: "read-only" },
       state: {
         loading: false,
         result: {
           sessionKey: key,
           role: "owner",
-          allowedVisibilities: ["shared"],
+          allowedVisibilities: ["read-only"],
+          permissions: Array.from({ length: count }, (_, i): SessionMemberPermission => ({
+            identityId: `person-${i}`,
+            level: memberIds.includes(`person-${i}`) ? "send" : "read",
+            options: ["read", "send"],
+          })),
           members: memberIds.map((identityId) => ({ identityId, addedBy: "owner", addedAt: 1 })),
           identities: Array.from({ length: count }, (_, i) => ({
             type: "human" as const,

@@ -83,7 +83,7 @@ function fixture(review: Partial<NonNullable<GatewaySessionRow["providerReview"]
     request,
     refresh,
     click(text: string, settle = true) {
-      const button = mounted.getByRole("button", { name: text });
+      const button = mounted.getByRole<HTMLButtonElement>("button", { name: text });
       button.click();
       if (settle) {
         flush();
@@ -245,9 +245,7 @@ it("requires explicit safe review, retains the pause, and retries status without
   firstRefresh.resolve({ status: "failed", error: "Disconnected during refresh" });
   await firstRefresh.promise;
   await waitForSolid(() =>
-    expect(f.text()).toContain(
-      "Continuation was requested, but its status could not be refreshed.",
-    ),
+    expect(f.text()).toContain("Couldn’t check whether continuation was accepted."),
   );
   expect(f.text()).not.toContain("Waiting for the provider to accept it.");
   f.expectPaused(true);
@@ -259,7 +257,7 @@ it("requires explicit safe review, retains the pause, and retries status without
   secondRefresh.resolve({ status: "refreshed" });
   await secondRefresh.promise;
   await waitForSolid(() => expect(f.text()).toContain("Waiting for the provider to accept it."));
-  expect(f.text()).not.toContain("status could not be refreshed");
+  expect(f.text()).not.toContain("Couldn’t check whether continuation was accepted");
   f.expectPaused(true);
   f.setRow({ providerReview: undefined });
   f.publishSource();
@@ -297,7 +295,7 @@ it.each([
       });
     }
     f.publishSource();
-    await waitForSolid(() => expect(f.text()).toContain("Continuation was not accepted."));
+    await waitForSolid(() => expect(f.text()).toContain("Couldn’t continue this session."));
     if (source === "row") {
       expect(f.text()).toContain("Provider authentication failed before acceptance.");
       expect(f.text()).not.toContain("Waiting for the provider to accept it.");
@@ -309,7 +307,7 @@ it.each([
       // A later row may omit the terminal receipt; only an explicit retry retires it.
       f.setRow({}, 3);
       f.publishSource();
-      expect(f.text()).toContain("Continuation was not accepted.");
+      expect(f.text()).toContain("Couldn’t continue this session.");
       f.expectPaused(false);
     }
     await expectFreshRetry(f, first);
@@ -336,7 +334,7 @@ it.each(["acknowledgment", "refresh"] as const)(
     await Promise.resolve();
     f.publishSource();
     await waitForSolid(() => f.expectPaused(false));
-    expect(f.text()).toContain("Continuation was not accepted.");
+    expect(f.text()).toContain("Couldn’t continue this session.");
   },
 );
 
@@ -371,13 +369,91 @@ it("preserves the same idempotency key after an uncertain transport failure with
   await f.outcome.promise.catch(() => {});
   await Promise.resolve();
   f.publishSource();
-  await waitForSolid(() => f.expectPaused(false));
-  f.click("Acknowledge findings and continue");
-  await waitForSolid(() => expect(f.calls()).toHaveLength(2));
+  await waitForSolid(() => {
+    f.expectPaused(false);
+    expect(f.text()).toContain("Connection closed before acknowledgment");
+  });
+  const dialog = f.container.querySelector("openclaw-modal-dialog");
+  const retry = createDeferred<unknown>();
+  f.request.mockImplementationOnce(() => retry.promise);
+  const button = f.click("Acknowledge findings and continue");
+  await waitForSolid(() => {
+    expect(f.calls()).toHaveLength(2);
+    expect(f.text()).not.toContain("Connection closed before acknowledgment");
+    expect(button.disabled).toBe(true);
+  });
+  expect(f.container.querySelector("openclaw-modal-dialog")).toBe(dialog);
+  expect(f.container.querySelector("button.primary")).toBe(button);
   const calls = f.calls();
   expect(calls[1]?.[1]).toEqual(first);
-  await f.outcome.promise.catch(() => {});
-  await Promise.resolve();
+  retry.resolve({ runId: "retry-run", status: "started" });
+  await waitForSolid(() => expect(f.text()).toContain("Waiting for the provider to accept it."));
+});
+
+it("shows rejected status refreshes beside retained controls and clears them during retry", async () => {
+  const f = fixture();
+  f.refresh.mockRejectedValueOnce(new Error("Status refresh unavailable"));
+  await f.acknowledge();
+  const dialog = f.container.querySelector("openclaw-modal-dialog");
+  f.outcome.resolve({ runId: "accepted-run", status: "started" });
+  await waitForSolid(() => {
+    expect(f.text()).toContain("Status refresh unavailable");
+    expect(f.text()).not.toContain("Waiting for the provider to accept it.");
+  });
+  const retry = holdRefresh(f);
+  const button = f.click("Check continuation status");
+  await retry.started;
+  await waitForSolid(() => {
+    expect(f.text()).not.toContain("Status refresh unavailable");
+    expect(f.text()).toContain("Checking continuation status");
+    expect(button.disabled).toBe(true);
+  });
+  expect(f.container.querySelector("openclaw-modal-dialog")).toBe(dialog);
+  expect(f.calls()).toHaveLength(1);
+  retry.resolve({ status: "refreshed" });
+  await waitForSolid(() => expect(f.text()).toContain("Waiting for the provider to accept it."));
+});
+
+it.each(["pending", "rejected"] as const)(
+  "preserves a %s command failure when reopening the dialog",
+  async (phase) => {
+    const f = fixture();
+    await f.acknowledge();
+    if (phase === "rejected") {
+      f.outcome.reject(new Error("Continuation unavailable"));
+      await waitForSolid(() => expect(f.text()).toContain("Continuation unavailable"));
+    }
+    f.click("Close");
+    await f.open();
+    if (phase === "pending") {
+      f.outcome.reject(new Error("Continuation unavailable"));
+    }
+    await waitForSolid(() => expect(f.text()).toContain("Continuation unavailable"));
+    expect(f.calls()).toHaveLength(1);
+    expect(f.container.querySelector("openclaw-modal-dialog")).not.toBeNull();
+  },
+);
+
+it("prioritizes terminal owner feedback over a rejected refresh and admits an explicit fresh retry", async () => {
+  const f = fixture();
+  f.refresh.mockRejectedValueOnce(new Error("Status refresh unavailable"));
+  const first = await f.acknowledge();
+  f.outcome.resolve({ runId: "accepted-run", status: "started" });
+  await waitForSolid(() => expect(f.text()).toContain("Status refresh unavailable"));
+  f.setRow({
+    lastRunId: "accepted-run",
+    status: "failed",
+    hasActiveRun: false,
+    activeRunIds: [],
+    lastRunError: "Provider access revoked",
+  });
+  f.publishSource();
+  await waitForSolid(() => {
+    expect(f.text()).toContain("Couldn’t continue this session.");
+    expect(f.text()).toContain("Provider access revoked");
+    expect(f.text()).not.toContain("Status refresh unavailable");
+  });
+  await expectFreshRetry(f, first);
 });
 
 it.each(["acknowledgment", "refresh"] as const)(

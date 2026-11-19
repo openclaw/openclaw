@@ -8,7 +8,7 @@ import {
   isCountedSourcePath,
   main as checkEnvVarCount,
 } from "./check-env-var-count.mts";
-import { reportLimitViolations } from "./lib/check-limits.mts";
+import { releaseBranchForChecks, reportLimitViolations } from "./lib/check-limits.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import {
   compareRatchetSets,
@@ -240,6 +240,22 @@ export function main(
     if (args.staged && args.prune) {
       throw new Error("--prune cannot be combined with --staged");
     }
+    if (!args.prune && releaseBranchForChecks(root)) {
+      // Keep the blanket-disable guard and env-name collection; only size debt is exempt.
+      const { allRules } = collectCurrentSuppressionState(root, {
+        staged: args.staged,
+        envVarNames,
+      });
+      console.log("Max-lines baseline skipped for release branch.");
+      return reportRatchetFailures([
+        {
+          entries: allRules,
+          title: "All-rule lint disables are forbidden; name only the required rules:",
+        },
+      ])
+        ? 1
+        : 0;
+    }
 
     let baseline;
     try {
@@ -264,31 +280,27 @@ export function main(
       ? compareRatchetSets(baseline, allowedBaseline, compareStrings).added
       : [];
 
-    if (
-      reportRatchetFailures([
-        {
-          entries: allRules,
-          title: "All-rule lint disables are forbidden; name only the required rules:",
-        },
-      ])
-    ) {
-      return 1;
-    }
-
-    if (
-      reportLimitViolations([
-        ...added.map((file) => ({
-          file,
-          title: "New max-lines suppressions are forbidden; split these files:",
-          message: "Remove the new max-lines suppression and split the file.",
-        })),
-        ...expanded.map((file) => ({
-          file: BASELINE_PATH,
-          title: "The max-lines baseline may only shrink; remove these entries:",
-          message: file,
-        })),
-      ])
-    ) {
+    // The baseline must describe the tree in CI too: advisory drift on main turns every
+    // later local run red. Only baseline growth follows the limit severity policy.
+    const unlisted = reportRatchetFailures([
+      {
+        entries: allRules,
+        title: "All-rule lint disables are forbidden; name only the required rules:",
+      },
+      {
+        entries: added,
+        title:
+          "New max-lines suppressions are forbidden; split these files (renames move their baseline entry):",
+      },
+    ]);
+    const grown = reportLimitViolations(
+      expanded.map((file) => ({
+        file: BASELINE_PATH,
+        title: "The max-lines baseline may only shrink; remove these entries:",
+        message: file,
+      })),
+    );
+    if (unlisted || grown) {
       return 1;
     }
 
@@ -301,13 +313,12 @@ export function main(
       return 0;
     }
     if (
-      reportLimitViolations(
-        stale.map((file) => ({
-          file: BASELINE_PATH,
+      reportRatchetFailures([
+        {
+          entries: stale,
           title: "Remove stale max-lines baseline entries (or run with --prune):",
-          message: file,
-        })),
-      )
+        },
+      ])
     ) {
       return 1;
     }

@@ -1,6 +1,11 @@
+import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { vi } from "vitest";
 import type { WorkboardStore } from "../store.js";
+
+export function toolsByName(tools: AnyAgentTool[]) {
+  return new Map(tools.map((tool) => [tool.name, tool]));
+}
 
 export async function createAmbiguousPrefix(store: WorkboardStore): Promise<string> {
   const seen = new Set<string>();

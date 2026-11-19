@@ -77,9 +77,9 @@ export async function handleClickClackInbound(params: {
           : { workspaceId: message.workspace_id, conversationId },
         turnId: message.id,
         agentLabel:
-          params.account.name?.trim() ||
+          params.account.name ||
           params.account.botHandle?.trim() ||
-          params.account.agentId?.trim() ||
+          params.account.agentId ||
           params.account.accountId,
         onError: (error) => {
           runtime.logging

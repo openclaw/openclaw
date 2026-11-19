@@ -1,15 +1,27 @@
 import "./install.test-support.js";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { ServiceStartRefusalError } from "../../daemon/service-inspection-error.js";
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
+import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../../infra/update-npm-prefix.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { nodeProbeOutput } from "./install.test-helpers.js";
 import { expectNoCalls, expectPartialCall } from "./lifecycle-assertions.test-support.js";
 import type { DaemonInstallOptions } from "./types.js";
+
+const { runGlobalPackageUpdateSteps } = vi.hoisted(() => ({
+  runGlobalPackageUpdateSteps: vi.fn(),
+}));
+// mock-isolation: records any durable-copy replacement instead of running npm on the test host.
+vi.mock("../../infra/package-update-steps.js", () => ({ runGlobalPackageUpdateSteps }));
+// mock-isolation: no npm prefix probe may spawn on the test host.
+vi.mock("../../infra/update-global.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-global.js")>()),
+  resolveGlobalInstallTarget: async () => ({ manager: "npm", command: "npm" }),
+}));
 
 const {
   actionState,
@@ -27,6 +39,7 @@ const {
   resolveNodeStartupTlsEnvironmentMock,
   runDaemonInstall,
   runExecMock,
+  runtimeLogs,
   service,
   setupInstallTests,
 } = await import("./install.test-support.js");
@@ -77,6 +90,19 @@ describe("runDaemonInstall", () => {
   setupInstallTests();
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+  it("returns without a readiness wait and names gateway start as the readiness step", async () => {
+    installDaemonServiceAndEmitMock.mockImplementationOnce(async (params) => {
+      await (params as { onVerified: () => Promise<void> }).onVerified();
+    });
+
+    await runDaemonInstall({});
+
+    expect(actionState.failed).toEqual([]);
+    expect(runtimeLogs.at(-1)).toContain(
+      "Runtime readiness has not been checked; startup may still be in progress. Run openclaw gateway start to wait until it is ready.",
+    );
+  });
+
   it("runs pin admission before planning and preserves the service on refusal", async () => {
     pinMigrationMock.mockRejectedValueOnce(
       new Error("Runtime pin migration conflict; run openclaw doctor."),
@@ -118,7 +144,7 @@ describe("runDaemonInstall", () => {
       revision: expected.revision,
       definition: expected.definition,
     });
-    function recoveryFixture(runtime: "node" | "bun" = "node") {
+    function recoveryFixture(runtime: "node" | "bun" | "standalone" = "node") {
       const root = tempDirs.make("openclaw-restore-cli-");
       const executable = path.join(
         root,
@@ -129,8 +155,26 @@ describe("runDaemonInstall", () => {
       for (const file of [executable, entrypoint, sqliteLibrary]) {
         fs.writeFileSync(file, "", { mode: 0o755 });
       }
+      if (runtime === "standalone") {
+        fs.mkdirSync(path.join(root, "runtime"));
+        fs.writeFileSync(
+          path.join(root, "manifest.json"),
+          JSON.stringify({
+            schemaVersion: 1,
+            mode: "aot",
+            executable: { path: "standalone" },
+            runtime: { path: "runtime" },
+            openclaw: { version: "2026.10.25" },
+            bun: { version: "1.4.4" },
+          }),
+        );
+      }
       pinSnapshotMock.mockReturnValue(expected);
-      return { executable, entrypoint, sqliteLibrary };
+      return {
+        executable,
+        entrypoint,
+        sqliteLibrary,
+      };
     }
     const restore = (cli: object, options: Partial<DaemonInstallOptions> = {}) =>
       runDaemonInstall({
@@ -171,35 +215,40 @@ describe("runDaemonInstall", () => {
     it.each([
       { runtime: "node", library: false },
       { runtime: "bun", library: true },
+      { runtime: "standalone", library: false },
     ] as const)(
       "restores $runtime with retained library=$library and definition custody",
       async ({ runtime, library }) => {
         const files = recoveryFixture(runtime);
-        const cli = { ...files, sqliteLibrary: library ? files.sqliteLibrary : null };
+        const cli = {
+          ...files,
+          entrypoint: runtime === "standalone" ? null : files.entrypoint,
+          sqliteLibrary: library ? files.sqliteLibrary : null,
+        };
         process.env.OPENCLAW_SQLITE_LIBRARY = "/installer/libsqlite3.dylib";
-        if (runtime === "bun") {
-          const probe = nodeProbeOutput("26.8.1");
+        if (runtime !== "node") {
+          const probe = nodeProbeOutput("26.12.1");
           runExecMock.mockResolvedValue({
             ...probe,
-            stdout: JSON.stringify({ ...JSON.parse(probe.stdout), bunVersion: "1.4.3" }),
+            stdout: JSON.stringify({ ...JSON.parse(probe.stdout), bunVersion: "1.4.4" }),
           });
         }
         performServiceInstall();
         await restore(cli, {
           runtime,
-          ...(runtime === "bun" ? { runtimePath: cli.executable } : {}),
+          ...(runtime !== "node" ? { runtimePath: cli.executable } : {}),
         });
         expect(actionState.failed).toEqual([]);
         const plan = readFirstInstallPlanArg();
         expect(plan).toMatchObject({
           serviceCli: { executable: cli.executable, entrypoint: cli.entrypoint },
           runtimePath: cli.executable,
-          pinnedRuntimePath: runtime === "bun" ? cli.executable : undefined,
+          pinnedRuntimePath: runtime !== "node" ? cli.executable : undefined,
         });
         expectPartialCall(service.install, {
           runtimePinUpdate: {
             expected,
-            pin: runtime === "bun" ? { runtime, path: cli.executable } : undefined,
+            pin: runtime !== "node" ? { runtime, path: cli.executable } : undefined,
             requireDefinitionMatch: true,
           },
           env: plan.env,
@@ -405,6 +454,82 @@ describe("runDaemonInstall", () => {
     );
   });
 
+  it("rejects an unsupported --runtime bun before replacing the durable copy a service runs", async () => {
+    // A service already runs the durable 1.0.0 copy; this CLI is npx openclaw@1.2.3.
+    const root = tempDirs.make("openclaw-npx-bun-");
+    const npxPackage = path.join(root, ".npm", "_npx", "abc", "node_modules", "openclaw");
+    fs.mkdirSync(npxPackage, { recursive: true });
+    fs.writeFileSync(
+      path.join(npxPackage, "package.json"),
+      '{"name":"openclaw","version":"1.2.3"}',
+    );
+    fs.writeFileSync(path.join(npxPackage, "openclaw.mjs"), "");
+    fs.mkdirSync(path.join(npxPackage, "dist"));
+    fs.writeFileSync(path.join(npxPackage, "dist", "index.js"), "");
+    const durablePackage = path.join(
+      resolveNpmGlobalPrefixLayoutFromPrefix(path.join(root, ".openclaw", "npm")).globalRoot,
+      "openclaw",
+    );
+    fs.mkdirSync(durablePackage, { recursive: true });
+    const durableManifest = path.join(durablePackage, "package.json");
+    fs.writeFileSync(durableManifest, '{"name":"openclaw","version":"1.0.0"}');
+    fs.writeFileSync(path.join(durablePackage, "openclaw.mjs"), "");
+    // The install guard requires the account's canonical state dir.
+    process.env.HOME = root;
+    delete process.env.OPENCLAW_STATE_DIR;
+    process.env.PATH = path.join(root, "no-bun");
+    vi.spyOn(process, "argv", "get").mockReturnValue([
+      process.execPath,
+      path.join(npxPackage, "openclaw.mjs"),
+      "gateway",
+      "install",
+    ]);
+    // The real planner selects the runtime; any Bun it probes (even a Bun test host) is 1.3.0.
+    const probe = JSON.parse(nodeProbeOutput("26.12.1").stdout);
+    runExecMock.mockResolvedValue({ stdout: JSON.stringify({ ...probe, bunVersion: "1.3.0" }) });
+    const { buildGatewayInstallPlan } = await vi.importActual<
+      typeof import("../../commands/daemon-install-helpers.js")
+    >("../../commands/daemon-install-helpers.js");
+    buildGatewayInstallPlanMock.mockImplementation(
+      buildGatewayInstallPlan as unknown as typeof buildGatewayInstallPlanMock,
+    );
+
+    await expect(runDaemonInstall({ json: true, force: true, runtime: "bun" })).rejects.toThrow(
+      "No supported Bun runtime was selected",
+    );
+    expectNoCalls(runGlobalPackageUpdateSteps, installDaemonServiceAndEmitMock, service.install);
+    expect(fs.readFileSync(durableManifest, "utf8")).toContain('"1.0.0"');
+  });
+
+  it("moves a loaded service off a temporary npx copy onto a durable one", async () => {
+    const npxPackage = path.join(path.sep, "home", "test", ".npm", "_npx", "abc", "node_modules");
+    loadedService({
+      programArguments: [
+        "/usr/bin/node",
+        path.join(npxPackage, "openclaw", "openclaw.mjs"),
+        "gateway",
+        "--port",
+        "18789",
+      ],
+    });
+
+    await expectReinstall();
+
+    expect(actionState.warnings).toContain(
+      "Gateway service runs from a temporary npx or pnpm dlx copy that can be deleted; refreshing the install.",
+    );
+  });
+
+  it("refreshes a loaded service when its definition is missing", async () => {
+    service.isLoaded.mockResolvedValue(true);
+
+    await expectReinstall();
+
+    expect(actionState.warnings).toContain(
+      "Gateway service definition is missing; refreshing the install.",
+    );
+  });
+
   it("returns already-installed when the embedded gateway token matches the install plan", async () => {
     const environment = { OPENCLAW_GATEWAY_TOKEN: "durable-token" };
     const command = loadedService({ environment });
@@ -448,6 +573,36 @@ describe("runDaemonInstall", () => {
     await expectReinstall();
     expect(resolveNodeStartupTlsEnvironmentMock.mock.calls[0]?.[0]).toMatchObject({
       execPath: serviceNode,
+    });
+  });
+
+  describe("legacy macOS CA bundle drift check", () => {
+    const staleBundleWarning =
+      "Gateway service trusts the outdated macOS CA bundle; refreshing the install.";
+
+    async function useRealDarwinResolver() {
+      const actual = await vi.importActual<typeof import("../../bootstrap/node-startup-env.js")>(
+        "../../bootstrap/node-startup-env.js",
+      );
+      resolveNodeStartupTlsEnvironmentMock.mockImplementation((params) =>
+        actual.resolveNodeStartupTlsEnvironment({ ...params, platform: "darwin" }),
+      );
+    }
+
+    it("reinstalls a macOS service that still trusts the legacy /etc/ssl/cert.pem bundle", async () => {
+      await useRealDarwinResolver();
+      loadedService({ environment: { NODE_EXTRA_CA_CERTS: "/etc/ssl/cert.pem" } });
+
+      await expectReinstall();
+      expect(actionState.warnings).toContain(staleBundleWarning);
+    });
+
+    it("does not flag an operator-chosen macOS CA bundle", async () => {
+      await useRealDarwinResolver();
+      loadedService({ environment: { NODE_EXTRA_CA_CERTS: "/opt/corporate-ca.pem" } });
+
+      await runDaemonInstall({ json: true });
+      expect(actionState.warnings).not.toContain(staleBundleWarning);
     });
   });
 

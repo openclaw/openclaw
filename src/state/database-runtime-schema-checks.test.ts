@@ -8,7 +8,7 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 import {
@@ -18,65 +18,31 @@ import {
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
-const trace = vi.hoisted(() => ({
-  execute: vi.fn<(database: EngineConnection, sql: string) => void>(),
-  isVersionProbe: (sql: string) =>
-    /^PRAGMA data_version\b|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql),
-}));
-vi.mock("../infra/kysely-sync-cache-state.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/kysely-sync-cache-state.js")>();
-  return {
-    ...actual,
-    executeWithCachedStatement: (...args: Parameters<typeof actual.executeWithCachedStatement>) => {
-      // Count executions, including hits in the prepared-statement cache.
-      if (!trace.isVersionProbe(args[1])) {
-        trace.execute(args[0], args[1]);
-      }
-      return actual.executeWithCachedStatement(...args);
-    },
-  };
-});
-vi.mock("../infra/node-sqlite.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/node-sqlite.js")>();
-  return {
-    ...actual,
-    openNodeSqliteDatabase: (...args: Parameters<typeof actual.openNodeSqliteDatabase>) => {
-      const database = actual.openNodeSqliteDatabase(...args);
-      const prepare = database.prepare.bind(database);
-      vi.spyOn(database, "prepare").mockImplementation((sql) => {
-        const statement = prepare(sql);
-        // Observe before admission: the state owner retains raw statements outside Kysely.
-        if (trace.isVersionProbe(sql)) {
-          const get = statement.get.bind(statement);
-          vi.spyOn(statement, "get").mockImplementation((...bindings) => {
-            trace.execute(database, sql);
-            return get(...bindings);
-          });
-        }
-        return statement;
-      });
-      return database;
-    },
-  };
-});
-
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-schema-budget-");
+function observeExecutions() {
+  const queries: string[] = [];
+  return {
+    ...observeMainThreadSql({
+      onStatement: (sql) => {
+        queries.push(sql);
+      },
+    }),
+    queries,
+  };
+}
 afterAll(() => {
   clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
 });
-function expectNoChecks(databases: EngineConnection[]) {
+function expectNoChecks(queries: string[]) {
   const schemaOrFreshness =
     /^PRAGMA (?:user_version|data_version)\b|\bsqlite_(?:master|schema)\b|FROM main\.pragma_data_version\(\)\s*$/iu;
-  for (const [db, sql] of trace.execute.mock.calls) {
-    if (databases.includes(db)) {
-      expect(sql).not.toMatch(schemaOrFreshness);
-    }
-  }
+  expect(queries.filter((sql) => schemaOrFreshness.test(sql))).toEqual([]);
 }
 
 it("keeps admitted reads free of schema checks and freshness probes", async () => {
   setRuntimeConfigSnapshot({});
+  const trace = observeExecutions();
   const scope = {
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: sessionDirs.make() },
@@ -84,7 +50,7 @@ it("keeps admitted reads free of schema checks and freshness probes", async () =
     projection: "list" as const,
   };
   await upsertSessionEntryCore(scope, { sessionId: "schema-budget", updatedAt: 1 });
-  const agent = openOpenClawAgentDatabase(scope);
+  openOpenClawAgentDatabase(scope);
   const state = openOpenClawStateDatabase(scope);
   const read = () => {
     expect(loadSessionEntryReadOnly(scope)?.sessionId).toBe("schema-budget");
@@ -94,22 +60,25 @@ it("keeps admitted reads free of schema checks and freshness probes", async () =
     expect(openOpenClawStateDatabase(scope)).toBe(state);
   };
   read();
-  expect(trace.execute.mock.calls.some(([, sql]) => /^PRAGMA user_version\b/i.test(sql))).toBe(
-    true,
-  );
-  expect(trace.execute.mock.calls.some(([, sql]) => trace.isVersionProbe(sql))).toBe(false);
-  trace.execute.mockClear();
+  expect(trace.queries.some((sql) => /^PRAGMA user_version\b/i.test(sql))).toBe(true);
+  expect(
+    trace.queries.some((sql) =>
+      /^PRAGMA data_version\b|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql),
+    ),
+  ).toBe(false);
+  trace.queries.length = 0;
 
   // No await: all 100 reads of each entry point occur in the same event-loop turn.
   for (let i = 0; i < 100; i++) {
     read();
   }
-  expectNoChecks([agent.db, state.db]);
-  trace.execute.mockClear();
+  expectNoChecks(trace.queries);
+  trace.queries.length = 0;
   for (let i = 0; i < 100; i++) {
     expect(withExistingOpenClawStateDatabaseReadOnly(({ db }) => db, scope)).toBe(state.db);
   }
-  expectNoChecks([state.db]);
+  expectNoChecks(trace.queries);
+  trace.restore();
 });
 
 it("invalidates cached admission after terminal revocation", () => {
@@ -119,8 +88,9 @@ it("invalidates cached admission after terminal revocation", () => {
   expect(cached()).toBe(database);
   const failure = new Error("synthetic revoked state admission");
   recordOpenClawStateDatabaseOpenFailure(database.path, failure);
-  trace.execute.mockClear();
+  const trace = observeExecutions();
   expect(cached).toThrow(failure);
   expect(() => withExistingOpenClawStateDatabaseReadOnly(() => undefined, scope)).toThrow(failure);
-  expect(trace.execute).not.toHaveBeenCalled();
+  trace.expectIdle();
+  trace.restore();
 });

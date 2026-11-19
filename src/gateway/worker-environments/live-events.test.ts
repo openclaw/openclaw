@@ -54,6 +54,38 @@ import {
 } from "./live-events.test-support.js";
 import * as workerRunOwner from "./worker-turn-run-owner.js";
 
+it("projects tool phases without cloning discarded payloads", () => {
+  const args = { paths: ["proof.txt"] };
+  const details = { status: "completed", paths: ["proof.txt"] };
+  const result = { content: [{ type: "text", text: "written" }], details };
+  const variants = [
+    tool({ phase: "start", name: " WRITE ", toolCallId: "call", args }),
+    tool({ phase: "update", name: " WRITE ", toolCallId: "call", partialResult: result }),
+    tool({ phase: "result", name: " WRITE ", toolCallId: "call", isError: false, result }),
+  ];
+  const clone = vi.spyOn(globalThis, "structuredClone");
+  try {
+    const projected = variants.map(liveProjection.prepareWorkerLiveEventData);
+    expect(clone).not.toHaveBeenCalled();
+    expect(projected).toEqual([
+      { phase: "start", name: "write", toolCallId: "call", args },
+      { phase: "update", name: "write", toolCallId: "call", partialResult: result },
+      { phase: "result", name: "write", toolCallId: "call", isError: false, result },
+    ]);
+    expect(projected[0]?.args).toBe(args);
+    expect(projected[1]?.partialResult).not.toBe(result);
+    expect(projected[2]?.result).not.toBe(result);
+    for (const [index, payload] of projected.entries()) {
+      expect(payload).not.toBe(variants[index]?.payload);
+      payload.name = "consumer-change";
+      expect(variants[index]?.payload).toMatchObject({ name: " WRITE " });
+    }
+    expect(result).toEqual({ content: [{ type: "text", text: "written" }], details });
+  } finally {
+    clone.mockRestore();
+  }
+});
+
 describe("worker live events", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-worker-live-");
   let root: string;
@@ -586,20 +618,19 @@ describe("worker live events", () => {
 
   it("bounds a retained capacity tail with normal resync", async () => {
     const first = msg(1, "first", 0, "run-prefix");
-    const second = msg(2, "second", 0, "run-buffered");
-    start({
-      maxActiveRuns: 1,
-      maxPendingBytes: Buffer.byteLength(JSON.stringify(second.event), "utf8"),
-    });
+    const second = msg(2, "x".repeat(16 * 1024), 0, "run-buffered");
+    start({ maxActiveRuns: 1 });
 
-    await ack(second, 0);
+    for (let seq = 2; seq <= 16; seq++) {
+      await ack({ ...second, seq }, 0);
+    }
     await ack(first);
     expect(
       await rx.apply({
         readAckedSeq,
         identity: ID,
         source: sourceFor(),
-        request: msg(3, "overflow", 1, "run-overflow"),
+        request: msg(17, "x".repeat(16 * 1024), 1, "run-overflow"),
       }),
     ).toEqual({
       ok: false,

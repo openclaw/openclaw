@@ -1,5 +1,7 @@
 import { asNullableRecord as getRecord } from "@openclaw/normalization-core/record-coerce";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
+import { readObjectPath } from "../shared/dot-path.js";
+import type { LegacyConfigIssue } from "./types.js";
 
 export { ensureRecord } from "@openclaw/normalization-core/record-coerce";
 export { getRecord };
@@ -11,6 +13,39 @@ export type LegacyConfigRule = {
   // source (not only after include/env resolution).
   requireSourceLiteral?: boolean;
 };
+
+/** Evaluate exactly the rules selected by the migration owner. */
+export function findLegacyConfigRuleIssues(
+  raw: unknown,
+  rules: readonly LegacyConfigRule[],
+  sourceRaw?: unknown,
+): LegacyConfigIssue[] {
+  if (!raw || typeof raw !== "object") {
+    return [];
+  }
+  // SAFETY: the guard accepts any non-null object, including legacy array inputs.
+  const root = raw as Record<string, unknown>;
+  const sourceRoot =
+    // SAFETY: the same object check preserves source-literal reads without excluding arrays.
+    sourceRaw && typeof sourceRaw === "object" ? (sourceRaw as Record<string, unknown>) : root;
+  const issues: LegacyConfigIssue[] = [];
+  for (const rule of rules) {
+    const cursor = readObjectPath(root, rule.path);
+    if (cursor !== undefined && (!rule.match || rule.match(cursor, root))) {
+      if (rule.requireSourceLiteral) {
+        const sourceCursor = readObjectPath(sourceRoot, rule.path);
+        if (sourceCursor === undefined) {
+          continue;
+        }
+        if (rule.match && !rule.match(sourceCursor, sourceRoot)) {
+          continue;
+        }
+      }
+      issues.push({ path: rule.path.join("."), message: rule.message });
+    }
+  }
+  return issues;
+}
 
 export const createLegacyConfigRule = (
   path: string[],

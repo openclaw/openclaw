@@ -1,9 +1,9 @@
 import path from "node:path";
 import {
   loadAuthProfileStoreForRuntimeAsync,
+  updateAuthProfileStoreWithLock,
   type AuthProfileCredential,
-} from "openclaw/plugin-sdk/agent-runtime";
-import { updateAuthProfileStoreWithLock } from "openclaw/plugin-sdk/provider-auth";
+} from "openclaw/plugin-sdk/provider-auth";
 
 export async function writeQaAuthProfiles(params: {
   agentId: string;

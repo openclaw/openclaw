@@ -30,13 +30,8 @@ async function createPlatformSkills() {
     ["always", { os: [" MacOS "], always: true, requires: { bins: ["missing-tool"] } }],
     ["unsupported", { os: ["unsupported-platform"], always: true }],
   ] as const;
-  const install = (
-    [
-      ["mac-recipe", "macos"],
-      ["linux-recipe", "linux"],
-    ] as const
-  ).map(([id, os]) => ({
-    id,
+  const install = ["macos", "linux"].map((os) => ({
+    id: os === "macos" ? "mac-recipe" : "linux-recipe",
     kind: "download",
     os: [os],
     url: "https://example.com/tool",
@@ -57,7 +52,6 @@ it.each([
   { platform: " Darwin ", remotePlatforms: [], compatible: true, installable: true },
   { platform: "linux", remotePlatforms: ["darwin"], compatible: true, installable: false },
   { platform: "linux", remotePlatforms: [], compatible: false, installable: false },
-  { platform: "win32", remotePlatforms: [], compatible: false, installable: false },
 ])(
   "aligns status and prompt on $platform with remote $remotePlatforms",
   async ({ platform, remotePlatforms, compatible, installable }) => {

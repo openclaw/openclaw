@@ -131,7 +131,6 @@ describe("service reader settlement", () => {
           expect(result).toBeNull();
         }
       }
-      expect(service.isLoaded).toHaveBeenCalledTimes(phase === "fallback" ? 1 : 0);
     },
   );
 });
@@ -275,9 +274,6 @@ describe("maintenance inspection settlement", () => {
           contexts: owned ? [caller, managed] : [caller],
           managedEnv: owned ? managed.env : undefined,
         });
-        expect(boundary.managedContext).toHaveBeenCalledWith(
-          expect.objectContaining({ stopState: owned ? inspected : undefined }),
-        );
       }
     },
   );

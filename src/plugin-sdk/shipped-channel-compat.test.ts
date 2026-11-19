@@ -2,14 +2,14 @@ import { expect, expectTypeOf, it } from "vitest";
 import type { ChannelProgressDraftCompositorSnapshot } from "../channels/progress-draft-compositor.types.js";
 import * as schemas from "./bundled-channel-config-schema.js";
 import type { ChannelInboundEnvelopeInput as EnvelopeInput } from "./channel-inbound.js";
-import type { inspectConversationBinding } from "./conversation-binding-inspection-runtime.js";
+import type { inspectConversationBinding as inspect } from "./conversation-binding-inspection-runtime.js";
 import type { ReplyDispatchRuntimeInfo } from "./reply-runtime.js";
 import type { PluginRuntime } from "./runtime-store.js";
 import type {
   SessionBindingRecord as Binding,
   SessionBindingService as Bindings,
 } from "./session-binding-runtime.js";
-import type { readSessionUpdatedAt, readSessionUpdatedAtAsync } from "./session-store-runtime.js";
+import type * as Store from "./session-store-runtime.js";
 import {
   createLegacyCompatChannelDmPolicy,
   promptLegacyChannelAllowFromForAccount,
@@ -27,16 +27,19 @@ type Timestamp = number | undefined;
 type TimestampCallback = (params: { storePath: string; sessionKey: string }) => Timestamp;
 type EnvelopeBuilder = (input: EnvelopeInput) => string;
 type BuiltEnvelope = { storePath: string; body: string };
+type Read = typeof Store.readSessionUpdatedAt;
+type ReadAsync = typeof Store.readSessionUpdatedAtAsync;
+type AsyncVersion<T extends (...args: never[]) => unknown> = (
+  ...args: Parameters<T>
+) => Promise<ReturnType<T>>;
 
 it("retains the synchronous binding selectors shipped in 2026.9.8", () => {
-  expectTypeOf<Bindings["listBySession"]>().toEqualTypeOf<
-    (targetSessionKey: string) => Binding[]
-  >();
+  expectTypeOf<Bindings["listBySession"]>().toEqualTypeOf<(key: string) => Binding[]>();
   expectTypeOf<Bindings["resolveByConversation"]>().returns.toEqualTypeOf<Binding | null>();
   expectTypeOf<BindingManager["getByConversationId"]>().toEqualTypeOf<
     (conversationId: string) => AccountBinding | undefined
   >();
-  expectTypeOf<typeof inspectConversationBinding>().returns.toEqualTypeOf<
+  expectTypeOf<typeof inspect>().returns.toEqualTypeOf<
     { status: "available"; binding: Binding | null } | { status: "unavailable" }
   >();
 });
@@ -46,7 +49,7 @@ it("retains synchronous envelope results and timestamp callbacks shipped in 2026
   type Route = Envelope["resolveInboundRouteEnvelopeBuilder"];
   type RuntimeRoute = Envelope["resolveInboundRouteEnvelopeBuilderWithRuntime"];
   type ChannelRoute = Inbound["resolveChannelInboundRouteEnvelope"];
-  expectTypeOf<typeof readSessionUpdatedAt>().returns.toEqualTypeOf<Timestamp>();
+  expectTypeOf<Read>().returns.toEqualTypeOf<Timestamp>();
   expectTypeOf<Session["readSessionUpdatedAt"]>().returns.toEqualTypeOf<Timestamp>();
   expectTypeOf<ChannelBuilder>().returns.toEqualTypeOf<EnvelopeBuilder>();
   expectTypeOf<ReturnType<ChannelRoute>["buildEnvelope"]>().toEqualTypeOf<EnvelopeBuilder>();
@@ -63,21 +66,15 @@ it("retains synchronous envelope results and timestamp callbacks shipped in 2026
 });
 
 it("adds awaited timestamp preparation without changing released input shapes", () => {
-  type Read = typeof readSessionUpdatedAt;
-  type ReadAsync = typeof readSessionUpdatedAtAsync;
   type AsyncBuilder = Inbound["createChannelInboundEnvelopeBuilderAsync"];
   type AsyncContext = Inbound["resolveInboundSessionEnvelopeContextAsync"];
   type Context = Inbound["resolveInboundSessionEnvelopeContext"];
-  expectTypeOf<ReadAsync>().returns.toEqualTypeOf<Promise<Timestamp>>();
-  expectTypeOf<Parameters<ReadAsync>>().toEqualTypeOf<Parameters<Read>>();
-  expectTypeOf<Session["readSessionUpdatedAtAsync"]>().returns.toEqualTypeOf<Promise<Timestamp>>();
-  expectTypeOf<Parameters<Session["readSessionUpdatedAtAsync"]>>().toEqualTypeOf<
-    Parameters<Session["readSessionUpdatedAt"]>
+  expectTypeOf<ReadAsync>().toEqualTypeOf<AsyncVersion<Read>>();
+  expectTypeOf<Session["readSessionUpdatedAtAsync"]>().toEqualTypeOf<
+    AsyncVersion<Session["readSessionUpdatedAt"]>
   >();
-  expectTypeOf<Parameters<AsyncBuilder>>().toEqualTypeOf<Parameters<ChannelBuilder>>();
-  expectTypeOf<AsyncBuilder>().returns.toEqualTypeOf<Promise<EnvelopeBuilder>>();
-  expectTypeOf<Parameters<AsyncContext>>().toEqualTypeOf<Parameters<Context>>();
-  expectTypeOf<AsyncContext>().returns.toEqualTypeOf<Promise<ReturnType<Context>>>();
+  expectTypeOf<AsyncBuilder>().toEqualTypeOf<AsyncVersion<ChannelBuilder>>();
+  expectTypeOf<AsyncContext>().toEqualTypeOf<AsyncVersion<Context>>();
 });
 
 it("retains named config schema exports used by published channel packages", () => {

@@ -34,7 +34,6 @@ export async function waitForBuzzRoomAccess(params: {
     return await new Promise<BuzzDiscoveredRoom[]>((resolve, reject) => {
       let settled = false;
       let checking = false;
-      const seenEvents = new Set<string>();
 
       const finish = (error?: unknown, rooms?: BuzzDiscoveredRoom[]) => {
         if (settled) {
@@ -95,13 +94,11 @@ export async function waitForBuzzRoomAccess(params: {
           onevent: (event) => {
             if (
               event.kind !== BUZZ_MEMBER_ADDED_NOTIFICATION_KIND ||
-              seenEvents.has(event.id) ||
               !event.tags.some((tag) => tag[0] === "p" && tag[1] === publicKey) ||
               !hasValidRoomTag(event)
             ) {
               return;
             }
-            seenEvents.add(event.id);
             void checkRooms();
           },
           oneose: () => {

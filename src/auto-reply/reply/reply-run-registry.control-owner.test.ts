@@ -67,6 +67,12 @@ it.each([
     "message_tool_only",
     "source_reply_delivery_mode_mismatch",
   ],
+  [
+    "sourceReplyDeliveryMode",
+    "automatic",
+    "message_tool_only",
+    "source_reply_delivery_mode_mismatch",
+  ],
   ["sourceReplyDeliveryMode", "message_tool_only", "message_tool_only", undefined],
   ["terminalReplyExpectation", "required", "optional", "reply_expectation_mismatch"],
   ["terminalReplyExpectation", "optional", "required", "reply_expectation_mismatch"],
@@ -161,6 +167,42 @@ it.each([false, true])(
       operation.complete();
       await operation.ownerSettlement;
     }
+  },
+);
+
+it.each(["required", "optional", "result-required", undefined] as const)(
+  "keeps a mismatched input out of a %s reply owner",
+  async (terminalReplyExpectation) => {
+    const queueMessage = vi.fn(async () => {});
+    const operation = createTestReplyOperation({
+      sessionKey,
+      sessionId: "session-reply-expectation",
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      terminalReplyExpectation,
+      cancel: vi.fn(),
+      queueMessage,
+    });
+    operation.setPhase("running");
+    const target = captureCurrentReplyMessageInjectionTarget(operation.key);
+    if (!target) {
+      throw new Error("Expected a live message injection target");
+    }
+    await expect(
+      queueReplyMessageInjectionTarget(target, "different input", {
+        terminalReplyExpectation:
+          (terminalReplyExpectation ?? "required") === "optional" ? "required" : "optional",
+      }),
+    ).resolves.toEqual({ status: "rejected", reason: "reply_expectation_mismatch" });
+    expect(queueMessage).not.toHaveBeenCalled();
+    await expect(
+      queueReplyMessageInjectionTarget(target, "matching input", {
+        terminalReplyExpectation,
+      }),
+    ).resolves.toEqual({ status: "accepted" });
+    expect(queueMessage).toHaveBeenCalledOnce();
   },
 );
 

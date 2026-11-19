@@ -17,13 +17,39 @@ on:
         required: true
         type: string
 
+      plugins:
+        description: Internal parent recovery subset; empty reconciles the full original roster
+        required: false
+        default: ""
+        type: string
+      release_publish_run_id:
+        description: Internal active release publication parent run
+        required: false
+        default: ""
+        type: string
+      release_publish_run_attempt:
+        description: Internal active release publication parent attempt
+        required: false
+        default: ""
+        type: string
+      full_release_validation_run_id:
+        description: Internal original full release validation run
+        required: false
+        default: ""
+        type: string
+      full_release_validation_run_attempt:
+        description: Internal original full release validation attempt
+        required: false
+        default: ""
+        type: string
+
 permissions:
   actions: read
   contents: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
 
 jobs:
   recover:
@@ -47,6 +73,7 @@ jobs:
           package-manager-cache: false
 
       - name: Download sealed recovery manifest
+        if: ${{ !(inputs.release_publish_run_id || inputs.release_publish_run_attempt || inputs.full_release_validation_run_id || inputs.full_release_validation_run_attempt || inputs.plugins) }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: openclaw-clawhub-recovery-manifest-${{ inputs.original_child_run_id }}-${{ inputs.original_child_run_attempt }}
@@ -55,6 +82,7 @@ jobs:
           run-id: ${{ inputs.original_child_run_id }}
 
       - name: Resolve exact child and parent attempts
+        if: ${{ !(inputs.release_publish_run_id || inputs.release_publish_run_attempt || inputs.full_release_validation_run_id || inputs.full_release_validation_run_attempt || inputs.plugins) }}
         id: attempts
         env:
           GH_TOKEN: ${{ github.token }}
@@ -76,6 +104,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Validate original sealed authority and exact recovery roster
+        if: ${{ !(inputs.release_publish_run_id || inputs.release_publish_run_attempt || inputs.full_release_validation_run_id || inputs.full_release_validation_run_attempt || inputs.plugins) }}
         env:
           GH_TOKEN: ${{ github.token }}
           VERIFIER_SHA: ${{ github.workflow_sha }}
@@ -91,6 +120,7 @@ jobs:
         run: node scripts/clawhub-postpublish.mjs
 
       - name: Recover every non-public exact attempt
+        if: ${{ !(inputs.release_publish_run_id || inputs.release_publish_run_attempt || inputs.full_release_validation_run_id || inputs.full_release_validation_run_attempt || inputs.plugins) }}
         env:
           CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
           RECOVERY_REASON: ${{ inputs.reason }}
@@ -102,6 +132,7 @@ jobs:
             --output "$RUNNER_TEMP/clawhub-recovery/result.json"
 
       - name: Reconcile the complete original package roster
+        if: ${{ !(inputs.release_publish_run_id || inputs.release_publish_run_attempt || inputs.full_release_validation_run_id || inputs.full_release_validation_run_attempt || inputs.plugins) }}
         env:
           GH_TOKEN: ${{ github.token }}
           VERIFIER_SHA: ${{ github.workflow_sha }}
@@ -114,6 +145,13 @@ jobs:
           PARENT_STATE_POLICY: recovery-producer
           RECOVERY_MANIFEST: ${{ runner.temp }}/clawhub-recovery/recovery-manifest.json
         run: node scripts/clawhub-postpublish.mjs
+
+      - name: Recover authenticated parent selection and verify sealed bytes
+        if: ${{ inputs.release_publish_run_id || inputs.release_publish_run_attempt || inputs.full_release_validation_run_id || inputs.full_release_validation_run_attempt || inputs.plugins }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+        run: node scripts/clawhub-postpublish.mjs recover-from-parent
 
       - name: Retain recovery and full-roster evidence
         if: ${{ always() }}

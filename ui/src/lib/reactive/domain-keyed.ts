@@ -31,6 +31,7 @@ export function projectProgressCard(source: () => ProgressCardProjectionSource) 
     },
     equality: (previous, next) =>
       previous.card === next.card &&
+      previous.completion === next.completion &&
       previous.lifetime === next.lifetime &&
       previous.error === next.error &&
       previous.refreshState === next.refreshState,

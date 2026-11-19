@@ -56,7 +56,7 @@ describe("retireStandaloneGitWrapper", () => {
       }
     };
     const readFile = fs.readFile;
-    const observation =
+    using _ =
       stage === "pkg inspection"
         ? vi.spyOn(exec, "runCommandBuffered").mockImplementationOnce(async () => {
             await changeWrapper();
@@ -67,44 +67,42 @@ describe("retireStandaloneGitWrapper", () => {
             await changeWrapper();
             return contents;
           });
-    try {
-      const result = await withMockedPlatform(platform, () => retire([base], assertCurrent));
-      if (change === "directory") {
-        expect((await fs.lstat(wrapper)).isDirectory()).toBe(true);
-      } else {
-        await expect(fs.readFile(wrapper, "utf8")).resolves.toBe(
-          change === "content change"
-            ? replacement
-            : change === "oversized file"
-              ? "x".repeat(4097)
-              : original,
-        );
-      }
-      expect(result).toMatchObject({ error: expect.stringContaining("Could not retire") });
-      expect(assertCurrent).toHaveBeenCalledTimes(change === "revoked finalizer" ? 1 : 0);
-    } finally {
-      observation.mockRestore();
+
+    const retiring = withMockedPlatform(platform, () => retire([base], assertCurrent));
+    const result =
+      change === "revoked finalizer"
+        ? await expect(retiring).rejects.toThrow("finalizer revoked")
+        : await retiring;
+    if (change === "directory") {
+      expect((await fs.lstat(wrapper)).isDirectory()).toBe(true);
+    } else {
+      await expect(fs.readFile(wrapper, "utf8")).resolves.toBe(
+        change === "content change"
+          ? replacement
+          : change === "oversized file"
+            ? "x".repeat(4097)
+            : original,
+      );
     }
+    if (change !== "revoked finalizer") {
+      expect(result).toMatchObject({ error: expect.stringContaining("Could not retire") });
+    }
+    expect(assertCurrent).toHaveBeenCalledTimes(change === "revoked finalizer" ? 1 : 0);
   });
 
   it("preserves a pkg-owned legacy wrapper even when its contents match", async () => {
     const { wrapper, original, retire } = await fixture("freebsd");
-    const query = vi
+    using _ = vi
       .spyOn(exec, "runCommandBuffered")
       .mockResolvedValue(pkgQueryResult(`${wrapper}\n`));
-    try {
-      await withMockedPlatform("freebsd", () =>
-        expect(retire()).resolves.toMatchObject({
-          error: expect.stringContaining("installed by FreeBSD pkg"),
-        }),
-      );
-      await expect(fs.readFile(wrapper, "utf8")).resolves.toBe(original);
-    } finally {
-      query.mockRestore();
-    }
+
+    await withMockedPlatform("freebsd", () =>
+      expect(retire()).rejects.toThrow("installed by FreeBSD pkg"),
+    );
+    await expect(fs.readFile(wrapper, "utf8")).resolves.toBe(original);
   });
   it("removes only the installer wrapper for the previous checkout", async () => {
-    const { base: home, root: oldRoot, wrapper, write, retire } = await fixture();
+    const { base: home, root: oldRoot, wrapper, retire } = await fixture();
     const unrelatedWrapper = path.join(home, "earlier", "openclaw");
     const secondWrapper = path.join(home, "legacy", "bin", "openclaw");
     await Promise.all(
@@ -120,10 +118,6 @@ describe("retireStandaloneGitWrapper", () => {
     await expect(fs.readFile(unrelatedWrapper, "utf8")).resolves.toContain("unrelated");
     await expect(fs.stat(wrapper)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(secondWrapper)).rejects.toMatchObject({ code: "ENOENT" });
-
-    await write("#!/usr/bin/env node\nimport '../lib/node_modules/openclaw/openclaw.mjs';\n");
-    await expect(retire()).resolves.toEqual({});
-    await expect(fs.stat(wrapper)).resolves.toBeDefined();
   });
 
   it("removes only the exact PowerShell installer wrapper on Windows", async () => {

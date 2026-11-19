@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import type { SubsystemLogger } from "../../../logging/subsystem.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
@@ -24,7 +25,6 @@ const mocks = vi.hoisted(() => ({
   preparePromptContext: vi.fn(),
   preparePromptExecution: vi.fn(),
   preparePromptPreflight: vi.fn(),
-  releasePendingSteering: vi.fn(),
   removeTrailingPrecheckError: vi.fn(),
   resolveApiKey: vi.fn(),
   submitPrompt: vi.fn(),
@@ -33,10 +33,6 @@ const mocks = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
 
-vi.mock("../../subagents/registry/subagent-registry.js", () => ({
-  releasePendingAgentSteeringItems: mocks.releasePendingSteering,
-  ackPendingAgentSteeringItems: vi.fn(),
-}));
 vi.mock("../google-prompt-cache.js", () => ({
   prepareGooglePromptCacheStreamFn: mocks.prepareGooglePromptCache,
 }));
@@ -99,8 +95,6 @@ export function createPromptAssemblyResult(
     promptBuildPrependContext: undefined,
     promptBuildAppendContext: undefined,
     originContext: undefined,
-    heartbeatSummary: undefined,
-    leasedSteering: undefined,
     transcriptLeafId: null,
   };
 }
@@ -147,14 +141,11 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
 
   mocks.preparePromptAssembly.mockImplementation(async (input: AssemblyCall) => {
     order.push("assembly");
-    const lease = { leaseId: "lease-1", runIds: ["run-1"], isCurrent: () => true };
     input.applyPromptBuildToolsAllow(undefined);
-    input.setLeasedSteering(lease);
     return {
       ...createPromptAssemblyResult(input),
       effectivePrompt: pendingPrompt,
       effectiveTranscriptPrompt: pendingPrompt,
-      leasedSteering: lease,
       transcriptLeafId: "leaf-1",
     };
   });
@@ -212,7 +203,6 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
   mocks.submitPrompt.mockImplementation(async (submissionInput: PromptSubmissionCall) => {
     order.push("submit");
     submissionInput.onFinalPromptText("hello");
-    submissionInput.onSteeringAcknowledged();
   });
   mocks.handlePromptError.mockResolvedValue({});
   const input = {
@@ -269,9 +259,7 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
           takePendingMidTurnPrecheckRequest: () => undefined,
         },
         preparedUserTurnMessage: {
-          role: "user",
-          content: "hello",
-          timestamp: 100,
+          ...makeUserMessage("hello", 100),
           __openclaw: { senderName: "Alice" },
         },
         sessionManager,

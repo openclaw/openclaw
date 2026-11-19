@@ -34,7 +34,10 @@ function digest(revision: number): SessionObserverDigest {
 
 function storeFixture(storePath?: string) {
   const target = { ...scope, ...(storePath ? { storePath } : {}) };
+  const changes: SessionRowChange[] = [];
+  onTestFinished(sessionChanges.subscribe((change) => changes.push(change)));
   return {
+    changes,
     seed: (entry: Partial<SessionEntry> = {}) =>
       upsertSessionEntryCore(target, { sessionId, updatedAt: 0, ...entry }),
     read: () => loadSessionEntryReadOnly(target),
@@ -100,8 +103,7 @@ it("rejects leading prose", () => {
 });
 
 it("returns null without publication when the session row is gone", () =>
-  withStore(async ({ persist }) => {
-    const changes = observeRows();
+  withStore(async ({ persist, changes }) => {
     expect(await persist(digest(1), { sessionId: undefined })).toBeNull();
     expect(changes).not.toContainEqual(expect.objectContaining(scope));
   }));
@@ -113,9 +115,9 @@ it.each([
 ] as const)(
   "rejects %s without changing or publishing the row",
   (_label, seedRevision, revision, options) =>
-    withStore(async ({ seed, read, persist }) => {
+    withStore(async ({ seed, read, persist, changes }) => {
       await seed({ observerDigest: digest(seedRevision), updatedAt: 1 });
-      const changes = observeRows();
+      changes.length = 0;
       expect(await persist(digest(revision), options)).toBe(false);
       expect(changes).not.toContainEqual(expect.objectContaining(scope));
       expect(read()?.observerDigest?.revision).toBe(seedRevision);
@@ -130,9 +132,9 @@ it.each([
 ] as const)(
   "store configured=%s rejects old lifecycle %s after same-id reset",
   (configured, lifecycleRevision) =>
-    withStore(async ({ seed, read, persist }) => {
+    withStore(async ({ seed, read, persist, changes }) => {
       await seed({ lifecycleRevision: "lifecycle-b", updatedAt: 1 });
-      const changes = observeRows();
+      changes.length = 0;
       expect(await persist({ ...digest(10), sessionId, lifecycleRevision })).toBe(false);
       expect(changes).not.toContainEqual(expect.objectContaining(scope));
       expect(read()?.observerDigest).toBeUndefined();

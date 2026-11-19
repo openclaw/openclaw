@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
+import { GATEWAY_RESTART_RESUME_TEXT } from "openclaw/plugin-sdk/qa-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import type { MockProviderVariant } from "../shared/mock-provider-variant.js";
 import type { QaMockRequestSnapshot } from "../shared/types.js";
@@ -47,6 +49,8 @@ export type QaMockProviderDispatchResult = {
   responsePauseMs?: number;
   /** Holds an accepted SSE stream open with comment keepalives during the pause. */
   responseKeepaliveMs?: number;
+  /** Writes each output-text delta this many milliseconds apart (paced streaming). */
+  deltaIntervalMs?: number;
 };
 
 export type StreamEvent =
@@ -230,7 +234,6 @@ export const QA_STREAMING_PROMPT_RE = /(?:partial|quiet) streaming qa check/i;
 export const QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE = /final-only marker streaming qa check/i;
 export const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
 export const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress( error)? qa check/i;
-export const QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE = /global tool loop breaker qa check/i;
 export const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check/i;
 export const QA_GROUP_PROGRESS_THEN_EMPTY_PROMPT_RE = /qa group progress then empty check/i;
 export const QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE = /qa msteams thread message-tool final dedupe/i;
@@ -346,10 +349,10 @@ export const QA_NATIVE_STOP_DELAY_MS = 180_000;
 export const QA_IMAGE_GENERATION_PROMPT_RE =
   /image generation check|capability flip image check|\/tool\s+image_generate/i;
 export const QA_REASONING_ONLY_RETRY_NEEDLE =
-  "recorded reasoning but did not produce a user-visible answer";
+  "Continue from the current conversation and answer the user's request now";
 export const QA_EMPTY_RESPONSE_RETRY_NEEDLE = "Continue from the current state";
 export const QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE =
-  "Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step:";
+  "Do not repeat completed tool calls or restart from scratch. Do not call tools in this step.";
 export const QA_SKILL_WORKSHOP_GIF_PROMPT_RE =
   /externally sourced animated GIF asset|animated GIF asset in a product UI/i;
 export const QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE = /Review transcript for durable skill updates/i;
@@ -358,9 +361,10 @@ export const QA_TOOL_SEARCH_PROMPT_RE = /tool search qa check/i;
 export const QA_TOOL_SEARCH_FAILURE_PROMPT_RE = /tool search qa failure/i;
 export const QA_MCP_CODE_MODE_PROMPT_RE = /mcp code mode qa check/i;
 export const QA_RESTART_CODE_MODE_WAIT_PROMPT_RE = /code mode restart wait qa check/i;
-export const QA_RESTART_RECOVERY_PROMPT_RE = /previous turn was interrupted by a gateway restart/i;
-export const QA_KILL_RESTART_PROMPT_RE = /\bKILL-RESTART-PROMPT\b/u;
-export const QA_KILL_RESTART_RECOVERED_MARKER = "KILL-RESTART-RECOVERED-OK";
+export const QA_RESTART_RESUME_PROMPT_RE = new RegExp(
+  escapeRegExp(GATEWAY_RESTART_RESUME_TEXT),
+  "u",
+);
 const QA_AUDIO_TRANSCRIPTION_TEXT =
   "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK";
 const QA_GROUP_AUDIO_TRANSCRIPTION_TEXT =

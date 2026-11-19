@@ -1,6 +1,7 @@
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
 import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -16,6 +17,10 @@ import { withPreparedEmbeddedRunToolAuthority } from "./tool-authority.runtime.j
 
 export const sessionId = "authority-session";
 export const sessionKey = "agent:main:main";
+export function createDirectReplyOperation() {
+  return createReplyOperation({ sessionId, sessionKey, resetTriggered: false, turnKind: "direct" });
+}
+
 type EmbeddedRunHandle = ReturnType<typeof createEmbeddedRunHandle>;
 type QueueMessage = EmbeddedRunHandle["queueMessage"];
 type QueueMock = ReturnType<typeof vi.fn<QueueMessage>>;
@@ -35,6 +40,26 @@ export const attempt = {
   senderId: "authority-requester",
   traceAuthorized: false,
 };
+
+export function expectOutcome(
+  pending: PromiseLike<unknown>,
+  ...expected: [status: "accepted" | "failed" | "answered"] | [status: "rejected", reason: string]
+) {
+  const [status, reason] = expected;
+  return expect(pending).resolves.toMatchObject({
+    status,
+    ...(reason === undefined ? {} : { reason }),
+  });
+}
+
+type AuthorityAttempt = Parameters<typeof withPreparedEmbeddedRunToolAuthority>[1];
+function withAuthority<T>(
+  admittedRunContext: AdmittedRunContext,
+  run: Parameters<typeof withPreparedEmbeddedRunToolAuthority<T, AuthorityAttempt>>[3],
+  params: AuthorityAttempt = attempt,
+) {
+  return withPreparedEmbeddedRunToolAuthority({ admittedRunContext }, params, undefined, run);
+}
 
 export async function admitted<T>(
   run: (context: { admittedRunContext: AdmittedRunContext; close: () => void }) => Promise<T>,
@@ -113,10 +138,8 @@ export async function published<T>(
 ) {
   return admitted(
     async ({ admittedRunContext, close }) =>
-      withPreparedEmbeddedRunToolAuthority(
-        { admittedRunContext },
-        { ...attempt, ...params },
-        undefined,
+      withAuthority(
+        admittedRunContext,
         async (prepared) => {
           const queue = vi.fn<QueueMessage>(async () => {});
           const handle = publishPreparedHandle(
@@ -130,6 +153,7 @@ export async function published<T>(
             clearActiveEmbeddedRun(sessionId, handle, sessionKey);
           }
         },
+        { ...attempt, ...params },
       ),
     operatorAuthority,
   );

@@ -34,13 +34,14 @@ function injectToolCallThoughtSignatures(
   context: ProviderContext,
   model: OpenAIModeModel,
 ): void {
-  if (!isGoogleOpenAICompatModel(model)) {
-    return;
-  }
+  // Other compatible endpoints (LiteLLM in front of Gemini) get back only signatures issued on
+  // this route, in LiteLLM's provider_specific_fields; provider adapters may move them.
+  const google = isGoogleOpenAICompatModel(model);
   const sigById = new Map<string, string>();
-  const fallbackSig = isGoogleGemini3ThinkingLevelModel(model.id)
-    ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
-    : undefined;
+  const fallbackSig =
+    google && isGoogleGemini3ThinkingLevelModel(model.id)
+      ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
+      : undefined;
   for (const msg of context.messages ?? []) {
     if (msg.role !== "assistant") {
       continue;
@@ -57,7 +58,8 @@ function injectToolCallThoughtSignatures(
       if (typeof id === "string" && typeof sig === "string" && sig.length > 0) {
         const isSameRoute =
           msg.api === model.api && msg.provider === model.provider && msg.model === model.id;
-        if (!isSameRoute && !fallbackSig) {
+        // Encrypted reasoning details (JSON) replay through reasoning_details instead.
+        if ((!isSameRoute && !fallbackSig) || (!google && sig.trimStart().startsWith("{"))) {
           continue;
         }
         sigById.set(id, isSameRoute ? sig : (fallbackSig ?? sig));
@@ -83,7 +85,12 @@ function injectToolCallThoughtSignatures(
       if (!sig) {
         continue;
       }
-      Object.assign(toolCall, { extra_content: { google: { thought_signature: sig } } });
+      Object.assign(
+        toolCall,
+        google
+          ? { extra_content: { google: { thought_signature: sig } } }
+          : { provider_specific_fields: { thought_signature: sig } },
+      );
     }
   }
 }
@@ -129,38 +136,12 @@ function sanitizeOpenRouterReasoningReplayFields(record: ReasoningReplayMessage)
   delete record.reasoning_text;
 }
 
-function shouldPreserveReasoningContentReplay(
-  model: OpenAIModeModel,
-  compat: { requiresReasoningContentOnAssistantMessages: boolean; thinkingFormat: string },
-): boolean {
-  if (
-    compat.requiresReasoningContentOnAssistantMessages ||
-    compat.thinkingFormat === "deepseek" ||
-    compat.thinkingFormat === "zai" ||
-    shouldTrustReasoningContentReplayMetadata(model)
-  ) {
-    return true;
-  }
-  return requiresReasoningContentReplay(model.id);
-}
-
 function shouldPreserveOpenRouterReasoningReplay(model: OpenAIModeModel): boolean {
   if (model.provider !== "openrouter") {
     return true;
   }
   const normalizedModelId = model.id.trim().toLowerCase();
   return !(normalizedModelId.startsWith("anthropic/") || normalizedModelId.startsWith("x-ai/"));
-}
-
-function shouldTrustReasoningContentReplayMetadata(model: OpenAIModeModel): boolean {
-  if (!model.reasoning) {
-    return false;
-  }
-  const provider = model.provider.trim().toLowerCase();
-  if (provider === "openai") {
-    return false;
-  }
-  return shouldPreserveOpenRouterReasoningReplay(model);
 }
 
 // OpenAI Chat Completions assistant-message input does not define reasoning
@@ -179,7 +160,14 @@ export function applyCompletionsReplay(
   injectToolCallThoughtSignatures(outgoingMessages, context, model);
   const preserveOpenRouterReasoning =
     compat.thinkingFormat === "openrouter" && shouldPreserveOpenRouterReasoningReplay(model);
-  const preserveReasoningContent = shouldPreserveReasoningContentReplay(model, compat);
+  const preserveReasoningContent =
+    compat.requiresReasoningContentOnAssistantMessages ||
+    compat.thinkingFormat === "deepseek" ||
+    compat.thinkingFormat === "zai" ||
+    (model.reasoning &&
+      model.provider.trim().toLowerCase() !== "openai" &&
+      shouldPreserveOpenRouterReasoningReplay(model)) ||
+    requiresReasoningContentReplay(model.id);
   for (const message of outgoingMessages) {
     if (message.role !== "assistant") {
       continue;

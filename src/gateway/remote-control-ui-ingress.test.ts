@@ -40,6 +40,7 @@ function fixture() {
     }),
     getRuntimeConfig: () => ({}),
     signal: new AbortController().signal,
+    admissionSignal: new AbortController().signal,
     handleRequest: async (req, res) => {
       res.end(JSON.stringify(req.headers));
     },
@@ -181,7 +182,14 @@ describe("remote Control UI handle", () => {
   it("rejects role-configured Gateways at open and after config publication", async () => {
     const { host, open } = fixture();
     const handle = await open();
-    host.getRuntimeConfig = () => ({ gateway: { roles: { definitions: {} } } });
+    host.getRuntimeConfig = () => ({
+      gateway: {
+        roles: {
+          default: "denied",
+          definitions: { denied: { agents: [], scopes: [], sessions: { others: "none" } } },
+        },
+      },
+    });
     await expect(open()).rejects.toMatchObject({
       code: "unsupported-auth",
       message: expect.stringContaining("gateway.roles"),

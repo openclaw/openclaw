@@ -76,7 +76,10 @@ describe.skipIf(process.platform === "win32")("native Codex tool PATH", () => {
                     call_id: `path-probe-${requests.length}`,
                     name: "exec_command",
                     arguments: JSON.stringify({
-                      cmd: `${expectPrefix ? "tool-path-probe && native-path-probe && " : ""}if shopt -q login_shell; then echo LOGIN=yes; else echo LOGIN=no; fi; printf 'GIT_NAME='; git config --get user.name || printf '\\n'; git config --get maintenance.auto; git config --get gc.auto`,
+                      // Restrictive filters can remove HOME; never fall back to operator Git config.
+                      cmd:
+                        "export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1; " +
+                        `${expectPrefix ? "tool-path-probe && native-path-probe && " : ""}if shopt -q login_shell; then echo LOGIN=yes; else echo LOGIN=no; fi; printf 'GIT_NAME='; git config --get user.name || printf '\\n'; git config --get maintenance.auto; git config --get gc.auto`,
                       shell: "/bin/bash",
                       ...(loginAllowed ? { login: true } : {}),
                       max_output_tokens: 1000,

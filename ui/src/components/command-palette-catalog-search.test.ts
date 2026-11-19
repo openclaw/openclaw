@@ -1,10 +1,8 @@
-import { expect, it, vi } from "vitest";
-import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { expect, it } from "vitest";
 import {
   type CommandPaletteItem,
   filterCommandPaletteItems,
   getStaticCommandPaletteCatalogItems,
-  loadCommandPaletteCatalogItems,
 } from "./command-palette-catalog-search.ts";
 
 function expectItem(items: CommandPaletteItem[], expected: Partial<CommandPaletteItem>) {
@@ -36,49 +34,4 @@ it("exposes app cards and permission-filtered settings sections without RPCs", (
     action: "nav:communications",
     search: "?section=transcripts",
   });
-});
-
-it("loads bounded name and description catalogs in parallel", async () => {
-  const skill = { skillKey: "forecast-brief", name: "Forecast", description: "Weather" };
-  const plugin = { id: "weather-helper", name: "Weather", description: "Tools" };
-  const catalogs: Record<string, unknown> = {
-    "cron.list": { jobs: [{ id: "nightly", name: "Nightly invoices" }] },
-    "skills.status": { skills: [skill] },
-    "plugins.list": { plugins: [plugin] },
-  };
-  const request = vi.fn(async (method: string) => {
-    if (!Object.hasOwn(catalogs, method)) {
-      throw new Error(`Unexpected method: ${method}`);
-    }
-    return catalogs[method];
-  });
-
-  const items = await loadCommandPaletteCatalogItems({
-    client: createTestGatewayClient(request),
-    agentId: "main",
-    agents: async () => ({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "global",
-      agents: [{ id: "main", name: "Main assistant" }],
-    }),
-    methodAvailable: () => true,
-  });
-
-  expectItem(items, { category: "agents", label: "Main assistant" });
-  expectItem(items, { category: "automations", label: "Nightly invoices" });
-  expectItem(items, { category: "skills", label: "Forecast", description: "Weather" });
-  expectItem(items, {
-    category: "plugins",
-    label: "Weather",
-    description: "Tools",
-    icon: "plug",
-  });
-  expect(request).toHaveBeenCalledWith(
-    "cron.list",
-    expect.objectContaining({ includeDisabled: true, limit: 200, offset: 0, compact: true }),
-  );
-  expect(request).toHaveBeenCalledWith("skills.status", { agentId: "main" });
-  expect(request).toHaveBeenCalledWith("plugins.list", {});
-  expect(request).not.toHaveBeenCalledWith("models.list", expect.anything());
 });

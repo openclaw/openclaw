@@ -41,91 +41,81 @@ function expectRevision(request: ReturnType<typeof vi.fn>, revision: string) {
   );
 }
 
-it.each([undefined, 1])(
-  "expands response-local sidebar facts before reconciliation (page size %s)",
-  async (pageSize) => {
-    const request = vi.fn(async (_method: string, raw?: unknown) => {
-      const offset = Number(asOptionalRecord(raw)?.offset ?? 0);
+it.each([
+  ["sidebar", undefined, 100],
+  ["sidebar", 100, 300],
+  [undefined, 100, 300],
+] as const)(
+  "expands page-local facts and retains enrichment (%s, page size %s)",
+  async (rowMode, pageSize, windowSize) => {
+    let revision = 1;
+    const rows = Array.from({ length: 350 }, (_, index) => makeRow(`thread-${index}`));
+    const request = vi.fn(async (method: string, raw?: unknown) => {
+      if (method !== "sessions.list") {
+        return {};
+      }
+      const params = asOptionalRecord(raw);
+      const offset = Number(params?.offset ?? 0);
+      const limit = Number(params?.limit);
       const actor = { type: "human", id: `profile-${offset}`, label: `Teammate ${offset}` };
+      const page = rows.slice(offset, offset + limit).map((row, index) =>
+        Object.assign(
+          {},
+          row,
+          { updatedAt: revision, rowMode, sharedFacts: [0] },
+          index < 100
+            ? {
+                derivedTitle: `Title ${row.sessionId} v${revision}`,
+                lastMessagePreview: `Preview ${row.sessionId} v${revision}`,
+              }
+            : {},
+        ),
+      );
       return {
-        ...sessionsResult([{ ...makeRow(`thread-${offset}`), ...sidebar, sharedFacts: [0] }], 1),
+        ...sessionsResult(page, revision),
         sharedFacts: [{ createdActor: actor, owner: { actor } }],
-        hasMore: offset === 0,
-        nextOffset: offset + 1,
+        offset,
+        limitApplied: limit,
+        totalCount: rows.length,
+        hasMore: offset + limit < rows.length,
+        nextOffset: offset + limit,
       };
     });
-    const result = await sidebarReader(request, { ...sidebar, limit: 2, pageSize })();
-    expect(result?.sessions).toHaveLength(pageSize ? 2 : 1);
-    for (const [index, row] of result!.sessions.entries()) {
-      expect(row.createdActor).toEqual({
-        type: "human",
-        id: `profile-${index}`,
-        label: `Teammate ${index}`,
-      });
-      expect(row.owner?.actor).toEqual(row.createdActor);
-      expect(row).not.toHaveProperty("sharedFacts");
+    const { gateway } = createGatewayHarness(createTestGatewayClient(request));
+    const sessions = createTestSessionCapability(gateway);
+    let held: ReturnType<typeof sessionsResult> | null = null;
+    const query = {
+      rowMode,
+      limit: windowSize,
+      pageSize,
+      archivedFilter: "all" as const,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+    };
+    const observer = sessions.observeList(query, (snapshot) => {
+      held = snapshot.result;
+    });
+    for (revision of [1, 2]) {
+      await observer.refresh();
+      const result = sessions.listSnapshot(query).result;
+      expect(result).toBe(held);
+      expect(result?.sessions).toHaveLength(query.limit);
+      expect(result).toMatchObject({ hasMore: true, nextOffset: query.limit });
+      expect(result).not.toHaveProperty("sharedFacts");
+      for (const [index, row] of (result?.sessions ?? []).entries()) {
+        expect(row.derivedTitle).toBe(`Title ${row.sessionId} v${revision}`);
+        expect(row.lastMessagePreview).toBe(`Preview ${row.sessionId} v${revision}`);
+        expect(row.createdActor).toEqual({
+          type: "human",
+          id: `profile-${Math.floor(index / 100) * 100}`,
+          label: `Teammate ${Math.floor(index / 100) * 100}`,
+        });
+        expect(row.owner?.actor).toEqual(row.createdActor);
+        expect(row).not.toHaveProperty("sharedFacts");
+      }
     }
-    expect(result).not.toHaveProperty("sharedFacts");
   },
 );
-
-it("retains titles and previews throughout a bounded managed window and its refresh", async () => {
-  let revision = 1;
-  const rows = Array.from({ length: 350 }, (_, index) => makeRow(`thread-${index}`));
-  const request = vi.fn(async (method: string, raw?: unknown) => {
-    if (method !== "sessions.list") {
-      return {};
-    }
-    const params = asOptionalRecord(raw);
-    const offset = Number(params?.offset ?? 0);
-    const limit = Number(params?.limit);
-    const page = rows.slice(offset, offset + limit).map((row, index) =>
-      Object.assign(
-        {},
-        row,
-        { updatedAt: revision },
-        index < 100
-          ? {
-              derivedTitle: `Title ${row.sessionId} v${revision}`,
-              lastMessagePreview: `Preview ${row.sessionId} v${revision}`,
-            }
-          : {},
-      ),
-    );
-    return {
-      ...sessionsResult(page, revision),
-      offset,
-      limitApplied: limit,
-      totalCount: rows.length,
-      hasMore: offset + limit < rows.length,
-      nextOffset: offset + limit,
-    };
-  });
-  const { gateway } = createGatewayHarness(createTestGatewayClient(request));
-  const sessions = createTestSessionCapability(gateway);
-  let held: ReturnType<typeof sessionsResult> | null = null;
-  const query = {
-    limit: 300,
-    pageSize: 100,
-    archivedFilter: "all" as const,
-    includeDerivedTitles: true,
-    includeLastMessage: true,
-  };
-  const observer = sessions.observeList(query, (snapshot) => {
-    held = snapshot.result;
-  });
-  for (revision of [1, 2]) {
-    await observer.refresh();
-    const result = sessions.listSnapshot(query).result;
-    expect(result).toBe(held);
-    expect(result?.sessions).toHaveLength(300);
-    expect(result).toMatchObject({ hasMore: true, nextOffset: 300 });
-    for (const row of result?.sessions ?? []) {
-      expect(row.derivedTitle).toBe(`Title ${row.sessionId} v${revision}`);
-      expect(row.lastMessagePreview).toBe(`Preview ${row.sessionId} v${revision}`);
-    }
-  }
-});
 
 it("reconstructs sidebar delta membership, order and facts before capability publication", async () => {
   const labelled = (id: string) => makeRow(id, { label: id, updatedAt: 1 });

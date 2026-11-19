@@ -4,20 +4,20 @@ import { en } from "./en.ts";
 const enModelSetup = {
   modelSetup: {
     discovery: {
-      title: "On this Gateway",
+      title: "Available models",
       description:
-        "Find existing connections or prepare a local model for {agent}. Using a model here changes this agent, not the global defaults.",
+        "Find saved accounts or set up a local model for {agent}. This changes only this agent’s model, not the defaults for other agents.",
       useForAgent: "Test & use for this agent",
-      connectForAgent: "Connect & use for this agent",
-      connectProvider: "Connect provider",
-      returnToModels: "Return to Models",
+      connectForAgent: "Add account for this agent",
+      connectProvider: "Add account",
+      returnToModels: "Back to Models",
       otherSoftware: "Other detected software",
     },
-    heading: "Connect a verified AI model",
+    heading: "Set up a model",
     intro:
-      "OpenClaw discovers AI access on this Gateway. Choose a provider to begin; nothing is selected, tested, installed, or saved automatically.",
-    loading: "Checking this Gateway for available AI access…",
-    testing: "Testing — asking the selected model for a quick reply…",
+      "OpenClaw finds saved accounts and local models on the computer running OpenClaw. Choose one to begin; nothing is selected, tested, installed, or saved automatically.",
+    loading: "Loading models…",
+    testing: "Asking the selected model for a quick reply…",
     retry: "Retry",
     checkAgain: "Check again",
     recovery: {
@@ -32,30 +32,30 @@ const enModelSetup = {
       retry: "Try again",
       checkAgain: "Check again",
       checkingButton: "Checking…",
-      checking: "Checking — asking {modelRef} for a quick reply…",
+      checking: "Asking {modelRef} for a quick reply…",
       ready: "Ready",
       readyIn: "Ready · {latencyMs} ms",
       providerUnavailable: "{provider} isn’t responding.",
     },
     access: {
-      adminRequired: "Model setup requires operator.admin access.",
-      gatewayTooOld: "The Gateway is running an older OpenClaw version",
+      adminRequired: "You need admin access to set up models.",
+      gatewayTooOld: "Update the Gateway to set up models.",
     },
     candidates: {
-      title: "Found on this Gateway",
+      title: "Available models",
       recommended: "Recommended",
-      credentialsReady: "Credentials ready",
+      credentialsReady: "Account ready",
       detected: "Detected",
       testAndUse: "Test & use",
       retry: "Retry test",
       testingButton: "Testing…",
     },
     nativeDiscovery: {
-      title: "Discover existing conversations",
-      body: "Show native assistant conversations from this Gateway host in OpenClaw. This is discovery, not an import or copy.",
-      enable: "Show existing native conversations",
+      title: "Find existing sessions",
+      body: "Show sessions from installed agents on the computer running OpenClaw in OpenClaw. This doesn’t import or copy them.",
+      enable: "Show existing sessions",
       decline:
-        "Leave unchecked to keep native session catalogs off when you connect your AI provider. Existing installations are not changed.",
+        "Leave unchecked to keep these sessions hidden when you add an account. Existing installations aren’t changed.",
     },
     nativeModels: {
       title: "Use an installed agent",
@@ -63,19 +63,19 @@ const enModelSetup = {
       choose: "Choose a model",
       use: "Use",
       saving: "Saving…",
-      loading: "Checking installed agents…",
+      loading: "Loading installed agents…",
       empty:
-        "No models are available from installed agents. Check the installed app, then open the picker again.",
+        "No models from installed agents yet. Check the installed app, then open the picker again.",
       unconfirmed: "Availability not confirmed",
     },
     empty: {
       title: "Recommended installs",
-      intro: "Install an assistant or local model service, then check again.",
+      intro: "Install an agent or local model service, then check again.",
     },
     signIn: {
       title: "Set up and verify a model",
       description:
-        "Setup requests a model reply. To save an account first, choose Connect provider.",
+        "Setup asks the model for a reply. To save an account first, choose Add account.",
       verify: "Set up & verify",
       install: "Review & install",
       custom: "Set up endpoint",
@@ -83,13 +83,15 @@ const enModelSetup = {
     },
     prepare: {
       title: "Run a model locally",
-      intro: "Use a local model service or prepare a private GGUF model on this Gateway.",
+      intro:
+        "Use a local model service or set up a private GGUF model on the computer running OpenClaw.",
       ollamaButton: "Check & set up",
       ollamaLabel: "Ollama",
-      ollamaHint: "Connect to the Ollama service on this Gateway and prepare a tools-capable model",
+      ollamaHint:
+        "Use Ollama on the computer running OpenClaw to set up a model that supports tools",
       llamaCppLabel: "llama.cpp",
       providerNotReady:
-        "{provider} did not expose a usable local model. Review the setup result, then retry.",
+        "Couldn’t find a usable local model from {provider}. Review the setup result, then try again.",
     },
     manual: {
       title: "Connect with an API key or token",
@@ -104,8 +106,8 @@ const enModelSetup = {
       required: "Choose a provider and enter an API key or token.",
     },
     success: {
-      title: "Connection verified",
-      body: "OpenClaw received a real reply from {modelRef}. You can start chatting now.",
+      title: "Model verified",
+      body: "{modelRef} replied. You can start chatting now.",
       activeModel: "Active model",
       latency: "Verified in {latencyMs} ms",
       openChat: "Start chatting",
@@ -115,19 +117,18 @@ const enModelSetup = {
     },
     utility: {
       role: "Setup & utility",
-      hint: "Helps set up OpenClaw and handles lightweight tasks. Regular chats need a primary model.",
+      hint: "Helps set up OpenClaw and handles lightweight tasks. Other sessions need a primary model.",
       useSetup: "Use for setup",
       useUtility: "Use as utility",
       ready: "Setup & utility model ready",
       configured: "Setup & utility model",
-      verified:
-        "OpenClaw received a real reply from {modelRef}. This model is ready for setup and lightweight tasks.",
+      verified: "{modelRef} replied. This model is ready for setup and lightweight tasks.",
       model: "Utility model",
       choosePrimary:
-        "Choose a primary model below for regular chats. Your setup assistant remains available.",
+        "Choose a primary model below for other sessions. Your setup agent stays available.",
       primaryReady:
-        "This model handles setup and lightweight tasks. Regular chats use your primary model.",
-      openAssistant: "Open setup assistant",
+        "This model handles setup and lightweight tasks. Other sessions use your primary model.",
+      openAssistant: "Open setup agent",
       repair: "Recheck & repair",
     },
     failure: {
@@ -136,26 +137,25 @@ const enModelSetup = {
       timeout: "Timed out",
       format: "Invalid response",
       unavailable: "Unavailable",
-      unknown: "Connection failed",
+      unknown: "Couldn’t check model",
     },
     failureGuidance: {
       rateLimit: "Wait for the provider limit to reset, then retry.",
       billing: "Restore provider billing or quota, then retry.",
-      timeout:
-        "The model did not finish the setup test in time. Warm it or choose a faster model, then retry.",
+      timeout: "The model didn’t reply in time. Try again or choose a faster model.",
       unavailable: "Make sure the provider service is running and reachable, then retry.",
-      format: "Check that the endpoint exposes a compatible chat model, then retry.",
-      unknown: "Review the connection details, then retry.",
+      format: "Check that the endpoint provides a compatible model, then try again.",
+      unknown: "Review the account details, then try again.",
     },
     errors: {
-      requestFailed: "Model setup request failed.",
-      activationFailed: "The model could not be activated.",
+      requestFailed: "Couldn’t set up the model. Try again.",
+      activationFailed: "Couldn’t use the model. Try again.",
     },
     wizard: {
       dialogLabel: "Provider sign-in",
       prepareDialogLabel: "Local model setup",
       title: "Sign in with a provider",
-      connected: "Account connected.",
+      connected: "Account added",
       prepareTitle: "Set up a local model",
       starting: "Starting provider sign-in…",
       prepareStarting: "Starting local model setup…",
@@ -170,21 +170,41 @@ const enModelSetup = {
       manualEntry: "Use manual entry",
       browserInstructions: "Complete sign-in in your browser, then return here.",
       waiting: "Waiting for sign-in…",
+      signInTitle: "Continue in your browser",
+      deviceCodeTitle: "Enter this code in your browser",
+      signInPage: "The sign-in page",
+      browserOpened:
+        "{provider} is open in a new tab. Approve access there. This window updates by itself.",
+      browserOpenedContinue:
+        "{provider} is open in a new tab. Approve access there, then choose Continue.",
+      deviceCodeOpened:
+        "{provider} is open in a new tab. Make sure it shows the same code before you approve.",
+      deviceCodeEnter: "Enter this code on the provider’s sign-in page.",
+      waitingForProvider: "Waiting for {provider}…",
+      reopenSignIn: "Reopen browser tab",
+      tryAgain: "Try again",
+      tabDidNotOpen: "Tab didn’t open?",
+      copySignInLink: "Copy sign-in link",
+      stillWaiting:
+        "Still waiting. If you already approved, the tab may have opened in another browser or profile. Try again from here.",
+      deviceCodeExpired:
+        "This code expired. No account was added. Close this window and sign in again.",
+      cancelSignIn: "Cancel sign-in",
       deviceCodeWarning:
-        "Continue only if you started this sign-in yourself. If a website or another person gave you this code, cancel.",
+        "Continue only if you started this sign-in. If someone sent you this code, cancel.",
       expires: "Expires in {count} minutes",
-      cancelled: "Provider sign-in was cancelled.",
+      expiresSoon: "Expires in less than a minute",
+      cancelled: "Sign-in canceled",
       finishingStep: "Setup is finishing the current step. You can cancel when it finishes.",
-      cancelFailed: "Could not confirm cancellation: {error}",
+      cancelFailed: "Couldn’t confirm cancellation. Try again. {error}",
       sessionExpired:
-        "The Gateway no longer has this setup session. It may already have finished. Close this dialog and choose Check again to review the current setup.",
+        "This setup may have finished. Close this dialog and choose Check again to review it.",
       gatewayNotResponding:
-        "The Gateway is not responding. Check that it is running, then try again.",
-      gatewayReconnecting: "The Gateway is not responding. Waiting for it to reconnect.",
-      notComplete: "Sign-in finished, but model setup is not complete yet.",
+        "Couldn’t finish setup. Check that the Gateway is running, then try again.",
+      gatewayReconnecting: "Disconnected. Waiting to reconnect…",
+      notComplete: "You’re signed in, but model setup isn’t complete yet.",
     },
-    waitingForApproval: "Waiting for approval in your browser…",
-    providerConnected: "{provider} is connected",
+    providerConnected: "{provider} is ready",
   },
 } satisfies TranslationMap;
 

@@ -29,15 +29,9 @@ export function recordUpdateCommandTarget(
     return;
   }
   let before: UpdateRunRecord | undefined;
-  const committed = recordUpdateRunPhase(
-    run.runId,
-    "requested",
-    patch,
-    { env: run.env },
-    (record) => {
-      before = record;
-    },
-  );
+  const committed = recordUpdateRunPhase(run.runId, "requested", patch, run, (record) => {
+    before = record;
+  });
   const admission = previewAdmissions.get(run);
   if (admission && isDeepStrictEqual(before, admission.record)) {
     admission.record = committed;

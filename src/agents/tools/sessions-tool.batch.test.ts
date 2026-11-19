@@ -14,6 +14,7 @@ import type {
   GatewayRequestContext,
   RespondFn,
 } from "../../gateway/server-methods/types.js";
+import { gatewayConnect } from "../../gateway/server/client-fixtures.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { createSessionsTool } from "./sessions-tool.js";
@@ -46,13 +47,10 @@ afterEach(() => flushPendingSessionsChangedEvents());
 
 function createStoredSessionTool(config: OpenClawConfig = {}) {
   const client: GatewayClient = {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "gateway-client", version: "test", platform: "test", mode: "backend" },
-      role: "operator",
-      scopes: ["operator.read", "operator.write"],
-    },
+    connect: gatewayConnect(["operator.read", "operator.write"], {
+      id: "gateway-client",
+      mode: "backend",
+    }),
   };
   const context = {
     getRuntimeConfig: () => config,

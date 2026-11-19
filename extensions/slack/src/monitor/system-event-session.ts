@@ -7,14 +7,6 @@ import { normalizeSlackChannelType, resolveSlackChatType } from "./channel-type.
 import type { SlackEventScope } from "./event-scope.js";
 import { qualifySlackConversationId, resolveSlackAgentRoute } from "./workspace-routing.js";
 
-type SlackSystemEventSessionKeyParams = {
-  channelId?: string | null;
-  channelType?: string | null;
-  senderId?: string | null;
-  threadTs?: string | null;
-  eventScope?: SlackEventScope;
-};
-
 export function createSlackSystemEventRouteResolver(params: {
   cfg: OpenClawConfig;
   accountId: string;
@@ -26,7 +18,13 @@ export function createSlackSystemEventRouteResolver(params: {
     eventScope?: SlackEventScope,
   ) => SlackMessageEvent["channel_type"] | undefined;
 }) {
-  return async (event: SlackSystemEventSessionKeyParams) => {
+  return async (event: {
+    channelId?: string | null;
+    channelType?: string | null;
+    senderId?: string | null;
+    threadTs?: string | null;
+    eventScope?: SlackEventScope;
+  }) => {
     const channelId = normalizeOptionalString(event.channelId) ?? "";
     const senderId = normalizeOptionalString(event.senderId) ?? "";
     // System events can omit channel_type too; prefer a type already seen on events

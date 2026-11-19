@@ -24,13 +24,33 @@ function setup(
       collector.wait(turn, { signal, abortError: () => new Error("caller aborted") }),
     stream: () => send("item/agentMessage/delta", { itemId: "answer", delta: "Still working." }),
     complete: (items: (typeof answer)[] | null = [answer]) =>
-      fixture.notify({
-        method: "turn/completed",
-        params: { threadId, turn: { ...turn, status: "completed", items } },
-      }),
+      send("turn/completed", { turn: { ...turn, status: "completed", items } }),
   };
 }
 afterEach(() => collectors.splice(0).forEach((collector) => collector.route.release()));
+
+it.each(["modelNotFound", "policyCapacityUnavailable", "inferenceHookDenied"])(
+  "settles %s failures without waiting for a timeout",
+  async (codexErrorInfo) => {
+    for (const method of ["turn/completed", "error"]) {
+      const { wait, send } = setup();
+      const abort = new AbortController();
+      const completion = wait(abort.signal).catch((error: unknown) => error);
+      const error = { message: "The requested model could not run.", codexErrorInfo };
+      const failedTurn = { ...turn, status: "failed", error };
+      try {
+        await send(method, method === "error" ? { error, willRetry: false } : { turn: failedTurn });
+        const result = await Promise.race([completion, setImmediate("still waiting")]);
+        expect(result).toMatchObject(
+          method === "error" ? { error: { error, willRetry: false } } : { turn: failedTurn },
+        );
+      } finally {
+        abort.abort();
+        await completion;
+      }
+    }
+  },
+);
 
 it("rejects a disconnect after a malformed completion", async () => {
   const { fixture, wait, complete } = setup();

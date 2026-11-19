@@ -14,9 +14,11 @@ import {
 // This doctor closure must stay dependency-light while accepting legacy array-backed objects.
 import { asOptionalObjectRecord as readLegacyObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readDoctorAgentEntries } from "../doctor-agent-config.js";
+import {
+  collectArchivedLegacyReindexFiles,
+  LEGACY_MEMORY_SIDECAR_SUFFIXES,
+} from "./doctor-memory-reindex-shadows.js";
 import type { LegacyMemorySidecarSource } from "./doctor-memory-sidecar-import.js";
-
-const LEGACY_MEMORY_SIDECAR_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 
 async function existingPaths(candidates: string[]): Promise<string[]> {
   const paths = await Promise.all(
@@ -498,6 +500,22 @@ async function migrateLegacyMemorySidecarSource(params: {
   }
 }
 
+function collectArchivedLegacyReindexFilesForDoctor(params: {
+  config: unknown;
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+}): Promise<string[]> {
+  const migrationEnv = { ...params.env, OPENCLAW_STATE_DIR: params.stateDir };
+  return collectArchivedLegacyReindexFiles({
+    legacyDir: path.join(params.stateDir, "memory"),
+    configuredPaths: resolveConfiguredAgentIds(params.config).flatMap((agentId) =>
+      readLegacyMemorySearchStorePaths(params.config, agentId).map((configured) =>
+        resolveUserPath(configured.replaceAll("{agentId}", agentId), migrationEnv),
+      ),
+    ),
+  });
+}
+
 export const memorySidecarStateMigration: PluginDoctorStateMigration = {
   id: "memory-core-legacy-sidecar-index-to-agent-sqlite",
   label: "Memory Core legacy memory index sidecar",
@@ -508,7 +526,9 @@ export const memorySidecarStateMigration: PluginDoctorStateMigration = {
   },
   async collectBackupResources(params) {
     const sources = await collectLegacyMemorySidecarSources(params);
-    const resources: Array<{ path: string; kind: "sqlite" | "file" }> = [];
+    const resources: Array<{ path: string; kind: "sqlite" | "file" }> = (
+      await collectArchivedLegacyReindexFilesForDoctor(params)
+    ).map((file) => ({ path: file, kind: "file" }));
     for (const source of sources) {
       resources.push({ path: source.agentDatabasePath, kind: "sqlite" });
       for (const sourcePath of await existingLegacySidecarPaths(source.legacyPath)) {
@@ -536,19 +556,37 @@ export const memorySidecarStateMigration: PluginDoctorStateMigration = {
   },
   async detectLegacyState(params) {
     const sources = await collectLegacyMemorySidecarSources(params);
-    if (sources.length === 0) {
+    const shadows = await collectArchivedLegacyReindexFilesForDoctor(params);
+    if (sources.length === 0 && shadows.length === 0) {
       return null;
     }
     return {
-      preview: sources.map(
-        (source) =>
-          `- Memory Core legacy memory index: ${source.legacyPath} -> ${source.agentDatabasePath}`,
-      ),
+      preview: [
+        ...sources.map(
+          (source) =>
+            `- Memory Core legacy memory index: ${source.legacyPath} -> ${source.agentDatabasePath}`,
+        ),
+        ...shadows.map((file) => `- Retired Memory Core legacy reindex shadow: ${file} -> remove`),
+      ],
     };
   },
   async migrateLegacyState(params) {
     const changes: string[] = [];
     const warnings: string[] = [];
+    // Doctor owns exclusive maintenance; automatic paths still report before removal.
+    // Only already archived sources are eligible; fresh imports wait for the next
+    // invocation so their shadows are included in its pre-migration backup.
+    for (const file of await collectArchivedLegacyReindexFilesForDoctor(params)) {
+      try {
+        console.warn("Removing retired Memory Core legacy reindex shadow:", file);
+        await fs.rm(file);
+        changes.push(`Removed retired Memory Core legacy reindex shadow: ${file}`);
+      } catch (err) {
+        warnings.push(
+          `Failed removing Memory Core legacy reindex shadow ${file}: ${String(err)}; run openclaw doctor --fix to retry`,
+        );
+      }
+    }
     const groups = new Map<string, LegacyMemorySidecarSource[]>();
     for (const source of await collectLegacyMemorySidecarSources(params)) {
       const group = groups.get(source.legacyPath) ?? [];
@@ -583,7 +621,12 @@ export const memorySidecarStateMigration: PluginDoctorStateMigration = {
         });
       }
     }
-    return { changes, warnings };
+    // These indexes are derived; failed imports retain their sources for a later repair.
+    return {
+      changes,
+      warnings,
+      ...(warnings.length > 0 ? { warningDisposition: "recoverable" as const } : {}),
+    };
   },
 };
 

@@ -11,7 +11,6 @@ import type {
   MessagePresentation,
   MessagePresentationAction,
   MessagePresentationButtonsBlock,
-  MessagePresentationSelectBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   resolveAskUserQuestionOptionIndex,
@@ -110,30 +109,6 @@ function resolveSlackActionTarget(
     : undefined;
 }
 
-function resolveSlackButtonTarget(
-  button: MessagePresentationButtonsBlock["buttons"][number],
-  questionOptionIndices?: AskUserQuestionOptionIndices,
-): SlackActionTarget | undefined {
-  if (button.action !== undefined) {
-    const action = resolveMessagePresentationButtonAction(button);
-    return action ? resolveSlackActionTarget(action, questionOptionIndices) : undefined;
-  }
-
-  // Legacy buttons could carry both a URL and callback fallback. Preserve the
-  // callback when Slack cannot accept the URL; typed actions stay authoritative.
-  const legacyUrl = normalizeOptionalString(
-    button.url ?? button.webApp?.url ?? button.web_app?.url,
-  );
-  if (legacyUrl && legacyUrl.length <= SLACK_BUTTON_URL_MAX) {
-    return { kind: "link", url: legacyUrl };
-  }
-  const legacyValue = normalizeOptionalString(button.value);
-  if (legacyValue) {
-    return { kind: "reply", value: legacyValue };
-  }
-  return legacyUrl ? { kind: "link", url: legacyUrl } : undefined;
-}
-
 function isSlackTextFallbackButton(
   button: MessagePresentationButtonsBlock["buttons"][number],
 ): boolean {
@@ -141,18 +116,6 @@ function isSlackTextFallbackButton(
   // this action keeps declared choices native without a composer hook.
   const action = resolveMessagePresentationButtonAction(button);
   return action?.type === "question" && "intent" in action && action.intent === "custom-input";
-}
-
-function resolveSlackOptionTarget(
-  option: MessagePresentationSelectBlock["options"][number],
-): Exclude<SlackActionTarget, { kind: "link" } | { kind: "question" }> | undefined {
-  if (option.action !== undefined) {
-    const action = resolveMessagePresentationOptionAction(option);
-    const target = action ? resolveSlackActionTarget(action) : undefined;
-    return target?.kind === "link" || target?.kind === "question" ? undefined : target;
-  }
-  const value = normalizeOptionalString(option.value);
-  return value ? { kind: "reply", value } : undefined;
 }
 
 function readSlackOpenClawBlockIndex(blockId: string, prefix: string): number | undefined {
@@ -244,7 +207,23 @@ function compileSlackPresentationBlocks(
   ) {
     return undefined;
   }
-  const tables = buildSlackPresentationTables(presentation, options);
+  // Admit tables together: one invalid or over-budget table keeps every table on the text path.
+  let tables: SlackBlock[] | undefined = [];
+  let cellCharacterCount = options.dataTableCellCharacterCountOffset ?? 0;
+  for (const block of presentation.blocks) {
+    if (block.type !== "table") {
+      continue;
+    }
+    const table = buildSlackDataTableBlock(block, {
+      cellCharacterCountOffset: cellCharacterCount,
+    });
+    if (!table) {
+      tables = undefined;
+      break;
+    }
+    cellCharacterCount += countSlackDataTableCellCharacters(table);
+    tables.push(table);
+  }
   if (requireComplete && !tables) {
     return undefined;
   }
@@ -286,7 +265,28 @@ function compileSlackPresentationBlocks(
       if (block.type === "buttons") {
         let complete = true;
         const buttons = block.buttons.flatMap((button, choiceIndex) => {
-          const target = resolveSlackButtonTarget(button, options.questionOptionIndices);
+          const questionOptionIndices = options.questionOptionIndices;
+          let target: SlackActionTarget | undefined;
+          if (button.action !== undefined) {
+            const action = resolveMessagePresentationButtonAction(button);
+            target = action ? resolveSlackActionTarget(action, questionOptionIndices) : undefined;
+          } else {
+            // Legacy buttons could carry both a URL and callback fallback. Preserve the
+            // callback when Slack cannot accept the URL; typed actions stay authoritative.
+            const legacyUrl = normalizeOptionalString(
+              button.url ?? button.webApp?.url ?? button.web_app?.url,
+            );
+            if (legacyUrl && legacyUrl.length <= SLACK_BUTTON_URL_MAX) {
+              target = { kind: "link", url: legacyUrl };
+            } else {
+              const legacyValue = normalizeOptionalString(button.value);
+              target = legacyValue
+                ? { kind: "reply", value: legacyValue }
+                : legacyUrl
+                  ? { kind: "link", url: legacyUrl }
+                  : undefined;
+            }
+          }
           if (
             !target ||
             (target.kind === "link"
@@ -325,8 +325,15 @@ function compileSlackPresentationBlocks(
       } else {
         const placeholder = normalizeOptionalString(block.placeholder) ?? "Choose an option";
         const candidates = block.options.map((option) => {
-          const target = resolveSlackOptionTarget(option);
-          return target ? { label: option.label, ...target } : undefined;
+          if (option.action !== undefined) {
+            const action = resolveMessagePresentationOptionAction(option);
+            const target = action ? resolveSlackActionTarget(action) : undefined;
+            return target && target.kind !== "link" && target.kind !== "question"
+              ? { label: option.label, ...target }
+              : undefined;
+          }
+          const value = normalizeOptionalString(option.value);
+          return value ? { label: option.label, kind: "reply" as const, value } : undefined;
         });
         if (
           requireComplete &&
@@ -402,27 +409,4 @@ function compileSlackPresentationBlocks(
     }
   }
   return blocks;
-}
-
-/** Admit tables together: one invalid or over-budget table keeps every table on the text path. */
-function buildSlackPresentationTables(
-  presentation: MessagePresentation,
-  options: SlackBlockRenderOptions = {},
-): SlackBlock[] | undefined {
-  const tables: SlackBlock[] = [];
-  let cellCharacterCount = options.dataTableCellCharacterCountOffset ?? 0;
-  for (const block of presentation.blocks) {
-    if (block.type !== "table") {
-      continue;
-    }
-    const table = buildSlackDataTableBlock(block, {
-      cellCharacterCountOffset: cellCharacterCount,
-    });
-    if (!table) {
-      return undefined;
-    }
-    cellCharacterCount += countSlackDataTableCellCharacters(table);
-    tables.push(table);
-  }
-  return tables;
 }

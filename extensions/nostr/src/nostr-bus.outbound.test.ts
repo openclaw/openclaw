@@ -54,9 +54,15 @@ vi.mock("./nostr-state-store.js", () => ({
 
 const RECIPIENT_KEY = new Uint8Array(32).fill(2);
 const RECIPIENT_PUBKEY = getPublicKey(RECIPIENT_KEY);
+const SENDER_PUBKEY = getPublicKey(TEST_HEX_PRIVATE_KEY_BYTES);
+type Relay = Awaited<ReturnType<typeof createNostrRelayFixture>>;
 let stateDir = "";
 let stops: Array<() => Promise<void>> = [];
-let relays: Array<Awaited<ReturnType<typeof createNostrRelayFixture>>> = [];
+let relays: Relay[] = [];
+
+function expectPlaintext(entry: Relay, publicKey: string, text: string, index = 0) {
+  expect(decrypt(RECIPIENT_KEY, publicKey, entry.events[index]!.content)).toBe(text);
+}
 
 async function relay(options: Parameters<typeof createNostrRelayFixture>[0] = {}) {
   const result = await createNostrRelayFixture(options);
@@ -81,7 +87,7 @@ async function startRegisteredAccount(urls: string[]) {
     cfg,
     account: buildResolvedNostrAccount({
       relays: urls,
-      publicKey: getPublicKey(TEST_HEX_PRIVATE_KEY_BYTES),
+      publicKey: SENDER_PUBKEY,
     }),
     abortSignal: abort.signal,
   });
@@ -235,20 +241,6 @@ describe("Nostr outbound relay failover", () => {
     },
   );
 
-  it("accepts a real positive OK even when its reason starts with connection failure", async () => {
-    const first = await relay({ reason: PREFIX_ACK_REASON });
-    const second = await relay();
-    const bus = await startBus([first.url, second.url]);
-
-    const id = await bus.sendDm(RECIPIENT_PUBKEY, "hello");
-
-    expect(first.events).toHaveLength(1);
-    expect(first.acknowledgements).toEqual([["OK", id, true, PREFIX_ACK_REASON]]);
-    expect(second.events).toEqual([]);
-    expect(first.events[0]).toMatchObject({ id, kind: 4, tags: [["p", RECIPIENT_PUBKEY]] });
-    expect(decrypt(RECIPIENT_KEY, bus.publicKey, first.events[0]!.content)).toBe("hello");
-  });
-
   it("preserves real failures when every relay rejects", async () => {
     const first = await relay({ rejectUpgrade: true });
     const second = await relay({ accepted: false, reason: PREFIX_ACK_REASON });
@@ -265,9 +257,9 @@ describe("Nostr outbound relay failover", () => {
     ]);
   });
 
-  it("prefers the last successful relay after falling back", async () => {
+  it("accepts a positive OK regardless of reason and prefers that relay on the next send", async () => {
     const first = await relay({ accepted: false, reason: PREFIX_ACK_REASON });
-    const second = await relay();
+    const second = await relay({ reason: PREFIX_ACK_REASON });
     const bus = await startBus([first.url, second.url]);
 
     await bus.sendDm(RECIPIENT_PUBKEY, "initial fallback");
@@ -275,10 +267,13 @@ describe("Nostr outbound relay failover", () => {
 
     expect(first.events).toHaveLength(1);
     expect(second.events).toHaveLength(2);
-    expect(second.events[1]!.id).toBe(nextId);
-    expect(decrypt(RECIPIENT_KEY, bus.publicKey, second.events[1]!.content)).toBe(
-      "preferred relay",
-    );
+    expect(second.acknowledgements.at(-1)).toEqual(["OK", nextId, true, PREFIX_ACK_REASON]);
+    expect(second.events[1]).toMatchObject({
+      id: nextId,
+      kind: 4,
+      tags: [["p", RECIPIENT_PUBKEY]],
+    });
+    expectPlaintext(second, bus.publicKey, "preferred relay", 1);
   });
 
   it("retries a recovered relay on the next explicit send after repeated rejections", async () => {
@@ -296,9 +291,7 @@ describe("Nostr outbound relay failover", () => {
 
     expect(recovering.events).toHaveLength(6);
     expect(recovering.acknowledgements.at(-1)).toEqual(["OK", id, true, options.reason]);
-    expect(decrypt(RECIPIENT_KEY, bus.publicKey, recovering.events[5]!.content)).toBe(
-      "relay recovered",
-    );
+    expectPlaintext(recovering, bus.publicKey, "relay recovered", 5);
   });
 
   describe("registered message sender", () => {
@@ -322,9 +315,7 @@ describe("Nostr outbound relay failover", () => {
       expect(result.receipt.parts[0]?.kind).toBe("text");
       expect(first.acknowledgements).toEqual([["OK", result.messageId, false, PREFIX_ACK_REASON]]);
       expect(second.acknowledgements).toEqual([["OK", result.messageId, true, "saved"]]);
-      expect(
-        decrypt(RECIPIENT_KEY, getPublicKey(TEST_HEX_PRIVATE_KEY_BYTES), second.events[0]!.content),
-      ).toBe("ordinary fallback");
+      expectPlaintext(second, SENDER_PUBKEY, "ordinary fallback");
       expect(onPlatformSendDispatch).toHaveBeenCalledTimes(2);
     });
 
@@ -372,9 +363,7 @@ describe("Nostr outbound relay failover", () => {
       expect(first.events).toHaveLength(1);
       expect(withdrawnResult).toBe(canceled);
       expect(currentResult).toMatchObject({ messageId: first.events[0]!.id });
-      expect(
-        decrypt(RECIPIENT_KEY, getPublicKey(TEST_HEX_PRIVATE_KEY_BYTES), first.events[0]!.content),
-      ).toBe("still current");
+      expectPlaintext(first, SENDER_PUBKEY, "still current");
     });
 
     it.each(["cancellation", "failure"])(

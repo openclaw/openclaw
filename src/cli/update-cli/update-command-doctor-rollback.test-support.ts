@@ -16,7 +16,10 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
-import { runFixtureGit } from "../../infra/update-runner-git-candidate.test-support.js";
+import {
+  isolateGitIdentity,
+  runFixtureGit,
+} from "../../infra/update-runner-git-candidate.test-support.js";
 import { updateGitCheckout } from "../../infra/update-runner-git.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -32,15 +35,7 @@ type Restart = typeof import("./update-command-service.js").maybeRestartService;
 type VerifyGateway = typeof import("./update-command-verification.js").verifyUpdatedGateway;
 
 async function createGitRollbackFixture(base: string) {
-  vi.stubEnv("GIT_CONFIG_COUNT", "0");
-  for (const key of [
-    "GIT_AUTHOR_NAME",
-    "GIT_AUTHOR_EMAIL",
-    "GIT_COMMITTER_NAME",
-    "GIT_COMMITTER_EMAIL",
-  ]) {
-    vi.stubEnv(key, undefined);
-  }
+  isolateGitIdentity();
   const remote = path.join(base, "remote");
   const root = path.join(base, "checkout");
   await fs.mkdir(remote);

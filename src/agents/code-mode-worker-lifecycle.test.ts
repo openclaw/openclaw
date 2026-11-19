@@ -13,7 +13,7 @@ import {
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 
 async function parkExpiringRun(method: "callValue" | "agentWait") {
-  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
   const { config, ctx, owner, continuation } = createRunFixture({
     tools: { codeMode: { enabled: true, snapshotTtlSeconds: 1 } },
   });
@@ -27,12 +27,13 @@ async function parkExpiringRun(method: "callValue" | "agentWait") {
       {
         id: `bridge:${method}:1`,
         method,
+        startedAtMs: Date.now(),
+        liveness: {},
         args: method === "agentWait" ? ["collector-1"] : ["openclaw:core:slow", {}],
         reply: owner.inbox.createReply(`bridge:${method}:1`),
         cancel,
       },
     ],
-    replaySafe: false,
     settlementMode: { kind: "awaiting" },
     continuation,
     parentToolCallId: "code-mode-lifecycle",

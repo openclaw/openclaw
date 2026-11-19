@@ -1,6 +1,7 @@
 import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import { ConnectCommand } from "./connect-command.tsx";
 
 const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
@@ -16,11 +17,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanupSolid();
   vi.useRealTimers();
-  if (clipboardDescriptor) {
-    Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
-  } else {
-    Reflect.deleteProperty(navigator, "clipboard");
-  }
+  restorePropertyDescriptor(navigator, "clipboard", clipboardDescriptor);
 });
 
 describe("connection command", () => {

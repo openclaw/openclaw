@@ -23,15 +23,15 @@ export type BrowserNativeBootstrapResponse =
   | { v: 1; ok: true; nonce: string; relay: BrowserNativeRelayEnsureStatus }
   | { v: 1; ok: false; code: BrowserNativeFailureCode };
 
-function readNativeUint32(buffer: Buffer, offset = 0): number {
-  return os.endianness() === "LE" ? buffer.readUInt32LE(offset) : buffer.readUInt32BE(offset);
+function readNativeUint32(buffer: Buffer): number {
+  return os.endianness() === "LE" ? buffer.readUInt32LE(0) : buffer.readUInt32BE(0);
 }
 
-function writeNativeUint32(buffer: Buffer, value: number, offset = 0): void {
+function writeNativeUint32(buffer: Buffer, value: number): void {
   if (os.endianness() === "LE") {
-    buffer.writeUInt32LE(value, offset);
+    buffer.writeUInt32LE(value, 0);
   } else {
-    buffer.writeUInt32BE(value, offset);
+    buffer.writeUInt32BE(value, 0);
   }
 }
 

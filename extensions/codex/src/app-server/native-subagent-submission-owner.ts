@@ -63,7 +63,6 @@ type SubmissionDependencies = NativeSubmissionCallDependencies & {
     nativeParentThreadId: string,
   ) => void;
   onSettled: (state: ParentState) => void;
-  recoveryPollDelaysMs?: readonly number[];
 };
 
 /** Captures successful native submissions before their turn notifications arrive. */
@@ -71,12 +70,10 @@ export class CodexNativeSubagentSubmissionOwner {
   private readonly calls = new Map<ParentState, Map<string, SubmissionCall>>();
   private readonly pending = new Map<ParentState, Map<string, SubmissionCustody>>();
   private readonly writes = new Map<ParentState, Set<Promise<void>>>();
-  private readonly pollDelays: readonly number[];
   readonly modelInputs: ReturnType<typeof createNativeSubagentSubmissionCalls>;
   private disposed = false;
 
   constructor(private readonly dependencies: SubmissionDependencies) {
-    this.pollDelays = dependencies.recoveryPollDelaysMs ?? DEFAULT_RECOVERY_POLL_DELAYS_MS;
     this.modelInputs = createNativeSubagentSubmissionCalls(this.calls, dependencies, this);
   }
 
@@ -378,8 +375,8 @@ export class CodexNativeSubagentSubmissionOwner {
     }
     custody.phase = "promoting";
     clearTimeout(custody.timer);
-    // Native history owns execution. Keep its existing submission receipt until
-    // the result is acknowledged; there is no task row to take restart custody.
+    // The monitor owns execution; retain receipt and completion custody until acknowledgment.
+    custody.release();
   }
 
   settleChild(state: ParentState, child: ChildState): void {
@@ -504,7 +501,7 @@ export class CodexNativeSubagentSubmissionOwner {
         error: formatErrorMessage(error),
       });
     }
-    if (!this.isObserving(state, custody) || !this.pollDelays.length) {
+    if (!this.isObserving(state, custody)) {
       return;
     }
     custody.timer = setTimeout(
@@ -512,7 +509,7 @@ export class CodexNativeSubagentSubmissionOwner {
         custody.timer = undefined;
         void this.reconcile(state, custody);
       },
-      delayForAttempt(this.pollDelays, custody.attempt++),
+      delayForAttempt(DEFAULT_RECOVERY_POLL_DELAYS_MS, custody.attempt++),
     );
     custody.timer.unref();
   }

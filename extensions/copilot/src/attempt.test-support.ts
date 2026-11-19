@@ -1,6 +1,10 @@
 import { EventEmitter } from "node:events";
 import type { CopilotClient, SessionEvent } from "@github/copilot-sdk";
-import { agentHarnessAttemptTerminal } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  agentHarnessAttemptTerminal,
+  type AgentHarnessAttemptParamsV2,
+  type AgentMessage,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { runInHarnessToolAuthorityForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi } from "vitest";
@@ -25,6 +29,48 @@ export async function awaitAttemptStage(stage: Promise<unknown>, attempt: Promis
 }
 
 export const projectAgentRunAttemptTerminal = agentHarnessAttemptTerminal.project;
+
+export function makeUserTurnRecorder(message: Extract<AgentMessage, { role: "user" }>) {
+  let blocked = false;
+  let persisted = false;
+  return {
+    message,
+    resolveMessage: vi.fn(async () => message),
+    markRuntimePersistencePending: vi.fn(),
+    markRuntimePersisted: vi.fn(() => {
+      persisted = true;
+    }),
+    markBlocked: vi.fn(() => {
+      blocked = true;
+    }),
+    hasPersisted: () => persisted,
+    isBlocked: () => blocked,
+    hasRuntimePersistencePending: () => false,
+    getAdmissionReceipt: () => undefined,
+    waitForRuntimePersistence: vi.fn(async () => undefined),
+    persistApproved: vi.fn(async () => undefined),
+    persistBlocked: vi.fn(async () => undefined),
+    persistFallback: vi.fn(async () => undefined),
+  } satisfies NonNullable<AgentHarnessAttemptParamsV2["userTurnTranscriptRecorder"]>;
+}
+
+export function makeCopilotModel(
+  overrides: Partial<AgentHarnessAttemptParamsV2["model"]> = {},
+): AgentHarnessAttemptParamsV2["model"] {
+  return {
+    api: "openai-responses",
+    id: "gpt-5",
+    name: "GPT-5",
+    provider: "github-copilot",
+    baseUrl: "https://api.githubcopilot.com",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 4096,
+    ...overrides,
+  };
+}
 
 export function runCopilotAttempt(...[params, deps]: Parameters<typeof runCopilotAttemptImpl>) {
   return runInHarnessToolAuthorityForTest(params, "copilot", (admitted) =>

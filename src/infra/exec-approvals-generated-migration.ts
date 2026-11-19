@@ -45,12 +45,10 @@ function removeObsoleteGeneratedExecApprovals(file: ExecApprovalsFile): {
 
 export function repairObsoleteGeneratedExecApprovals(): number {
   let removed = 0;
-  updateExecApprovalsForMaintenance({
-    update: (file) => {
-      const result = removeObsoleteGeneratedExecApprovals(file);
-      removed = result.removed;
-      return result.removed > 0 ? result.file : null;
-    },
+  updateExecApprovalsForMaintenance((file) => {
+    const result = removeObsoleteGeneratedExecApprovals(file);
+    removed = result.removed;
+    return result.removed > 0 ? result.file : null;
   });
   return removed;
 }

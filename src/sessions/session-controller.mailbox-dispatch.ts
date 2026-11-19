@@ -1,9 +1,9 @@
 /** Selection, preparation and dispatch share one mailbox-owned lifecycle. */
-import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../agents/prepared-model-runtime-generation-scope.js";
 import {
   prepareNextDeliveryGroup,
   resolveFollowupDeliveryStorageKey,
 } from "../auto-reply/reply/queue/delivery-context.js";
+import { runOutsideAdmittedGenerationScopes } from "../auto-reply/reply/queue/drain-admission-scope.js";
 import { requiresIndividualCollectDrain } from "../auto-reply/reply/queue/envelope.js";
 import { updateFollowupRetryHeartbeatsWithCustody } from "../auto-reply/reply/queue/pre-adoption-heartbeat.js";
 import {
@@ -25,6 +25,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "../state/agent-database-admission-error.js";
 import { evaluateTurnAdmission, isMutationOwnedTurn } from "./session-controller.admission-rule.js";
 import type {
@@ -154,7 +155,7 @@ export function pumpSessionControllerMailbox(mailbox: SessionControllerMailbox):
   const delay =
     first.ready || first.task || priority
       ? 0
-      : Math.max(0, mailbox.lastEnqueuedAt + mailbox.debounceMs - Date.now());
+      : Math.max(0, mailbox.lastEnqueuedAt + mailbox.debounceMs - performance.now());
   if (delay > 0) {
     clearTimeout(mailbox.timer);
     mailbox.timer = setTimeout(() => {
@@ -214,7 +215,7 @@ async function prepareSessionControllerMailboxSelection(
       () =>
         runWithGatewayDetachedWorkContinuation(
           () =>
-            runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+            runOutsideAdmittedGenerationScopes(() =>
               prepareNextDeliveryGroup(() => selection.sources, assertCurrent),
             ),
           "session:mailbox-preparation",
@@ -229,7 +230,7 @@ async function prepareSessionControllerMailboxSelection(
       selection.sources,
       (source) => source.controllerClaim?.custody ?? source.controllerInput!.custody,
     );
-    mailbox.lastEnqueuedAt = Date.now();
+    mailbox.lastEnqueuedAt = performance.now();
     retry = !(error instanceof AgentDatabaseExecutionAdmissionClosedError);
     if (!(error instanceof FollowupRunDeferredError)) {
       if (isGatewayRestartDrainError(error)) {
@@ -313,12 +314,15 @@ function disposeSessionControllerMailbox(mailbox: SessionControllerMailbox): voi
   clearTimeout(mailbox.timer);
   if (mailbox.recentSources.size) {
     const expires = Math.min(...[...mailbox.recentSources.values()].map((value) => value.expires));
-    mailbox.timer = setTimeout(
-      () => {
-        mailbox.timer = undefined;
-        disposeSessionControllerMailbox(mailbox);
-      },
-      Math.max(1, expires - now),
+    // Receipt maintenance outlives the completed turn and must not retain its async context.
+    mailbox.timer = runInDetachedAsyncContext(() =>
+      setTimeout(
+        () => {
+          mailbox.timer = undefined;
+          disposeSessionControllerMailbox(mailbox);
+        },
+        Math.max(1, expires - now),
+      ),
     );
     mailbox.timer.unref?.();
     return;

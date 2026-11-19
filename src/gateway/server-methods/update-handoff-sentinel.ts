@@ -1,6 +1,7 @@
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { managedHandoffSentinelRequestSchema } from "../../infra/update-managed-service-handoff-sentinel-schema.js";
 import { runManagedHandoffSentinelOwnerRequest } from "../../infra/update-managed-service-handoff-sentinel.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const updateHandoffSentinelHandlers: GatewayRequestHandlers = {
@@ -8,11 +9,7 @@ export const updateHandoffSentinelHandlers: GatewayRequestHandlers = {
     const { params, respond } = options;
     const parsed = managedHandoffSentinelRequestSchema.safeParse(params);
     if (!parsed.success) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "Invalid handoff sentinel request"),
-      );
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "Invalid handoff sentinel request");
       return;
     }
     try {
@@ -25,11 +22,7 @@ export const updateHandoffSentinelHandlers: GatewayRequestHandlers = {
         await runManagedHandoffSentinelOwnerRequest(parsed.data, process.env, assertRequestCurrent),
       );
     } catch {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "Handoff sentinel operation failed"),
-      );
+      respondError(respond, ErrorCodes.UNAVAILABLE, "Handoff sentinel operation failed");
     }
   },
 };

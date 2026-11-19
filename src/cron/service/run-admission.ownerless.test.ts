@@ -334,7 +334,6 @@ describe("ownerless skip transaction guards", () => {
         expect(state.deps.enqueueSessionEvent).not.toHaveBeenCalled();
       }
       expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
       expect(receipts(storePath, job.id)).toEqual([]);
       expect(execute).not.toHaveBeenCalled();
     } finally {

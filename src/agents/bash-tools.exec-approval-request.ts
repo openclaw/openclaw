@@ -22,6 +22,7 @@ import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
 } from "./bash-tools.exec-runtime.js";
+import type { ExecApprovalRegistration, ExecApprovalTransport } from "./exec-approval-transport.js";
 import {
   getGatewayToolCallerIdentity,
   captureGatewayToolCallerAssertion,
@@ -88,13 +89,6 @@ function resolveDefaultExecApprovalExpiresAtMs(): number {
   return resolveExpiresAtMsFromDurationMs(DEFAULT_APPROVAL_TIMEOUT_MS) ?? 0;
 }
 
-/** Registration result returned before an approval decision is available. */
-export type ExecApprovalRegistration = {
-  id: string;
-  expiresAtMs: number;
-  finalDecision?: string | null;
-};
-
 class ExecApprovalRunAbortedError extends Error {
   constructor() {
     super("Exec approval cancelled because its run was aborted");
@@ -109,9 +103,15 @@ export function isExecApprovalRunAbortedError(error: unknown): boolean {
 /** Registers a two-phase exec approval request with the gateway. */
 async function registerExecApprovalRequest(
   params: ExecApprovalRequestToolParams,
+  transport?: ExecApprovalTransport,
 ): Promise<ExecApprovalRegistration> {
   // Two-phase registration is critical: the ID must be registered server-side
   // before exec returns `approval-pending`, otherwise `/approve` can race and orphan.
+  if (transport) {
+    const registration = await transport.request(params);
+    markToolDecisionRecorded();
+    return registration;
+  }
   const registrationResult = await callGatewayTool(
     "exec.approval.request",
     { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
@@ -131,6 +131,7 @@ async function registerExecApprovalRequest(
 
 /** Uses a pre-resolved decision or waits for the registered approval id. */
 export async function resolveRegisteredExecApprovalDecision(params: {
+  approvalTransport?: ExecApprovalTransport;
   approvalId: string;
   expiresAtMs?: number;
   preResolvedDecision: string | null | undefined;
@@ -151,11 +152,13 @@ export async function resolveRegisteredExecApprovalDecision(params: {
           },
         });
   try {
-    const decisionResult = await callGatewayTool<{ decision: string }>(
-      "exec.approval.waitDecision",
-      { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-      { id: params.approvalId },
-    );
+    const decisionResult = params.approvalTransport
+      ? await params.approvalTransport.waitDecision({ id: params.approvalId })
+      : await callGatewayTool<{ decision: string }>(
+          "exec.approval.waitDecision",
+          { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
+          { id: params.approvalId },
+        );
     if (
       decisionResult &&
       typeof decisionResult === "object" &&
@@ -179,6 +182,7 @@ type HostExecApprovalParams = Omit<
   RequestExecApprovalDecisionParams,
   "id" | "cwd" | "deliverToApprovalClientsOnly"
 > & {
+  approvalTransport?: ExecApprovalTransport;
   approvalId: string;
   workdir: string | undefined;
   commandHighlighting?: boolean;
@@ -285,7 +289,10 @@ export async function registerExecApprovalRequestForHostOrThrow(
   params: HostExecApprovalParams,
 ): Promise<ExecApprovalRegistration> {
   try {
-    return await registerExecApprovalRequest(await buildHostApprovalDecisionParams(params));
+    return await registerExecApprovalRequest(
+      await buildHostApprovalDecisionParams(params),
+      params.approvalTransport,
+    );
   } catch (err) {
     throw new Error(`Exec approval registration failed: ${String(err)}`, { cause: err });
   }

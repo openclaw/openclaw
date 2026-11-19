@@ -1,21 +1,21 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
-  createNativeOpenAIResponsesModel,
+  createNativeOpenAIResponsesModel as responseModel,
   createParameterFreeTool,
-  createPermissiveTool,
-  createStrictCompatibleTool,
-  normalizedParameterFreeSchema,
+  createPermissiveTool as permissiveTool,
+  createStrictCompatibleTool as strictTool,
+  normalizedParameterFreeSchema as emptySchema,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { expect, it } from "vitest";
 import { createOpenAIResponsesContextManagementWrapper } from "../llm/providers/stream-wrappers/openai.js";
 import { buildProviderToolCompatFamilyHooks } from "../plugin-sdk/provider-tools.js";
 import { testing as openAITransportTesting } from "./openai-transport-stream.test-support.js";
 
-const { buildOpenAIResponsesParams } = openAITransportTesting;
+const { buildOpenAIResponsesParams: buildParams } = openAITransportTesting;
 
-function responseParams(tools: Parameters<typeof buildOpenAIResponsesParams>[1]["tools"]) {
-  return buildOpenAIResponsesParams(
-    createNativeOpenAIResponsesModel() as never,
+function responseParams(tools: Parameters<typeof buildParams>[1]["tools"]) {
+  return buildParams(
+    responseModel() as never,
     { systemPrompt: "system", messages: [], tools },
     undefined,
   ) as { tools?: Array<{ strict?: boolean; parameters?: unknown }> };
@@ -31,35 +31,25 @@ function preparedTools() {
 }
 
 it("keeps HTTP Responses strict decisions stable for the same tool set", () => {
-  const httpParams = responseParams([
-    createStrictCompatibleTool(),
-    createPermissiveTool(),
-  ] as never);
+  const httpParams = responseParams([strictTool(), permissiveTool()] as never);
   expect(httpParams.tools?.map((tool) => tool.strict)).toEqual([false, false]);
 });
 
-it.each([
-  ["raw", () => [createParameterFreeTool()]],
-  ["provider-prepared", preparedTools],
-] as const)("normalizes %s parameter-free schemas for HTTP Responses", (_name, tools) => {
-  const tool = responseParams(tools() as never).tools?.[0];
+it("normalizes raw parameter-free schemas for HTTP Responses", () => {
+  const tool = responseParams([createParameterFreeTool()] as never).tools?.[0];
   expect(tool?.strict).toBe(true);
-  expect(tool?.parameters).toEqual(normalizedParameterFreeSchema());
+  expect(tool?.parameters).toEqual(emptySchema());
 });
 
 it("passes prepared executable schemas through compaction-triggered Responses requests", () => {
   // Server-side compaction must not strip provider-prepared strict tool schemas.
   const tools = preparedTools() as never;
-  const model = createNativeOpenAIResponsesModel() as never;
+  const model = responseModel() as never;
   let payload:
-    | { context_management?: unknown; tools?: Array<{ parameters?: unknown }> }
+    | { context_management?: unknown; tools?: Array<{ parameters?: unknown; strict?: boolean }> }
     | undefined;
   const baseStreamFn: StreamFn = (modelArg, contextArg, optionsArg) => {
-    payload = buildOpenAIResponsesParams(
-      modelArg,
-      contextArg,
-      optionsArg as never,
-    ) as typeof payload;
+    payload = buildParams(modelArg, contextArg, optionsArg as never) as typeof payload;
     optionsArg?.onPayload?.(payload, modelArg);
     return {} as ReturnType<StreamFn>;
   };
@@ -70,5 +60,6 @@ it("passes prepared executable schemas through compaction-triggered Responses re
   void streamFn(model, { systemPrompt: "system", messages: [], tools } as never, {});
 
   expect(payload?.context_management).toEqual([{ type: "compaction", compact_threshold: 140_000 }]);
-  expect(payload?.tools?.[0]?.parameters).toEqual(normalizedParameterFreeSchema());
+  expect(payload?.tools?.[0]?.strict).toBe(true);
+  expect(payload?.tools?.[0]?.parameters).toEqual(emptySchema());
 });

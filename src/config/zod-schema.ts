@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { listAgentEntries } from "../agents/agent-roster.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { OpenClawSchemaShape } from "./zod-schema.root-shape.js";

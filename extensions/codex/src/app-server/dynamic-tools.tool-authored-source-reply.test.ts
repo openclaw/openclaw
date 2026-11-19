@@ -2,36 +2,29 @@ import {
   createEmptyPluginRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { Type } from "typebox";
 import { afterEach, expect, it } from "vitest";
-import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
-import { installResultMiddleware, textToolResult } from "./dynamic-tools.test-support.js";
+import {
+  createBridge,
+  createTool,
+  createDynamicToolCall,
+  installResultMiddleware,
+  textToolResult,
+} from "./dynamic-tools.test-support.js";
 import { CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE } from "./protocol.js";
 
 async function callOrderStatus({
   canDeliverSourceReply = true,
   namespace = CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
 }: { canDeliverSourceReply?: boolean; namespace?: string | null } = {}) {
-  const bridge = createCodexDynamicToolBridge({
-    tools: [
-      {
-        name: "order_status",
-        label: "order_status",
-        description: "Order status fixture",
-        parameters: Type.Object({}, { additionalProperties: true }),
-        ...(canDeliverSourceReply ? { canDeliverSourceReply: true } : {}),
-        execute: async () => textToolResult(JSON.stringify(replyDetails), replyDetails),
-      },
-    ],
-    signal: new AbortController().signal,
-  });
+  const bridge = createBridge([
+    createTool("order_status", {
+      ...(canDeliverSourceReply ? { canDeliverSourceReply: true } : {}),
+      execute: async () => textToolResult(JSON.stringify(replyDetails), replyDetails),
+    }),
+  ]);
   const result = await bridge.handleToolCall({
-    threadId: "thread-1",
-    turnId: "turn-1",
-    callId: "call-1",
+    ...createDynamicToolCall("order_status"),
     namespace,
-    tool: "order_status",
-    arguments: {},
   });
   expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([]);
   expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);

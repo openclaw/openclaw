@@ -6,7 +6,7 @@
   },
   "name": "Lobster",
   "description": "Lobster workflow tool plugin for typed pipelines and resumable approvals.",
-  "catalog": { "featured": true, "order": 50 },
+  "catalog": { "featured": true, "order": 50, "sidebar": true },
   "contracts": {
     "tools": ["lobster"]
   },
@@ -19,5 +19,9 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
-  }
+  },
+  "recommendedPrompts": [
+    "Check whether Lobster is ready for a repeatable workflow.",
+    "Design a small Lobster workflow with approval checkpoints before running it."
+  ]
 }

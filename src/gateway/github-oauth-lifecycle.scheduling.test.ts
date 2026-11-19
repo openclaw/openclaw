@@ -68,7 +68,8 @@ it("refreshes once after sleep while personal maintenance is pending, then stops
   const initialWake = time.wake();
   try {
     await scheduled.promise;
-    expect(refreshToken).toHaveBeenCalledOnce();
+    // The durable refresh claim commits before dispatch and may arm a reconcile wake first.
+    await vi.waitFor(() => expect(refreshToken).toHaveBeenCalledOnce());
 
     await githubRecords.writeGitHubOAuthRecord(oauthRecord(OLD_PROFILE));
     await time.advanceBy(5 * 60_000);
@@ -92,8 +93,7 @@ it("skips empty OAuth inventories until a committed write makes work available",
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-github-empty-oauth-"));
   vi.spyOn(Date, "now").mockReturnValue(NOW);
   openOpenClawStateDatabase();
-  const devices = vi.spyOn(githubRecords, "listGitHubDeviceAuthorizationRecords");
-  const records = vi.spyOn(githubRecords, "listGitHubOAuthRecords");
+  const inventory = vi.spyOn(githubRecords, "listGitHubAuthorizationRecords");
   const time = createGatewaySchedulerClock(NOW);
   const lifecycle = createGitHubOAuthLifecycle({
     getConfig: () => configForScope("system"),
@@ -104,13 +104,11 @@ it("skips empty OAuth inventories until a committed write makes work available",
   try {
     await lifecycle.maintain();
     await lifecycle.maintain();
-    expect(devices).toHaveBeenCalledOnce();
-    expect(records).toHaveBeenCalledOnce();
+    expect(inventory).toHaveBeenCalledOnce();
 
     await githubRecords.writeGitHubOAuthRecord(oauthRecord(OLD_PROFILE));
     await lifecycle.maintain();
-    expect(devices).toHaveBeenCalledTimes(2);
-    expect(records).toHaveBeenCalledTimes(2);
+    expect(inventory).toHaveBeenCalledTimes(2);
     expect(await githubRecords.inspectGitHubOAuthRecord(OLD_PROFILE)).toEqual({ state: "missing" });
   } finally {
     await lifecycle.stop();

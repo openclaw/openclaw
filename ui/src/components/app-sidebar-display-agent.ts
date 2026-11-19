@@ -6,7 +6,8 @@ import {
 } from "../lib/sessions/session-key.ts";
 import { resolveActiveSidebarAgent } from "./app-sidebar-session-navigation-logic.ts";
 
-type DisplayAgentInput = {
+/** Show a provisional chat's owner without changing the selected-agent scope. */
+export function resolveSidebarDisplayAgent(input: {
   activeId: string;
   roster: NonNullable<ApplicationContext["agents"]["state"]["agentsList"]>["agents"];
   identities: ReturnType<ApplicationContext["agentIdentity"]["entries"]>;
@@ -14,10 +15,7 @@ type DisplayAgentInput = {
   creation: ReturnType<ApplicationContext["chatSubmissions"]["readCreate"]>;
   sessionKey: string;
   chipMode: boolean;
-};
-
-/** Show a provisional chat's owner without changing the selected-agent scope. */
-export function resolveSidebarDisplayAgent(input: DisplayAgentInput) {
+}) {
   const active = resolveActiveSidebarAgent(input);
   const sessionAgentId = parseAgentSessionKey(input.sessionKey)?.agentId;
   if (

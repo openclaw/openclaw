@@ -10,6 +10,7 @@ import {
 import type { UsersBackgroundResult } from "../../../../packages/gateway-protocol/src/schema/users-background.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import {
   adoptCommittedBackgroundPreference,
   resolveServerUiPrefWriteStatus,
@@ -18,26 +19,26 @@ import {
 import { canSyncAppearancePreference } from "../../app/server-prefs-profile-runtime.ts";
 import { subscribeServerUiPrefWrites } from "../../app/server-prefs.ts";
 import { patchSettings } from "../../app/settings.ts";
+import type { SessionBackground } from "../../components/session-background-host.tsx";
 import {
   backgroundImageReadIdentity,
   readBackgroundImage,
 } from "../../components/session-background-image.ts";
-import type { SessionBackground } from "../../components/session-background.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 type BackgroundSnapshot = Extract<UsersBackgroundResult, { status: "ok" }>;
 type BackgroundScope = { client: GatewayBrowserClient; profileId: string };
+type BackgroundRead = {
+  completion: Promise<{ error: unknown } | undefined>;
+  retire: () => void;
+};
 
 async function readFileBase64(file: File): Promise<string> {
-  const dataUrl = await readBlobAsDataUrl(file, {
-    readError: "Image could not be read",
-    invalidResultError: "Image could not be read",
-  });
+  const dataUrl = await readBlobAsDataUrl(file, "Image could not be read");
   return dataUrl.slice(dataUrl.indexOf(",") + 1);
 }
 
@@ -65,6 +66,8 @@ export function createAppearanceBackground(
     | null = null;
   let metadataAbort: AbortController | undefined;
   let metadataKey: readonly unknown[] = [];
+  let metadataRead: BackgroundRead | undefined;
+  let thumbnailRead: BackgroundRead | undefined;
 
   const isConnected = () => connected && host().isConnected;
   const busy = () => mutationScope !== null;
@@ -76,6 +79,8 @@ export function createAppearanceBackground(
 
   async function readMetadata() {
     metadataAbort?.abort();
+    metadataRead?.retire();
+    metadataRead = undefined;
     const scope = captureScope();
     const requestedRevision = metadataRevision;
     if (!scope) {
@@ -84,6 +89,8 @@ export function createAppearanceBackground(
     }
     const controller = new AbortController();
     metadataAbort = controller;
+    const settled = Promise.withResolvers<{ error: unknown } | undefined>();
+    metadataRead = { completion: settled.promise, retire: () => settled.resolve(undefined) };
     try {
       const result = await scope.client.request<UsersBackgroundResult>(
         "users.background.get",
@@ -99,8 +106,10 @@ export function createAppearanceBackground(
       publish();
     } catch (error) {
       if (owns(scope) && !controller.signal.aborted) {
-        setMessage({ kind: "error", text: formatUiError(error) });
+        settled.resolve({ error });
       }
+    } finally {
+      settled.resolve(undefined);
     }
   }
   let previewTimer: ReturnType<typeof setTimeout> | undefined;
@@ -115,11 +124,20 @@ export function createAppearanceBackground(
     gatewayUrl: string;
   } | null = null;
   let metadataRevision = 0;
-  let mutationScope: BackgroundScope | null = null;
-  let imagePreview: { identity: string; controller: AbortController } | null = null;
+  let mutationScope: (BackgroundScope & { retire: () => void }) | null = null;
+  let mutation: { kind: "uploading" | "removing"; completion: Promise<string | null> } | null =
+    null;
+  let imagePreview: {
+    identity: string;
+    controller: AbortController;
+    retire: () => void;
+  } | null = null;
   function captureScope(): BackgroundScope | null {
     const snapshot = application.gateway.snapshot;
-    return snapshot.phase === "connected" && snapshot.client && snapshot.selfUser?.id
+    return snapshot.phase === "connected" &&
+      snapshot.client &&
+      snapshot.selfUser?.id &&
+      hasOperatorReadAccess(snapshot.hello?.auth ?? null)
       ? { client: snapshot.client, profileId: snapshot.selfUser.id }
       : null;
   }
@@ -155,8 +173,10 @@ export function createAppearanceBackground(
   }
 
   function releasePreview() {
+    imagePreview?.retire();
     imagePreview?.controller.abort();
     imagePreview = null;
+    thumbnailRead = undefined;
     if (imageUrl) {
       URL.revokeObjectURL(imageUrl);
     }
@@ -199,8 +219,11 @@ export function createAppearanceBackground(
     if (!assetId || !identity || imagePreview) {
       return;
     }
-    const preview = { identity, controller: new AbortController() };
+    const settled = Promise.withResolvers<{ error: unknown } | undefined>();
+    const retire = () => settled.resolve(undefined);
+    const preview = { identity, controller: new AbortController(), retire };
     imagePreview = preview;
+    thumbnailRead = { completion: settled.promise, retire };
     void readBackgroundImage(context, assetId, {
       signal: preview.controller.signal,
       isCurrent: () =>
@@ -216,13 +239,25 @@ export function createAppearanceBackground(
       })
       .catch(() => {
         if (imagePreview === preview && !preview.controller.signal.aborted) {
-          setMessage({ kind: "error", text: t("configView.appearance.background.unavailable") });
+          settled.resolve({ error: new Error(t("configView.appearance.background.unavailable")) });
         }
-      });
+      })
+      .finally(() => settled.resolve(undefined));
+  }
+
+  function dismissReadStatus() {
+    // Retire only presentation; admitted reads may still refresh the current cache.
+    metadataRead?.retire();
+    thumbnailRead?.retire();
+    metadataRead = undefined;
+    thumbnailRead = undefined;
   }
 
   function retireMutation() {
+    mutationScope?.retire();
     mutationScope = null;
+    mutation = null;
+    dismissReadStatus();
     publish();
     setMessage(null);
   }
@@ -286,7 +321,10 @@ export function createAppearanceBackground(
       const width = canvas.clientWidth;
       const height = canvas.clientHeight;
       host().style.setProperty("--settings-background-preview-top", `${bounds.top}px`);
-      host().style.setProperty("--settings-background-preview-left", `${bounds.left}px`);
+      host().style.setProperty(
+        "--settings-background-preview-left",
+        `${bounds.left + canvas.clientLeft}px`,
+      );
       host().style.setProperty("--settings-background-preview-width", `${width}px`);
       host().style.setProperty("--settings-background-preview-height", `${height}px`);
       // Docks and responsive chrome can change the canvas without window resize.
@@ -369,8 +407,9 @@ export function createAppearanceBackground(
     if (busy()) {
       return;
     }
+    dismissReadStatus();
     patchSettings({ background: { ...readPreference(), ...patch } });
-    application.theme.refresh();
+    mutation = null;
     setMessage(null);
   }
 
@@ -394,11 +433,12 @@ export function createAppearanceBackground(
     change(selectBackgroundSource({ kind }, application.theme.settings.background));
   }
 
-  async function mutate(file?: File) {
+  function mutate(file?: File) {
     const scope = captureScope();
     if (!scope || !canUpload() || busy() || readWriteStatus().status !== "saved") {
-      return;
+      return undefined;
     }
+    mutation = null;
     if (
       file &&
       (!file.size ||
@@ -406,30 +446,37 @@ export function createAppearanceBackground(
         (file.type !== "" && !["image/jpeg", "image/png", "image/webp"].includes(file.type)))
     ) {
       setMessage({ kind: "error", text: t("configView.appearance.background.invalidFile") });
-      return;
+      return undefined;
     }
+    dismissReadStatus();
     dismissCanvasPreview();
-    mutationScope = scope;
-    publish();
-    setMessage({
-      kind: "status",
-      text: t(
-        file
-          ? "configView.appearance.background.uploading"
-          : "configView.appearance.background.removing",
-      ),
+    let retire!: () => void;
+    const retired = new Promise<null>((resolve) => {
+      retire = () => resolve(null);
     });
+    const admitted = { ...scope, retire };
+    mutationScope = admitted;
+    setMessage(null);
+    const completion = Promise.race([completeMutation(admitted, file), retired]);
+    mutation = { kind: file ? "uploading" : "removing", completion };
+    // The renderer observes the same rejection through its native error boundary.
+    void completion.catch(() => undefined);
+    publish();
+    return completion;
+  }
+
+  async function completeMutation(scope: NonNullable<typeof mutationScope>, file?: File) {
     const isCurrent = () => owns(scope) && mutationScope === scope;
     try {
       const imageBase64 = file ? await readFileBase64(file) : undefined;
       if (!isCurrent()) {
-        return;
+        return null;
       }
       // Read the authoritative image/preference pair before the guarded mutation;
       // another browser's later edit conflicts instead of being overwritten.
       const current = await scope.client.request<UsersBackgroundResult>("users.background.get", {});
       if (!isCurrent()) {
-        return;
+        return null;
       }
       if (current.status !== "ok") {
         throw new Error(t("configView.appearance.background.profileRequired"));
@@ -443,7 +490,7 @@ export function createAppearanceBackground(
         file ? { ...expected, imageBase64 } : expected,
       );
       if (!isCurrent()) {
-        return;
+        return null;
       }
       if (result.status !== "ok") {
         throw new Error(
@@ -464,18 +511,13 @@ export function createAppearanceBackground(
       });
       metadata = { ...scope, revision: metadataRevision, snapshot: result };
       application.theme.refresh();
-      setMessage({
-        kind: "status",
-        text: t(
-          file
-            ? "configView.appearance.background.saved"
-            : "configView.appearance.background.removed",
-        ),
-      });
+      // The selected image is already visible; no duplicate success notice.
+      return null;
     } catch (error) {
       if (isCurrent()) {
-        setMessage({ kind: "error", text: formatUiError(error) });
+        throw error;
       }
+      return null;
     } finally {
       if (isCurrent()) {
         publish();
@@ -502,9 +544,9 @@ export function createAppearanceBackground(
       preference: readPreference(),
       imageUrl,
       hasImage: Boolean(readSnapshot()?.asset),
-      busy: busy(),
+      mutation,
       uploadAllowed: canUpload() && writeStatus.status === "saved",
-      scopeHint: !scope
+      scopeHint: !application.gateway.snapshot.selfUser?.id
         ? t("configView.appearance.background.browserOnly")
         : !canUpload()
           ? t("configView.appearance.background.readOnly")
@@ -513,8 +555,8 @@ export function createAppearanceBackground(
       onSource: (source: BackgroundPreference["source"]["kind"]) => selectSource(source),
       onChange: (patch: Partial<BackgroundPreference>) => change(patch),
       onChooseImage: chooseFile,
-      onRemoveImage: () => void mutate(),
-      onFile: (file: File) => void mutate(file),
+      onRemoveImage: () => mutate(),
+      onFile: (file: File) => mutate(file),
       onPreviewStart: startCanvasPreview,
       onPreviewInput: () => showCanvasPreview(),
       onPreviewEnd: endCanvasPreview,
@@ -547,6 +589,7 @@ export function createAppearanceBackground(
       // Connection receipts retire upload and image-preview authority synchronously.
       application.gateway.subscribe(() => {
         if ((mutationScope && !owns(mutationScope)) || (metadata && !owns(metadata))) {
+          metadata = null;
           retireMutation();
         }
         retireChangedPreview();
@@ -595,6 +638,14 @@ export function createAppearanceBackground(
   });
   return {
     viewProps: createMemo(viewProps),
+    metadataRead: createMemo(() => {
+      revision();
+      return metadataRead;
+    }),
+    thumbnailRead: createMemo(() => {
+      revision();
+      return thumbnailRead;
+    }),
     previewPreference,
     previewPresented: () => {
       revision();

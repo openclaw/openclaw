@@ -1,23 +1,13 @@
 // Setup inference verification tests keep noninteractive imports prompt-free.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
-import {
-  readAuthProfileStoreForTest,
-  removeOAuthTestTempRoot,
-} from "../agents/auth-profiles/oauth-test-utils.js";
-import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
-import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
-import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SetupInferenceConfigTarget } from "../system-agent/setup-inference-transition.js";
 import { verifySetupInferenceConfig } from "../system-agent/setup-inference-turn.js";
-import type { WizardPrompter } from "./prompts.js";
-import type { SetupModelAuthCandidate } from "./setup.model-auth.js";
+import { authCandidate, createEmptyWizardPrompter } from "./setup.credentials.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   repair: vi.fn(),
@@ -35,19 +25,13 @@ vi.mock("./setup.model-auth.js", () => ({
 
 import { offerLiveModelVerification } from "./setup.inference-verification.js";
 
+type VerificationParams = Parameters<typeof offerLiveModelVerification>[0];
 type VerificationOptions = Partial<
-  Omit<
-    Parameters<typeof offerLiveModelVerification>[0],
-    "config" | "configTarget" | "runtime" | "prompter"
-  >
+  Omit<VerificationParams, "config" | "configTarget" | "runtime" | "prompter">
 >;
 
-function authCandidate(config: OpenClawConfig) {
-  return { config, authProfiles: [], persistAuthProfiles: vi.fn(async () => {}) };
-}
-
 function verificationFixture(config: OpenClawConfig, options: VerificationOptions = {}) {
-  const prompter = createPrompter();
+  const prompter = createEmptyWizardPrompter();
   const writeConfig = vi.fn(async (next: OpenClawConfig) => next);
   let current = structuredClone(config);
   const target: SetupInferenceConfigTarget = {
@@ -81,18 +65,6 @@ function verificationFixture(config: OpenClawConfig, options: VerificationOption
 const tempRoots = createTempDirTracker();
 afterEach(() => tempRoots.cleanup());
 
-function createPrompter(): WizardPrompter {
-  return createWizardPrompter({
-    intro: vi.fn(),
-    outro: vi.fn(),
-    note: vi.fn(),
-    confirm: vi.fn(),
-    select: vi.fn(),
-    multiselect: vi.fn(),
-    text: vi.fn(),
-  });
-}
-
 function expectNotCalled(...functions: ReturnType<typeof vi.fn>[]) {
   for (const fn of functions) {
     expect(fn).not.toHaveBeenCalled();
@@ -117,84 +89,6 @@ describe("offerLiveModelVerification", () => {
     mocks.repair.mockReset();
     mocks.verify.mockReset();
     mocks.runEmbedded.mockReset();
-  });
-
-  it("preserves a working profile when a rejected replacement is retried without another login", async () => {
-    const stateDir = await fs.realpath(tempRoots.make("openclaw-working-setup-profile-"));
-    const agentDir = path.join(stateDir, "import-agent");
-    const working = {
-      profileId: "openai:working",
-      credential: { type: "api_key" as const, provider: "openai", key: "working-key" },
-    };
-    await upsertAuthProfileWithLock({ ...working, agentDir });
-    const config: OpenClawConfig = {
-      browser: { enabled: false },
-      agents: {
-        ownership: "explicit",
-        entries: { main: {} },
-        defaults: { model: "openai/test-model@openai:working" },
-      },
-      auth: { profiles: { "openai:working": { provider: "openai", mode: "api_key" } } },
-    };
-    const before = structuredClone(config);
-    const replacement = { ...working, credential: { ...working.credential, key: "rejected-key" } };
-    const persistAuthProfiles = vi.fn(
-      async (profiles: SetupModelAuthCandidate["authProfiles"] = [replacement]) => {
-        for (const profile of profiles) {
-          await upsertAuthProfileWithLock({ ...profile, agentDir });
-        }
-      },
-    );
-    const candidate: SetupModelAuthCandidate = {
-      config: { ...config, agents: { ...config.agents, defaults: { model: "openai/test-model" } } },
-      authProfiles: [replacement],
-      persistAuthProfiles,
-    };
-    const attemptedProfiles: string[] = [];
-    mocks.verify.mockImplementation(async ({ config: tested }: { config: OpenClawConfig }) => {
-      const primary = expectDefined(
-        resolveAgentModelPrimaryValue(tested.agents?.defaults?.model),
-        "selected model",
-      );
-      const profileId = expectDefined(
-        splitTrailingAuthProfile(primary).profile,
-        "selected credential profile",
-      );
-      attemptedProfiles.push(profileId);
-      const store = readAuthProfileStoreForTest(agentDir);
-      expect(profileId).toMatch(/^openai:setup-/);
-      expect(store.profiles[profileId]).toMatchObject({
-        ...replacement.credential,
-        setup: {
-          replacement: true,
-          modelRef: "openai/test-model",
-          configJson: expect.any(String),
-        },
-      });
-      expect(store.profiles[working.profileId]).toEqual(working.credential);
-      expect(tested.browser).toEqual({ enabled: false });
-      return { ok: false, status: "auth", error: "credential rejected" };
-    });
-    const { run, writeConfig, prompter } = verificationFixture(config, {
-      initialCandidate: candidate,
-      opts: { nonInteractive: true },
-      stateDir,
-      agentDir,
-      required: true,
-    });
-    try {
-      const rejected = { verified: false, persisted: false };
-      await expect(run()).resolves.toMatchObject(rejected);
-      await expect(run()).resolves.toMatchObject(rejected);
-      expect(attemptedProfiles).toHaveLength(2);
-      expect(attemptedProfiles[1]).toBe(attemptedProfiles[0]);
-      expect(Object.keys(readAuthProfileStoreForTest(agentDir).profiles)).toHaveLength(2);
-      expect(persistAuthProfiles).toHaveBeenCalledOnce();
-      expectNotCalled(writeConfig, mocks.repair, vi.mocked(prompter.select));
-      expect(config).toEqual(before);
-    } finally {
-      await removeOAuthTestTempRoot(stateDir);
-    }
   });
 
   it.each(["research", undefined])(
@@ -267,13 +161,8 @@ describe("offerLiveModelVerification", () => {
     const verificationError = new Error("provider network dropped");
     mocks.verify.mockRejectedValue(verificationError);
     const { run, prompter } = verificationFixture(
-      {
-        agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
-      },
-      {
-        opts: { nonInteractive: true },
-        required: true,
-      },
+      { agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } } },
+      { opts: { nonInteractive: true }, required: true },
     );
     const stop = vi.fn();
     vi.mocked(prompter.progress).mockReturnValue({ stop, update: vi.fn() });

@@ -7,7 +7,7 @@ export async function withEmbeddedAttemptToolActivity<R>(
   operation: () => Promise<R>,
 ): Promise<R> {
   const interval = setInterval(() => notifyToolActivity(runId), 60_000);
-  interval.unref?.();
+  interval.unref();
   try {
     notifyToolActivity(runId);
     return await operation();

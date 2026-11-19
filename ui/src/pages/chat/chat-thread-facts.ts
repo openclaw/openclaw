@@ -1,0 +1,52 @@
+import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
+import type { ChatItem } from "../../lib/chat/chat-types.ts";
+import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
+import type { ReplyAttributionFacts } from "./chat-thread-grouping.ts";
+import {
+  isKeyedAssistantStreamFallbackMessage,
+  transcriptRunId,
+} from "./chat-thread-run-identity.ts";
+
+/**
+ * Transcript-wide facts of one build. An older-page prepend reuses retained rows
+ * only while the new page cannot change them (see chat-thread-prepend.ts).
+ */
+export type ChatItemsFacts = ReplyAttributionFacts & {
+  /** Content before live progress decides whether history loading can hide the indicator. */
+  hasContentBeforeProgress?: boolean;
+  /** Prepared beside the working indicator, before first text changes row membership. */
+  streamOnset?: Extract<ChatItem, { kind: "stream" }>;
+  /** Display history after heartbeat/commentary filtering and composition. */
+  history?: readonly unknown[];
+  completionIds?: ReadonlySet<string>;
+  /** First history message owning each persisted canvas identity or inline view key. */
+  firsts: Map<string, unknown>;
+  /** History messages whose divider key includes their transcript index. */
+  indexedDividers: unknown[];
+  /** Model-selection state entering this message. */
+  probe?: unknown;
+  modelBefore?: string;
+};
+
+/** Hidden commentary still owns a boundary between neighboring activity batches. */
+export function isHiddenChatCommentary(
+  props: { persistCommentary?: boolean },
+  message: unknown,
+  activeCommentaryRunId?: string,
+): boolean {
+  return (
+    props.persistCommentary === false &&
+    isKeyedAssistantStreamFallbackMessage(message) &&
+    (activeCommentaryRunId === undefined || transcriptRunId(message) !== activeCommentaryRunId)
+  );
+}
+
+/** Keep commentary sources until grouping records their invisible boundaries. */
+export function displayChatHistory(props: {
+  messages: unknown[];
+  persistCommentary?: boolean;
+}): unknown[] {
+  return composeTranscriptDisplay(
+    props.messages.filter((message) => !isAssistantHeartbeatAckForDisplay(message)),
+  );
+}

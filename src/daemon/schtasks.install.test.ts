@@ -7,11 +7,10 @@ import { beforeEach, describe, expect, it as base, vi } from "vitest";
 import { decodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
 import {
   installScheduledTask,
-  readScheduledTaskCommand,
-  resolveTaskScriptPath,
   stageScheduledTask,
   uninstallScheduledTask,
-} from "./schtasks.js";
+} from "./schtasks-install.js";
+import { readScheduledTaskCommand, resolveTaskScriptPath } from "./schtasks-layout.js";
 import { auditGatewayServiceConfig, SERVICE_AUDIT_CODES } from "./service-audit.js";
 import { buildServiceEnvironment } from "./service-env.js";
 

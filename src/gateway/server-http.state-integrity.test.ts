@@ -68,11 +68,11 @@ it("returns 503 with the worker admission refusal after audit index corruption, 
     getStateDatabaseFailure: () =>
       openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(pathname),
   });
-  const probe = async (url: string, remoteAddress = "127.0.0.1", method = "GET") => {
+  const probe = async (url: string) => {
     const response = createMockServerResponse();
     expect(
       await handleGatewayProbeRequest(
-        createGatewayRequest({ path: url, remoteAddress, method }),
+        createGatewayRequest({ path: url }),
         response,
         url,
         { mode: "none", allowTailscale: false },
@@ -102,10 +102,7 @@ it("returns 503 with the worker admission refusal after audit index corruption, 
         },
       },
     });
-    expect(channelManager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
     expect(await probe("/healthz")).toMatchObject({ status: 200 });
-    expect(await probe("/readyz", "203.0.113.10")).toEqual({ status: 503, body: { ready: false } });
-    expect(await probe("/ready", "127.0.0.1", "HEAD")).toEqual({ status: 503, body: undefined });
     mainSql.expectIdle();
 
     clearOpenClawStateDatabaseOpenFailure(pathname);

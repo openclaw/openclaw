@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { heartbeatTaskDeclarationKey } from "../commands/doctor-heartbeat-task-identity.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { heartbeatTaskDeclarationKey } from "./heartbeat-task.js";
 import {
   createStartedCronServiceWithFinishedBarrier,
   setupCronServiceSuite,
@@ -9,13 +10,20 @@ import type { CronJobCreate } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite();
 
-// The private task adapter remains until the heartbeat executor retirement slice.
-it("routes a private legacy task through the guarded heartbeat wake", async () => {
+it("settles a migrated task through ordinary session execution without a heartbeat wake", async () => {
   const { storePath } = await makeStorePath();
+  const entered = createDeferred();
+  const release = createDeferred();
+  let completed = false;
   const context = createStartedCronServiceWithFinishedBarrier({
     scheduler: createTestGatewayScheduler(),
     storePath,
     logger,
+    runSessionEvent: async () => {
+      entered.resolve();
+      await release.promise;
+      return { status: "ok" };
+    },
   });
   const { cron } = context;
   try {
@@ -30,28 +38,35 @@ it("routes a private legacy task through the guarded heartbeat wake", async () =
       sessionTarget: "main",
       wakeMode: "next-heartbeat",
     };
-    await expect(cron.add(input)).rejects.toThrow(/system-owned/);
-    const added = await cron.add(input, { systemOwned: true });
+    const added = await cron.add(input);
     const job = "job" in added ? added.job : added;
-    await expect(cron.run(job.id, "force")).resolves.toMatchObject({ ok: true });
-    expect(context.requestHeartbeatAndWait).toHaveBeenCalledWith(
-      {
-        source: "interval",
-        intent: "task",
-        reason: `heartbeat-task:${job.id}`,
-        agentId: "main",
-        tasks: [{ jobId: job.id, name: "inbox", prompt: "Check urgent inbox items" }],
-      },
-      expect.objectContaining({ abortSignal: expect.any(AbortSignal) }),
+    const running = cron.run(job.id, "force").then((result) => {
+      completed = true;
+      return result;
+    });
+    await awaitGateBeforeSettlement(
+      entered.promise,
+      running,
+      "Migrated task finished before reaching ordinary session execution",
     );
-    expect(context.requestHeartbeat).not.toHaveBeenCalled();
+    expect(completed).toBe(false);
+    expect(cron.getJob(job.id)?.state.lastStatus).not.toBe("ok");
+    expect(context.runSessionEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        job: expect.objectContaining({ id: job.id, sessionTarget: "main" }),
+        text: "Check urgent inbox items",
+      }),
+    );
     expect(context.enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(context.runSessionEvent).not.toHaveBeenCalled();
+    release.resolve();
+    await expect(running).resolves.toMatchObject({ ok: true });
+    expect(cron.getJob(job.id)?.state.lastStatus).toBe("ok");
     await expect(
       cron.update(job.id, { payload: { kind: "systemEvent", text: "Check priority inbox" } }),
     ).resolves.toMatchObject({ id: job.id });
     await expect(cron.remove(job.id)).resolves.toEqual({ ok: true, removed: true });
   } finally {
+    release.resolve();
     cron.stop();
     await cron.waitForIdle();
   }

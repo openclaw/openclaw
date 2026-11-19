@@ -8,9 +8,7 @@ describe("BTW prepared tool policy", () => {
   btw.setupBtwTestHooks();
   beforeEach(() => {
     btw.mockOpenAIPlatformProfile();
-    const resolvedModel = { ...model, baseUrl: "https://api.openai.com/v1" };
-    btw.resolveModelWithRegistryMock.mockReturnValue(resolvedModel);
-    btw.resolveModelAsyncMock.mockResolvedValue({ model: resolvedModel });
+    btw.mockResolvedModel({ ...model, baseUrl: "https://api.openai.com/v1" });
   });
 
   it("prepares deny-all sender policy before calling a plugin side-question hook", async () => {

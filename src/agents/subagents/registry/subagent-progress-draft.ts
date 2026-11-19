@@ -1,8 +1,10 @@
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ProgressContinuationDraft } from "../../../channels/progress-continuation.js";
 import { normalizeAgentPlanSteps } from "../../../channels/streaming.js";
 import { onAgentEventForRun, type AgentEventPayload } from "../../../infra/agent-events.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
+import { formatSubagentProgressReference } from "../../agent-activity-presentation.js";
 import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -88,7 +90,12 @@ function projectChild(entry: SubagentRunRecord): ProgressItem {
   return {
     itemId: taskId(entry),
     kind: "subagent",
-    title: (entry.label ?? entry.taskName ?? "Delegated work").slice(0, 120),
+    title: [
+      truncateUtf16Safe(entry.label ?? entry.taskName ?? "Subagent", 120),
+      formatSubagentProgressReference(entry.childSessionKey),
+    ]
+      .filter(Boolean)
+      .join(" "),
     phase: ended ? "end" : "update",
     status:
       outcome === "ok"

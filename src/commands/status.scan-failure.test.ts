@@ -50,16 +50,19 @@ const installationDrift =
 
 beforeEach(() => vi.clearAllMocks());
 
-it.each(
-  ["text", "fast JSON", "all"].flatMap((mode) =>
-    [false, true].map((unavailable) => ({ mode, unavailable })),
-  ),
-)(
-  "preserves schema refusal ($mode, service inspection unavailable=$unavailable)",
-  async ({ mode, unavailable }) => {
+it.each([
+  ["text", false],
+  ["fast JSON", false],
+  ["all", false],
+  ["text", true],
+  ["fast JSON", true],
+  ["all", true],
+] as const)(
+  "preserves schema refusal (%s, service inspection unavailable=%s)",
+  async (mode, unavailable) => {
     const timeoutMs = mode === "fast JSON" ? 2345 : undefined;
     const original = new Error(
-      "OpenClaw agent database /state/agents/main/agent.sqlite uses schema version 19; stop active agents and run openclaw doctor --fix to migrate session identities before using it.",
+      "OpenClaw agent database /state/agents/main/agent.sqlite uses schema version 19; stop active agents and run openclaw doctor --fix to upgrade it to schema version 32 before using it.",
     );
     mocks.scan.mockRejectedValue(original);
     mocks.overview.mockRejectedValue(original);

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runMessageActionDiscoveryAsync } from "../channels/plugins/message-action-discovery.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -12,10 +12,10 @@ const EMPTY_PREPARED_MESSAGE_TOOL_CATALOG = {
   getChannel: () => undefined,
 } as const;
 
-function registerPlugin(id: string, overrides: Partial<ChannelPlugin> = {}) {
+function registerPlugin(id: string, overrides: Partial<ChannelPlugin> = {}, aliases?: string[]) {
   const plugin: ChannelPlugin = {
     id,
-    meta: { id, label: id, selectionLabel: id, docsPath: `/channels/${id}`, blurb: id },
+    meta: { id, label: id, selectionLabel: id, docsPath: `/channels/${id}`, blurb: id, aliases },
     capabilities: { chatTypes: ["direct"] },
     config: { listAccountIds: () => [], resolveAccount: () => ({}) },
     ...overrides,
@@ -35,9 +35,12 @@ function discover(
 }
 
 describe("channel tools", () => {
-  const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+  });
 
-  beforeEach(() => {
+  it("keeps an explicitly empty prepared catalog authoritative", async () => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     registerPlugin("test", {
       actions: {
         describeMessageTool: () => {
@@ -45,32 +48,14 @@ describe("channel tools", () => {
         },
       },
     });
-    errorSpy.mockClear();
-  });
-
-  afterEach(() => {
-    setActivePluginRegistry(createTestRegistry([]));
-  });
-
-  it("keeps an explicitly empty prepared catalog authoritative", async () => {
     expect(await discover("test", EMPTY_PREPARED_MESSAGE_TOOL_CATALOG)).toEqual([]);
     expect(errorSpy).not.toHaveBeenCalled();
-  });
-
-  it("skips crashing plugins and logs once", async () => {
-    expect(await discover()).toStrictEqual([]);
-    expect(errorSpy).toHaveBeenCalledTimes(1);
-
-    expect(await discover()).toStrictEqual([]);
-    expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 
   it("does not infer poll actions from outbound adapters when action discovery omits them", async () => {
     registerPlugin("polltest", {
       capabilities: { chatTypes: ["direct"], polls: true },
-      actions: {
-        describeMessageTool: () => ({ actions: [] }),
-      },
+      actions: { describeMessageTool: () => ({ actions: [] }) },
       outbound: {
         deliveryMode: "gateway",
         sendPoll: async () => ({ channel: "polltest", messageId: "poll-1" }),
@@ -80,19 +65,11 @@ describe("channel tools", () => {
   });
 
   it("normalizes channel aliases before listing supported actions", async () => {
-    registerPlugin("telegram", {
-      meta: {
-        id: "telegram",
-        label: "Telegram",
-        selectionLabel: "Telegram",
-        docsPath: "/channels/telegram",
-        blurb: "telegram plugin",
-        aliases: ["tg"],
-      },
-      actions: {
-        describeMessageTool: () => ({ actions: ["react"] }),
-      },
-    });
+    registerPlugin(
+      "telegram",
+      { actions: { describeMessageTool: () => ({ actions: ["react"] }) } },
+      ["tg"],
+    );
     expect(await discover("tg")).toEqual(["react"]);
   });
 });

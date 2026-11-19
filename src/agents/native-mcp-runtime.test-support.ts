@@ -8,14 +8,19 @@ import type {
   NativeMcpResponse,
 } from "./native-mcp-runtime.js";
 
-export function createFixtureRuntime(directory: string, file: string, requester: string) {
+export function createFixtureRuntime(
+  directory: string,
+  file: string,
+  requester: string,
+  requestTimeoutMs?: number,
+) {
   return createSessionMcpRuntime({
     sessionId: `projection-${requester}`,
     requesterScope: { requesterSenderId: requester },
     workspaceDir: directory,
     cfg: {
       plugins: { enabled: false },
-      mcp: { servers: { fixture: { command: process.execPath, args: [file] } } },
+      mcp: { servers: { fixture: { command: process.execPath, args: [file], requestTimeoutMs } } },
     },
   });
 }

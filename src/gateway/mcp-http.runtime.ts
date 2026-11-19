@@ -336,17 +336,15 @@ async function constructMcpLoopbackTools(
   if (includeNodeExecTool) {
     excludeToolNames.delete("exec");
   }
-  const skillWorkshop = params.skillLibraryAuthoring
-    ? { libraryAuthoring: params.skillLibraryAuthoring }
-    : undefined;
   const scopeOptions: Parameters<typeof resolveGatewayScopedTools>[0] = {
     ...context,
     messageActionTurnCapability: params.messageActionTurnCapability,
     memoryAudience: params.memoryAudience,
+    toolsAllow,
     cfg: params.cfg,
     authProfileStore: params.authProfileStore,
     onYield: params.onYield,
-    skillWorkshop,
+    skillLibraryAuthoring: params.skillLibraryAuthoring,
     bundledTools: params.bundledTools,
     nativeCronCreatorToolAllowlist: context.nativeCronCreatorToolAllowlist ?? undefined,
     agentDir: params.authProfileStoreAgentDir,
@@ -363,17 +361,19 @@ async function constructMcpLoopbackTools(
   };
   const scoped = await resolveGatewayScopedTools(scopeOptions, params.assertCurrent);
   params.assertCurrent();
+  const permissionTools = scoped.permissionTools ?? scoped.tools;
   const tools =
     mode === "exact"
-      ? applyGrantToolsAllow(scoped.tools, toolsAllow)
-      : applyPolicyToolsAllow(scoped.tools, toolsAllow);
+      ? applyGrantToolsAllow(permissionTools, toolsAllow)
+      : applyPolicyToolsAllow(permissionTools, toolsAllow);
   const toolSchema = buildMcpToolSchema(tools);
   scoped.captureFinalCronCreatorTools?.(new Set(toolSchema.map((tool) => tool.name)));
+  const presentedNames = new Set(scoped.tools.map((tool) => tool.name));
   return {
     agentId: scoped.agentId,
     workspaceDir: scoped.workspaceDir,
-    tools,
-    toolSchema,
+    tools: tools.filter((tool) => presentedNames.has(tool.name)),
+    toolSchema: toolSchema.filter((tool) => presentedNames.has(tool.name)),
     sessionFacts,
   };
 }

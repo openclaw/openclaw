@@ -1,22 +1,26 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
-import {
-  clearLiveCatalogCacheForTests,
-  type LiveModelCatalogFetchGuard,
-} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
+import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { Type } from "typebox";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import openrouterPlugin from "./index.js";
 import { buildOpenrouterLiveProvider } from "./provider-catalog.js";
 
+afterEach(() => vi.restoreAllMocks());
+
 function catalogFetch(data: unknown[], release = vi.fn(async () => undefined)) {
-  return vi.fn<LiveModelCatalogFetchGuard>(async ({ url }) => ({
+  return vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(async ({ url }) => ({
     response: Response.json({ data }),
     finalUrl: url,
     release,
   }));
+}
+
+function textRow(id: string, modality = "text->text", fields: Record<string, unknown> = {}) {
+  return { id, architecture: { modality }, ...fields };
 }
 
 type Catalog = Awaited<ReturnType<typeof buildOpenrouterLiveProvider>>;
@@ -40,16 +44,15 @@ function requestModel(catalog: Catalog, id: string, standalone = false) {
 }
 
 async function reasoningCatalog(id: string, reasoning: Record<string, unknown>) {
-  return buildOpenrouterLiveProvider({
-    fetchGuard: catalogFetch([
-      {
-        id,
-        architecture: { modality: "text->text" },
-        supported_parameters: ["reasoning", "tools"],
-        reasoning,
-      },
-    ]),
-  });
+  catalogFetch([
+    {
+      id,
+      architecture: { modality: "text->text" },
+      supported_parameters: ["reasoning", "tools"],
+      reasoning,
+    },
+  ]);
+  return buildOpenrouterLiveProvider({});
 }
 
 async function thinkingProfile(catalog: Catalog, id: string) {
@@ -75,84 +78,56 @@ describe("OpenRouter provider catalog", () => {
 
   it("discovers text models and preserves bundled routes", async () => {
     const release = vi.fn(async () => undefined);
-    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async ({ url }) => ({
-      response: Response.json({
-        data: [
-          {
-            id: "acme/partial-pricing",
-            name: "Partial Pricing Fixture",
-            architecture: {
-              input_modalities: ["text", "image", "audio", "video"],
-              output_modalities: ["text"],
-            },
-            supported_parameters: ["reasoning", "tools"],
-            context_length: 1_048_576,
-            top_provider: {
-              context_length: 1_048_576,
-              max_completion_tokens: 65_536,
-            },
-            pricing: {
-              prompt: "0.0000015",
-              completion: "0.0000075",
-              input_cache_read: "0.00000015",
-              input_cache_write: "0.0000025",
-              overrides: [
-                {
-                  min_prompt_tokens: 272_000,
-                  prompt: "0.000004",
-                },
-              ],
-            },
+    const fetchGuard = catalogFetch(
+      [
+        {
+          id: "acme/partial-pricing",
+          name: "Partial Pricing Fixture",
+          architecture: {
+            input_modalities: ["text", "image", "audio", "video"],
+            output_modalities: ["text"],
           },
-          {
-            id: "google/gemini-3.5-flash-lite",
-            architecture: { modality: "text+image->text" },
-            supported_parameters: ["include_reasoning"],
-            context_length: 1_048_576,
-            max_completion_tokens: 65_536,
-            pricing: { prompt: "0.0000003", completion: "0.0000025" },
+          supported_parameters: ["reasoning", "tools"],
+          context_length: 1_048_576,
+          top_provider: { context_length: 1_048_576, max_completion_tokens: 65_536 },
+          pricing: {
+            prompt: "0.0000015",
+            completion: "0.0000075",
+            input_cache_read: "0.00000015",
+            input_cache_write: "0.0000025",
+            overrides: [{ min_prompt_tokens: 272_000, prompt: "0.000004" }],
           },
-          {
-            id: "google/gemini-3.1-flash-image",
-            architecture: { modality: "text+image->image" },
-            context_length: 65_536,
-          },
-          {
-            id: "typesafe/jev-1.13",
-            architecture: { modality: "text->decisions" },
-            context_length: 32000,
-          },
-          {
-            id: "acme/no-tools",
-            architecture: { modality: "text->text" },
-            supported_parameters: [],
-          },
-          {
-            id: "custom/legacy-model",
-            architecture: { modality: "text->text" },
-          },
-        ],
-      }),
-      finalUrl: url,
+        },
+        textRow("google/gemini-3.5-flash-lite", "text+image->text", {
+          supported_parameters: ["include_reasoning"],
+          context_length: 1_048_576,
+          max_completion_tokens: 65_536,
+          pricing: { prompt: "0.0000003", completion: "0.0000025" },
+        }),
+        textRow("google/gemini-3.1-flash-image", "text+image->image", { context_length: 65_536 }),
+        textRow("typesafe/jev-1.13", "text->decisions", { context_length: 32000 }),
+        textRow("acme/no-tools", "text->text", { supported_parameters: [] }),
+        textRow("custom/legacy-model", "text->text"),
+      ],
       release,
-    }));
+    );
 
     const provider = await buildOpenrouterLiveProvider({
       apiKey: "OPENROUTER_API_KEY",
       discoveryApiKey: "resolved-openrouter-key",
-      fetchGuard,
     });
 
+    const ids = provider.models.map((model) => model.id);
     expect(provider.apiKey).toBe("OPENROUTER_API_KEY");
-    expect(provider.models.map((model) => model.id)).toEqual(
+    expect(ids).toEqual(
       expect.arrayContaining([
         "openrouter/auto",
         "google/gemini-3.5-flash-lite",
         "acme/partial-pricing",
       ]),
     );
-    expect(provider.models.map((model) => model.id)).not.toContain("google/gemini-3.1-flash-image");
-    expect(provider.models.map((model) => model.id)).not.toContain("typesafe/jev-1.13");
+    expect(ids).not.toContain("google/gemini-3.1-flash-image");
+    expect(ids).not.toContain("typesafe/jev-1.13");
     expect(provider.models.find((model) => model.id === "acme/partial-pricing")).toMatchObject({
       name: "Partial Pricing Fixture",
       reasoning: true,
@@ -167,21 +142,13 @@ describe("OpenRouter provider catalog", () => {
         cacheWrite: 2.5,
         tieredPricing: [
           { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 2.5, range: [0, 272_001] },
-          {
-            input: 4,
-            output: 7.5,
-            cacheRead: 0.15,
-            cacheWrite: 2.5,
-            range: [272_001],
-          },
+          { input: 4, output: 7.5, cacheRead: 0.15, cacheWrite: 2.5, range: [272_001] },
         ],
       },
     });
     expect(
       provider.models.find((model) => model.id === "google/gemini-3.5-flash-lite")?.compat,
-    ).toEqual({
-      supportsTools: false,
-    });
+    ).toEqual({ supportsTools: false });
     expect(provider.models.find((model) => model.id === "acme/no-tools")?.compat).toEqual({
       supportsTools: false,
     });
@@ -196,18 +163,8 @@ describe("OpenRouter provider catalog", () => {
       ["custom/legacy-model", true],
       ["openrouter/auto", true],
     ] as const) {
-      const model = provider.models.find((entry) => entry.id === id);
-      if (!model) {
-        throw new Error(`Missing discovered model: ${id}`);
-      }
       const request = buildOpenAICompletionsParams(
-        {
-          ...model,
-          input: model.input.filter((kind) => kind === "text" || kind === "image"),
-          provider: "openrouter",
-          api: "openai-completions",
-          baseUrl: provider.baseUrl,
-        },
+        requestModel(provider, id),
         {
           messages: [{ role: "user", content: "Synthetic request", timestamp: 1 }],
           tools: [{ name: "lookup", description: "Synthetic lookup", parameters: Type.Object({}) }],
@@ -222,57 +179,43 @@ describe("OpenRouter provider catalog", () => {
         expect(request, id).not.toHaveProperty("tool_choice");
       }
     }
-    expect(
-      new Headers(vi.mocked(fetchGuard).mock.calls[0]?.[0].init?.headers).get("authorization"),
-    ).toBe("Bearer resolved-openrouter-key");
+    expect(new Headers(fetchGuard.mock.calls[0]?.[0].init?.headers).get("authorization")).toBe(
+      "Bearer resolved-openrouter-key",
+    );
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    {
-      id: "x-ai/grok-4.6",
-      efforts: ["xhigh", "high", "medium", "low"],
-      mandatory: true,
-      levels: ["low", "medium", "high", "xhigh"],
-      selected: "low",
-      wireEffort: "low",
-    },
-  ] as const)(
-    "carries $id reasoning capabilities from discovery through selection and requests",
-    async ({ id, efforts, mandatory, levels, selected, wireEffort }) => {
-      const catalog = await reasoningCatalog(id, { supported_efforts: efforts, mandatory });
-      const model = catalogModel(catalog, id);
-      expect(model?.compat?.supportedReasoningEfforts).toEqual(
-        mandatory
-          ? efforts
-          : ["none", ...(efforts ?? ["minimal", "low", "medium", "high", "xhigh", "max"])],
-      );
-      expect(model?.thinkingLevelMap?.off).toBe(mandatory ? null : undefined);
-      expect(model.compat?.supportsTools).toBe(true);
-      const { provider, profile } = await thinkingProfile(catalog, id);
-      expect(
-        profile?.levels.map((level) => level.id).toSorted((a, b) => a.localeCompare(b)),
-      ).toEqual(levels.toSorted((a, b) => a.localeCompare(b)));
-      let payload: unknown;
-      const streamFn: StreamFn = async (nextModel, context, options) => {
-        const request = buildOpenAICompletionsParams(nextModel, context, options);
-        payload = (await options?.onPayload?.(request, nextModel)) ?? request;
-        return createAssistantMessageEventStream();
-      };
-      const wrapped = provider.wrapStreamFn?.({
-        provider: "openrouter",
-        modelId: id,
-        thinkingLevel: selected,
-        streamFn,
-      });
-      await wrapped?.(
-        requestModel(catalog, id),
-        { messages: [{ role: "user", content: "Synthetic request", timestamp: 1 }] },
-        { reasoning: selected },
-      );
-      expect(payload).toMatchObject({ reasoning: { effort: wireEffort } });
-    },
-  );
+  it("carries Grok reasoning capabilities from discovery through selection and requests", async () => {
+    const id = "x-ai/grok-4.6";
+    const efforts = ["xhigh", "high", "medium", "low"];
+    const catalog = await reasoningCatalog(id, { supported_efforts: efforts, mandatory: true });
+    const model = catalogModel(catalog, id);
+    expect(model?.compat?.supportedReasoningEfforts).toEqual(efforts);
+    expect(model?.thinkingLevelMap?.off).toBeNull();
+    expect(model.compat?.supportsTools).toBe(true);
+    const { provider, profile } = await thinkingProfile(catalog, id);
+    expect(profile?.levels.map((level) => level.id).toSorted((a, b) => a.localeCompare(b))).toEqual(
+      ["high", "low", "medium", "xhigh"],
+    );
+    let payload: unknown;
+    const streamFn: StreamFn = async (nextModel, context, options) => {
+      const request = buildOpenAICompletionsParams(nextModel, context, options);
+      payload = (await options?.onPayload?.(request, nextModel)) ?? request;
+      return createAssistantMessageEventStream();
+    };
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "openrouter",
+      modelId: id,
+      thinkingLevel: "low",
+      streamFn,
+    });
+    await wrapped?.(
+      requestModel(catalog, id),
+      { messages: [{ role: "user", content: "Synthetic request", timestamp: 1 }] },
+      { reasoning: "low" },
+    );
+    expect(payload).toMatchObject({ reasoning: { effort: "low" } });
+  });
 
   it.each([
     {
@@ -366,21 +309,16 @@ describe("OpenRouter provider catalog", () => {
       apiKey: "OPENROUTER_API_KEY",
       discoveryApiKey: "synthetic-private-proxy-key",
       baseUrl: "https://private.example.invalid/router/v1///",
-      request: {
-        headers: { "X-Private-Proxy-Tenant": "synthetic-tenant" },
-      },
-      fetchGuard,
+      request: { headers: { "X-Private-Proxy-Tenant": "synthetic-tenant" } },
     });
 
-    const request = vi.mocked(fetchGuard).mock.calls[0]?.[0];
+    const request = fetchGuard.mock.calls[0]?.[0];
     expect(request?.url).toBe("https://private.example.invalid/router/v1/models");
     expect(provider.baseUrl).toBe("https://private.example.invalid/router/v1");
     const headers = new Headers(request?.init?.headers);
     expect(headers.get("authorization")).toBe("Bearer synthetic-private-proxy-key");
     expect(headers.get("x-private-proxy-tenant")).toBe("synthetic-tenant");
-    expect(request?.policy).toEqual({
-      allowedOrigins: ["https://private.example.invalid"],
-    });
+    expect(request?.policy).toEqual({ allowedOrigins: ["https://private.example.invalid"] });
   });
 
   it.each([
@@ -390,10 +328,12 @@ describe("OpenRouter provider catalog", () => {
     "https://private.example.invalid/v1?token=synthetic-secret",
     "https://private.example.invalid/v1#synthetic-secret",
   ])("rejects malformed credential destinations before fetching: %s", async (baseUrl) => {
-    const fetchGuard = vi.fn() as unknown as LiveModelCatalogFetchGuard;
+    const fetchGuard = vi
+      .spyOn(ssrfRuntime, "fetchWithSsrFGuard")
+      .mockRejectedValue(new Error("Unexpected catalog fetch"));
 
     await expect(
-      buildOpenrouterLiveProvider({ apiKey: "synthetic-private-key", baseUrl, fetchGuard }),
+      buildOpenrouterLiveProvider({ apiKey: "synthetic-private-key", baseUrl }),
     ).rejects.toThrow("Invalid OpenRouter API base URL");
     expect(fetchGuard).not.toHaveBeenCalled();
   });
@@ -404,17 +344,16 @@ describe("OpenRouter provider catalog", () => {
     await buildOpenrouterLiveProvider({
       apiKey: "OPENROUTER_API_KEY",
       baseUrl: "https://private.example.invalid/v1",
-      fetchGuard,
     });
 
-    expect(
-      new Headers(vi.mocked(fetchGuard).mock.calls[0]?.[0].init?.headers).has("authorization"),
-    ).toBe(false);
+    expect(new Headers(fetchGuard.mock.calls[0]?.[0].init?.headers).has("authorization")).toBe(
+      false,
+    );
   });
 
   it("isolates successful discovery caches by credential destination and request policy", async () => {
     const fetchGuard = catalogFetch([{ id: "private/model" }]);
-    const base = { apiKey: "synthetic-private-key", fetchGuard };
+    const base = { apiKey: "synthetic-private-key" };
     const tenantA = { headers: { "X-Private-Proxy-Tenant": "tenant-a" } };
     const tenantB = { headers: { "X-Private-Proxy-Tenant": "tenant-b" } };
 
@@ -440,7 +379,7 @@ describe("OpenRouter provider catalog", () => {
     });
 
     expect(fetchGuard).toHaveBeenCalledTimes(3);
-    expect(vi.mocked(fetchGuard).mock.calls.map(([request]) => request.url)).toEqual([
+    expect(fetchGuard.mock.calls.map(([request]) => request.url)).toEqual([
       "https://first.invalid/v1/models",
       "https://first.invalid/v1/models",
       "https://second.invalid/v1/models",
@@ -458,10 +397,9 @@ describe("OpenRouter provider catalog", () => {
         auth: { mode: "header", headerName: "X-Proxy-Key", value: "synthetic-override-key" },
         proxy: { mode: "explicit-proxy", url: "https://corporate-proxy.example.invalid" },
       },
-      fetchGuard,
     });
 
-    const request = vi.mocked(fetchGuard).mock.calls[0]?.[0];
+    const request = fetchGuard.mock.calls[0]?.[0];
     const headers = new Headers(request?.init?.headers);
     expect(headers.get("x-proxy-key")).toBe("synthetic-override-key");
     expect(headers.has("authorization")).toBe(false);
@@ -474,7 +412,8 @@ describe("OpenRouter provider catalog", () => {
 
   it("does not follow cross-origin catalog pagination with private credentials", async () => {
     const release = vi.fn(async () => undefined);
-    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async ({ url }) => ({
+    const fetchGuard = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard");
+    fetchGuard.mockImplementation(async ({ url }) => ({
       response: Response.json({
         data: [{ id: "private/model" }],
         next: "https://attacker.example.invalid/models?page=2",
@@ -487,12 +426,11 @@ describe("OpenRouter provider catalog", () => {
       buildOpenrouterLiveProvider({
         apiKey: "synthetic-private-key",
         baseUrl: "https://private.example.invalid/v1",
-        fetchGuard,
       }),
     ).rejects.toThrow("did not include a supported next page");
 
     expect(fetchGuard).toHaveBeenCalledOnce();
-    const request = vi.mocked(fetchGuard).mock.calls[0]?.[0];
+    const request = fetchGuard.mock.calls[0]?.[0];
     expect(request?.url).toBe("https://private.example.invalid/v1/models");
     expect(new Headers(request?.init?.headers).get("authorization")).toBe(
       "Bearer synthetic-private-key",
@@ -503,7 +441,8 @@ describe("OpenRouter provider catalog", () => {
   it("strips private bearer and custom auth headers after a guarded cross-origin redirect", async () => {
     let requestCount = 0;
     const redirectedUrl = "https://redirect.example.invalid/catalog";
-    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async ({ url }) => {
+    const fetchGuard = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard");
+    fetchGuard.mockImplementation(async ({ url }) => {
       requestCount += 1;
       return {
         response: Response.json({
@@ -519,17 +458,18 @@ describe("OpenRouter provider catalog", () => {
       apiKey: "synthetic-private-key",
       baseUrl: "https://private.example.invalid/v1",
       request: { headers: { "X-Private-Proxy-Tenant": "synthetic-secret-tenant" } },
-      fetchGuard,
     });
 
     expect(fetchGuard).toHaveBeenCalledTimes(2);
-    const redirectedHeaders = new Headers(vi.mocked(fetchGuard).mock.calls[1]?.[0].init?.headers);
+    const redirectedHeaders = new Headers(fetchGuard.mock.calls[1]?.[0].init?.headers);
     expect(redirectedHeaders.has("authorization")).toBe(false);
     expect(redirectedHeaders.has("x-private-proxy-tenant")).toBe(false);
   });
 
   it("fails closed before discovery when configured request secrets are unresolved", async () => {
-    const fetchGuard = vi.fn() as unknown as LiveModelCatalogFetchGuard;
+    const fetchGuard = vi
+      .spyOn(ssrfRuntime, "fetchWithSsrFGuard")
+      .mockRejectedValue(new Error("Unexpected catalog fetch"));
 
     await expect(
       buildOpenrouterLiveProvider({
@@ -544,7 +484,6 @@ describe("OpenRouter provider catalog", () => {
             },
           },
         },
-        fetchGuard,
       }),
     ).rejects.toThrow();
     expect(fetchGuard).not.toHaveBeenCalled();

@@ -1,4 +1,4 @@
-import { createXApiClient, type XFetch } from "../api.js";
+import { createXTestApi as createXApiClient, type XFetch } from "./api-client.js";
 import { createXTestSpend } from "./spend.js";
 
 export function createContextApi(fetch: XFetch, dailyUsd?: number) {

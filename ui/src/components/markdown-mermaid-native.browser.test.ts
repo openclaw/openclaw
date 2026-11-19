@@ -1,8 +1,12 @@
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.ts";
+import { afterEach, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import type { NativeMermaidWindow } from "../../../packages/mermaid-renderer/src/native.ts";
+import peleScriptUrl from "../../../packages/mermaid-renderer/src/pele-script-url.ts";
 import "../../../packages/mermaid-renderer/src/native.ts";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import { parsePassiveSvg, theme } from "./markdown-mermaid.test-support.ts";
+
+declare const window: NativeMermaidWindow;
 
 type NativeReply = {
   id: string;
@@ -34,6 +38,14 @@ async function expectRecovery(source: string, index: number) {
   expect(diagram.querySelector("img")?.complete).toBe(true);
 }
 
+beforeAll(async () => {
+  // Vite builds the classic bundle on its first request. Prepare that fixture
+  // before the native renderer's load watchdog, which still covers the iframe.
+  const response = await fetch(peleScriptUrl);
+  expect(response.ok).toBe(true);
+  await response.arrayBuffer();
+});
+
 beforeEach(() => {
   replies = [];
   diagram = document.createElement("div");
@@ -59,14 +71,15 @@ it("delivers ordered passive images at the requested viewport width", async () =
     render("first", "flowchart LR\nA[First] --> B[Diagram]", 512),
     render("second", "sequenceDiagram\nAlice->>Bob: Ready", 384),
   ]);
-  expect(replies.map((reply) => [reply.id, reply.success, reply.widthCssPx])).toEqual([
-    ["first", true, 512],
-    ["second", true, 384],
-  ]);
   for (const reply of replies) {
+    expect(reply.success, reply.error).toBe(true);
     expect(reply.heightCssPx).toBeGreaterThan(0);
     parsePassiveSvg(reply.svg!);
   }
+  expect(replies.map((reply) => [reply.id, reply.widthCssPx])).toEqual([
+    ["first", 512],
+    ["second", 384],
+  ]);
   const image = diagram.querySelector("img")!;
   expect(image).toMatchObject({ complete: true, width: 384 });
   expect(image.naturalWidth).toBeGreaterThan(0);
@@ -74,9 +87,21 @@ it("delivers ordered passive images at the requested viewport width", async () =
   expect(frame.contentDocument).toBeNull();
 });
 
+it("keeps a small diagram at layout scale within the iPad physical bitmap cap", async () => {
+  await render("ipad", "flowchart TD\nDraft --> Review\nReview --> Ship", 694);
+  const reply = replies[0];
+  assert.isDefined(reply);
+  expect(reply.success, reply.error).toBe(true);
+  const root = new DOMParser().parseFromString(reply.svg!, "image/svg+xml").querySelector("svg")!;
+  const image = diagram.querySelector("img")!;
+  expect(image.height).toBe(Math.ceil(root.viewBox.baseVal.height));
+  expect(image.width * image.height * 2 ** 2).toBeLessThanOrEqual(4_194_304);
+  expect(image.style.objectFit).toBe("contain");
+});
+
 it("keeps syntax and raster-limit failures permanent and renders the next request", async () => {
-  const source = "flowchart TB\nA[One] --> B[Two] --> C[Three]";
-  await render("oversized", source, 4_096);
+  const source = "flowchart TB\nA[One] --> B[Two] --> C[Three] --> D[Four] --> E[Five] --> F[Six]";
+  await render("oversized", source, 8_192);
   expect(replies).toEqual([
     { id: "oversized", success: false, error: "Diagram image is too large.", retryable: false },
   ]);

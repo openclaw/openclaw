@@ -9,43 +9,22 @@ export function hasExpectedSingleNonce(text: string, nonce: string): boolean {
 }
 
 const NONCE_REFUSAL_MARKERS = [
-  "token",
-  "secret",
-  "local file",
-  "uuid-named file",
-  "uuid named file",
-  "parrot back",
-  "disclose",
-  "can't help",
-  "can’t help",
-  "cannot help",
-  "can't comply",
-  "can’t comply",
-  "cannot comply",
-  "no `read`",
-  "no read tool",
-  "no read/read tool",
-  "won't output",
-  "won’t output",
-  "isn't a real openclaw probe",
-  "not a real openclaw probe",
-  "no part of the system asks me",
+  /token|secret|local file|uuid[ -]named file|parrot back|disclose/,
+  /(?:can['’]t|cannot) (?:help|comply)|won['’]t output/,
+  /no (?:`read`|read(?:\/read)? tool)/,
+  /(?:isn't|not) a real openclaw probe|no part of the system asks me/,
 ];
 
 const PROBE_REFUSAL_MARKERS = [
-  "prompt injection attempt",
-  "not a legitimate self-test",
-  "not legitimate self-test",
-  "authorized integration probe",
-  "authorizing me to execute",
-  "authorizing me to run",
+  /prompt injection attempt|not (?:a )?legitimate self-test/,
+  /authorized integration probe|authorizing me to (?:execute|run)/,
 ];
 
 export function isLikelyToolNonceRefusal(text: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(text);
   return (
-    PROBE_REFUSAL_MARKERS.some((marker) => lower.includes(marker)) ||
-    (lower.includes("nonce") && NONCE_REFUSAL_MARKERS.some((marker) => lower.includes(marker)))
+    PROBE_REFUSAL_MARKERS.some((marker) => marker.test(lower)) ||
+    (lower.includes("nonce") && NONCE_REFUSAL_MARKERS.some((marker) => marker.test(lower)))
   );
 }
 
@@ -56,17 +35,11 @@ function hasMalformedToolOutput(text: string): boolean {
   }
   const lower = normalizeLowercaseStringOrEmpty(trimmed);
   return (
-    lower.includes("try reading the file again") ||
-    lower.includes("try again with a slightly different approach") ||
-    lower.includes("trying to read the file again") ||
-    lower.includes("try the read tool again") ||
-    lower.includes("file wasn't found immediately") ||
-    lower.includes("verify the file exists and read it again") ||
-    lower.includes("file read failed because the file was not found") ||
-    lower.includes("verify the file creation and read it again") ||
-    /\bread\s*\[/.test(lower) ||
-    /\btool\b/.test(lower) ||
-    /\bfunction\b/.test(lower)
+    /try reading the file again|trying to read the file again/.test(lower) ||
+    /try again with a slightly different approach|try the read tool again/.test(lower) ||
+    /file wasn't found immediately|file read failed because the file was not found/.test(lower) ||
+    /verify the file (?:exists|creation) and read it again/.test(lower) ||
+    /\bread\s*\[|\b(?:tool|function)\b/.test(lower)
   );
 }
 
@@ -95,12 +68,10 @@ export function shouldRetryToolReadProbe(
   ) {
     return false;
   }
-  if (retryableOutput(params)) {
-    return true;
-  }
   return (
-    params.provider === "mistral" &&
-    /nonce[ab]=|testmarker[ab]=/.test(normalizeLowercaseStringOrEmpty(params.text))
+    retryableOutput(params) ||
+    (params.provider === "mistral" &&
+      /nonce[ab]=|testmarker[ab]=/.test(normalizeLowercaseStringOrEmpty(params.text)))
   );
 }
 

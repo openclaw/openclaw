@@ -1,26 +1,17 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import {
   collectDependencyOwnershipSurfaceCheckErrors,
-  collectDependencyOwnershipSurfaceReport,
+  type collectDependencyOwnershipSurfaceReport,
   packageNameFromLockKey,
   parseArgs,
   renderDependencyOwnershipSurfaceMarkdownReport,
 } from "../../scripts/dependency-ownership-surface-report.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeFixtureFiles } from "./z0632-fixtures.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const makeTempRepo = () => tempDirs.make("openclaw-ownership-surface-");
-
-function writeRepoFile(repoRoot: string, relativePath: string, value: string) {
-  const filePath = path.join(repoRoot, relativePath);
-  mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, value, "utf8");
-}
-const writeRepoJson = (root: string, file: string, value: unknown) =>
-  writeRepoFile(root, file, JSON.stringify(value));
 
 it("extracts scoped and unscoped names from pnpm snapshot keys", () => {
   expect(packageNameFromLockKey("@scope/pkg@1.2.3(peer@1.0.0)")).toBe("@scope/pkg");
@@ -44,14 +35,29 @@ it("rejects duplicate report artifact options", () => {
   );
 });
 it("reports ownership and install surface with toolchain metadata", () => {
-  const repoRoot = makeTempRepo();
-  writeRepoJson(repoRoot, "package.json", {
-    dependencies: { "core-lib": "1.0.0", "missing-owner": "2.0.0" },
+  const repoRoot = tempDirs.make("openclaw-ownership-surface-");
+  const ownership = (owner: string, risk: string) => ({
+    owner,
+    class: "core-runtime",
+    risk: [risk],
   });
-  writeRepoFile(
-    repoRoot,
-    "pnpm-lock.yaml",
-    `---
+  writeFixtureFiles(repoRoot, {
+    "package.json": { dependencies: { "core-lib": "1.0.0", "missing-owner": "2.0.0" } },
+    "scripts/lib/dependency-ownership.json": {
+      schemaVersion: 1,
+      dependencies: {
+        "alias-domexception": ownership("core:test", "compat"),
+        "core-lib": ownership("core:test", "network"),
+        "plugin-readable": {
+          owner: "plugin:web-readability",
+          class: "plugin-runtime",
+          risk: ["html"],
+        },
+        "removed-lib": ownership("core:test", "unused"),
+      },
+    },
+    "src/index.ts": 'import "core-lib";\n',
+    "pnpm-lock.yaml": `---
 lockfileVersion: '9.0'
 packages: {toolchain@12.0.0: {hasBin: true}}
 snapshots: {toolchain@12.0.0: {}}
@@ -63,30 +69,24 @@ importers:
       core-lib: {specifier: 1.0.0, version: 1.0.0}
       missing-owner: {specifier: 2.0.0, version: 2.0.0}
       alias-domexception: {specifier: 'npm:@nolyfill/domexception@1.0.0', version: 'npm:@nolyfill/domexception@1.0.0'}
+  extensions/web-readability:
+    dependencies: {plugin-readable: {specifier: 2.0.0, version: 2.0.0}}
 packages:
   core-lib@1.0.0: {}
   transitive-native@1.0.0: {requiresBuild: true}
   missing-owner@2.0.0: {}
   '@nolyfill/domexception@1.0.0': {}
+  plugin-readable@2.0.0: {}
 snapshots:
   core-lib@1.0.0:
     dependencies: {transitive-native: 1.0.0, alias-domexception: '@nolyfill/domexception@1.0.0'}
   transitive-native@1.0.0: {}
   missing-owner@2.0.0: {}
   '@nolyfill/domexception@1.0.0': {}
+  plugin-readable@2.0.0: {}
 `,
-  );
-  writeRepoJson(repoRoot, "scripts/lib/dependency-ownership.json", {
-    schemaVersion: 1,
-    dependencies: {
-      "alias-domexception": { owner: "core:test", class: "core-runtime", risk: ["compat"] },
-      "core-lib": { owner: "core:test", class: "core-runtime", risk: ["network"] },
-    },
   });
-  writeRepoFile(repoRoot, "src/index.ts", 'import "core-lib";\n');
-
-  const report = collectDependencyOwnershipSurfaceReport({ repoRoot });
-  const cliReport = JSON.parse(
+  const report: ReturnType<typeof collectDependencyOwnershipSurfaceReport> = JSON.parse(
     execFileSync(
       process.execPath,
       [
@@ -100,18 +100,16 @@ snapshots:
       { encoding: "utf8" },
     ),
   );
-  expect(cliReport.summary).toEqual(report.summary);
-  expect(cliReport.ownershipGaps).toEqual(report.ownershipGaps);
-
   expect(report.summary).toEqual({
     buildRiskPackageCount: 2,
-    importerCount: 1,
-    lockfilePackageCount: 5,
+    importerCount: 2,
+    lockfilePackageCount: 6,
     rootClosurePackageCount: 4,
     rootDirectDependencyCount: 3,
-    rootOwnershipRecordCount: 2,
+    rootOwnershipRecordCount: 4,
   });
   expect(report.ownershipGaps).toEqual(["missing-owner"]);
+  expect(report.staleOwnershipRecords).toEqual(["removed-lib"]);
   expect(report.topRootDependencyCones[0]).toEqual({
     class: "core-runtime",
     closureSize: 3,
@@ -131,45 +129,8 @@ snapshots:
   ]);
 
   const markdown = renderDependencyOwnershipSurfaceMarkdownReport(report);
-  expect(markdown).toContain("# Dependency Ownership and Install Surface Report");
-  expect(markdown).toContain("It does not query npm advisories");
   expect(markdown).toContain("`missing-owner`");
   expect(markdown).toContain("`core-lib`: 3 resolved transitive packages");
   expect(markdown).toContain("3 direct dependencies");
   expect(markdown).toContain("`transitive-native@1.0.0`: requires build");
-});
-
-it("does not mark plugin importer dependencies as stale ownership records", () => {
-  const repoRoot = makeTempRepo();
-  writeRepoJson(repoRoot, "package.json", { dependencies: { "core-lib": "1.0.0" } });
-  writeRepoFile(
-    repoRoot,
-    "pnpm-lock.yaml",
-    `
-lockfileVersion: '9.0'
-importers:
-  .:
-    dependencies: {core-lib: {specifier: 1.0.0, version: 1.0.0}}
-  extensions/web-readability:
-    dependencies: {plugin-readable: {specifier: 2.0.0, version: 2.0.0}}
-packages: {core-lib@1.0.0: {}, plugin-readable@2.0.0: {}}
-snapshots: {core-lib@1.0.0: {}, plugin-readable@2.0.0: {}}
-`,
-  );
-  writeRepoJson(repoRoot, "scripts/lib/dependency-ownership.json", {
-    schemaVersion: 1,
-    dependencies: {
-      "core-lib": { owner: "core:test", class: "core-runtime", risk: ["network"] },
-      "plugin-readable": {
-        owner: "plugin:web-readability",
-        class: "plugin-runtime",
-        risk: ["html"],
-      },
-      "removed-lib": { owner: "core:test", class: "core-runtime", risk: ["unused"] },
-    },
-  });
-
-  const report = collectDependencyOwnershipSurfaceReport({ repoRoot });
-
-  expect([report.ownershipGaps, report.staleOwnershipRecords]).toStrictEqual([[], ["removed-lib"]]);
 });

@@ -10,7 +10,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import type { InstallRecordBase } from "../config/zod-schema.installs.js";
 import { readHookInstalls } from "../hooks/installs.js";
-import { readInstalledPackageVersion } from "../infra/package-update-utils.js";
+import {
+  isPinnedRegistrySpec,
+  readInstalledPackageVersion,
+} from "../infra/package-update-utils.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-record-reader.js";
 import {
@@ -20,11 +23,7 @@ import {
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { listInstalledPluginDirs } from "./installed-plugin-dirs.js";
 
-function readChannelCommandSetting(
-  cfg: OpenClawConfig,
-  channelId: string,
-  key: "native" | "nativeSkills",
-): unknown {
+function readChannelCommandSetting(cfg: OpenClawConfig, channelId: string): unknown {
   const channelCfg = cfg.channels?.[channelId as keyof NonNullable<OpenClawConfig["channels"]>];
   if (!channelCfg || typeof channelCfg !== "object" || Array.isArray(channelCfg)) {
     return undefined;
@@ -33,7 +32,7 @@ function readChannelCommandSetting(
   if (!commands || typeof commands !== "object" || Array.isArray(commands)) {
     return undefined;
   }
-  return (commands as Record<string, unknown>)[key];
+  return (commands as Record<string, unknown>).nativeSkills;
 }
 
 async function isChannelPluginConfigured(
@@ -130,19 +129,6 @@ function resolveEnabledExtensionPluginIds(params: {
     enabled.push(normalizedId);
   }
   return enabled;
-}
-
-function isPinnedRegistrySpec(spec: string): boolean {
-  const value = spec.trim();
-  if (!value) {
-    return false;
-  }
-  const at = value.lastIndexOf("@");
-  if (at <= 0 || at >= value.length - 1) {
-    return false;
-  }
-  const version = value.slice(at + 1).trim();
-  return /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version);
 }
 
 async function collectNpmInstallFindings(
@@ -280,7 +266,7 @@ export async function collectPluginsTrustFindings(params: {
             }
             return resolveNativeSkillsEnabled({
               providerId: plugin.id,
-              providerSetting: readChannelCommandSetting(params.cfg, plugin.id, "nativeSkills") as
+              providerSetting: readChannelCommandSetting(params.cfg, plugin.id) as
                 | "auto"
                 | boolean
                 | undefined,

@@ -106,45 +106,6 @@ async function normalizeAndMatch(params: {
   };
 }
 
-async function normalizeSubjectIdentifiersForMatch(params: {
-  input: NormalizedStateInput;
-  subject: NormalizedIngressSubject;
-  context: "dm" | "group";
-  opaquePrefix: string;
-}): Promise<NormalizedIngressEntry[]> {
-  const normalized = await Promise.all(
-    params.subject.identifiers.map(async (identifier, identifierIndex) => {
-      const entries = await params.input.adapter.normalizeEntries({
-        entries: [identifier.value],
-        context: params.context,
-        accountId: params.input.accountId,
-      });
-      return (
-        entries.matchable
-          // Origin subjects are identity material, not configured allowlists.
-          // Do not let a subject value normalize into adapter wildcard semantics.
-          .filter(
-            (entry) =>
-              entry.kind === identifier.kind &&
-              (entry.identityFieldKey === undefined ||
-                entry.identityFieldKey === identifier.opaqueId) &&
-              entry.value !== "*",
-          )
-          .map((entry, entryIndex) => ({
-            opaqueEntryId: `${params.opaquePrefix}-${identifierIndex + 1}:${entryIndex + 1}`,
-            kind: entry.kind,
-            value: entry.value,
-            identityFieldKey: entry.identityFieldKey,
-            authentication: identifier.authentication,
-            dangerous: entry.dangerous,
-            sensitivity: entry.sensitivity,
-          }))
-      );
-    }),
-  );
-  return normalized.flat();
-}
-
 function strongerAuthentication(
   left: IdentifierAuthentication | undefined,
   right: IdentifierAuthentication,
@@ -214,12 +175,37 @@ async function originSubjectAuthentication(
     [origin, input.subject, "origin", true],
     [input.subject, origin, "current", false],
   ] as const) {
-    const entries = await normalizeSubjectIdentifiersForMatch({
-      input,
-      subject,
-      context,
-      opaquePrefix,
-    });
+    const normalized = await Promise.all(
+      subject.identifiers.map(async (identifier, identifierIndex) => {
+        const normalizedIdentifierEntries = await input.adapter.normalizeEntries({
+          entries: [identifier.value],
+          context,
+          accountId: input.accountId,
+        });
+        return (
+          normalizedIdentifierEntries.matchable
+            // Origin subjects are identity material, not configured allowlists.
+            // Do not let a subject value normalize into adapter wildcard semantics.
+            .filter(
+              (entry) =>
+                entry.kind === identifier.kind &&
+                (entry.identityFieldKey === undefined ||
+                  entry.identityFieldKey === identifier.opaqueId) &&
+                entry.value !== "*",
+            )
+            .map((entry, entryIndex) => ({
+              opaqueEntryId: `${opaquePrefix}-${identifierIndex + 1}:${entryIndex + 1}`,
+              kind: entry.kind,
+              value: entry.value,
+              identityFieldKey: entry.identityFieldKey,
+              authentication: identifier.authentication,
+              dangerous: entry.dangerous,
+              sensitivity: entry.sensitivity,
+            }))
+        );
+      }),
+    );
+    const entries = normalized.flat();
     if (entries.length === 0) {
       continue;
     }
@@ -239,22 +225,26 @@ async function originSubjectAuthentication(
   return strongest;
 }
 
-async function resolveAccessGroupEntries(params: {
+async function resolveIngressAllowlist(params: {
   input: NormalizedStateInput;
+  rawEntries: Array<string | number> | undefined;
   context: "dm" | "group" | "route" | "command";
-  referenced: readonly string[];
-}): Promise<{
-  normalizedEntries: ReturnType<typeof redactedEntries>;
-  invalidEntries: RedactedIngressEntryDiagnostic[];
-  disabledEntries: RedactedIngressEntryDiagnostic[];
-  matches: RedactedIngressMatch[];
-  accessGroups: NormalizedIngressAllowlist["accessGroups"];
-}> {
+}): Promise<NormalizedIngressAllowlist> {
+  const entries = normalizeStringEntries(params.rawEntries ?? []);
+  const referenced = allReferencedAccessGroupNames([entries]);
+  const directEntries = entries.filter((entry) => parseAccessGroupAllowFromEntry(entry) == null);
+  const direct = await normalizeAndMatch({
+    adapter: params.input.adapter,
+    subject: params.input.subject,
+    accountId: params.input.accountId,
+    entries: directEntries,
+    context: params.context,
+  });
   const factByName = new Map(
     (params.input.accessGroupMembership ?? []).map((fact) => [fact.groupName, fact]),
   );
   const accessGroups: NormalizedIngressAllowlist["accessGroups"] = {
-    referenced: [...params.referenced],
+    referenced: [...referenced],
     matched: [],
     missing: [],
     unsupported: [],
@@ -265,7 +255,7 @@ async function resolveAccessGroupEntries(params: {
   const disabledEntries: RedactedIngressEntryDiagnostic[] = [];
   const matches: RedactedIngressMatch[] = [];
 
-  for (const groupName of params.referenced) {
+  for (const groupName of referenced) {
     const fact = factByName.get(groupName);
     if (fact?.kind === "matched") {
       accessGroups.matched.push(groupName);
@@ -318,47 +308,17 @@ async function resolveAccessGroupEntries(params: {
       matches.push(resolved.match);
     }
   }
-
-  return {
-    normalizedEntries,
-    invalidEntries,
-    disabledEntries,
-    matches,
-    accessGroups,
-  };
-}
-
-async function resolveIngressAllowlist(params: {
-  input: NormalizedStateInput;
-  rawEntries: Array<string | number> | undefined;
-  context: "dm" | "group" | "route" | "command";
-}): Promise<NormalizedIngressAllowlist> {
-  const entries = normalizeStringEntries(params.rawEntries ?? []);
-  const referenced = allReferencedAccessGroupNames([entries]);
-  const directEntries = entries.filter((entry) => parseAccessGroupAllowFromEntry(entry) == null);
-  const direct = await normalizeAndMatch({
-    adapter: params.input.adapter,
-    subject: params.input.subject,
-    accountId: params.input.accountId,
-    entries: directEntries,
-    context: params.context,
-  });
-  const groups = await resolveAccessGroupEntries({
-    input: params.input,
-    context: params.context,
-    referenced,
-  });
-  const match = mergeMatches([direct.match, ...groups.matches]);
+  const match = mergeMatches([direct.match, ...matches]);
   return {
     rawEntryCount: entries.length,
-    normalizedEntries: [...direct.normalizedEntries, ...groups.normalizedEntries],
-    invalidEntries: [...direct.invalidEntries, ...groups.invalidEntries],
-    disabledEntries: [...direct.disabledEntries, ...groups.disabledEntries],
+    normalizedEntries: [...direct.normalizedEntries, ...normalizedEntries],
+    invalidEntries: [...direct.invalidEntries, ...invalidEntries],
+    disabledEntries: [...direct.disabledEntries, ...disabledEntries],
     matchedEntryIds: match.matchedEntryIds,
     hasConfiguredEntries: entries.length > 0,
-    hasMatchableEntries: direct.normalizedEntries.length > 0 || groups.normalizedEntries.length > 0,
+    hasMatchableEntries: direct.normalizedEntries.length > 0 || normalizedEntries.length > 0,
     hasWildcard: directEntries.includes("*"),
-    accessGroups: groups.accessGroups,
+    accessGroups,
     match,
   };
 }

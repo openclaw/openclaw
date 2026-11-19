@@ -1,3 +1,4 @@
+import { routeLogsToStderr } from "../logging/console.js";
 import type { OpenClawStateOwnershipWorkerReply } from "./openclaw-state-ownership-worker.js";
 import {
   inspectOpenClawStateOwnershipInProcess,
@@ -22,4 +23,6 @@ function inspect(databasePath: string | undefined): OpenClawStateOwnershipWorker
   }
 }
 
+// Stdout carries only the JSON reply; raised console levels must not prefix it.
+routeLogsToStderr();
 process.stdout.write(JSON.stringify(inspect(process.argv[2])));

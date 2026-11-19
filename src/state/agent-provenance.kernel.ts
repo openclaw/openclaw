@@ -57,7 +57,11 @@ export function recordAgentProvenanceInDatabase(
 export function agentProvenanceFromRow(
   row: AgentProvenanceDatabase["agent_provenance"],
 ): AgentProvenance {
-  if (row.created_via !== "operator" && row.created_via !== "agent" && row.created_via !== "claw") {
+  if (
+    row.created_via !== "operator" &&
+    row.created_via !== "agent" &&
+    row.created_via !== "template"
+  ) {
     throw new Error(`Invalid agent provenance created_via: ${row.created_via}`);
   }
   return {

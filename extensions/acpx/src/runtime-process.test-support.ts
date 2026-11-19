@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { createAgentRegistry, createFileSessionStore } from "acpx/runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import type { resolveAcpxPluginConfig } from "./config.js";
 import { AcpxRuntime } from "./runtime.js";
 
 export type RuntimeHandle = Awaited<ReturnType<AcpxRuntime["ensureSession"]>>;
@@ -13,6 +14,31 @@ export type OwnerRuntimeOptions = Partial<
   RuntimeOptions & { agent: string; args: string[]; script: string }
 >;
 type TurnInput = Parameters<AcpxRuntime["startTurn"]>[0];
+
+export async function prepareTestWrappers(
+  root: string,
+  pluginConfig: ReturnType<typeof resolveAcpxPluginConfig>,
+) {
+  // This module also runs in the standalone retention child, outside Vitest.
+  const { vi } = await import("vitest");
+  const { prepareAcpxCodexAuthConfig } = await import("./codex-auth-bridge.js");
+  const codexHome = path.join(root, "empty-codex-home");
+  await fs.mkdir(codexHome);
+  vi.stubEnv("CODEX_HOME", codexHome);
+  return prepareAcpxCodexAuthConfig({ pluginConfig, stateDir: root });
+}
+
+export async function testProcessLeases(state: OpenClawTestState) {
+  const { createAcpxProcessLeaseStore, openAcpxProcessLeaseStateStore } =
+    await import("./process-lease.js");
+  const { createPluginStateKeyedStoreForTests } =
+    await import("openclaw/plugin-sdk/plugin-state-test-runtime");
+  return createAcpxProcessLeaseStore({
+    store: openAcpxProcessLeaseStateStore((options) =>
+      createPluginStateKeyedStoreForTests("acpx", { ...options, env: state.env }),
+    ),
+  });
+}
 
 export function createTestGate() {
   const entered = createDeferred<void>();

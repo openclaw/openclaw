@@ -180,10 +180,7 @@ export class AgentsApiMessageProjection {
         event.part?.type === "output_text")
     ) {
       const state = this.eventItem(event);
-      if (!state || state.terminal) {
-        return;
-      }
-      if (state.recoveredPartial && !event.type.endsWith(".done")) {
+      if (!state) {
         return;
       }
       const index = event.content_index ?? 0;
@@ -198,10 +195,7 @@ export class AgentsApiMessageProjection {
     }
     if (event.type.startsWith("agent.session.turn.reasoning_summary_")) {
       const state = this.eventItem(event);
-      if (!state || state.terminal) {
-        return;
-      }
-      if (state.recoveredPartial && !event.type.endsWith(".done")) {
+      if (!state) {
         return;
       }
       const index = event.summary_index ?? 0;
@@ -618,7 +612,10 @@ export class AgentsApiMessageProjection {
       throw new Error("Agents API output event has no item identity");
     }
     const turnId = event.turn_id ?? this.turnByItem.get(event.item_id);
-    return turnId ? this.items.get(this.identity(turnId, event.item_id)) : undefined;
+    const state = turnId ? this.items.get(this.identity(turnId, event.item_id)) : undefined;
+    return state && !state.terminal && (!state.recoveredPartial || event.type.endsWith(".done"))
+      ? state
+      : undefined;
   }
 
   private identity(turnId: string, itemId: string): string {

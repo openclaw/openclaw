@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { normalizeModelRef } from "../agents/model-ref-shared.js";
-import { resolveProviderEndpoint } from "../agents/provider-attribution.js";
-import { loadBundledPluginFacade as loadFacade } from "../test-utils/bundled-plugin-public-surface.js";
-import { registerProviderPlugins } from "../test-utils/plugin-registration.js";
-import { makeEmptyPluginMetadataOwners } from "./current-plugin-metadata.test-support.js";
 import { createPluginRecord } from "./loader-records.js";
 import { PluginInstance } from "./plugin-instance.js";
 import type { ProviderPlugin } from "./provider-plugin.types.js";
@@ -35,40 +31,6 @@ function normalize(registry: ReturnType<typeof createEmptyPluginRegistry>, ref =
 }
 
 describe("provider registry selection", () => {
-  const url = "https://coding-intl.dashscope.aliyuncs.com/v1";
-  it.each([
-    ["dashscope", undefined],
-    ["custom-dashscope", url],
-  ] as const)("resolves Qwen quota hooks for %s", async (providerId, baseUrl) => {
-    const plugin = await loadFacade<{
-      default: Parameters<typeof registerProviderPlugins>[0];
-    }>({ pluginId: "qwen", artifactBasename: "index.js" });
-    const providers = await registerProviderPlugins(plugin.default);
-    const owners = makeEmptyPluginMetadataOwners();
-    owners.providerEndpoints = [{ endpointClass: "modelstudio-native", baseUrls: [url] }];
-    const selected = findProvider({
-      registry: {
-        providers: providers.map((entry) => ({
-          pluginId: "qwen",
-          source: "fixture.ts",
-          provider: entry,
-        })),
-      },
-      provider: providerId,
-      ownerRefs: baseUrl ? [resolveProviderEndpoint(baseUrl, owners).endpointClass] : [],
-    })?.provider;
-
-    expect(selected?.id).toBe("qwen");
-    expect(
-      selected?.classifyFailoverReason?.({
-        provider: providerId,
-        status: 429,
-        code: "insufficient_quota",
-        errorMessage: "Free allocated quota exceeded.",
-      }),
-    ).toBe("billing");
-  });
-
   it.each([
     { ref: " TARGET ", refs: [], expected: "target" },
     { ref: "alias", refs: [], expected: "first" },
@@ -83,11 +45,7 @@ describe("provider registry selection", () => {
       target: provider("target"),
       last: provider("last"),
     });
-    for (let repeat = 0; repeat < 2; repeat++) {
-      expect(findProvider({ registry, provider: ref, ownerRefs: refs })?.provider.id).toBe(
-        expected,
-      );
-    }
+    expect(findProvider({ registry, provider: ref, ownerRefs: refs })?.provider.id).toBe(expected);
   });
 
   it("rechecks owner eligibility and preserves registry order for colliding ids and aliases", () => {

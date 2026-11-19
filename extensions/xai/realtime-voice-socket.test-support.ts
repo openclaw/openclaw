@@ -1,38 +1,36 @@
-// Shared xAI realtime test doubles: a fake WebSocket and provider auth mocks.
+import { EventEmitter } from "node:events";
 import { vi } from "vitest";
 
-type Listener = (...args: unknown[]) => void;
-
-export class FakeWebSocket {
+export class FakeWebSocket extends EventEmitter {
   static readonly OPEN = 1;
+  static readonly CONNECTING = 0;
   static readonly CLOSED = 3;
   static instances: FakeWebSocket[] = [];
+  static onCreate: ((socket: FakeWebSocket) => void) | undefined;
 
-  readonly listeners = new Map<string, Listener[]>();
-  readyState = 0;
+  readyState = FakeWebSocket.CONNECTING;
   sent: string[] = [];
   closed = false;
   terminated = false;
-  deferClose = false;
-  pendingClose: { code: number; reason: Buffer } | undefined;
   args: unknown[];
 
-  constructor(...args: unknown[]) {
+  readonly url?: string;
+  readonly options?: { headers?: Record<string, string>; maxPayload?: number };
+
+  constructor(...args: [url?: string, options?: FakeWebSocket["options"]]) {
+    super();
     this.args = args;
+    [this.url, this.options] = args;
     FakeWebSocket.instances.push(this);
+    FakeWebSocket.onCreate?.(this);
   }
 
-  on(event: string, listener: Listener): this {
-    const listeners = this.listeners.get(event) ?? [];
-    listeners.push(listener);
-    this.listeners.set(event, listeners);
-    return this;
-  }
-
-  emit(event: string, ...args: unknown[]): void {
-    for (const listener of this.listeners.get(event) ?? []) {
-      listener(...args);
+  override emit(event: string, ...args: unknown[]): boolean {
+    // Preserve the fixture's ignored unobserved errors while sharing listener/once semantics.
+    if (event === "error" && this.listenerCount(event) === 0) {
+      return false;
     }
+    return super.emit(event, ...args);
   }
 
   emitServer(event: unknown): void {
@@ -51,25 +49,12 @@ export class FakeWebSocket {
   close(code?: number, reason?: string): void {
     this.closed = true;
     this.readyState = FakeWebSocket.CLOSED;
-    const closeEvent = { code: code ?? 1000, reason: Buffer.from(reason ?? "") };
-    if (this.deferClose) {
-      this.pendingClose = closeEvent;
-      return;
-    }
-    this.emit("close", closeEvent.code, closeEvent.reason);
+    this.emit("close", code ?? 1000, Buffer.from(reason ?? ""));
   }
 
   terminate(): void {
     this.terminated = true;
     this.close(1006, "terminated");
-  }
-
-  flushClose(): void {
-    const closeEvent = this.pendingClose;
-    this.pendingClose = undefined;
-    if (closeEvent) {
-      this.emit("close", closeEvent.code, closeEvent.reason);
-    }
   }
 }
 

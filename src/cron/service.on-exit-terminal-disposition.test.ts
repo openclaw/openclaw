@@ -1,5 +1,4 @@
 import { expect, it } from "vitest";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createTelegramDelivery,
   setupFailureAlertSuite,
@@ -22,13 +21,13 @@ it.each<
 >([
   ["permanent failure with route", permanentError, routed, 0, 1],
   ["transient failure with route", "rate limit exceeded", routed, 0, 1],
-  ["same incident during cooldown", permanentError, routed, 0, 1, 2],
+  ["same incident during cooldown", permanentError, routed, 0, 2, 2],
   ["no route", permanentError, { mode: "none" }, 1, 0],
   ["best-effort route", permanentError, { ...routed, bestEffort: true }, 1, 0],
 ])(
   "records and notifies a watcher terminal %s",
   async (_name, error, delivery, notices, alerts, priorFailures = 0) => {
-    await withFailureAlertCron({ scheduler: createTestGatewayScheduler() }, async (f) => {
+    await withFailureAlertCron({}, async (f) => {
       f.runIsolatedAgentJob.mockResolvedValue({ status: "error", error });
       const job = await f.addJob("completed watcher", { schedule, delivery });
       for (let attempt = 0; attempt < priorFailures; attempt += 1) {
@@ -66,7 +65,7 @@ it.each<
 it.each([true, false])(
   "preserves an operator force-run of an on-exit job with enabled=%s",
   async (enabled) => {
-    await withFailureAlertCron({ scheduler: createTestGatewayScheduler() }, async (f) => {
+    await withFailureAlertCron({}, async (f) => {
       f.runIsolatedAgentJob.mockResolvedValue({
         status: "error",
         error: "invalid job configuration",
@@ -81,7 +80,11 @@ it.each([true, false])(
       expect(stored?.enabled).toBe(enabled);
       expect(stored?.state.autoDisabled).toBeUndefined();
       expect(f.enqueueSessionEvent).not.toHaveBeenCalled();
-      expect(f.sendCronFailureAlert).not.toHaveBeenCalled();
+      // An ordinary first-failure alert, not a terminal auto-disable notice.
+      expect(f.sendCronFailureAlert).toHaveBeenCalledOnce();
+      expect(f.sendCronFailureAlert.mock.calls[0]?.[0]?.payload.text).not.toContain(
+        "auto-disabled",
+      );
       expect(f.runCronFailureRepair).not.toHaveBeenCalled();
     });
   },

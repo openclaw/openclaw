@@ -31,12 +31,18 @@ async function main(): Promise<void> {
       return await buildBrowserNativeHostPairing(boundProfile ?? profile);
     },
     ensureRelay: async (port) => {
+      const { createPluginRuntimeProcessEntrypoint, resolveRuntimeWorkerUrl } =
+        await import("openclaw/plugin-sdk/process-runtime");
       const { ensureBrowserNativeRelay } =
         await import("./src/browser/extension-native-host.runtime.js");
       // Resolve the sibling entry here, not relative to a shared runtime chunk.
       return await ensureBrowserNativeRelay(
         port,
-        fileURLToPath(new URL("./relay-daemon-entry.js", import.meta.url)),
+        fileURLToPath(
+          resolveRuntimeWorkerUrl(
+            createPluginRuntimeProcessEntrypoint("browserRelayDaemon", import.meta.url),
+          ),
+        ),
       );
     },
   });

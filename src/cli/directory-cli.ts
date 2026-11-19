@@ -1,4 +1,3 @@
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
@@ -25,7 +24,9 @@ import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record
 import { defaultRuntime } from "../runtime.js";
 import { resolveCommandConfigWithSecrets } from "./command-config-resolution.js";
 import { getScopedChannelsCommandSecretTargets } from "./command-secret-targets.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
+import { parseOptionalPositiveInteger } from "./parse-positive-integer.js";
 
 const DIRECTORY_LIST_LABELS = {
   listPeers: ["Peers", "No peers found", "directory peers"],
@@ -136,7 +137,7 @@ export function registerDirectoryCli(program: Command) {
     const selectedChannelId = selection.channel;
     const plugin = selection.plugin;
     if (!plugin) {
-      throw new Error(`Unsupported channel: ${String(selectedChannelId)}`);
+      throwExpectedCliError(`Unsupported channel: ${String(selectedChannelId)}`);
     }
     const channelId = selectedChannelId ?? plugin.id;
     const accountId =
@@ -170,16 +171,10 @@ export function registerDirectoryCli(program: Command) {
     action: keyof typeof DIRECTORY_LIST_LABELS,
   ) => {
     const [title, emptyMessage, unsupported] = DIRECTORY_LIST_LABELS[action];
-    const limit =
-      opts.limit === undefined || opts.limit === null
-        ? null
-        : parseStrictPositiveInteger(opts.limit);
-    if (limit === undefined) {
-      throw new Error("--limit must be a positive integer.");
-    }
+    const limit = parseOptionalPositiveInteger(opts.limit ?? undefined, "--limit", ".") ?? null;
     const groupId = normalizeStringifiedOptionalString(opts.groupId) ?? "";
     if (action === "listGroupMembers" && !groupId) {
-      throw new Error("Missing --group-id");
+      throwExpectedCliError("Missing --group-id");
     }
     const resolved = await resolve(opts);
     if (!resolved) {
@@ -195,7 +190,7 @@ export function registerDirectoryCli(program: Command) {
             : (plugin.directory?.listGroupsLive ?? plugin.directory?.listGroups)
           )?.bind(undefined, { ...lookupOptions, query: opts.query ?? null });
     if (!lookup) {
-      throw new Error(`Channel ${channelId} does not support ${unsupported}`);
+      throwExpectedCliError(`Channel ${channelId} does not support ${unsupported}`);
     }
     const result = await lookup();
     if (opts.json) {
@@ -241,7 +236,7 @@ export function registerDirectoryCli(program: Command) {
         const { cfg, channelId, accountId, plugin } = resolved;
         const fn = plugin.directory?.self;
         if (!fn) {
-          throw new Error(`Channel ${channelId} does not support directory self`);
+          throwExpectedCliError(`Channel ${channelId} does not support directory self`);
         }
         const result = await fn({ cfg, accountId, runtime: defaultRuntime });
         if (!result) {

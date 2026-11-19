@@ -9,7 +9,9 @@ import { afterEach, beforeEach, vi } from "vitest";
 import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
 import { resolveAcpxPluginConfig } from "./config.js";
 
-export function useAuthBridgeFixture() {
+type RestorableMock = { mockRestore(): void };
+
+export function useAuthBridgeFixture(mockCodexPackageBin: (codexBin: string) => RestorableMock) {
   let workspace: TempWorkspace;
   const previousEnv = {
     CODEX_HOME: process.env.CODEX_HOME,
@@ -58,12 +60,21 @@ export function useAuthBridgeFixture() {
         wrapperPath: path.join(baseDir, "codex-acp-wrapper.mjs"),
       },
       generatedClaude: { wrapperPath: path.join(baseDir, "claude-agent-acp-wrapper.mjs") },
-      prepare: (options: Partial<Parameters<typeof prepareAcpxCodexAuthConfig>[0]> = {}) =>
-        prepareAcpxCodexAuthConfig({
-          pluginConfig: options.pluginConfig ?? config(),
-          stateDir,
-          ...options,
-        }),
+      prepare: async (
+        options: Partial<Parameters<typeof prepareAcpxCodexAuthConfig>[0]> = {},
+        codexBin?: string,
+      ) => {
+        const packageBinMock = codexBin ? mockCodexPackageBin(codexBin) : undefined;
+        try {
+          return await prepareAcpxCodexAuthConfig({
+            pluginConfig: options.pluginConfig ?? config(),
+            stateDir,
+            ...options,
+          });
+        } finally {
+          packageBinMock?.mockRestore();
+        }
+      },
     };
   };
 }

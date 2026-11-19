@@ -21,7 +21,7 @@ import type {
   PreparedGatewayModelCatalogReadResult,
 } from "./server-model-catalog.types.js";
 
-export type GatewayModelChoice = import("../agents/model-catalog.js").ModelCatalogEntry;
+export type GatewayModelChoice = import("../agents/model-catalog.types.js").ModelCatalogEntry;
 export type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 
 type GatewayModelCatalogConfig = ReturnType<typeof getRuntimeConfig>;
@@ -47,6 +47,9 @@ type LoadGatewayModelCatalogParams = {
 type LoadPreparedGatewayModelCatalogParams = LoadGatewayModelCatalogParams & {
   authScope?: PreparedModelRuntimeAuthScope;
   refreshAuth?: boolean;
+};
+type ReadPreparedGatewayModelCatalogParams = LoadGatewayModelCatalogParams & {
+  includeSessionRowPolicy?: boolean;
 };
 
 async function loadGatewayModelCatalogOwnerSnapshot(
@@ -152,7 +155,7 @@ export async function loadGatewayModelCatalog(
 function readPreparedGatewayModelCatalogSync(
   getPreparedModelCatalogOwnerSnapshot: typeof import("../agents/prepared-model-catalog.js").getPreparedModelCatalogOwnerSnapshot,
   config: GatewayModelCatalogConfig,
-  params?: LoadGatewayModelCatalogParams,
+  params?: ReadPreparedGatewayModelCatalogParams,
 ): PreparedGatewayModelCatalog | undefined {
   const owner = getPreparedModelCatalogOwnerSnapshot({
     ...(params?.agentId ? { agentId: params.agentId } : {}),
@@ -171,12 +174,13 @@ function readPreparedGatewayModelCatalogSync(
     routeVariants: catalog.routeVariants,
     pluginRegistry: owner.pluginRegistry,
     metadataSnapshot: owner.metadataSnapshot,
+    includeSessionRowPolicy: params?.includeSessionRowPolicy,
   });
 }
 
 /** Reads the newest completed published catalog without starting provider discovery. */
 export async function readPreparedGatewayModelCatalog(
-  params?: LoadGatewayModelCatalogParams,
+  params?: ReadPreparedGatewayModelCatalogParams,
 ): Promise<PreparedGatewayModelCatalog | undefined> {
   const { getPreparedModelCatalogOwnerSnapshot } =
     await import("../agents/prepared-model-catalog.js");
@@ -189,7 +193,7 @@ export async function readPreparedGatewayModelCatalog(
 
 export async function readPreparedGatewayModelCatalogBatch(
   agentIds: readonly string[],
-  params?: Pick<LoadGatewayModelCatalogParams, "getConfig">,
+  params?: Pick<ReadPreparedGatewayModelCatalogParams, "getConfig" | "includeSessionRowPolicy">,
 ): Promise<PreparedGatewayModelCatalogReadResult[]> {
   if (agentIds.length === 0) {
     return [];
@@ -209,6 +213,7 @@ export async function readPreparedGatewayModelCatalogBatch(
               config,
               {
                 agentId,
+                includeSessionRowPolicy: params?.includeSessionRowPolicy,
               },
             ),
           };

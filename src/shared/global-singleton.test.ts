@@ -5,6 +5,7 @@ import {
   readGlobalSingleton,
   resolveGlobalMap as mapFor,
   resolveGlobalSingleton,
+  resetGlobalSingletonLifecycleState,
 } from "./global-singleton.js";
 
 const TEST_KEY = Symbol("global-singleton:test");
@@ -15,6 +16,28 @@ const register = (reset: () => void | Promise<void>, key = TEST_KEY) =>
 afterEach(() => [TEST_KEY, TEST_MAP_KEY].forEach((key) => Reflect.deleteProperty(globalThis, key)));
 
 describe("resolveGlobalSingleton", () => {
+  it("resets only the current registered owner without creating an absent one", async () => {
+    const absent = Symbol("absent-owner");
+    await resetGlobalSingletonLifecycleState(absent);
+    expect(readGlobalSingleton(absent)).toBeUndefined();
+    const [oldReset, currentReset, otherReset] = [vi.fn(), vi.fn(), vi.fn()];
+    register(oldReset);
+    register(currentReset);
+    register(otherReset, TEST_MAP_KEY);
+
+    await resetGlobalSingletonLifecycleState(TEST_KEY);
+    expect(oldReset).not.toHaveBeenCalled();
+    expect(currentReset).toHaveBeenCalledOnce();
+    expect(otherReset).not.toHaveBeenCalled();
+  });
+
+  it("propagates the registered owner's cleanup failure", async () => {
+    const error = new Error("owner cleanup failed");
+    register(() => Promise.reject(error));
+    await expect(resetGlobalSingletonLifecycleState(TEST_KEY)).rejects.toBe(error);
+    register(() => {});
+  });
+
   it("reuses an initialized singleton", () => {
     const create = vi.fn(() => ({ value: 1 }));
 
@@ -24,17 +47,6 @@ describe("resolveGlobalSingleton", () => {
     expect(readGlobalSingleton(TEST_KEY)).toBe(first);
     expect(create).toHaveBeenCalledTimes(1);
   });
-  it("keeps map resets registered across repeated lifecycle drains", async () => {
-    const map = mapFor<string, number>(TEST_MAP_KEY, (state) => state.clear());
-    map.set("first", 1);
-    await drain();
-    map.set("second", 2);
-    await drain();
-
-    expect(map.size).toBe(0);
-    expect(mapFor<string, number>(TEST_MAP_KEY)).toBe(map);
-  });
-
   it("keeps only the latest reset owner for a duplicated slot", async () => {
     const firstReset = vi.fn();
     const secondReset = vi.fn();

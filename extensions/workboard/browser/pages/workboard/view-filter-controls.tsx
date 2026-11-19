@@ -4,11 +4,12 @@ import { createEffect, createMemo, For, Show } from "solid-js";
 import { SelectPicker } from "../../components/host-components.tsx";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
+import { createElementRefs } from "../../lib/element-refs.ts";
 import type {
   WorkboardCard,
   WorkboardStatus,
   WorkboardUiState,
-} from "../../lib/workboard/index.ts";
+} from "../../lib/workboard/types.ts";
 import { formatStatusLabel } from "./view-helpers.tsx";
 import { workboardPopoverRef } from "./view-popover.ts";
 import type { WorkboardSelectOption } from "./workboard-select.ts";
@@ -35,17 +36,26 @@ export function multiFilterLabel<Value extends string>(
     value: labels.map((option) => option.label).join(", "),
   });
 }
-export function ActiveFilters(props: { filters: ActiveFilter[]; requestUpdate?: () => void }) {
+export function ActiveFilters(props: {
+  filters: ActiveFilter[];
+  onChange?: () => void;
+  filterTrigger: () => HTMLButtonElement | undefined;
+}) {
+  const buttons = createElementRefs<HTMLButtonElement>();
+  const visibleButtons = (filters: ActiveFilter[]) =>
+    filters.flatMap((filter) => {
+      const button = buttons.get(filter.id);
+      return button?.getClientRects().length ? [button] : [];
+    });
   let pendingFocus:
     | {
         button: HTMLButtonElement;
-        toolbar: Element | null;
         index: number;
       }
     | undefined;
   createEffect(
-    () => props.filters,
-    () => {
+    () => ({ filters: props.filters, trigger: props.filterTrigger() }),
+    ({ filters, trigger }) => {
       const pending = pendingFocus;
       pendingFocus = undefined;
       if (!pending) {
@@ -55,15 +65,8 @@ export function ActiveFilters(props: { filters: ActiveFilter[]; requestUpdate?: 
       if (doc.activeElement !== pending.button && doc.activeElement !== doc.body) {
         return;
       }
-      const remaining = [
-        ...(pending.toolbar?.querySelectorAll<HTMLButtonElement>(
-          ".workboard-filter-chip__remove",
-        ) ?? []),
-      ].filter((candidate) => candidate.getClientRects().length > 0);
-      (
-        remaining[Math.min(pending.index, remaining.length - 1)] ??
-        pending.toolbar?.querySelector<HTMLButtonElement>(".workboard-filter-trigger")
-      )?.focus();
+      const remaining = visibleButtons(filters);
+      (remaining[Math.min(pending.index, remaining.length - 1)] ?? trigger)?.focus();
     },
   );
   return (
@@ -90,28 +93,23 @@ export function ActiveFilters(props: { filters: ActiveFilter[]; requestUpdate?: 
               <span class="workboard-filter-chip__label">{filter().label}</span>
               <button
                 class="workboard-filter-chip__remove"
+                ref={buttons.ref(() => filter().id)}
                 type="button"
                 aria-label={t("workboard.removeFilter", {
                   filter: filter().label,
                 })}
                 onClick={(event) => {
                   const button = event.currentTarget;
-                  const toolbar = button.closest(".workboard-toolbar");
-                  const buttons = [
-                    ...(toolbar?.querySelectorAll<HTMLElement>(".workboard-filter-chip__remove") ??
-                      []),
-                  ].filter((candidate) => candidate.getClientRects().length > 0);
-                  const index = buttons.indexOf(button);
+                  const index = visibleButtons(props.filters).indexOf(button);
                   pendingFocus =
                     event.detail === 0
                       ? {
                           button,
-                          toolbar,
                           index,
                         }
                       : undefined;
                   filter().clear();
-                  props.requestUpdate?.();
+                  props.onChange?.();
                 }}
               >
                 {icons.x}
@@ -134,7 +132,7 @@ function toggleStatus(state: WorkboardUiState, status: WorkboardStatus | undefin
 }
 type StatusFilterProps = {
   state: WorkboardUiState;
-  requestUpdate?: () => void;
+  onChange?: () => void;
   revision?: number;
 };
 export function StatusTabs(props: StatusFilterProps) {
@@ -159,7 +157,7 @@ export function StatusTabs(props: StatusFilterProps) {
             }
             onClick={() => {
               toggleStatus(state(), status());
-              props.requestUpdate?.();
+              props.onChange?.();
             }}
           >
             {status() === undefined ? t("workboard.allStatuses") : formatStatusLabel(status()!)}
@@ -171,7 +169,7 @@ export function StatusTabs(props: StatusFilterProps) {
 }
 export function MobileStatusPicker(
   props: StatusFilterProps & {
-    cards: readonly WorkboardCard[];
+    cards: readonly WorkboardCard[] | null;
   },
 ) {
   const state = () => {
@@ -180,7 +178,7 @@ export function MobileStatusPicker(
   };
   const counts = createMemo(() => {
     const result = new Map<WorkboardStatus, number>();
-    for (const card of props.cards) {
+    for (const card of props.cards ?? []) {
       result.set(card.status, (result.get(card.status) ?? 0) + 1);
     }
     return result;
@@ -234,7 +232,7 @@ export function MobileStatusPicker(
               }
               onClick={() => {
                 toggleStatus(state(), status());
-                props.requestUpdate?.();
+                props.onChange?.();
               }}
             >
               <span class="workboard-status-option__icon" aria-hidden="true">
@@ -247,9 +245,13 @@ export function MobileStatusPicker(
               <span>
                 {status() === undefined ? t("workboard.allWork") : formatStatusLabel(status()!)}
               </span>
-              <span class="workboard-mobile-status__count">
-                {status() === undefined ? props.cards.length : (counts().get(status()!) ?? 0)}
-              </span>
+              <Show when={props.cards}>
+                {(cards) => (
+                  <span class="workboard-mobile-status__count">
+                    {status() === undefined ? cards().length : (counts().get(status()!) ?? 0)}
+                  </span>
+                )}
+              </Show>
               <span class="workboard-status-option__check" aria-hidden="true">
                 {icons.check}
               </span>
@@ -286,7 +288,7 @@ export function FilterSelect<Value extends string>(props: {
 function DisplayChoice<Field extends "viewMode" | "layout" | "emptyColumnMode">(props: {
   state: WorkboardUiState;
   revision?: number;
-  requestUpdate?: () => void;
+  onChange?: () => void;
   field: Field;
   labelKey: string;
   options: readonly (readonly [WorkboardUiState[Field], string, keyof typeof icons, string?])[];
@@ -312,7 +314,7 @@ function DisplayChoice<Field extends "viewMode" | "layout" | "emptyColumnMode">(
                 if (props.field === "emptyColumnMode") {
                   state().expandedEmptyStatuses.clear();
                 }
-                props.requestUpdate?.();
+                props.onChange?.();
               }}
             >
               <span aria-hidden="true">{icons[option()[2]]}</span>
@@ -330,7 +332,7 @@ export function DisplayChoices(props: StatusFilterProps) {
       <DisplayChoice
         state={props.state}
         revision={props.revision}
-        requestUpdate={props.requestUpdate}
+        onChange={props.onChange}
         field="viewMode"
         labelKey="filterLayout"
         options={[
@@ -341,7 +343,7 @@ export function DisplayChoices(props: StatusFilterProps) {
       <DisplayChoice
         state={props.state}
         revision={props.revision}
-        requestUpdate={props.requestUpdate}
+        onChange={props.onChange}
         field="layout"
         labelKey="filterDensity"
         options={[
@@ -352,7 +354,7 @@ export function DisplayChoices(props: StatusFilterProps) {
       <DisplayChoice
         state={props.state}
         revision={props.revision}
-        requestUpdate={props.requestUpdate}
+        onChange={props.onChange}
         field="emptyColumnMode"
         labelKey="emptyColumns"
         options={[
@@ -370,7 +372,7 @@ export function MultiFilter<Value extends string>(props: {
   options: readonly {
     value: Value;
     label: string;
-    count: number;
+    count?: number;
     title?: string;
     icon?: () => JSX.Element;
   }[];
@@ -419,19 +421,21 @@ export function MultiFilter<Value extends string>(props: {
                 {option().icon ? <i aria-hidden="true">{option().icon?.()}</i> : null}
                 {option().label}
               </span>
-              <span
-                class="workboard-filter-option__count"
-                aria-label={t(
-                  option().count === 1
-                    ? "workboard.viewPresetCountOne"
-                    : "workboard.viewPresetCount",
-                  {
-                    count: String(option().count),
-                  },
-                )}
-              >
-                {option().count}
-              </span>
+              <Show when={option().count !== undefined}>
+                <span
+                  class="workboard-filter-option__count"
+                  aria-label={t(
+                    option().count === 1
+                      ? "workboard.viewPresetCountOne"
+                      : "workboard.viewPresetCount",
+                    {
+                      count: String(option().count),
+                    },
+                  )}
+                >
+                  {option().count}
+                </span>
+              </Show>
             </label>
           )}
         </For>

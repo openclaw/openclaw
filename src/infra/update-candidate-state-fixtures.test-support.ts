@@ -33,6 +33,7 @@ export function stateClock() {
   const now = Date.now.bind(Date);
   let elapsed = 0;
   vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+  vi.spyOn(performance, "now").mockImplementation(() => now() + elapsed);
   const expire = captureUpdateCandidateDeadline();
   return (milliseconds: number, expires = false) => {
     elapsed = milliseconds;

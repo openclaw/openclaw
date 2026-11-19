@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { text } from "node:stream/consumers";
@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatPendingInputsPage } from "../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { GatewayChatClient } from "../src/tui/gateway-chat.js";
+import { readRestartTrace, writeRestartPlugin } from "./gateway-restart.test-support.js";
 import {
   createOpenAiResponsesModelConfig,
   startOpenAiResponsesModelServer,
@@ -95,17 +96,14 @@ async function startMockModelServer() {
 }
 
 async function writeTurnTracerPlugin(pluginDir: string, tracePath: string): Promise<void> {
-  await writeFile(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({
+  await writeRestartPlugin(
+    pluginDir,
+    {
       id: "queued-rotation-tracer",
       name: "Queued Rotation Tracer",
       description: "Records agent-turn preparation for the queued session rotation E2E test.",
       configSchema: { type: "object", additionalProperties: false, properties: {} },
-    }),
-  );
-  await writeFile(
-    path.join(pluginDir, "index.mjs"),
+    },
     `import { appendFileSync } from "node:fs";
 export default {
   id: "queued-rotation-tracer", name: "Queued Rotation Tracer",
@@ -120,16 +118,7 @@ export default {
   );
 }
 
-async function readTraceCount(tracePath: string): Promise<number> {
-  try {
-    return (await readFile(tracePath, "utf8")).split("\n").filter(Boolean).length;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return 0;
-    }
-    throw error;
-  }
-}
+const readTraceCount = async (tracePath: string) => (await readRestartTrace(tracePath)).length;
 
 async function startScenario(name: string, trace = false) {
   const fixtureDir = await mkdtemp(path.join(tmpdir(), `openclaw-${name}-`));
@@ -140,7 +129,6 @@ async function startScenario(name: string, trace = false) {
   const tracePath = path.join(fixtureDir, "turns.ndjson");
   if (trace) {
     const pluginDir = path.join(fixtureDir, "plugin");
-    await mkdir(pluginDir, { recursive: true });
     await writeTurnTracerPlugin(pluginDir, tracePath);
     config.plugins = {
       enabled: true,

@@ -10,6 +10,47 @@ import type { QaTransportAdapter } from "./qa-transport.js";
 
 export type CrablineTransport = Awaited<ReturnType<typeof createQaCrablineTransportAdapter>>;
 
+export function expectDelivery(
+  transport: CrablineTransport,
+  channel: string,
+  target: string,
+  to: unknown,
+) {
+  expect(transport.buildAgentDelivery({ target })).toEqual({
+    channel,
+    replyChannel: channel,
+    replyTo: to,
+    to,
+  });
+}
+
+export async function expectInbound(
+  transport: CrablineTransport,
+  conversation: Parameters<CrablineTransport["sendInbound"]>[0]["conversation"],
+  senderId: string,
+  text: string,
+  extra: Record<string, unknown> = {},
+) {
+  const input = { conversation, senderId, senderName: "Alice", text };
+  await expect(transport.state.addInboundMessage(input)).resolves.toMatchObject({
+    conversation,
+    direction: "inbound",
+    senderId,
+    text,
+    ...extra,
+  });
+}
+
+export async function expectOutbound(
+  transport: CrablineTransport,
+  conversation: Parameters<CrablineTransport["waitForOutbound"]>[0]["conversation"],
+  text: string,
+) {
+  await expect(
+    transport.waitForOutbound({ conversation, textIncludes: text, timeoutMs: 1_000 }),
+  ).resolves.toMatchObject({ conversation, text });
+}
+
 export function createSelection(
   channel: OpenClawCrablineChannelDriverSelection["channel"] = "telegram",
 ) {

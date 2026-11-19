@@ -11,15 +11,17 @@ export function createProvisionOwnerFixture(
   directory: string,
   mode: "native" | "managed" = "native",
   files = 128,
+  /** Wrapper sources to run; extracted trusted-anchor copies omit the rest of the checkout. */
+  source = process.cwd(),
 ) {
   const nodeExecPath = requireNodeTool("node");
   const root = realpathSync(directory);
-  const source = process.cwd();
   const canonical = join(root, "repo");
   const home = join(root, "home");
   const bin = join(root, "bin");
+  // These private fixture ancestors must not inherit a group-writable host umask.
   for (const dir of [canonical, home, bin]) {
-    mkdirSync(dir);
+    mkdirSync(dir, { mode: 0o700 });
   }
   const isolation = createProvisionIsolationFixture(root, canonical);
   const env: NodeJS.ProcessEnv = {

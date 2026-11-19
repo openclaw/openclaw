@@ -14,22 +14,16 @@ import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-sup
 const buildIdentityUrl = resolveRuntimeWorkerUrl(toolingProbeRuntimeEntrypoints.buildIdentity);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
-const resolveIdentity = (options: Partial<Parameters<typeof resolveBuildIdentityEnvironment>[0]>) =>
-  resolveBuildIdentityEnvironment({
-    commitLabel: "runtime pack commit",
-    readGitCommit: () => null,
-    now: () => new Date("2026-07-11T12:34:56.000Z"),
-    ...options,
-  });
+const sha = (digit: string) => digit.repeat(40);
 
-function readGitCommitInChild(cwd: string, env: NodeJS.ProcessEnv = process.env) {
+function readGitCommitInChild(cwd: string, env: NodeJS.ProcessEnv = process.env, gitCwd?: string) {
   const result = spawnSync(
     testNodeExecPath,
     [
       ...resolveRuntimeWorkerArgv(buildIdentityUrl, testNodeExecPath).slice(0, -1),
       "--input-type=module",
       "--eval",
-      `const { readCurrentGitCommit } = await import(${JSON.stringify(buildIdentityUrl.href)}); process.stdout.write(JSON.stringify(readCurrentGitCommit()));`,
+      `const { readCurrentGitCommit } = await import(${JSON.stringify(buildIdentityUrl.href)}); process.stdout.write(JSON.stringify(readCurrentGitCommit(${JSON.stringify(gitCwd)})));`,
     ],
     {
       cwd,
@@ -44,7 +38,7 @@ function readGitCommitInChild(cwd: string, env: NodeJS.ProcessEnv = process.env)
   return JSON.parse(result.stdout) as string | null;
 }
 
-it("reads HEAD from the inherited cwd and returns null when Git cannot resolve it", () => {
+it("reads HEAD from the selected cwd and returns null when Git cannot resolve it", () => {
   const root = tempDirs.make("openclaw-build-identity-");
   const repo = join(root, "repo");
   const outsideRepo = join(root, "outside");
@@ -59,6 +53,8 @@ it("reads HEAD from the inherited cwd and returns null when Git cannot resolve i
 
   expect(readGitCommitInChild(repo)).toBe(expected);
   expect(readGitCommitInChild(outsideRepo)).toBeNull();
+  expect(readGitCommitInChild(outsideRepo, process.env, repo)).toBe(expected);
+  expect(readGitCommitInChild(repo, process.env, outsideRepo)).toBeNull();
 
   const envWithoutGit = {
     ...Object.fromEntries(
@@ -70,37 +66,34 @@ it("reads HEAD from the inherited cwd and returns null when Git cannot resolve i
 });
 
 it.each([
-  [{ GIT_COMMIT: "A".repeat(40), GIT_SHA: "b".repeat(40) }, "a".repeat(40), false],
-  [{ GIT_SHA: "B".repeat(40), GITHUB_SHA: "c".repeat(40) }, "b".repeat(40), false],
-  [{ GITHUB_SHA: "c".repeat(40) }, "d".repeat(40), true],
-])("preserves build source precedence %#", (env, expected, readsCheckout) => {
-  const readGitCommit = vi.fn(() => "D".repeat(40));
-  const resolved = resolveIdentity({
-    commitLabel: "build commit",
-    env,
-    readGitCommit,
-  });
-
-  expect(resolved.GIT_COMMIT).toBe(expected);
-  expect(readGitCommit).toHaveBeenCalledTimes(readsCheckout ? 1 : 0);
-});
-
-it("uses workflow identity only when the checkout cannot be read", () => {
-  expect(
-    resolveIdentity({
-      env: {
-        GITHUB_SHA: "e".repeat(40),
-        OPENCLAW_BUILD_TIMESTAMP: " 2026-07-10T01:02:03.000Z ",
-      },
-    }),
-  ).toMatchObject({
-    GIT_COMMIT: "e".repeat(40),
-    OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T01:02:03.000Z",
-  });
-});
-
-it("uses the owner label in malformed commit diagnostics", () => {
-  expect(() => resolveIdentity({ env: { GIT_COMMIT: "deadbeef" } })).toThrow(
-    "runtime pack commit must be a full 40-character hexadecimal SHA",
-  );
+  [{ GIT_COMMIT: sha("A"), GIT_SHA: sha("b") }, sha("D"), { GIT_COMMIT: sha("a") }, 0],
+  [{ GIT_SHA: sha("B"), GITHUB_SHA: sha("c") }, sha("D"), { GIT_COMMIT: sha("b") }, 0],
+  [{ GITHUB_SHA: sha("c") }, sha("D"), { GIT_COMMIT: sha("d") }, 1],
+  [
+    { GITHUB_SHA: "e".repeat(40), OPENCLAW_BUILD_TIMESTAMP: " 2026-07-10T01:02:03.000Z " },
+    null,
+    { GIT_COMMIT: "e".repeat(40), OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T01:02:03.000Z" },
+    1,
+  ],
+  [
+    { GIT_COMMIT: "deadbeef" },
+    null,
+    new Error("runtime pack commit must be a full 40-character hexadecimal SHA"),
+    0,
+  ],
+] as const)("resolves build identity %#", (env, checkout, expected, reads) => {
+  const readGitCommit = vi.fn(() => checkout);
+  const resolve = () =>
+    resolveBuildIdentityEnvironment({
+      env,
+      readGitCommit,
+      commitLabel: "runtime pack commit",
+      now: () => new Date("2026-07-11T12:34:56.000Z"),
+    });
+  if (expected instanceof Error) {
+    expect(resolve).toThrow(expected);
+  } else {
+    expect(resolve()).toMatchObject(expected);
+  }
+  expect(readGitCommit).toHaveBeenCalledTimes(reads);
 });

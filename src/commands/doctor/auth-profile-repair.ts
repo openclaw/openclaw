@@ -41,10 +41,32 @@ export async function repairAuthProfileMigration(params: {
           imported.migratedProfileIds.has(to)),
     ),
   );
-  const aliases =
-    params.prompter.shouldRepair || authorized.size > 0
-      ? await maybeRepairLegacyAuthProfileStores({ cfg: config, env, profileIdMap: authorized })
-      : { profileIdMap: authorized, changes: [], warnings: [] };
+  const aliasesChecked = params.prompter.shouldRepair || authorized.size > 0;
+  const aliases = aliasesChecked
+    ? await maybeRepairLegacyAuthProfileStores({ cfg: config, env, profileIdMap: authorized })
+    : { profileIdMap: authorized, changes: [], warnings: [], findings: [] };
+  const remainingTargets = new Set(aliases.findings.map((finding) => finding.target));
+  const retainedAliasFindings = aliasesChecked
+    ? imported.aliasFindings.filter(
+        (finding) => finding.target !== undefined && remainingTargets.has(finding.target),
+      )
+    : imported.aliasFindings;
+  const preciseTargets = new Set(retainedAliasFindings.map((finding) => finding.target));
+  const aliasFindings = [
+    ...retainedAliasFindings,
+    ...aliases.findings.filter(
+      (finding) =>
+        finding.checkId !== "core/doctor/auth-migration/identity-unresolved" ||
+        !preciseTargets.has(finding.target),
+    ),
+  ];
+  const findings = [
+    ...new Map(
+      [...imported.findings, ...aliasFindings].map(
+        (finding) => [`${finding.checkId}\0${finding.target ?? ""}`, finding] as const,
+      ),
+    ).values(),
+  ];
   const repaired = maybeRepairOpenAICodexAuthConfig(config, { profileIdMap: aliases.profileIdMap });
   const configChanged = imported.configChanged || repaired.changes.length > 0;
   if (configChanged) {
@@ -58,6 +80,7 @@ export async function repairAuthProfileMigration(params: {
     ],
     storeChanges: [...imported.changes, ...aliases.changes],
     warnings: [...imported.warnings, ...aliases.warnings, ...repaired.warnings],
+    findings,
     profileIdMap: aliases.profileIdMap,
   };
 }

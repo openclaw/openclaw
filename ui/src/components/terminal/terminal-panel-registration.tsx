@@ -18,6 +18,7 @@ type Host = SolidBridgeElement<TerminalInputs, TerminalPanelMethods>;
 
 // Native calls can arrive before the bridge's first microtask mount.
 const owners = new WeakMap<HTMLElement, TerminalPanelOwner>();
+const connections = new WeakMap<HTMLElement, () => void>();
 function ownerFor(host: Host) {
   const retained = owners.get(host);
   if (retained) {
@@ -56,6 +57,7 @@ export const TerminalPanelHost = defineSolidBridge<TerminalInputs, TerminalPanel
     );
   },
   {
+    connected: (host) => connections.get(host)?.(),
     properties: {
       mobile: { default: false, type: Boolean },
       client: { default: null, attribute: false },
@@ -83,7 +85,7 @@ export const TerminalPanelHost = defineSolidBridge<TerminalInputs, TerminalPanel
       restoreTerminalPanelOpenState: (host) => ownerFor(host).restoreTerminalPanelOpenState(),
       resetTerminalSessionPicker: (host) => ownerFor(host).resetTerminalSessionPicker(),
       findTerminalPanelViewport: (host) => ownerFor(host).findTerminalPanelViewport(),
-      selectHostedTab: (host, id) => ownerFor(host).selectHostedTab(id),
+      selectHostedTab: (host, id, event) => ownerFor(host).selectHostedTab(id, event),
       closeHostedTab: (host, id) => ownerFor(host).closeHostedTab(id),
       handleToggleRequest: (host, event) => ownerFor(host).handleToggleRequest(event),
     },
@@ -95,21 +97,19 @@ function terminalPanel(owner: TerminalPanelOwner) {
   owner.bindPresentation();
   const state = projectOwner(owner, (current) => current.viewState);
   onSettled(() => {
-    let disposed = false;
+    let attached = false;
     let detach: (() => void) | undefined;
     const connect = () => {
-      if (!disposed && owner.inputs.isConnected) {
+      if (!attached && owner.inputs.isConnected) {
+        attached = true;
         detach = owner.attach(application);
       }
     };
-    // Direct Solid hosts settle before their parent inserts them.
-    if (owner.inputs.isConnected) {
-      connect();
-    } else {
-      queueMicrotask(connect);
-    }
+    // Lazy portals can insert the host after settlement; native connection owns that edge.
+    connections.set(owner.inputs, connect);
+    connect();
     return () => {
-      disposed = true;
+      connections.delete(owner.inputs);
       detach?.();
     };
   });

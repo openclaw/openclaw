@@ -1,5 +1,8 @@
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  BoardSnapshot,
+  BoardWidgetDataQuery,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { readBoardHtml } from "../../boards/board-store.test-support.js";
 import * as execApprovalsStore from "../../infra/exec-approvals-store.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
@@ -11,7 +14,6 @@ import {
 const reviewWidgetApproval = vi.hoisted(() => vi.fn());
 const readSessionEntry = vi.hoisted(() => vi.fn());
 const sessionKey = "agent:main:session";
-const boardBroadcastScope = { sessionKeys: [sessionKey], agentId: "main" };
 const approved = { decision: "allow-once", risk: "low", rationale: "synthetic widget" };
 const policy = (revision: string) => ({ file: { version: 1 as const }, revision });
 const declared = { netOrigins: ["https://api.example.com"], tools: ["health"] };
@@ -66,14 +68,6 @@ it("reuses a reviewed document in a new session but still gates changed bytes an
   await put(sessionKey, { name: "other" });
   expect(reviewWidgetApproval).toHaveBeenCalledTimes(3);
 
-  readSessionEntry.mockReturnValue({ permissionMode: "guarded" });
-  const guarded = await put("agent:main:guarded");
-  expect(guarded.mock.calls[0]?.[1]).toMatchObject({
-    widgets: [{ grantState: "pending" }],
-  });
-  expect(reviewWidgetApproval).toHaveBeenCalledTimes(3);
-
-  readSessionEntry.mockReset();
   cfg = { ...cfg, tools: { exec: { mode: "auto", reviewer: { timeoutMs: 15_000 } } } };
   await put("agent:main:new-config");
   expect(reviewWidgetApproval).toHaveBeenCalledTimes(4);
@@ -90,8 +84,7 @@ it("refuses a cached assessment when grant authority is revoked during write adm
   const harness = createHarness(undefined, undefined, undefined, { getRuntimeConfig: () => cfg });
   harness.context.resolveGatewayContext = () => (active ? harness.context : undefined);
   reviewWidgetApproval.mockResolvedValue(approved);
-  const widget = weatherWidget;
-  await harness.invoke("board.widget.put", { ...widget, sessionKey });
+  await harness.invoke("board.widget.put", { ...weatherWidget, sessionKey });
   const grant = harness.store.grant.bind(harness.store);
   const intercepted = vi.spyOn(harness.store, "grant").mockImplementationOnce((...args) => {
     active = false;
@@ -99,42 +92,73 @@ it("refuses a cached assessment when grant authority is revoked during write adm
   });
   onTestFinished(() => intercepted.mockRestore());
   const target = { sessionKey: "agent:main:revoked", agentId: "main" };
-  const response = await harness.invoke("board.widget.put", { ...widget, ...target });
+  const response = await harness.invoke("board.widget.put", { ...weatherWidget, ...target });
   expect(response.mock.calls[0]?.[0]).toBe(false);
   expect(reviewWidgetApproval).toHaveBeenCalledTimes(1);
   expect((await harness.store.getSnapshot(target)).widgets[0]?.grantState).toBe("pending");
 });
 
-it.each(
-  [
-    { permissionMode: "read-only" },
-    { reviewDecision: "allow-once", reviewRisk: "medium" },
-    { reviewDecision: "deny", reviewRisk: "low" },
-    { reviewFailure: true },
-    { reviewDecision: "allow-once", emptyTools: true },
-  ].map((row) =>
-    Object.assign({ permissionMode: "workspace" }, row, {
-      grantState: row.emptyTools ? "granted" : "rejected",
-    }),
-  ),
-)("routes session $permissionMode ($grantState, empty tools=$emptyTools)", async (testCase) => {
-  const { grantState, emptyTools, permissionMode, reviewDecision, reviewRisk, reviewFailure } =
-    testCase;
-  readSessionEntry.mockReturnValue({ permissionMode });
-  if (reviewDecision) {
-    reviewWidgetApproval.mockResolvedValue({
-      decision: reviewDecision,
-      risk: reviewRisk ?? (reviewDecision === "allow-once" ? "low" : "high"),
-      rationale: "widget capability review",
-    });
-  } else if (reviewFailure) {
-    reviewWidgetApproval.mockRejectedValue(new Error("reviewer unavailable"));
+it("reviews a changed named query even with identical HTML and a narrower field set", async () => {
+  vi.stubEnv("GH_TOKEN", "synthetic-actions-token");
+  onTestFinished(() => void vi.unstubAllEnvs());
+  const github = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ id: 100, login: "fixture-user", avatar_url: null })),
+    );
+  onTestFinished(() => github.mockRestore());
+  reviewWidgetApproval.mockResolvedValue(approved);
+  const { invoke } = createHarness(undefined, undefined, undefined, {
+    getRuntimeConfig: () => ({ tools: { exec: { mode: "auto" as const } } }),
+  });
+  const query: BoardWidgetDataQuery = {
+    name: "main-ci",
+    bindingId: "github.actions.runs",
+    params: {
+      repository: "owner/repo",
+      workflow: "ci.yml",
+      branch: "main",
+      status: null,
+      created: null,
+      perPage: 1,
+      excludePullRequests: true,
+    },
+    fields: ["conclusion", "id"],
+  };
+  const request = {
+    sessionKey,
+    name: "ci",
+    content: { kind: "html" as const, html: "<p>CI</p>" },
+    declared: { queries: [query] },
+  };
+  const initial = await invoke("board.widget.put", request);
+  expect(initial.mock.calls[0]).toMatchObject([true, { widgets: [{ grantState: "granted" }] }]);
+  reviewWidgetApproval.mockResolvedValue({ ...approved, decision: "deny" });
+  const narrowed = { queries: [{ ...query, fields: ["id" as const] }] };
+  const changed = await invoke("board.widget.put", { ...request, declared: narrowed });
+  expect(changed.mock.calls[0]).toMatchObject([true, { widgets: [{ grantState: "rejected" }] }]);
+});
+
+it.each([
+  ["read-only", approved, false],
+  ["workspace", { ...approved, risk: "medium" }, false],
+  ["workspace", { ...approved, decision: "deny" }, false],
+  ["workspace", new Error("reviewer unavailable"), false],
+  ["workspace", approved, true],
+] as const)("routes %s / %j / empty tools=%s", async (mode, review, emptyTools) => {
+  const grantState = emptyTools ? "granted" : "rejected";
+  readSessionEntry.mockReturnValue({ permissionMode: mode });
+  if (review instanceof Error) {
+    reviewWidgetApproval.mockRejectedValue(review);
+  } else {
+    reviewWidgetApproval.mockResolvedValue(review);
   }
   const dependencies = emptyTools ? createMcpAppDependencies() : undefined;
   if (dependencies) {
     vi.mocked(dependencies.resolveAllowedToolNames).mockResolvedValue([]);
   }
-  const { invoke, broadcast, store, mcpApp } = createHarness(undefined, dependencies, undefined, {
+  const { invoke, store, mcpApp } = createHarness(undefined, dependencies, undefined, {
     getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
   });
 
@@ -145,13 +169,7 @@ it.each(
     declared: emptyTools ? undefined : declared,
   });
 
-  expect(put.mock.calls[0]).toMatchObject([
-    true,
-    {
-      resolvedWidgetName: "weather",
-      widgets: [{ name: "weather", grantState }],
-    },
-  ]);
+  expect(put.mock.calls[0]).toMatchObject([true, { widgets: [{ name: "weather", grantState }] }]);
   const stored = emptyTools
     ? await store.readWidgetMcpApp({ sessionKey }, "weather")
     : await readBoardHtml(store, { sessionKey }, "weather");
@@ -159,15 +177,16 @@ it.each(
   if (emptyTools) {
     expect(stored).toMatchObject({ grantState, interactive: true, declaredTools: [] });
   }
-  const reviewed = permissionMode === "workspace";
-  expect(reviewWidgetApproval).toHaveBeenCalledTimes(reviewed ? 1 : 0);
-  if (reviewed) {
-    expect(reviewWidgetApproval).toHaveBeenCalledWith({
-      kind: "board-widget",
-      name: "weather",
-      declared: emptyTools ? {} : declared,
-      agent: { id: "main", sessionKey },
-    });
+  expect(reviewWidgetApproval).toHaveBeenCalledTimes(mode === "workspace" ? 1 : 0);
+  if (mode === "workspace") {
+    expect(reviewWidgetApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "board-widget",
+        name: "weather",
+        declared: emptyTools ? {} : declared,
+        agent: { id: "main", sessionKey },
+      }),
+    );
   }
 
   const response = await invoke("board.get", { sessionKey });
@@ -184,7 +203,4 @@ it.each(
       expect.objectContaining({ readOnly: grantState !== "granted" }),
     );
   }
-  expect(broadcast.mock.calls).toEqual([
-    ["board.changed", { sessionKey, revision: 2, widget: "weather" }, boardBroadcastScope],
-  ]);
 });

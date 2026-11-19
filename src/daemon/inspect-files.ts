@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { hasErrnoCode } from "../infra/errno.js";
-import { resolveGatewaySystemdServiceName, resolveNodeLaunchAgentLabel } from "./constants.js";
+import { resolveGatewaySystemdServiceName, isNodeLaunchAgentLabel } from "./constants.js";
 import { detectMarkerLineWithGateway, hasGatewayServiceMarker } from "./inspect-markers.js";
 import { parseSystemdInlineEnvironment } from "./systemd-unit.js";
 
@@ -28,7 +28,7 @@ export function isPotentialGatewayServiceName(
   return (
     name === selected ||
     (platform === "darwin"
-      ? (name.startsWith("ai.openclaw.") && name !== resolveNodeLaunchAgentLabel()) ||
+      ? (name.startsWith("ai.openclaw.") && !isNodeLaunchAgentLabel(name)) ||
         /clawdbot.*gateway/.test(name)
       : /^(?:openclaw|clawdbot)(?:$|@|-gateway(?:$|[-.@]))/.test(name))
   );

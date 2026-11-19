@@ -74,35 +74,32 @@ it("reads GC owner facts without parsing unrelated session payloads", () => {
   }, scope);
   const database = openOpenClawAgentDatabase(scope);
   const parseJson = JSON.parse;
-  const parse = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+  using parse = vi.spyOn(JSON, "parse");
+  parse.mockImplementation((text, reviver) => {
     if (text.includes(payloadMarker)) {
       throw new Error("GC parsed an unrelated full session payload");
     }
     return parseJson(text, reviver);
   });
   const sql = observeHostDataSql();
-  try {
-    const result = readExactSessionEntriesWithLifecycle({
-      kind: "session-exact-entries",
-      database: { agentId: database.agentId, path: database.path },
-      env: scope.env,
-      projection: "worktree",
-      sessionKeys: [
-        ...entries.map(({ sessionKey }) => sessionKey),
-        retainedKey,
-        "agent:main:missing",
-      ],
-    });
-    expect(result.entries.toSorted((a, b) => a.sessionKey.localeCompare(b.sessionKey))).toEqual(
-      entries.toSorted((a, b) => a.sessionKey.localeCompare(b.sessionKey)),
-    );
-    expect(
-      sql.queries.filter((query) => /^(BEGIN|COMMIT|SAVEPOINT|RELEASE)\b/i.test(query)),
-    ).toEqual([]);
-  } finally {
-    sql.restore();
-    parse.mockRestore();
-  }
+  using _ = { [Symbol.dispose]: sql.restore };
+  const result = readExactSessionEntriesWithLifecycle({
+    kind: "session-exact-entries",
+    database: { agentId: database.agentId, path: database.path },
+    env: scope.env,
+    projection: "worktree",
+    sessionKeys: [
+      ...entries.map(({ sessionKey }) => sessionKey),
+      retainedKey,
+      "agent:main:missing",
+    ],
+  });
+  const byKey = (a: { sessionKey: string }, b: { sessionKey: string }) =>
+    a.sessionKey.localeCompare(b.sessionKey);
+  expect(result.entries.toSorted(byKey)).toEqual(entries.toSorted(byKey));
+  expect(sql.queries.filter((query) => /^(BEGIN|COMMIT|SAVEPOINT|RELEASE)\b/i.test(query))).toEqual(
+    [],
+  );
 });
 
 const ownerJson = JSON.stringify({ sessionId: "owner", updatedAt: 1 });

@@ -302,7 +302,7 @@ export function createFaceTimeCallEventHandler(params: {
         }
         if (ringingCall) {
           try {
-            const generation = ringingCall.captureGeneration();
+            const generation = ringingCall.generation;
             const muteResult = await ringingCall.runCarrierCommand({
               generation,
               action: async () => await params.helper.safetyMute(ringingCall.carrierCallUUID),

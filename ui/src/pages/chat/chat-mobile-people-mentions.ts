@@ -1,8 +1,9 @@
+import { formatUiError } from "../../lib/format-error.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import type {
   HumanMentionAccess,
   HumanMentionRead,
-} from "./components/chat-composer-mention-menu.tsx";
+} from "./components/chat-composer-mention-menu-state.ts";
 
 export type ChatMobilePeopleMentions = {
   readonly status: "idle" | "loading" | "ready" | "unavailable" | "error" | "insert-rejected";
@@ -58,7 +59,7 @@ export function createChatMobilePeopleMentions(
       }
       page.receipt = page.access?.read(query);
       page.status = "error";
-      page.error = error instanceof Error ? error.message : String(error);
+      page.error = formatUiError(error);
     }
   };
   return {

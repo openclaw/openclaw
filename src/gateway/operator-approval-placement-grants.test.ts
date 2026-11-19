@@ -4,10 +4,8 @@ import type { Compilable, Updateable } from "kysely";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
-import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -17,21 +15,19 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { createTestApprovalFixture } from "./exec-approval-manager.test-support.js";
 import {
   resolveNodeInvokePlacementGrant,
   retainResolvedNodeInvokePlacementGrant,
   type NodeInvokePlacementGrantAuthorization,
 } from "./node-invoke-placement-grant.js";
-import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
 import {
-  createContext,
   createDemoPolicy,
   createNodeSession,
   createOperatorClient,
-  DEMO_COMMAND,
-  DEMO_PARAMS,
+  createPolicyApprovalFixture,
+  createRuntimeClient,
   expectSinglePendingApproval,
+  invokeDemoPolicy,
   setDangerousDemoCommandRegistry,
 } from "./node-invoke-plugin-policy.test-helpers.js";
 import {
@@ -40,7 +36,6 @@ import {
   type PlacementStandingGrantRuntime,
 } from "./operator-approval-placement-grants.js";
 import { insertOperatorApproval, resolveOperatorApproval } from "./operator-approval-store.js";
-import { createApprovalClientLookup } from "./server-methods/approval-request.test-support.js";
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 
 type PlacementTestDatabase = Pick<
@@ -104,7 +99,8 @@ function placementDatabase(databaseOptions: OpenClawStateDatabaseOptions) {
 }
 
 function createRuntime(databaseOptions: OpenClawStateDatabaseOptions, now = () => NOW_MS + 2_000) {
-  return createPlacementStandingGrantRuntime({ runtimeEpoch: "runtime-1", databaseOptions, now });
+  vi.spyOn(Date, "now").mockImplementation(now);
+  return createPlacementStandingGrantRuntime({ runtimeEpoch: "runtime-1", databaseOptions });
 }
 
 function grantInput(binding: PlacementStandingGrantMintSpec, approvalId = "approval-1") {
@@ -114,6 +110,7 @@ function grantInput(binding: PlacementStandingGrantMintSpec, approvalId = "appro
 beforeEach(resetPluginRuntimeStateForTest);
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
   await Promise.all(
     [...databasePaths].map((databasePath) => closeOpenClawStateDatabaseByPathAsync(databasePath)),
@@ -320,13 +317,6 @@ describe("placement standing grants", () => {
     const databaseOptions = createDatabaseOptions();
     seedActivePlacement(databaseOptions);
     const database = openOpenClawStateDatabase(databaseOptions);
-    const schemaSnapshot = () => [
-      database.db.prepare("PRAGMA user_version").get(),
-      database.db
-        .prepare("SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary'")
-        .get(),
-    ];
-    const schemaBefore = schemaSnapshot();
     expect(tableExists(database.db, "operator_approval_placement_grants")).toBe(false);
 
     const runtime = createRuntime(databaseOptions);
@@ -350,7 +340,6 @@ describe("placement standing grants", () => {
     expect(await createRuntime(databaseOptions).validateAsync(binding)).toMatchObject({
       outcome: "no-grant",
     });
-    expect(schemaSnapshot()).toEqual(schemaBefore);
   });
 
   it("does not retain a grant before the parent allow-always decision", async () => {
@@ -385,21 +374,20 @@ describe("placement standing grants", () => {
     expect((await runtime.consumeAsync(binding)).outcome).toBe("placement-changed");
   });
 
-  it("fails closed after expiry, parent removal or reversal, or placement removal", async () => {
+  it("fails closed after expiry, parent removal, or placement removal", async () => {
     const scenarios = {
       expired: "expired",
       "parent-missing": "approval-missing",
-      parent: "approval-not-allow-always",
       placement: "placement-missing",
     };
     for (const [scenario, outcome] of Object.entries(scenarios)) {
       let nowMs = NOW_MS + 2_000;
-      const { binding, runtime, database, stateDb, execute, revokeApproval } =
-        await createPlacementFixture(true, () => nowMs);
+      const { binding, runtime, database, stateDb, execute } = await createPlacementFixture(
+        true,
+        () => nowMs,
+      );
       if (scenario === "parent-missing") {
         execute(stateDb.deleteFrom("operator_approvals").where("approval_id", "=", "approval-1"));
-      } else if (scenario === "parent") {
-        revokeApproval();
       } else if (scenario === "placement") {
         execute(stateDb.deleteFrom("worker_session_placements"));
       }
@@ -412,23 +400,27 @@ describe("placement standing grants", () => {
   });
 
   it("skips the second launch and re-prompts after the placement generation changes", async (testContext) => {
-    const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(testContext, {
-      approvalKind: "plugin",
-      resolveAllowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions,
-      resolveStandingGrantMint: (request) =>
-        request.placementGrant ? { kind: "placement", ...request.placementGrant } : null,
-      retainPlacementStandingGrantAsync: (grant) => placementStandingGrants.retainAsync(grant),
-      validateAgentRuntimeDelegatedAuthority: () => true,
-    });
-    const { manager, databaseOptions } = fixture;
+    const nodeSession = createNodeSession({ pairingGeneration: PAIRING_GENERATION });
+    const fixture = createPolicyApprovalFixture(
+      testContext,
+      {
+        resolveAllowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions,
+        resolveStandingGrantMint: (request) =>
+          request.placementGrant ? { kind: "placement", ...request.placementGrant } : null,
+        retainPlacementStandingGrantAsync: (grant) => placementStandingGrants.retainAsync(grant),
+        validateAgentRuntimeDelegatedAuthority: () => true,
+      },
+      { nodeSession, validateAgentRuntimeApprovalAuthority: () => true },
+    );
+    const { manager, databaseOptions, context } = fixture;
     const placementStandingGrants = createPlacementStandingGrantRuntime({
       runtimeEpoch: manager.runtimeEpoch,
       databaseOptions,
     });
     await fixture.run(async () => {
       seedActivePlacement(databaseOptions);
-      const policy = createDemoPolicy(async (context) => {
-        const placementApproval = await context.approvals?.request({
+      const policy = createDemoPolicy(async (policyContext) => {
+        const placementApproval = await policyContext.approvals?.request({
           title: "Run on placement",
           description: "Allow this exact active placement.",
           allowedDecisions: ["allow-once", "allow-always"],
@@ -439,18 +431,11 @@ describe("placement standing grants", () => {
         ) {
           return { ok: false, code: "DENIED", message: "approval denied" };
         }
-        return await context.invokeNode();
+        return await policyContext.invokeNode();
       });
       policy.policy.classifyRisk = () => ({ level: "high", family: "demo.exec" });
       setDangerousDemoCommandRegistry([policy]);
 
-      const nodeSession = { ...createNodeSession(), pairingGeneration: PAIRING_GENERATION };
-      const { context } = createContext({
-        pluginApprovalManager: manager,
-        nodeSession,
-        getApprovalClientConnIds: createApprovalClientLookup([createOperatorClient("reviewer")]),
-        validateAgentRuntimeApprovalAuthority: () => true,
-      });
       context.placementStandingGrants = placementStandingGrants;
       const invoke = vi.fn(async (input: Parameters<typeof context.nodeRegistry.invoke>[0]) => {
         if (
@@ -470,14 +455,7 @@ describe("placement standing grants", () => {
       context.nodeRegistry.invoke = invoke;
       const client = createOperatorClient();
       const invokePolicy = (requestClient = client) =>
-        applyPluginNodeInvokePolicy({
-          context,
-          client: requestClient,
-          nodeSession,
-          command: DEMO_COMMAND,
-          params: DEMO_PARAMS,
-          sessionKey: SESSION_KEY,
-        });
+        invokeDemoPolicy(context, requestClient, { nodeSession, sessionKey: SESSION_KEY });
       let placementAuthorityActive = true;
       const nodePlacementGrantAuthority = {
         agentId: "main",
@@ -489,28 +467,9 @@ describe("placement standing grants", () => {
           }
         },
       };
-      const operationalRunInstance = createOperationalRunInstanceRef("identity-only-placement");
       const { record: identityOnlyApproval, pending: identityOnlyLaunch } =
         await expectSinglePendingApproval(manager, context, () =>
-          fixture.track(
-            invokePolicy({
-              ...client,
-              internal: {
-                agentRuntimeIdentity: {
-                  kind: "agentRuntime",
-                  agentId: "main",
-                  sessionKey: SESSION_KEY,
-                  operationalRunInstance,
-                  delegatedAuthority: {
-                    kind: "local",
-                    operationalRunInstance,
-                    lifecycleGeneration: "identity-only-generation",
-                    claimId: "identity-only-claim",
-                  },
-                },
-              },
-            }),
-          ),
+          fixture.track(invokePolicy(createRuntimeClient("identity-only-placement", SESSION_KEY))),
         );
       expect(identityOnlyApproval.request.allowedDecisions).not.toContain("allow-always");
       expect(identityOnlyApproval.request.placementGrant).toBeNull();

@@ -113,7 +113,7 @@ export function createChannelReplayGuardWithDedupe<TEvent>(
     keys: [string, ...string[]],
     dedupeOptions?: PersistentDedupeCheckOptions,
   ): ChannelReplayClaimHandle => {
-    const ownedKeys = Object.freeze([...keys]) as readonly [string, ...string[]];
+    const ownedKeys = Object.freeze(keys);
     let settlement:
       | { kind: "claimed" }
       | { kind: "committing"; pending: Promise<boolean> }

@@ -1,19 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { zalouserDoctor } from "./doctor.js";
 
+function config(groups: Record<string, unknown>, accounts?: Record<string, unknown>) {
+  return { channels: { zalouser: { groups, ...(accounts ? { accounts } : {}) } } } as never;
+}
+
 describe("zalouser doctor", () => {
   it("warns when mutable group names rely on disabled name matching", async () => {
     const warnings = await Promise.resolve(
       zalouserDoctor.collectMutableAllowlistWarnings?.({
-        cfg: {
-          channels: {
-            zalouser: {
-              groups: {
-                "group:trusted": { enabled: true },
-              },
-            },
-          },
-        } as never,
+        cfg: config({ "group:trusted": { enabled: true } }),
       }) ?? [],
     );
 
@@ -32,23 +28,15 @@ describe("zalouser doctor", () => {
     }
 
     const result = normalize({
-      cfg: {
-        channels: {
-          zalouser: {
-            groups: {
-              "group:trusted": { allow: true },
-              "group:disabled": { allow: true, enabled: false },
-              "group:invalid-enabled": { allow: false, enabled: "invalid" },
-              "group:invalid-allow": { allow: "true" },
-            },
-            accounts: {
-              work: {
-                groups: { "group:legacy": { allow: false } },
-              },
-            },
-          },
+      cfg: config(
+        {
+          "group:trusted": { allow: true },
+          "group:disabled": { allow: true, enabled: false },
+          "group:invalid-enabled": { allow: false, enabled: "invalid" },
+          "group:invalid-allow": { allow: "true" },
         },
-      } as never,
+        { work: { groups: { "group:legacy": { allow: false } } } },
+      ),
     });
 
     expect(result.config.channels?.zalouser?.groups).toEqual({

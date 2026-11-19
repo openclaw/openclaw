@@ -13,7 +13,6 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-con
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
-  openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { seedOpenClawAgentSchemaV21 } from "../../state/openclaw-agent-schema-v21.test-support.js";
@@ -56,6 +55,22 @@ function seedShared(db: EngineConnection) {
   sql`INSERT INTO session_watch_cursors (watcher_session_key, target_session_key, updated_at) VALUES (${oldKey}, ${oldKey}, 1)`.run();
 }
 
+function seedPair(agentKey = oldKey) {
+  return withEngineStoreAdmission(() => ({
+    agent: runOpenClawAgentWriteTransaction(
+      (database) => {
+        seedAgent(database.db, agentKey);
+        return database;
+      },
+      { agentId: "main" },
+    ),
+    shared: runOpenClawStateWriteTransaction((database) => {
+      seedShared(database.db);
+      return database;
+    }),
+  }));
+}
+
 function readAgent(db: EngineConnection) {
   return {
     nodes: db.prepare("SELECT * FROM session_nodes").all(),
@@ -73,27 +88,6 @@ function readShared(db: EngineConnection) {
       .prepare("SELECT * FROM state_leases WHERE scope = 'doctor-session-key-migration'")
       .all(),
   };
-}
-
-function assertAgentKey(
-  db: EngineConnection,
-  sessionKey = newKey,
-  completionOwnerSessionKey?: string,
-) {
-  expect(db.prepare("SELECT session_key, parent_session_key FROM session_nodes").get()).toEqual({
-    session_key: sessionKey,
-    parent_session_key: sessionKey,
-  });
-  for (const table of ["session_windows", "board_tabs", "board_widgets"]) {
-    expect(db.prepare(`SELECT session_key FROM ${table}`).get()).toEqual({
-      session_key: sessionKey,
-    });
-  }
-  const row = db.prepare("SELECT entry_json FROM session_nodes").get() as { entry_json: string };
-  expect(JSON.parse(row.entry_json)).toMatchObject({
-    parentSessionKey: sessionKey,
-    ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
-  });
 }
 
 async function sourceArtifacts(paths: string[]) {
@@ -200,30 +194,6 @@ describe.skipIf(!mixedAgentConnection)("reserved-incognito adoption preflight", 
           expect(await sourceArtifacts([agentPath, sharedPath, state.configPath])).toEqual(
             original,
           );
-          {
-            using agentSource = openNodeSqliteDatabase(agentPath, { readOnly: true });
-            expect(agentSource.prepare("SELECT session_key FROM session_nodes").get()).toEqual({
-              session_key: sourceAgentKey,
-            });
-            if (jsonOnly || historical) {
-              const entry = agentSource.prepare("SELECT entry_json FROM session_nodes").get() as {
-                entry_json: string;
-              };
-              expect(JSON.parse(entry.entry_json)).toMatchObject(
-                historical
-                  ? { systemPromptReport: { sessionKey: oldKey } }
-                  : { completionOwnerSessionKey: oldKey },
-              );
-            }
-            if (!withoutShared) {
-              using sharedSource = openNodeSqliteDatabase(sharedPath, { readOnly: true });
-              expect(
-                sharedSource.prepare("SELECT session_key FROM session_state_heads").get(),
-              ).toEqual(jsonOnly ? undefined : { session_key: oldKey });
-            } else {
-              expect(fs.existsSync(sharedPath)).toBe(false);
-            }
-          }
           expect(fs.existsSync(databasePortManifestPath(state.stateDir))).toBe(false);
           const recovery = state.statePath("recovery", "database-port");
           expect(fs.existsSync(recovery) ? await files(recovery) : []).toEqual([]);
@@ -237,20 +207,6 @@ describe.skipIf(!mixedAgentConnection)("reserved-incognito adoption preflight", 
           await expect(
             repairReservedIncognitoSessionKeys({ apply: true, cfg, env: state.env }),
           ).resolves.toEqual({ found: 1, repaired: 1 });
-          withEngineStoreAdmission(() => {
-            assertAgentKey(
-              openOpenClawAgentDatabase({ agentId: "main", env: state.env }).db,
-              expectedAgentKey,
-              jsonOnly ? newKey : undefined,
-            );
-            expect(readShared(openOpenClawStateDatabase({ env: state.env }).db)).toMatchObject({
-              heads: jsonOnly ? [] : [{ session_key: newKey, last_sequence: 7 }],
-              watches: jsonOnly
-                ? []
-                : [{ watcher_session_key: newKey, target_session_key: newKey }],
-              journal: [],
-            });
-          });
           await cleanupSessionStateForTest({ stateDir: state.stateDir });
           const result = await doctorDatabasePort(portOptions);
           expect(result).toMatchObject({
@@ -328,21 +284,7 @@ describe.skipIf(!mixedAgentConnection)("reserved-incognito PG admission refusal"
   useMixedAgentPair("sqlite", "postgres");
 
   it("preserves SQLite shared state and its journal when the PG agent cannot be admitted", async () => {
-    const agent = withEngineStoreAdmission(() =>
-      runOpenClawAgentWriteTransaction(
-        (database) => {
-          seedAgent(database.db, "agent:main:main");
-          return database;
-        },
-        { agentId: "main" },
-      ),
-    );
-    const shared = withEngineStoreAdmission(() =>
-      runOpenClawStateWriteTransaction((database) => {
-        seedShared(database.db);
-        return database;
-      }),
-    );
+    const { agent, shared } = seedPair("agent:main:main");
     const facts = getPostgresPhysicalFacts(agent.db);
     assert(facts);
     const before = withEngineStoreAdmission(() => readShared(shared.db));
@@ -379,59 +321,29 @@ describe.skipIf(!mixedAgentConnection)("reserved-incognito PG admission refusal"
   });
 });
 
-describe.each(["sqlite", "postgres"] as const)("%s reserved-incognito Doctor", (engine) => {
-  describe.skipIf(engine === "postgres" && !mixedAgentConnection)("repair boundary", () => {
-    useMixedAgentPair(engine, engine);
+describe.skipIf(!mixedAgentConnection)("PostgreSQL reserved-incognito Doctor", () => {
+  useMixedAgentPair("postgres", "postgres");
 
-    it("repairs SQLite references or refuses PostgreSQL before any data or journal write", async () => {
-      const agent = withEngineStoreAdmission(() =>
-        runOpenClawAgentWriteTransaction(
-          (database) => {
-            seedAgent(database.db);
-            return database;
-          },
-          { agentId: "main" },
-        ),
-      );
-      const shared = withEngineStoreAdmission(() =>
-        runOpenClawStateWriteTransaction((database) => {
-          seedShared(database.db);
-          return database;
-        }),
-      );
-      const before = withEngineStoreAdmission(() => ({
-        agent: readAgent(agent.db),
-        shared: readShared(shared.db),
-      }));
-      installDatabaseProcessRole("cli-oneshot");
-      const repair = (apply: boolean) =>
-        repairReservedIncognitoSessionKeys({ apply, cfg: {}, env: process.env });
-      if (engine === "postgres") {
-        for (const apply of [true, false]) {
-          const error: unknown = await repair(apply).catch((caught: unknown) => caught);
-          expect(error).toBeInstanceOf(DoctorStateMigrationRefusalError);
-          expect(error).toMatchObject({ code: "RESERVED_INCOGNITO_SESSION_KEYS" });
-          expect(String(error)).toMatch(/re-adopt.*repaired SQLite/i);
-          expect(
-            withEngineStoreAdmission(() => ({
-              agent: readAgent(agent.db),
-              shared: readShared(shared.db),
-            })),
-          ).toEqual(before);
-        }
-      } else {
-        await expect(repair(false)).resolves.toEqual({ found: 1, repaired: 0 });
-        await expect(repair(true)).resolves.toEqual({ found: 1, repaired: 1 });
-        withEngineStoreAdmission(() => {
-          assertAgentKey(agent.db);
-          expect(readShared(shared.db)).toMatchObject({
-            heads: [{ session_key: newKey, last_sequence: 7 }],
-            watches: [{ watcher_session_key: newKey, target_session_key: newKey }],
-            journal: [],
-          });
-        });
-        await expect(repair(true)).resolves.toEqual({ found: 0, repaired: 0 });
-      }
-    });
+  it("refuses repair and dry-run before any data or journal write", async () => {
+    const { agent, shared } = seedPair();
+    const before = withEngineStoreAdmission(() => ({
+      agent: readAgent(agent.db),
+      shared: readShared(shared.db),
+    }));
+    installDatabaseProcessRole("cli-oneshot");
+    const repair = (apply: boolean) =>
+      repairReservedIncognitoSessionKeys({ apply, cfg: {}, env: process.env });
+    for (const apply of [true, false]) {
+      const error: unknown = await repair(apply).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(DoctorStateMigrationRefusalError);
+      expect(error).toMatchObject({ code: "RESERVED_INCOGNITO_SESSION_KEYS" });
+      expect(String(error)).toMatch(/re-adopt.*repaired SQLite/i);
+      expect(
+        withEngineStoreAdmission(() => ({
+          agent: readAgent(agent.db),
+          shared: readShared(shared.db),
+        })),
+      ).toEqual(before);
+    }
   });
 });

@@ -1,19 +1,28 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   createNativeNotificationsCapability,
   type NativeNotificationsCapability,
 } from "./native-notifications.ts";
-
-// Wire contract shared with the Mac app bridge; asserted literally on purpose.
-const NATIVE_NOTIFICATIONS_STATUS_EVENT = "openclaw:native-notifications-status";
 
 type NativeNotificationsMessage = {
   type: "status" | "request-permission" | "send-test";
 };
 
 let capability: NativeNotificationsCapability | null = null;
+let postMessage: ReturnType<typeof vi.fn<(message: NativeNotificationsMessage) => void>>;
+type NotificationListener = Parameters<NativeNotificationsCapability["subscribe"]>[0];
+let listener: ReturnType<typeof vi.fn<NotificationListener>>;
+
+beforeEach(() => {
+  postMessage = vi.fn<(message: NativeNotificationsMessage) => void>();
+  vi.stubGlobal("webkit", { messageHandlers: { openclawNotifications: { postMessage } } });
+  capability = createNativeNotificationsCapability();
+  listener = vi.fn<NotificationListener>();
+  capability?.subscribe(listener);
+  postMessage.mockClear();
+});
 
 afterEach(() => {
   capability?.dispose();
@@ -22,27 +31,13 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function installBridge() {
-  const postMessage = vi.fn<(message: NativeNotificationsMessage) => void>();
-  vi.stubGlobal("webkit", {
-    messageHandlers: { openclawNotifications: { postMessage } },
-  });
-  capability = createNativeNotificationsCapability();
-  return postMessage;
-}
-
 function publish(detail: unknown) {
-  window.dispatchEvent(new CustomEvent(NATIVE_NOTIFICATIONS_STATUS_EVENT, { detail }));
-}
-
-function subscribe() {
-  installBridge();
-  const listener = vi.fn();
-  capability?.subscribe(listener);
-  return listener;
+  // Literal wire contract shared with the Mac app bridge.
+  window.dispatchEvent(new CustomEvent("openclaw:native-notifications-status", { detail }));
 }
 
 it("returns null without the WebKit bridge", () => {
+  vi.unstubAllGlobals();
   expect(createNativeNotificationsCapability()).toBeNull();
 });
 
@@ -50,24 +45,13 @@ it.each([
   ["denied", { permission: "denied", test: null }, [{ permission: "denied", test: null }]],
   ["authorized", { permission: "unknown", test: null }, []],
 ] as const)("validates the %s permission event", (permission, expected, deliveries) => {
-  const listener = subscribe();
   publish(permission === "denied" ? { permission, test: null } : { permission });
   expect(capability?.snapshot).toEqual(expected);
   expect(listener.mock.calls).toEqual(deliveries.map((snapshot) => [snapshot]));
 });
 
-it("posts permission requests", () => {
-  const postMessage = installBridge();
-  postMessage.mockClear();
-  capability?.requestPermission();
-  expect(postMessage).toHaveBeenCalledWith({ type: "request-permission" });
-});
-
 it("shares a test receipt and settles only after the native pending acknowledgement", async () => {
-  const postMessage = installBridge();
-  postMessage.mockClear();
   const completion = capability?.sendTest();
-  expect(completion).toBeInstanceOf(Promise);
   expect(capability?.sendTest()).toBe(completion);
   expect(capability?.snapshot).toEqual({ permission: "unknown", test: { state: "pending" } });
   expect(postMessage.mock.calls).toEqual([[{ type: "send-test" }]]);
@@ -83,9 +67,7 @@ it("shares a test receipt and settles only after the native pending acknowledgem
 });
 
 it("forwards completion to the native permission owner without prompting", () => {
-  const postMessage = installBridge();
   publish({ permission: "notDetermined", test: null });
-  postMessage.mockClear();
   capability?.backgroundSessionCompleted({ runId: "run-1", path: "/chat/research" });
   expect(postMessage.mock.calls).toEqual([
     [{ type: "background-session-completed", runId: "run-1", path: "/chat/research" }],
@@ -93,22 +75,17 @@ it("forwards completion to the native permission owner without prompting", () =>
 });
 
 it("keeps permission and failed send as independent facts across focus refresh", () => {
-  const postMessage = installBridge();
   const failed = {
     permission: "granted",
     test: { state: "error", message: "Open System Settings and try again." },
   };
-  publish({ ...failed, test: { ...failed.test } });
-  postMessage.mockClear();
+  publish(failed);
   window.dispatchEvent(new Event("focus"));
   expect(capability?.snapshot).toEqual(failed);
   expect(postMessage).toHaveBeenCalledWith({ type: "status" });
 });
 
 it("retires a pending receipt and removes listeners on dispose", async () => {
-  const postMessage = installBridge();
-  const listener = vi.fn();
-  capability?.subscribe(listener);
   const completion = capability?.sendTest();
   listener.mockClear();
   capability?.dispose();

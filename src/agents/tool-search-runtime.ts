@@ -1,22 +1,28 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import {
+  attachInternalToolResultContentSource,
+  copyInternalToolResultState,
+} from "../../packages/agent-core/src/internal-hooks.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { resolveAgentToolExecutionSchema } from "./agent-tool-availability.js";
 import {
   finalizeToolTerminalPresentation,
   getBeforeToolCallFailureDisposition,
-  isPreExecutionBlockedToolResult,
 } from "./agent-tools.before-tool-call.js";
-import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
+import {
+  coerceToolExecutionArguments,
+  runWithToolExecutionValidation,
+} from "./agent-tools.execution-validation.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
+import { TOOL_IMAGE_CHARS } from "./embedded-agent-runner/tool-result-char-estimator.js";
+import { resolveAgentHarnessToolResultPresentation } from "./harness/tool-result-facts.js";
+import { createAgentToolResultMiddlewareApplier } from "./harness/tool-result-middleware.js";
 import { setMcpCodeModeGuestResultFromAgentResult } from "./mcp-content.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolResult } from "./runtime/index.js";
-import {
-  attachInternalToolResultContentSource,
-  copyInternalToolResultState,
-} from "./runtime/internal-hooks.js";
 import {
   captureToolOutputSelection,
   readToolOutputSchemaVariants,
@@ -25,13 +31,18 @@ import {
 } from "./schema/tool-output-schema.js";
 import { bindJoinedCollectorInvocation } from "./subagents/swarm/swarm-collector-capability.js";
 import { markToolContractFailure } from "./tool-contract-error.js";
-import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
+import { readToolExecutionRefusal } from "./tool-effect-receipt.js";
 import {
-  isToolResultError,
   isTrustedToolExecutionPreflightError,
   protectNetworkToolExecutionError,
-} from "./tool-result-error.js";
-import { runWithToolResultDelivery } from "./tool-result-limits.js";
+} from "./tool-execution-error.js";
+import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
+import { isToolResultError, resolveToolResultFailureKind } from "./tool-result-error.js";
+import {
+  resolveToolResultBudget,
+  runWithToolResultDelivery,
+  type ToolResultBudget,
+} from "./tool-result-limits.js";
 import {
   compactToolSearchCatalogEntry,
   describeToolSearchCatalogEntry,
@@ -45,6 +56,11 @@ import {
   serializeToolSearchControlResult,
 } from "./tool-search-control-result.js";
 import { getToolSearchLexicalIndex } from "./tool-search-index.js";
+import type {
+  CatalogVisibilityOptions,
+  ToolSearchConfig,
+  UnknownToolErrorOptions,
+} from "./tool-search-protocol.js";
 import { scoreLexical, tokenizeQuery } from "./tool-search-ranking.js";
 import {
   formatCatalogInputError,
@@ -56,14 +72,11 @@ import { readToolSearchLimit } from "./tool-search-request.js";
 import { runScheduledToolSearchCall } from "./tool-search-scheduling.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import type {
-  CatalogVisibilityOptions,
   ToolSearchCallOptions,
   ToolSearchCatalogEntry,
   ToolSearchCatalogSession,
   ToolSearchCatalogToolExecutor,
-  ToolSearchConfig,
   ToolSearchToolContext,
-  UnknownToolErrorOptions,
 } from "./tool-search-types.js";
 import { ToolSourceReplyCell } from "./tool-source-reply-completion.js";
 import { textResult, ToolInputError } from "./tools/common.js";
@@ -87,7 +100,7 @@ function findEntry(
   }
   const namedEntries =
     match === "exact-id" ? [] : entries.filter((candidate) => candidate.name === needle);
-  if (namedEntries.length > 1) {
+  if (namedEntries.length > 1 || namedEntries[0]?.requiresExactId) {
     throw new ToolInputError(`Ambiguous tool name: ${needle}; use an exact tool id.`);
   }
   const namedEntry = namedEntries[0];
@@ -174,13 +187,12 @@ async function assertCatalogOutputMatchesSchema(
   if (!entry.outputSchema && !outputSelection) {
     return;
   }
-  if (isPreExecutionBlockedToolResult(result)) {
-    const details = unwrapToolResultValue(result);
-    const reason =
-      isRecord(details) && typeof details.reason === "string" && details.reason.trim()
-        ? details.reason
-        : "Tool call blocked by policy";
-    throw new Error(`Tool "${entry.id}" was blocked before execution: ${reason}`);
+  const refusal = readToolExecutionRefusal(result);
+  if (refusal) {
+    if (refusal.kind === "blocked") {
+      throw new Error(`Tool "${entry.id}" was blocked before execution: ${refusal.reason}`);
+    }
+    return;
   }
   // Failed operations carry an error result, not the tool's successful output.
   if ("isError" in result && result.isError === true) {
@@ -208,7 +220,9 @@ function sanitizeToolCallIdPart(value: string): string {
 
 export class ToolSearchRuntime {
   readonly sourceReplyCell = new ToolSourceReplyCell();
+  readonly resultBudget: ToolResultBudget | undefined;
   private readonly pluginRuntimeRefresh = captureAgentPluginRuntimeRefresh();
+  private readonly applyToolResultMiddleware;
   private callSequence = 0;
   private readonly terminalTargetBatchByParent = new Map<string, boolean>();
   private readonly networkInvocations = new Map<string, { active: number; observed: boolean }>();
@@ -221,7 +235,17 @@ export class ToolSearchRuntime {
       validateInput?: boolean;
       callIdScope?: string;
     } = {},
-  ) {}
+  ) {
+    const { agentId, sessionId, sessionKey, runId } = ctx;
+    this.resultBudget = resolveToolResultBudget(ctx.modelContextWindowTokens);
+    this.applyToolResultMiddleware = createAgentToolResultMiddlewareApplier({
+      runtime: "openclaw",
+      agentId,
+      sessionId,
+      sessionKey,
+      runId,
+    });
+  }
 
   search = async (
     query: string,
@@ -282,15 +306,6 @@ export class ToolSearchRuntime {
   all = (options?: CatalogVisibilityOptions) =>
     visibleCatalogEntries(resolveCatalog(this.ctx), options).map((entry) =>
       compactToolSearchCatalogEntry(entry),
-    );
-
-  namespaceEntries = () =>
-    // Snapshot host metadata without rendering hints or retaining the executable tool.
-    resolveCatalog(this.ctx).entries.map(
-      ({ tool: _tool, outputSchema: _outputSchema, ...entry }) => {
-        entry.parameters ??= {};
-        return entry;
-      },
     );
 
   describe = async (
@@ -399,7 +414,14 @@ export class ToolSearchRuntime {
   ) => {
     this.pluginRuntimeRefresh.assertCurrent();
     catalog.callCount += 1;
-    const normalizedInput = input ?? {};
+    const validateInput = this.options.validateInput && entry.source === "openclaw";
+    const normalizedInput = validateInput
+      ? coerceToolExecutionArguments(
+          entry,
+          resolveAgentToolExecutionSchema(entry.tool, entry.parameters),
+          input ?? {},
+        )
+      : (input ?? {});
     const parentId = sanitizeToolCallIdPart(options?.parentToolCallId ?? "direct");
     const scope = this.options.callIdScope
       ? `${sanitizeToolCallIdPart(this.options.callIdScope)}:`
@@ -413,6 +435,7 @@ export class ToolSearchRuntime {
       ? captureToolOutputSelection(outputVariants.inputProperty, normalizedInput)
       : undefined;
     let executedOutputSelection: ToolOutputSelection | undefined;
+    let executedInput: Record<string, unknown> | undefined;
     const executeTool =
       this.ctx.executeTool ??
       (async (params: Parameters<ToolSearchCatalogToolExecutor>[0]) => {
@@ -425,29 +448,47 @@ export class ToolSearchRuntime {
         );
         return await params.acceptResultBeforeProjection(result);
       });
-    let preExecutionBlocked = false;
+    let preExecutionRefused = false;
     // Reuse only this call's accepted snapshot; outer schema validation must still run.
     let acceptedSnapshot: AgentToolResult<unknown> | undefined;
-    const acceptResultBeforeProjection = async (candidate: AgentToolResult<unknown>) => {
+    const acceptResultBeforeProjection = async (rawResult: AgentToolResult<unknown>) => {
+      let candidate = rawResult;
       // Projection failure cannot revoke delivery already committed by the producer.
       this.sourceReplyCell.observe(candidate);
-      if (isPreExecutionBlockedToolResult(candidate)) {
-        // The JSON-safe snapshot drops the private blocked-result marker.
-        preExecutionBlocked = true;
+      const refusal = readToolExecutionRefusal(candidate);
+      if (refusal) {
+        preExecutionRefused = true;
+      }
+      if (refusal?.kind === "blocked") {
         if (entry.source === "mcp") {
           const operation = entry.mcp?.operation ?? "tool";
           if (operation === "tool") {
             setMcpCodeModeGuestResultFromAgentResult(candidate);
           } else if (options?.mcpNamespaceGuest) {
-            const details = isRecord(candidate.details) ? candidate.details : undefined;
-            const reason =
-              typeof details?.reason === "string" && details.reason.trim()
-                ? details.reason.trim()
-                : "Tool call blocked by policy";
-            throw new Error(`Tool "${entry.id}" was blocked before execution: ${reason}`);
+            throw new Error(`Tool "${entry.id}" was blocked before execution: ${refusal.reason}`);
           }
         }
         await assertCatalogOutputMatchesSchema(entry, candidate);
+      }
+      // Native catalog calls bypass the session tool_result hook. Apply once
+      // before guest serialization; MCP/client transports keep their owned projections.
+      if (entry.source === "openclaw" && candidate !== acceptedSnapshot) {
+        const failureKind = resolveToolResultFailureKind(candidate);
+        const update = await this.applyToolResultMiddleware({
+          toolCallId,
+          toolName: entry.name,
+          args: executedInput ?? asOptionalRecord(structuredClone(normalizedInput)) ?? {},
+          cwd: readStringValue(asOptionalRecord(candidate.details)?.cwd),
+          isError: failureKind !== undefined,
+          result: candidate,
+        });
+        if (update) {
+          candidate = resolveAgentHarnessToolResultPresentation({
+            result: update,
+            executionIsError: failureKind !== undefined,
+            executionFailureKind: failureKind,
+          }).result;
+        }
       }
       const snapshot =
         candidate === acceptedSnapshot
@@ -461,7 +502,6 @@ export class ToolSearchRuntime {
       acceptedSnapshot = snapshot;
       return snapshot;
     };
-    const validateInput = this.options.validateInput && entry.source === "openclaw";
     const validateExecution = validateInput || outputVariants !== undefined;
     const executionTool = prepareToolSearchCatalogExecutionTool(entry, {
       ...this.options,
@@ -482,6 +522,7 @@ export class ToolSearchRuntime {
       try {
         const result = await executeTool({
           tool: executionTool,
+          toolId: entry.id,
           toolName: entry.name,
           source: entry.source,
           sourceName: entry.sourceName,
@@ -493,14 +534,14 @@ export class ToolSearchRuntime {
           onUpdate: options?.onUpdate,
           acceptResultBeforeProjection,
         });
-        if (networkInvocation && !preExecutionBlocked) {
+        if (networkInvocation && !preExecutionRefused) {
           networkInvocation.observed = true;
         }
         return result;
       } catch (error) {
         if (
           networkInvocation &&
-          !preExecutionBlocked &&
+          !preExecutionRefused &&
           getBeforeToolCallFailureDisposition(error) === undefined &&
           !isTrustedToolExecutionPreflightError(error) &&
           !(signal?.aborted && error === signal.reason)
@@ -524,6 +565,7 @@ export class ToolSearchRuntime {
               if (validateInput) {
                 await assertCatalogInputMatchesSchema(entry, finalInput);
               }
+              executedInput = asOptionalRecord(structuredClone(finalInput));
               if (outputVariants) {
                 // Retain the prepared primitive, not an input object the tool can mutate.
                 executedOutputSelection = captureToolOutputSelection(
@@ -567,13 +609,32 @@ export function formatToolSearchControlResult<T>(
   options: {
     parentToolCallId?: string;
     terminalBatchStatus?: "waiting" | "completed" | "failed";
-    compact?: boolean;
+    /** Model-facing projection of payload; details keep the full payload. */
+    modelPayload?: unknown;
+    /** Discovery metadata may retain a schema prefix; execution results must stay whole. */
+    allowPartial?: boolean;
     images?: Extract<AgentToolResult<unknown>["content"][number], { type: "image" }>[];
   } = {},
 ): AgentToolResult<T> {
-  const serialized = serializeToolSearchControlResult(payload, options.compact);
+  const serialized = serializeToolSearchControlResult(
+    "modelPayload" in options ? options.modelPayload : payload,
+  );
   const networkContent = runtime?.hasNetworkContent(options.parentToolCallId) ?? false;
-  const { text } = renderToolSearchControlText(serialized, networkContent);
+  const budget = runtime?.resultBudget;
+  const textBudget =
+    budget && options.images?.length
+      ? {
+          ...budget,
+          maxContextChars: Math.max(
+            0,
+            budget.maxContextChars - options.images.length * TOOL_IMAGE_CHARS,
+          ),
+        }
+      : budget;
+  const { text } = renderToolSearchControlText(serialized, networkContent, {
+    budget: textBudget,
+    allowPartial: options.allowPartial,
+  });
   const result = textResult(text, payload);
   if (networkContent) {
     // The control tool has no static source; finalization reads this per-call fact.
@@ -620,6 +681,10 @@ function projectToolResultValue(result: AgentToolResult<unknown>): unknown {
     return result;
   }
   const { details } = result;
+  const refusal = readToolExecutionRefusal(result);
+  if (refusal?.kind === "gated") {
+    return { ...(isRecord(details) ? details : {}), message: refusal.reason };
+  }
   // An explicit error can explain itself only in model-facing text; keep that reason.
   if (result.isError !== true || hasErrorMessage(details)) {
     return details;

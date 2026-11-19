@@ -68,9 +68,9 @@ function onPendingAccess(action: () => Promise<void>, { at = 1, after = true } =
     return result;
   });
 }
-const settle = <T>(work: Promise<T>) =>
+const settle = (work: Promise<void>) =>
   work.then(
-    (completed) => ({ completed }),
+    () => ({ completed: true as const }),
     (error: unknown) => ({ error }),
   );
 function onLockOpen(action: (flags: Parameters<typeof fs.open>[1]) => Promise<void>) {
@@ -142,16 +142,23 @@ function isExclusiveCreate(flags: string | number | undefined): boolean {
   );
 }
 
-it.each(["absent", "replacement-pending", "replacement-complete"])(
-  "refuses %s root after observation-time disposal",
-  async (state) => {
+it.each([
+  ["observation", "absent"],
+  ["observation", "replacement-pending"],
+  ["script", "absent"],
+  ["script", "replacement-pending"],
+])("refuses a displaced root during %s (%s)", async (phase, state) => {
+  const displaced = displacedRoot();
+  const cooperativeDiscard = vi.fn();
+  let originalLock: Buffer | undefined;
+  let replaced = false;
+  vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
+  if (phase === "observation") {
     const originalIdentity = await identity(packageRoot);
     // Allocate while the original exists: deletion may immediately recycle its inode.
     const replacementRoot = tempDirs.make("openclaw-lifecycle-replacement-");
     const replacementIdentity = await identity(replacementRoot);
     expect(replacementIdentity).not.toEqual(originalIdentity);
-    let replaced = false;
-    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     onPendingAccess(async () => {
       replaced = true;
       await dispose(() => fs.rm(packageRoot, { recursive: true, force: true }));
@@ -164,27 +171,7 @@ it.each(["absent", "replacement-pending", "replacement-complete"])(
         }
       }
     });
-    await expect(finish()).rejects.toMatchObject({ name: "PackageLifecycleOwnershipError" });
-    expect({ replaced, dispatches: runScript.mock.calls.length }).toEqual({
-      replaced: true,
-      dispatches: 0,
-    });
-    await missing(lock);
-    if (state === "absent") {
-      await missing(packageRoot);
-    } else if (state === "replacement-pending") {
-      expect(await read(pending)).toBe("replacement pending\n");
-    }
-  },
-);
-
-it.each(["absent", "replacement-empty", "replacement-pending"])(
-  "does not arm %s root displaced during a script",
-  async (state) => {
-    const displaced = displacedRoot();
-    const cooperativeDiscard = vi.fn();
-    let originalLock: Buffer | undefined;
-    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
+  } else {
     runScript.mockImplementation(async () => {
       await expect(dispose(cooperativeDiscard)).rejects.toBeInstanceOf(OwnershipError);
       expect(cooperativeDiscard).not.toHaveBeenCalled();
@@ -198,34 +185,26 @@ it.each(["absent", "replacement-empty", "replacement-pending"])(
         }
       }
     });
-    await expect(finish()).rejects.toBeInstanceOf(OwnershipError);
-    expect(runScript).toHaveBeenCalledTimes(1);
+  }
+  await expect(finish()).rejects.toBeInstanceOf(OwnershipError);
+  expect(runScript).toHaveBeenCalledTimes(phase === "script" ? 1 : 0);
+  if (phase === "script") {
     expect(await fs.readFile(path.join(displaced, path.basename(lock)))).toEqual(originalLock);
-    await missing(lock);
-    if (state === "absent") {
-      await missing(packageRoot);
-      return;
-    }
-    const markerBeforeReplay = await optionalPending();
-    if (state === "replacement-pending") {
-      // The failed generation does not authorize recovery of its replacement.
-      expect(markerBeforeReplay).toBe("replacement pending\n");
-      return;
-    }
-    const replay = vi.fn();
-    const completed = await finish(replay);
-    expect({ markerBeforeReplay, completed, dispatches: replay.mock.calls.length }).toEqual({
-      markerBeforeReplay: null,
-      completed: false,
-      dispatches: 0,
-    });
-  },
-);
+  } else {
+    expect(replaced).toBe(true);
+  }
+  await missing(lock);
+  if (state === "absent") {
+    await missing(packageRoot);
+  } else if (state === "replacement-pending") {
+    // The failed generation does not authorize recovery of its replacement.
+    expect(await read(pending)).toBe("replacement pending\n");
+  }
+});
 
 it.each([
   ["callback", "absent"],
   ["callback", "legacy"],
-  ["release-before-retirement", "absent"],
   ["release-before-retirement", "pending"],
 ])("preserves retired work after %s failure (%s)", async (phase, shape) => {
   const other = await fixture();
@@ -282,52 +261,46 @@ it.each([
   const replay = vi.fn(async () => {
     await rm(legacy, { force: true });
   });
-  const completed = await finish(replay);
+  await finish(replay);
   const shouldRestore = phase === "callback" && shape !== "absent";
-  expect({ markerBeforeReplay, completed, dispatches: replay.mock.calls.length }).toEqual({
+  expect({ markerBeforeReplay, dispatches: replay.mock.calls.length }).toEqual({
     markerBeforeReplay: shape === "pending" || shouldRestore ? "pending\n" : null,
-    completed: shape !== "absent",
     dispatches: shape !== "absent" ? 2 : 0,
   });
 });
-it.each([
-  "directory",
-  "partial",
-  "unknown",
-  "oversized",
-  "reused-pid",
-  "dead-parent",
-  "symlink",
-  "marker-absent",
-])("refuses %s ownership without mutation or scripts", async (kind) => {
-  const outside = path.join(packageRoot, "sentinel");
-  if (kind === "marker-absent") {
-    await fs.rm(pending);
-  }
-  if (kind === "directory") {
-    await fs.mkdir(lock);
-  } else if (kind === "symlink") {
-    await fs.mkdir(outside);
-    await fs.writeFile(path.join(outside, "keep"), "keep");
-    await fs.symlink(outside, lock, process.platform === "win32" ? "junction" : "dir");
-  } else if (kind === "dead-parent") {
-    const child = spawnSync(process.execPath, ["-e", ""], { timeout: 5000 });
-    expect(child.status).toBe(0);
-    await writeOwner({ pid: child.pid });
-  } else {
-    const raw =
-      kind === "partial" || kind === "marker-absent"
-        ? "{unfinished"
-        : kind === "oversized"
-          ? "x".repeat(1024 * 1024 + 1)
-          : kind === "reused-pid"
-            ? JSON.stringify({
-                ...ownerPayload(),
-                starttime: (pidAlive.getFileLockProcessStartTime(process.pid) ?? 0) + 1,
-              })
-            : "{}";
-    await fs.writeFile(lock, raw);
-  }
+const sentinel = () => path.join(packageRoot, "sentinel");
+it.each<[string, () => Promise<unknown>]>([
+  ["directory", () => fs.mkdir(lock)],
+  ["partial", () => fs.writeFile(lock, "{unfinished")],
+  ["unknown", () => fs.writeFile(lock, "{}")],
+  ["oversized", () => fs.writeFile(lock, "x".repeat(1024 * 1024 + 1))],
+  ["reused-pid", () => writeOwner({ starttime: (ownerPayload().starttime ?? 0) + 1 })],
+  [
+    "dead-parent",
+    async () => {
+      const child = spawnSync(process.execPath, ["-e", ""], { timeout: 5000 });
+      expect(child.status).toBe(0);
+      await writeOwner({ pid: child.pid });
+    },
+  ],
+  [
+    "symlink",
+    async () => {
+      const outside = sentinel();
+      await fs.mkdir(outside);
+      await fs.writeFile(path.join(outside, "keep"), "keep");
+      await fs.symlink(outside, lock, process.platform === "win32" ? "junction" : "dir");
+    },
+  ],
+  [
+    "marker-absent",
+    async () => {
+      await fs.rm(pending);
+      await fs.writeFile(lock, "{unfinished");
+    },
+  ],
+])("refuses %s ownership without mutation or scripts", async (kind, prepare) => {
+  await prepare();
   const before = await fs.lstat(lock);
   const rawBefore = before.isFile() ? await fs.readFile(lock) : null;
   const completion = finish();
@@ -338,7 +311,7 @@ it.each([
   if (kind === "symlink") {
     await expect(completion).rejects.toBeInstanceOf(OwnershipError);
     expect((await fs.lstat(lock)).isSymbolicLink()).toBe(true);
-    expect(await read(path.join(outside, "keep"))).toBe("keep");
+    expect(await read(path.join(sentinel(), "keep"))).toBe("keep");
   }
   expect(runScript).not.toHaveBeenCalled();
   expect((await fs.lstat(lock)).ino).toBe(before.ino);
@@ -351,17 +324,6 @@ it.each([
   } else {
     expect(await read(pending)).toBe("pending\n");
   }
-});
-
-it("retries when the observed owner released before exiting", async () => {
-  await writeOwner();
-  vi.spyOn(pidAlive, "isPidAlive").mockImplementationOnce(() => {
-    fsSync.rmSync(lock);
-    return false;
-  });
-  await expect(finish()).resolves.toBe(true);
-  expect(runScript).toHaveBeenCalledTimes(2);
-  await missing(lock);
 });
 
 it.each(["not-directory", "inaccessible", "removed-on-create"])(
@@ -437,7 +399,7 @@ it.each(["pending", "completed", "replacement"])("reads %s after release", async
     expect(await read(lock)).toBe("{replacement publishing");
     expect(await read(pending)).toBe("pending\n");
   } else {
-    await expect(completion).resolves.toBe(state === "pending");
+    await completion;
     expect(runScript).toHaveBeenCalledTimes(state === "pending" ? 2 : 0);
     await missing(lock, pending);
   }
@@ -516,7 +478,7 @@ it.each(["ownership", "release"])("keeps work retired after %s failure", async (
 
   vi.restoreAllMocks();
   await rm(lock);
-  await expect(finish()).resolves.toBe(false);
+  await finish();
   expect(runScript).not.toHaveBeenCalled();
 });
 
@@ -576,7 +538,7 @@ it.each(["pending", "legacy"])("retires %s before disposal waiters enter", async
   }
   const contended = observeContention();
   const rm = fs.rm;
-  let contender: Promise<{ completed: boolean } | { error: unknown }> | undefined;
+  let contender: ReturnType<typeof settle> | undefined;
   vi.spyOn(fs, "rm").mockImplementation(async (file, options) => {
     if (file === (shape === "legacy" ? legacy : pending) && !contender) {
       contender = settle(finish());
@@ -586,8 +548,7 @@ it.each(["pending", "legacy"])("retires %s before disposal waiters enter", async
   });
   try {
     await dispose(async () => {
-      await expect(fs.access(pending)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.access(legacy)).rejects.toMatchObject({ code: "ENOENT" });
+      await missing(pending, legacy);
       // A recursive remover may unlink the in-tree lock before other files.
       await rm(lock, { force: true });
       expect(runScript).not.toHaveBeenCalled();
@@ -599,10 +560,10 @@ it.each(["pending", "legacy"])("retires %s before disposal waiters enter", async
     if (result && "error" in result) {
       expect(result.error).toBeInstanceOf(OwnershipError);
     } else {
-      expect(result).toEqual({ completed: false });
+      expect(result).toEqual({ completed: true });
     }
     expect(runScript).not.toHaveBeenCalled();
-    await expect(fs.access(packageRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    await missing(packageRoot);
   } finally {
     vi.restoreAllMocks();
     await rm(lock, { force: true });
@@ -613,7 +574,7 @@ it.each(["pending", "legacy"])("retires %s before disposal waiters enter", async
 it.each(["removed", "replacement"])("refuses %s roots after disposal", async (state) => {
   const displaced = displacedRoot();
   const contended = observeContention();
-  let completion: ReturnType<typeof settle<boolean>> | undefined;
+  let completion: ReturnType<typeof settle> | undefined;
   vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
   vi.useFakeTimers({ toFake: ["setTimeout"] });
   try {

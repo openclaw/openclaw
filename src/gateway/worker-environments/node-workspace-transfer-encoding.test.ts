@@ -7,34 +7,20 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
 import { withNodeWorkerTransferHttpRequest } from "../../node-host/node-worker-transfer-http.js";
 import { nodeWorkspaceTransferManifestPath } from "../../worker/node-workspace-transfer-protocol.js";
-import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
-import {
-  startNodeWorkspaceTransferTestServer,
-  transferOwner,
-} from "./node-workspace-transfer.test-support.js";
+import { transferFixture } from "./node-workspace-transfer-fixtures.test-support.js";
+import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 it("negotiates gzip only for authorized manifests while retaining identity peers", async () => {
   const root = tempDirs.make("workspace-transfer-encoding-");
-  const localPath = path.join(root, "source");
+  const { service, request, files } = await transferFixture(root);
   const content = "transfer content\n";
-  await fs.mkdir(localPath);
-  await fs.writeFile(path.join(localPath, "input.txt"), content);
-  const service = createNodeWorkspaceTransferService({
-    temporaryRoot: path.join(root, "transfers"),
-    getOwner: () => transferOwner("session"),
-  });
+  await files.write("input.txt", content);
   const server = await startNodeWorkspaceTransferTestServer(service);
   try {
-    const { snapshot, token } = await service.prepareSync({
-      environmentId: "environment",
-      ownerEpoch: 1,
-      sessionId: "session",
-      localPath,
-      isAuthorized: () => true,
-    });
+    const { snapshot, token } = await service.prepareSync(request);
     const requestManifest = async (header?: string, requestToken = token) =>
       await withNodeWorkerTransferHttpRequest(
         {

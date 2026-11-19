@@ -19,9 +19,8 @@ async function readBoundedGitValue(filePath: string): Promise<string> {
 export async function preflightWorkerWorkspace(params: {
   localPath: string;
   signal?: AbortSignal;
-  timeoutMs?: number;
 }): Promise<void> {
-  const timeoutMs = params.timeoutMs ?? 10 * 60_000;
+  const timeoutMs = 10 * 60_000;
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const signal = params.signal ? AbortSignal.any([params.signal, timeoutSignal]) : timeoutSignal;
   const temporaryDirectory = await fs.mkdtemp(

@@ -1,0 +1,15 @@
+[data-text-overflow="inline"] {
+  mask-image: linear-gradient(
+    to right,
+    black calc(100% - var(--text-overflow-fade-width, 16px)),
+    transparent
+  );
+}
+
+[data-text-overflow="inline"]:dir(rtl) {
+  mask-image: linear-gradient(
+    to left,
+    black calc(100% - var(--text-overflow-fade-width, 16px)),
+    transparent
+  );
+}

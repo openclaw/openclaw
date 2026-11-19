@@ -5,6 +5,8 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../../scripts/lib/package-lifecycle-marker.mjs";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { runtimeProcessScriptEntrypoints } from "../../infra/runtime-process-manifest.js";
 import type { UpdateAdmissionContext } from "../../infra/update-admission-contract.js";
 import type { UpdateAdmissionVerdict } from "../../infra/update-run-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
@@ -40,7 +42,15 @@ export function createCandidateAdmissionFixtures(f: CandidateAdmissionFixture) {
     const events: string[] = [];
     const databaseExistsAtAdmission: boolean[] = [];
     f.mockNpmGlobalCommands(nodeModules, async (argv) => {
-      if (argv[1] === "--input-type=module" && argv.at(-1) === "--version") {
+      if (
+        argv.at(-1) === "--version" &&
+        argv.some(
+          (argument) =>
+            path.basename(argument) === runtimeProcessScriptEntrypoints.updateNativeGate.fileName ||
+            path.parse(argument).name ===
+              path.parse(runtimeProcessEntrypoints.updateNativeGate.distWorkerPath).name,
+        )
+      ) {
         events.push("runtime-provision");
         return createCommandResult({ cleanup: "normal" });
       }

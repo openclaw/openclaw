@@ -69,7 +69,9 @@ describe("matrix profile actions", () => {
       });
       expect(loadWebMediaMock).toHaveBeenCalledExactlyOnceWith(
         source === "http" ? "https://cdn.example.org/avatar.png" : "/tmp/avatar.png",
-        source === "http" ? 10 * 1024 * 1024 : { maxBytes: 10 * 1024 * 1024, localRoots: ["/tmp"] },
+        source === "http"
+          ? { maxBytes: 10 * 1024 * 1024 }
+          : { maxBytes: 10 * 1024 * 1024, localRoots: ["/tmp"] },
       );
       expect(actionClient.setAvatarUrl).toHaveBeenCalledExactlyOnceWith(
         "mxc://example/uploaded-avatar",
@@ -80,7 +82,7 @@ describe("matrix profile actions", () => {
   it("skips blank desired profile values before provider or media effects", async () => {
     expect(
       await updateMatrixOwnProfile({ displayName: "  ", avatarUrl: "\t", avatarPath: "\n" }),
-    ).toMatchObject({ skipped: true, displayNameUpdated: false, avatarUpdated: false });
+    ).toMatchObject({ displayNameUpdated: false, avatarUpdated: false });
     expect(actionClient.getUserProfile).not.toHaveBeenCalled();
     expect(actionClient.setDisplayName).not.toHaveBeenCalled();
     expect(actionClient.setAvatarUrl).not.toHaveBeenCalled();

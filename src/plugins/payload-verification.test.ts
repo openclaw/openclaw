@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { writeJsonFile as writeJson } from "../../test/helpers/temp-repo.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
@@ -10,11 +11,6 @@ import {
 } from "./payload-verification.js";
 
 type BundleFormat = "agent" | "codex" | "claude" | "cursor";
-type FormatMarkedBundleInstallRecord = PluginInstallRecord & {
-  format: "bundle";
-  bundleFormat?: BundleFormat;
-};
-
 let tmpRoot: string;
 beforeEach(async () => {
   tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-payload-smoke-"));
@@ -32,18 +28,16 @@ function checkRecord(pluginId: string, record: PluginInstallRecord) {
   return runPluginPayloadSmokeCheck({ records: { [pluginId]: record }, env: {} });
 }
 
-async function writeJson(file: string, value: unknown) {
+async function writeFile(file: string, contents: string) {
   await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, JSON.stringify(value), "utf8");
+  await fs.writeFile(file, contents, "utf8");
 }
 
 async function writePackage(dir: string, manifest: Record<string, unknown>, mainContent?: string) {
-  await writeJson(path.join(dir, "package.json"), manifest);
+  writeJson(path.join(dir, "package.json"), manifest);
   const main = typeof manifest.main === "string" ? manifest.main : "index.js";
   if (mainContent !== undefined) {
-    const target = path.join(dir, main);
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(target, mainContent, "utf8");
+    await writeFile(path.join(dir, main), mainContent);
   }
 }
 
@@ -73,7 +67,7 @@ async function writeBundle(
     cursor: ".cursor-plugin",
     claude: ".claude-plugin",
   }[format];
-  await writeJson(
+  writeJson(
     path.join(dir, manifestDir, "plugin.json"),
     manifest ?? {
       ...(format === "agent"
@@ -82,17 +76,6 @@ async function writeBundle(
       name: `${format}-bundle`,
     },
   );
-}
-
-function formatMarkedBundleRecord(params: {
-  installPath: string;
-  bundleFormat?: BundleFormat;
-}): FormatMarkedBundleInstallRecord {
-  return {
-    source: "marketplace",
-    format: "bundle",
-    ...params,
-  } satisfies FormatMarkedBundleInstallRecord;
 }
 
 function resolveTestHostRoot(): string {
@@ -120,7 +103,7 @@ async function writeHostDependency(dir: string, dependencyField: string, native 
     },
     "export default {};",
   );
-  await writeJson(path.join(dir, "node_modules/openclaw/package.json"), {
+  writeJson(path.join(dir, "node_modules/openclaw/package.json"), {
     name: "openclaw",
     version: "2026.7.1-beta.2",
   });
@@ -134,8 +117,7 @@ async function checkExtension(extensions: string[], entry?: string) {
     openclaw: { extensions },
   });
   if (entry) {
-    await fs.mkdir(path.dirname(path.join(dir, entry)), { recursive: true });
-    await fs.writeFile(path.join(dir, entry), "export default {};\n", "utf8");
+    await writeFile(path.join(dir, entry), "export default {};\n");
   }
   return { dir, result: await checkPackage("brave", dir) };
 }
@@ -193,35 +175,28 @@ it.each([false, true])("reports missing package payload (directory exists: %s)",
 });
 
 it.each([
-  ["agent", "format"],
-  ["codex", "clawhubFamily"],
-  ["claude", "marker"],
-  ["cursor", "marketplace"],
+  ["agent", "format", { source: "marketplace", format: "bundle", bundleFormat: "agent" }],
+  ["codex", "clawhubFamily", { source: "clawhub", clawhubFamily: "bundle-plugin" }],
+  ["claude", "marker", { source: "marketplace", format: "bundle" }],
+  [
+    "cursor",
+    "marketplace",
+    {
+      source: "marketplace",
+      marketplaceName: "Local",
+      marketplaceSource: "local/repo",
+      marketplacePlugin: "marketplace-bundle",
+    },
+  ],
 ] as const)(
   "accepts a tracked %s bundle record via %s metadata",
-  async (bundleFormat, metadataKind) => {
+  async (bundleFormat, metadataKind, record) => {
     const dir = path.join(tmpRoot, `${bundleFormat}-bundle`);
     await writeBundle(dir, bundleFormat, undefined, metadataKind === "marker");
     if (metadataKind === "marketplace") {
-      await writeJson(path.join(dir, "package.json"), null);
+      writeJson(path.join(dir, "package.json"), null);
     }
-    const result = await checkRecord(
-      `${bundleFormat}-bundle`,
-      metadataKind === "clawhubFamily"
-        ? { source: "clawhub", clawhubFamily: "bundle-plugin", installPath: dir }
-        : metadataKind === "marketplace"
-          ? {
-              source: "marketplace",
-              installPath: dir,
-              marketplaceName: "Local",
-              marketplaceSource: "local/repo",
-              marketplacePlugin: "marketplace-bundle",
-            }
-          : formatMarkedBundleRecord({
-              installPath: dir,
-              ...(metadataKind === "format" ? { bundleFormat } : {}),
-            }),
-    );
+    const result = await checkRecord(`${bundleFormat}-bundle`, { ...record, installPath: dir });
     expect(result).toEqual({ checked: [`${bundleFormat}-bundle`], failures: [] });
   },
 );
@@ -255,7 +230,12 @@ it.each([
     }
     const record =
       kind === "missing"
-        ? formatMarkedBundleRecord({ installPath: dir, bundleFormat: "codex" })
+        ? ({
+            source: "marketplace",
+            format: "bundle",
+            installPath: dir,
+            bundleFormat: "codex",
+          } as const)
         : ({ source: "clawhub", clawhubFamily: "bundle-plugin", installPath: dir } as const);
     expectFailure(
       await checkRecord("bundle", record),
@@ -316,29 +296,22 @@ it.each(["missing", "wrong root", "host root"])(
         "junction",
       );
     }
-    const result = await checkPackage("codex", dir);
-    if (target === "host root") {
-      expect(result.failures).toEqual([]);
-    } else if (target === "missing") {
-      expectFailure(
-        result,
-        "codex",
-        dir,
-        "missing-openclaw-peer-link",
-        `Plugin declares peerDependency "openclaw" but peer link audit failed: missing ${peerPath}.`,
-      );
-    } else {
-      expect(result.failures).toEqual([
-        expect.objectContaining({
-          pluginId: "codex",
-          installPath: dir,
-          reason: "missing-openclaw-peer-link",
-          detail: expect.stringContaining(
-            `${peerPath} points to ${await resolveRealPath(wrongRoot)} instead of ${await resolveRealPath(resolveTestHostRoot())}`,
-          ),
-        }),
-      ]);
-    }
+    const failure = {
+      pluginId: "codex",
+      installPath: dir,
+      reason: "missing-openclaw-peer-link",
+      detail:
+        target === "wrong root"
+          ? expect.stringContaining(
+              `${peerPath} points to ${await resolveRealPath(wrongRoot)} instead of ${await resolveRealPath(resolveTestHostRoot())}`,
+            )
+          : `Plugin declares peerDependency "openclaw" but peer link audit failed: missing ${peerPath}.`,
+    };
+    expect((await checkPackage("codex", dir)).failures).toStrictEqual(
+      target === "host root"
+        ? []
+        : [target === "wrong root" ? expect.objectContaining(failure) : failure],
+    );
   },
 );
 
@@ -375,8 +348,7 @@ it.each([
   async (content, error) => {
     const dir = path.join(tmpRoot, "broken");
     const laterDir = path.join(tmpRoot, "later");
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, "package.json"), content, "utf8");
+    await writeFile(path.join(dir, "package.json"), content);
     await writePackage(laterDir, { name: "later", main: "missing.js" });
 
     const result = await runPluginPayloadSmokeCheck({

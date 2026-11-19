@@ -53,6 +53,7 @@ function metadataEntryFor(
       sessionDefaults?: UiSessionDefaultsHost,
       {
         sessionOnly = false,
+        refreshSessionFacts = sessionOnly || !scope?.sessionKey,
         retireCatalog = false,
         matchesCatalog,
         commandsChanged = true,
@@ -89,7 +90,7 @@ function metadataEntryFor(
         notifyChatMetadataListeners(entry, {
           type: "invalidated",
           scope: sessionOnly ? "session" : "full",
-          refreshSessionFacts: sessionOnly || !scope?.sessionKey,
+          refreshSessionFacts,
           ...(retireCatalog ? { retireCatalog: true } : {}),
         });
         entry.release();
@@ -174,7 +175,7 @@ function preparePublication(entry: ChatMetadataEntry): ChatMetadataPublication {
         if (isCurrent()) {
           entry.invalidated = true;
         }
-        throw new Error("Chat commands are unavailable. Retry the metadata request.");
+        throw new Error("Couldn’t load session commands. Request the session metadata again.");
       }
       if ("unchanged" in result && metadata.revision !== result.revision) {
         throw new Error("Chat metadata was unchanged without a retained revision.");

@@ -1,9 +1,7 @@
-import { buildControlUiCatalogSessionUrl } from "@openclaw/session-url-contract";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { buildCatalogSessionKey } from "./catalog-key.ts";
 import {
-  resolveSessionPreferredFace,
   resolveSessionPreferredFaceForKey,
   SESSION_FACE_PREFERENCE_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
@@ -14,12 +12,6 @@ const catalog = (threadId = "thread-1") => ({
   catalogId: "claude",
   hostId: "gateway:local",
   threadId,
-});
-
-it("defaults generic opens to chat and honors a stored dashboard preference", () => {
-  expect(resolveSessionPreferredFace(undefined)).toBe("chat");
-  expect(resolveSessionPreferredFace({ boardFace: "chat" })).toBe("chat");
-  expect(resolveSessionPreferredFace({ boardFace: "dashboard" })).toBe("dashboard");
 });
 
 it("keeps different catalog threads on different destinations", () => {
@@ -48,16 +40,6 @@ it("requires the destination face while preserving catalog identity", () => {
     mainKey: "workspace",
   });
 
-  expect(target.href).toBe(
-    buildControlUiCatalogSessionUrl({
-      namespace: "dashboard",
-      agentId: "research",
-      basePath: "/admin/openclaw/",
-      catalog: catalogKey.catalogId,
-      host: catalogKey.hostId,
-      thread: catalogKey.threadId,
-    }),
-  );
   expect(target).toEqual({
     href: "/admin/openclaw/dashboard/research?catalog=claude&host=gateway%3Alocal&thread=thread-1",
     options: {

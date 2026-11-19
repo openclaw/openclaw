@@ -1,7 +1,9 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { storeDeviceAuthToken } from "../lib/nodes/index.ts";
-import * as prewarm from "../pages/chat/session-snapshot-prewarm.ts";
+import * as prewarm from "../pages/chat/chat-snapshot-prewarm.ts";
+import { readSidebarBootSnapshot } from "../pages/chat/session-snapshot-prewarm.ts";
+import { restoreMocksAndGlobals } from "../test-helpers/mock-cleanup.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { makeBootRecord as bootRecord, makeBootRoster } from "./bootstrap.test-support.ts";
 import { bootstrapApplication } from "./bootstrap.ts";
@@ -24,19 +26,48 @@ function configure(patch: Partial<ReturnType<typeof loadSettings>>, token = "tes
 }
 
 function spyPrewarm() {
-  return vi.spyOn(prewarm, "prewarmChatSnapshot").mockImplementation(() => undefined);
+  return vi.spyOn(prewarm, "prewarmChatSnapshot").mockImplementation(async () => undefined);
 }
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
+afterEach(() => restoreMocksAndGlobals());
 
 it.each([
   {
     key: "agent:other:conversation",
     url: "/chat",
     expected: "agent:other:conversation",
+  },
+  { key: "agent:other:conversation", url: "/settings", expected: null },
+  {
+    key: "agent:main:dashboard:12345678-90ab-4def-8234-567890abcdef",
+    url: "/dashboard/main/mission-control",
+    expected: "agent:main:dashboard:12345678-90ab-4def-8234-567890abcdef",
+  },
+  {
+    key: "agent:main:dashboard:12345678-90ab-4def-8234-567890abcdef",
+    url: "/dashboard/main/~key/mission-control",
+    expected: "agent:main:mission-control",
+  },
+  {
+    key: "agent:other:dashboard:12345678-90ab-4def-8234-567890abcdef",
+    url: "/dashboard/main/mission-control",
+    expected: "agent:main:mission-control",
+  },
+  {
+    key: "agent:main:dashboard:12345678-90ab-4def-8234-567890abcdef",
+    url: "/chat/main/new-topic",
+    expected: "agent:main:new-topic",
+  },
+  { key: "agent:other:conversation", url: "/chat/main", expected: "agent:main:main" },
+  {
+    key: "agent:other:conversation",
+    url: "/chat/main/new-topic",
+    expected: "agent:main:new-topic",
+  },
+  {
+    key: "agent:other:conversation",
+    url: "/chat/main/1234567890abcdef1234567890abcdef",
+    expected: null,
   },
   {
     key: "agent:main:main",
@@ -68,7 +99,7 @@ it.each([
     }
     expect(runtime.context.gateway.snapshot.phase).not.toBe("connected");
   } finally {
-    await prewarm.readSidebarBootSnapshot(runtime.context.gateway);
+    await readSidebarBootSnapshot(runtime.context.gateway);
   }
 });
 it.each([

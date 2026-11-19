@@ -45,6 +45,7 @@ export type {
   ImageContent,
   Message,
   Model,
+  ModelRequestHeaders,
   ModelThinkingLevel,
   ProviderResponse,
   ProviderStreamOptions,

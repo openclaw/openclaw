@@ -5,15 +5,11 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayPendingRequests } from "../../../../packages/gateway-client/src/pending-request.ts";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
-import {
-  createGatewayHarness,
-  createTestSessionCapability,
-  sessionsResult,
-} from "../../lib/sessions/session-capability.test-support.ts";
+import * as sessionFixtures from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createContext } from "./skill-workshop-page.test-support.ts";
 import { SkillWorkshopPage } from "./skill-workshop-page.tsx";
 
@@ -23,18 +19,16 @@ const key = "agent:research:dashboard:7e93881c-0186-4d25-9e99-cdce85cac675";
 const retainedRun = expect.objectContaining({ sessionKey: key, pendingRunId: "learning-run" });
 const unresolved = () => new Promise<never>(() => {});
 
-function learningContext(request: ReturnType<typeof vi.fn> = vi.fn(unresolved)) {
-  return createContext(request, { methods: ["sessions.create"] });
-}
-
-async function mountLearningPage(context = learningContext()) {
+async function mountLearningPage(
+  context = createContext(vi.fn(unresolved), { methods: ["sessions.create"] }),
+) {
   const mounted = mountSolid(() => <SkillWorkshopPage />, {
     wrapper: createSolidApplicationContextProvider(context).wrapper,
   });
   const button = await waitForSolid(() =>
     mounted.getByRole<HTMLButtonElement>("button", { name: "Learn from history" }),
   );
-  return { ...mounted, page: mounted.container, context, button };
+  return { ...mounted, context, button };
 }
 
 it("starts one ordinary session and opens its acknowledged run", async () => {
@@ -43,6 +37,7 @@ it("starts one ordinary session and opens its acknowledged run", async () => {
   context.sessions.createResult = vi.fn(() => creation.promise);
   button.click();
   button.click();
+  await waitForSolid(() => expect(button.disabled).toBe(true));
 
   expect(context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(
     {
@@ -56,17 +51,20 @@ it("starts one ordinary session and opens its acknowledged run", async () => {
   expect(context.navigate).not.toHaveBeenCalled();
   creation.resolve({ key, initialRun: { status: "started", runId: "learning-run" } });
   await vi.waitFor(() => expect(context.navigate).toHaveBeenCalledOnce());
+  flush();
+  expect(button.disabled).toBe(false);
   expect(context.navigate).toHaveBeenCalledWith("chat", expect.any(Object));
   expect(context.chatSubmissions.retain).toHaveBeenCalledWith(retainedRun);
 });
 
 it("shows a failed creation without automatically retrying", async () => {
-  const { page, context, button } = await mountLearningPage();
+  const mounted = await mountLearningPage();
+  const { context, button } = mounted;
   context.sessions.state.error = "The Gateway refused this session.";
   context.sessions.createResult = vi.fn(async () => null);
   button.click();
   await vi.waitFor(() =>
-    expect(page.querySelector('[role="alert"]')?.textContent).toContain("Gateway refused"),
+    expect(mounted.getByRole("alert").textContent).toContain("Gateway refused"),
   );
   expect(context.sessions.createResult).toHaveBeenCalledOnce();
   expect(context.navigate).not.toHaveBeenCalled();
@@ -85,33 +83,26 @@ it("retains an accepted run without redirecting a replaced Workshop page", async
         signal = options?.signal;
         return pending.request(sender, method, params, options);
       }
-      return method === "sessions.list" ? Promise.resolve(sessionsResult([])) : unresolved();
+      return method === "sessions.list"
+        ? Promise.resolve(sessionFixtures.sessionsResult([]))
+        : unresolved();
     },
   );
   const client = createTestGatewayClient(request);
-  const context = learningContext(request);
-  const { gateway } = createGatewayHarness(client, ["sessions.create"], {
-    initial: {
-      hello: context.gateway.snapshot.hello,
-      sessionKey: "global",
-      assistantAgentId: "research",
-    },
+  const context = createContext(request, { methods: ["sessions.create"] });
+  const { gateway } = sessionFixtures.createGatewayHarness(client, ["sessions.create"], {
+    initial: { ...context.gateway.snapshot, client, phase: "connected" },
   });
-  const sessions = createTestSessionCapability(gateway, "research");
+  const sessions = sessionFixtures.createTestSessionCapability(gateway, "research");
   Object.assign(context, { gateway, sessions });
   const create = vi.spyOn(sessions, "createResult");
   let mounted = await mountLearningPage(context);
   mounted.button.click();
   const frame = await sent.promise;
-  expect(frame.method).toBe("sessions.create");
   mounted.unmount();
   expect(signal?.aborted).toBe(true);
-  pending.handleResponse({
-    type: "res",
-    id: frame.id,
-    ok: true,
-    payload: { key, runStarted: true, runId: "learning-run" },
-  });
+  const payload = { key, runStarted: true, runId: "learning-run" };
+  pending.handleResponse({ type: "res", id: frame.id, ok: true, payload });
   await create.mock.results[0]?.value;
   expect(context.chatSubmissions.retain).toHaveBeenCalledExactlyOnceWith(retainedRun);
   mounted = await mountLearningPage(context);

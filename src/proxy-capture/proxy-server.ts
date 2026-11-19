@@ -12,6 +12,7 @@ import { URL } from "node:url";
 import { promisify } from "node:util";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { readJsonBodyWithLimit } from "../infra/http-body.js";
+import { formatHostForUrl } from "../infra/net/hostname.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { ensureDebugProxyCa } from "./ca.js";
 import { DEBUG_PROXY_CHILD_CAPTURE_PATH } from "./child-transport.js";
@@ -155,15 +156,13 @@ export async function startDebugProxyServer(params: {
   host?: string;
   port?: number;
   settings: DebugProxySettings;
-  env?: NodeJS.ProcessEnv;
   captureStore?: DebugProxyCliStore;
 }) {
   const settings = { ...params.settings };
-  const env = { ...(params.env ?? process.env) };
   await ensureDebugProxyCa(settings.certDir);
   const lease = params.captureStore
     ? { store: params.captureStore, release: undefined }
-    : await acquireDebugProxyCaptureStoreAsync({ env });
+    : await acquireDebugProxyCaptureStoreAsync();
   const store = lease.store;
   const childSessionId = settings.sessionId;
   const token = randomBytes(32).toString("base64url");
@@ -528,7 +527,7 @@ export async function startDebugProxyServer(params: {
     if (!address || typeof address === "string") {
       throw new Error("Failed to resolve debug proxy server address");
     }
-    const proxyUrl = `http://${host}:${address.port}`;
+    const proxyUrl = `http://${formatHostForUrl(host)}:${address.port}`;
     const endpoint = new URL(proxyUrl);
     endpoint.username = DEBUG_PROXY_CHILD_CAPTURE_USERNAME;
     endpoint.password = token;

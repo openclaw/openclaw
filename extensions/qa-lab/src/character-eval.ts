@@ -88,19 +88,6 @@ type QaCharacterEvalParams = {
   progress?: QaCharacterEvalProgressLogger;
 };
 
-function resolveCandidateOptions(params: QaCharacterEvalParams, model: string) {
-  const modelOptions = params.candidateModelOptions?.[model];
-  return {
-    thinkingDefault:
-      modelOptions?.thinkingDefault ??
-      params.candidateThinkingByModel?.[model] ??
-      params.candidateThinkingDefault ??
-      DEFAULT_CHARACTER_THINKING_BY_MODEL[model] ??
-      DEFAULT_CHARACTER_THINKING,
-    fastMode: modelOptions?.fastMode ?? params.candidateFastMode ?? isQaFastModeModelRef(model),
-  };
-}
-
 function sanitizePathPart(value: string) {
   const sanitized = value.replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "");
   return sanitized || "model";
@@ -261,7 +248,15 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
   const candidatesStartedAt = Date.now();
   const { results: runs } = await runTasksWithConcurrency<QaCharacterEvalRun>({
     tasks: models.map((model, index) => async () => {
-      const { thinkingDefault, fastMode } = resolveCandidateOptions(params, model);
+      const modelOptions = params.candidateModelOptions?.[model];
+      const thinkingDefault =
+        modelOptions?.thinkingDefault ??
+        params.candidateThinkingByModel?.[model] ??
+        params.candidateThinkingDefault ??
+        DEFAULT_CHARACTER_THINKING_BY_MODEL[model] ??
+        DEFAULT_CHARACTER_THINKING;
+      const fastMode =
+        modelOptions?.fastMode ?? params.candidateFastMode ?? isQaFastModeModelRef(model);
       const modelOutputDir = path.join(runsDir, `${index + 1}-${sanitizePathPart(model)}`);
       const runStartedAt = Date.now();
       const complete = <T extends QaCharacterEvalRun>(run: T) => {

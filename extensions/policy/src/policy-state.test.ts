@@ -164,6 +164,31 @@ it("keeps explicit Podman identity while exposing shared container settings", ()
     { kind: "containerMount", bindSurface: "docker", bind: "/host/data:/data:ro" },
   );
 });
+
+it("keeps scanning later agents after a disabled sandbox browser", () => {
+  const evidence = scanPolicySandboxPosture({
+    agents: {
+      entries: {
+        alpha: { sandbox: { browser: { enabled: false } } },
+        beta: {
+          sandbox: { browser: { enabled: true, cdpSourceRange: "172.21.0.1/32" } },
+        },
+      },
+    },
+  });
+
+  expectIncludes(
+    evidence,
+    { agentId: "alpha", kind: "browserCdpSourceRange", value: false },
+    { agentId: "beta", kind: "browserCdpSourceRange", value: "172.21.0.1/32" },
+    {
+      agentId: "beta",
+      kind: "containerNetwork",
+      networkSurface: "browser",
+      value: "openclaw-sandbox-browser",
+    },
+  );
+});
 describe("scanPolicyToolPosture", () => {
   it("derives exec posture from normalized agent entries", () => {
     const evidence = scanPolicyToolPosture({

@@ -156,13 +156,14 @@ title: "Configuration — workplace chat channels"
 - `channels.slack.execApprovals`: Slack-native approval-client delivery and exec approver authorization. Same schema as Discord: `enabled` (`true`/`false`/`"auto"`), `approvers` (Slack user IDs), `agentFilter`, `sessionFilter`, and `target` (`"dm"`, `"channel"`, or `"both"`). Plugin approvals can use this native-client path for Slack-origin requests when Slack plugin approvers resolve; Slack-native plugin approval delivery can also be enabled through `approvals.plugin` for Slack-origin sessions or Slack targets. Plugin approvals use `approvals.plugin.slack` reviewer lists when set, falling back to Slack account `allowFrom` and default routing when the default list is omitted. They do not use exec approvers.
 - An effective nonempty `approvals.plugin.slack` reviewer list enables native Slack plugin approval delivery independently of `channels.slack.execApprovals` and plugin forwarding.
 
-| Action group | Default | Notes                  |
-| ------------ | ------- | ---------------------- |
-| reactions    | enabled | React + list reactions |
-| messages     | enabled | Read/send/edit/delete  |
-| pins         | enabled | Pin/unpin/list         |
-| memberInfo   | enabled | Member info            |
-| emojiList    | enabled | List custom emoji      |
+| Action group | Default  | Notes                     |
+| ------------ | -------- | ------------------------- |
+| channels     | disabled | Create workspace channels |
+| reactions    | enabled  | React + list reactions    |
+| messages     | enabled  | Read/send/edit/delete     |
+| pins         | enabled  | Pin/unpin/list            |
+| memberInfo   | enabled  | Member info               |
+| emojiList    | enabled  | List custom emoji         |
 
 ## Mattermost
 

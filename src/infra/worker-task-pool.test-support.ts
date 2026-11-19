@@ -16,7 +16,6 @@ export type PoolFixtureInput = {
   wait?: boolean;
   exitCode?: number;
   buffer?: ArrayBuffer;
-  relayBuffer?: boolean;
 };
 export type PoolFixtureResult = Awaited<ReturnType<typeof runFixture>>;
 
@@ -41,7 +40,6 @@ async function runFixture(input: unknown, channel?: WorkerTaskChannel) {
   if (input.wait && counters) {
     Atomics.wait(counters, 1, 0);
   }
-  let relayedBufferBytes: number | undefined;
   if (input.consumeInput) {
     assert.ok(channel);
     channel.consumeInput();
@@ -49,20 +47,10 @@ async function runFixture(input: unknown, channel?: WorkerTaskChannel) {
   if (input.exchanges && channel) {
     channel.consumeInput();
     for (let index = 0; index < Number(input.exchanges); index++) {
-      const buffer =
-        input.relayBuffer && input.buffer instanceof ArrayBuffer ? input.buffer : undefined;
-      const response = await channel.request(
-        {
-          kind: input.opaqueRequest ? undefined : "fixture-exchange",
-          label: input.label,
-          buffer,
-        },
-        buffer ? [buffer] : undefined,
-      );
-      if (buffer) {
-        relayedBufferBytes = buffer.byteLength;
-        input.buffer = undefined;
-      }
+      const response = await channel.request({
+        kind: input.opaqueRequest ? undefined : "fixture-exchange",
+        label: input.label,
+      });
       if (response.input instanceof ArrayBuffer) {
         input.buffer = response.input;
       }
@@ -78,7 +66,6 @@ async function runFixture(input: unknown, channel?: WorkerTaskChannel) {
     ...(input.readEngineSelection ? { engineSelection: getDatabaseEngineSelection() } : {}),
     buffer: input.buffer,
     previousBufferBytes,
-    relayedBufferBytes,
     ...(input.readStartupOptions
       ? { startupOptions: { data: workerData, argv: process.argv.slice(2) } }
       : {}),

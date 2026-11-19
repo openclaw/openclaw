@@ -93,82 +93,6 @@ export function registerBuiltDiscordComponentMessage(params: {
   });
 }
 
-async function buildDiscordComponentPayload(params: {
-  spec: DiscordComponentMessageSpec;
-  opts: DiscordComponentSendOpts;
-  accountId: string;
-}) {
-  const messageReference = params.opts.reply
-    ? { message_id: params.opts.reply.messageId, fail_if_not_exists: false }
-    : undefined;
-
-  let spec = params.spec;
-  let resolvedFileName: string | undefined;
-  let files: MessagePayloadFile[] | undefined;
-  let attachmentNames: string[] | undefined;
-  if (params.opts.mediaUrl) {
-    const media = await loadOutboundMediaFromUrl(params.opts.mediaUrl, {
-      mediaAccess: params.opts.mediaAccess,
-      mediaLocalRoots: params.opts.mediaLocalRoots,
-      mediaReadFile: params.opts.mediaReadFile,
-    });
-    const filenameOverride = params.opts.filename?.trim();
-    attachmentNames = extractComponentAttachmentNames(spec);
-    const explicitAttachmentName = attachmentNames[0];
-    resolvedFileName =
-      filenameOverride ||
-      explicitAttachmentName ||
-      media.fileName ||
-      `upload${extensionForMime(media.contentType) ?? ""}`;
-    if (attachmentNames.length === 0) {
-      // An implicit File component must reference the uploaded filename.
-      const file: `attachment://${string}` = `attachment://${resolvedFileName}`;
-      spec = { ...spec, blocks: [...(spec.blocks ?? []), { type: "file", file }] };
-      attachmentNames = [resolveDiscordComponentAttachmentName(file)];
-    }
-    files = [{ data: media.buffer, name: resolvedFileName, contentType: media.contentType }];
-  }
-
-  const uniqueAttachmentNames = uniqueStrings(
-    attachmentNames ?? extractComponentAttachmentNames(spec),
-  );
-  if (uniqueAttachmentNames.length > 1) {
-    throw new Error(
-      "Discord component attachments currently support a single file. Use media-gallery for multiple files.",
-    );
-  }
-  const expectedAttachmentName = uniqueAttachmentNames[0];
-  if (expectedAttachmentName && resolvedFileName && expectedAttachmentName !== resolvedFileName) {
-    throw new Error(
-      `Component file block expects attachment "${expectedAttachmentName}", but the uploaded file is "${resolvedFileName}". Update components.blocks[].file or provide a matching filename.`,
-    );
-  }
-  if (!params.opts.mediaUrl && expectedAttachmentName) {
-    throw new Error(
-      "Discord component file blocks require a media attachment (media/path/filePath).",
-    );
-  }
-
-  const buildResult = buildDiscordComponentMessage({
-    spec,
-    sessionKey: params.opts.sessionKey,
-    agentId: params.opts.agentId,
-    accountId: params.accountId,
-  });
-  const payload: MessagePayloadObject = {
-    components: buildResult.components,
-    allowed_mentions: params.opts.allowedMentions,
-    ...(params.opts.silent ? { flags: SUPPRESS_NOTIFICATIONS_FLAG } : {}),
-    ...(files ? { files } : {}),
-  };
-  const body = {
-    ...serializePayload(payload),
-    ...(messageReference ? { message_reference: messageReference } : {}),
-  };
-
-  return { body, buildResult };
-}
-
 export async function sendDiscordComponentMessage(
   to: string,
   spec: DiscordComponentMessageSpec,
@@ -219,11 +143,76 @@ async function writeDiscordComponentMessage(
       throw new Error("Discord components are not supported in forum-style channels");
     }
   }
-  const { body: componentBody, buildResult } = await buildDiscordComponentPayload({
-    spec,
-    opts,
+  const messageReference = opts.reply
+    ? { message_id: opts.reply.messageId, fail_if_not_exists: false }
+    : undefined;
+
+  let componentSpec = spec;
+  let resolvedFileName: string | undefined;
+  let files: MessagePayloadFile[] | undefined;
+  let attachmentNames: string[] | undefined;
+  if (opts.mediaUrl) {
+    const media = await loadOutboundMediaFromUrl(opts.mediaUrl, {
+      mediaAccess: opts.mediaAccess,
+      mediaLocalRoots: opts.mediaLocalRoots,
+      mediaReadFile: opts.mediaReadFile,
+    });
+    const filenameOverride = opts.filename?.trim();
+    attachmentNames = extractComponentAttachmentNames(componentSpec);
+    const explicitAttachmentName = attachmentNames[0];
+    resolvedFileName =
+      filenameOverride ||
+      explicitAttachmentName ||
+      media.fileName ||
+      `upload${extensionForMime(media.contentType) ?? ""}`;
+    if (attachmentNames.length === 0) {
+      // An implicit File component must reference the uploaded filename.
+      const file: `attachment://${string}` = `attachment://${resolvedFileName}`;
+      componentSpec = {
+        ...componentSpec,
+        blocks: [...(componentSpec.blocks ?? []), { type: "file", file }],
+      };
+      attachmentNames = [resolveDiscordComponentAttachmentName(file)];
+    }
+    files = [{ data: media.buffer, name: resolvedFileName, contentType: media.contentType }];
+  }
+
+  const uniqueAttachmentNames = uniqueStrings(
+    attachmentNames ?? extractComponentAttachmentNames(componentSpec),
+  );
+  if (uniqueAttachmentNames.length > 1) {
+    throw new Error(
+      "Discord component attachments currently support a single file. Use media-gallery for multiple files.",
+    );
+  }
+  const expectedAttachmentName = uniqueAttachmentNames[0];
+  if (expectedAttachmentName && resolvedFileName && expectedAttachmentName !== resolvedFileName) {
+    throw new Error(
+      `Component file block expects attachment "${expectedAttachmentName}", but the uploaded file is "${resolvedFileName}". Update components.blocks[].file or provide a matching filename.`,
+    );
+  }
+  if (!opts.mediaUrl && expectedAttachmentName) {
+    throw new Error(
+      "Discord component file blocks require a media attachment (media/path/filePath).",
+    );
+  }
+
+  const buildResult = buildDiscordComponentMessage({
+    spec: componentSpec,
+    sessionKey: opts.sessionKey,
+    agentId: opts.agentId,
     accountId: accountInfo.accountId,
   });
+  const payload: MessagePayloadObject = {
+    components: buildResult.components,
+    allowed_mentions: opts.allowedMentions,
+    ...(opts.silent ? { flags: SUPPRESS_NOTIFICATIONS_FLAG } : {}),
+    ...(files ? { files } : {}),
+  };
+  const componentBody = {
+    ...serializePayload(payload),
+    ...(messageReference ? { message_reference: messageReference } : {}),
+  };
   // Nonce enforcement belongs to Create Message, not edits.
   const body = creating
     ? { ...componentBody, nonce: createDiscordMessageNonce(), enforce_nonce: true }

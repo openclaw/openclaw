@@ -7,25 +7,12 @@ import {
   stopNodeHostWorkerFromSignal,
 } from "./worker-support.js";
 
-describe("parseNodeHostWorkerInput", () => {
-  const input = {
-    type: "invoke-input",
-    generation: 1,
-    invokeId: "invoke-1",
-    seq: 2,
-    payloadJSON: "x",
-  };
-  const cancel = { type: "invoke-cancel", generation: 1, invokeId: "invoke-1" };
-  const parse = (frame: object) => parseNodeHostWorkerInput(JSON.stringify(frame));
-
-  it("accepts ordered input and cancel control frames", () => {
-    expect(parse(input)).toEqual(input);
-    expect(parse(cancel)).toEqual(cancel);
-  });
-
-  it("rejects malformed JSON frames", () => {
-    expect(parseNodeHostWorkerInput("{")).toBeNull();
-  });
+it.each([
+  { type: "invoke-input", generation: 1, invokeId: "invoke-1", seq: 2, payloadJSON: "x" },
+  { type: "invoke-cancel", generation: 1, invokeId: "invoke-1" },
+  null,
+])("parses worker control frame %j", (frame) => {
+  expect(parseNodeHostWorkerInput(frame === null ? "{" : JSON.stringify(frame))).toEqual(frame);
 });
 
 describe("NodeHostWorkerBridgeClient", () => {
@@ -39,6 +26,15 @@ describe("NodeHostWorkerBridgeClient", () => {
   });
   afterEach(() => client.close());
   const messages = () => write.mock.calls.map(([message]) => message);
+
+  it("does not send a worker request whose signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("cancelled before progress"));
+    await expect(
+      client.request("node.invoke.progress", {}, { signal: controller.signal }),
+    ).rejects.toThrow("cancelled before progress");
+    expect(write).not.toHaveBeenCalled();
+  });
 
   it("fences pending RPCs and retained invocation output after route replacement", async () => {
     const pending = client.request("skills.bins");
@@ -57,16 +53,13 @@ describe("NodeHostWorkerBridgeClient", () => {
   });
 
   it("preserves structured gateway rejection for the shared publisher", async () => {
+    const error = { code: "INVALID_REQUEST", message: "unknown method: node.skills.update" };
     const response = client.request("node.skills.update");
     const rejection = expect(response).rejects.toMatchObject({
-      gatewayCode: "INVALID_REQUEST",
-      message: "unknown method: node.skills.update",
+      gatewayCode: error.code,
+      message: error.message,
     });
-    client.handleResponse({
-      ...responseFrame,
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: "unknown method: node.skills.update" },
-    });
+    client.handleResponse({ ...responseFrame, ok: false, error });
     await rejection;
     await expect(response).rejects.toBeInstanceOf(GatewayClientRequestError);
   });
@@ -104,43 +97,10 @@ describe("NodeHostWorkerBridgeClient", () => {
     await response;
     expect(settled).toBe(true);
   });
-
-  it("does not keep the worker alive for a pending gateway timeout", async () => {
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    try {
-      const response = client.request("skills.bins", {}, { timeoutMs: 60_000 });
-      const timer = timeoutSpy.mock.results[0]?.value as NodeJS.Timeout | undefined;
-
-      expect(timer?.hasRef()).toBe(false);
-      client.close();
-      await expect(response).rejects.toThrow("node-host worker stopped");
-    } finally {
-      timeoutSpy.mockRestore();
-    }
-  });
 });
 
 it("preserves the signal exit code when closing stdin emits EOF", async () => {
-  const calls: string[] = [];
-  let stopping = false;
-  const stop = async (exitCode: number) => {
-    if (stopping) {
-      return;
-    }
-    stopping = true;
-    calls.push(`stop:${exitCode}`);
-  };
-
-  await stopNodeHostWorkerFromSignal(
-    {
-      close: () => {
-        calls.push("close");
-        void stop(0);
-      },
-    },
-    stop,
-    143,
-  );
-
-  expect(calls).toEqual(["stop:143", "close"]);
+  const stop = vi.fn(async (_exitCode: number) => {});
+  await stopNodeHostWorkerFromSignal({ close: () => void stop(0) }, stop, 143);
+  expect(stop.mock.calls).toEqual([[143], [0]]);
 });

@@ -2,7 +2,10 @@ import { parseJsonPreservingUnsafeIntegers } from "openclaw/plugin-sdk/json-unsa
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "openclaw/plugin-sdk/provider-stream-shared";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OllamaToolCall } from "./stream-messages.js";
-import { checkNdjsonRecordCap } from "./stream-ndjson-cap.js";
+
+// Ollama's Go client caps one streamed line at 8 MB. Keep more than a 2x
+// compatibility margin while preventing newline-free peers from growing memory.
+const OLLAMA_NDJSON_RECORD_MAX_BYTES = 16 * 1024 * 1024;
 
 export interface OllamaChatResponse extends Record<string, unknown> {
   model: string;
@@ -42,7 +45,20 @@ export async function* readOllamaNdjsonLines(
       if (done) {
         break;
       }
-      pendingRecordBytes = checkNdjsonRecordCap(value, pendingRecordBytes);
+      let offset = 0;
+      while (offset < value.byteLength) {
+        const newlineIndex = value.indexOf(0x0a, offset);
+        const segmentEnd = newlineIndex === -1 ? value.byteLength : newlineIndex;
+        pendingRecordBytes += segmentEnd - offset;
+        if (pendingRecordBytes > OLLAMA_NDJSON_RECORD_MAX_BYTES) {
+          throw new Error(`Ollama NDJSON record exceeds ${OLLAMA_NDJSON_RECORD_MAX_BYTES} bytes`);
+        }
+        if (newlineIndex === -1) {
+          break;
+        }
+        pendingRecordBytes = 0;
+        offset = newlineIndex + 1;
+      }
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";

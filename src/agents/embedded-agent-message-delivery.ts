@@ -1,6 +1,7 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   listMessageReceiptSourceTargets,
   resolveMessageReceiptPrimaryId,
@@ -12,7 +13,7 @@ import { normalizeMessageDeliveryStatus } from "./embedded-agent-messaging-statu
 import type { AgentToolResult } from "./runtime/index.js";
 import { markFinalSourceReplyResult } from "./tool-source-reply-completion.js";
 
-type EmbeddedMessageDeliveryFact = {
+export type EmbeddedMessageDeliveryFact = {
   status: "settled" | "suppressed" | "dryRun" | "failed";
   sourceReplyDelivered?: true;
   primaryPlatformMessageId?: string;
@@ -193,6 +194,7 @@ export function pluginEnvelopeHas(value: unknown, signal: keyof typeof PLUGIN_SI
 function readPluginDeliveryIdentity(records: readonly Record<string, unknown>[]) {
   let primaryPlatformMessageId: string | undefined;
   const deliveredTargets = new Set<string>();
+  const createdThreadIds = new Set<string>();
   for (const record of records) {
     primaryPlatformMessageId ??= [
       record.messageId,
@@ -204,10 +206,28 @@ function readPluginDeliveryIdentity(records: readonly Record<string, unknown>[])
     for (const target of listMessageReceiptSourceTargets(record)) {
       deliveredTargets.add(target);
     }
+    // Adapter receipts can report the thread a send created or landed in.
+    const receipt = asOptionalRecord(record.receipt);
+    const parts = Array.isArray(receipt?.parts) ? receipt.parts : [];
+    for (const id of [
+      record.topicId,
+      record.threadId,
+      record.messageThreadId,
+      asOptionalRecord(record.thread)?.id,
+      receipt?.threadId,
+      ...parts.map((part) => asOptionalRecord(part)?.threadId),
+    ]) {
+      if (hasNonEmptyString(id)) {
+        createdThreadIds.add(id.trim());
+      } else if (typeof id === "number" && Number.isFinite(id)) {
+        createdThreadIds.add(String(id));
+      }
+    }
   }
   return {
     ...(primaryPlatformMessageId ? { primaryPlatformMessageId } : {}),
     ...(deliveredTargets.size ? { deliveredTargets: [...deliveredTargets] } : {}),
+    createdThreadIds: [...createdThreadIds],
   };
 }
 
@@ -237,9 +257,9 @@ export function projectPluginMessageDeliveryFact(
     return undefined;
   }
   return {
-    status: "settled",
-    ...readPluginDeliveryIdentity(envelopes.map(({ record }) => record)),
     ...EMPTY_DELIVERY_FACT,
+    ...readPluginDeliveryIdentity(envelopes.map(({ record }) => record)),
+    status: "settled",
   };
 }
 
@@ -408,9 +428,7 @@ export function readEmbeddedMessageDeliveryFact(
   value: unknown,
 ): EmbeddedMessageDeliveryFact | undefined {
   const fact = asOptionalRecord(value);
-  const createdThreadIds = Array.isArray(fact?.createdThreadIds)
-    ? fact.createdThreadIds.filter((id): id is string => typeof id === "string")
-    : [];
+  const createdThreadIds = filterStringEntries(fact?.createdThreadIds);
   if (
     !fact ||
     !isDeliveryStatus(fact.status) ||

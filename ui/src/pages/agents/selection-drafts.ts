@@ -5,15 +5,11 @@ import {
   type AgentFilesState,
   type RetainedAgentFileDrafts,
 } from "./files.ts";
-import { resetIdentityDraft, type AgentIdentityDraft } from "./identity-actions.ts";
-
-type AgentSelectionDraftHost = AgentFilesState & {
-  agentsSelectedId: string | null;
-  agentFileActive: string | null;
-  identityDraft: AgentIdentityDraft;
-  identitySaving: boolean;
-  identityError: string | null;
-};
+import {
+  resetIdentityDraft,
+  type AgentIdentityDraft,
+  type AgentIdentityOutcome,
+} from "./identity-actions.ts";
 
 type Selection = {
   selectedId: string | null;
@@ -39,29 +35,15 @@ type RetainedIdentityWork = {
 
 const retainedIdentityWork = new WeakMap<ApplicationContext, RetainedIdentityWork>();
 
-function identityWorkFor(context: ApplicationContext): RetainedIdentityWork {
-  const gateway = context.gateway;
-  const scope = {
-    gateway,
-    connectionRevision: gateway.connectionRevision ?? 0,
-    gatewayUrl: gateway.connection?.gatewayUrl ?? "",
-  };
-  let work = retainedIdentityWork.get(context);
-  if (
-    !work ||
-    work.scope.gateway !== scope.gateway ||
-    work.scope.connectionRevision !== scope.connectionRevision ||
-    work.scope.gatewayUrl !== scope.gatewayUrl
-  ) {
-    work = { scope, profileId: null, identities: new Map(), saves: new Map() };
-    retainedIdentityWork.set(context, work);
-  }
-  return work;
-}
-
 /** Owns private editor drafts across the selected target's presentation lifetime. */
 export function createAgentSelectionDrafts(
-  host: AgentSelectionDraftHost,
+  host: AgentFilesState & {
+    agentsSelectedId: string | null;
+    agentFileActive: string | null;
+    identityDraft: AgentIdentityDraft;
+    identitySaving: boolean;
+    identityOutcome: Promise<AgentIdentityOutcome> | null;
+  },
   resetSelection: () => void,
 ) {
   const retainedFiles = new Map<string, RetainedAgentFileDrafts>();
@@ -69,7 +51,22 @@ export function createAgentSelectionDrafts(
   let ownerProfileId: string | null = null;
 
   function bindContext(context: ApplicationContext): Map<string, RetainedIdentitySave> {
-    const next = identityWorkFor(context);
+    const gateway = context.gateway;
+    const scope = {
+      gateway,
+      connectionRevision: gateway.connectionRevision ?? 0,
+      gatewayUrl: gateway.connection?.gatewayUrl ?? "",
+    };
+    let next = retainedIdentityWork.get(context);
+    if (
+      !next ||
+      next.scope.gateway !== scope.gateway ||
+      next.scope.connectionRevision !== scope.connectionRevision ||
+      next.scope.gatewayUrl !== scope.gatewayUrl
+    ) {
+      next = { scope, profileId: null, identities: new Map(), saves: new Map() };
+      retainedIdentityWork.set(context, next);
+    }
     if (lifetime && lifetime !== next) {
       resetIdentityDraft(host);
     }

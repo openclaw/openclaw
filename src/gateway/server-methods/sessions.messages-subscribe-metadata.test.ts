@@ -1,28 +1,22 @@
 import { expect, it, vi } from "vitest";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createOperatorApprovalSessionEventRuntime } from "../operator-approval-session-events.js";
-import { createSessionMessageSubscriberRegistry } from "../server-chat-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import {
-  roleClient,
-  rolePolicyConfig,
-  sharingPolicyClient,
-} from "../session-sharing.test-utils.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { disposeSessionReadContexts } from "./sessions-read-cache.test-support.js";
 import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
+import { prepareSubscriptionFixture } from "./sessions.messages-subscribe-wait.test-support.js";
 
 it.each(["operator.read", "operator.sessions.read"])(
   "keeps %s approval subscriptions across metadata updates but rejects changed access",
   (readScope) =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const cfg = rolePolicyConfig();
-      cfg.gateway!.roles!.definitions.view!.scopes.push("operator.approvals");
-      await state.writeConfig(cfg);
-      setRuntimeConfigSnapshot(cfg);
+      const { cfg, client, subscribers, runtime } = await prepareSubscriptionFixture(
+        state,
+        "metadata",
+        readScope,
+      );
       const key = "agent:main:subscribe-metadata";
       const scope = { agentId: "main", sessionKey: key };
       const entry: SessionEntry = {
@@ -32,15 +26,6 @@ it.each(["operator.read", "operator.sessions.read"])(
         visibility: "shared",
       };
       replaceSessionEntrySync(scope, entry);
-      const client = { ...roleClient("view", "metadata-reader"), connId: "metadata-reader" };
-      client.connect.scopes = [readScope, "operator.approvals"];
-      client.connect.device = sharingPolicyClient({ deviceId: "metadata-device" }).connect.device;
-      const subscribers = createSessionMessageSubscriberRegistry();
-      const runtime = createOperatorApprovalSessionEventRuntime({
-        clients: [client],
-        sessionMessageSubscribers: subscribers,
-        broadcastToConnIds: () => {},
-      });
       let duringReplay = () => {};
       const context = await createHistoryReadContext({
         getRuntimeConfig: () => cfg,

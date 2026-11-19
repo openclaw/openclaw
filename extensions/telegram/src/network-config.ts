@@ -8,11 +8,6 @@ const TELEGRAM_DISABLE_AUTO_SELECT_FAMILY_ENV = "OPENCLAW_TELEGRAM_DISABLE_AUTO_
 const TELEGRAM_ENABLE_AUTO_SELECT_FAMILY_ENV = "OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY";
 export const TELEGRAM_DNS_RESULT_ORDER_ENV = "OPENCLAW_TELEGRAM_DNS_RESULT_ORDER";
 
-type TelegramAutoSelectFamilyDecision = {
-  value: boolean;
-  source: string;
-};
-
 let wsl2SyncCache: boolean | undefined;
 
 type TelegramDnsResultOrderDecision = {
@@ -22,28 +17,22 @@ type TelegramDnsResultOrderDecision = {
 
 export function resolveTelegramAutoSelectFamilyDecision(params?: {
   network?: TelegramNetworkConfig;
-  env?: NodeJS.ProcessEnv;
-}): TelegramAutoSelectFamilyDecision {
-  const env = params?.env ?? process.env;
-
-  if (isTruthyEnvValue(env[TELEGRAM_ENABLE_AUTO_SELECT_FAMILY_ENV])) {
-    return { value: true, source: `env:${TELEGRAM_ENABLE_AUTO_SELECT_FAMILY_ENV}` };
+}): boolean {
+  if (isTruthyEnvValue(process.env[TELEGRAM_ENABLE_AUTO_SELECT_FAMILY_ENV])) {
+    return true;
   }
-  if (isTruthyEnvValue(env[TELEGRAM_DISABLE_AUTO_SELECT_FAMILY_ENV])) {
-    return { value: false, source: `env:${TELEGRAM_DISABLE_AUTO_SELECT_FAMILY_ENV}` };
+  if (isTruthyEnvValue(process.env[TELEGRAM_DISABLE_AUTO_SELECT_FAMILY_ENV])) {
+    return false;
   }
   if (typeof params?.network?.autoSelectFamily === "boolean") {
-    return { value: params.network.autoSelectFamily, source: "config" };
+    return params.network.autoSelectFamily;
   }
   // WSL2 has unstable IPv6 connectivity; disable autoSelectFamily to use IPv4 directly
   if ((wsl2SyncCache ??= isWSL2Sync())) {
-    return { value: false, source: "default-wsl2" };
+    return false;
   }
   // DNS ordering alone does not stop Node from racing the other address family.
-  return {
-    value: resolveTelegramDnsResultOrderDecision(params).value !== "ipv4first",
-    source: "default-dns-order",
-  };
+  return resolveTelegramDnsResultOrderDecision(params).value !== "ipv4first";
 }
 
 // Default to IPv4 first to work around networks with broken IPv6 connectivity.

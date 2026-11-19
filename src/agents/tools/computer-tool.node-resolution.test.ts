@@ -20,56 +20,16 @@ import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { parseNodeWorkerComputerInput } from "../../worker/node-computer-protocol.js";
 import type { ComputerToolTransport } from "./computer-tool.js";
+import {
+  callGatewayToolMock,
+  createComputerTool,
+  gatewayComputerStatusMock,
+  listNodesMock,
+  macComputerNode,
+  screenshotPayload,
+  sleepMock,
+} from "./computer-tool.test-helpers.js";
 import { wrapToolWithGatewayCallerIdentity } from "./gateway-caller-context.js";
-
-const listNodesMock = vi.hoisted(() => vi.fn());
-const callGatewayToolMock = vi.hoisted(() => vi.fn());
-const sleepMock = vi.hoisted(() => vi.fn());
-const gatewayComputerStatusMock = vi.hoisted(() => vi.fn());
-const TINY_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
-
-vi.mock("./nodes-utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./nodes-utils.js")>();
-  return { ...actual, listNodes: listNodesMock };
-});
-
-vi.mock("./gateway.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./gateway.js")>();
-  return { ...actual, callGatewayTool: callGatewayToolMock };
-});
-
-vi.mock("../../utils/sleep.js", () => ({ sleep: sleepMock }));
-vi.mock("./computer-tool-gateway.js", () => ({
-  loadGatewayComputerStatus: gatewayComputerStatusMock,
-  bindGatewayComputerCleanup: async () => undefined,
-}));
-
-const { createComputerTool } = await import("./computer-tool.js");
-
-function macComputerNode(overrides?: Record<string, unknown>) {
-  return {
-    nodeId: "mac-1",
-    displayName: "Studio",
-    platform: "macos",
-    connected: true,
-    commands: ["screen.snapshot", "computer.act"],
-    ...overrides,
-  };
-}
-
-function screenshotPayload(screenIndex = 0, base64 = TINY_PNG_BASE64) {
-  return {
-    payload: {
-      format: "png",
-      base64,
-      displayFrameId: `display-${screenIndex}-frame`,
-      width: 1280,
-      height: 800,
-      screenIndex,
-    },
-  };
-}
 
 function attachedDesktopHarness(desktopRegistry?: ReturnType<typeof createDesktopSessionRegistry>) {
   const h = createHarness();

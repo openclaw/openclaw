@@ -2,7 +2,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildTemporalContextText } from "./date-time.js";
 import type { RuntimeContextFragment } from "./internal-runtime-context.js";
-import { buildInterruptedInputContext } from "./interrupted-input-context.js";
 import { buildMediaTaskRuntimeContext } from "./media-generation-task-status.js";
 import type { AgentRunSessionTarget } from "./run-session-target.types.js";
 import {
@@ -35,10 +34,6 @@ export async function buildRuntimeFactsContext(
   const media = await buildMediaTaskRuntimeContext({ ...params, includeEmptySnapshots });
   if (media) {
     facts.push({ kind: "conversation-data", text: media });
-  }
-  const interrupted = await buildInterruptedInputContext(params);
-  if (interrupted) {
-    facts.push(interrupted);
   }
   facts.push({
     kind: "conversation-data",

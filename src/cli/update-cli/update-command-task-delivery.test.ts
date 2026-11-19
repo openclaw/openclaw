@@ -43,7 +43,7 @@ function seededOrphans() {
   const env = { ...process.env };
   const filename = resolveOpenClawStateSqlitePath(env);
   fs.mkdirSync(path.dirname(filename), { recursive: true });
-  const db = new DatabaseSync(filename);
+  using db = new DatabaseSync(filename);
   db.exec(OPENCLAW_STATE_SCHEMA_SQL);
   db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}; PRAGMA foreign_keys = OFF;`);
   db.prepare("INSERT INTO schema_meta VALUES ('primary','global',?,NULL,'2026.9.4',1,1)").run(
@@ -64,7 +64,6 @@ function seededOrphans() {
   }
   expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
   expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(18);
-  db.close();
   return {
     root,
     env,
@@ -79,12 +78,8 @@ function seededOrphans() {
 }
 
 function inspect<T>(filename: string, run: (db: DatabaseSync) => T): T {
-  const db = new DatabaseSync(filename);
-  try {
-    return run(db);
-  } finally {
-    db.close();
-  }
+  using db = new DatabaseSync(filename);
+  return run(db);
 }
 const queryOne = (filename: string, sql: string) =>
   inspect(filename, (db) => db.prepare(sql).get());
@@ -103,7 +98,9 @@ function expectUnadmitted(f: ReturnType<typeof seededOrphans>) {
 it("keeps repairable task-delivery state unchanged during update preview", async () => {
   const f = seededOrphans();
   await expect(
-    admitUpdateCommandRun({ opts: { dryRun: true }, root: f.root }).then(() => "admitted"),
+    admitUpdateCommandRun({ env: process.env, opts: { dryRun: true }, root: f.root }).then(
+      () => "admitted",
+    ),
   ).rejects.toThrow(/repairable[\s\S]*openclaw doctor --fix/iu);
   expectUnadmitted(f);
   expect(recoveryDirectories(f.filename)).toEqual([]);
@@ -111,7 +108,7 @@ it("keeps repairable task-delivery state unchanged during update preview", async
 
 it("admits cascade-owned task-delivery orphans with preservation and a durable recovery record", async () => {
   const f = seededOrphans();
-  const run = await admitUpdateCommandRun({ opts: {}, root: f.root });
+  const run = await admitUpdateCommandRun({ env: process.env, opts: {}, root: f.root });
   const directories = recoveryDirectories(f.filename);
   expect(directories).toHaveLength(1);
   const directory = path.join(path.dirname(f.filename), directories[0]!);

@@ -1,15 +1,20 @@
 /** Declares the explicitly approved, lazily loaded node-backed Codex exec-server. */
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
+const loadNodeExecServerRuntime = createLazyRuntimeModule(
+  () => import("./node-exec-server.runtime.js"),
+);
+
 const CODEX_NODE_EXEC_SERVER_COMMAND = "codex.exec-server.stdio.v1";
 
 const CODEX_NODE_EXEC_SERVER_CAPABILITY = "codex.exec-server";
 
-function parseCodexNodePlacementWorkspace(value: unknown) {
+export function parseCodexNodePlacementWorkspace(value: unknown) {
   if (
     !isRecord(value) ||
     Object.keys(value).length !== 5 ||
@@ -92,7 +97,7 @@ export function createCodexNodeExecServerCommand(): OpenClawPluginNodeHostComman
         ? { ...io, signal: AbortSignal.any([io.signal, context.signal]) }
         : io;
       const assertExecAuthorized = context.prepareExecAuthorization(request.authorization);
-      const { runCodexNodeExecServer } = await import("./node-exec-server.runtime.js");
+      const { runCodexNodeExecServer } = await loadNodeExecServerRuntime();
       runtimeIo.signal.throwIfAborted();
       const workspace = await context.acquireManagedWorkspaceAsync(workspaceRequest);
       try {

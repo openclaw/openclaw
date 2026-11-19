@@ -31,6 +31,10 @@ export function buildMultiResult(sessions: SessionsListResult["sessions"]): Sess
 export function buildProps(result: SessionsListResult): SessionsProps {
   return {
     loading: false,
+    roster: null,
+    detailsRead: () => undefined,
+    detailsReadKey: () => null,
+    onRetryDetails: () => undefined,
     refreshing: false,
     refreshDisabled: false,
     agentId: "main",
@@ -68,7 +72,7 @@ export function buildProps(result: SessionsListResult): SessionsProps {
     onNavigateToChat: () => undefined,
     onSortChange: () => undefined,
     onGroupByChange: () => undefined,
-    onAssignCategory: () => undefined,
+    onAssignCategory: async () => undefined,
     onRequestNewCategory: () => undefined,
     onLoadMore: () => undefined,
     onPageChange: () => undefined,

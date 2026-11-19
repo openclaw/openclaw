@@ -1,4 +1,3 @@
-import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, it, vi } from "vitest";
 import { buildAskPrompt } from "./prompts.js";
@@ -20,13 +19,12 @@ it("asks with the latest 200 observations in chronological order", async () => {
     text: `Observation ${index} 🦞`,
   }));
   const seedBatch = async (batchDay: string) => {
-    const frameId = await store.insertFrame(
-      fixtures.frameInput({
-        capturedAtMs: Date.now(),
-        day: batchDay,
-        path: path.join(dataDir, "synthetic.jpg"),
-      }),
-    );
+    const frameId = await store.captureFrame({
+      capturedAtMs: Date.now(),
+      day: batchDay,
+      screenIndex: 0,
+      buffer: Buffer.from(batchDay),
+    });
     return await store.createBatch(fixtures.batchInput([frameId], 1, end, batchDay));
   };
   const batchId = await seedBatch(day);

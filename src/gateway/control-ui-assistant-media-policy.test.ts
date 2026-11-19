@@ -8,6 +8,10 @@ import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { mockStoppedWorkspaceContainer } from "../agents/sandbox/mount-plan.test-helpers.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { resolveStateDir } from "../config/paths.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { GatewayOperatorRolesConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -26,8 +30,12 @@ import { mergeProfiles, setUserProfileRole } from "../state/user-profile-writes.
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { handleControlUiAssistantMediaRequest } from "./control-ui.js";
+import { handleControlUiAssistantMediaRequest } from "./control-ui-assistant-media-http.js";
 import { resolveHttpProfile } from "./http-auth-user-profile.js";
+import {
+  setOpenClawIdTunnelPrincipalLookup,
+  type OpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
@@ -53,7 +61,10 @@ vi.mock("../config/io.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/io.js")>()),
   getRuntimeConfig: () => state.config ?? {},
 }));
-vi.mock("./http-utils.js", () => ({ authorizeControlUiReadRequestOrReply: state.auth }));
+vi.mock("./http-auth-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./http-auth-utils.js")>()),
+  authorizeControlUiReadRequestOrReply: state.auth,
+}));
 vi.mock("./session-worker-placement-context.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-worker-placement-context.js")>()),
   resolveSessionWorkerPlacementContext: () => ({
@@ -81,6 +92,10 @@ async function image(name = "image.png", root = project, contents: string | Buff
   await fs.mkdir(path.dirname(source), { recursive: true });
   await fs.writeFile(source, contents);
   return source;
+}
+
+function loadedSession(canonicalKey: string, agentId = "main") {
+  return { cfg, agentId, canonicalKey, storePath: path.join(temp, "sessions.json"), entry };
 }
 
 async function managedWorkspace() {
@@ -165,13 +180,7 @@ beforeEach(async () => {
     sessionRoot: project,
     permissionMode: "workspace",
   };
-  state.loaded.mockImplementation((requestedKey: string) => ({
-    cfg,
-    agentId: "main",
-    canonicalKey: requestedKey,
-    storePath: path.join(temp, "sessions.json"),
-    entry,
-  }));
+  state.loaded.mockImplementation((requestedKey: string) => loadedSession(requestedKey));
   state.retained.mockImplementation(({ sessionKeys }: { sessionKeys: string[] }) => ({
     entries: sessionKeys.map((key) => ({ sessionKey: key, entry })),
   }));
@@ -185,6 +194,8 @@ afterEach(async () => {
     await closeStateDatabaseForTest();
     await fs.rm(temp, { recursive: true, force: true });
   } finally {
+    setOpenClawIdTunnelPrincipalLookup(undefined);
+    clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
     restoreEnv();
   }
@@ -278,6 +289,22 @@ it("binds relative media tickets to the execution directory within the session r
   expect((await request("image.png", { ticket, bytes: true })).res.statusCode).toBe(404);
   expect((await request("image.png")).payload).toMatchObject({ available: true });
   expect((await request("image.png", { unscoped: true })).res.statusCode).toBe(404);
+});
+
+it("reports expired relative scratch media in metadata and existing byte tickets", async () => {
+  const relative = ".openclaw/tmp/proof/expired.png";
+  const source = await image(relative);
+  const ticket = await mediaTicket(relative);
+  await fs.unlink(source);
+  await expectMetadata(relative, {
+    available: false,
+    code: "artifact-file-expired",
+    reason: "file expired (scratch cleaned after 24 h)",
+    retryable: false,
+  });
+  const downloaded = await request(relative, { ticket, bytes: true });
+  expect(downloaded.res.statusCode).toBe(410);
+  expect(downloaded.bytes.toString()).toBe("file expired (scratch cleaned after 24 h)");
 });
 
 it.each(["metadata", "bytes"] as const)(
@@ -430,6 +457,30 @@ it("denies incognito images to a named profile while preserving administrator ac
   await expectMetadata(source, { available: true });
 });
 
+it("preserves standalone media for administrators with an invited role and revokes their tickets", async () => {
+  const adminScopes = ["operator.admin"] as const;
+  const profile = await namedReader("admin@example.com", {
+    viewer: { ...viewerRole, sessions: { others: "invited" }, scopes: [...adminScopes] },
+  });
+  state.auth.mockResolvedValue({
+    authMethod: "trusted-proxy",
+    operatorScopes: [...adminScopes],
+    ...resolveHttpProfile(profile.id, cfg),
+  });
+  const source = await image("standalone.png", path.join(resolveStateDir(), "media"));
+  const ticket = await mediaTicket(source, { unscoped: true });
+  await expectBytes(source, { ticket, unscoped: true });
+
+  cfg.gateway!.roles!.definitions.viewer!.scopes = readScopes;
+  state.auth.mockResolvedValue({
+    authMethod: "trusted-proxy",
+    operatorScopes: readScopes,
+    ...resolveHttpProfile(profile.id, cfg),
+  });
+  await expectWithheld(source, { unscoped: true });
+  await expectWithheld(source, { ticket, bytes: true, unscoped: true });
+});
+
 it("keeps unscoped readers on the default static roots even when a query selects a full-access agent", async () => {
   cfg.tools = { fs: { workspaceOnly: false } };
   cfg.agents!.entries!.other = { workspace: project };
@@ -442,11 +493,8 @@ it("keeps unscoped readers on the default static roots even when a query selects
 it("selects the scoped session's agent when its optional agent parameter is omitted", async () => {
   cfg.agents!.entries!.other = { workspace: project };
   state.loaded.mockImplementation((requestedKey: string) => ({
-    cfg,
-    agentId: "other",
-    canonicalKey: requestedKey,
+    ...loadedSession(requestedKey, "other"),
     storePath: path.join(temp, "other-sessions.json"),
-    entry,
   }));
   const source = await image();
   await expectMetadata(
@@ -471,9 +519,7 @@ it("keeps Gateway-owned inbound images available in a repository session", async
   entry.repositoryWorkspaceId = "remote-workspace";
   const id = "remote-session-upload.png";
   const source = `media://inbound/${id}`;
-  const file = path.join(resolveStateDir(), "media", "inbound", id);
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, PNG);
+  await image(id, path.join(resolveStateDir(), "media", "inbound"));
   await expectBytes(source, { ticket: await mediaTicket(source) });
 });
 it("keeps merged-profile media tickets bound to the canonical person's current plugin access", async () => {
@@ -525,6 +571,122 @@ it.each(["role assignment", "role definition"] as const)(
     await expectWithheld(source, { ticket, bytes: true });
   },
 );
+
+it.each(
+  (["session ceiling", "scope ceiling", "access policy", "device listing"] as const).flatMap(
+    (change) =>
+      (change === "device listing"
+        ? (["before request", "during file preparation"] as const)
+        : (["before request"] as const)
+      ).map((when) => ({ change, when })),
+  ),
+)("rechecks an ID media ticket's $change $when", async ({ change, when }) => {
+  const profile = await namedReader("id-media-reader@example.test", {
+    viewer: viewerRole,
+    localAdmin: { ...viewerRole, scopes: ["operator.admin"] },
+  });
+  setUserProfileRole(profile.id, "localAdmin");
+  invalidateOperatorRolePolicy(profile.id);
+  const localAuth = {
+    authMethod: "trusted-proxy",
+    operatorScopes: ["operator.admin"],
+    ...resolveHttpProfile(profile.id, cfg),
+  };
+  let principal: OpenClawIdTunnelPrincipal | undefined = {
+    kind: "member",
+    peerKey: `iroh:${"a".repeat(64)}`,
+    accountId: "media-member",
+    role: "viewer",
+    authority: { clawId: "media-claw", rootPub: "media-root", listedSeq: 1 },
+  };
+  setOpenClawIdTunnelPrincipalLookup(() => principal);
+  setRuntimeConfigSnapshot(cfg);
+  state.auth.mockResolvedValue({
+    ...localAuth,
+    operatorScopes: readScopes,
+    operatorRolePolicy: viewerRole,
+    openclawIdPrincipal: principal,
+  });
+  const source = await image("id-shared.png");
+  const ticket = await mediaTicket(source);
+  await expectBytes(source, { ticket });
+  state.auth.mockResolvedValue(localAuth);
+  const localTicket = await mediaTicket(source);
+  let withdrawn = false;
+  const withdraw = () => {
+    withdrawn = true;
+    if (change === "device listing") {
+      principal = undefined;
+    } else {
+      cfg.gateway!.roles!.definitions.viewer =
+        change === "session ceiling"
+          ? { ...viewerRole, sessions: { others: "none" } }
+          : change === "scope ceiling"
+            ? { ...viewerRole, scopes: [] }
+            : { ...viewerRole, accessPolicyPlugin: "unavailable-member-access" };
+      setRuntimeConfigSnapshot(cfg);
+    }
+  };
+  if (when === "before request") {
+    withdraw();
+  }
+  using opened = onOpen(source, () => {
+    if (when === "during file preparation") {
+      withdraw();
+    }
+  });
+  await expectWithheld(source, { ticket, bytes: true });
+  expect(withdrawn).toBe(true);
+  opened.mockRestore();
+  await expectBytes(source, { ticket: localTicket });
+});
+
+it("keeps an owner device's media tickets independent of its linked local role", async () => {
+  const localRole: GatewayOperatorRolesConfig["definitions"][string] = {
+    ...viewerRole,
+    scopes: [],
+    sessions: { others: "none" },
+  };
+  const profile = await namedReader("owner-media-reader@example.test", {
+    viewer: localRole,
+  });
+  localRole.accessPolicyPlugin = "unavailable-local-access";
+  const principal: OpenClawIdTunnelPrincipal = {
+    kind: "owner",
+    peerKey: `iroh:${"b".repeat(64)}`,
+    authority: { clawId: "media-claw", rootPub: "media-root", listedSeq: 1 },
+  };
+  setOpenClawIdTunnelPrincipalLookup(() => principal);
+  setRuntimeConfigSnapshot(cfg);
+  state.auth.mockResolvedValue({
+    authMethod: "trusted-proxy",
+    operatorScopes: ["operator.admin"],
+    ...resolveHttpProfile(profile.id),
+    openclawIdPrincipal: principal,
+  });
+  const source = await image("owner.png");
+  await expectBytes(source, { ticket: await mediaTicket(source) });
+});
+
+it("withholds member media when attribution did not resolve a durable profile", async () => {
+  cfg.gateway = { roles: { definitions: { viewer: viewerRole } } };
+  const principal: OpenClawIdTunnelPrincipal = {
+    kind: "member",
+    peerKey: `iroh:${"c".repeat(64)}`,
+    accountId: "unattributed-member",
+    role: "viewer",
+    authority: { clawId: "media-claw", rootPub: "media-root", listedSeq: 1 },
+  };
+  setOpenClawIdTunnelPrincipalLookup(() => principal);
+  setRuntimeConfigSnapshot(cfg);
+  state.auth.mockResolvedValue({
+    authMethod: "trusted-proxy",
+    operatorScopes: readScopes,
+    operatorRolePolicy: viewerRole,
+    openclawIdPrincipal: principal,
+  });
+  await expectWithheld(await image("unattributed.png"));
+});
 
 it.each(
   (["metadata", "bytes"] as const).flatMap((operation) =>
@@ -624,8 +786,7 @@ it("preserves legacy Full Access PDF attachments under the configured agent work
   entry.permissionMode = "full";
   const source = await image(name, path.join(temp, "agent"), content);
   await expectBytes(source, {}, Buffer.from(content), "application/pdf");
-  const outside = path.join(temp, name);
-  await fs.writeFile(outside, content);
+  const outside = await image(name, temp, content);
   expect((await request(outside, { bytes: true })).res.statusCode).toBe(404);
 });
 

@@ -88,7 +88,10 @@ export function createOversizedJsonResponse(): {
   return { response, cancel };
 }
 
-export function createCapturingStreamFn(result = "stream") {
+export function createCapturingStreamFn(
+  result = "stream",
+  initialPayload: Record<string, unknown> = {},
+) {
   let capturedPayload: Record<string, unknown> | undefined;
   const streamFn = vi.fn(
     (
@@ -96,7 +99,7 @@ export function createCapturingStreamFn(result = "stream") {
       _context: Parameters<StreamFn>[1],
       options: Parameters<StreamFn>[2],
     ) => {
-      const payload: Record<string, unknown> = {};
+      const payload: Record<string, unknown> = { ...initialPayload };
       void options?.onPayload?.(payload, model);
       capturedPayload = payload;
       return result as never;

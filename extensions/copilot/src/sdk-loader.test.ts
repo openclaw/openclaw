@@ -32,7 +32,10 @@ describe("sdk-loader", () => {
   it("resolves and imports the installed SDK entry from OPENCLAW_STATE_DIR", async () => {
     // Exercise a concrete entry file: Node ESM rejects package directory imports.
     mkdirSync(fallbackPath, { recursive: true });
-    writeFileSync(path.join(fallbackPath, "package.json"), JSON.stringify({ main: "./index.cjs" }));
+    writeFileSync(
+      path.join(fallbackPath, "package.json"),
+      JSON.stringify({ name: "@github/copilot-sdk", main: "./index.cjs" }),
+    );
     writeFileSync(path.join(fallbackPath, "index.cjs"), "module.exports = { fixture: true };");
     const { loadCopilotSdk } = await import("./sdk-loader.js");
     await expect(loadCopilotSdk()).resolves.toMatchObject({ fixture: true });

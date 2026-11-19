@@ -10,7 +10,6 @@ import type {
   ChannelMessageActionName,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -92,6 +91,37 @@ async function withSandbox(test: (sandboxDir: string) => Promise<void>) {
   }
 }
 
+async function withMediaFile(
+  name: string,
+  content: string | Buffer,
+  test: (file: string) => Promise<void>,
+) {
+  await withSandbox(async (dir) => {
+    const file = path.join(dir, name);
+    await fs.writeFile(file, content);
+    await test(file);
+  });
+}
+
+function createMediaAction(
+  channel: string,
+  action: ActionInput["action"],
+  defaults: ActionInput["params"] = {},
+) {
+  const cfg = { channels: { [channel]: { enabled: true } } };
+  return (params: ActionInput["params"], overrides: Partial<ActionInput> = {}) =>
+    runMessageAction({
+      cfg,
+      action,
+      ...overrides,
+      params: { channel, target: "+15551234567", ...defaults, ...params },
+    });
+}
+const localFileConfig = (channel: string, workspaceOnly: boolean) => ({
+  channels: { [channel]: { enabled: true } },
+  tools: { fs: { workspaceOnly } },
+});
+
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function requireActionPayload(
@@ -116,9 +146,9 @@ describe("runMessageAction media behavior", () => {
     vi.clearAllMocks();
   });
 
-  it("normalizes image/png data URLs and infers filenames for send", async () => {
+  it.each(["send", "thread-reply"] as const)("stages png data URLs for %s", async (action) => {
     const args: Record<string, unknown> = { buffer: parameterizedPngDataUrl };
-    await hydrate(args);
+    await hydrate(args, { action });
     expect(args).toMatchObject({
       contentType: "image/png",
       filename: "attachment.png",
@@ -178,19 +208,12 @@ describe("runMessageAction media behavior", () => {
   });
 
   describe("sendAttachment hydration", () => {
-    const cfg: OpenClawConfig = { channels: { attachmentchat: { enabled: true } } };
     const attachmentPlugin = mediaPlugin(
       "attachmentchat",
       ["sendAttachment", "upload-file", "setGroupIcon"],
       async ({ params }) => jsonResult(attachmentPayload(params)),
     );
-    const runAttachment = (params: ActionInput["params"], overrides: Partial<ActionInput> = {}) =>
-      runMessageAction({
-        cfg,
-        action: "sendAttachment",
-        ...overrides,
-        params: { channel: "attachmentchat", target: "+15551234567", ...params },
-      });
+    const runAttachment = createMediaAction("attachmentchat", "sendAttachment");
 
     beforeEach(() => {
       setTestPlugin(attachmentPlugin, "attachmentchat");
@@ -211,18 +234,10 @@ describe("runMessageAction media behavior", () => {
     it("hydrates validated host-local text attachments when fs root expansion is enabled", async () => {
       await restoreRealMediaLoader();
 
-      await withSandbox(async (tempDir) => {
-        const outsidePath = path.join(tempDir, "secret.txt");
-        await fs.writeFile(outsidePath, "secret", "utf8");
-
+      await withMediaFile("secret.txt", "secret", async (outsidePath) => {
         const result = await runAttachment(
           { media: outsidePath, message: "caption" },
-          {
-            cfg: {
-              ...cfg,
-              tools: { fs: { workspaceOnly: false } },
-            },
-          },
+          { cfg: localFileConfig("attachmentchat", false) },
         );
 
         expect(requireActionPayload(result)).toMatchObject({
@@ -282,9 +297,7 @@ describe("runMessageAction media behavior", () => {
 
       await restoreRealMediaLoader();
       for (const [action, field] of cases) {
-        await withSandbox(async (tempDir) => {
-          const outsidePath = path.join(tempDir, "secret.txt");
-          await fs.writeFile(outsidePath, "secret", "utf8");
+        await withMediaFile("secret.txt", "secret", async (outsidePath) => {
           await expect(
             runAttachment(
               { ...destination(action), [field]: outsidePath },
@@ -294,12 +307,40 @@ describe("runMessageAction media behavior", () => {
         });
       }
     });
+
+    it("denies configured blockedHostnames before fetching host and sandbox attachment URLs", async () => {
+      await restoreRealMediaLoader();
+      const handleAction = vi.fn(async () => jsonResult({ ok: true }));
+      setTestPlugin(
+        mediaPlugin("attachmentchat", ["sendAttachment"], handleAction),
+        "attachmentchat",
+      );
+      // A mocked fetch skips DNS, so this stays offline while hostname policy still runs.
+      const fetchMock = vi.fn(async () => new Response(onePixelPng));
+      vi.stubGlobal("fetch", fetchMock);
+      const cfg = {
+        channels: { attachmentchat: { enabled: true } },
+        tools: { web: { fetch: { ssrfPolicy: { blockedHostnames: ["blocked.example"] } } } },
+      };
+      const media = "https://blocked.example/pic.png";
+      try {
+        await expect(runAttachment({ media }, { cfg })).rejects.toThrow(/configured blocklist/);
+        await withSandbox(async (sandboxRoot) => {
+          await expect(runAttachment({ media }, { cfg, sandboxRoot })).rejects.toThrow(
+            /configured blocklist/,
+          );
+        });
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(handleAction).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
   });
 
   describe("reply hydration", () => {
     // Regression #79864: hydrate reply paths before plugin dispatch, enforcing
     // media policy without synthesizing attachment captions from reply text.
-    const cfg: OpenClawConfig = { channels: { replychat: { enabled: true } } };
     const handleActionMock = vi.fn();
     const replyPlugin = mediaPlugin("replychat", ["reply"], async ({ params }) => {
       handleActionMock(params);
@@ -309,19 +350,10 @@ describe("runMessageAction media behavior", () => {
         message: params.message,
       });
     });
-    const runReply = (params: ActionInput["params"], overrides: Partial<ActionInput> = {}) =>
-      runMessageAction({
-        cfg,
-        action: "reply",
-        ...overrides,
-        params: {
-          channel: "replychat",
-          target: "+15551234567",
-          messageId: "parent-id",
-          text: "look at this",
-          ...params,
-        },
-      });
+    const runReply = createMediaAction("replychat", "reply", {
+      messageId: "parent-id",
+      text: "look at this",
+    });
     const readHandlerParams = () =>
       mockFirstRecordArg(handleActionMock, "handleAction", "Expected a non-array record");
 
@@ -435,10 +467,7 @@ describe("runMessageAction media behavior", () => {
 
     it("routes attachments[] host paths into local-root expansion", async () => {
       await restoreRealMediaLoader();
-      await withSandbox(async (tempDir) => {
-        const attachmentPath = path.join(tempDir, "photo.png");
-        await fs.writeFile(attachmentPath, onePixelPng);
-
+      await withMediaFile("photo.png", onePixelPng, async (attachmentPath) => {
         const result = await runReply(
           {
             attachments: [
@@ -449,7 +478,7 @@ describe("runMessageAction media behavior", () => {
               },
             ],
           },
-          { cfg: { ...cfg, tools: { fs: { workspaceOnly: false } } } },
+          { cfg: localFileConfig("replychat", false) },
         );
 
         expect(result.kind).toBe("action");
@@ -464,15 +493,9 @@ describe("runMessageAction media behavior", () => {
 
     it("rejects host paths outside mediaLocalRoots before invoking the reply handler", async () => {
       await restoreRealMediaLoader();
-      await withSandbox(async (tempDir) => {
-        const outsidePath = path.join(tempDir, "secret.txt");
-        await fs.writeFile(outsidePath, "secret", "utf8");
-
+      await withMediaFile("secret.txt", "secret", async (outsidePath) => {
         await expect(
-          runReply(
-            { path: outsidePath },
-            { cfg: { ...cfg, tools: { fs: { workspaceOnly: true } } } },
-          ),
+          runReply({ path: outsidePath }, { cfg: localFileConfig("replychat", true) }),
         ).rejects.toThrow(/allowed directory|path-not-allowed|workspace/i);
         expect(handleActionMock).not.toHaveBeenCalled();
       });

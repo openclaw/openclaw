@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as processSupervisor from "../../process/supervisor/index.js";
 import type {
   ManagedRun,
   ProcessSupervisor,
@@ -82,6 +83,7 @@ function createChildFixture(options: { startupError?: string; finalizationError?
       return run;
     },
     cancel: () => run.cancel(),
+    release: async () => undefined,
     cancelScope: () => run.cancel(),
   };
   const env = {
@@ -89,11 +91,11 @@ function createChildFixture(options: { startupError?: string; finalizationError?
     DISPLAY: ":99",
     DBUS_SESSION_BUS_ADDRESS: "unix:path=/fixture/bus",
   };
+  using _ = vi.spyOn(processSupervisor, "getProcessSupervisor").mockReturnValue(supervisor);
   const child = startComputerHostProcess({
     env,
     pluginIds: ["fixture"],
     assertCurrent: () => {},
-    supervisor,
   });
   cleanups.push(async () => {
     exit();

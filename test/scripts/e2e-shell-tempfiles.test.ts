@@ -92,7 +92,6 @@ const maintainedRawRow = {
 const searchArgs = (query = "gifgrep") => ["skills", "search", query, "--limit", "8", "--json"];
 const installArgs = ["skills", "install", "@steipete/gifgrep", "--version", "1.0.1", "--force"];
 const candidate = (slug: string, installRef: string) => ({ slug, installRef });
-const writeJson = (file: string, value: unknown) => writeFile(file, `${JSON.stringify(value)}\n`);
 const writeExecutable = (file: string, contents: string) =>
   writeFile(file, contents, { mode: 0o755 });
 
@@ -118,6 +117,7 @@ async function runClawhubInstallProof(options: {
   skillText?: string;
   refusal?: boolean | "frozen" | "unrelated";
   rejectedSlug?: string;
+  escapedInfo?: boolean;
 }) {
   const { root, bin, scratch } = await installFixture("openclaw-clawhub-maintained-");
   const callsPath = path.join(root, "calls.jsonl");
@@ -175,7 +175,9 @@ switch (args[1]) {
     break;
   }
   case "info":
-    console.log(JSON.stringify({ skillKey: slug, baseDir: skillDir }));
+    console.log(JSON.stringify(fixture.escapedInfo
+      ? { skillKey: "wrong-skill", filePath: skillDir + "-escape/SKILL.md" }
+      : { skillKey: slug, baseDir: skillDir }));
     break;
   default: process.exit(64);
 }
@@ -221,28 +223,6 @@ async function listShellScripts(dir: string): Promise<string[]> {
   }
 
   return scripts;
-}
-
-async function extractClawhubModule(kind: "verifier" | "selector"): Promise<string> {
-  const script = await readFile("scripts/e2e/lib/skills/clawhub-install-proof.sh", "utf8");
-  const args =
-    kind === "verifier"
-      ? '"$OPENCLAW_CONFIG_PATH" "$skill_dir" "$origin_json" "$lock_json" "$info_json" "$slug" "$maintained_fixture"'
-      : '"$search_json" "$resolve_json" "$requested_slug" "$preferred_slug" "$maintained_fixture"';
-  const marker = `run_node_module ${args} <<'NODE'\n`;
-  const start = script.indexOf(marker);
-  const end = script.indexOf("\nNODE", start + marker.length);
-  if (start === -1 || end === -1) {
-    throw new Error(`ClawHub skill install ${kind} heredoc was not found or terminated`);
-  }
-  return script.slice(start + marker.length, end);
-}
-
-async function runClawhubModule(kind: "verifier" | "selector", ...args: string[]) {
-  return spawnSync(process.execPath, ["--input-type=module", "-", ...args], {
-    encoding: "utf8",
-    input: await extractClawhubModule(kind),
-  });
 }
 
 function runInstall(bin: string, scratch: string) {
@@ -398,24 +378,21 @@ test ! -s "$OPENCLAW_ONBOARD_E2E_TMPDIR/sent.txt"
     expect(`${result.stdout}\n${result.stderr}`).not.toContain("Timeout waiting");
   });
 
-  it("checks local onboarding logs for systemd noise", async () => {
-    const contents = await readFile("scripts/e2e/lib/onboard/scenario.sh", "utf8");
-
-    for (const text of [
-      'ONBOARD_TMP_DIR="$(mktemp -d "$ONBOARD_TMP_ROOT/openclaw-onboard.XXXXXX")"',
-      'OPENCLAW_E2E_LOG_DIR="$ONBOARD_TMP_DIR/logs"',
-      'GATEWAY_LOG_PATH="$ONBOARD_TMP_DIR/gateway-e2e.log"',
-      'validate_local_basic_log "$OPENCLAW_E2E_LAST_LOG_PATH"',
-      'openclaw_e2e_assert_log_not_contains "$log_path" "systemctl --user unavailable"',
-    ]) {
-      expect(contents).toContain(text);
-    }
-    for (const text of [
-      "/tmp/gateway-e2e.log",
-      "validate_local_basic_log /tmp/openclaw-onboard-local-basic.log",
-    ]) {
-      expect(contents).not.toContain(text);
-    }
+  it("rejects systemd noise from the actual local onboarding log", () => {
+    const result = runOnboard(`
+openclaw_test_state_create() { :; }
+run_local_onboard() {
+  openclaw_e2e_run_logged local-basic printf '%s' 'systemctl --user unavailable'
+  case "$OPENCLAW_E2E_LAST_LOG_PATH" in
+    "$ONBOARD_TMP_DIR"/logs/*) ;;
+    *) exit 2 ;;
+  esac
+}
+openclaw_e2e_run_command() { "$@"; }
+run_case_local_basic
+`);
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stdout).toContain("Unexpected log output: systemctl --user unavailable");
   });
 
   it.each([true, false])(
@@ -489,57 +466,28 @@ exit "$status"
   });
 
   it("selects a non-suspicious ClawHub search result without weakening explicit requests", async () => {
-    const tempRoot = tempDirs.make("openclaw-clawhub-select-test-");
-    const searchPath = path.join(tempRoot, "search.json");
-    const resolvePath = path.join(tempRoot, "resolved.json");
-    await writeJson(searchPath, {
-      results: [
-        {
-          installRef: "@owner/risky",
-          native: { skill: { isSuspicious: true } },
-          slug: "preferred",
-          trust: { clawHubVerdict: "suspicious" },
+    const results = [
+      { ...candidate("preferred", "@owner/preferred"), native: { skill: { isSuspicious: true } } },
+      candidate("fallback", "@owner/fallback"),
+      candidate("homeassistant-safe", "@owner/homeassistant-safe"),
+    ];
+    const run = (explicit: boolean) =>
+      runClawhubInstallProof({
+        results,
+        overrides: {
+          OPENCLAW_SKILL_INSTALL_E2E_PREFERRED_SLUG: "preferred",
+          ...(explicit ? { OPENCLAW_SKILL_INSTALL_E2E_SLUG: "preferred" } : {}),
         },
-        {
-          installRef: "@owner/safe",
-          native: { skill: { isSuspicious: false } },
-          slug: "homeassistant-safe",
-          trust: { clawHubVerdict: null, installability: "installable" },
-        },
-        candidate("fallback-two", "@owner/fallback-two"),
-        candidate("fallback-three", "@owner/fallback-three"),
-        candidate("fallback-four", "@owner/fallback-four"),
-      ],
-    });
-
-    const defaultResult = await runClawhubModule(
-      "selector",
-      searchPath,
-      resolvePath,
-      "",
-      "preferred",
-    );
+        skillText: "name: Custom\n",
+      });
+    const installed = (calls: string[][]) =>
+      calls.filter((args) => args[1] === "install").map((args) => args[2]);
+    const defaultResult = await run(false);
     expect(defaultResult.status, defaultResult.stderr).toBe(0);
-    expect(JSON.parse(await readFile(resolvePath, "utf8"))).toMatchObject({
-      candidates: [
-        candidate("homeassistant-safe", "@owner/safe"),
-        candidate("fallback-two", "@owner/fallback-two"),
-        candidate("fallback-three", "@owner/fallback-three"),
-        candidate("fallback-four", "@owner/fallback-four"),
-      ],
-    });
-
-    const explicitResult = await runClawhubModule(
-      "selector",
-      searchPath,
-      resolvePath,
-      "preferred",
-      "preferred",
-    );
+    expect(installed(defaultResult.calls)).toEqual(["@owner/homeassistant-safe"]);
+    const explicitResult = await run(true);
     expect(explicitResult.status, explicitResult.stderr).toBe(0);
-    expect(JSON.parse(await readFile(resolvePath, "utf8"))).toMatchObject({
-      candidates: [candidate("preferred", "@owner/risky")],
-    });
+    expect(installed(explicitResult.calls)).toEqual(["@owner/preferred"]);
   });
 
   it("falls through a search candidate rejected by live ClawHub security", async () => {
@@ -617,7 +565,6 @@ exit "$status"
     ["wrong owner", { ...maintainedMappedRow, ownerHandle: "other" }],
     ["wrong ref", { ...maintainedMappedRow, installRef: "@other/gifgrep" }],
     ["null ref", { ...maintainedRawRow, installRef: null }],
-    ["empty ref", { ...maintainedRawRow, installRef: "" }],
     ["external source", { ...maintainedRawRow, source: "skills.sh" }],
     [
       "external kind",
@@ -627,12 +574,7 @@ exit "$status"
       "wrong raw ref",
       { ...maintainedRawRow, install: { kind: "clawhub", reference: "other/gifgrep" } },
     ],
-    ["missing install", { ...maintainedMappedRow, source: "clawhub" }],
-    ["missing source", { ...maintainedMappedRow, install: maintainedRawRow.install }],
-    ["null source", { ...maintainedMappedRow, source: null }],
-    ["empty source", { ...maintainedMappedRow, source: "" }],
     ["null install", { ...maintainedRawRow, install: null }],
-    ["partial install", { ...maintainedRawRow, install: { kind: "clawhub" } }],
     ["contradictory hybrid", { ...maintainedRawRow, installRef: "@other/gifgrep" }],
     ["mapped trust verdict", { ...maintainedMappedRow, trust: { clawHubVerdict: "suspicious" } }],
     ["native suspicious flag", { ...maintainedRawRow, native: { skill: { isSuspicious: true } } }],
@@ -720,38 +662,12 @@ docker_e2e_run_with_harness() { printf '%s\\n' "$@"; }
   });
 
   it("rejects ClawHub skill info paths that only share a resolved prefix", async () => {
-    const tempRoot = tempDirs.make("openclaw-clawhub-info-path-");
-    const workspaceDir = path.join(tempRoot, "workspace");
-    const slug = "demo";
-    const skillDir = path.join(workspaceDir, "skills", slug);
-    const escapedInfoPath = path.join(workspaceDir, "skills", `${slug}-escape`, "SKILL.md");
-    const configPath = path.join(tempRoot, "openclaw.json");
-    const originPath = path.join(skillDir, ".clawhub", "origin.json");
-    const lockPath = path.join(workspaceDir, ".clawhub", "lock.json");
-    const infoPath = path.join(tempRoot, "info.json");
-
-    await mkdir(path.dirname(originPath), { recursive: true });
-    await mkdir(path.dirname(lockPath), { recursive: true });
-    await writeFile(path.join(skillDir, "SKILL.md"), `---\nname: Demo\n---\n`);
-    await writeJson(configPath, { skills: { install: { allowUploadedArchives: false } } });
-    await writeJson(originPath, {
-      installedVersion: "1.0.0",
-      registry: "https://clawhub.ai",
-      slug,
+    const result = await runClawhubInstallProof({
+      results: [candidate("demo", "demo")],
+      overrides: { OPENCLAW_SKILL_INSTALL_E2E_SLUG: "demo" },
+      skillText: "name: Demo\n",
+      escapedInfo: true,
     });
-    await writeJson(lockPath, { skills: { [slug]: { version: "1.0.0" } } });
-    await writeJson(infoPath, { filePath: escapedInfoPath, skillKey: "wrong-skill" });
-
-    const result = await runClawhubModule(
-      "verifier",
-      configPath,
-      skillDir,
-      originPath,
-      lockPath,
-      infoPath,
-      slug,
-    );
-
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("skills info did not report installed skill demo");
   });

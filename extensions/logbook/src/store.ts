@@ -8,8 +8,9 @@ import {
   type DatabaseEngineInput,
 } from "openclaw/plugin-sdk/database-engine-runtime";
 import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/file-access-runtime";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { SqliteWorkerError, type SqliteWorkerStore } from "openclaw/plugin-sdk/sqlite-runtime";
-import { acquireLogbookFrameIo } from "./frame-io.js";
 import { isLogbookWriteOperation } from "./store-contract.js";
 import type {
   LogbookBatchInput,
@@ -18,6 +19,45 @@ import type {
   LogbookOperations,
 } from "./store-contract.js";
 import type { LogbookBatchStatus, LogbookCardDraft } from "./types.js";
+
+const MAX_FRAME_OPERATIONS = 128;
+
+/** Frame reads and pruning share admission while SQLite remains owned by the worker. */
+function acquireLogbookFrameIo(root: string) {
+  const state = resolveGlobalSingleton(Symbol.for("openclaw.logbookFrameIo"), () => ({
+    queue: new KeyedAsyncQueue(),
+    pending: 0,
+  }));
+  const accepted = new Set<Promise<unknown>>();
+  let closing: Promise<void> | undefined;
+  return {
+    run<T>(operation: () => Promise<T>): Promise<T> {
+      if (closing) {
+        return Promise.reject(new Error("Logbook frame I/O is closed"));
+      }
+      if (state.pending >= MAX_FRAME_OPERATIONS) {
+        return Promise.reject(
+          Object.assign(new Error("Logbook frame I/O queue capacity reached"), {
+            code: "overloaded",
+          }),
+        );
+      }
+      state.pending += 1;
+      const result = state.queue.enqueue(root, operation);
+      accepted.add(result);
+      const settle = () => {
+        state.pending -= 1;
+        accepted.delete(result);
+      };
+      void result.then(settle, settle);
+      return result;
+    },
+    close(): Promise<void> {
+      closing ??= Promise.allSettled(accepted).then(() => undefined);
+      return closing;
+    },
+  };
+}
 
 type CapturedFrame = Omit<LogbookFrameInput, "path" | "byteSize" | "contentHash" | "idle"> & {
   buffer: Buffer;
@@ -89,24 +129,12 @@ export class LogbookStore {
     return path.join(this.framesDir, day, `${capturedAtMs}.jpg`);
   }
 
-  insertFrame(params: LogbookFrameInput) {
-    return this.execute("insertFrame", params);
-  }
-
-  lastFrame() {
-    return this.execute("lastFrame", undefined);
-  }
-
   unbatchedActiveFrames(limit: number) {
     return this.execute("unbatchedActiveFrames", { limit });
   }
 
   countUnbatchedActiveFrames() {
     return this.execute("countUnbatchedActiveFrames", undefined);
-  }
-
-  frameById(id: number) {
-    return this.execute("frameById", { id });
   }
 
   framesInRange(startMs: number, endMs: number) {

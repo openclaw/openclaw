@@ -1,4 +1,3 @@
-import type { CommittedCompactionBoundary } from "../../agents/sessions/session-compaction-persistence.js";
 import {
   captureSessionManagerIncognitoBinding,
   withSessionManagerMemoryActor,
@@ -15,11 +14,12 @@ import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.pa
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import type { persistCompactionBoundaryWithSessionEntrySync } from "./session-accessor.sqlite-compaction.js";
+import type { persistCompactionBoundaryWithSessionEntryInWorker } from "./session-accessor.sqlite-compaction.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import type { CommittedCompactionBoundary } from "./session-compaction-persistence.types.js";
 import type { SessionManagerIncognitoDatabase } from "./session-manager-write-contract.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { sameSessionTranscriptStorePath } from "./transcript-store-identity.js";
@@ -36,8 +36,11 @@ import {
 
 /** Commit transcript and accounting together through the existing SessionManager writer. */
 export async function persistCompactionBoundaryWithSessionEntryAsync(
-  scope: Parameters<typeof persistCompactionBoundaryWithSessionEntrySync>[0],
-  params: Parameters<typeof persistCompactionBoundaryWithSessionEntrySync>[1],
+  scope: Parameters<typeof persistCompactionBoundaryWithSessionEntryInWorker>[0],
+  params: Omit<
+    Parameters<typeof persistCompactionBoundaryWithSessionEntryInWorker>[1],
+    "initialWriterRunId"
+  >,
   assertActive?: () => void,
 ): Promise<CommittedCompactionBoundary> {
   assertActive?.();

@@ -21,7 +21,6 @@ import {
   captureSessionTarget,
 } from "../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
-import { getRpcSourceIdentity } from "../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { sessionAbortHandlers } from "./server-methods/sessions-abort.js";
@@ -29,7 +28,8 @@ import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 import { createRpcSourceForTest, claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
-const { createQueuedReservation, requestContext, launchedRunIds } = useQueuedCollectorFixture();
+const { createQueuedReservation, requestContext, requestOptions, launchedRunIds } =
+  useQueuedCollectorFixture();
 
 async function reserve(name: string, profile: string) {
   const client = roleClient("view", profile);
@@ -44,24 +44,30 @@ async function reserve(name: string, profile: string) {
 }
 
 function abort(client: ReturnType<typeof roleClient>, key: string, context = requestContext()) {
-  const respond = vi.fn();
+  const options = requestOptions(context, "sessions.abort", { key });
   const done = handleGatewayRequest({
-    req: { type: "req", id: "collector-stop", method: "sessions.abort", params: { key } },
-    context,
+    ...options,
+    req: { ...options.req, params: options.params },
     client,
-    respond,
-    isWebchatConnect: () => false,
     extraHandlers: { "sessions.abort": sessionAbortHandlers["sessions.abort"]! },
   });
-  return { respond, done };
+  return { respond: options.respond, done };
+}
+
+function expectAborted(respond: ReturnType<typeof vi.fn>, runId: string) {
+  expect(respond).toHaveBeenCalledOnce();
+  expect(respond.mock.calls[0]?.[2]).toBeUndefined();
+  expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
+    true,
+    { ok: true, status: "aborted", abortedRunId: runId },
+  ]);
 }
 
 it.each(["active", "queued", "pending-chat"] as const)(
   "narrow collector Stop preserves a same-key prior-incarnation %s producer",
   async (kind) => {
     const { client, entry, loaded } = await reserve("reserved", "collector-stop-owner");
-    const childSession = expectDefined(loaded.entry, "collector session");
-    expect(childSession.createdActor).toEqual({
+    expect(loaded.entry?.createdActor).toEqual({
       type: "human",
       source: "profile",
       id: client.authenticatedUserProfile!.profileId,
@@ -78,17 +84,16 @@ it.each(["active", "queued", "pending-chat"] as const)(
     const descendantSession = descendant
       ? await loadGatewaySessionEntryReadOnlyAsync(descendant.entry.childSessionKey)
       : undefined;
-    const source = (runId: string, sessionId: string) =>
+    const source = (
+      runId: string,
+      sessionId: string,
+      session = expectDefined(descendantSession, "descendant session"),
+      sessionKey = expectDefined(descendant, "descendant").entry.childSessionKey,
+      phase: "waiting" | "preparing" = "waiting",
+    ) =>
       createRpcSourceForTest(
         { requester: { connectionId: client.connId } },
-        {
-          runId,
-          sessionId,
-          phase: "waiting",
-          agentId: "main",
-          storeScope: expectDefined(descendantSession, "descendant session").storePath,
-          sessionKey: expectDefined(descendant, "descendant").entry.childSessionKey,
-        },
+        { runId, sessionId, phase, agentId: "main", storeScope: session.storePath, sessionKey },
       );
     const descendantSource = descendant
       ? source("prior-descendant-input", "previous-descendant-session")
@@ -101,16 +106,12 @@ it.each(["active", "queued", "pending-chat"] as const)(
       : undefined;
     const context = requestContext();
     const oldRunId = "prior-incarnation-input";
-    const old = createRpcSourceForTest(
-      { requester: { connectionId: client.connId } },
-      {
-        runId: oldRunId,
-        storeScope: loaded.storePath,
-        phase: kind === "queued" ? "waiting" : "preparing",
-        sessionKey: entry.childSessionKey,
-        agentId: "main",
-        sessionId: "previous-child-session",
-      },
+    const old = source(
+      oldRunId,
+      "previous-child-session",
+      loaded,
+      entry.childSessionKey,
+      kind === "queued" ? "waiting" : "preparing",
     );
     if (kind === "active") {
       await claimRpcSourceForTest(old);
@@ -128,19 +129,14 @@ it.each(["active", "queued", "pending-chat"] as const)(
           ownerConnId: client.connId,
           agentId: "main",
           sessionKey: entry.childSessionKey,
-          sessionId: getRpcSourceIdentity(old).sessionId,
+          sessionId: "previous-child-session",
         },
       });
     }
     const originalPending = context.dedupe.get(`${kind}:${oldRunId}`);
     const { respond, done } = abort(client, entry.childSessionKey, context);
     await done;
-    expect(respond).toHaveBeenCalledOnce();
-    expect(respond.mock.calls[0]?.[2]).toBeUndefined();
-    expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
-      true,
-      { ok: true, status: "aborted", abortedRunId: entry.runId },
-    ]);
+    expectAborted(respond, entry.runId);
     expect(isSubagentRunQueued(entry)).toBe(false);
     expect(getCurrentSubagentRunOwner(subagentRuns, entry)).toMatchObject({
       collectorCompletion: { status: "killed" },
@@ -240,10 +236,7 @@ it("narrow collector Stop joins owned raw effects without interrupting or waitin
     rawFinish.resolve();
     await raw;
     await stop;
-    expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
-      true,
-      { ok: true, status: "aborted", abortedRunId: entry.runId },
-    ]);
+    expectAborted(respond, entry.runId);
     expect(priorInterrupted).not.toHaveBeenCalled();
     expect(foreign.isActive()).toBe(true);
     expect(foreignAbort).not.toHaveBeenCalled();

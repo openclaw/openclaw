@@ -87,7 +87,9 @@ export function registerSecurityCli(program: Command) {
           "Invalid --auth password: pass --password <password> for audit auth override.",
         );
       }
-      const auditGatewayAuthOverride = authMode
+      const auditGatewayAuthOverride: Parameters<
+        typeof runSecurityAuditCore
+      >[0]["auditGatewayAuthOverride"] = authMode
         ? { mode: authMode, ...(token ? { token } : {}), ...(password ? { password } : {}) }
         : undefined;
       const fixResult = opts.fix ? await fixSecurityFootguns() : null;
@@ -105,7 +107,6 @@ export function registerSecurityCli(program: Command) {
         sourceConfig,
         deep: Boolean(opts.deep),
         includeFilesystem: true,
-        includeChannelSecurity: true,
         deepProbeAuth:
           token || password
             ? {

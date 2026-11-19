@@ -5,12 +5,12 @@ import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.j
 import {
   resolveAgentEffectiveModelPrimary,
   resolveAgentExplicitModelPrimary,
-  resolveEffectiveModelFallbacks,
 } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { FailoverError } from "./failover-error.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
+import { resolveEffectiveModelFallbacks } from "./model-selection-config.js";
 import {
   resolveConfiguredSubagentSpawnModelSelection,
   resolveDefaultModelForAgent,

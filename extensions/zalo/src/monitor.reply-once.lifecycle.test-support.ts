@@ -1,10 +1,10 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createLifecycleMonitorSetup,
   createTextUpdate,
-  postWebhookReplay,
+  replayLifecycleWebhook,
+  withStoppedMonitor,
 } from "./test-support/lifecycle-test-support.js";
 import {
   loadCachedLifecycleMonitorModule,
@@ -66,30 +66,6 @@ describe("Zalo reply-once lifecycle", () => {
     });
   }
 
-  async function replayWebhook(
-    monitor: Awaited<ReturnType<typeof startWebhookLifecycleMonitor>>,
-    payload: Record<string, unknown>,
-    waitBeforeReplay = false,
-  ) {
-    await withServer(
-      (req, res) => {
-        void monitor.route.handler(req, res);
-      },
-      async (baseUrl) => {
-        const { first, replay } = await postWebhookReplay({
-          baseUrl,
-          path: "/hooks/zalo",
-          secret: "supersecret",
-          payload,
-          ...(waitBeforeReplay ? { beforeReplay: monitor.waitForIdle } : {}),
-        });
-        expect(first.status).toBe(200);
-        expect(replay.status).toBe(200);
-        await monitor.waitForIdle();
-      },
-    );
-  }
-
   it.each(["message.text.received", "message.unsupported.received"])(
     "routes %s text to one visible reply across duplicate replay",
     async (eventName) => {
@@ -100,8 +76,8 @@ describe("Zalo reply-once lifecycle", () => {
 
       const monitor = await startMonitor();
 
-      try {
-        await replayWebhook(monitor, { ...textUpdate, event_name: eventName });
+      await withStoppedMonitor(monitor, async () => {
+        await replayLifecycleWebhook(monitor, { ...textUpdate, event_name: eventName });
 
         expect(dispatchReply).toHaveBeenCalledTimes(1);
         expect(dispatchReply.mock.calls[0]?.[0].ctx.BodyForAgent).toBe("check https://example.com");
@@ -110,23 +86,21 @@ describe("Zalo reply-once lifecycle", () => {
         expect(recordArgs).toMatchObject({
           sessionKey: "agent:main:zalo:direct:dm-chat-1",
           ctx: {
+            MessageSid: "zalo-replay",
             AccountId: "acct-zalo-lifecycle",
             SessionKey: "agent:main:zalo:direct:dm-chat-1",
             From: "zalo:user-1",
             To: "zalo:dm-chat-1",
           },
         });
-        expect(recordArgs?.ctx?.MessageSid).toBe("zalo-replay");
-        expect(sendMessageMock).toHaveBeenCalledTimes(1);
-        const [token, payload, options] = sendMessageMock.mock.calls[0]!;
-        expect([token, payload, options]).toEqual([
-          "zalo-token",
-          expect.objectContaining({ chat_id: "dm-chat-1", text: "zalo reply once" }),
-          undefined,
+        expect(sendMessageMock.mock.calls).toEqual([
+          [
+            "zalo-token",
+            expect.objectContaining({ chat_id: "dm-chat-1", text: "zalo reply once" }),
+            undefined,
+          ],
         ]);
-      } finally {
-        await monitor.stop();
-      }
+      });
     },
   );
 
@@ -134,8 +108,8 @@ describe("Zalo reply-once lifecycle", () => {
     "logs unsupported events with no usable text (%j) without sending a reply",
     async (text) => {
       const monitor = await startMonitor();
-      try {
-        await replayWebhook(
+      await withStoppedMonitor(monitor, async () => {
+        await replayLifecycleWebhook(
           monitor,
           {
             ...textUpdate,
@@ -151,9 +125,7 @@ describe("Zalo reply-once lifecycle", () => {
         expect(dispatchReply).not.toHaveBeenCalled();
         expect(recordSession).not.toHaveBeenCalled();
         expect(sendMessageMock).not.toHaveBeenCalled();
-      } finally {
-        await monitor.stop();
-      }
+      });
     },
   );
 
@@ -171,14 +143,12 @@ describe("Zalo reply-once lifecycle", () => {
 
     const monitor = await startMonitor();
 
-    try {
-      await replayWebhook(monitor, textUpdate, true);
+    await withStoppedMonitor(monitor, async () => {
+      await replayLifecycleWebhook(monitor, textUpdate, true);
 
       expect(dispatchReply).toHaveBeenCalledTimes(1);
       expect(sendMessageMock).toHaveBeenCalledTimes(1);
       expect(monitor.runtime.error).not.toHaveBeenCalled();
-    } finally {
-      await monitor.stop();
-    }
+    });
   });
 });

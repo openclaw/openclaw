@@ -3,7 +3,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { toAgentRequestSessionKey } from "../routing/session-key.js";
 
-type SessionIdMatch = readonly [string, SessionEntry, ...unknown[]];
+type SessionIdMatch = [string, SessionEntry];
 type SessionIdMatchSelection =
   | { kind: "none" }
   | { kind: "ambiguous"; sessionKeys: string[] }
@@ -16,7 +16,7 @@ function newestFirst([, a]: SessionIdMatch, [, b]: SessionIdMatch): number {
 // Structural suffix/request-key matches beat fuzzy matches; ties between
 // distinct sessions remain ambiguous, in their original store order.
 export function resolveSessionIdMatchSelection(
-  matches: readonly SessionIdMatch[],
+  matches: SessionIdMatch[],
   sessionId: string,
 ): SessionIdMatchSelection {
   if (matches.length === 0) {
@@ -68,7 +68,7 @@ export function resolveSessionIdMatchSelection(
 }
 
 export function resolvePreferredSessionKeyForSessionIdMatches(
-  matches: readonly SessionIdMatch[],
+  matches: SessionIdMatch[],
   sessionId: string,
 ): string | undefined {
   const selection = resolveSessionIdMatchSelection(matches, sessionId);

@@ -46,6 +46,14 @@ const GoalOperationIdentity = {
 export const SessionsGoalUpdateParamsSchema = Type.Union([
   closedObject({
     ...GoalOperationIdentity,
+    sessionId: NonEmptyString,
+    action: Type.Literal("replace"),
+    objective: Type.String({ minLength: 1, maxLength: 16_000 }),
+    expectedGoalUpdatedAt: Type.Number(),
+    expectedRunId: NonEmptyString,
+  }),
+  closedObject({
+    ...GoalOperationIdentity,
     action: Type.Literal("edit"),
     objective: Type.String({ minLength: 1, maxLength: 16_000 }),
   }),
@@ -58,7 +66,16 @@ export const SessionsGoalUpdateParamsSchema = Type.Union([
 export const SessionsGoalClearParamsSchema = closedObject(GoalOperationIdentity);
 export const SessionsGoalMutationResultSchema = closedObject({
   operationId: NonEmptyString,
-  action: stringLiteralUnion(["start", "edit", "pause", "resume", "complete", "block", "clear"]),
+  action: stringLiteralUnion([
+    "start",
+    "edit",
+    "replace",
+    "pause",
+    "resume",
+    "complete",
+    "block",
+    "clear",
+  ]),
   sessionId: NonEmptyString,
   goalId: NonEmptyString,
   goal: Type.Optional(SessionGoalSchema),

@@ -12,6 +12,7 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
@@ -161,6 +162,7 @@ export async function deliverReplies(params: {
   const mediaLocalRoots = deliverySession
     ? getAgentScopedMediaLocalRoots(params.cfg, deliverySession.agentId)
     : undefined;
+  const mediaAccess = resolveOutboundMediaAccessForConfig(params.cfg);
   let latestResult: SlackSendResult | undefined;
   for (const prepared of params.replies) {
     const { payload } = prepared;
@@ -199,6 +201,7 @@ export async function deliverReplies(params: {
         token: params.token,
         accountId: params.accountId,
         ...(mediaLocalRoots ? { mediaLocalRoots } : {}),
+        mediaAccess,
         onDeliveryResult: (result) => {
           acceptedResults.push(result);
           if (questionId) {
@@ -430,6 +433,7 @@ export async function deliverSlackSlashReplies(params: {
     const materializeAuthoredText = hasSlackReplyStructuredContent(payload);
     const { authoredTextPlacement, segments } = resolveSlackReplyBlockResolution(payload, {
       materializeAuthoredText,
+      tableMode: params.tableMode,
     });
     if (segments.length > 0) {
       const messages: PlannedSlashReplyMessage[] = [];

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { dirname } from "node:path";
 import * as config from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { beforeEach, expect, it, vi } from "vitest";
+import { assert, beforeEach, expect, it, vi } from "vitest";
 import { createFileTransferNodeInvokePolicy } from "../shared/node-invoke-policy.js";
 import { createCtx } from "../shared/node-invoke-policy.test-support.js";
 import { handleFileStat } from "./file-stat.js";
@@ -10,7 +10,11 @@ import { useFiles } from "./node-host.test-support.js";
 vi.mock("../shared/audit.js", () => ({ appendFileTransferAudit: vi.fn() }));
 
 let file: string;
-const { at, file: makeFile } = useFiles("file-stat-test-", config.clearRuntimeConfigSnapshot);
+const {
+  at,
+  file: makeFile,
+  replacement,
+} = useFiles("file-stat-test-", config.clearRuntimeConfigSnapshot);
 
 beforeEach(async () => {
   config.setRuntimeConfigSnapshot({});
@@ -39,14 +43,12 @@ it("rejects symlinks by default and returns the canonical target when allowed", 
 });
 
 it("refuses a replacement at the same path after authorization", async () => {
-  const authorized = await handleFileStat({ path: file, preflightOnly: true });
-  if (!authorized.ok) {
-    throw new Error(authorized.message);
-  }
-  await fs.rename(file, `${file}.old`);
-  await fs.writeFile(file, "replacement");
+  const { target, swap } = await replacement("inode");
+  const authorized = await handleFileStat({ path: target, preflightOnly: true });
+  assert(authorized.ok);
+  await swap();
   const { path: expectedCanonicalPath, binding: expectedBinding } = authorized;
-  const params = { path: file, expectedCanonicalPath, expectedBinding };
+  const params = { path: target, expectedCanonicalPath, expectedBinding };
   await expectStatError(params, "CANONICAL_PATH_CHANGED");
 });
 

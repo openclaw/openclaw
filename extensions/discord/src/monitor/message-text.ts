@@ -1,5 +1,6 @@
 import { ComponentType } from "discord-api-types/v10";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking";
 import type { Message } from "../internal/discord.js";
 import {
   formatDiscordSnapshotAuthor,
@@ -11,28 +12,14 @@ import {
 } from "./message-forwarded.js";
 import { formatDiscordMediaText } from "./message-media.js";
 
-function resolveDiscordEmbedText(
-  embeds?: readonly { title?: string | null; description?: string | null }[] | null,
-): string {
-  return (embeds ?? [])
-    .flatMap(({ title, description }) => [
-      normalizeOptionalString(title),
-      normalizeOptionalString(description),
-    ])
-    .filter(Boolean)
-    .join("\n");
-}
-
 export function resolveDiscordMessageText(
   message: Message,
-  options?: { fallbackText?: string; includeForwarded?: boolean },
+  options?: { includeForwarded?: boolean },
 ): string {
   const rawText =
     resolveDiscordMessageMentionDocuments(message)
       .map((text) => text.trim())
-      .join("\n") ||
-    normalizeOptionalString(options?.fallbackText) ||
-    "";
+      .join("\n") || "";
   const baseText = resolveDiscordMentions(rawText, message);
   if (!options?.includeForwarded) {
     return baseText;
@@ -82,7 +69,7 @@ export function resolveDiscordMessageBatch(last: Message, preceding: readonly Me
 /** Adds native media text only for history surfaces that cannot carry structured facts. */
 export function resolveDiscordMessageHistoryText(
   message: Message,
-  options?: { fallbackText?: string; includeForwarded?: boolean },
+  options?: { includeForwarded?: boolean },
 ): string {
   const text = resolveDiscordMessageText(message, options);
   const mediaText = formatDiscordMediaText({
@@ -100,12 +87,14 @@ function resolveDiscordMentions(text: string, message: Message): string {
   if (!Array.isArray(mentions) || mentions.length === 0) {
     return text;
   }
-  let out = text;
-  for (const user of mentions) {
-    const label = user.globalName || user.username || user.id;
-    out = out.replace(new RegExp(`<@!?${user.id}>`, "g"), () => `@${label}`);
-  }
-  return out;
+  const codeRegions = findCodeRegions(text);
+  return text.replace(/<@!?(\d+)>/g, (mention: string, id: string, offset: number) => {
+    if (isInsideCode(offset, codeRegions)) {
+      return mention;
+    }
+    const user = mentions.find((mentionedUser) => mentionedUser.id === id);
+    return user ? `@${user.globalName || user.username || user.id}` : mention;
+  });
 }
 
 function resolveDiscordForwardedMessagesText(message: Message): string {
@@ -192,7 +181,13 @@ export function resolveDiscordRawMessageText(
   });
   const text =
     content ||
-    resolveDiscordEmbedText(message.embeds) ||
+    (message.embeds ?? [])
+      .flatMap(({ title, description }) => [
+        normalizeOptionalString(title),
+        normalizeOptionalString(description),
+      ])
+      .filter(Boolean)
+      .join("\n") ||
     extractDiscordComponentsV2Text(message.components) ||
     resolveDiscordForwardedMessagesTextFromSnapshots(
       normalizeDiscordMessageSnapshots(message.message_snapshots),

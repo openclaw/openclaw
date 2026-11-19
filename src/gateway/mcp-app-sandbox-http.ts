@@ -11,17 +11,13 @@ import {
   decodeSandboxHostCsp,
   SANDBOX_HOST_PATH,
 } from "../agents/sandbox-host.js";
-import type { PluginBoardWidgetContentKind } from "../plugins/board-widget-content-kind.types.js";
-import type { PluginRegistry } from "../plugins/registry-types.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
 import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
 } from "./ingress-attribution.js";
-
-type PublicResourceReader = NonNullable<
-  PluginBoardWidgetContentKind["resources"]["readPublicResource"]
->;
+import type { GatewayClient } from "./server-methods/types.js";
+import { handleSessionFilePreviewHttpRequest } from "./session-file-preview-http.js";
 
 function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerResponse): boolean {
   const url = URL.parse(req.url ?? "/", "http://localhost");
@@ -63,12 +59,14 @@ function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerRespons
   return true;
 }
 
-/** Dedicated listener: only the proxy and explicitly public renderer assets, never Gateway data. */
+type SandboxHostOptions = { clients: ReadonlySet<GatewayClient> };
+
+/** Isolated shell and explicitly granted file resources, never arbitrary Gateway data. */
 export function createSandboxHostHttpServer(
   tlsOptions?: TlsOptions,
-  resolvePluginRegistry?: () => PluginRegistry,
+  options?: SandboxHostOptions,
 ): HttpServer {
-  const handler = createSandboxHostHttpRequestHandler(resolvePluginRegistry);
+  const handler = createSandboxHostHttpRequestHandler(options);
   const listener = (req: IncomingMessage, res: ServerResponse) => {
     void handler(req, res);
   };
@@ -77,67 +75,15 @@ export function createSandboxHostHttpServer(
 
 /** Shared dedicated-surface owner for listener and virtual ingress transports. */
 export function createSandboxHostHttpRequestHandler(
-  resolvePluginRegistry?: () => PluginRegistry,
+  options?: SandboxHostOptions,
 ): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
-  // Public static assets may finish an in-flight read across plugin reloads.
-  const readersByRegistry = new WeakMap<PluginRegistry, Map<string, PublicResourceReader>>();
-  const serveResource = async (req: IncomingMessage, res: ServerResponse) => {
-    const registry = resolvePluginRegistry?.();
-    if (!registry || (req.method !== "GET" && req.method !== "HEAD")) {
-      respondPlainText(res, 404, "Not Found");
-      return;
-    }
-    let readers = readersByRegistry.get(registry);
-    if (!readers) {
-      readers = new Map();
-      for (const { definition } of registry.boardWidgetContentKinds.values()) {
-        const read = definition.resources.readPublicResource;
-        if (read) {
-          for (const resourcePath of definition.resources.paths) {
-            readers.set(resourcePath, read);
-          }
-        }
-      }
-      readersByRegistry.set(registry, readers);
-    }
-    const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-    const reader = readers.get(pathname);
-    const resource = reader ? await reader(pathname) : undefined;
-    assertRemoteControlUiIngressCurrent(getRemoteControlUiIngressContext(req));
-    if (!resource) {
-      respondPlainText(res, 404, "Not Found");
-      return;
-    }
-    res.statusCode = 200;
-    res.setHeader("Content-Type", resource.contentType);
-    res.setHeader("Content-Length", String(resource.body.byteLength));
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.end(req.method === "HEAD" ? undefined : resource.body);
-  };
   return async (req: IncomingMessage, res: ServerResponse) => {
-    const ingress = getRemoteControlUiIngressContext(req);
-    assertRemoteControlUiIngressCurrent(ingress);
-    if (handleMcpAppSandboxHttpRequest(req, res)) {
+    assertRemoteControlUiIngressCurrent(getRemoteControlUiIngressContext(req));
+    if (options && (await handleSessionFilePreviewHttpRequest(req, res, options.clients))) {
       return;
     }
-    if (!resolvePluginRegistry) {
+    if (!handleMcpAppSandboxHttpRequest(req, res)) {
       respondPlainText(res, 404, "Not Found");
-      return;
-    }
-    try {
-      await serveResource(req, res);
-    } catch {
-      if (ingress) {
-        try {
-          assertRemoteControlUiIngressCurrent(ingress);
-        } catch {
-          res.destroy();
-          return;
-        }
-      }
-      respondPlainText(res, 503, "Renderer resource unavailable");
     }
   };
 }

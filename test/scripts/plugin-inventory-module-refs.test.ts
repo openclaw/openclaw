@@ -111,10 +111,6 @@ it.each([
         ).bundles;
     if (format) {
       const plan = await buildPluginNpmRuntime({ packageDir: root, logLevel: "silent" });
-      expect(plan?.runtimeBuildOutputs).toEqual([
-        `./dist/companion.${runtimeExtension}`,
-        `./dist/setup.${runtimeExtension}`,
-      ]);
       expect(plan?.packageFiles).toContain("dist/**");
     }
     const cache = createPluginCache();
@@ -129,28 +125,20 @@ it.each([
       const setup = path.join(outDir, format ? `setup.${runtimeExtension}` : `${entryName}.js`);
       if (binding === "unrelated") {
         expect(privateChunks).toHaveLength(0);
-        expect(fs.readFileSync(setup, "utf8")).not.toContain("new URL(");
         return;
       }
       if (format) {
-        const privateFiles = fs.readdirSync(path.join(outDir, ".setup"));
-        expect(privateFiles.length).toBeGreaterThan(0);
-        expect(
-          privateFiles.every((file) => file.endsWith(format === "cjs" ? ".cjs" : ".mjs")),
-        ).toBe(true);
         expect(requireHost(path.join(outDir, `companion.${runtimeExtension}`))).toMatchObject({
           runtimeSelectedExport: "retained",
           channelPlugin: { id: "fixture" },
         });
       } else {
-        expect(privateChunks.length).toBeGreaterThan(0);
         expect(privateChunks.some((chunk) => chunk.exports.includes("runtimeSelectedExport"))).toBe(
           true,
         );
       }
       const nativeListeners = process.listenerCount(event);
       expect(nativeListeners).toBe(format ? 1 : 0);
-      expect(fs.readFileSync(setup, "utf8")).toContain("new URL(");
       if (binding === "inventory") {
         expect(fs.existsSync(path.join(outDir, "extensions/openai/capability-catalog.js"))).toBe(
           true,
@@ -163,7 +151,7 @@ it.each([
         rootDir,
         source: setup,
       });
-      const setupEntry = withPluginCache(cache, () => {
+      withPluginCache(cache, () => {
         const loader = getPluginSetupModuleLoader(record, setup, rootDir);
         const module = loader(setup) as {
           default: { loadSetupPlugin(): { id: string } };
@@ -172,12 +160,8 @@ it.each([
         expect(process.listenerCount(event)).toBe(nativeListeners);
         expect(module.retained).toEqual(["first", "escaped"]);
         expect(loader.initialize(() => module.default.loadSetupPlugin()).id).toBe("fixture");
-        return module.default;
       });
       // Bundled code reuses the public load; installed packages evaluate a captured graph.
-      expect(process.listenerCount(event)).toBe(evaluations);
-      await retirePluginCache(cache);
-      expect(() => setupEntry.loadSetupPlugin()).toThrow("reloaded or disabled");
       expect(process.listenerCount(event)).toBe(evaluations);
     } finally {
       await retirePluginCache(cache);

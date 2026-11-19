@@ -3,14 +3,11 @@ import path from "node:path";
 import { createReadTool } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createOpenClawCodingTools } from "./agent-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
-import {
-  createHostWorkspaceWriteTool,
-  createOpenClawReadTool,
-  wrapToolMemoryFlushAppendOnlyWrite,
-} from "./agent-tools.read.js";
+import { projectMemoryFlushWriteTool } from "./agent-tools.memory-flush.test-support.js";
+import { createHostWorkspaceWriteTool, createOpenClawReadTool } from "./agent-tools.read.js";
 import { expectReadWriteEditTools, getTextContent } from "./test-helpers/agent-tools-fs-helpers.js";
 
 vi.mock("../infra/shell-env.js", async () => {
@@ -28,15 +25,8 @@ const guardedRead = (workspaceDir: string) =>
 describe("memory filesystem policy", () => {
   let workspaceDir: string;
 
-  const memoryWriteTool = (relativePath: string) =>
-    wrapToolMemoryFlushAppendOnlyWrite(createHostWorkspaceWriteTool(workspaceDir), {
-      root: workspaceDir,
-      relativePath,
-    });
-
-  beforeEach(async () => {
-    workspaceDir = path.join(tempDirs.make("openclaw-workspace-outside-"), "workspace");
-    await fs.mkdir(workspaceDir);
+  beforeEach(() => {
+    workspaceDir = tempDirs.make("openclaw-workspace-outside-");
   });
 
   it("makes only missing canonical daily-memory reads implicitly optional", async () => {
@@ -71,7 +61,11 @@ describe("memory filesystem policy", () => {
     "validates memory append paths after suffix stripping (valid: %s)",
     async (valid) => {
       const file = "memory/2026-03-08.md";
-      const result = memoryWriteTool(file).execute("write", {
+      const write = projectMemoryFlushWriteTool(createHostWorkspaceWriteTool(workspaceDir), {
+        root: workspaceDir,
+        relativePath: file,
+      });
+      const result = write.execute("write", {
         path: `${valid ? file : ""}</arg_value>>`,
         content: "new note",
       });

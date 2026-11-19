@@ -40,6 +40,7 @@ import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore, WorkerSessionTurnClaim } from "./placement-store.js";
+import { assertWorkerTurnLiveEventInputAdmitted } from "./placement-turn-claim-events.js";
 import { boundedWorkerError } from "./worker-error.js";
 
 export type ActiveWorkerTurn = {
@@ -71,6 +72,37 @@ type WorkerRunOwner = WorkerTurnLiveEventOwner & {
 
 // Projection of the admitting controller operation; the operation owns turn liveness.
 const activeOwners = new WeakMap<ReplyOperation, WorkerRunOwner>();
+
+export const isWorkerTerminalLiveEvent = (request: WorkerLiveEventParams): boolean =>
+  request.event.kind === "lifecycle" &&
+  (request.event.payload.phase === "finishing" ||
+    request.event.payload.phase === "end" ||
+    (request.event.payload.phase === "error" &&
+      (request.event.payload.aborted === true ||
+        request.event.payload.fallbackExhaustedFailure === true)));
+
+export function prepareWorkerTurnAdmittedLiveEvent(
+  identity: WorkerConnectionIdentity,
+  request: WorkerLiveEventParams,
+): WorkerLiveEventParams {
+  try {
+    assertWorkerTurnLiveEventInputAdmitted(identity);
+    return request;
+  } catch (error) {
+    if (request.event.kind !== "lifecycle" || request.event.payload.phase !== "finishing") {
+      throw error;
+    }
+    // Workers without approved input still settle their terminal receipt, without
+    // persisting worker-controlled content before input admission.
+    return {
+      ...request,
+      event: {
+        kind: "lifecycle",
+        payload: { phase: "finishing", endedAt: request.event.payload.endedAt, aborted: true },
+      },
+    };
+  }
+}
 
 export async function prepareWorkerTurnReplyDelivery(
   previous: ActiveWorkerTurn | undefined,

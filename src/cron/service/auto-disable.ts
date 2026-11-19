@@ -1,8 +1,7 @@
 /** Shared state and owner-notification policy for cron auto-disable transitions. */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { cronFailureDetailLines } from "../failure-notification-text.js";
-import { isSystemMonitorDeclaration } from "../system-owned-declaration.js";
-import type { CronJob, CronJobState } from "../types.js";
+import type { CronFailureNotificationDetail, CronJob, CronJobState } from "../types.js";
 import { cronNotificationJob } from "./notification-intents.js";
 import type { DeferredCronNotifications } from "./state.js";
 
@@ -23,6 +22,7 @@ export function buildCronAutoDisableNotice(params: {
   job: Pick<CronJob, "id" | "name" | "state">;
   reason: CronAutoDisableReason;
   consecutiveErrors: number;
+  failureNotificationDetail?: CronFailureNotificationDetail;
 }): string {
   const { job } = params;
   const name = truncateUtf16Safe((job.name || job.id).replace(/\s+/g, " ").trim(), 120);
@@ -30,7 +30,7 @@ export function buildCronAutoDisableNotice(params: {
     params.reason === "consecutive-failures" ? job.state.lastErrorReason : undefined;
   return [
     `⚠️ Automation "${name}" was auto-disabled after ${params.consecutiveErrors} consecutive ${autoDisableReasonLabel(params.reason)}.`,
-    ...cronFailureDetailLines(errorReason),
+    ...cronFailureDetailLines(errorReason, params.failureNotificationDetail),
     `Fix the underlying cause, then run \`openclaw automations enable ${job.id}\` to re-enable it.`,
   ].join("\n");
 }
@@ -40,6 +40,7 @@ export function queueCronAutoDisableNotification(params: {
   job: CronJob;
   reason: CronAutoDisableReason;
   consecutiveErrors: number;
+  failureNotificationDetail?: CronFailureNotificationDetail;
   deferredNotifications: DeferredCronNotifications;
 }): void {
   params.deferredNotifications.push({
@@ -55,16 +56,13 @@ export function autoDisableCronJob(params: {
   reason: CronAutoDisableReason;
   atMs: number;
   consecutiveErrors: number;
+  failureNotificationDetail?: CronFailureNotificationDetail;
   deferredNotifications: DeferredCronNotifications;
   /** A terminal one-shot is already disabled when its notification is finalized. */
   terminalOneShot?: boolean;
   notify?: boolean;
 }): boolean {
   const { job } = params;
-  // Gateway convergence owns these jobs; clients cannot re-enable them, so failures stay visible while they retry on schedule.
-  if (isSystemMonitorDeclaration(job.declarationKey)) {
-    return false;
-  }
   if ((!job.enabled && !params.terminalOneShot) || job.state.autoDisabled) {
     return false;
   }

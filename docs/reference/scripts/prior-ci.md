@@ -14,7 +14,10 @@ is a separate immediate-squash admission, not a fallback from auto/queue or a
 failed request. It verifies a prior successful CI attempt and its PR/head
 provenance, binds the reviewed prior-to-prepared delta and scoped-check
 attestations, and revalidates active organization/repository-admin authority and
-effective review rules. For attributed pre-existing failures only, it also
+effective review rules. The selected run's `head_sha` binds its tested commit;
+its associated PR number and base repository bind PR provenance. GitHub can
+refresh the nested PR head after a later push, so that snapshot does not identify
+the historical tested commit. For attributed pre-existing failures only, it also
 accepts repository write access plus active organization membership and the
 actual writer's live `always`/`pull_requests_only` bypass of every effective
 repository-owned CI-only ruleset. The ruleset must contain only GitHub Actions
@@ -82,6 +85,45 @@ its baseline/prior head and tested merge objects. Exact PR/policy facts and the
 landing-parent audit still apply; active prior-CI admission may accept verified
 forward-main movement under the [merge admission contract](/reference/scripts/merge-admission). See the [landing workflow](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-pr-maintainer/references/landing.md#explicit-prior-ci-admin-landing)
 for the evidence fields and supported policy limits.
+
+## Artifact-build failure with successful primary CI
+
+The same confirmed admin route accepts an independently attributed failure in
+`.github/workflows/ci-build-artifacts-testbox.yml` when primary `ci.yml` passed
+on the exact prepared PR head. This is the supported artifact-build contract;
+it does not admit arbitrary secondary workflows.
+
+Keep `runId` and `runAttempt` bound to the failed artifact-build run, including
+`tests.result: "fail"` and the review's `tests.preExistingCi`. Add
+`primaryCi: { runId, runAttempt }` naming the separate successful primary attempt.
+Retain the ordinary tested merge, baseline, artifact hashes, per-job attribution,
+and scoped passing checks. Every failure's unchanged `sourcePaths` must include
+the artifact-build workflow itself. Omit `aggregate` and `cancellation`:
+all artifact-build jobs must be terminal and none may be cancelled.
+
+Admission binds the failed jobs to current optional check-runs, their suite,
+workflow, and attempt. A newer PR run of the same workflow invalidates this evidence; older successful
+or skipped runs do not.
+Primary CI's gate and `security-fast`, the combined CI/security status, and every
+current required check must pass. Security Review replay verification uses the
+primary CI run and attempt. Other failed or unfinished rollup contexts remain
+blocking; the ordinary watcher and cancellation contracts are unchanged.
+
+A PR bound to older tooling with no retained merge outcome can explicitly select
+current official-main tooling for this one confirmed admin invocation:
+
+```bash
+scripts/pr merge-run <PR> --current-workflow --admin-evidence <file> --confirmed-operator-admin
+```
+
+The native lock, fresh official-main acquisition, complete wrapper verification,
+exact review/preparation/head checks, and existing writer authority still apply.
+Any retained outcome or unresolved merge capture blocks first admission.
+The original binding is unchanged. The outcome retains `workflowAdmission`
+with the binding and old/new sources; ordinary reconciliation and completion
+continue through the original workflow. The new tooling must land through the
+existing trusted workflow before use. Never edit a binding or invent a recovery
+outcome to select unlanded code.
 
 ## Requalification on a busy main
 

@@ -10,10 +10,10 @@ import {
 } from "./service.test-harness.js";
 import { onTimer } from "./service/timer.test-support.js";
 
-const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-main-heartbeat-target" });
+const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-main-session-delivery" });
 
 describe("cron main job session delivery", () => {
-  it("dispatches main-session events without a heartbeat wake", async () => {
+  it("dispatches main-session events through the session controller", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.now();
     const clock = createGatewaySchedulerClock(now);
@@ -34,12 +34,11 @@ describe("cron main job session delivery", () => {
         },
       ],
     });
-    const { cron, state, finished, runSessionEvent, requestHeartbeatAndWait } =
-      createStartedCronServiceWithFinishedBarrier({
-        scheduler: createTestGatewayScheduler(clock.clock),
-        storePath,
-        logger,
-      });
+    const { cron, state, finished, runSessionEvent } = createStartedCronServiceWithFinishedBarrier({
+      scheduler: createTestGatewayScheduler(clock.clock),
+      storePath,
+      logger,
+    });
     const terminal = finished.waitForOk("main-delivery");
     try {
       await cron.start();
@@ -56,7 +55,6 @@ describe("cron main job session delivery", () => {
           text: "Check in",
         }),
       );
-      expect(requestHeartbeatAndWait).not.toHaveBeenCalled();
     } finally {
       cron.stop();
     }

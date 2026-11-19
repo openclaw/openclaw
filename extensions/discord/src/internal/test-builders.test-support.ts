@@ -1,7 +1,8 @@
 import { ComponentType, InteractionType } from "discord-api-types/v10";
 import { vi, type Mock } from "vitest";
+import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import { Client } from "./client.js";
-import type { DiscordCommand } from "./commands.js";
+import { Command, type CommandOptions, type DiscordCommand } from "./commands.js";
 import type { RawInteraction } from "./interactions.js";
 import type { RequestClient } from "./rest.js";
 
@@ -17,6 +18,32 @@ type FakeRestCall = {
   data?: Parameters<RequestClient["post"]>[1];
   query?: Parameters<RequestClient["get"]>[1];
 };
+
+export function createTestCommand(
+  name: string,
+  options?: CommandOptions,
+  config: Partial<Pick<Command, "description" | "run" | "defer" | "ephemeral">> = {},
+) {
+  return new (class extends Command {
+    name = name;
+    override description = config.description ?? `${name} command`;
+    override options = options;
+    override defer = config.defer ?? false;
+    override ephemeral = config.ephemeral ?? false;
+    run = config.run ?? (() => {});
+  })();
+}
+
+export function createTestHashStore() {
+  const rows = new Map<string, string>();
+  const store = {
+    lookup: vi.fn(async (key: string) => rows.get(key)),
+    register: vi.fn(async (key: string, value: string) => {
+      rows.set(key, value);
+    }),
+  } satisfies DiscordCommandDeployHashStore;
+  return { rows, store };
+}
 
 export function createJsonResponse(body: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(body), { status: 200, ...init });
@@ -49,6 +76,7 @@ export function createInternalTestClient(
 
 export function attachRestMock(client: Client, rest: RestMock) {
   const mock = {
+    options: client.rest.options,
     get: vi.fn(async () => undefined),
     post: vi.fn(async () => undefined),
     patch: vi.fn(async () => undefined),

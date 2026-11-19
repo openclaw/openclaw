@@ -3,14 +3,15 @@ import type { preparePublishedModelRuntimeChoice } from "../../agents/model-runt
 import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { callAgentHandler } from "./agents-mutate.test-support.js";
+import { expectRpcError, expectRpcResult } from "./rpc-response.test-support.js";
 
 const fixture = vi.hoisted(() => {
   const config: OpenClawConfig = {};
   return {
     config,
-    writes: vi.fn(),
-    beforeWrite: vi.fn(),
-    choice: vi.fn<typeof preparePublishedModelRuntimeChoice>(),
+    beforeWrite: () => {},
+    current: true,
   };
 });
 
@@ -24,40 +25,36 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
     await params.mutate(draft);
     fixture.beforeWrite();
     params.writeOptions?.assertConfigPathForWrite?.();
-    fixture.writes(draft);
     fixture.config = draft;
     if (params.writeOptions) {
       getRuntimeConfigWriteApplication(params.writeOptions)?.claim()?.settle("applied");
     }
   },
 }));
+// mock-isolation: Control catalog ownership without activating model runtimes.
 vi.mock("../../agents/model-runtime-choice.js", () => ({
-  preparePublishedModelRuntimeChoice: fixture.choice,
+  preparePublishedModelRuntimeChoice: async ({
+    runtimeId,
+  }: Parameters<typeof preparePublishedModelRuntimeChoice>[0]): ReturnType<
+    typeof preparePublishedModelRuntimeChoice
+  > => ({
+    kind: "ready",
+    runtimeId: runtimeId ?? "openclaw",
+    validate: () => (fixture.current ? undefined : "Replaced"),
+  }),
 }));
 
 const { agentsHandlers } = await import("./agents.js");
-async function update(params: Record<string, unknown>) {
-  const respond = vi.fn();
-  await agentsHandlers["agents.update"]!({
-    req: { type: "req", id: "native-selection", method: "agents.update" },
-    params,
-    respond,
+function update(params: Record<string, unknown>) {
+  return callAgentHandler(agentsHandlers["agents.update"]!, "agents.update", params, {
     context: createDirectChatContext({ getRuntimeConfig: () => fixture.config }),
-    client: null,
-    isWebchatConnect: () => false,
   });
-  return respond;
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
   fixture.config = { agents: { entries: { main: {} } } };
-  fixture.beforeWrite.mockReset();
-  fixture.choice.mockReset().mockImplementation(async ({ runtimeId }) => ({
-    kind: "ready",
-    runtimeId: runtimeId ?? "openclaw",
-    validate: () => undefined,
-  }));
+  fixture.beforeWrite = () => {};
+  fixture.current = true;
 });
 
 const model = "acp-opencode/fixture-model";
@@ -68,39 +65,22 @@ it.each([false, true])(
     if (implicit) {
       fixture.config = {};
     }
-    expect(await update(request)).toHaveBeenCalledWith(
-      true,
-      { ok: true, agentId: "main" },
-      undefined,
-    );
-    expect(
-      implicit ? fixture.config.agents?.defaults : fixture.config.agents?.entries?.main,
-    ).toMatchObject({
+    expectRpcResult(await update(request), { ok: true, agentId: "main" });
+    const selection = {
       model,
       models: { [model]: { agentRuntime: { id: "acp-opencode" } } },
+    };
+    expect(fixture.config).toEqual({
+      ...(implicit ? { meta: { migrations: { modelPolicyAllowlist: true } } } : {}),
+      agents: implicit ? { defaults: selection } : { defaults: {}, entries: { main: selection } },
     });
-    if (implicit) {
-      expect(fixture.config.agents?.entries).toBeUndefined();
-    }
-    expect([fixture.config.auth, fixture.config.wizard]).toEqual([undefined, undefined]);
   },
 );
 it("rechecks catalog ownership at the final config write", async () => {
   const before = structuredClone(fixture.config);
-  let current = true;
-  fixture.choice.mockResolvedValue({
-    kind: "ready",
-    runtimeId: "acp-opencode",
-    validate: () => (current ? undefined : "Replaced"),
-  });
-  fixture.beforeWrite.mockImplementation(() => {
-    current = false;
-  });
-  expect(await update(request)).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ message: "Replaced" }),
-  );
-  expect(fixture.writes).not.toHaveBeenCalled();
+  fixture.beforeWrite = () => {
+    fixture.current = false;
+  };
+  expectRpcError(await update(request), { message: "Replaced" });
   expect(fixture.config).toEqual(before);
 });

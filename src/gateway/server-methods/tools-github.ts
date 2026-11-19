@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import {
   ErrorCodes,
   errorShape,
@@ -19,8 +20,15 @@ import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+} from "../../config/runtime-write-application.js";
+import { logWarn } from "../../logger.js";
+import { redactToolPayloadText } from "../../logging/redact.js";
 import { capturePluginLifecycleAuthority } from "../../plugins/registry-lifecycle.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { consumeGitHubSetupHandoff } from "../../secrets/store/secret-store.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
@@ -29,6 +37,7 @@ import { gitHubPublicApi } from "../github-public-api.js";
 import { prepareGitHubReaderIdentity } from "../github-reader-identity.js";
 import { updateGitHubToolIdentityConfig } from "../github-tool-identity-config.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -45,11 +54,7 @@ const handleGitHubRead: GatewayRequestHandler = async (options) => {
     params.sessionKey !== undefined ||
     (params.refresh !== undefined && typeof params.refresh !== "boolean")
   ) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `invalid ${req.method} params`),
-    );
+    respondError(respond, ErrorCodes.INVALID_REQUEST, `invalid ${req.method} params`);
     return;
   }
   const caller = client?.internal?.syntheticClient ? getGatewayToolCallerIdentity() : undefined;
@@ -69,13 +74,10 @@ const handleGitHubRead: GatewayRequestHandler = async (options) => {
     client?.internal?.pluginRuntimeOwnerId !== "github" ||
     !pluginCurrent
   ) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `GitHub reading requires an active ${toolName} tool invocation.`,
-      ),
+    respondError(
+      respond,
+      ErrorCodes.INVALID_REQUEST,
+      `GitHub reading requires an active ${toolName} tool invocation.`,
     );
     return;
   }
@@ -118,7 +120,7 @@ const handleGitHubRead: GatewayRequestHandler = async (options) => {
       error instanceof GitHubIdentityError
         ? { message: error.message, retryable: error.reason !== "unavailable" }
         : gitHubPublicApi.formatControlUiGitHubPreviewError(error);
-    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, details));
+    respondError(respond, ErrorCodes.UNAVAILABLE, message, details);
   }
 };
 
@@ -167,11 +169,18 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
           scope: params.scope,
         });
         let nextConfig = resolved.cfg;
+        // Clients re-read status for every agent that inherits this identity as soon as
+        // this reply arrives; reply only after the Gateway runs on the written config.
+        const application = createRuntimeConfigWriteApplication(
+          captureGatewayRootWorkAdmissionContinuationScope()?.run,
+        );
+        const writeOptions = attachRuntimeConfigWriteApplication({}, application);
         if (params.mode === "inherit") {
           nextConfig = await updateGitHubToolIdentityConfig({
             scope: params.scope,
             agentId: resolved.agentId,
             expectedIdentity: previousIdentity ?? null,
+            writeOptions,
           });
         } else {
           const gitAuthor = params.gitAuthor
@@ -210,9 +219,17 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
                 agentId: resolved.agentId,
                 identity,
                 expectedIdentity: previousIdentity ?? null,
+                writeOptions,
               });
             },
           });
+        }
+        const applied = application.claimed ? await application.result : "applied";
+        if (applied !== "applied" && applied !== "applied-restart-required") {
+          // The identity is saved; new replies pick it up once the Gateway applies it.
+          logWarn(
+            `tools-github: saved GitHub identity was not applied immediately (${typeof applied === "string" ? applied : applied.status})`,
+          );
         }
         if (previousIdentity?.kind === "oauth") {
           await context.githubOAuthService?.retireProfileAsync(previousIdentity.profileId);
@@ -225,12 +242,12 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
             selectedScope: params.scope,
           }),
         );
-      } catch {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "GitHub identity setup failed"),
+      } catch (error) {
+        // Credential setup causes must be safe even in raw file logs.
+        logWarn(
+          `tools-github: GitHub identity setup failed: ${formatErrorMessage(error, { redact: redactToolPayloadText })}`,
         );
+        respondError(respond, ErrorCodes.UNAVAILABLE, "GitHub identity setup failed");
       }
     },
   ),
@@ -256,15 +273,12 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
           await service.startAuthorization({ scope: params.scope, agentId: resolved.agentId }),
         );
       } catch (error) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            error instanceof GitHubCliUnavailableError
-              ? error.message
-              : "GitHub authorization could not start",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          error instanceof GitHubCliUnavailableError
+            ? error.message
+            : "GitHub authorization could not start",
         );
       }
     },
@@ -287,10 +301,10 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
     async ({ params, respond, context }) => {
       const service = context.githubOAuthService;
       if (!service) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "GitHub authorization lifecycle is unavailable"),
+        respondError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          "GitHub authorization lifecycle is unavailable",
         );
         return;
       }

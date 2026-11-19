@@ -2,6 +2,7 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
@@ -50,6 +51,7 @@ import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-cla
 import { writeAdminStateOwnerObservationPreload } from "./admin-state-owner.observation.test-support.js";
 import { adminStateOwnerFixtureEntrypoint } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import { stateOwnerEnv } from "./cli-process-fixture.test-support.js";
 
 const roots = useAutoCleanupTempDirTracker(afterAll);
 const entrypoint = resolveRuntimeWorkerArgv(
@@ -165,24 +167,15 @@ describe("administrative CLI state owner routing", () => {
   beforeAll(async () => {
     root = roots.make("openclaw-admin-owner-");
     claim = await acquireTestPortBlock({ offsets: [0, 1] });
-    env = {
-      PATH: process.env.PATH,
-      SystemRoot: process.env.SystemRoot,
-      HOME: root,
-      USERPROFILE: root,
-      OPENCLAW_HOME: root,
-      OPENCLAW_STATE_DIR: path.join(root, "state"),
-      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+    env = stateOwnerEnv(root, {
       OPENCLAW_GATEWAY_TOKEN: token,
-      OPENCLAW_NO_RESPAWN: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      NODE_DISABLE_COMPILE_CACHE: "1",
-    };
+    });
     const preloadPath = await writeAdminStateOwnerObservationPreload(
       root,
       resolveGatewayLockPaths(env).ownerLockPath,
     );
     Object.assign(env, sqliteWorkerPreloadEnv(preloadPath));
+    env.OPENCLAW_TEST_SQLITE_WORKER_PRELOAD ??= pathToFileURL(preloadPath).href;
     const cfg = {
       gateway: {
         mode: "local" as const,

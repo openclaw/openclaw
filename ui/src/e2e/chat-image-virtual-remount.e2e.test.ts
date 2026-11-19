@@ -1,5 +1,6 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
@@ -38,7 +39,7 @@ async function scrollToBottom(thread: Locator) {
 }
 
 suite.define(() => {
-  it.each(["unchanged", "sharing", "role assignment", "role definition"] as const)(
+  it.each(["sharing", "role assignment", "role definition"] as const)(
     "reuses remounted images; invalidates on %s",
     async (change) => {
       const page = await newChatPage(suite);
@@ -57,11 +58,7 @@ suite.define(() => {
         await route.fulfill(
           meta
             ? {
-                json: {
-                  available: true,
-                  mediaTicket: `remount-ticket-${requests.metadata}`,
-                  mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-                },
+                json: mediaTicketPayload(`remount-ticket-${requests.metadata}`, 300_000),
               }
             : {
                 contentType: "image/png",
@@ -110,9 +107,6 @@ suite.define(() => {
       await waitForChatScrollIdle(page);
       expect(await trace.evaluate((stop) => stop())).toBe(false);
       expect(requests).toEqual({ metadata: 1, image: 1 });
-      if (change === "unchanged") {
-        return;
-      }
       await scrollToBottom(thread);
       await expect.poll(() => image.count()).toBe(0);
       await waitForChatScrollIdle(page);

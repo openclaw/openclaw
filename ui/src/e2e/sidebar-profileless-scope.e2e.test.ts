@@ -7,6 +7,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { sidebarSessionList } from "./sidebar-contract.test-support.ts";
+import { seedSidebarOwnerFilter } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Personal navigation identity resolution" });
 
@@ -21,6 +22,8 @@ async function checkIdentityScope({ page }: { page: Page }) {
     { key: mine, label: "Weekly planning", owner: { actor: owners[0]! } },
     { key: other, label: "Research notes", owner: { actor: owners[1]! } },
   ];
+  // A returning browser saved My sessions for Alex; it applies only once Alex is identified.
+  await seedSidebarOwnerFilter(page, suite.server.baseUrl, "alex", "owner:alex");
   const gateway = await installMockGateway(page, {
     heldMethods: ["users.self"],
     hasMultipleSessionSharingIdentities: true,
@@ -67,7 +70,7 @@ async function checkIdentityScope({ page }: { page: Page }) {
 }
 
 suite.define(() => {
-  it("shows All owners without a profile and defaults to My sessions after identification", () =>
+  it("shows All owners without a profile and restores the saved choice after identification", () =>
     suite.withPage(
       { viewport: { width: 1280, height: 800 }, locale: "en-US" },
       checkIdentityScope,

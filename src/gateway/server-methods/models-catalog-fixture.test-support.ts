@@ -77,6 +77,31 @@ export function createCatalogModel(id: string, name = id) {
   return { id, name, ...catalogModelDefaults() };
 }
 
+export function catalogDiscoverySource(
+  provider: string,
+  baseUrl: string,
+  options: { wrappedRows?: boolean; model?: Record<string, unknown>; error: string },
+) {
+  return `catalog: {
+    order: "profile",
+    async run(ctx) {
+      const auth = ctx.resolveProviderAuth(${JSON.stringify(provider)});
+      if (!auth.discoveryApiKey) return null;
+      const response = await fetch(${JSON.stringify(`${baseUrl}/models`)}, {
+        headers: { Authorization: "Bearer " + auth.discoveryApiKey },
+      });
+      if (!response.ok) throw new Error(${JSON.stringify(options.error)});
+      const payload = await response.json();
+      return { provider: {
+        baseUrl: ${JSON.stringify(baseUrl)}, api: "openai-completions",
+        models: ${options.wrappedRows ? "payload.data" : "payload"}.map((row) => ({
+          ...row, ...${JSON.stringify({ ...catalogModelDefaults(), ...options.model })},
+        })),
+      } };
+    },
+  }`;
+}
+
 export function catalogReply(id: string, model: string, text: string) {
   return `data: ${JSON.stringify({
     id,
@@ -132,4 +157,19 @@ export function catalogModelIds(
   provider: string,
 ) {
   return result.models.filter((row) => row.provider === provider).map((row) => row.id);
+}
+
+export function catalogTransportModels(
+  provider: string,
+  requestHeader: string,
+): NonNullable<OpenClawConfig["models"]> {
+  return {
+    providers: {
+      [provider]: {
+        baseUrl: "",
+        models: [],
+        request: { allowPrivateNetwork: true, headers: { "X-Dispatch-Request": requestHeader } },
+      },
+    },
+  };
 }

@@ -188,49 +188,34 @@ export async function collectChannelSecurityFindingsCore(params: {
     const account = useSourceUnavailableAccount ? sourceInspectedAccount : resolvedAccount;
     const selectedInspection = useSourceUnavailableAccount ? sourceInspection : resolvedInspection;
     const accountRecord = asNullableRecord(account);
-    let enabled =
-      typeof selectedInspection?.enabled === "boolean"
-        ? selectedInspection.enabled
-        : typeof accountRecord?.enabled === "boolean"
-          ? accountRecord.enabled
-          : true;
-    if (
-      typeof selectedInspection?.enabled !== "boolean" &&
-      typeof accountRecord?.enabled !== "boolean" &&
-      plugin.config.isEnabled
-    ) {
+    const accountFlags = { enabled: true, configured: true };
+    // Preserve synchronous enabled evaluation and await only the configured hook.
+    for (const field of ["enabled", "configured"] as const) {
+      const inspected = selectedInspection?.[field];
+      if (typeof inspected === "boolean") {
+        accountFlags[field] = inspected;
+        continue;
+      }
+      const stored = accountRecord?.[field];
+      if (typeof stored === "boolean") {
+        accountFlags[field] = stored;
+        continue;
+      }
       try {
-        enabled = plugin.config.isEnabled(account, params.cfg);
+        if (field === "enabled" && plugin.config.isEnabled) {
+          accountFlags.enabled = plugin.config.isEnabled(account, params.cfg);
+        } else if (field === "configured" && plugin.config.isConfigured) {
+          accountFlags.configured = await plugin.config.isConfigured(account, params.cfg);
+        }
       } catch (error) {
-        enabled = false;
+        accountFlags[field] = false;
         diagnostics.push(
-          `${plugin.id}:${accountId}: failed to evaluate enabled state (${formatErrorMessage(error)}).`,
+          `${plugin.id}:${accountId}: failed to evaluate ${field} state (${formatErrorMessage(error)}).`,
         );
       }
     }
 
-    let configured =
-      typeof selectedInspection?.configured === "boolean"
-        ? selectedInspection.configured
-        : typeof accountRecord?.configured === "boolean"
-          ? accountRecord.configured
-          : true;
-    if (
-      typeof selectedInspection?.configured !== "boolean" &&
-      typeof accountRecord?.configured !== "boolean" &&
-      plugin.config.isConfigured
-    ) {
-      try {
-        configured = await plugin.config.isConfigured(account, params.cfg);
-      } catch (error) {
-        configured = false;
-        diagnostics.push(
-          `${plugin.id}:${accountId}: failed to evaluate configured state (${formatErrorMessage(error)}).`,
-        );
-      }
-    }
-
-    return { account, enabled, configured, diagnostics };
+    return { account, ...accountFlags, diagnostics };
   };
 
   const warnDmPolicy = async (input: {

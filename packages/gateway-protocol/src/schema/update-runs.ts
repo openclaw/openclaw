@@ -1,6 +1,7 @@
 import { Type, type Static } from "typebox";
 import {
   UPDATE_NPM_ERROR_CODES,
+  UPDATE_RUN_CAUSES,
   UPDATE_RUN_DRIVER_LIMIT,
   UPDATE_RUN_PHASES,
   UPDATE_RUN_STATUSES,
@@ -99,6 +100,7 @@ export const UpdateRunRecordSchema = closedObject({
     campaignId: Type.Optional(text),
     doctorHint: Type.Optional(text),
     nextAction: Type.Optional(text),
+    cause: Type.Optional(Type.Enum(UPDATE_RUN_CAUSES)),
   }),
   target: closedObject({
     channel: Type.Optional(text),
@@ -273,6 +275,14 @@ export const UpdateRunRecordSchema = closedObject({
   finishedAtMs: Type.Union([timestamp, Type.Null()]),
   downtimeMs: Type.Union([timestamp, Type.Null()]),
 });
+
+export const UpdateRecoveryCleanupParamsSchema = Type.Union([
+  closedObject({ runId, expectedOwnerId: Type.String({ minLength: 1 }) }),
+  closedObject({
+    dryRun: Type.Optional(Type.Boolean()),
+    expectedOwnerId: Type.String({ minLength: 1 }),
+  }),
+]);
 
 export const UpdateRunsGetParamsSchema = closedObject({ runId });
 export const UpdateRunsGetResultSchema = closedObject({

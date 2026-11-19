@@ -5,10 +5,7 @@ import {
   type SettingsSearchBlock,
 } from "../../app-navigation.ts";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
-import type {
-  NativeDeviceSettingsCapability,
-  NativeDeviceSettingsSnapshot,
-} from "../../app/native-device-settings.ts";
+import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { currentThemeBranding } from "../../app/theme-branding.ts";
 import { SECTION_META } from "../../components/config-form.meta.ts";
 import {
@@ -17,51 +14,24 @@ import {
 } from "../../components/config-form.search.ts";
 import { splitConfigSchemaByTier } from "../../components/config-form.tiers.ts";
 import { t } from "../../i18n/index.ts";
+import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { schemaType, type JsonSchema } from "../../lib/config-form-utils.ts";
 import { settingsSearchTextMatches } from "../../lib/settings-navigation.ts";
 import { PLUGIN_SETTINGS_VISIBLE_KEYS } from "../plugins/settings-model.ts";
-import { configPageForSection } from "./config-sections.ts";
-import { MEMORY_SETTINGS_KEYS } from "./memory-schema.ts";
+import {
+  configPageForSection,
+  MEMORY_SETTINGS_KEYS,
+  omitCuratedOwnedConfigLeaves,
+} from "./config-sections.ts";
 import { SETTINGS_SEARCH_TARGETS, type SettingsSearchTarget } from "./settings-targets.ts";
 import { setupVisibleSchema } from "./setup-schema.ts";
 
 registerSettingsEnglish();
-
-type StaticSettingsBlock = SettingsSearchBlock & {
-  searchText: string;
-};
+registerProfileEnglish();
 
 const STATIC_SETTINGS_BLOCKS: readonly SettingsSearchTarget[] =
   Object.values(SETTINGS_SEARCH_TARGETS);
-
-function resolveStaticSettingsBlock(
-  block: SettingsSearchTarget,
-  snapshot: NativeDeviceSettingsSnapshot | null,
-): StaticSettingsBlock {
-  const label = t(block.labelKey);
-  const nativeKeys = snapshot
-    ? Object.entries(block.nativeSearchKeys ?? {})
-        .filter(([, available]) => available(snapshot))
-        .map(([key]) => key)
-    : [];
-  return {
-    routeId: block.routeId,
-    ...(block.search === undefined ? {} : { search: block.search }),
-    hash: block.hash,
-    label,
-    searchText: [
-      label,
-      ...[...block.searchKeys, ...nativeKeys]
-        .filter(
-          (key) =>
-            currentThemeBranding().lobsterdex || key !== "configView.appearance.tabIcon.lobsterdex",
-        )
-        .map((key) => t(key)),
-      block.aliases ?? "",
-    ].join(" "),
-  };
-}
 
 // Curated pages render only a subset of their section's schema; search must
 // promise exactly what the destination page can edit, or the result is a
@@ -76,6 +46,7 @@ const preparedSectionsBySchema = new WeakMap<
   JsonSchema,
   {
     hints: ConfigUiHints;
+    openclawIdEnabled: boolean;
     sections: Map<
       string,
       { schema: JsonSchema; tiers: ReturnType<typeof splitConfigSchemaByTier> }
@@ -100,6 +71,7 @@ function visibleSectionSchema(routeId: string, sectionSchema: JsonSchema): JsonS
 
 export function findSettingsSearchBlocks(params: {
   query: string;
+  openclawIdEnabled?: boolean;
   schema: unknown;
   value: Record<string, unknown> | null;
   uiHints: ConfigUiHints;
@@ -126,9 +98,34 @@ export function findSettingsSearchBlocks(params: {
               params.nativeDeviceSettings,
             ),
         )
-          .map((block) =>
-            resolveStaticSettingsBlock(block, params.nativeDeviceSettings?.snapshot ?? null),
-          )
+          .map((block): SettingsSearchBlock & { searchText: string } => {
+            const snapshot = params.nativeDeviceSettings?.snapshot ?? null;
+            const label = t(block.labelKey);
+            const nativeKeys = snapshot
+              ? Object.entries(block.nativeSearchKeys ?? {})
+                  .filter(([, available]) => available(snapshot))
+                  .map(([key]) => key)
+              : [];
+            return Object.assign(
+              { routeId: block.routeId },
+              block.search === undefined ? {} : { search: block.search },
+              {
+                hash: block.hash,
+                label,
+                searchText: [
+                  label,
+                  ...[...block.searchKeys, ...nativeKeys]
+                    .filter(
+                      (key) =>
+                        currentThemeBranding().lobsterdex ||
+                        key !== "configView.appearance.tabIcon.lobsterdex",
+                    )
+                    .map((key) => t(key)),
+                  block.aliases ?? "",
+                ].join(" "),
+              },
+            );
+          })
           .filter((block) => settingsSearchTextMatches(block.searchText, criteria.text))
       : [];
   const schema = isRecord(params.schema) ? (params.schema as JsonSchema) : null;
@@ -138,8 +135,13 @@ export function findSettingsSearchBlocks(params: {
   let prepared = preparedSectionsBySchema.get(schema);
   // Schema responses replace both objects. Keep only the current hint revision;
   // draft values, query text, locale, and route visibility are evaluated below.
-  if (!prepared || prepared.hints !== params.uiHints) {
-    prepared = { hints: params.uiHints, sections: new Map() };
+  const openclawIdEnabled = params.openclawIdEnabled === true;
+  if (
+    !prepared ||
+    prepared.hints !== params.uiHints ||
+    prepared.openclawIdEnabled !== openclawIdEnabled
+  ) {
+    prepared = { hints: params.uiHints, openclawIdEnabled, sections: new Map() };
     preparedSectionsBySchema.set(schema, prepared);
   }
   const value = params.value ?? {};
@@ -156,10 +158,13 @@ export function findSettingsSearchBlocks(params: {
     }
     let section = prepared.sections.get(key);
     if (!section) {
-      const sectionSchema =
+      const sectionSchema = omitCuratedOwnedConfigLeaves(
         key === "wizard"
           ? setupVisibleSchema(rawSectionSchema)
-          : visibleSectionSchema(routeId, rawSectionSchema);
+          : visibleSectionSchema(routeId, rawSectionSchema),
+        key,
+        openclawIdEnabled,
+      );
       section = {
         schema: sectionSchema,
         tiers: splitConfigSchemaByTier({

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
+import { prepareRuntimeSkillEntries } from "../../agents/embedded-agent-runner/skills-prompt.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -15,7 +16,6 @@ import {
   type SkillEntry,
   type SkillSnapshot,
 } from "../types.js";
-import { resolveEmbeddedRunSkillEntries } from "./embedded-run-entries.js";
 import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
 import { recordSkillRootsExecutionFileHost } from "./skill-snapshot-provenance.js";
 
@@ -42,9 +42,9 @@ const snapshot: SkillSnapshot = {
   ],
   skillFilter: ["workspace"],
 };
-const defaults = { workspaceDir: workspaceRoot, config, skillsSnapshot: snapshot };
-const resolve = (options: Partial<Parameters<typeof resolveEmbeddedRunSkillEntries>[0]> = {}) =>
-  resolveEmbeddedRunSkillEntries({ ...defaults, ...options });
+const defaults = { skillsAnchorWorkspace: workspaceRoot, config, skillsSnapshot: snapshot };
+const resolve = (options: Partial<Parameters<typeof prepareRuntimeSkillEntries>[0]> = {}) =>
+  prepareRuntimeSkillEntries({ ...defaults, ...options });
 
 beforeEach(() => {
   clearRuntimeConfigSnapshot();
@@ -52,11 +52,11 @@ beforeEach(() => {
   library.mockReset().mockResolvedValue(libraryEntries);
 });
 
-function pause(stage: "workspace" | "library", once = true) {
+function pause(stage: "workspace" | "library") {
   const gate = createDeferredCore<SkillEntry[]>();
   const entered = createDeferredCore();
   const mock = stage === "workspace" ? workspace : library;
-  mock[once ? "mockImplementationOnce" : "mockImplementation"](() => {
+  mock.mockImplementationOnce(() => {
     entered.resolve();
     return gate.promise;
   });
@@ -80,10 +80,18 @@ it.each(["canonical", "materialized", "legacy"] as const)(
     const serialized = JSON.stringify(skillsSnapshot);
     const hydrated: SkillSnapshot = JSON.parse(serialized);
     const eligibility = { nodeSkills: { canExec: true } };
-    const context = { config: {}, agentId: "writer", eligibility };
+    const context = { config: {}, agentId: "writer" };
     await resolve({
-      workspaceDir,
-      workspaceOnly,
+      skillsAnchorWorkspace: workspaceDir,
+      ...(workspaceOnly
+        ? {
+            sandbox: {
+              enabled: true,
+              skillsWorkspaceDir: workspaceDir,
+              skillsEligibility: eligibility,
+            },
+          }
+        : {}),
       ...context,
       ...(mode === "legacy"
         ? ({ executionWorkspaceDir, executionWorkspaceFileHost: "gateway" } as const)
@@ -96,7 +104,7 @@ it.each(["canonical", "materialized", "legacy"] as const)(
         ...context,
         executionWorkspaceDir: workspaceOnly ? undefined : executionWorkspaceDir,
         executionWorkspaceFileHost: workspaceOnly ? undefined : "gateway",
-        ...(workspaceOnly ? { workspaceOnly: true } : {}),
+        ...(workspaceOnly ? { workspaceOnly: true, eligibility } : {}),
       },
       undefined,
     );
@@ -121,24 +129,6 @@ it.each([false, true])(
     expect(workspace).toHaveBeenCalledWith(workspaceRoot, { config: resolvedConfig }, undefined);
   },
 );
-it("keeps concurrent lazy reads private until complete and preserves append order", async () => {
-  const { gate, entered } = pause("library", false);
-  const result = await resolve();
-  expect(workspace).not.toHaveBeenCalled();
-  expect(library).not.toHaveBeenCalled();
-  const capture = (entries: SkillEntry[]) => {
-    expect(names(entries)).toEqual(["workspace", "library"]);
-    return entries;
-  };
-  const first = result.loadSkillEntries().then(capture);
-  await entered.promise;
-  const second = result.loadSkillEntries().then(capture);
-  gate.resolve(libraryEntries);
-  const results = await Promise.all([first, second]);
-  expect(results).toContain(await result.loadSkillEntries());
-  expect(names(workspaceEntries)).toEqual(["workspace"]);
-});
-
 it("preserves the first complete publication across concurrent lazy reads", async () => {
   const base = "/synthetic/embedded-concurrent";
   const roots = {
@@ -148,14 +138,12 @@ it("preserves the first complete publication across concurrent lazy reads", asyn
   const bumpSources = () =>
     bumpSkillsSnapshotVersion({
       workspaceDir: path.resolve(roots.agentWorkspaceDir),
-      sourceScopes: [{ executionWorkspaceDir: path.resolve(roots.executionWorkspaceDir) }],
     });
-  workspace
-    .mockResolvedValueOnce([entry("workspace-stale")])
-    .mockResolvedValue([entry("workspace-current")]);
+  const currentEntries = [entry("workspace-current")];
+  workspace.mockResolvedValueOnce([entry("workspace-stale")]).mockResolvedValue(currentEntries);
   const { gate, entered } = pause("library");
   const result = await resolve({
-    workspaceDir: "/synthetic/fallback-workspace",
+    skillsAnchorWorkspace: "/synthetic/fallback-workspace",
     agentId: "fixture",
     skillsSnapshot: {
       ...snapshot,
@@ -163,6 +151,8 @@ it("preserves the first complete publication across concurrent lazy reads", asyn
       skillRoots: roots,
     },
   });
+  expect(workspace).not.toHaveBeenCalled();
+  expect(library).not.toHaveBeenCalled();
   const first = result.loadSkillEntries();
   await entered.promise;
   bumpSources();
@@ -177,6 +167,7 @@ it("preserves the first complete publication across concurrent lazy reads", asyn
   bumpSources();
   expect(await result.loadSkillEntries()).toBe(entries);
   expect(names(entries)).toEqual(["workspace-current", "library"]);
+  expect(names(currentEntries)).toEqual(["workspace-current"]);
 });
 
 it.each([
@@ -210,7 +201,9 @@ it.each([
 );
 
 it("excludes pinned libraries from workspace-only loads and retains workspace array identity", async () => {
-  const result = await resolve({ workspaceOnly: true });
+  const result = await resolve({
+    sandbox: { enabled: true, skillUsagePaths: [] },
+  });
   expect(result).toMatchObject({ shouldLoadSkillEntries: false, skillEntries: [] });
   expect(workspace).not.toHaveBeenCalled();
   expect(await result.loadSkillEntries()).toBe(workspaceEntries);

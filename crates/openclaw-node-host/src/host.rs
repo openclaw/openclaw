@@ -898,7 +898,7 @@ mod tests {
                         &mut socket,
                         json!({
                             "type":"res", "id":connect["id"], "ok":true,
-                            "payload":{"type":"hello-ok","protocol":4}
+                            "payload":{"type":"hello-ok","protocol":openclaw_gateway_client::protocol::PROTOCOL_VERSION}
                         }),
                     )
                     .await;
@@ -922,7 +922,10 @@ mod tests {
         );
 
         let session = connect().await.unwrap();
-        assert_eq!(session.hello()["protocol"], 4);
+        assert_eq!(
+            session.hello()["protocol"],
+            openclaw_gateway_client::protocol::PROTOCOL_VERSION
+        );
         assert!(issued_device_token.lock().unwrap().is_none());
         drop(session);
         server.await.unwrap();

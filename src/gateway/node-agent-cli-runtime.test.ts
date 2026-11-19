@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { decodeClaudeCliNodeRunParams } from "../node-host/invoke-agent-cli-claude-params.js";
+import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
@@ -7,15 +10,6 @@ const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
   isNodeCommandAllowed: vi.fn(),
   resolveNodeCommandAllowlist: vi.fn(() => new Set<string>()),
-}));
-
-vi.mock("../plugins/runtime/gateway-request-scope.js", () => ({
-  getPluginRuntimeGatewayRequestScope: () => ({
-    context: {
-      getRuntimeConfig: mocks.getRuntimeConfig,
-      nodeRegistry: { get: mocks.get, invoke: mocks.invoke },
-    },
-  }),
 }));
 
 vi.mock("./node-command-policy.js", async (importOriginal) => ({
@@ -28,16 +22,26 @@ import { invokeNodeClaudeCliRun } from "./node-agent-cli-runtime.js";
 import { NodeRegistry } from "./node-registry.js";
 import { makeClient } from "./node-registry.test-helpers.js";
 
+const gateway = {
+  getRuntimeConfig: mocks.getRuntimeConfig,
+  nodeRegistry: { get: mocks.get, invoke: mocks.invoke },
+} as unknown as GatewayRequestContext;
+
+// Turns run under the Gateway's resolver after the originating request ends, without a direct context.
 function invoke(overrides: Partial<Parameters<typeof invokeNodeClaudeCliRun>[0]> = {}) {
-  return invokeNodeClaudeCliRun({
-    nodeId: "node-1",
-    argv: ["-p"],
-    stdin: "hello",
-    timeoutMs: 10_000,
-    idleTimeoutMs: 1_000,
-    onProgress: () => {},
-    ...overrides,
-  });
+  return withPluginRuntimeGatewayContextResolver(
+    () => gateway,
+    () =>
+      invokeNodeClaudeCliRun({
+        nodeId: "node-1",
+        argv: ["-p"],
+        stdin: "hello",
+        timeoutMs: 10_000,
+        idleTimeoutMs: 1_000,
+        onProgress: () => {},
+        ...overrides,
+      }),
+  );
 }
 
 describe("invokeNodeClaudeCliRun", () => {
@@ -52,6 +56,7 @@ describe("invokeNodeClaudeCliRun", () => {
       nodeId: "node-1",
       pairingGeneration: "generation-1",
       commands: ["agent.cli.claude.run.v1"],
+      caps: [],
     });
   });
 
@@ -78,17 +83,33 @@ describe("invokeNodeClaudeCliRun", () => {
       clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
     };
     await expect(invoke(credentials)).resolves.toEqual({ ok: true });
-    expect(mocks.resolveNodeCommandAllowlist).toHaveBeenCalledOnce();
-    expect(mocks.invoke.mock.calls).toMatchObject([
-      [
-        {
-          expectedConnId: "conn-1",
-          expectedPairingGeneration: "generation-1",
-          params: credentials,
-        },
-      ],
-    ]);
+    expect(mocks.invoke.mock.calls[0]?.[0]).toMatchObject({
+      expectedConnId: "conn-1",
+      expectedPairingGeneration: "generation-1",
+      params: credentials,
+    });
   });
+
+  it.each([false, true])(
+    "negotiates native-only auth with node support (%s)",
+    async (supported) => {
+      mocks.isNodeCommandAllowed.mockReturnValue({ ok: true });
+      mocks.get.mockReturnValue({
+        ...mocks.get(),
+        caps: supported ? ["claude-cli-native-auth-v1"] : [],
+      });
+      mocks.invoke.mockImplementation(async ({ params }) => {
+        if (!supported && Object.hasOwn(params, "nativeAuthOnly")) {
+          throw new Error("INVALID_REQUEST: unknown param nativeAuthOnly");
+        }
+        const decoded = await decodeClaudeCliNodeRunParams(JSON.stringify(params));
+        expect(decoded.nativeAuthOnly).toBe(supported ? true : undefined);
+        return { ok: true };
+      });
+
+      await expect(invoke({ nativeAuthOnly: true })).resolves.toEqual({ ok: true });
+    },
+  );
 
   it("withholds private history revoked while node pairing is pending", async () => {
     const pairingEntered = createDeferred();

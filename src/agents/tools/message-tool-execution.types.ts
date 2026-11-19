@@ -1,4 +1,5 @@
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type { ThinkLevel } from "../../auto-reply/thinking.shared.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
@@ -6,8 +7,12 @@ import type { PreparedMessageToolCatalog } from "../../channels/plugins/message-
 import type { ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
+import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 
 export type MessageToolOptions = {
+  /** Runtime presentation only; never records a delegated permission denial. */
+  onAvailability?: (available: boolean) => void;
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   agentAccountId?: string;
   agentSessionKey?: string;
   runSessionKey?: string;
@@ -37,6 +42,7 @@ export type MessageToolOptions = {
   sandboxWorkspaceMediaReadAllowed?: boolean;
   requireExplicitTarget?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  messageToolFinalByDefault?: boolean;
   inputProvenance?: import("../../sessions/input-provenance.js").InputProvenance;
   /** Process-local completion authority: send only to the current source route. */
   sourceReplyOnly?: boolean;
@@ -45,4 +51,8 @@ export type MessageToolOptions = {
   senderIsOwner?: boolean;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   workspaceDir?: string;
+  /** Calling run's model selection, for model tokens in responsePrefix. */
+  modelProvider?: string;
+  modelId?: string;
+  requesterThinkingLevel?: ThinkLevel;
 };

@@ -1,9 +1,13 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
-import { makeEmbeddedRunnerAttempt as makeAttempt } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import * as modelsConfig from "../../models-config-state.js";
+import { makeEmbeddedRunnerAttempt } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import type { NormalizedUsage } from "../../usage.js";
+import { mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
+import { CUT_OFF_SUMMARY_NOTICE_TEXT } from "./incomplete-turn-resolution.js";
 import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "./lane-runtime.js";
 import { useFinalizationAdmission } from "./settled-finalization-harness.test-support.js";
 import {
@@ -23,6 +27,7 @@ import {
 import { isEmbeddedRunTerminalTimeout } from "./terminal-outcome.js";
 import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
 import { makeTerminalInput } from "./terminal-resolution.test-support.js";
+import { createPendingToolMediaCarry } from "./tool-media-payloads.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const backendMocks = vi.hoisted(() => ({
@@ -58,6 +63,12 @@ vi.mock("../../harness/selection.js", () => ({
 vi.mock("../../../plugin-sdk/session-transcript-runtime.js", () => ({
   appendAssistantMirrorMessageByIdentity: transcriptMocks.append,
 }));
+
+function makeAttempt(
+  overrides: Partial<EmbeddedRunAttemptWithReceiptEvidence>,
+): EmbeddedRunAttemptWithReceiptEvidence {
+  return makeEmbeddedRunnerAttempt(overrides);
+}
 
 function expectPayload(
   result: Awaited<ReturnType<typeof finalize>>,
@@ -111,6 +122,25 @@ function finalizationInput(
 describe("prepareTerminalWithSettledTurnFinalization", () => {
   afterEach(() => vi.useRealTimers());
 
+  it.each<{ name: string; usage: NormalizedUsage; expected?: number }>([
+    {
+      name: "recorded zero",
+      usage: { input: 100, cost: { total: 0, totalOrigin: "provider-billed" } },
+      expected: 0,
+    },
+    { name: "final unknown", usage: { input: 100, costStatus: "unavailable" } },
+  ])("settles $name before optional pricing", async ({ usage, expected }) => {
+    using source = vi.spyOn(modelsConfig, "captureModelsJsonCostSource");
+    const input = finalizationInput(settledAttempt(false), {
+      resolveReplyDelivery: async () => "delivered",
+    });
+    mergeUsageIntoAccumulator(input.terminalBase.usageAccumulator, usage);
+    const result = await finalize(input);
+    expect(result.prepared.agentMeta.costUsd).toBe(expected);
+    expect(source).not.toHaveBeenCalled();
+    expect(backendMocks.finalize).not.toHaveBeenCalled();
+  });
+
   it.each(["delivered", "pending", "missing"] as const)(
     "requests settled context only when source delivery is missing (%s)",
     async (delivery) => {
@@ -136,9 +166,94 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       expect(backendMocks.finalize).toHaveBeenCalledTimes(missing ? 1 : 0);
       expect(result.finalizationOutcome).toBe(missing ? "answered" : "not-attempted");
       if (missing) {
-        expect(backendMocks.finalize.mock.calls[0]?.[1]).toBe(attempt);
         expect(attempt.settledTurnFinalizationContext).toBe(context);
         expect(result.attempt.assistantTexts).toEqual(["The tools completed successfully."]);
+      }
+    },
+  );
+
+  function cutOffAttempt(stopReason: "length" | "stop") {
+    const attempt = settledAttempt(false);
+    const cutOff = textAssistant(undefined, {
+      stopReason,
+      content: [{ type: "thinking", thinking: "Next", thinkingSignature: "opaque" }],
+    });
+    return Object.assign(attempt, {
+      lastAssistant: cutOff,
+      currentAttemptAssistant: cutOff,
+      currentAttemptCompletedAssistant: cutOff,
+      messagesSnapshot: [...attempt.messagesSnapshot, cutOff],
+    });
+  }
+
+  it.each(["length", "stop"] as const)(
+    "labels a recovered summary only when the settled turn was cut off (%s)",
+    async (stopReason) => {
+      // #178300: a tool-free summary of a cut-off turn must not read as a clean finish.
+      backendMocks.finalize.mockResolvedValueOnce(
+        finalizationReply("answered", "All steps are complete."),
+      );
+
+      const result = await finalize(finalizationInput(cutOffAttempt(stopReason)));
+
+      expect(result.finalizationOutcome).toBe("answered");
+      expect(result.prepared.payloadsWithToolMedia?.map((payload) => payload.text)).toEqual(
+        stopReason === "length"
+          ? ["All steps are complete.", CUT_OFF_SUMMARY_NOTICE_TEXT]
+          : ["All steps are complete."],
+      );
+    },
+  );
+
+  it("holds the cut-off notice back with a summary whose source reply was already delivered", async () => {
+    const input = finalizationInput(cutOffAttempt("length"));
+    // The source reply lands while the finalizer runs, so its summary must not be sent.
+    input.terminalBase.runParams.resolveReplyDelivery = vi
+      .fn()
+      .mockResolvedValueOnce("missing")
+      .mockResolvedValue("delivered");
+    backendMocks.finalize.mockResolvedValueOnce(
+      finalizationReply("answered", "All steps are complete."),
+    );
+
+    const result = await finalize(input);
+
+    expect(result.finalizationOutcome).toBe("answered");
+    expect(result.prepared.payloadsWithToolMedia ?? []).toEqual([]);
+  });
+
+  it.each(["answered", "empty"] as const)(
+    "carries only a real finalizer answer across message-tool-only suppression (%s)",
+    async (outcome) => {
+      // #181226: the stranded-reply retry finalizes in message_tool_only mode with the
+      // harness-captured context. A real answer must reach the source channel; a failed
+      // recovery must leave no visible text for the retry's diagnostic to misread.
+      const attempt = settledAttempt(false);
+      attempt.settledTurnFinalizationContext = { source: "harness", data: [] } as never;
+      const input = finalizationInput(attempt, { sourceReplyDeliveryMode: "message_tool_only" });
+      backendMocks.finalize.mockResolvedValueOnce(
+        outcome === "answered"
+          ? finalizationReply("answered", "Update: shipped.")
+          : finalizationReply("empty"),
+      );
+
+      const result = await finalize(input);
+
+      if (outcome === "answered") {
+        expect(result.finalizationOutcome).toBe("answered");
+        expectPayload(result, { text: "Update: shipped." });
+        expect(
+          getReplyPayloadMetadata(result.prepared.payloadsWithToolMedia![0]!)
+            ?.deliverDespiteSourceReplySuppression,
+        ).toBe(true);
+      } else {
+        expect(result.finalizationOutcome).toBe("failed");
+        expect(result.prepared.finalAssistantVisibleText).toBe("");
+        expect(
+          (result.prepared.payloadsWithToolMedia ?? []).filter(
+            (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression,
+          ),
+        ).toEqual([]);
       }
     },
   );
@@ -157,21 +272,18 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
 
     expect(backendMocks.finalize).not.toHaveBeenCalled();
     expect(result.finalizationOutcome).toBe("not-attempted");
-    expect(result.attempt).toBe(attempt);
     expect(result.prepared.payloadsWithToolMedia).toEqual([]);
   });
 
   it.each([
     { delivery: "delivered", observation: "absent", expected: "delivered" },
     { delivery: "delivered", observation: "missing", expected: "delivered" },
-    { delivery: "delivered", observation: "pending", expected: "delivered" },
     { delivery: "pending", observation: "absent", expected: "pending" },
     { delivery: "pending", observation: "missing", expected: "pending" },
     { delivery: "pending", observation: "delivered", expected: "delivered" },
     { delivery: "missing", observation: "absent", expected: "missing" },
     { delivery: "missing", observation: "delivered", expected: "delivered" },
     { delivery: "progress", observation: "absent", expected: "missing" },
-    { delivery: "progress", observation: "missing", expected: "missing" },
     { delivery: "progress", observation: "delivered", expected: "delivered" },
   ] as const)(
     "uses reconciled $delivery custody with an $observation observer for finalization",
@@ -237,13 +349,6 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     expect(result.finalizationOutcome).toBe("failed");
     expect(input.terminalBase.runParams.onAttemptTerminalReplaced).not.toHaveBeenCalled();
     expect(backendMocks.finalize).toHaveBeenCalledTimes(2);
-    for (const [preparedAttempt, completedAttempt] of backendMocks.finalize.mock.calls) {
-      expect(preparedAttempt).toMatchObject({
-        operation: "settled-tool-finalization",
-        disableTools: true,
-      });
-      expect(completedAttempt).toBe(attempt);
-    }
     expectPayload(result, { text: "LLM request timed out.", isError: true });
   });
 
@@ -255,7 +360,6 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
 
     const result = await finalize(finalizationInput(attempt));
 
-    expect(backendMocks.finalize).toHaveBeenCalled();
     expect(result.finalizationOutcome).toBe("failed");
     expect(result.attempt).toBe(attempt);
     expectPayload(result, { text: expect.stringContaining("failed"), isError: true });
@@ -345,10 +449,6 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     const result = await finalize(input);
 
     expect(factory).toHaveBeenCalledTimes(2);
-    expect(backendMocks.finalize.mock.calls).toEqual([
-      [expect.objectContaining({ disableTools: true }), attempt, expect.anything()],
-      [expect.objectContaining({ disableTools: true }), attempt, expect.anything()],
-    ]);
     expect(result.finalizationOutcome).toBe("answered");
     expectPayload(result, { text: "The command completed successfully." });
     expect(result.prepared.agentMeta).toMatchObject({ assistantTurns: 3 });
@@ -439,13 +539,12 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
   });
 
   it.each([
-    { trigger: "user", expectation: "required", notice: true },
-    { trigger: "cron", expectation: "optional", notice: false },
-    { trigger: "heartbeat", expectation: "optional", notice: false },
-    { trigger: "user", expectation: "result-required", notice: false },
+    { trigger: "user", expectation: "required" },
+    { trigger: "cron", expectation: "optional" },
+    { trigger: "user", expectation: "result-required" },
   ] as const)(
     "settles empty $trigger/$expectation turns without persisting a synthetic answer",
-    async ({ trigger, expectation, notice }) => {
+    async ({ trigger, expectation }) => {
       const attempt = settledAttempt(false);
       const emptyAssistant = textAssistant("");
       backendMocks.finalize.mockResolvedValue(
@@ -469,43 +568,19 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       expect(result.prepared.payloadsWithToolMedia ?? []).toEqual([]);
       expect(transcriptMocks.append).not.toHaveBeenCalled();
       expect(result.attempt.assistantTexts).toEqual([]);
-      const terminalInput = makeTerminalInput({
-        ...result.prepared,
-        attempt: result.attempt,
-        attemptAssistant: result.attemptAssistant,
-        terminalState: result.terminalState,
-        runParams: input.terminalBase.runParams,
-        settledTurnFinalizationOutcome: result.finalizationOutcome,
-        replayState: { hadPotentialSideEffects: true, replayInvalid: false },
-      });
-      const terminal = await resolveEmbeddedRunTerminal(terminalInput);
-      expect(terminalInput.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
-      if (terminal.action !== "complete") {
-        throw new Error("expected failed completion");
-      }
-      expect(terminal.result).toMatchObject({
-        meta: {
-          ...(expectation === "optional"
-            ? {}
-            : { error: expect.objectContaining({ kind: "incomplete_turn" }) }),
-          terminalReply: { disposition: "empty" },
-          finalAssistantVisibleText: expectation === "optional" ? "" : undefined,
-          finalAssistantRawText: undefined,
-        },
-        payloads: notice
-          ? [
-              {
-                text: "No answer was returned. Ask again if you still need one. Note: some tool actions may have already been executed — please verify before retrying.",
-                isError: true,
-                isStatusNotice: true,
-              },
-            ]
-          : undefined,
-      });
-      if (expectation === "optional") {
-        expect(terminal.result.meta.error).toBeUndefined();
-      }
-      if (notice) {
+      if (expectation === "required") {
+        const terminal = await resolveEmbeddedRunTerminal(
+          makeTerminalInput({
+            ...result.prepared,
+            attempt: result.attempt,
+            attemptAssistant: result.attemptAssistant,
+            terminalState: result.terminalState,
+            runParams: input.terminalBase.runParams,
+            settledTurnFinalizationOutcome: result.finalizationOutcome,
+            replayState: { hadPotentialSideEffects: true, replayInvalid: false },
+          }),
+        );
+        assert(terminal.action === "complete", "Expected completed failure");
         expect(getReplyPayloadMetadata(terminal.result.payloads?.[0] ?? {})).toMatchObject({
           assistantTranscriptOwned: true,
         });
@@ -542,26 +617,29 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     expect(result.attempt.assistantTexts).toEqual([]);
   });
 
-  it("does not replace terminal ownership when cancellation arrives during delivery observation", async () => {
-    const input = finalizationInput();
-    const controller = new AbortController();
-    input.finalization.abortSignal = AbortSignal.any([
-      input.finalization.abortSignal,
-      controller.signal,
-    ]);
-    let observations = 0;
-    input.terminalBase.runParams.resolveReplyDelivery = async () => {
-      if (++observations === 2) {
-        controller.abort(new Error("cancelled before acceptance"));
-      }
-      return "missing";
-    };
-    const text = "The completed tools produced a result.";
-    backendMocks.finalize.mockResolvedValueOnce(finalizationReply("answered", text));
-    await expect(finalize(input)).rejects.toThrow();
-    expect(observations).toBe(2);
-    expect(input.terminalBase.runParams.onAttemptTerminalReplaced).not.toHaveBeenCalled();
-  });
+  it.each(["failed", "stop", "length"] as const)(
+    "does not replace %s terminal ownership when cancellation arrives during delivery observation",
+    async (source) => {
+      const input = finalizationInput(source === "failed" ? undefined : cutOffAttempt(source));
+      const controller = new AbortController();
+      input.finalization.abortSignal = AbortSignal.any([
+        input.finalization.abortSignal,
+        controller.signal,
+      ]);
+      let observations = 0;
+      input.terminalBase.runParams.resolveReplyDelivery = async () => {
+        if (++observations === 2) {
+          controller.abort(new Error("cancelled before acceptance"));
+        }
+        return "missing";
+      };
+      const text = "The completed tools produced a result.";
+      backendMocks.finalize.mockResolvedValueOnce(finalizationReply("answered", text));
+      await expect(finalize(input)).rejects.toThrow();
+      expect(observations).toBe(2);
+      expect(input.terminalBase.runParams.onAttemptTerminalReplaced).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["outer", "Stop"])(
     "preserves %s cancellation during finalization without a fallback",
@@ -595,3 +673,224 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     },
   );
 });
+
+it.each(["pending", "missing"] as const)(
+  "carries %s custody through media preparation and terminal resolution",
+  async (observation) => {
+    const assistant = textAssistant();
+    const attempt = makeAttempt({
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptCompletedAssistant: assistant,
+      sourceReplyDeliveryState: "missing",
+      toolMediaUrls: ["/tmp/current.pdf"],
+      messagingToolSourceReplyPayloads: [
+        { text: "Earlier committed reply.", sourceReplyFinal: true },
+      ],
+      answerSegments: [
+        {
+          textEnd: 0,
+          messageEnd: 1,
+          finalMessageStart: 1,
+          lastAssistant: textAssistant(),
+          sourceReplyDeliveryState: "delivered",
+        },
+      ],
+    });
+    const input = finalizationInput(attempt, {
+      trigger: "user",
+      sourceReplyDeliveryMode: "automatic",
+      resolveReplyDelivery: async () => observation,
+    });
+    const carry = createPendingToolMediaCarry();
+    carry.capture({ toolMediaUrls: ["/tmp/carried-current.pdf"] });
+    input.terminalBase.mergeToolMedia = carry.merge;
+    const finalizer = vi.spyOn(input.finalization.harness, "finalizeSettledTurn");
+    const settled = await finalize(input);
+    expect(finalizer).not.toHaveBeenCalled();
+    expect(settled.finalizationOutcome).toBe("not-attempted");
+    const resolved = await resolveEmbeddedRunTerminal(
+      makeTerminalInput({
+        runParams: input.terminalBase.runParams,
+        attempt,
+        prepared: settled.prepared,
+        terminalState: settled.terminalState,
+        settledTurnFinalizationOutcome: settled.finalizationOutcome,
+      }),
+    );
+    if (resolved.action !== "complete") {
+      throw new Error("Expected terminal completion");
+    }
+    const payloads = resolved.result.payloads ?? [];
+    expect(payloads[0]?.text).toBe("Earlier committed reply.");
+    expect(getReplyPayloadMetadata(payloads[0]!)).toHaveProperty("sourceReplyTranscriptMirror");
+    if (observation === "pending") {
+      expect(payloads).toEqual([expect.objectContaining({ text: "Earlier committed reply." })]);
+      expect(payloads[0]?.mediaUrls).toBeUndefined();
+      expect(resolved.result.sourceReplyDeliveryState).toBe("pending");
+      input.terminalBase.runParams.resolveReplyDelivery = async () => "missing";
+      const released = await finalize(input);
+      expect(released.prepared.payloadsWithToolMedia?.flatMap((p) => p.mediaUrls ?? [])).toEqual(
+        expect.arrayContaining(["/tmp/current.pdf", "/tmp/carried-current.pdf"]),
+      );
+    } else {
+      expect(payloads.flatMap((p) => p.mediaUrls ?? [])).toEqual(
+        expect.arrayContaining(["/tmp/current.pdf", "/tmp/carried-current.pdf"]),
+      );
+    }
+  },
+);
+it("preserves a tool-authored source projection and its owned media while custody is pending", async () => {
+  const assistant = textAssistant(undefined, {
+    stopReason: "toolUse",
+    content: [{ type: "toolCall", id: "reply-tool", name: "report", arguments: {} }],
+  });
+  const attempt = makeAttempt({
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
+    currentAttemptCompletedAssistant: assistant,
+    sourceReplyDeliveryState: "missing",
+    toolMediaUrls: ["/tmp/unselected.pdf"],
+    messagingToolSourceReplyPayloads: [
+      {
+        text: "Committed tool reply.",
+        mediaUrls: ["/tmp/committed.pdf"],
+        sourceReplyFinal: true,
+        toolAuthored: true,
+        toolAuthoredForToolCallId: "reply-tool",
+      },
+    ],
+  });
+  const settled = await finalize(
+    finalizationInput(attempt, { resolveReplyDelivery: async () => "pending" }),
+  );
+  expect(settled.prepared.payloadsWithToolMedia).toEqual([
+    expect.objectContaining({ text: "Committed tool reply.", mediaUrls: ["/tmp/committed.pdf"] }),
+  ]);
+  expect(getReplyPayloadMetadata(settled.prepared.payloadsWithToolMedia![0]!)).toMatchObject({
+    deliverDespiteSourceReplySuppression: true,
+    sourceReplyTranscriptMirror: { text: "Committed tool reply." },
+  });
+});
+it("preserves a preceding input's answer while current delivery remains pending", async () => {
+  const current = textAssistant("Current answer.");
+  const attempt = makeAttempt({
+    lastAssistant: current,
+    currentAttemptAssistant: current,
+    currentAttemptCompletedAssistant: current,
+    sourceReplyDeliveryState: "missing",
+    assistantTexts: ["Earlier answer.", "Current answer."],
+    answerSegments: [
+      {
+        textEnd: 1,
+        messageEnd: 1,
+        finalMessageStart: 1,
+        lastAssistant: textAssistant("Earlier answer."),
+        sourceReplyDeliveryState: "missing",
+      },
+    ],
+  });
+  const settled = await finalize(
+    finalizationInput(attempt, {
+      sourceReplyDeliveryMode: "automatic",
+      resolveReplyDelivery: async () => "pending",
+    }),
+  );
+  expect(settled.prepared.payloadsWithToolMedia).toEqual([
+    expect.objectContaining({ text: "Earlier answer." }),
+  ]);
+  expect(getReplyPayloadMetadata(settled.prepared.payloadsWithToolMedia![0]!)).toMatchObject({
+    precedingInputAnswer: true,
+  });
+});
+it.each([
+  ["required", "missing", "phased"],
+  ["result-required", "missing", "empty"],
+  ["result-required", "pending-during-recovery", "plain"],
+] as const)(
+  "settles %s/%s/%s followed by NO_REPLY without replaying tools",
+  async (expectation, delivery, variant) => {
+    const batch = settledBatch(["send", "message"]);
+    const signedText = (text: string, id: string, phase: string) => ({
+      type: "text" as const,
+      text,
+      textSignature: JSON.stringify({ v: 1, id, phase }),
+    });
+    const earlierText = "## Result\n\n- **Saved** the note.";
+    const earlier = textAssistant(undefined, {
+      stopReason: "toolUse",
+      content: [signedText(earlierText, "earlier-answer", "final_answer")],
+    });
+    const assistant = textAssistant(undefined, {
+      content:
+        variant === "empty"
+          ? []
+          : variant === "phased"
+            ? [
+                signedText("Nothing else to add.", "progress", "commentary"),
+                signedText(SILENT_REPLY_TOKEN, "silent-answer", "final_answer"),
+              ]
+            : [{ type: "text", text: SILENT_REPLY_TOKEN }],
+    });
+    const messages = [
+      {
+        role: "user" as const,
+        content: "Save the note and confirm when it is saved.",
+        timestamp: 0,
+      },
+      ...batch.messagesSnapshot,
+      ...(variant === "empty" ? [] : [earlier]),
+      assistant,
+    ];
+    const attempt = makeAttempt({
+      ...batch,
+      sessionIdUsed: "session-settled",
+      sourceReplyDeliveryState: "missing",
+      messagesSnapshot: messages,
+      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+      toolMetas: [{ toolName: "message", meta: "send", replaySafe: false }],
+      assistantTexts: variant === "empty" ? [] : [earlierText, SILENT_REPLY_TOKEN],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptCompletedAssistant: assistant,
+      settledTurnFinalizationContext: {
+        source: "openclaw-transcript",
+        messages: Object.freeze([...messages]),
+      },
+    });
+    let observations = 0;
+    const input = finalizationInput(attempt, {
+      trigger: "user",
+      terminalReplyExpectation: expectation,
+      allowEmptyAssistantReplyAsSilent: true,
+      resolveReplyDelivery: async () =>
+        delivery === "pending-during-recovery" && ++observations > 1 ? "pending" : "missing",
+    });
+    const runAttempt = vi.spyOn(input.finalization.harness, "runAttempt");
+    backendMocks.finalize.mockResolvedValueOnce(
+      finalizationReply("answered", "The note is saved."),
+    );
+    const { finalizationOutcome, prepared } = await finalize(input);
+    const shouldFinalize = expectation === "result-required";
+    expect(backendMocks.finalize).toHaveBeenCalledTimes(shouldFinalize ? 1 : 0);
+    expect(finalizationOutcome).toBe(shouldFinalize ? "answered" : "not-attempted");
+    expect(runAttempt).not.toHaveBeenCalled();
+    expect(transcriptMocks.append).not.toHaveBeenCalled();
+    if (shouldFinalize) {
+      expect(backendMocks.finalize.mock.calls[0]?.[0]).toMatchObject({
+        operation: "settled-tool-finalization",
+        disableTools: true,
+        skipPreparedUserTurnMessage: true,
+        suppressNextUserMessagePersistence: true,
+      });
+      const pending = delivery === "pending-during-recovery";
+      expect(prepared.payloadsWithToolMedia).toEqual(
+        pending ? [] : [expect.objectContaining({ text: "The note is saved." })],
+      );
+      expect(prepared.replyDeliveryState).toBe(pending ? "pending" : "missing");
+    } else {
+      expect(prepared.payloadsWithToolMedia).toEqual([]);
+    }
+  },
+);

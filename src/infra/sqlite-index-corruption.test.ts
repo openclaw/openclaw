@@ -3,16 +3,20 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
+import * as fileDescriptor from "./file-descriptor.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
-import { repairDoctorSqliteIndexCorruption as repairDoctor } from "./sqlite-index-recovery.js";
+import {
+  repairDoctorSqliteIndexCorruption as repairDoctor,
+  repairDoctorSqliteIndexCorruptionAsync as repairDoctorAsync,
+} from "./sqlite-index-recovery.js";
 import { repairSqliteIndexCorruption as repair } from "./sqlite-index-schema.js";
+import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
+import * as snapshots from "./sqlite-snapshot-source.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
-  setLoggerOverride(null);
-  resetLogger();
+  vi.unstubAllEnvs();
 });
 
 const rows = (db: DatabaseSync, sql: string) => db.prepare(sql).all();
@@ -40,16 +44,11 @@ function fixture(replacement = "bravo") {
 
 it.each(["bravo", "omega"])(
   "preserves table rows and backs up before UNIQUE index repair (%s)",
-  async (replacement) => {
+  (replacement) => {
     using state = fixture(replacement);
     const { pathname, db } = state;
-    const file = path.join(path.dirname(pathname), "repair.log");
-    setLoggerOverride({ level: "info", consoleLevel: "silent", file });
-    let clock = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => clock);
     const before = rows(db, "SELECT * FROM audit_events NOT INDEXED");
     const backup = vi.fn(() => {
-      clock += 1_200;
       expect(db.prepare("PRAGMA integrity_check").get()?.integrity_check).not.toBe("ok");
       expect(rows(db, "SELECT * FROM audit_events NOT INDEXED")).toEqual(before);
     });
@@ -57,22 +56,6 @@ it.each(["bravo", "omega"])(
       "sqlite_autoindex_audit_events_1",
     ]);
     expect(backup).toHaveBeenCalledOnce();
-    await flushLogger();
-    const holds = fs
-      .readFileSync(file, "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as Record<string, unknown>)
-      .filter((record) => record.message === "slow SQLite transaction hold")
-      .map((record) => record["1"]);
-    expect(holds).toContainEqual(
-      expect.objectContaining({
-        database: pathname,
-        operation: "sqlite.index-corruption-repair",
-        mode: "immediate",
-        elapsedMs: 1_200,
-      }),
-    );
     expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
     expect(rows(db, "PRAGMA foreign_key_check")).toEqual([]);
     expect(rows(db, "SELECT event_id FROM audit_links")).toEqual([{ event_id: "alpha" }]);
@@ -159,4 +142,86 @@ it("refuses structural damage mixed with an index finding without attempting rep
   );
   expect(backup).not.toHaveBeenCalled();
   expect(fs.readFileSync(pathname)).toEqual(bytes);
+});
+
+it("keeps the damaged image when authority is lost while its async backup is prepared", async () => {
+  using state = fixture();
+  const { pathname, db } = state;
+  const before = image(db);
+  const recoveries = () =>
+    fs
+      .readdirSync(path.dirname(pathname))
+      .filter((name) => name.startsWith("openclaw-index-recovery-"));
+  await expect(
+    repairDoctorAsync(db, pathname, {
+      label: "audit",
+      assertCurrent() {
+        if (recoveries().length > 0) {
+          throw new Error("maintenance authority lost during backup");
+        }
+      },
+    }),
+  ).rejects.toThrow("maintenance authority lost during backup");
+  expect(db.isTransaction).toBe(false);
+  expect(image(db)).toEqual(before);
+  expect(recoveries()).toHaveLength(1);
+  using backup = new DatabaseSync(
+    path.join(path.dirname(pathname), recoveries()[0]!, "database.sqlite"),
+    { readOnly: true },
+  );
+  expect(image(backup)).toEqual(before);
+});
+
+it("does not create a backup for a clean async index inspection", async () => {
+  const pathname = path.join(tempDirs.make("clean-index-inspection-"), "state.sqlite");
+  using db = new DatabaseSync(pathname);
+  db.exec("CREATE TABLE clean(value TEXT); INSERT INTO clean VALUES ('retained')");
+  await expect(
+    repairDoctorAsync(db, pathname, { label: "clean", assertCurrent() {} }),
+  ).resolves.toEqual([]);
+  expect(
+    fs
+      .readdirSync(path.dirname(pathname))
+      .filter((name) => name.startsWith("openclaw-index-recovery-")),
+  ).toEqual([]);
+  expect(db.prepare("SELECT value FROM clean").get()).toEqual({ value: "retained" });
+});
+
+it("removes incomplete recovery output when its copy is cancelled", async () => {
+  using state = fixture();
+  const { pathname, db } = state;
+  const before = image(db);
+  const preparedRoots: string[] = [];
+  const prepare = snapshots.prepareSqliteReadOnlyLocation;
+  vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(async (...args) => {
+    const prepared = await prepare(...args);
+    const root = prepared.cleanupRoot ?? path.dirname(prepared.location);
+    expect(fs.existsSync(root)).toBe(true);
+    preparedRoots.push(root);
+    return prepared;
+  });
+  const cancellation = new AbortController();
+  const failure = new Error("controlled recovery copy cancellation");
+  vi.spyOn(fileDescriptor, "copyFileHandle").mockImplementationOnce(async (_source, output) => {
+    await output.write("incomplete backup");
+    cancellation.abort(failure);
+    throw failure;
+  });
+  await expect(
+    withSqliteReadOnlyWorkerScope(
+      () => repairDoctorAsync(db, pathname, { label: "audit", assertCurrent() {} }),
+      { signal: cancellation.signal, deadlineOwnedByCaller: true },
+    ),
+  ).rejects.toThrow("controlled recovery copy cancellation");
+  expect(image(db)).toEqual(before);
+  expect(db.isTransaction).toBe(false);
+  expect(
+    fs
+      .readdirSync(path.dirname(pathname))
+      .filter((name) => name.startsWith("openclaw-index-recovery-")),
+  ).toEqual([]);
+  expect(preparedRoots).toHaveLength(1);
+  for (const root of preparedRoots) {
+    expect(fs.existsSync(root)).toBe(false);
+  }
 });

@@ -27,10 +27,6 @@ import type { WhatsAppInboundAdmission } from "../../inbound/admission.js";
 import { resolveWhatsAppIngressLifecycle } from "../../inbound/ingress-lifecycle.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { formatError } from "../../session.js";
-import {
-  resolveWhatsAppDirectSystemPrompt,
-  resolveWhatsAppGroupSystemPrompt,
-} from "../../system-prompt.js";
 import { deliverWebReply } from "../deliver-reply.js";
 import { whatsappInboundLog } from "../loggers.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
@@ -48,7 +44,7 @@ import {
   updateWhatsAppMainLastRoute,
 } from "./inbound-dispatch.js";
 import { trackBackgroundTask, updateLastRouteInBackground } from "./last-route.js";
-import { buildInboundLine } from "./message-line.js";
+import { formatInboundEnvelope as formatWhatsAppInboundEnvelope } from "./message-line.runtime.js";
 import {
   buildHistoryContextFromEntries,
   createChannelMessageReplyPipeline,
@@ -90,59 +86,6 @@ function mapWhatsAppIngressToTurnAdmission(ingress: WhatsAppInboundAdmission["in
     return { kind: "handled" as const, reason };
   }
   return { kind: "drop" as const, reason, recordHistory: false };
-}
-
-function shouldEmitWhatsAppMessageReceivedHooks(params: {
-  cfg: ReturnType<LoadConfigFn>;
-  accountId?: string;
-}): boolean {
-  const channelConfig = params.cfg.channels?.whatsapp;
-  const accountConfig = params.accountId ? channelConfig?.accounts?.[params.accountId] : undefined;
-
-  return (
-    accountConfig?.pluginHooks?.messageReceived ??
-    channelConfig?.pluginHooks?.messageReceived ??
-    false
-  );
-}
-
-function emitWhatsAppMessageReceivedHooksIfEnabled(params: {
-  cfg: ReturnType<LoadConfigFn>;
-  ctx: Awaited<ReturnType<typeof prepareWhatsAppInboundContext>>["ctxPayload"];
-  accountId?: string;
-  sessionKey: string;
-}): void {
-  if (!shouldEmitWhatsAppMessageReceivedHooks(params)) {
-    return;
-  }
-  const canonical = deriveInboundMessageHookContext(params.ctx);
-  const hookRunner = getGlobalHookRunner();
-  if (hookRunner?.hasHooks("message_received")) {
-    fireAndForgetBoundedHook(
-      () =>
-        hookRunner.runMessageReceived(
-          toPluginMessageReceivedEvent(canonical),
-          toPluginMessageContext(canonical),
-        ),
-      "whatsapp: message_received plugin hook failed",
-      undefined,
-      WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS,
-    );
-  }
-  fireAndForgetBoundedHook(
-    () =>
-      triggerInternalHook(
-        createInternalHookEvent(
-          "message",
-          "received",
-          params.sessionKey,
-          toInternalMessageReceivedContext(canonical),
-        ),
-      ),
-    "whatsapp: message_received internal hook failed",
-    undefined,
-    WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS,
-  );
 }
 
 export async function processMessage(params: {
@@ -237,11 +180,28 @@ export async function processMessage(params: {
     groupAllowFrom: inboundPolicy.groupAllowFrom,
   });
 
-  let combinedBody = buildInboundLine({
-    msg: msgForAgent,
+  let replyContext: string | null = null;
+  if (visibleReplyTo?.body) {
+    const replySender =
+      visibleReplyTo.sender?.label ?? visibleReplyTo.sender?.e164 ?? "unknown sender";
+    const idPart = visibleReplyTo.id ? ` id:${visibleReplyTo.id}` : "";
+    replyContext = `[Replying to ${replySender}${idPart}]\n${visibleReplyTo.body}\n[/Replying]`;
+  }
+  const envelopeSender = getSenderIdentity(msgForAgent);
+  let combinedBody = formatWhatsAppInboundEnvelope({
+    channel: "WhatsApp",
+    from: conversationKind === "group" ? conversationId : conversationId.replace(/^whatsapp:/, ""),
+    timestamp: msgForAgent.event.timestamp,
+    body: `${msgForAgent.payload.body}${replyContext ? `\n\n${replyContext}` : ""}`,
+    chatType: conversationKind,
+    sender: {
+      name: envelopeSender.name ?? undefined,
+      e164: envelopeSender.e164 ?? undefined,
+      id: getPrimaryIdentityId(envelopeSender) ?? undefined,
+    },
     previousTimestamp,
     envelope: envelopeOptions,
-    visibleReplyTo,
+    fromMe: msgForAgent.platform.fromMe,
   });
   const visibleGroupHistory =
     conversationKind === "group"
@@ -354,16 +314,14 @@ export async function processMessage(params: {
     params.msg.event.isBatched === true,
   );
 
-  const conversationSystemPrompt =
-    conversationKind === "group"
-      ? resolveWhatsAppGroupSystemPrompt({
-          accountConfig: account,
-          groupId: conversationId,
-        })
-      : resolveWhatsAppDirectSystemPrompt({
-          accountConfig: account,
-          peerId: dmRouteTarget ?? conversationId,
-        });
+  const conversationPrompts = conversationKind === "group" ? account.groups : account.direct;
+  const promptTargetId =
+    conversationKind === "group" ? conversationId : (dmRouteTarget ?? conversationId);
+  const selectedPrompt = promptTargetId
+    ? (conversationPrompts?.[promptTargetId]?.systemPrompt ??
+      conversationPrompts?.["*"]?.systemPrompt)
+    : undefined;
+  const conversationSystemPrompt = selectedPrompt?.trim() || undefined;
 
   const prepared = await prepareWhatsAppInboundContext({
     bodyForAgent: msgForAgent.payload.body,
@@ -403,12 +361,45 @@ export async function processMessage(params: {
   const turnAdoptionLifecycle = ingressLifecycle
     ? bindIngressLifecycleToReplyOptions(ingressLifecycle).turnAdoptionLifecycle
     : undefined;
-  emitWhatsAppMessageReceivedHooksIfEnabled({
-    cfg: params.cfg,
-    ctx: ctxPayload,
-    accountId: params.route.accountId,
-    sessionKey: params.route.sessionKey,
-  });
+  const hookConfig = params.cfg;
+  const hookAccountId = params.route.accountId;
+  const hookSessionKey = params.route.sessionKey;
+  const channelConfig = hookConfig.channels?.whatsapp;
+  const accountConfig = hookAccountId ? channelConfig?.accounts?.[hookAccountId] : undefined;
+  if (
+    accountConfig?.pluginHooks?.messageReceived ??
+    channelConfig?.pluginHooks?.messageReceived ??
+    false
+  ) {
+    const canonical = deriveInboundMessageHookContext(ctxPayload);
+    const hookRunner = getGlobalHookRunner();
+    if (hookRunner?.hasHooks("message_received")) {
+      fireAndForgetBoundedHook(
+        () =>
+          hookRunner.runMessageReceived(
+            toPluginMessageReceivedEvent(canonical),
+            toPluginMessageContext(canonical),
+          ),
+        "whatsapp: message_received plugin hook failed",
+        undefined,
+        WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS,
+      );
+    }
+    fireAndForgetBoundedHook(
+      () =>
+        triggerInternalHook(
+          createInternalHookEvent(
+            "message",
+            "received",
+            hookSessionKey,
+            toInternalMessageReceivedContext(canonical),
+          ),
+        ),
+      "whatsapp: message_received internal hook failed",
+      undefined,
+      WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS,
+    );
+  }
 
   const pinnedMainDmRecipient = resolvePinnedMainDmOwnerFromAllowlist({
     dmScope: params.cfg.session?.dmScope,

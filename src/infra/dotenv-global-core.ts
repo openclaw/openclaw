@@ -19,7 +19,7 @@ type DotEnvEntry = {
   value: string;
 };
 
-export type LoadedDotEnvFile = {
+type LoadedDotEnvFile = {
   filePath: string;
   entries: DotEnvEntry[];
 };
@@ -34,29 +34,10 @@ export type GlobalRuntimeDotEnvOptions = {
   onWarning?: DotEnvWarning;
 };
 
-export type ReadDotEnvFileOptions = {
+type ReadDotEnvFileOptions = {
   entryFilter?: (key: string, value: string) => boolean;
   filePath: string;
-  quiet?: boolean;
-  onWarning?: DotEnvWarning;
 };
-
-function reportDotEnvReadError(params: ReadDotEnvFileOptions, error: unknown): void {
-  if (params.quiet) {
-    return;
-  }
-  const code =
-    error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
-  if (code !== "ENOENT") {
-    params.onWarning?.(`Failed to read ${params.filePath}: ${String(error)}`, { error });
-  }
-  // Surface oversized files so operators know a configured file was skipped.
-  if (error instanceof Error && error.message?.startsWith("File exceeds")) {
-    params.onWarning?.(
-      `skipping oversized .env file (max ${MAX_DOTENV_FILE_BYTES} bytes): ${params.filePath}`,
-    );
-  }
-}
 
 function parseDotEnvFile(params: ReadDotEnvFileOptions, content: Buffer): LoadedDotEnvFile {
   const entries: DotEnvEntry[] = [];
@@ -80,8 +61,7 @@ export function readDotEnvFileCore(params: ReadDotEnvFileOptions): LoadedDotEnvF
       maxBytes: MAX_DOTENV_FILE_BYTES,
     });
     content = buffer;
-  } catch (error) {
-    reportDotEnvReadError(params, error);
+  } catch {
     return null;
   }
 
@@ -99,8 +79,7 @@ export async function readDotEnvFileAsyncCore(
       maxBytes: MAX_DOTENV_FILE_BYTES,
     });
     content = buffer;
-  } catch (error) {
-    reportDotEnvReadError(params, error);
+  } catch {
     return null;
   }
   return parseDotEnvFile(params, content);
@@ -196,8 +175,6 @@ function resolveGlobalDotEnvFiles(opts: GlobalRuntimeDotEnvOptions, env: NodeJS.
     path.resolve(stateEnvPath) !== path.resolve(defaultStateEnvPath);
   const readOptions = {
     entryFilter: opts.entryFilter,
-    quiet: true,
-    onWarning: opts.onWarning,
   };
   return {
     globalFiles: globalEnvPaths.map((filePath) => Object.assign({}, readOptions, { filePath })),

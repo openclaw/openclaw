@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import { makeCatalogEntry, makeMeta } from "../flows/channel-setup.test-helpers.js";
 import type { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createTestConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -55,8 +57,9 @@ vi.mock("../cli/command-secret-targets.js", () => ({
   getChannelsCommandSecretTargetIds: () => new Set<string>(),
 }));
 
+// mock-isolation: Supply exact channel plugins without plugin discovery or saved-auth probes.
 vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: mocks.listReadOnlyChannelPluginsForConfig,
+  listReadOnlyChannelPluginsForConfigAsync: mocks.listReadOnlyChannelPluginsForConfig,
 }));
 
 vi.mock("../channels/plugins/status.js", () => ({
@@ -86,13 +89,7 @@ function createMockChannelPlugin(overrides: {
   const id = overrides.id ?? "telegram";
   return {
     id,
-    meta: {
-      id,
-      label: overrides.label ?? "Telegram",
-      selectionLabel: overrides.label ?? "Telegram",
-      docsPath: `/channels/${id}`,
-      blurb: overrides.label ?? "Telegram",
-    },
+    meta: makeMeta(id, overrides.label ?? "Telegram", { blurb: overrides.label ?? "Telegram" }),
     capabilities: { chatTypes: ["direct"] },
     config: {
       listAccountIds: () => overrides.accountIds ?? [],
@@ -102,18 +99,10 @@ function createMockChannelPlugin(overrides: {
 }
 
 function createCatalogEntry(id: string, label: string): ChannelPluginCatalogEntry {
-  return {
-    id,
+  return makeCatalogEntry(id, label, {
     pluginId: `@openclaw/${id}`,
-    meta: {
-      id,
-      label,
-      selectionLabel: label,
-      docsPath: `/channels/${id}`,
-      blurb: label,
-    },
-    install: { npmSpec: `@openclaw/${id}` },
-  };
+    meta: makeMeta(id, label, { blurb: label }),
+  });
 }
 
 function loggedText(runtime: ReturnType<typeof createTestRuntime>): string {
@@ -219,6 +208,31 @@ describe("channels list", () => {
     expect(payload.chat?.telegram?.accounts).toStrictEqual([accountId]);
   });
 
+  it("sanitizes catalog-only channel labels in terminal output but not JSON", async () => {
+    const control = "\u001B]0;catalog-injection\u0007\u001B[2J";
+    const label = `${control}QQ Bot\r\nAdmin\tgroup`;
+    mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
+      createCatalogEntry("qqbot", label),
+    ]);
+    mocks.listPluginContributionIds.mockReturnValue([]);
+
+    const textRuntime = createTestRuntime();
+    await channelsListCommand({ all: true }, textRuntime);
+
+    const textOutput = loggedText(textRuntime);
+    expect(textOutput).not.toContain("\u001B");
+    expect(textOutput).not.toContain("\nAdmin");
+    expect(textOutput).toContain("QQ Bot\\r\\nAdmin\\tgroup");
+    expect(textOutput.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+
+    const jsonRuntime = createTestRuntime();
+    await channelsListCommand({ all: true, json: true }, jsonRuntime);
+    const payload = JSON.parse(loggedText(jsonRuntime)) as {
+      chat?: Record<string, { label: string }>;
+    };
+    expect(payload.chat?.qqbot?.label).toBe(label);
+  });
+
   it("prefers reachable gateway account snapshots over command-local token state", async () => {
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
       createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: ["default"] }),
@@ -240,6 +254,7 @@ describe("channels list", () => {
             tokenStatus: "available",
             enabled: true,
           },
+          { accountId: "ops", name: "operator", configured: true, tokenSource: "env" },
         ],
       },
     });
@@ -252,8 +267,10 @@ describe("channels list", () => {
       timeoutMs: 5000,
     });
     const output = stripAnsi(loggedText(runtime));
-    expect(output).toContain("Discord default (clawsweeper):");
-    expect(output).toContain("configured");
+    const accountLines = output.split("\n").filter((line) => line.startsWith("- Discord "));
+    expect(accountLines).toHaveLength(2);
+    expect(accountLines[0]).toContain("Discord default (clawsweeper):");
+    expect(accountLines[1]).toContain("Discord ops (operator):");
     expect(output).toContain("token=env");
     expect(output).not.toContain("not configured");
     expect(output).not.toContain("token=none");
@@ -277,6 +294,17 @@ describe("channels list", () => {
     expect(output).toContain("Discord default:");
     expect(output).toContain("not configured");
     expect(output).toContain("token=none");
+
+    runtime.log.mockClear();
+    const scope = new AsyncWorkScope();
+    const reason = new Error("channels list interrupted");
+    mocks.callGateway.mockImplementation(async () => {
+      scope.beginClose(reason);
+      throw new Error("gateway unavailable");
+    });
+    await expect(scope.run(() => channelsListCommand({ all: true }, runtime))).rejects.toBe(reason);
+    expect(runtime.log).not.toHaveBeenCalled();
+    await scope.drain();
   });
 
   it("marks configured-but-unavailable credential sources in text output", async () => {
@@ -298,39 +326,31 @@ describe("channels list", () => {
     expect(output).toContain("token=config-unavailable");
   });
 
-  it.each(["env"])(
-    "default output shows recovery for a missing plugin with credentials from %s",
-    async (source) => {
-      mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
-        createCatalogEntry("mattermost", "Mattermost"),
-      ]);
-      const actual = await vi.importActual<
-        typeof import("../plugins/official-external-plugin-repair-hints.js")
-      >("../plugins/official-external-plugin-repair-hints.js");
-      mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockImplementation(
-        actual.resolveMissingOfficialExternalChannelPluginRepairHints,
-      );
-      vi.stubEnv("MATTERMOST_URL", source === "env" ? "https://mattermost.example.test" : "");
-      vi.stubEnv("MATTERMOST_BOT_TOKEN", source === "env" ? "test-token" : "");
-      mocks.readConfigFileSnapshot.mockResolvedValue(
-        createTestConfigSnapshot(
-          source === "config" ? { channels: { mattermost: { botToken: "test-token" } } } : {},
-        ),
-      );
+  it("default output shows recovery for a missing plugin with env credentials", async () => {
+    mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
+      createCatalogEntry("mattermost", "Mattermost"),
+    ]);
+    const actual = await vi.importActual<
+      typeof import("../plugins/official-external-plugin-repair-hints.js")
+    >("../plugins/official-external-plugin-repair-hints.js");
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockImplementation(
+      actual.resolveMissingOfficialExternalChannelPluginRepairHints,
+    );
+    vi.stubEnv("MATTERMOST_URL", "https://mattermost.example.test");
+    vi.stubEnv("MATTERMOST_BOT_TOKEN", "test-token");
 
-      await channelsListCommand({}, runtime);
+    await channelsListCommand({}, runtime);
 
-      const output = stripAnsi(loggedText(runtime));
-      expect(output).toContain("Mattermost");
-      expect(output).toContain("not installed");
-      expect(output).toContain("configured");
-      expect(output).toContain("disabled");
-      expect(output).toContain(
-        "run openclaw plugins install npm:@openclaw/mattermost or openclaw doctor --fix",
-      );
-      expect(output).not.toContain("no configured chat channels");
-    },
-  );
+    const output = stripAnsi(loggedText(runtime));
+    expect(output).toContain("Mattermost");
+    expect(output).toContain("not installed");
+    expect(output).toContain("configured");
+    expect(output).toContain("disabled");
+    expect(output).toContain(
+      "run openclaw plugins install npm:@openclaw/mattermost or openclaw doctor --fix",
+    );
+    expect(output).not.toContain("no configured chat channels");
+  });
 
   it("--all surfaces bundled-but-unconfigured plugins with installed=true / not configured", async () => {
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
@@ -342,14 +362,11 @@ describe("channels list", () => {
       enabled: false,
     });
 
-    // Without --all: discord should not appear.
     await channelsListCommand({}, runtime);
     const noAllOutput = stripAnsi(loggedText(runtime));
     expect(noAllOutput).not.toContain("Discord default:");
 
     runtime.log.mockClear();
-
-    // With --all: discord is rendered with installed + not configured + disabled.
     await channelsListCommand({ all: true }, runtime);
     const allOutput = stripAnsi(loggedText(runtime));
     expect(allOutput).toContain("Discord default:");

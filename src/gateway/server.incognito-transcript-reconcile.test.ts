@@ -5,7 +5,6 @@ import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
@@ -83,22 +82,33 @@ it("serves authorized incognito descriptions, events, and active-branch history"
           { agentId: "main", sessionKey: key, sessionId },
           { expectedSessionId: sessionId, messages },
         );
+      const payload = {
+        sessionKey: key,
+        session: expect.objectContaining({ sessionId, incognito: true }),
+      };
       await append([
         transcriptMessage("root", null, "user"),
         transcriptMessage("abandoned", "root"),
         transcriptMessage("active", "root"),
       ]);
+      // Seed writes may coalesce into a reset; observe it before publishing one message.
+      await expect
+        .poll(() => events)
+        .toContainEqual(
+          expect.objectContaining({
+            event: "sessions.changed",
+            payload: expect.objectContaining({ ...payload, phase: "message" }),
+          }),
+        );
       const history = await client.request<{
         sessionId: string;
         sessionInfo?: SessionIdentity & { modelProvider: string; model: string };
         messages: Array<{ role: string; content: unknown }>;
       }>("chat.history", { agentId: "main", sessionKey: key, limit: 10 });
       await append([transcriptMessage("published", "active")]);
-      const payload = expect.objectContaining({
-        sessionKey: key,
-        session: expect.objectContaining({ sessionId, incognito: true }),
-      });
-      const expectedEvents = eventNames.map((event) => expect.objectContaining({ event, payload }));
+      const expectedEvents = eventNames.map((event) =>
+        expect.objectContaining({ event, payload: expect.objectContaining(payload) }),
+      );
       await expect.poll(() => events).toEqual(expect.arrayContaining(expectedEvents));
       const roster = await client.request<{ sessions: Array<{ key: string }> }>(
         "sessions.list",
@@ -117,34 +127,20 @@ it("serves authorized incognito descriptions, events, and active-branch history"
       ]);
       const memoryPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
       expect(fs.existsSync(memoryPath)).toBe(false);
-      const durable = withOpenClawAgentDatabaseReadOnly(
-        ({ db }) => ({
-          events: db
-            .prepare("SELECT count(*) AS count FROM transcript_events WHERE session_id = ?")
-            .get(sessionId),
-          nodes: db
-            .prepare("SELECT count(*) AS count FROM session_nodes WHERE session_key = ?")
-            .get(key),
-        }),
-        { agentId: "main" },
-      );
-      if (durable.found) {
-        expect(durable.value).toEqual({ events: { count: 0 }, nodes: { count: 0 } });
-      } else {
-        expect(["database-missing", "schema-missing"]).toContain(durable.reason);
-        if (durable.reason === "schema-missing") {
-          // Admission may reserve an empty file without creating durable session storage.
-          using empty = openNodeSqliteDatabase(
-            resolveOpenClawAgentSqlitePath({ agentId: "main" }),
-            { readOnly: true },
-          );
-          expect(
-            empty
-              .prepare(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('transcript_events', 'session_nodes')",
-              )
-              .all(),
-          ).toEqual([]);
+      const durablePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      if (fs.existsSync(durablePath)) {
+        using db = openNodeSqliteDatabase(durablePath, { readOnly: true });
+        for (const [table, column, value] of [
+          ["transcript_events", "session_id", sessionId],
+          ["session_nodes", "session_key", key],
+        ] as const) {
+          if (
+            db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table)
+          ) {
+            expect(
+              db.prepare(`SELECT count(*) AS count FROM ${table} WHERE ${column} = ?`).get(value),
+            ).toEqual({ count: 0 });
+          }
         }
       }
     },

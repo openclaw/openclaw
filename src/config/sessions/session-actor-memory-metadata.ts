@@ -12,6 +12,7 @@ import { createSessionActorMemoryTranscript } from "./session-actor-memory-trans
 import { isReadableSessionMessage } from "./session-entry-codec.js";
 import { projectCompactionAccountingPatch } from "./session-entry-projection.js";
 import type { SessionMetadataOperations } from "./session-manager-write-contract.js";
+import { appendSessionPriorWorkspaceCopies } from "./session-prior-workspace-boundary.js";
 import { sessionMatchesExpectedTranscriptTurn } from "./session-transcript-turn-state.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 import { canonicalizeTranscriptEventMedia } from "./transcript-event-media.js";
@@ -224,22 +225,25 @@ export function createSessionActorMemoryMetadata(context: SessionActorMemoryStor
         ) {
           throw new Error("Session transcript changed before rewrite publication");
         }
-        const original = new Map(sources);
-        for (const source of original.values()) {
+        const original = new Map<string, { source: (typeof sources)[number][1]; rawSeq: number }>();
+        for (const [copyId, source] of sources) {
           const row = state.events.find(({ event }) => isRecord(event) && event.id === source.id);
           if (!row || !isDeepStrictEqual(row.event, source)) {
             throw new Error("Session transcript changed before rewrite publication");
           }
+          original.set(copyId, { source, rawSeq: row.rawSeq });
         }
+        const copies: { sourceSeq: number; seq: number }[] = [];
         const entries = structuredClone(command.input.entries);
         const messages = createSessionActorMemoryMessages(context, events);
         let pendingInputReceipt;
         for (const entry of entries) {
           if (entry.type === "message") {
-            const source = original.get(entry.id);
-            if (!source) {
+            const found = original.get(entry.id);
+            if (!found) {
               throw new Error("Transcript rewrite message has no source entry");
             }
+            const { source } = found;
             const appended = messages.appendMessage({
               eventId: entry.id,
               parentId: entry.parentId,
@@ -260,9 +264,20 @@ export function createSessionActorMemoryMetadata(context: SessionActorMemoryStor
             // The returned view must match the stored row for later source comparisons.
             entry.supersedesEntryId = source.id;
             pendingInputReceipt = appended.receipt ?? pendingInputReceipt;
+            const seq = events.version().rawSeq;
+            if (seq !== null) {
+              copies.push({ sourceSeq: found.rawSeq, seq });
+            }
           } else if (!events.appendRaw(entry).appended) {
             throw new Error("Transcript rewrite entry was not appended");
           }
+        }
+        if (state.hot.entry) {
+          state.hot.entry = appendSessionPriorWorkspaceCopies(
+            state.hot.entry,
+            events.version().generation,
+            copies,
+          );
         }
         return {
           version: events.version(),

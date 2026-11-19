@@ -342,10 +342,7 @@ it.each([
           ]
         : [],
     );
-    const result = await listManagedOpenClawGatewayServices(
-      { HOME: home },
-      { requireComplete: true },
-    );
+    const result = await listManagedOpenClawGatewayServices({ HOME: home });
     expect(result.errors).toEqual([]);
     expect(result.services.map((service) => service.label)).toEqual(gateway ? [name] : []);
   },
@@ -369,15 +366,12 @@ it("keeps discovered native selectors independent of display details", async () 
     await write(unitPath, CUSTOM_OPENCLAW_GATEWAY_CONTENTS);
   }
 
-  const result = await listManagedOpenClawGatewayServices(
-    {
-      HOME: home,
-      XDG_CONFIG_HOME: configHome,
-      XDG_DATA_HOME: dataHome,
-      XDG_RUNTIME_DIR: runtimeDir,
-    },
-    { requireComplete: true },
-  );
+  const result = await listManagedOpenClawGatewayServices({
+    HOME: home,
+    XDG_CONFIG_HOME: configHome,
+    XDG_DATA_HOME: dataHome,
+    XDG_RUNTIME_DIR: runtimeDir,
+  });
 
   expect(result.errors).toEqual([]);
   expect(result.services.map((service) => service.label).toSorted()).toEqual(
@@ -554,9 +548,6 @@ it.each([
         : [],
     };
     await expect(listManagedOpenClawGatewayServices({ HOME: home })).resolves.toEqual(expected);
-    await expect(
-      listManagedOpenClawGatewayServices({ HOME: home }, { requireComplete: true }),
-    ).resolves.toEqual(expected);
   },
 );
 

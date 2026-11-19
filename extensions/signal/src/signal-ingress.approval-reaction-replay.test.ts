@@ -1,32 +1,14 @@
-// Real SQLite, monitor and handler; only Gateway approval resolution is mocked.
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { registerSignalApprovalReactionTarget } from "./approval-reactions.js";
+// Real SQLite, monitor and handler; only Gateway approval resolution is mocked.
 import { startSignalIngressMonitor } from "./signal-ingress.js";
 
-const reactionStores = vi.hoisted(() => new Set<{ clearForTest(): void }>());
-
-vi.mock("openclaw/plugin-sdk/approval-reaction-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/approval-reaction-runtime")>();
-  return {
-    ...actual,
-    createApprovalReactionTargetStore: <TTarget>(
-      params: Parameters<typeof actual.createApprovalReactionTargetStore<TTarget>>[0],
-    ) => {
-      const store = actual.createApprovalReactionTargetStore<TTarget>(params);
-      if (params.namespace === "signal.approval-reactions.v2") {
-        reactionStores.add(store);
-      }
-      return store;
-    },
-  };
-});
-
+const reactionStores = await vi.hoisted(() => import("./approval-reactions.test-support.js"));
 const resolveApproval = vi.hoisted(() => vi.fn());
 
 // mock-isolation: simulate approval failures without sending requests to a real Gateway.
@@ -35,21 +17,12 @@ vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
 }));
 
 vi.useRealTimers();
-let harness: typeof import("./monitor/event-handler.test-harness.js");
-let createHandler: typeof import("./monitor/event-handler.js").createSignalEventHandler;
+const { createBaseSignalEventHandlerDeps, createSignalReceiveEvent } =
+  await import("./monitor/event-handler.test-harness.js");
+const { createSignalEventHandler } = await import("./monitor/event-handler.js");
 
 type SignalIngressQueue = NonNullable<Parameters<typeof startSignalIngressMonitor>[0]["queue"]>;
 type SignalIngressPayload = Parameters<SignalIngressQueue["enqueue"]>[1];
-
-beforeAll(async () => {
-  harness = await import("./monitor/event-handler.test-harness.js");
-  ({ createSignalEventHandler: createHandler } = await import("./monitor/event-handler.js"));
-});
-
-beforeEach(() => {
-  reactionStores.forEach((store) => store.clearForTest());
-  resolveApproval.mockReset();
-});
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
@@ -60,9 +33,10 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 it(
-  "releases the claim and replays a reaction after a transient Gateway failure",
+  "replays approval reactions after a transient Gateway failure",
   { timeout: 30_000 },
   async () => {
+    reactionStores.clearSignalApprovalReactionStoresForTest();
     const queue = createChannelIngressQueueForTests<SignalIngressPayload>({
       channelId: "signal",
       accountId: "default",
@@ -86,8 +60,8 @@ it(
     const monitor = await startSignalIngressMonitor({
       accountId: "default",
       queue,
-      dispatch: createHandler(
-        harness.createBaseSignalEventHandlerDeps({
+      dispatch: createSignalEventHandler(
+        createBaseSignalEventHandlerDeps({
           cfg: {
             channels: { signal: { allowFrom: ["+15550001111"] } },
             approvals: { exec: { enabled: true, mode: "session" } },
@@ -96,8 +70,7 @@ it(
       ),
       runtime: { error: vi.fn(), log: vi.fn() },
     });
-    const reactionEvent = harness.createSignalReceiveEvent({
-      sourceNumber: "+15550001111",
+    const reactionEvent = createSignalReceiveEvent({
       reactionMessage: {
         emoji: "👍",
         targetAuthor: "+15550001111",

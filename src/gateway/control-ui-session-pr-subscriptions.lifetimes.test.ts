@@ -149,6 +149,9 @@ describe("recipient publication lifetimes", () => {
           const prepared = {
             ...target,
             assertCurrent: () => {
+              if (connId === "recipient" && holdRecipient) {
+                throw new Error("Recipient preparation pending");
+              }
               if (boundary === "selection" && captured !== generation) {
                 throw new Error("Prepared selection changed");
               }
@@ -194,7 +197,6 @@ describe("recipient publication lifetimes", () => {
   it("acknowledges a forced result equal to the normal poll queued before it", async () => {
     const normal = hold(undefined);
     const forced = hold(undefined);
-    const admitted = createDeferred();
     let holdNormal = false;
     const active = start({
       load: async ({ refresh }) => {
@@ -213,9 +215,8 @@ describe("recipient publication lifetimes", () => {
     holdNormal = true;
     const poll = active.pollNow();
     await normal.entered;
-    const refresh = active.replace("first", ["shared"], new Set(["shared"]), admitted.resolve);
+    const refresh = active.replace("first", ["shared"], new Set(["shared"]));
     drain([poll, refresh]);
-    await admitted.promise;
     normal.release();
     await forced.entered;
     expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
@@ -226,7 +227,6 @@ describe("recipient publication lifetimes", () => {
 
   it("acknowledges a refresh admitted after that viewer received the in-flight result", async () => {
     const held = hold(undefined);
-    const admitted = createDeferred();
     let holdRecipient = false;
     const load = vi.fn(async ({ refresh }: { refresh?: boolean }) => (refresh ? changed : READY));
     const active = start({
@@ -248,8 +248,7 @@ describe("recipient publication lifetimes", () => {
     const operations = [first];
     drain(operations);
     await held.entered;
-    operations.push(active.replace("first", ["shared"], new Set(["shared"]), admitted.resolve));
-    await admitted.promise;
+    operations.push(active.replace("first", ["shared"], new Set(["shared"])));
     await vi.advanceTimersByTimeAsync(0);
     held.release();
     await Promise.all(operations);
@@ -405,10 +404,18 @@ describe("recipient publication lifetimes", () => {
 
   it("checks the recipient's prepared authority when another watcher joins before send", async () => {
     const access = new AbortController();
-    const recipientTarget = { ...target, assertCurrent: () => access.signal.throwIfAborted() };
+    let holdRecipient = false;
+    const recipientTarget = {
+      ...target,
+      assertCurrent: () => {
+        if (holdRecipient) {
+          throw new Error("Recipient preparation pending");
+        }
+        access.signal.throwIfAborted();
+      },
+    };
     const recipient = hold(recipientTarget);
     const joining = hold(target);
-    let holdRecipient = false;
     let snapshot = READY;
     const active = start({
       load: async () => snapshot,

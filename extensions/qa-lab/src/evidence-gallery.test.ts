@@ -43,21 +43,13 @@ function uxMatrixEntry(params: {
   result: QaEvidenceSummaryJson["entries"][number]["result"];
 }): QaEvidenceSummaryJson["entries"][number] {
   const entry = vitestArtifactEvidence(params).entries[0]!;
-  return {
-    ...entry,
-    test: {
-      ...entry.test,
-      kind: "ux-matrix-cell",
-      source: { path: "external/qa/ux-matrix-producer.mjs" },
-    },
-    coverage: [],
-    execution: {
-      ...entry.execution!,
-      runner: "ux-matrix-dashboard",
-      artifacts: [params.artifact],
-    },
-    result: params.result,
-  };
+  entry.test.kind = "ux-matrix-cell";
+  entry.test.source = { path: "external/qa/ux-matrix-producer.mjs" };
+  entry.coverage = [];
+  entry.execution!.runner = "ux-matrix-dashboard";
+  entry.execution!.artifacts = [params.artifact];
+  entry.result = params.result;
+  return entry;
 }
 
 async function writeFiles(root: string, files: Record<string, string>) {
@@ -85,9 +77,10 @@ describe("evidence gallery", () => {
   it("builds a generic gallery model for non-UX QA Lab evidence", async () => {
     const repoRoot = await createTempRepo();
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "vitest");
-    await fs.mkdir(path.join(outputDir, "runner"), { recursive: true });
-    await fs.writeFile(path.join(outputDir, "runner", "result.json"), '{"ok":true}\n', "utf8");
-    await fs.writeFile(path.join(outputDir, "runner", "output.log"), "vitest pass\n", "utf8");
+    await writeFiles(outputDir, {
+      "runner/result.json": '{"ok":true}\n',
+      "runner/output.log": "vitest pass\n",
+    });
 
     const evidence = artifactEvidence(
       "runner/result.json",
@@ -165,16 +158,12 @@ describe("evidence gallery", () => {
     const repoRoot = await createTempRepo("qa-evidence-gallery-gif-");
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "vitest");
     const artifactPath = path.join(outputDir, "absolute");
-    await fs.mkdir(outputDir, { recursive: true });
-    await fs.writeFile(
-      artifactPath,
-      `absolute artifact ${repoRoot}\nfile://${repoRoot}/trace.log\n`,
-      "utf8",
-    );
     const relativeLeakArtifactPath = `nested${repoRoot}/relative.log`;
     const relativeLeakFile = path.resolve(outputDir, relativeLeakArtifactPath);
-    await fs.mkdir(path.dirname(relativeLeakFile), { recursive: true });
-    await fs.writeFile(relativeLeakFile, "relative artifact\n", "utf8");
+    await writeFiles(outputDir, {
+      absolute: `absolute artifact ${repoRoot}\nfile://${repoRoot}/trace.log\n`,
+      [relativeLeakArtifactPath]: "relative artifact\n",
+    });
     const evidence = artifactEvidence(artifactPath);
     evidence.profile = `${repoRoot}/qa-profile`;
     const absoluteEntry = evidence.entries[0]!;
@@ -472,14 +461,8 @@ describe("evidence gallery", () => {
     await expect(resolveArtifact("artifact.log")).resolves.toBe(
       await fs.realpath(path.join(outputDir, "artifact.log")),
     );
-    await fs.mkdir(path.join(repoRoot, "runner"), { recursive: true });
-    await fs.mkdir(path.join(outputDir, "runner"), { recursive: true });
-    await fs.writeFile(path.join(repoRoot, "runner", "result.json"), '{"from":"repo"}\n', "utf8");
-    await fs.writeFile(
-      path.join(outputDir, "runner", "result.json"),
-      '{"from":"evidence"}\n',
-      "utf8",
-    );
+    await writeFiles(repoRoot, { "runner/result.json": '{"from":"repo"}\n' });
+    await writeFiles(outputDir, { "runner/result.json": '{"from":"evidence"}\n' });
     const collisionEvidence = artifactEvidence("runner/result.json", "runner-result");
     await writeJson(evidencePath, collisionEvidence);
     await expect(resolveArtifact("runner/result.json")).resolves.toBe(

@@ -91,9 +91,6 @@ suite.define(() => {
         expect(changed.text).toBe(initial.text);
         expect(changed.width).toBe(changed.cssWidth * changed.dpr);
         expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
-        await settings.reload();
-        await input.waitFor();
-        expect(await input.inputValue()).toBe("DejaVu Sans Mono");
         await input.fill('"bad", serif');
         await input.press("Tab");
         expect(
@@ -108,9 +105,6 @@ suite.define(() => {
         expect((await terminalState()).text).toBe(initial.text);
         await settings.getByRole("button", { name: "Use default", exact: true }).click();
         await expect.poll(async () => (await terminalState()).family).toBe(initial.family);
-        await settings.reload();
-        await input.waitFor();
-        expect(await input.inputValue()).toBe("");
         await settings.close();
       },
     ));

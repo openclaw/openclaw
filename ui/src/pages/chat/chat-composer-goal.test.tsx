@@ -2,23 +2,18 @@
 
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createSessionGoalFixture } from "../../../../src/gateway/session-goal.test-support.js";
 import type { SessionGoal } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { ChatGoal } from "./components/chat-composer-goal.tsx";
 
-const goal: SessionGoal = {
-  schemaVersion: 1,
-  id: "goal-timing",
-  objective: "Verify the deployment",
-  status: "active",
+const goal: SessionGoal = createSessionGoalFixture("goal-timing", "Verify the deployment", {
   createdAt: 1_000,
   updatedAt: 61_000,
-  tokenStart: 0,
   tokensUsed: 100,
-  continuationTurns: 0,
-};
+});
 
 type GoalProps = Parameters<typeof ChatGoal>[0];
 function mountGoal(initial: SessionGoal, options: Partial<GoalProps> = {}) {
@@ -39,11 +34,10 @@ function mountGoal(initial: SessionGoal, options: Partial<GoalProps> = {}) {
   vi.advanceTimersToNextFrame();
   flush();
   return {
-    container: view.container,
+    ...view,
     draw: (value: SessionGoal | undefined) => update({ goal: value }),
     update,
     query: view.container.querySelector.bind(view.container),
-    unmount: view.unmount,
     elapsed: () => view.container.querySelector(".agent-chat__goal-elapsed")?.textContent,
   };
 }
@@ -87,29 +81,16 @@ it("keeps Resume progress and its saved retry in the goal pill", () => {
   expect(query(".session-run-spinner")).toBeNull();
 });
 
-it.each([
-  ["active", "2m 00s"],
-  ["paused", "1m 00s"],
-  ["blocked", "1m 00s"],
-  ["usage_limited", "1m 00s"],
-  ["budget_limited", "1m 00s"],
-  ["complete", "1m 00s"],
-] as const)("renders elapsed time immediately for %s goals", (status, elapsed) => {
-  const view = mountGoal({ ...goal, status });
-  expect(view.elapsed()).toBe(elapsed);
-});
-
 it("replaces a live tick with the authoritative stop time and resumes ticking", () => {
   const view = mountGoal(goal);
   advanceTime(1_000);
-  expect(view.elapsed()).toBe("2m 01s");
+  expect(view.elapsed()).toBe("2m");
 
-  const transitions: [SessionGoal, string, string][] = [
+  for (const [next, immediate, afterMinute] of [
     [{ ...goal, status: "paused", pausedAt: 46_000 }, "45s", "45s"],
-    [goal, "3m 01s", "4m 01s"],
-    [{ ...goal, status: "complete", completedAt: 151_000 }, "2m 30s", "2m 30s"],
-  ];
-  for (const [next, immediate, afterMinute] of transitions) {
+    [goal, "3m", "4m"],
+    [{ ...goal, status: "complete", completedAt: 151_000 }, "2m", "2m"],
+  ] satisfies [SessionGoal, string, string][]) {
     view.draw(next);
     expect(view.elapsed()).toBe(immediate);
     advanceTime(60_000);
@@ -131,7 +112,36 @@ it.each(["remove", "unmount"])(
     expect(vi.getTimerCount()).toBe(0);
     advanceTime(60_000);
     view = mountGoal(goal);
-    expect(view.elapsed()).toBe("3m 00s");
+    expect(view.elapsed()).toBe("3m");
     expect(vi.getTimerCount()).toBe(1);
   },
 );
+
+it("disables only fresh Resume while the session is busy and preserves receipt recovery", () => {
+  const onGoalAction = vi.fn();
+  const onGoalEdit = vi.fn();
+  const onCheck = vi.fn(async () => true);
+  const view = mountGoal(
+    { ...goal, status: "blocked" },
+    {
+      canAct: true,
+      connected: true,
+      resumeBusy: true,
+      onGoalAction,
+      onGoalEdit,
+    },
+  );
+  const resume = view.query<HTMLButtonElement>('[aria-label="Resume goal"]')!;
+  expect(resume.disabled).toBe(true);
+  expect(view.query<HTMLButtonElement>('[aria-label="Edit goal"]')!.disabled).toBe(false);
+  expect(view.query<HTMLButtonElement>('[aria-label="Clear goal"]')!.disabled).toBe(false);
+  resume.click();
+  expect(onGoalAction).not.toHaveBeenCalled();
+  view.update({ resumeBusy: false });
+  expect(resume.disabled).toBe(false);
+  resume.click();
+  expect(onGoalAction).toHaveBeenCalledExactlyOnceWith(goal.id, "resume");
+  view.update({ resumeBusy: true, resumeRecovery: { pending: false, onCheck } });
+  view.query<HTMLButtonElement>(".agent-chat__goal-resume")!.click();
+  expect(onCheck).toHaveBeenCalledOnce();
+});

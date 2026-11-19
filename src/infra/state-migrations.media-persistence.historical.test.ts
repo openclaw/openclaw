@@ -24,6 +24,14 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
+  buildSqliteMemoryBodyFtsSchema,
+  buildSqliteMemoryPathFtsSchema,
+} from "./database-engine/sqlite-memory-search-fragments.js";
+import {
+  ensureMemoryChunkFtsTriggers,
+  ensureMemoryPathFtsTriggers,
+} from "./database-engine/sqlite-search-schema.js";
+import {
   completeGatewayBootLifecycle,
   inspectGatewayCrashLoopBreakerAsync,
   beginGatewayBootLifecycle,
@@ -285,6 +293,180 @@ function createHistoricalFixture() {
   registerOpenClawAgentDatabase({ agentId: "main", env, path: dbPath, schemaVersion: 14 });
   return { dbPath, env, eventJson, trajectoryJson };
 }
+
+it.each([
+  "valid",
+  "valid-fts-shadow",
+  "valid-fts-trigram",
+  "drifted-memory-fts",
+  "fake-fts-shadow",
+  "unknown-fts",
+  "invalid-entry",
+  "unknown-column",
+  "unknown-table",
+  "unknown-index",
+  "missing-table",
+  "unique-index",
+  "drifted-trigger",
+] as const)(
+  "Doctor migrates published beta.6 v16 only with valid rows and known schema: %s",
+  async (scenario) => {
+    const { env, dbPath } = createAgentPaths("media-persistence-beta6-v16-");
+    const schema = fs.readFileSync(
+      new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v16.sql", import.meta.url),
+      "utf8",
+    );
+    const entry = JSON.stringify({ sessionId: "beta6", updatedAt: 1000 });
+    expect(createHash("sha256").update(schema).digest("hex")).toBe(
+      "7463624a2f664f2af1dd130da09110cfc617c30a2219c4a1ef6f152b011a5c83",
+    );
+    const event = JSON.stringify({
+      type: "message",
+      message: { role: "user", content: "retained" },
+    });
+    {
+      using db = openFixtureDatabase(dbPath);
+      db.exec(schema);
+      db.exec(`PRAGMA user_version = 16;
+        INSERT INTO schema_meta VALUES ('primary', 'agent', 16, 'main', '2026.7.2-beta.6', 1000, 1000);`);
+      db.prepare(`INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+        VALUES ('agent:main:beta6', 'beta6', ?, 1000)`).run(
+        scenario === "invalid-entry" ? '{"sessionId":"other","updatedAt":1000}' : entry,
+      );
+      db.exec(`INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
+        VALUES ('beta6', 'agent:main:beta6', 1000, 1000)`);
+      db.prepare(
+        "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES ('beta6', 0, ?, 1000)",
+      ).run(event);
+      if (scenario === "unknown-column") {
+        db.exec("ALTER TABLE session_nodes ADD COLUMN unknown_column TEXT");
+      }
+      if (scenario === "unknown-table") {
+        db.exec("CREATE TABLE unknown_table (value TEXT)");
+      }
+      if (scenario === "unknown-index") {
+        db.exec("CREATE INDEX unknown_index ON session_nodes(updated_at)");
+      }
+      if (scenario === "missing-table") {
+        db.exec("DROP TABLE cache_entries");
+      }
+      if (scenario === "unique-index") {
+        db.exec("CREATE UNIQUE INDEX unknown_unique ON session_nodes(updated_at)");
+      }
+      if (scenario === "drifted-trigger") {
+        db.exec(
+          `CREATE TRIGGER session_nodes_entry_valid_after_insert AFTER INSERT ON session_nodes BEGIN DELETE FROM session_nodes WHERE session_key = NEW.session_key; END`,
+        );
+      }
+      if (scenario === "valid-fts-shadow" || scenario === "valid-fts-trigram") {
+        const tokenizer = scenario === "valid-fts-trigram" ? "trigram" : "unicode61";
+        db.prepare(
+          "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, 'memory', 'synthetic-hash', 1000, 64)",
+        ).run("notes/synthetic.md");
+        db.prepare(
+          `INSERT INTO memory_index_chunks
+            (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+            VALUES ('chunk-1', 'notes/synthetic.md', 'memory', 1, 2, 'synthetic-hash', 'synthetic-model', ?, '[]', 1000)`,
+        ).run("synthetic memory token");
+        db.exec(
+          buildSqliteMemoryBodyFtsSchema({ tableName: "memory_index_chunks_fts", tokenizer }),
+        );
+        db.exec(buildSqliteMemoryPathFtsSchema({ tokenizer }));
+        // The lazy index can already carry the current body triggers. They
+        // address chunk_rowid before this published table has that column.
+        ensureMemoryChunkFtsTriggers(db);
+        ensureMemoryPathFtsTriggers(db);
+        db.prepare(
+          `INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line)
+            VALUES ('synthetic memory token', 'chunk-1', 'notes/synthetic.md', 'memory', 'synthetic-model', 1, 2)`,
+        ).run();
+        db.prepare(
+          "INSERT INTO memory_index_paths_fts (path, source) VALUES ('notes/synthetic.md', 'memory')",
+        ).run();
+      }
+      if (scenario === "drifted-memory-fts") {
+        db.exec("CREATE VIRTUAL TABLE memory_index_chunks_fts USING fts5(text)");
+      }
+      if (scenario === "fake-fts-shadow") {
+        db.exec("CREATE TABLE memory_index_chunks_fts_data (id INTEGER PRIMARY KEY, block BLOB)");
+      }
+      if (scenario === "unknown-fts") {
+        db.exec("CREATE VIRTUAL TABLE unknown_fts USING fts5(text)");
+      }
+    }
+    registerOpenClawAgentDatabase({ agentId: "main", env, path: dbPath, schemaVersion: 16 });
+    const result = await migrateLegacyMediaPersistence({ env });
+    using db = openFixtureDatabase(dbPath, true);
+    if (
+      scenario === "valid" ||
+      scenario === "valid-fts-shadow" ||
+      scenario === "valid-fts-trigram"
+    ) {
+      expect(result.warnings).toEqual([]);
+      expectVersion(db, OPENCLAW_AGENT_SCHEMA_VERSION);
+      expect(get(db, "SELECT entry_json FROM session_nodes")).toEqual({ entry_json: entry });
+      expect(get(db, "SELECT event_json FROM transcript_events")).toEqual({ event_json: event });
+      if (scenario !== "valid") {
+        expect(get(db, "SELECT text FROM memory_index_chunks")).toEqual({
+          text: "synthetic memory token",
+        });
+        expect(
+          get(
+            db,
+            "SELECT text FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'synthetic'",
+          ),
+        ).toEqual({ text: "synthetic memory token" });
+        expect(
+          get(
+            db,
+            "SELECT path FROM memory_index_paths_fts WHERE memory_index_paths_fts MATCH 'synthetic'",
+          ),
+        ).toEqual({ path: "notes/synthetic.md" });
+      }
+      expect(get(db, "PRAGMA integrity_check")).toEqual({ integrity_check: "ok" });
+      expect(all(db, "PRAGMA foreign_key_check")).toEqual([]);
+      expect((await migrateLegacyMediaPersistence({ env })).warnings).toEqual([]);
+    } else {
+      const refusal = {
+        "drifted-memory-fts": "drifted memory FTS table memory_index_chunks_fts",
+        "fake-fts-shadow": "unexpected table memory_index_chunks_fts_data",
+        "unknown-fts": "unexpected table unknown_fts",
+        "invalid-entry": "invalid session entry identity or JSON",
+        "unknown-column": "column definitions differ for session_nodes",
+        "unknown-table": "unexpected table unknown_table",
+        "unknown-index": "unexpected index unknown_index",
+        "missing-table": "missing table cache_entries",
+        "unique-index": "unexpected unique index unknown_unique",
+        "drifted-trigger": "missing or drifted trigger session_nodes_entry_valid_after_insert",
+      }[scenario];
+      expect(result.warnings.join("\n")).toContain(refusal);
+      expect(result.warnings.join("\n")).not.toContain("run openclaw doctor --fix to repair it");
+      expectVersion(db, 16);
+      expect(get(db, "SELECT entry_json FROM session_nodes")).toEqual({
+        entry_json: scenario === "invalid-entry" ? '{"sessionId":"other","updatedAt":1000}' : entry,
+      });
+      expect(
+        get(
+          db,
+          "SELECT name FROM sqlite_schema WHERE name = 'session_nodes_entry_valid_after_entry_update'",
+        ),
+      ).toBeUndefined();
+    }
+    const backupLine = result.changes.find((line) =>
+      line.startsWith("Saved pre-repair SQLite backup: "),
+    );
+    expect(backupLine).toBeDefined();
+    using backup = openFixtureDatabase(
+      backupLine!.slice("Saved pre-repair SQLite backup: ".length),
+      true,
+    );
+    expectVersion(backup, 16);
+    expect(
+      get(backup, "SELECT name FROM pragma_table_info('session_nodes') WHERE name = 'entry_valid'"),
+    ).toBeUndefined();
+    expect(get(backup, "SELECT event_json FROM transcript_events")).toEqual({ event_json: event });
+  },
+);
 
 it("migrates the exact v2026.7.2-beta.4 schema without losing its session or media", async () => {
   expect(createHash("sha256").update(historicalV14AgentSchemaSql()).digest("hex")).toBe(

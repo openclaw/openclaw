@@ -61,6 +61,29 @@ export function isTelegramChatWindowPromptContext(entry: TelegramPromptContextEn
   return entry.source === "telegram" && entry.type === "chat_window";
 }
 
+/** Ids of unhydrated media the sender posted in the selected chat window, oldest first. */
+export function selectTelegramSenderMediaMessageIds(params: {
+  promptContext: readonly TelegramPromptContextEntry[];
+  senderId: string;
+  sinceMs: number;
+}): string[] {
+  return params.promptContext.flatMap((entry) =>
+    isTelegramChatWindowPromptContext(entry)
+      ? telegramPromptMessages(asOptionalRecord(entry.payload)).flatMap((message) => {
+          const messageId = message["message_id"];
+          const timestamp = message["timestamp_ms"];
+          return typeof messageId === "string" &&
+            message["sender_id"] === params.senderId &&
+            typeof message["media_ref"] === "string" &&
+            typeof timestamp === "number" &&
+            timestamp >= params.sinceMs
+            ? [messageId]
+            : [];
+        })
+      : [],
+  );
+}
+
 export function telegramPromptContextHistory(
   promptContext: readonly TelegramPromptContextEntry[],
 ): HistoryEntry[] {
