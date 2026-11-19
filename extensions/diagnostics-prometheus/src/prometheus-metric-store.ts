@@ -1,9 +1,8 @@
 /// <reference lib="es2024.arraybuffer" />
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
-  MAX_PROMETHEUS_FAMILY_SERIES,
-  PROMETHEUS_FAMILY_RESERVES,
-  SHARED_PROMETHEUS_SERIES,
+  PROMETHEUS_FAMILY_LIMITS,
+  MAX_PROMETHEUS_SERIES,
   type PrometheusMetricName,
 } from "./prometheus-family-budget.js";
 import {
@@ -79,7 +78,7 @@ export function createPrometheusMetricStore(
   const gauges = createSeries<ScalarSample>();
   const histograms = createSeries<HistogramSample>();
   let droppedSeries = 0;
-  let sharedSeries = 0;
+  let retainedSeries = 0;
   const familyCounts = new Map<PrometheusMetricName, number>();
   const familyDrops = new Map<PrometheusMetricName, number>();
   const headers = new Map<string, { type: string; help: string; bytes: Buffer }>();
@@ -131,11 +130,7 @@ export function createPrometheusMetricStore(
       break;
     }
     const count = familyCounts.get(name) ?? 0;
-    const reserve = PROMETHEUS_FAMILY_RESERVES[name];
-    if (
-      count >= Math.max(MAX_PROMETHEUS_FAMILY_SERIES, reserve) ||
-      (count >= reserve && sharedSeries >= SHARED_PROMETHEUS_SERIES)
-    ) {
+    if (count >= PROMETHEUS_FAMILY_LIMITS[name] || retainedSeries >= MAX_PROMETHEUS_SERIES) {
       droppedSeries++;
       familyDrops.set(name, (familyDrops.get(name) ?? 0) + 1);
       if (onSeriesDropped && !warnedFamilies.has(name)) {
@@ -145,9 +140,7 @@ export function createPrometheusMetricStore(
       return undefined;
     }
     familyCounts.set(name, count + 1);
-    if (count >= reserve) {
-      sharedSeries++;
-    }
+    retainedSeries++;
     if (!shape) {
       // Each metric can have multiple label shapes (for example GC's optional worker slot).
       shape = {
@@ -242,8 +235,7 @@ export function createPrometheusMetricStore(
     gauges.samples = gauges.samples.filter((sample) => sample.name !== name);
     const count = familyCounts.get(name) ?? 0;
     const remaining = count - (previousLength - gauges.samples.length);
-    const reserve = PROMETHEUS_FAMILY_RESERVES[name];
-    sharedSeries -= Math.max(0, count - reserve) - Math.max(0, remaining - reserve);
+    retainedSeries -= count - remaining;
     familyCounts.set(name, remaining);
   };
 
@@ -429,7 +421,7 @@ export function createPrometheusMetricStore(
       map.shapes.clear();
     }
     droppedSeries = 0;
-    sharedSeries = 0;
+    retainedSeries = 0;
     familyCounts.clear();
     familyDrops.clear();
     headers.clear();
