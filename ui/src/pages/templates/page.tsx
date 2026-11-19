@@ -7,6 +7,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { TemplatesCatalogDialog } from "../agents-home/templates-catalog-dialog.tsx";
+import type { TemplatesExploreSelection } from "../agents-home/templates-explore.tsx";
 import { PluginDetailLoadingHero } from "../plugins/detail-loading-hero.tsx";
 import { isTemplatesAvailable } from "./availability.ts";
 import { templateCreatorFlow } from "./creator-flow.ts";
@@ -46,6 +47,9 @@ export function TemplatesPage(props: { routeData: TemplatesRouteData | undefined
   const gateway = projectGateway(context.gateway);
   const runtimeConfig = projectRuntimeConfig(context.runtimeConfig);
   const available = () => isTemplatesAvailable(runtimeConfig.read().state);
+  // A Template detail replaces Explore inside this route. Returning from it reopens the
+  // same search and category; leaving Templates starts over.
+  const exploreSelection: TemplatesExploreSelection = { query: "", category: "" };
   // Query changes select a different draft; gateway reconnects may only resume the same one.
   const draftSearch = createMemo(() => props.routeData?.location.search ?? "");
   const draftTarget = createMemo(() => templateDraftTargetFromSearch(draftSearch()));
@@ -87,7 +91,16 @@ export function TemplatesPage(props: { routeData: TemplatesRouteData | undefined
           when={connectedDraftTarget()}
           keyed
           fallback={
-            <Show when={source()} keyed fallback={<TemplatesCatalogDialog />}>
+            <Show
+              when={source()}
+              keyed
+              fallback={
+                <TemplatesCatalogDialog
+                  exploreSelection={exploreSelection}
+                  onExploreSelectionChange={(change) => Object.assign(exploreSelection, change)}
+                />
+              }
+            >
               {(selectedSource) => (
                 <TemplatesCatalogDialog
                   initialPackageName={selectedSource.packageName}

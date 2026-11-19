@@ -216,6 +216,52 @@ describe("Templates discovery", () => {
     await vi.waitFor(() => expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1));
   });
 
+  it("reopens the search and category a visitor left for a Template detail", async () => {
+    const { detail, find, request, showExplore, setPackageName } = createDetail({
+      templatesEnabled: true,
+    });
+    const chip = (name: string) =>
+      [...detail.querySelectorAll<HTMLButtonElement>(".plugin-catalog-chip")].find(
+        (button) => button.textContent?.trim() === name,
+      );
+    const searches = () =>
+      request.mock.calls.filter(([method]) => method === "templates.catalog.search");
+    await vi.waitFor(() => expect(find(".plugin-capabilities")).not.toBeNull());
+
+    showExplore();
+    await vi.waitFor(() =>
+      expect(detail.querySelectorAll("[data-templates-entry]")).toHaveLength(1),
+    );
+    expect(chip("All")?.getAttribute("aria-pressed")).toBe("true");
+    chip("Productivity")!.click();
+    await vi.waitFor(() => expect(find("[data-templates-results]")).not.toBeNull());
+    const search = find("[data-templates-search]") as HTMLInputElement;
+    search.value = "workflow";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("templates.catalog.search", {
+        query: "workflow",
+        category: "productivity",
+      }),
+    );
+    await vi.waitFor(() => expect(find("[data-templates-results]")).not.toBeNull());
+
+    setPackageName(workflowOperator.packageName);
+    await vi.waitFor(() => expect(find(".plugin-capabilities")).not.toBeNull());
+    expect(find("[data-templates-explore]")).toBeNull();
+    const before = searches().length;
+
+    showExplore();
+    await vi.waitFor(() => expect(find("[data-templates-results]")).not.toBeNull());
+    expect(chip("Productivity")?.getAttribute("aria-pressed")).toBe("true");
+    expect(chip("All")?.getAttribute("aria-pressed")).toBe("false");
+    expect((find("[data-templates-search]") as HTMLInputElement).value).toBe("workflow");
+    // Returning reads the retained selection directly, without reloading the overview.
+    expect(searches().slice(before)).toEqual([
+      ["templates.catalog.search", { query: "workflow", category: "productivity" }],
+    ]);
+  });
+
   it("retries the selected package's detail read while retaining its route", async () => {
     const { request, setTemplatesEnabled, find } = createDetail({ templatesEnabled: false });
     const original = request.getMockImplementation()!;

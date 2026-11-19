@@ -81,6 +81,9 @@ function firstScreenArtwork(catalog: TemplateCatalog): string[] {
   return [...urls].slice(0, FIRST_SCREEN_SIZE);
 }
 
+/** The search and category a visitor is browsing; the page retains it across a Template detail. */
+export type TemplatesExploreSelection = { query: string; category: string };
+
 type TemplateAddProps = {
   onAdd: (entry: TemplateCatalogEntry) => void;
   addingPackageName: string | null;
@@ -206,10 +209,16 @@ function TemplateCatalogSkeleton(props: { overview: boolean }) {
 export function TemplatesExplore(
   props: TemplateAddProps & {
     onSelect?: (entry: TemplateCatalogEntry) => void;
+    /** Where Explore opens. Its owner applies each reported change to this same selection. */
+    selection?: TemplatesExploreSelection;
+    onSelectionChange?: (change: Partial<TemplatesExploreSelection>) => void;
   },
 ) {
   const context = useApplication();
-  const [view, setView] = createStore({ query: "", category: "" });
+  const [view, setView] = createStore<TemplatesExploreSelection>(
+    () => ({ query: props.selection?.query ?? "", category: props.selection?.category ?? "" }),
+    { query: "", category: "" },
+  );
   const [request, setRequest] = createSignal<{
     scope: GatewayConnectionScope;
     query: string;
@@ -223,11 +232,13 @@ export function TemplatesExplore(
     canCallGatewayMethod(gateway.snapshot, "templates.catalog.search", "operator.read");
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
-    onIdentityChange: () =>
+    onIdentityChange: () => {
       setView((draft) => {
         draft.query = "";
         draft.category = "";
-      }),
+      });
+      props.onSelectionChange?.({ query: "", category: "" });
+    },
     invalidateRequests: () => {
       cancelSearch();
       loadedForConnection = false;
@@ -266,6 +277,7 @@ export function TemplatesExplore(
     setView((draft) => {
       draft.query = query;
     });
+    props.onSelectionChange?.({ query });
     loadCatalog(view.category, query, 150);
   }
 
@@ -276,6 +288,7 @@ export function TemplatesExplore(
     setView((draft) => {
       draft.category = category;
     });
+    props.onSelectionChange?.({ category });
     loadCatalog(category);
   }
 
