@@ -190,6 +190,16 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   if (settledBatch.length === 0 || settledBatch.some(isClaimedByLiveRequesterTurn)) {
     return false;
   }
+  if (subagentRuns.isCompletionAuthorityRetired(currentSettledEntry)) {
+    await completeBatch(settledBatch, currentState, {
+      delivered: false,
+      path: "none",
+      disposition: "permanent_failure",
+      error:
+        "Child result delivery lost its Gateway owner. Inspect the saved child results and retry.",
+    });
+    return false;
+  }
 
   const resolveGatewayContext = getSharedGatewayContextResolver(settledBatch);
   const hadGatewayContext = resolveGatewayContext ? Boolean(resolveGatewayContext()) : false;
