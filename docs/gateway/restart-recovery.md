@@ -430,6 +430,12 @@ child through the ordinary abort path. The child settles terminally without a
 shutdown completion announcement or a "subagent failed" notice to its parent.
 Children are not adopted or independently resumed at startup.
 
+Collector children retain their captured results. If shutdown recorded a terminal
+child before its collector result finished publishing, startup completes that
+record from the saved outcome. A resumed parent's `agents_wait` reads these
+recorded results, including stopped children, without waiting for a new execution
+or completion event. This does not restore the child's retired tool authority.
+
 The parent's single resume input covers reconciliation of its children. It can
 inspect their transcripts and results with the existing sub-agent tools, then
 send a new instruction or spawn replacements after checking what already happened.
