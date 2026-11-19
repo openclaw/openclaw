@@ -97,21 +97,14 @@ export async function recordRequiredCompletionFailure(
         ))
       : `subagent-delivery-failure:${entry.taskRunId ?? entry.runId}:${entry.delivery?.generation ?? 1}`;
   // This records a failed obligation, without borrowing its retired execution authority.
-  // A newer turn can receive its batch's failure, but reset, deletion and Stop cannot.
+  // Address the current chat, including a compaction successor; deletion and Stop get no notice.
   const requester = {
     agentId: entry.requesterAgentId,
     sessionKey: entry.requesterSessionKey,
     storePath: entry.requesterStorePath,
   };
   const current = await readSessionEntryReadOnlyInWorker(requester);
-  if (
-    !current?.sessionId ||
-    current.status === "killed" ||
-    (entry.completionRequesterSessionId !== undefined &&
-      current.sessionId !== entry.completionRequesterSessionId) ||
-    (entry.completionRequesterLifecycleRevision !== undefined &&
-      current.lifecycleRevision !== entry.completionRequesterLifecycleRevision)
-  ) {
+  if (!current?.sessionId || current.status === "killed") {
     return;
   }
   const result = await runWithoutOwnedSessionTranscriptWrites(() =>
@@ -135,7 +128,7 @@ export async function recordRequiredCompletionFailure(
                   renderRuntimeCoordinationFailureCopy("child_completion_delivery_failed"),
                   "child completion failure notice",
                 ),
-                details: { runId, childRunId: entry.runId },
+                details: { runId, childRunId: entry.runId, error: reason },
               },
       },
     ),
