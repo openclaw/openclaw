@@ -693,6 +693,7 @@ function buildUnifiedDistEntries(): Record<string, string> {
     ...coreDistEntries,
     ...dockerE2eHarnessEntries,
     // Private app protocol entry shares chunks with the SDK needed by node-host plugins.
+    "plugin-sdk-worker-preload": "src/plugins/plugin-sdk-worker-preload.ts",
     "mac-node-worker": "src/node-host/mac-worker-entry.ts",
     ...Object.fromEntries(
       Object.entries(buildPackageDistEntriesFromExports("normalization-core")).map(
