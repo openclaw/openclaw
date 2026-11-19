@@ -8,8 +8,10 @@ import { verifyUpdateStateConsistency } from "../../infra/update-data-at-risk.js
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
   dataAtRiskVerifiedStep,
+  describeRecordedDataAtRisk,
   findUnverifiedDataAtRisk,
   listUnverifiedDataAtRisk,
+  type RecordedDataAtRisk,
 } from "../../infra/update-run-data-at-risk.js";
 import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
 import {
@@ -58,7 +60,7 @@ function stoppedGatewayGuidance(reason: string, env: NodeJS.ProcessEnv): string 
  */
 export async function verifyRecordedDataAtRisk(params: {
   /** Newest first; one verification settles them all. */
-  marks: readonly { runId: string; mark: string }[];
+  marks: readonly RecordedDataAtRisk[];
   repairRunId: string;
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -173,17 +175,19 @@ export async function restoreRepairGateway(params: {
 }> {
   const { env, phase, originalRunId } = params;
   const runIds = [originalRunId, params.repairRunId];
-  // A mark stays on its run; this repair's verification receipt resolves it.
+  // A mark stays on its run; a receipt from this or an earlier repair resolves it.
   const risk = () =>
-    findUnverifiedDataAtRisk(getUpdateRun(originalRunId, { env }), [
-      getUpdateRun(params.repairRunId, { env }),
-    ]);
+    findUnverifiedDataAtRisk(
+      getUpdateRun(originalRunId, { env }),
+      listUpdateRuns({ limit: 100 }, { env }),
+    );
   const service = resolveGatewayService();
   const mark = risk();
-  if (mark) {
+  const original = getUpdateRun(originalRunId, { env });
+  if (mark && original) {
     const refusal = await verifyRecordedDataAtRisk({
       ...params,
-      marks: [{ runId: originalRunId, mark }],
+      marks: [describeRecordedDataAtRisk(original, mark)],
     });
     if (refusal) {
       return { restart: false, warning: refusal };

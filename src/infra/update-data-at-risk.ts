@@ -9,6 +9,7 @@ import type {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { VERSION } from "../version.js";
 import { formatErrorMessage } from "./errors.js";
+import type { RecordedDataAtRisk } from "./update-run-data-at-risk.js";
 import {
   assertUpdateRecoveryAdmission,
   assertUpdateRecoveryDirectoryAdmission,
@@ -52,21 +53,8 @@ function listFindings(findings: readonly string[]): string {
  * its own file before it restores the backup. Check beside the shared database and every
  * registered agent database, wherever it lives; `null` when the registry cannot be read.
  */
-function findRollbackLeftover(
-  env: NodeJS.ProcessEnv,
-  statePath: string,
-  runId: string,
-): string | null | undefined {
-  let agentPaths: string[];
-  try {
-    agentPaths = readRegisteredAgentDatabases(
-      { env, includeIncompatibleSchemaVersions: true },
-      false,
-    ).map((entry) => entry.path);
-  } catch {
-    return null;
-  }
-  for (const databasePath of [statePath, ...agentPaths]) {
+function findRollbackLeftover(databasePaths: readonly string[], runId: string): string | undefined {
+  for (const databasePath of databasePaths) {
     for (const suffix of ["", "-wal", "-shm", "-journal"]) {
       const leftover = `${databasePath}.migrated-${runId}${suffix}`;
       if (fs.existsSync(leftover)) {
@@ -75,6 +63,26 @@ function findRollbackLeftover(
     }
   }
   return undefined;
+}
+
+function readAgentDatabasePaths(env: NodeJS.ProcessEnv): string[] | undefined {
+  try {
+    return readRegisteredAgentDatabases(
+      { env, includeIncompatibleSchemaVersions: true },
+      false,
+    ).map((entry) => entry.path);
+  } catch {
+    return undefined;
+  }
+}
+
+function leftoverFinding(leftover: { runId: string; file: string }): UpdateStateVerification {
+  return {
+    status: "inconsistent",
+    detail: `the database rollback of update ${leftover.runId} left ${leftover.file}, so the state may be only partly restored`,
+    nextAction:
+      "keep that file and the update's backup; an agent or a person must compare them before the Gateway starts.",
+  };
 }
 
 function describeBehind(database: {
@@ -152,7 +160,7 @@ export async function verifyUpdateStateConsistency(params: {
   env: NodeJS.ProcessEnv;
   formatCommand: (command: string) => string;
   /** The recorded marks being checked; some name evidence a schema check cannot see. */
-  marks?: readonly { runId: string; mark: string }[];
+  marks?: readonly RecordedDataAtRisk[];
   /**
    * This run's Doctor maintenance has since held exclusive state and agent ownership, so
    * no writer the marked run left behind can still hold the state.
@@ -160,37 +168,18 @@ export async function verifyUpdateStateConsistency(params: {
   writersExcluded?: true;
   signal?: AbortSignal;
 }): Promise<UpdateStateVerification> {
-  if (!params.writersExcluded && params.marks?.some(({ mark }) => mark === "active-mutation")) {
-    // Schemas cannot show whether writers exited; Doctor's ownership admission can.
-    return {
-      status: "unverifiable",
-      detail:
-        "the mark records Doctor processes that may still be writing, which a state check cannot rule out",
-      nextAction: `run \`${params.formatCommand("openclaw update repair")}\`: its Doctor waits for those writers to release the state, then this check runs again.`,
-      finishable: true,
-    };
-  }
   const databasePath = path.resolve(resolveOpenClawStateSqlitePath(params.env));
-  const leftovers = (params.marks ?? []).map(({ runId }) => ({
-    runId,
-    file: findRollbackLeftover(params.env, databasePath, runId),
-  }));
-  if (leftovers.some(({ file }) => file === null)) {
-    return {
-      status: "unverifiable",
-      detail:
-        "the agent database registry could not be read to check for database rollback leftovers",
-      nextAction: retryRepair(params.formatCommand),
-    };
-  }
-  const leftover = leftovers.find(({ file }) => file);
-  if (leftover) {
-    return {
-      status: "inconsistent",
-      detail: `the database rollback of update ${leftover.runId} left ${leftover.file}, so the state may be only partly restored`,
-      nextAction:
-        "keep that file and the update's backup; an agent or a person must compare them before the Gateway starts.",
-    };
+  // A completed rollback keeps its displaced files on purpose; only other runs' count.
+  const rollbackRuns = (params.marks ?? []).filter(({ databaseRestored }) => !databaseRestored);
+  const findLeftover = (paths: readonly string[]) =>
+    rollbackRuns
+      .map(({ runId }) => ({ runId, file: findRollbackLeftover(paths, runId) }))
+      .find((entry): entry is { runId: string; file: string } => entry.file !== undefined);
+  // The shared database needs no registry; agent databases are checked after the schema
+  // verdict, so an unreadable registry cannot hide a schema finding.
+  const sharedLeftover = findLeftover([databasePath]);
+  if (sharedLeftover) {
+    return leftoverFinding(sharedLeftover);
   }
   try {
     await assertUpdateRecoveryDirectoryAdmission(databasePath);
@@ -232,6 +221,32 @@ export async function verifyUpdateStateConsistency(params: {
     };
   }
   const verdict = classify(schemas, params.formatCommand);
+  // A finding that refuses outright reports first. One a caller may defer to Doctor or
+  // continue past (an unfinished migration, newer state) must not hide a rollback leftover.
+  const deferrable =
+    verdict.status !== "consistent" && (verdict.finishable === true || verdict.newerState === true);
+  if (verdict.status !== "consistent" && !deferrable) {
+    return verdict;
+  }
+  if (rollbackRuns.length > 0) {
+    const agentPaths = readAgentDatabasePaths(params.env);
+    if (!agentPaths && verdict.status !== "consistent") {
+      // The schema finding is the more useful answer; it still refuses resolution.
+      return verdict;
+    }
+    if (!agentPaths) {
+      return {
+        status: "unverifiable",
+        detail:
+          "the agent database registry could not be read to check for database rollback leftovers",
+        nextAction: retryRepair(params.formatCommand),
+      };
+    }
+    const agentLeftover = findLeftover(agentPaths);
+    if (agentLeftover) {
+      return leftoverFinding(agentLeftover);
+    }
+  }
   if (verdict.status !== "consistent") {
     // A schema finding explains why recovery rows may be unreadable, so it reports first.
     return verdict;
@@ -251,6 +266,17 @@ export async function verifyUpdateStateConsistency(params: {
       status: "unverifiable",
       detail: `update recovery records could not be read: ${formatErrorMessage(error)}`,
       nextAction: retryRepair(params.formatCommand),
+    };
+  }
+  // Checked last, so evidence a state check can see is never hidden behind a deferral.
+  if (!params.writersExcluded && params.marks?.some(({ mark }) => mark === "active-mutation")) {
+    // Schemas cannot show whether writers exited; Doctor's ownership admission can.
+    return {
+      status: "unverifiable",
+      detail:
+        "the mark records Doctor processes that may still be writing, which a state check cannot rule out",
+      nextAction: `run \`${params.formatCommand("openclaw update repair")}\`: its Doctor waits for those writers to release the state, then this check runs again.`,
+      finishable: true,
     };
   }
   return verdict;

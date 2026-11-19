@@ -464,6 +464,34 @@ it("lets Doctor finish an unfinished migration before the mark is checked again"
   );
 });
 
+it("fails repair and leaves recovery open when the mark is still refused after Doctor", async () => {
+  const original = seed(true, markedRisk);
+  const behind = {
+    status: "inconsistent",
+    finishable: true,
+    detail: "the state database is at schema 39",
+    nextAction: "run `openclaw doctor --fix` to finish the migration.",
+  } as const;
+  vi.spyOn(dataAtRisk, "verifyUpdateStateConsistency")
+    .mockResolvedValueOnce(behind)
+    .mockResolvedValueOnce({ ...behind, detail: "the state database is still at schema 39" });
+
+  await repair();
+
+  expect(mocks.doctor).toHaveBeenCalled();
+  expect(service.start).not.toHaveBeenCalled();
+  expect(listUpdateRuns()[0]?.status).toBe("failed");
+  expect(defaultRuntime.error).toHaveBeenCalledWith(
+    expect.stringContaining("Found: the state database is still at schema 39."),
+  );
+  // Recovery stays open: once the state is consistent, the next repair starts the Gateway.
+  await repair(false);
+  expect(events).toEqual(["finalized", "finalized", "start", "verified"]);
+  expect(listUpdateRuns()[0]?.steps).toContainEqual(
+    expect.objectContaining({ step: `finalize:data-at-risk-verified:${original}` }),
+  );
+});
+
 it("resolves a live-writer mark once Doctor has held the state, without a second repair", async () => {
   const original = seed(true, {
     recovery: { ...markedRisk.recovery, dataAtRisk: "active-mutation" },

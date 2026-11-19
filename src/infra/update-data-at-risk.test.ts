@@ -135,19 +135,29 @@ it.each(["shared", "agent"] as const)(
     await fs.mkdir(directory, { recursive: true });
     await fs.writeFile(leftover, "migrated state");
 
-    const marked = (runId: string) =>
+    const marked = (runId: string, extra: { databaseRestored?: true } = {}) =>
       verifyUpdateStateConsistency({
         env: process.env,
         formatCommand: (command) => command,
-        marks: [{ runId, mark: "rollback-state-unverified" }],
+        // A live-writer mark beside it must not defer past the leftover.
+        marks: [
+          { runId: "run-0", mark: "active-mutation" },
+          { runId, mark: "rollback-state-unverified", ...extra },
+        ],
       });
 
     await expect(marked("run-1")).resolves.toMatchObject({
       status: "inconsistent",
       detail: expect.stringContaining(leftover),
     });
-    // Another update's leftover says nothing about this mark.
-    await expect(marked("run-2")).resolves.toMatchObject({ status: "consistent" });
+    // Another update's leftover, and one a completed rollback kept on purpose, say nothing
+    // about this mark; only the live-writer deferral remains.
+    for (const verdict of [
+      await marked("run-2"),
+      await marked("run-1", { databaseRestored: true }),
+    ]) {
+      expect(verdict).toMatchObject({ status: "unverifiable", finishable: true });
+    }
   },
 );
 

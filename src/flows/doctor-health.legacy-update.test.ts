@@ -539,7 +539,7 @@ it.each(["manager-refused", "old-listener-remains", "identity-uninspectable"] as
       if (failure === "identity-uninspectable") {
         // The message must not claim a stop was attempted for a PID that still runs.
         await expect(run).rejects.toThrow(
-          `Stale Gateway PID 4200 was not stopped and is still running: ${skipped}`,
+          `Stale Gateway PID 4200 was not stopped: ${skipped} Observed: service=running, PID=4200,`,
         );
         expect(service.stop).not.toHaveBeenCalled();
       } else {

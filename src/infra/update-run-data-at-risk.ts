@@ -39,12 +39,30 @@ export function findUnverifiedDataAtRisk(
   return mark && marked && !hasVerifiedDataAtRisk(history, marked.runId) ? mark : undefined;
 }
 
+export type RecordedDataAtRisk = {
+  runId: string;
+  mark: string;
+  /**
+   * The run's database rollback completed. The restore owner keeps the displaced
+   * `<db>.migrated-<run>` files for manual recovery, so they are not a partial restore.
+   */
+  databaseRestored?: true;
+};
+
+/** A mark with the run facts its verification needs. */
+export function describeRecordedDataAtRisk(run: UpdateRunRecord, mark: string): RecordedDataAtRisk {
+  const restored = run.steps.some(
+    (entry) => entry.step === "database rollback" && entry.status === "completed",
+  );
+  return { runId: run.runId, mark, ...(restored ? { databaseRestored: true as const } : {}) };
+}
+
 /** Newest-first history: every recorded mark that no run has verified yet, newest first. */
 export function listUnverifiedDataAtRisk(
   history: readonly UpdateRunRecord[],
-): { runId: string; mark: string }[] {
+): RecordedDataAtRisk[] {
   return history.flatMap((run) => {
     const mark = findUnverifiedDataAtRisk(run, history);
-    return mark ? [{ runId: run.runId, mark }] : [];
+    return mark ? [describeRecordedDataAtRisk(run, mark)] : [];
   });
 }

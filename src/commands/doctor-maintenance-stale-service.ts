@@ -116,6 +116,8 @@ export async function inspectStaleDoctorGateway(params: {
 export async function assertStaleDoctorGatewayStopped(params: {
   stale: DoctorStaleGateway;
   env: NodeJS.ProcessEnv;
+  /** Why the stop was skipped rather than attempted, when it was. */
+  skipped?: string;
   assertCurrent?: () => void;
 }): Promise<void> {
   const runtime = await resolveGatewayService().readRuntime(params.env);
@@ -123,8 +125,11 @@ export async function assertStaleDoctorGatewayStopped(params: {
   const legacy = await readLegacyGatewayLockIdentity(params.env);
   params.assertCurrent?.();
   if (runtime.status !== "stopped" || (runtime.pid ?? 0) > 0 || port !== "free" || legacy) {
+    const observed = `service=${runtime.status}, PID=${runtime.pid ?? "none"}, port ${params.stale.port}=${port}, legacy lock owner=${legacy?.pid ?? "none"}`;
     throw new Error(
-      `Stale Gateway PID ${params.stale.pid ?? "unknown"} did not stop: service=${runtime.status}, PID=${runtime.pid ?? "none"}, port ${params.stale.port}=${port}, legacy lock owner=${legacy?.pid ?? "none"}.`,
+      params.skipped
+        ? `Stale Gateway PID ${params.stale.pid ?? "unknown"} was not stopped: ${params.skipped} Observed: ${observed}.`
+        : `Stale Gateway PID ${params.stale.pid ?? "unknown"} did not stop: ${observed}.`,
     );
   }
 }
