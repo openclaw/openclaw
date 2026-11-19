@@ -239,8 +239,11 @@ export async function executeMutableUpdate(
           onStopped: (state) => {
             preManagedServiceStop = { ...state, ...(serviceIdentity ? { serviceIdentity } : {}) };
           },
-          handoffFromGateway: (state) =>
-            handoffUpdateFromGateway({
+          handoffFromGateway: async (state) => {
+            // The handed-off update changes state in another process, which cannot capture.
+            await originalRun?.captureOriginal?.();
+            assertExecutionCurrent();
+            return await handoffUpdateFromGateway({
               state,
               root: params.managedServiceRoot ? params.root : mutationRoot,
               opts,
@@ -256,7 +259,8 @@ export async function executeMutableUpdate(
               nodeRunner: params.packageUpdateNodeRunner,
               invocationCwd: params.invocationCwd,
               stopProgress: params.stop,
-            }),
+            });
+          },
         });
         if (serviceIdentity) {
           preManagedServiceStop.serviceIdentity = serviceIdentity;
@@ -426,6 +430,10 @@ export async function executeMutableUpdate(
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
     await waitForCurrent();
     familyAdmission.assertAdmitted();
+    // Activation is this run's first state change. Copy the originals while the Gateway
+    // still serves; an already-current or refused run never reaches this point.
+    await originalRun?.captureOriginal?.();
+    assertExecutionCurrent();
     if (params.switchToGit && !opts.run?.sourceArtifactLock) {
       await admitSourceUpdateArtifacts(resolveGitInstallDir(), opts.run);
       assertExecutionCurrent();

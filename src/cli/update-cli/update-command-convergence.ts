@@ -317,7 +317,13 @@ export async function convergeUpdatePlugins(params: {
                 }
               : {}),
             pluginUpdate: producedPluginUpdate,
-            beforeDoctor: params.beforeDoctor,
+            beforeDoctor: async () => {
+              // Fresh Doctor can migrate core and plugin state. An already-current core
+              // copies its originals only here, once it knows Doctor will run.
+              await params.opts.run?.captureOriginal?.();
+              assertCurrent?.();
+              await params.beforeDoctor?.();
+            },
             assertCurrent,
             yes: params.opts.yes === true,
             json: params.opts.json === true,

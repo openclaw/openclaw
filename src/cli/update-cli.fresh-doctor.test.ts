@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { resolveStateDir } from "../config/paths.js";
+import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { recordCommandProcessFailure } from "../process/exec-result.js";
 import { VERSION } from "../version.js";
 import {
@@ -112,6 +114,10 @@ describe("update-cli", () => {
     const doctorCalls = commandCalls().filter(([argv]) => argv.at(-1) === "--doctor");
     expect(doctorCalls).toHaveLength(1);
     update.expectDelegatedPluginDoctorInput(doctorCalls[0]?.[1].input);
+    // The core is current, but Doctor can migrate plugin state: the run copies first.
+    const [run] = update.listUpdateRuns({ limit: 1 });
+    const capture = path.join(resolveUpdateCaptureRoot(resolveStateDir()), run!.runId);
+    await expect(fs.stat(path.join(capture, "manifest.json"))).resolves.toBeTruthy();
     expect(update.runExec).toHaveBeenCalledWith(
       expect.any(String),
       [f.FRESH_POST_UPDATE_ENTRYPOINT, "config", "validate", "--json"],

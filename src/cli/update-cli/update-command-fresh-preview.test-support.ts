@@ -48,6 +48,8 @@ function expectOriginalCapture(params: {
   installRoot: string;
   databasePath: string;
   previousRunId?: string;
+  /** Set when the run copied at its first state change, after its own history row. */
+  copiedAfterAdmission?: boolean;
 }) {
   const manifest = parseUpdateRecoveryBackupManifest(fs.readFileSync(params.manifestPath, "utf8"));
   expect(manifest.runId).toBe(params.runId);
@@ -68,9 +70,15 @@ function expectOriginalCapture(params: {
         .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
         .get("fixture.original"),
     ).toEqual({ value_json: '{"message":"acknowledged before update"}' });
-    expect(original.prepare("SELECT run_id FROM update_runs ORDER BY run_id").all()).toEqual([
-      { run_id: params.previousRunId },
-    ]);
+    expect(
+      original
+        .prepare("SELECT run_id FROM update_runs")
+        .all()
+        .map((row) => row.run_id)
+        .toSorted(),
+    ).toEqual(
+      [params.previousRunId, ...(params.copiedAfterAdmission ? [params.runId] : [])].toSorted(),
+    );
   } else {
     expect(captured).toEqual({
       kind: "missing",
@@ -108,7 +116,7 @@ export function registerOriginalCaptureTests({
       releaseDenied: true,
     },
   ])(
-    "captures original state before parent history (schema=$schema, existing=$existing, refused=$refused, release denied=$releaseDenied)",
+    "captures original state only before state changes (schema=$schema, existing=$existing, refused=$refused, release denied=$releaseDenied)",
     async ({ schema, existing, refused, releaseDenied = false }) => {
       const previousRunId = existing ? createUpdateRun({ trigger: "cli" }).runId : undefined;
       if (previousRunId) {
@@ -129,6 +137,7 @@ export function registerOriginalCaptureTests({
           installRoot: captureRoot,
           databasePath: fixture.databasePath,
           previousRunId,
+          copiedAfterAdmission: existing,
         });
       if (refused) {
         fs.mkdirSync(path.join(captureRoot, "dist"));
@@ -218,6 +227,11 @@ export function registerOriginalCaptureTests({
             });
           }
           expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("running");
+          if (existing) {
+            // An existing profile copies at the first state change; activation calls this.
+            expect(run.originalRecoveryCapture).toBeUndefined();
+            await run.captureOriginal?.();
+          }
           const ref = run.originalRecoveryCapture;
           assert(ref);
           expectCapture(run.runId, ref.manifestPath);
@@ -279,11 +293,10 @@ export function registerOriginalCaptureTests({
         await updateStatusCommand({ json: true });
         const output = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0];
         assert(isRecord(output) && Array.isArray(output.recoverySets));
-        const capture = output.recoverySets.find(
-          (set) => isRecord(set) && set.runId === result.runId,
-        );
-        assert(isRecord(capture) && typeof capture.manifestPath === "string");
-        expectCapture(result.runId, capture.manifestPath);
+        // A refused update changed nothing, so it copied nothing.
+        expect(
+          output.recoverySets.filter((set) => isRecord(set) && set.runId === result.runId),
+        ).toEqual([]);
         expectNoFreshCalls(
           execute,
           packageUpdate.stagePackageInstallUpdate,

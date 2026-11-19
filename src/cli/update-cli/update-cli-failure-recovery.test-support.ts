@@ -45,19 +45,6 @@ export const recoveryObservationStep = (cwd = process.cwd()) => ({
     ),
   ],
 });
-export const recoveryCleanupStep = () => ({
-  name: "recovery-artifact-cleanup",
-  command: "openclaw update cleanup",
-  cwd: "",
-  durationMs: expect.any(Number),
-  exitCode: 0,
-  // The summary comes first; one line per removed or kept item follows.
-  diagnostics: expect.arrayContaining([
-    expect.stringMatching(
-      /^Update backup cleanup removed [1-9]\d* items? \([1-9]\d* logical bytes, .+\)\./,
-    ),
-  ]),
-});
 
 export function registerForegroundFailureRecoveryTests(deps: {
   setupUpdatedRootRefresh: (params: { admitMutation: false }) => { root: string };
@@ -112,8 +99,8 @@ export function registerForegroundFailureRecoveryTests(deps: {
               { check: "update", code: "update-failed" },
             ],
           }),
+          // The update never reached its first state change, so it copied and removed nothing.
           expect.objectContaining({ name: "gateway recovery observation", exitCode: 0 }),
-          ...(handoff === undefined ? [recoveryCleanupStep()] : []),
         ],
       });
       expect(deps.updateNpmInstalledPlugins).not.toHaveBeenCalled();
