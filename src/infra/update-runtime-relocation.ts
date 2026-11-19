@@ -7,6 +7,13 @@ import { parseBunCliLauncher, renderBunCliLauncher } from "../../scripts/lib/bun
 import { ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { hasErrnoCode } from "./errors.js";
 import { isPathInside } from "./path-guards.js";
+import {
+  hasInnerExpansion,
+  joinLeadingExpansion,
+  readShellLauncherWords,
+  rewriteShellLauncher,
+  splitLeadingExpansion,
+} from "./update-launcher-shell.js";
 import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 
 export type RuntimeRelocation = {
@@ -21,72 +28,30 @@ type PreparedRuntimeRelocations = {
 };
 type RuntimeRelocations = readonly RuntimeRelocation[] | PreparedRuntimeRelocations;
 
-// Older pnpm shims write `"$basedir/target"`; current ones (seen from 11.28 and 12.21)
-// write `"$basedir"/'target'`, a single-quoted shell word where `'` is spelled `'\''`.
-const launcherRelativePath =
-  /(\$(?:basedir_abs|basedir_win|basedir)(?:"[/\\]'|[/\\])|%~dp0\\)([^"\r\n]+)/gu;
-const ESCAPED_QUOTE = "'\\''";
+// Windows cmd-shim (`%~dp0\target`) and PowerShell (`$basedir/target`) references.
+const windowsLauncherRelativePath =
+  /(\$(?:basedir_abs|basedir_win|basedir)[/\\]|%~dp0\\)([^"\r\n]+)/gu;
+const SHELL_BASEDIR = new Set(["basedir", "basedir_abs", "basedir_win"]);
 
-/** Split a matched reference into its decoded directory-relative target and the text after it. */
-function splitLauncherReference(prefix: string, reference: string): [string, string] {
-  if (!prefix.endsWith("'")) {
-    return [reference, ""];
-  }
-  let target = "";
-  for (let index = 0; index < reference.length;) {
-    const quote = reference.indexOf("'", index);
-    if (quote < 0) {
-      return [reference, ""];
-    }
-    target += reference.slice(index, quote);
-    if (!reference.startsWith(ESCAPED_QUOTE, quote)) {
-      return [target, reference.slice(quote)];
-    }
-    target += "'";
-    index = quote + ESCAPED_QUOTE.length;
-  }
-  return [reference, ""];
+function isWindowsLauncher(file: string): boolean {
+  return /\.(?:cmd|ps1)$/iu.test(file);
 }
 
-/**
- * Replace an absolute path prefix, spelling a destination `'` as `'\''` where the
- * occurrence sits inside a single-quoted shell word (pnpm's NODE_PATH export).
- */
-function replaceShellPath(content: string, source: string, destination: string): string {
-  if (!destination.includes("'")) {
-    return content.replaceAll(source, destination);
+/** Directory-relative targets of `$basedir...` words in a POSIX shell launcher. */
+function readShellRelativeTargets(content: string): string[] {
+  const targets: string[] = [];
+  for (const word of readShellLauncherWords(content)) {
+    const leading = splitLeadingExpansion(word.value);
+    if (
+      leading &&
+      SHELL_BASEDIR.has(leading.name) &&
+      leading.rest.startsWith("/") &&
+      !hasInnerExpansion(leading.rest)
+    ) {
+      targets.push(leading.rest.slice(1));
+    }
   }
-  return content
-    .split("\n")
-    .map((line) => {
-      let result = "";
-      let quoted = false;
-      for (let index = 0; index < line.length;) {
-        if (!line.startsWith("#") && line.startsWith(source, index)) {
-          result += quoted ? destination.replaceAll("'", ESCAPED_QUOTE) : destination;
-          index += source.length;
-          continue;
-        }
-        if (line[index] === "\\" && !quoted) {
-          result += line.slice(index, index + 2);
-          index += 2;
-          continue;
-        }
-        if (line[index] === "'") {
-          quoted = !quoted;
-        }
-        result += line[index];
-        index += 1;
-      }
-      // Comments (the cmd-shim-target record) keep the literal path.
-      return line.startsWith("#") ? line.replaceAll(source, destination) : result;
-    })
-    .join("\n");
-}
-
-/** Encode a relative target for the reference form it came from. */
-function encodeLauncherReference(prefix: string, target: string): string {
-  return prefix.endsWith("'") ? target.replaceAll("'", ESCAPED_QUOTE) : target;
+  return targets;
 }
 
 /** The entry paths a launcher file executes, resolved the way its shell resolves them. */
@@ -97,15 +62,20 @@ export async function resolveRuntimeLauncherTargets(
 ): Promise<string[]> {
   const content = knownContent ?? (await fs.readFile(file, "utf8"));
   const bunLauncher = parseBunCliLauncher(content);
+  if (bunLauncher) {
+    return [bunLauncher.entryPath];
+  }
   const base = content.includes("$basedir_abs")
     ? await fs.realpath(path.dirname(file))
     : path.dirname(file);
-  return bunLauncher
-    ? [bunLauncher.entryPath]
-    : [...content.matchAll(launcherRelativePath)]
-        .map((match) => splitLauncherReference(match[1]!, match[2]!)[0].replaceAll("\\", path.sep))
-        .filter((relative) => path.basename(relative) === entryName && !/[$%]/u.test(relative))
-        .map((relative) => path.resolve(base, relative));
+  const relatives = isWindowsLauncher(file)
+    ? [...content.matchAll(windowsLauncherRelativePath)]
+        .map((match) => match[2]!.replaceAll("\\", path.sep))
+        .filter((relative) => !/[$%]/u.test(relative))
+    : readShellRelativeTargets(content);
+  return relatives
+    .filter((relative) => path.basename(relative) === entryName)
+    .map((relative) => path.resolve(base, relative));
 }
 
 /** Check executable references, not cmd-shim-target metadata that may already be correct. */
@@ -261,7 +231,7 @@ export async function relocateRuntimeLauncher(
       entryPath: relocateRuntimePath(bunLauncher.entryPath, prepared),
     });
   } else {
-    // pnpm cmd-shim uses these directory-relative references on sh, cmd and PowerShell.
+    // pnpm cmd-shim uses directory-relative references on sh, cmd and PowerShell.
     // Resolve them before changing the directory; absolute store/runtime paths stay external.
     const sourceDir = path.dirname(sourceFile);
     const destinationDir = path.dirname(destinationFile);
@@ -269,34 +239,71 @@ export async function relocateRuntimeLauncher(
     const shellBase = original.includes("$basedir_abs")
       ? await canonicalPathFromExistingAncestor(destinationDir)
       : destinationDir;
-    content = original.replace(launcherRelativePath, (match, prefix: string, reference: string) => {
-      const [relative, rest] = splitLauncherReference(prefix, reference);
-      if (/[$%]/u.test(relative)) {
-        return match;
-      }
-      const destinationBase = prefix.startsWith("$basedir") ? shellBase : destinationDir;
-      const sourceTarget = path.resolve(sourceDir, relative.replaceAll("\\", path.sep));
+    const relocateRelative = (relative: string, destinationBase: string) => {
+      const sourceTarget = path.resolve(sourceDir, relative);
       const target = isPathInside(sourceDir, sourceTarget)
         ? path.resolve(destinationBase, path.relative(sourceDir, sourceTarget))
         : relocateRuntimePath(sourceTarget, prepared);
-      const replacement = path.relative(destinationBase, target);
-      return `${prefix}${prefix.startsWith("%") ? replacement.replaceAll("/", "\\") : encodeLauncherReference(prefix, replacement.replaceAll("\\", "/"))}${rest}`;
-    });
-    for (const relocation of prepared.rules) {
-      for (const sourceRoot of [relocation.sourceRoot, ...(relocation.sourceAliases ?? [])]) {
-        // NODE_PATH and the shim's target comment can carry absolute project paths.
-        content = replaceShellPath(
-          content,
-          `${sourceRoot}${path.sep}`,
-          `${relocation.destinationRoot}${path.sep}`,
-        );
-        if (path.sep === "\\") {
-          content = content.replaceAll(
-            `${sourceRoot.replaceAll("\\", "/")}/`,
-            `${relocation.destinationRoot.replaceAll("\\", "/")}/`,
+      return path.relative(destinationBase, target);
+    };
+    // Windows launchers can also spell project paths with forward slashes.
+    const relocateAbsolute = (value: string, forwardSlashes = false) => {
+      let next = value;
+      const spell = (root: string) => (forwardSlashes ? root.replaceAll("\\", "/") : root);
+      const separator = forwardSlashes ? "/" : path.sep;
+      for (const relocation of prepared.rules) {
+        for (const sourceRoot of [relocation.sourceRoot, ...(relocation.sourceAliases ?? [])]) {
+          next = next.replaceAll(
+            `${spell(sourceRoot)}${separator}`,
+            `${spell(relocation.destinationRoot)}${separator}`,
           );
         }
       }
+      return next;
+    };
+    if (isWindowsLauncher(destinationFile) || isWindowsLauncher(file)) {
+      content = original.replace(
+        windowsLauncherRelativePath,
+        (match, prefix: string, relative: string) => {
+          if (/[$%]/u.test(relative)) {
+            return match;
+          }
+          const destinationBase = prefix.startsWith("$basedir") ? shellBase : destinationDir;
+          const replacement = relocateRelative(
+            relative.replaceAll("\\", path.sep),
+            destinationBase,
+          );
+          return `${prefix}${prefix.startsWith("%") ? replacement.replaceAll("/", "\\") : replacement.replaceAll("\\", "/")}`;
+        },
+      );
+      content = relocateAbsolute(content);
+      if (path.sep === "\\") {
+        content = relocateAbsolute(content, true);
+      }
+    } else {
+      // Rewrite each shell word by value, so every quoting form pnpm emits (including
+      // `'\''` for an apostrophe and paths containing `"`, `$` or `\\`) is handled alike.
+      content = rewriteShellLauncher(
+        original,
+        (word) => {
+          const leading = splitLeadingExpansion(word.value);
+          if (
+            leading &&
+            SHELL_BASEDIR.has(leading.name) &&
+            leading.rest.startsWith("/") &&
+            !hasInnerExpansion(leading.rest)
+          ) {
+            const replacement = relocateRelative(leading.rest.slice(1), shellBase);
+            // A POSIX file name may contain `\`; only Windows paths use it as a separator.
+            const posix = path.sep === "\\" ? replacement.replaceAll("\\", "/") : replacement;
+            return joinLeadingExpansion(leading.name, `/${posix}`);
+          }
+          // NODE_PATH and other absolute project paths.
+          return relocateAbsolute(word.value);
+        },
+        // The cmd-shim-target record is a literal path in a comment.
+        (line) => relocateAbsolute(line),
+      );
     }
   }
   if (content !== original) {

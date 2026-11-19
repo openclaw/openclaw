@@ -1404,21 +1404,30 @@ Both pnpm 10's home-level shim and pnpm 11's `bin/` shim are supported, and the
 child PATH includes both locations. The installed updater must contain this fix;
 installing a newer candidate cannot repair an older updater's preflight.
 
-Native pnpm updates also relocate pnpm launcher paths before publishing them,
-including the quoted `"$basedir_abs"/'<target>'` form current pnpm writes. A
-staged launcher that still points into the update stage stops the update before
-the Gateway is stopped. After activation, a published launcher whose target
-does not exist fails the update, and the package transaction restores the
-previous launchers; a launcher format the updater cannot read only produces a
-warning with repair guidance. A pnpm package update also restarts the Gateway on
-the new version even though pnpm moved the package to a new versioned store
-directory. These protections require the installed updater to contain the fix.
+Native pnpm updates also relocate pnpm launcher paths before publishing them.
+Each shell word is rewritten by value, so every quoting form pnpm writes is
+covered, including the quoted `"$basedir_abs"/'<target>'` form and paths that
+contain `'`, `"`, `$`, spaces or backslashes. A staged launcher that still points
+into the update stage stops the update before the Gateway is stopped. After
+activation, a published launcher whose target does not exist fails the update,
+and the package transaction restores the previous launchers. A launcher format
+the updater cannot read only produces a warning with repair guidance. A pnpm
+package update also restarts the Gateway on the new version even though pnpm
+moved the package to a new versioned store directory. The updater that is already
+installed runs these steps, so updates driven by 2026.11.4 or 2026.11.5 do not
+get them.
 
-If an older updater left `openclaw` pointing into a missing
-`.openclaw-update-native-*` directory, the new package repairs it: its Doctor
-(which also runs during the update) and Gateway startup rewrite a launcher whose
-`cmd-shim-target` names this installation and whose stage directory is gone. If
-the Gateway is also down and no new code has run yet, reinstall the same version
+When 2026.11.4 or 2026.11.5 updates a pnpm install to a release with this fix,
+it still publishes a launcher that points into its removed stage. The new
+package's Doctor, which runs during that update, repairs the launcher. Both of
+those updaters hand the later update steps to the new package, which restarts
+the Gateway on the new version. In test runs this first hop ended with a working
+CLI and Gateway.
+
+If `openclaw` still points into a missing `.openclaw-update-native-*` directory,
+the new package's Doctor and Gateway startup repair it. They rewrite a launcher
+whose `cmd-shim-target` names this installation and whose stage directory is
+gone. If the Gateway is also down and no new code has run yet, reinstall the same version
 with `pnpm add -g openclaw@<installed-version>` using the same account and global
 directories, then run `openclaw gateway install --force` and
 `openclaw gateway restart`. Back up first and follow the

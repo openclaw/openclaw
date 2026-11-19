@@ -39,9 +39,9 @@ function publishedShim(home: string, recorded: string) {
   ].join("\n");
 }
 
-async function pnpmHome(base: string, globalName = "global") {
-  await fs.mkdir(path.join(base, "pnpm-home"));
-  const home = await fs.realpath(path.join(base, "pnpm-home"));
+async function pnpmHome(base: string, globalName = "global", homeName = "pnpm-home") {
+  await fs.mkdir(path.join(base, homeName), { recursive: true });
+  const home = await fs.realpath(path.join(base, homeName));
   const packageRoot = path.join(home, globalName, GROUP, "node_modules", "openclaw");
   await fs.mkdir(packageRoot, { recursive: true });
   await fs.writeFile(
@@ -49,6 +49,12 @@ async function pnpmHome(base: string, globalName = "global") {
     'console.log("live 2026.11.5", process.env.NODE_PATH ?? "");\n',
   );
   await fs.mkdir(path.join(home, "bin"));
+  // The shim prefers `$basedir/node`; this one reports exactly what the shell passed it.
+  await fs.writeFile(
+    path.join(home, "bin", "node"),
+    `#!/bin/sh\n[ -e "$1" ] || { echo "missing: $1" >&2; exit 1; }\nprintf '%s\\n%s\\n' "$1" "$NODE_PATH"\n`,
+    { mode: 0o755 },
+  );
   const launcher = path.join(home, "bin", "openclaw");
   const recorded = path.join(packageRoot, "openclaw.mjs");
   await fs.writeFile(launcher, publishedShim(home, recorded), { mode: 0o755 });
@@ -56,11 +62,19 @@ async function pnpmHome(base: string, globalName = "global") {
 }
 
 describe.skipIf(process.platform === "win32")("staged launcher repair", () => {
-  it.each(["global", "team's global"])(
-    "rewrites a launcher left pointing at the removed stage to the live install (%s)",
-    async (globalName) =>
+  it.each([
+    ["global", "pnpm-home"],
+    // An apostrophe below the pnpm home: the live target and NODE_PATH need `'\''`.
+    ["team's global", "pnpm-home"],
+    // An apostrophe above it: pnpm spells the stage itself with `'\''` in NODE_PATH.
+    ["global", "team's base/pnpm-home"],
+    // Every character a single-quoted word carries literally.
+    [`odd "dir" $HOME \\ global`, "pnpm-home"],
+  ])(
+    "rewrites a launcher left pointing at the removed stage to the live install (%s under %s)",
+    async (globalName, homeName) =>
       withTestDir({ prefix: "launcher-repair-" }, async (base) => {
-        const { home, packageRoot, launcher } = await pnpmHome(base, globalName);
+        const { home, packageRoot, launcher } = await pnpmHome(base, globalName, homeName);
         await expect(runFile(launcher)).rejects.toThrow();
 
         const { repaired, failed } = await repairPublishedPnpmLaunchers({
@@ -73,18 +87,22 @@ describe.skipIf(process.platform === "win32")("staged launcher repair", () => {
         expect(repaired).toEqual([
           expect.objectContaining({ file: launcher, stage: path.join(home, STAGE) }),
         ]);
-        // The repaired shim still parses as shell, quotes the live path, and runs it.
+        // The repaired shim still parses as shell and hands the exact live paths to node.
         const { stdout } = await runFile(launcher);
-        expect(stdout.trim()).toBe(
-          `live 2026.11.5 ${path.join(home, globalName, GROUP, "node_modules/.pnpm/node_modules")}`,
-        );
+        const live = path.join(home, globalName, GROUP, "node_modules");
+        const [entry, nodePath, end] = stdout.split("\n");
+        expect([path.resolve(entry ?? ""), nodePath, end]).toEqual([
+          path.join(live, "openclaw", "openclaw.mjs"),
+          path.join(live, ".pnpm", "node_modules"),
+          "",
+        ]);
         expect((await fs.stat(launcher)).mode & 0o777).toBe(0o755);
         expect(await fs.readFile(launcher, "utf8")).not.toContain(STAGE);
         // Repaired once; a second pass finds a current launcher and leaves no staging behind.
         await expect(repairStagedRuntimeLauncher(launcher)).resolves.toEqual({
           outcome: "current",
         });
-        expect(await fs.readdir(path.dirname(launcher))).toEqual(["openclaw"]);
+        expect((await fs.readdir(path.dirname(launcher))).toSorted()).toEqual(["node", "openclaw"]);
       }),
   );
 
@@ -124,7 +142,10 @@ describe.skipIf(process.platform === "win32")("staged launcher repair", () => {
       }
       const before = await fs.readFile(launcher, "utf8");
 
-      await expect(repairPublishedPnpmLaunchers({ root, env: {} })).resolves.toEqual({
+      // PNPM_HOME presents the launcher in every case, so each guard must refuse it.
+      await expect(
+        repairPublishedPnpmLaunchers({ root, env: { PNPM_HOME: home } }),
+      ).resolves.toEqual({
         repaired: [],
         failed: [],
       });
