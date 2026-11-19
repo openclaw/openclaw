@@ -227,6 +227,13 @@ suite.define(() => {
         });
         await installMockGateway(page, { awaitInitialRoster: false });
         await page.goto(`${suite.server.baseUrl}settings/notifications`);
+        if (captureUiProof) {
+          const nativeSection = page.locator(".settings-section").filter({
+            has: page.getByRole("heading", { name: "Notifications", exact: true }),
+          });
+          await nativeSection.getByRole("button").waitFor();
+          await page.screenshot({ path: path.join(suite.artifactDir, "native-test-idle.png") });
+        }
         const send = page.getByRole("button", { name: "Send test", exact: true });
         await send.click();
         const pending = page.getByRole("button", { name: "Sending test…", exact: true });

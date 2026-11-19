@@ -16,6 +16,7 @@ afterEach(() => {
 
 it("keeps the sign-in explanation loaded before the proxy stops serving chunks", async () => {
   // The entry module loaded while signed in; subsequent chunk requests are now refused.
+  // mock-isolation: reject late dialog imports to prove the already-loaded explanation survives lost chunk access.
   vi.doMock("./browser-auth-recovery-dialog.tsx", () => {
     throw new Error("Synthetic sign-in dialog chunk unavailable");
   });

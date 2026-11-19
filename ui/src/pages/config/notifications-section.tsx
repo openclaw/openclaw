@@ -165,7 +165,7 @@ function NativeNotificationSection(props: {
               <Icon name={testPending() ? "loader" : "send"} />
               {testPending()
                 ? t("configView.notifications.sendingTest")
-                : t("configView.notifications.testAllBrowsers")}
+                : t("configView.notifications.sendTest")}
             </button>
           ) : (
             <button

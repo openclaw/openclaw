@@ -1,0 +1,3 @@
+# Owning regression for HTTP auth recovery versus stale-chunk document reload.
+# Covers healthy admission, pending/confirmed/dismissed protection, restoration, and disposal.
+58

@@ -4,6 +4,7 @@ import {
   buildControlUiCspHeader,
   computeInlineScriptHashes,
 } from "../../../src/gateway/control-ui-csp.ts";
+import type { StoredDurableComposerDraft } from "../lib/chat/composer-draft-store-codec.ts";
 import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -82,14 +83,67 @@ function historyLayout(element: Element, mobile: boolean) {
   };
 }
 
-async function paste(composer: Locator) {
-  await composer.evaluate((element, text) => {
-    const clipboard = new DataTransfer();
-    clipboard.setData("text/plain", text);
-    element.dispatchEvent(
-      new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: clipboard }),
-    );
-  }, pastedText);
+// Retained drafts can contain attachments made by earlier clients. Seed their
+// persisted shape; current native text paste no longer creates attachments.
+async function seedRetainedPaste(
+  page: Page,
+  text: string,
+  content = pastedText,
+  route = "chat",
+  legacy = false,
+) {
+  const scopeKey =
+    route === "new" ? JSON.stringify(["", "", ""]) : "chat:v3:agent:main:main\u0000agent:main";
+  await waitForCommittedComposerDraft(page, scopeKey, text, 0);
+  const fileName = "pasted-text-123.txt";
+  await page.evaluate(
+    async (seed) => {
+      const once = (target: EventTarget, event: string, run: () => void) =>
+        target.addEventListener(event, run, { once: true });
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("openclaw-control-ui");
+        once(request, "success", () => resolve(request.result));
+        once(request, "error", () =>
+          reject(request.error ?? new Error("Draft database open failed")),
+        );
+      });
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const transaction = database.transaction("composerDrafts", "readwrite");
+          const store = transaction.objectStore("composerDrafts");
+          const request: IDBRequest<StoredDurableComposerDraft[]> = store.getAll();
+          once(request, "success", () => {
+            const draft = request.result.find((record) => record.scopeKey === seed.scopeKey);
+            if (!draft) {
+              transaction.abort();
+              return;
+            }
+            draft.attachments = [
+              {
+                blob: new Blob([seed.content], { type: "text/plain" }),
+                mimeType: "text/plain",
+                fileName: seed.fileName,
+                ...(!seed.legacy ? { origin: "paste" as const } : {}),
+              },
+            ];
+            store.put(draft);
+          });
+          once(transaction, "complete", resolve);
+          for (const event of ["abort", "error"]) {
+            once(transaction, event, () =>
+              reject(transaction.error ?? new Error("Retained draft fixture failed")),
+            );
+          }
+        });
+      } finally {
+        database.close();
+      }
+    },
+    { scopeKey, content, fileName, legacy },
+  );
+  await page.reload();
+  await waitForCommittedComposerDraft(page, scopeKey, text, 1);
+  return fileName;
 }
 
 suite.define(() => {
@@ -213,7 +267,7 @@ suite.define(() => {
     { route: "chat", selector: ".agent-chat__composer-combobox textarea" },
     { route: "new", selector: ".new-session-page__message" },
   ])(
-    "keeps a long native paste inline only in an empty $route composer",
+    "keeps long native pastes inline and restores a retained attachment in the $route composer",
     async ({ route, selector }) => {
       await suite.withPage(contextOptions, async ({ page }) => {
         const endMarker = "End of the attached note.";
@@ -240,6 +294,12 @@ suite.define(() => {
 
         await composer.fill("Keep this draft");
         await page.keyboard.press(nativePasteShortcut);
+        await expect.poll(() => composer.inputValue()).toBe("Keep this draft" + pasteText);
+        expect(
+          await page.locator(".chat-attachments-preview openclaw-chat-pasted-text").count(),
+        ).toBe(0);
+        await composer.fill("Keep this draft");
+        await seedRetainedPaste(page, "Keep this draft", pasteText, route);
         await button(page, pastedTextLabel).waitFor();
         expect(await composer.inputValue()).toBe("Keep this draft");
         if (route === "new") {
@@ -289,7 +349,7 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible" });
       await composer.fill("Keep this draft");
-      await paste(composer);
+      await seedRetainedPaste(page, "Keep this draft");
       const fileName = "launch-preview.html";
       const fileCard = page.locator(".chat-attachment-file__name", { hasText: fileName });
       await page.locator(".agent-chat__file-input").setInputFiles({
@@ -387,7 +447,7 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible" });
       await composer.fill("Review the attachment");
-      await paste(composer);
+      await seedRetainedPaste(page, "Review the attachment");
       await composer.fill("");
       const chip = button(page, pastedTextLabel);
       await chip.focus();
@@ -422,66 +482,16 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible" });
       await composer.fill("Review the attachment");
-      await paste(composer);
-      await composer.fill("");
-      const scopeKey = `chat:v3:${sessionKey}\u0000agent:main`;
-      await waitForCommittedComposerDraft(page, scopeKey, "", 1);
-      const fileName = await page.evaluate(
-        async ({ scopeKey: storedScopeKey, legacy: restoreLegacy }) => {
-          const once = (target: EventTarget, event: string, run: () => void) =>
-            target.addEventListener(event, run, { once: true });
-          const database = await new Promise<IDBDatabase>((resolve, reject) => {
-            const request = indexedDB.open("openclaw-control-ui");
-            once(request, "success", () => resolve(request.result));
-            once(request, "error", () =>
-              reject(request.error ?? new Error("Could not open composer draft database")),
-            );
-          });
-          try {
-            return await new Promise<string>((resolve, reject) => {
-              const transaction = database.transaction(
-                "composerDrafts",
-                restoreLegacy ? "readwrite" : "readonly",
-              );
-              const store = transaction.objectStore("composerDrafts");
-              const request: IDBRequest<
-                Array<{
-                  scopeKey: string;
-                  attachments: Array<{ fileName: string; origin?: string }>;
-                }>
-              > = store.getAll();
-              let savedFileName: string | undefined;
-              once(request, "success", () => {
-                const draft = request.result.find((record) => record.scopeKey === storedScopeKey);
-                const attachment = draft?.attachments[0];
-                if (!draft || !attachment) {
-                  transaction.abort();
-                  return;
-                }
-                savedFileName = attachment.fileName;
-                if (restoreLegacy) {
-                  // Reproduce the persisted shape written before origin metadata existed.
-                  delete attachment.origin;
-                  store.put(draft);
-                }
-              });
-              once(transaction, "complete", () =>
-                savedFileName
-                  ? resolve(savedFileName)
-                  : reject(new Error("Missing persisted attachment")),
-              );
-              for (const event of ["abort", "error"]) {
-                once(transaction, event, () =>
-                  reject(transaction.error ?? new Error("Draft fixture transaction failed")),
-                );
-              }
-            });
-          } finally {
-            database.close();
-          }
-        },
-        { scopeKey, legacy },
+      const fileName = await seedRetainedPaste(
+        page,
+        "Review the attachment",
+        pastedText,
+        "chat",
+        legacy,
       );
+      await composer.fill("");
+      const scopeKey = "chat:v3:" + sessionKey + "\u0000agent:main";
+      await waitForCommittedComposerDraft(page, scopeKey, "", 1);
       await page.reload();
       const chip = button(page, pastedTextLabel);
       await chip.click();
