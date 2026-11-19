@@ -87,6 +87,7 @@ export async function retainCanvasWidgetRead(
       scope,
       { kind: "canvas-widget", docId },
       invocation.signal,
+      "canvas-widget",
     );
     read.assertCurrent();
     if (

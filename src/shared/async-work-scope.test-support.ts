@@ -1,5 +1,5 @@
 import { onTestFinished, vi, type Mock } from "vitest";
-import { AsyncWorkScope } from "./async-work-scope.js";
+import { AsyncWorkScope, runOutsideAsyncWorkScope } from "./async-work-scope.js";
 
 let observation: { spy: Mock<AsyncWorkScope["run"]>; subscribers: number } | undefined;
 
@@ -34,7 +34,10 @@ export function observeAsyncWorkScopeRuns() {
 
 export function createDeferredWorkTracker(scope: AsyncWorkScope) {
   return <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
-    const operation = Promise.resolve().then(() => run(scope.signal));
+    // The explicit fixture lifetime must not inherit the startup scope it can later drain.
+    const operation = runOutsideAsyncWorkScope(() =>
+      Promise.resolve().then(() => run(scope.signal)),
+    );
     return scope.track(() => operation);
   };
 }

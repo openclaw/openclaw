@@ -704,8 +704,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             reconnectAttempts: preserveRestartAttempts ? (restarts.get(rKey)?.attempts ?? 0) : 0,
           });
           const task = Promise.resolve().then(async () => {
-            if (optsValue.deferAccountStartUntil) {
-              await waitForDeferredAccountStart(optsValue.deferAccountStartUntil, abort.signal);
+            if (opts.deferStartupAccountStartsUntil) {
+              await waitForDeferredAccountStart(opts.deferStartupAccountStartsUntil, abort.signal);
             } else if (startupTrace) {
               await waitForChannelStartupHandoff();
             }
@@ -1254,15 +1254,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     withRegistry((registry) => stopChannelInRegistry(registry, ...args));
 
   const startChannelsWithOptions = async (startOptions: StartChannelOptions = {}) => {
-    const deferAccountStartUntil = opts.deferStartupAccountStartsUntil;
     await Promise.all(
       listLoadedChannelPluginsForRegistry(getPluginRegistry()).map(async (plugin) => {
         try {
           await measureStartup(`channels.${plugin.id}.start`, () =>
             startChannelInternal(plugin.id, undefined, {
               reason: "startup",
+              preserveManualStop: opts.deferStartupAccountStartsUntil !== undefined,
               ...startOptions,
-              ...(deferAccountStartUntil ? { deferAccountStartUntil } : {}),
             }),
           );
         } catch (err) {

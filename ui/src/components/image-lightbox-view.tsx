@@ -182,7 +182,7 @@ function LightboxImageDownload(props: {
     } catch {
       // An action can outlive the view, including a reconnect of its host.
       if (button.isConnected) {
-        showToast({ message: t("chat.imageLightbox.downloadFailed") });
+        showToast({ severity: "error", message: t("chat.imageLightbox.downloadFailed") });
       }
     }
   });

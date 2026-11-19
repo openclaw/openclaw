@@ -208,14 +208,10 @@ it.each([
         }
         const archived = loadSessionEntry(target);
         expect(archived).toMatchObject(archivedEntry);
-        if (kind === "native reset") {
-          expect(projection.sharingTarget(query)).toBeNull();
-        } else {
-          expect(projection.sharingTarget(query)?.entry).toMatchObject({
-            sessionId,
-            archivedAt: archived?.archivedAt,
-          });
-        }
+        expect(projection.sharingTarget(query)?.entry).toMatchObject({
+          ...archivedEntry,
+          archivedAt: archived?.archivedAt,
+        });
         if (changesIdentity) {
           expect(captured).toBeDefined();
           expect(projection.isCurrent(captured!)).toBe(false);

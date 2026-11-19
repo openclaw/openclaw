@@ -6,7 +6,7 @@ import { createSessionActorMemoryMessages } from "./session-actor-memory-message
 import type { SessionActorMemoryStorageContext } from "./session-actor-memory-storage-context.js";
 import type { SessionActorMemoryTurnReads } from "./session-actor-memory-turn-contract.js";
 import {
-  buildRestartRecoveryExpectedState,
+  buildSessionTranscriptTurnExpectedState,
   prepareSessionTranscriptTurnEntry,
 } from "./session-transcript-turn-state.js";
 import type { SessionTurnPlan } from "./session-turn.types.js";
@@ -86,7 +86,7 @@ export function prepareSessionActorMemoryTurn(
     version: events.version(),
     expectedSessionState:
       expectedEntry &&
-      buildRestartRecoveryExpectedState(
+      buildSessionTranscriptTurnExpectedState(
         selected?.entry ?? { sessionId: scope.sessionId, updatedAt: 0 },
       ),
     goalId:

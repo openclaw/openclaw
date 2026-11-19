@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { activityPersonFromPath } from "../../app-route-paths.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
@@ -16,6 +17,19 @@ import {
 } from "./session-activity.ts";
 
 const { active, listing, setup } = useSessionActivityControllerFixture();
+
+it("discards retained activity after access is revoked and preserves the explicit denial", async () => {
+  const { client, request, controller } = setup();
+  const query = { personId: "person", time: "all" as const, query: "" };
+  await controller.load(client, query);
+  expect(controller.result?.sessions).toHaveLength(1);
+  const message =
+    "Other people's activity is private. You can still open sessions shared with you.";
+  request.mockRejectedValueOnce(new GatewayRequestError({ code: "FORBIDDEN", message }));
+  await controller.load(client, query, "refresh");
+  expect(controller.result).toBeUndefined();
+  expect(controller.error).toBe(message);
+});
 
 it("orders refreshed membership by the activity timestamps actually displayed", () => {
   const provenance = createSessionRowProvenance();
@@ -138,6 +152,18 @@ describe("session activity projection", () => {
       canonicalSessionActivityLocation(legacy, "abcdef12-1234-4123-8123-123456789abc", "Ada", "/ui")
         ?.pathname,
     ).toBe("/ui/activity/ada-abcdef12123441238123123456789abc");
+  });
+
+  it("keeps an unknown Everyone count distinct from accepted zero and page fallbacks", () => {
+    expect(projectSessionActivity(undefined).timeCount).toBeUndefined();
+    expect(projectSessionActivity({ ...result([]), peopleSessionCount: 0 }).timeCount).toBe(0);
+    expect(projectSessionActivity({ ...result([]), peopleSessionCount: undefined }).timeCount).toBe(
+      0,
+    );
+    expect(
+      projectSessionActivity({ ...result([active]), peopleSessionCount: undefined }).timeCount,
+    ).toBe(1);
+    expect(projectSessionActivity(result([])).timeCount).toBe(15);
   });
 
   it("groups the server page without treating its preview or session clock as personal history", () => {

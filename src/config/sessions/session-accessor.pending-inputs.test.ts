@@ -49,6 +49,7 @@ import {
 } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import { readSessionPendingInputReceiptsInWorker as listSessionPendingInputReceipts } from "./session-pending-input-receipts.js";
+import { dismissRetiredSessionPendingInputs } from "./session-pending-input-withdrawal.js";
 import {
   waitForSessionTranscriptIndexReconcile,
   waitForSessionTranscriptProjection,
@@ -68,6 +69,12 @@ const custodyFault = useSqliteWorkerFault([
     match: /^update session_pending_inputs\b/u,
     sql: `CREATE TEMP TRIGGER reject_collect_consume BEFORE UPDATE OF consumed_event_id ON main.session_pending_inputs
       WHEN OLD.run_id = 'atomic-b' BEGIN SELECT RAISE(ABORT, 'collect consume failed'); END`,
+  },
+  {
+    name: "reject_pending_finish",
+    match: /^update session_pending_inputs\b/u,
+    sql: `CREATE TEMP TRIGGER reject_pending_finish BEFORE UPDATE OF state ON main.session_pending_inputs
+      BEGIN SELECT RAISE(ABORT, 'finish failed'); END`,
   },
 ]);
 
@@ -154,7 +161,7 @@ beforeEach(async () => {
 afterEach(async () => {
   const retained = receipts.splice(0);
   for (const receipt of retained) {
-    receipt.finish("interrupted");
+    receipt.finish("interrupted", "failed");
   }
   await Promise.allSettled(retained.map(async (receipt) => receipt.settled?.()));
   await closeOpenClawAgentDatabasesAsync();
@@ -197,16 +204,16 @@ it("keeps accepted input outside the active transcript and applies its hook once
   expect(committedReplay.message).toEqual(receipt.message);
   expect(bindSessionPendingInputSources([committedReplay], message("recollected"))).toBeUndefined();
   expect(prepare).toHaveBeenCalledOnce();
-  receipt.finish("interrupted");
+  receipt.finish("interrupted", "failed");
   expect(() => receipt.run(() => {})).toThrow("ownership ended");
   const readForeign = await prepareForeignLiveSessionPendingInputEntries(scope());
-  expect(readForeign()).toEqual(new Map([[receipt.inputId, receipt.message.idempotencyKey]]));
-  committedReplay.finish("interrupted");
+  expect(await readForeign()).toEqual(new Map([[receipt.inputId, receipt.message.idempotencyKey]]));
+  committedReplay.finish("interrupted", "failed");
   await committedReplay.settled?.();
-  expect(readForeign()).toEqual(new Map());
+  expect(await readForeign()).toEqual(new Map());
 });
 
-it("keeps requester facts with exact accepted custody through projection edits and restart replay", async () => {
+it("keeps requester facts with exact accepted custody through projection edits", async () => {
   const requesterOrigin = {
     sessionKey: "agent:research:telegram:group:requesters",
     messageProvider: "telegram",
@@ -222,23 +229,10 @@ it("keeps requester facts with exact accepted custody through projection edits a
   expect(Object.isFrozen(captured)).toBe(true);
   expect(captured?.sessionKey).toBe(requesterOrigin.sessionKey);
   expect(readSessionPendingInputRequesterOrigin({ ...receipt })).toBeUndefined();
-  receipt.finish("interrupted");
+  receipt.finish("interrupted", "failed");
   await receipt.settled?.();
-  rotateAgentEventLifecycleGeneration();
-  const recovered = await stage("requester-custody", {
-    message: input,
-    trackCompletion: true,
-  });
-  expect(readSessionPendingInputRequesterOrigin(recovered)).toMatchObject(requesterOrigin);
-  await expect(
-    stage("requester-custody", {
-      message: {
-        ...input,
-        __openclaw: { requesterOrigin: { ...requesterOrigin, senderId: "alice" } },
-      },
-      trackCompletion: true,
-    }),
-  ).rejects.toThrow("conflicts");
+  expect(() => receipt.run(() => {})).toThrow("ownership ended");
+  expect(() => readSessionPendingInputRequesterOrigin(receipt)).toThrow("ownership ended");
 });
 
 it("mirrors a correlated input to another session without borrowing or consuming source custody", async () => {
@@ -286,7 +280,7 @@ it.each([
     if (disposition === "collected-consumed") {
       await promote(bind([receipt], "versioned-collect"));
     }
-    receipt.finish("interrupted");
+    receipt.finish("interrupted", "failed");
     await receipt.settled?.();
     expect(() => readSessionPendingInputRequesterOrigin(receipt)).toThrow(
       SessionPendingInputCustodyError,
@@ -313,48 +307,33 @@ it.each([
     expect(() => receipt.run(execute)).toThrow();
     expect(readStoredSource()).toEqual(storedSource);
     expect(await readTranscript()).toEqual(transcript);
-    expect((await pendingInputs()).total).toBe(disposition === "interrupted" ? 1 : 0);
+    expect((await pendingInputs()).total).toBe(0);
 
     if (!restart) {
       await expect(stage(runId, { requestFingerprint })).rejects.toThrow("ownership ended");
     }
+    if (disposition === "interrupted") {
+      await expect(stage(runId, { requestFingerprint, retryCancelled: true })).rejects.toThrow(
+        "ownership ended",
+      );
+      expect(readStoredSource()).toEqual(storedSource);
+      expect(prepare).not.toHaveBeenCalled();
+      expect(execute).not.toHaveBeenCalled();
+      expect(await pendingInputs()).toEqual({ total: 0, items: [] });
+      return;
+    }
     const renewed = await stage(runId, {
       requestFingerprint,
-      retryInterrupted: !restart,
       prepareMessageAfterIdempotencyCheck: prepare,
     });
     expect(renewed.inputId).toBe(receipt.inputId);
     expect(renewed.message).toEqual(receipt.message);
     expect(prepare).not.toHaveBeenCalled();
-    if (disposition === "collected-consumed") {
-      expect(renewed.state).toBe("consumed");
-      expect(() => renewed.run(execute)).toThrow("already been consumed");
-      expect(readStoredSource()).toEqual(storedSource);
-      expect(await readTranscript()).toEqual(transcript);
-    } else {
-      expect(renewed.state).toBe("queued");
-      const appended = await renewed.run(async () => {
-        execute();
-        return append(renewed.message);
-      });
-      expect(appended).toMatchObject({
-        ...appendResult(receipt.inputId),
-        message: receipt.message,
-      });
-      const committed = await readTranscript();
-      expect(
-        committed.filter(
-          (event) =>
-            typeof event === "object" &&
-            event !== null &&
-            "type" in event &&
-            event.type === "message",
-        ),
-      ).toEqual([expect.objectContaining({ id: receipt.inputId, message: receipt.message })]);
-      expect(await promote(renewed)).toMatchObject(appendResult(receipt.inputId, false));
-      expect(await readTranscript()).toEqual(committed);
-    }
-    expect(execute).toHaveBeenCalledTimes(disposition === "interrupted" ? 1 : 0);
+    expect(renewed.state).toBe("consumed");
+    expect(() => renewed.run(execute)).toThrow("already been consumed");
+    expect(readStoredSource()).toEqual(storedSource);
+    expect(await readTranscript()).toEqual(transcript);
+    expect(execute).not.toHaveBeenCalled();
     expect(await pendingInputs()).toEqual({ total: 0, items: [] });
   },
 );
@@ -370,6 +349,97 @@ it("rolls transcript promotion and custody consumption back together", async () 
   expect(await promote(receipt)).toMatchObject(appendResult(receipt.inputId));
   expect(await readPending(receipt.inputId)).toBeUndefined();
 });
+
+it("lets a channel redelivery reopen its own cancelled attempt under a fresh run", async () => {
+  const acceptedMessage: PersistedUserTurnMessage = {
+    role: "user",
+    content: "fix it please",
+    timestamp: 100,
+    idempotencyKey: "channel-user:v1:redelivered-source-turn",
+  };
+  const first = await stage("ingress-attempt-1", {
+    message: acceptedMessage,
+    reclaimCancelledSourceTurn: true,
+  });
+  const before = await readTranscript();
+  first.finish("cancelled", "failed");
+  await first.settled?.();
+  await expect(
+    stage("ingress-attempt-1", { message: acceptedMessage, retryCancelled: true }),
+  ).rejects.toThrow("ownership ended");
+  await expect(stage("ingress-attempt-2", { message: acceptedMessage })).rejects.toThrow(
+    "idempotency key conflicts",
+  );
+  await expect(
+    stage("ingress-attempt-2", {
+      message: { ...acceptedMessage, content: "different bytes" },
+      reclaimCancelledSourceTurn: true,
+    }),
+  ).rejects.toThrow("idempotency key conflicts");
+  const renewed = await stage("ingress-attempt-2", {
+    message: acceptedMessage,
+    reclaimCancelledSourceTurn: true,
+  });
+  expect(renewed.inputId).toBe(first.inputId);
+  expect(await readPending(first.inputId)).toMatchObject({ state: "queued" });
+  await expect(
+    stage("ingress-attempt-3", { message: acceptedMessage, reclaimCancelledSourceTurn: true }),
+  ).rejects.toThrow("idempotency key conflicts");
+  expect(await readTranscript()).toEqual(before);
+  await promote(renewed);
+  expect(await readPending(first.inputId)).toBeUndefined();
+});
+
+it.each(["stopped", "dismissed"] as const)(
+  "never reopens a source turn the user %s",
+  async (retirement) => {
+    const sourceTurn: PersistedUserTurnMessage = {
+      role: "user",
+      content: `${retirement} source turn`,
+      timestamp: 100,
+      idempotencyKey: `channel-user:v1:${retirement}-source-turn`,
+    };
+    const first = await stage(`${retirement}-attempt-1`, {
+      message: sourceTurn,
+      reclaimCancelledSourceTurn: true,
+    });
+    if (retirement === "stopped") {
+      first.finish("cancelled", "user-stop");
+      await first.settled?.();
+    } else {
+      first.finish("cancelled", "failed");
+      await first.settled?.();
+      await dismissRetiredSessionPendingInputs(scope(), [first.inputId], () => {});
+    }
+    const transcript = await readTranscript();
+    const endCause = retirement === "stopped" ? "user-stop" : "delete";
+    const retainedMessage =
+      retirement === "stopped" ? sourceTurn : { ...sourceTurn, display: false };
+    expect(await readPending(first.inputId)).toMatchObject({
+      state: "cancelled",
+      endCause,
+      message: retainedMessage,
+    });
+    expect(
+      database()
+        .db.prepare("SELECT end_cause, message_json FROM session_pending_inputs WHERE input_id = ?")
+        .get(first.inputId),
+    ).toEqual({ end_cause: endCause, message_json: JSON.stringify(retainedMessage) });
+    await expect(
+      stage(`${retirement}-attempt-1`, { message: sourceTurn, retryCancelled: true }),
+    ).rejects.toThrow("ownership ended");
+
+    await expect(
+      stage(`${retirement}-attempt-2`, { message: sourceTurn, reclaimCancelledSourceTurn: true }),
+    ).rejects.toThrow("idempotency key conflicts");
+    expect(await readTranscript()).toEqual(transcript);
+    expect(
+      database()
+        .db.prepare("SELECT run_id, state FROM session_pending_inputs WHERE input_id = ?")
+        .get(first.inputId),
+    ).toEqual({ run_id: `${retirement}-attempt-1`, state: "cancelled" });
+  },
+);
 
 it("moves transcript custody only after an authorized relocation commits", async () => {
   const receipt = await stage("relocation");
@@ -398,7 +468,7 @@ it("moves transcript custody only after an authorized relocation commits", async
 
   expect(move(receipt.inputId, "relocated-user")).toMatchObject(nativeResult("relocated-user"));
   expect(() => move(receipt.inputId, "stale-source-copy")).toThrow("does not match");
-  receipt.finish("cancelled");
+  receipt.finish("cancelled", "failed");
   expect(appendCopy("relocated-user", "closed-owner-copy")).toMatchObject(
     nativeResult("closed-owner-copy"),
   );
@@ -555,7 +625,7 @@ it("revalidates every collected source after an await and rejects copied receipt
   expect(bindSessionPendingInputSources([{ ...first }], message("forged-c"))).toBeUndefined();
   const promotion = aggregate.run(async () => {
     await Promise.resolve();
-    first.finish("cancelled");
+    first.finish("cancelled", "failed");
     return append(aggregate.message);
   });
   await expect(promotion).rejects.toThrow("custody ended");
@@ -637,24 +707,42 @@ it("binds lazy recorder collection to approved sources and reports consumed sour
       }),
     ).toThrow("already been consumed");
   } finally {
-    aggregate.finishPendingInput?.("interrupted");
+    aggregate.finishPendingInput?.("interrupted", "failed");
     await aggregate.waitForPendingInputSettlement?.();
   }
 });
 
 it.each(["cancelled", "interrupted"] as const)(
-  "retains %s input visibly without permitting the old run to execute",
+  "preserves %s input without permitting the old run to execute",
   async (disposition) => {
     const receipt = await stage("closed");
-    receipt.finish(disposition);
+    receipt.finish(disposition, "failed");
     await receipt.settled?.();
-    expect((await readPending(receipt.inputId))?.state).toBe(disposition);
+    expect((await readPending(receipt.inputId))?.state).toBe(
+      disposition === "cancelled" ? "cancelled" : undefined,
+    );
+    expect(storedInputs()).toMatchObject([
+      { state: disposition, message_json: JSON.stringify(receipt.message) },
+    ]);
     expect(() => promote(receipt)).toThrow("ownership ended");
     await expect(stage("closed")).rejects.toThrow("submit a new turn");
     await expect(append(receipt.message)).rejects.toThrow("outside its admitted turn");
     expect(await promote(await stage("new-authorized-run"))).toMatchObject({ appended: true });
   },
 );
+
+it("does not let a fresh send reattach queued input after terminal settlement failed", async () => {
+  const receipt = await stage("failed-settlement");
+  custodyFault.enable(2);
+  receipt.finish("cancelled", "revoked");
+  await expect(receipt.settled?.()).rejects.toThrow("finish failed");
+  custodyFault.disable();
+
+  expect(await readPending(receipt.inputId)).toMatchObject({ state: "queued" });
+  expect(() => promote(receipt)).toThrow("ownership ended");
+  await expect(stage("failed-settlement")).rejects.toThrow("Pending input ownership ended");
+  expect(await readTranscript()).toEqual([]);
+});
 
 it("fences authority loss after an await without overriding the owner's terminal disposition", async () => {
   let current = true;
@@ -674,7 +762,7 @@ it("fences authority loss after an await without overriding the owner's terminal
   ).rejects.toThrow("run authority closed");
   await expect(stage("authority")).rejects.toThrow("already admitted");
   expect((await pendingInputs()).items[0]?.state).toBe("queued");
-  receipt.finish("cancelled");
+  receipt.finish("cancelled", "failed");
   await receipt.settled?.();
   expect((await pendingInputs()).items[0]?.state).toBe("cancelled");
   expect(database().db.prepare("SELECT state FROM session_pending_inputs").get()).toEqual({
@@ -691,7 +779,7 @@ it.each(["receipt-entry", "persistence-only"] as const)(
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const retained = await readPending(receipt.inputId);
-    expect(retained?.state).toBe("interrupted");
+    expect(retained?.state).toBe("cancelled");
     expect(await readTranscript()).toEqual([]);
     if (entry === "receipt-entry") {
       const execute = vi.fn();
@@ -713,7 +801,7 @@ it("allows terminal mirroring to read a promoted user after cancellation without
   await receipt.run(async () => {
     await append(receipt.message);
     const before = await readTranscript();
-    receipt.finish("cancelled");
+    receipt.finish("cancelled", "failed");
     expect(await append(receipt.message)).toMatchObject({ appended: false });
     expect(await readTranscript()).toEqual(before);
   });
@@ -737,7 +825,7 @@ it.each(["deleted", "rebound", "replaced"] as const)(
           entryId: "rewritten-user",
         });
       }
-      receipt.finish("cancelled");
+      receipt.finish("cancelled", "failed");
       const before = await readTranscript();
       await expect(append(receipt.message)).rejects.toThrow(
         change === "deleted"
@@ -768,7 +856,7 @@ it.each([false, true])(
       expect(replacement.effectiveParentId).toBeNull();
       expect(anchor(receipt.inputId)).toBeUndefined();
       expect(anchor(replacementId)).toBeUndefined();
-      receipt.finish("cancelled");
+      receipt.finish("cancelled", "failed");
       await expect(append(receipt.message)).rejects.toThrow("no longer active");
     });
     await waitForSessionTranscriptProjection(scope());
@@ -822,13 +910,13 @@ it.each([
         toDatabaseOptions(resolveSqliteScope(target)),
       );
     }
-    expect(await listSessionPendingInputs(target)).toMatchObject(
-      destination === "same"
-        ? pendingPage([receipt], "interrupted")
-        : consumed
-          ? { total: 0, items: [] }
-          : { total: 1, items: [{ state: "interrupted", message: receipt.message }] },
-    );
+    expect(await listSessionPendingInputs(target)).toEqual({ total: 0, items: [] });
+    const copied = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(target)));
+    expect(
+      copied.db
+        .prepare("SELECT message_json FROM session_pending_inputs WHERE session_key = ?")
+        .get(target.sessionKey),
+    ).toEqual({ message_json: JSON.stringify(receipt.message) });
     if (consumed) {
       const duplicate = await stageSessionPendingInput(target, {
         runId: "repair",
@@ -850,7 +938,7 @@ it("reconciles reset input without host reads and removes custody on logical del
   const receipt = await stage("reset", {
     message: message("reset", "accepted input ".repeat(4096)),
   });
-  const second = await stage("reset-second");
+  await stage("reset-second");
   expect((await pendingInputs()).items.map((input) => input.state)).toEqual(["queued", "queued"]);
   await upsertSessionEntryCore(scope(), { sessionId: "replacement-session", updatedAt: 2 });
   await expect(promote(receipt)).rejects.toThrow("session changed");
@@ -858,14 +946,12 @@ it("reconciles reset input without host reads and removes custody on logical del
   expect(storedBefore.map((row) => row.state)).toEqual(["queued", "queued"]);
   const counter = trackPendingReads();
   try {
-    expect(await pendingInputs()).toMatchObject(pendingPage([receipt, second], "interrupted"));
+    expect(await pendingInputs()).toEqual({ total: 0, items: [] });
     expect(counter).toMatchObject({ counts: { pending: 0 }, textBytes: { pending: 0 } });
   } finally {
     counter.restore();
   }
-  expect(storedInputs()).toEqual(
-    storedBefore.map((row) => Object.assign({}, row, { state: "interrupted" })),
-  );
+  expect(storedInputs()).toEqual(storedBefore);
   await deleteSessionEntryLifecycle({
     archiveTranscript: false,
     storePath: fixture.storePath(),

@@ -1,14 +1,12 @@
-import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
-import type { SessionRestartResume } from "../../config/sessions/restart-resume.js";
 import type { ProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
-import type { SessionControllerInput } from "../../sessions/session-controller.contracts.js";
+import { isHumanAddressedChatMessage } from "./chat-human-mentions.js";
 import { respondChatSendAdmissionError } from "./chat-send-admission-errors.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import type { ChatSendDiagnostics } from "./chat-send-diagnostics.js";
 import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
-import { normalizeChatSendRequest } from "./chat-send-request.js";
+import { normalizeChatSendRequest, type NormalizedChatSendRequest } from "./chat-send-request.js";
 import {
   prepareChatSendNativeRuntimeRestriction,
   prepareChatSendSession,
@@ -38,10 +36,8 @@ export async function prepareAndAdmitChatSend(
   onAdmissionOwned?: () => Promise<boolean>,
   options?: {
     trustedSystemInput?: boolean;
-    controllerInput?: SessionControllerInput;
     isDirectExternalUser?: boolean;
     goalResume?: SessionGoalOperation & { action: "resume" };
-    restartResume?: SessionRestartResume;
     providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   },
   diagnostics?: ChatSendDiagnostics,
@@ -65,7 +61,6 @@ export async function prepareAndAdmitChatSend(
     client,
     ...(options?.trustedSystemInput ? { trustedSystemInput: true } : {}),
     ...(options?.goalResume ? { goalResume: options.goalResume } : {}),
-    ...(options?.restartResume ? { restartResume: options.restartResume } : {}),
     ...(options?.providerReviewAcknowledgment
       ? { providerReviewAcknowledgment: options.providerReviewAcknowledgment }
       : {}),
@@ -95,7 +90,6 @@ export async function prepareAndAdmitChatSend(
     request: normalizedRequest.value,
     context,
     client,
-    isDirectExternalUser: options?.isDirectExternalUser,
     assertCurrent,
   });
   if (!loadedSession.ok) {
@@ -108,35 +102,14 @@ export async function prepareAndAdmitChatSend(
     );
     return undefined;
   }
-  const recoveryEntry = loadedSession.value.entry;
-  let recoveryOutcome: "rejected" | "admitted" | "retried" = "rejected";
-  using recoveryLog =
-    recoveryEntry?.mainRestartRecovery && !normalizedRequest.value.stopCommand
-      ? {
-          [Symbol.dispose]() {
-            try {
-              context.logGateway.info("chat.send recovery admission", {
-                outcome: recoveryOutcome,
-                sessionIdHash: sha256HexPrefixCore(recoveryEntry.sessionId, 16),
-                runId: loadedSession.value.clientRunId,
-                sourceRunId: recoveryEntry.restartRecoveryDeliverySourceRunId,
-                recoveryRunId: recoveryEntry.restartRecoveryDeliveryRunId,
-                // Capture the incoming custody, including rejected requests that never write.
-                chargedAttempts: recoveryEntry.mainRestartRecovery?.chargedAttempts,
-              });
-            } catch {
-              // Observability must not change admission or retry outcomes.
-            }
-          },
-        }
-      : undefined;
-  if (normalizedRequest.value.mentions) {
+  let request: NormalizedChatSendRequest = normalizedRequest.value;
+  if (request.mentions) {
     const mentions = await context.mentionInbox?.validateRecipientsAsync(
       client,
       loadedSession.value.entry
         ? { sessionKey: loadedSession.value.sessionKey, agentId: loadedSession.value.agentId }
         : { agentId: loadedSession.value.agentId },
-      normalizedRequest.value.mentions.map((mention) => mention.profileId),
+      request.mentions.map((mention) => mention.profileId),
     );
     if (!mentions?.ok) {
       respond(
@@ -150,17 +123,22 @@ export async function prepareAndAdmitChatSend(
       );
       return undefined;
     }
+    if (
+      isHumanAddressedChatMessage({
+        cfg: loadedSession.value.cfg,
+        agentId: loadedSession.value.agentId,
+        text: request.workContext?.text ?? request.rawMessage,
+        mentions: request.mentions,
+      })
+    ) {
+      request = { ...request, humanAddressed: true };
+    }
   }
   phase?.mark("authority");
   const preparation = {
-    request: normalizedRequest.value,
+    request,
     session: loadedSession.value,
-    respond: recoveryLog
-      ? (((...response) => {
-          recoveryOutcome = response[0] ? "retried" : "rejected";
-          respond(...response);
-        }) satisfies typeof respond)
-      : respond,
+    respond,
     context,
     client,
     assertCurrent,
@@ -191,8 +169,8 @@ export async function prepareAndAdmitChatSend(
     ...preparation,
     session,
     onAdmissionOwned,
-    controllerInput: options?.controllerInput,
     hasCurrentClientAuthority,
+    sessionMutationAuthorization,
     withPreparedCurrent: sessionMutationAuthorization?.withPreparedCurrent,
     followRegistration: sessionMutationAuthorization?.followRegistration,
     diagnostics,
@@ -200,10 +178,9 @@ export async function prepareAndAdmitChatSend(
   if (!admitted.ok) {
     return undefined;
   }
-  recoveryOutcome = "admitted";
   phase?.finish();
   return {
-    request: normalizedRequest.value,
+    request,
     session,
     admission: admitted.value,
   };

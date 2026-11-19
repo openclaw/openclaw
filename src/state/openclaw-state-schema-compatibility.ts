@@ -2,6 +2,7 @@ import {
   getCanonicalSqliteNamedIndexNames,
   type SqliteSchemaCompatibility,
   type SqliteSchemaIssue,
+  type SqliteTableContractReader,
 } from "../infra/sqlite-schema-contract.js";
 import {
   ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS,
@@ -118,6 +119,20 @@ export const STATE_RUNTIME_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
   excludedTables: [...RETAINED_STATE_TABLES, ...LAZY_ADDITIVE_STATE_TABLES],
   excludedIndexes: LAZY_ADDITIVE_STATE_INDEXES,
 };
+
+/** Both cold admission and bounded upgrade selection require these present-table columns. */
+export function findMissingLazyStateStartupColumn(readTable: SqliteTableContractReader) {
+  for (const { tableName, columnName } of CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
+    if (!STATE_RUNTIME_SCHEMA_COMPATIBILITY.excludedTables?.includes(tableName)) {
+      continue;
+    }
+    const table = readTable(tableName);
+    if (table && !table.columns.some((column) => column.name === columnName)) {
+      return { tableName, columnName };
+    }
+  }
+  return undefined;
+}
 
 export const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
   ...STATE_PERSISTENT_SCHEMA_COMPATIBILITY,

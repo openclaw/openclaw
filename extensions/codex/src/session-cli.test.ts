@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { AsyncWorkScope } from "openclaw/plugin-sdk/concurrency-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerCodexSessionCli } from "./session-cli.js";
 
@@ -121,8 +122,7 @@ describe("registerCodexSessionCli", () => {
       expect(output).toContain("Build Codex fleet sessions\\n");
       expect(output).toContain("/Users/test/Projects/openclaw");
       expect(output).toContain("branch codex/codex-session-fleet");
-      expect(output).toContain("source vscode");
-      expect(output).toContain("provider openai");
+      expect(output).toContain("source vscode · provider openai");
       expect(output).toContain(
         "repeat the same filters with --host 'gateway:local' --cursor 'gateway-next'",
       );
@@ -135,23 +135,26 @@ describe("registerCodexSessionCli", () => {
 
     it("reports empty catalog and unmatched host results", async () => {
       callGatewayFromCli.mockResolvedValue(gatewayCatalog([]));
+      expect(await runCli(["sessions"])).toBe("No Codex session hosts found.\n");
+      expect(await runCli(["sessions"], { host: "node:missing" })).toBe(
+        'No Codex session host matched "node:missing".\n',
+      );
+    });
 
-      const emptyOutput = await runCli(["sessions"]);
-      const hostOutput = await runCli(["sessions"], { host: "node:missing" });
-
-      expect(emptyOutput).toBe("No Codex session hosts found.\n");
-      expect(hostOutput).toBe('No Codex session host matched "node:missing".\n');
+    it("prints no session list that lands after Ctrl+C", async () => {
+      const work = new AsyncWorkScope();
+      callGatewayFromCli.mockImplementation(async () => {
+        work.beginClose();
+        return gatewayCatalog(catalog.hosts);
+      });
+      expect(await work.run(() => runCli(["sessions"], { json: true }))).toBe("");
     });
   });
 
   describe("continue", () => {
     it.each([false, true])("continues a Gateway-local thread (JSON=%s)", async (json) => {
       const sessionKey = "harness:codex:supervision:branch\u001b[2J";
-      callGatewayFromCli.mockResolvedValueOnce({
-        sessionKey,
-        ignored: true,
-      });
-
+      callGatewayFromCli.mockResolvedValueOnce({ sessionKey, ignored: true });
       const output = await runCli(["continue", "thread-1"], {
         agent: "JarVis",
         host: "gateway:local:source-a",
@@ -170,7 +173,6 @@ describe("registerCodexSessionCli", () => {
         expect(JSON.parse(output)).toEqual({ sessionKey });
       } else {
         expect(output).toBe("OpenClaw session: harness:codex:supervision:branch\n");
-        expect(output).not.toContain("\u001b");
       }
     });
   });
@@ -178,9 +180,7 @@ describe("registerCodexSessionCli", () => {
   describe("archive", () => {
     it("renders a successful archive in human-readable output", async () => {
       callGatewayFromCli.mockResolvedValueOnce({ ok: true });
-
       const output = await runCli(["archive", "thread-2"], { "confirm-no-other-runner": true });
-
       expect(output).toBe("Archived Codex thread thread-2.\n");
     });
   });

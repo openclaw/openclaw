@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -25,7 +26,9 @@ import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   beginTrajectoryRuntimeRetention,
+  deleteTrajectoryRuntimeRetention,
   prepareTrajectoryRuntimeRetention,
+  selectTrajectoryRuntimeRetentionBatch,
 } from "./runtime-retention.sqlite.js";
 import {
   appendSqliteTrajectoryRuntimeEventsWithWriter,
@@ -109,6 +112,77 @@ function appendManaged(event: TrajectoryEvent, discardPrevious = false) {
     (operationLabel, write) => runOpenClawAgentWriteTransaction(write, options, { operationLabel }),
   );
 }
+
+it.each(["before", "after"])(
+  "accounts for repeated appends once outside the writer with a snapshot from %s the appends",
+  (snapshotTiming) => {
+    const options = { agentId: "main", path: sqlitePath() };
+    const database = openOpenClawAgentDatabase(options);
+    const event = currentEvent("retention-accounting");
+    const events = Array.from({ length: 128 }, () => event);
+    append("session-1", events);
+    let windowFacts = { nextSeq: events.length, retainedBytes: eventBytes(events) };
+    const lease = new Int32Array(new SharedArrayBuffer(4));
+    Atomics.store(lease, 0, 1);
+    const sweepId = beginTrajectoryRuntimeRetention(database.db, lease);
+    const snapshot = () =>
+      prepareTrajectoryRuntimeRetention(database.db, { sessionId: "session-1" }, Date.now());
+    let plan = snapshotTiming === "before" ? snapshot() : undefined;
+    const statements: Array<{ sql: string; transaction: boolean }> = [];
+    const observer = (message: unknown) => {
+      const { sql } = message as { sql?: string };
+      if (sql?.includes('"trajectory_runtime_events"')) {
+        statements.push({ sql, transaction: database.db.isTransaction });
+      }
+    };
+    const observations = channel("openclaw.database.statement");
+    observations.subscribe(observer);
+    try {
+      for (let index = 0; index < 8; index++) {
+        windowFacts = appendSqliteTrajectoryRuntimeEventsWithWriter(
+          {
+            sessionId: "session-1",
+            windowFacts,
+            events: [{ line: JSON.stringify(event), ts: event.ts, runId: event.runId }],
+          },
+          database,
+          (operationLabel, write) =>
+            runOpenClawAgentWriteTransaction(write, options, { operationLabel }),
+        ).receipt.windowFacts;
+      }
+      expect(statements).toHaveLength(8);
+      expect(statements.every(({ sql }) => /^insert/i.test(sql))).toBe(true);
+      plan ??= snapshot();
+      statements.length = 0;
+      const selected = selectTrajectoryRuntimeRetentionBatch(database.db, {
+        sweepId,
+        snapshot: plan,
+      });
+      expect(statements).toHaveLength(1);
+      expect(statements[0]).toMatchObject({
+        sql: expect.stringMatching(/sum\(/i),
+        transaction: false,
+      });
+      expect(
+        runOpenClawAgentWriteTransaction(
+          () => deleteTrajectoryRuntimeRetention(database, selected),
+          options,
+        ),
+      ).toMatchObject({
+        complete: true,
+        refresh: false,
+        deleted: 0,
+        totalBytes: eventBytes([...events, ...Array.from({ length: 8 }, () => event)]),
+      });
+      statements.length = 0;
+      selectTrajectoryRuntimeRetentionBatch(database.db, { sweepId });
+      expect(statements).toHaveLength(0);
+    } finally {
+      observations.unsubscribe(observer);
+      Atomics.store(lease, 0, 0);
+    }
+  },
+);
 
 it.each(["missing", "invalidated", "empty"] as const)(
   "admits a retention write only for a current selection (%s)",

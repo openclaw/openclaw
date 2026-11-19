@@ -38,7 +38,6 @@ import type {
   SubagentRunMutationOptions,
 } from "./subagent-registry-persistence.types.js";
 import { readFullSubagentRuns } from "./subagent-registry-read-cache.js";
-import { isRetiredSubagentExecution } from "./subagent-registry-restart-recovery-helpers.js";
 import {
   consumeFreshSubagentRegistryRows,
   publishSubagentRunsAfterAtomicStore,
@@ -335,10 +334,23 @@ async function commitRows<T>(
   runs: ReadonlyMap<string, SubagentRunRecord>,
 ): Promise<SubagentRunMutationReceipt<T>> {
   const postimages = new Map(
-    [...(planned.postimages ?? [])].map(
-      ([runId, row]) =>
-        [runId, row ? copySubagentRunRuntimeOwner(row, structuredClone(row)) : null] as const,
-    ),
+    [...(planned.postimages ?? [])].map(([runId, row]) => {
+      // Only reuse containers from the registry's immutable current row.
+      const captured = row && { ...row };
+      const previous = runs.get(runId);
+      if (captured) {
+        for (const [key, value] of Object.entries(captured)) {
+          if (
+            value &&
+            typeof value === "object" &&
+            (!previous || value !== Reflect.get(previous, key))
+          ) {
+            Reflect.set(captured, key, structuredClone(value));
+          }
+        }
+      }
+      return [runId, row && captured ? copySubagentRunRuntimeOwner(row, captured) : null] as const;
+    }),
   );
   const values = [...postimages.values()].flatMap((row) => {
     if (!row) {
@@ -358,6 +370,8 @@ async function commitRows<T>(
     writeId: randomUUID(),
     values,
     deleteRunIds: [...postimages].flatMap(([id, row]) => (row ? [] : [id])),
+    removalReason: planned.removalReason,
+    terminalRows: planned.terminalRows,
     terminalEvents: planned.terminalEvents?.map(({ input }) => structuredClone(input)),
   };
   if (!values.length && !write.deleteRunIds.length && !write.terminalEvents?.length) {
@@ -393,30 +407,10 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
 ): Promise<P["value"]> {
   const context = options.context ?? captureOpenClawStateWorkerContext();
   const runs = options.runs ?? subagentRuns;
-  const recovery = options.gatewayRecovery;
-  const recoveredRuntimeKey = recovery ? {} : undefined;
   const runtimeKeyFor = (current: SubagentRunRecord | undefined, row: SubagentRunRecord) =>
-    recoveredRuntimeKey ??
-    (current && isSameSubagentRun(current, row)
+    current && isSameSubagentRun(current, row)
       ? getSubagentRunRuntimeKey(current)
-      : getSubagentRunRuntimeKey(row));
-  const assertRecoveryCurrent = () => {
-    if (!recovery) {
-      return;
-    }
-    const current = runs.get(recovery.expected.runId);
-    if (
-      !current ||
-      !isSameSubagentRunOwner(current, recovery.expected) ||
-      (!(current.execution.status === "terminal" && current.requesterSettleWake) &&
-        !isRetiredSubagentExecution(current)) ||
-      getGatewayContextResolver(current) !== recovery.previousResolver ||
-      recovery.previousResolver() !== undefined ||
-      recovery.resolver() !== recovery.gateway
-    ) {
-      throw new SubagentRegistryMutationRejectedError("Subagent Gateway recovery owner changed");
-    }
-  };
+      : getSubagentRunRuntimeKey(row);
   const runIds = [...new Set(selectedRunIds.map((id) => id.trim()).filter(Boolean))].toSorted();
   assertSubagentRegistryWriteOutcomeKnown(runIds, context.admission);
   const queue = sourceQueue(context.admission);
@@ -441,7 +435,6 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
       assertSubagentRegistryWriteSourceCurrent(context);
       assertSubagentRegistryWriteOutcomeKnown(runIds, context.admission);
       options.assertCurrent?.();
-      assertRecoveryCurrent();
     },
   };
   let published = false;
@@ -607,7 +600,12 @@ export async function restoreSubagentRunsFromDisk(params: {
           continue;
         }
         retainSubagentRunRuntimeOwner(params.runs.get(runId), entry);
-        params.runs.set(runId, compactSubagentRunForMemory(entry));
+        const retained = compactSubagentRunForMemory(entry);
+        params.runs.set(runId, retained);
+        if (params.runs === subagentRuns && !getGatewayContextResolver(retained)?.()) {
+          // Retained rows are history. Only a newly admitted live task may own completion.
+          subagentRuns.retireCompletionAuthority(retained);
+        }
         rememberRestoredSubagentRunNotification(entry);
         added += 1;
       }

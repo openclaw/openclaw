@@ -2,7 +2,7 @@ import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "../co
 import { withCurrentProjectionSnapshot } from "../config/sessions/session-accessor.sqlite-active-projection.js";
 import { preserveSessionEntryCacheAcrossWrite } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
+import { SessionTranscriptColdError } from "../config/sessions/session-transcript-cold-error.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,

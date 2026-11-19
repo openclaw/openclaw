@@ -10,7 +10,9 @@ import {
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
 import { createClientHarness, useAutoCleanupTempDirTracker } from "./test-support.js";
+import { buildCodexRuntimeThreadConfigForRun } from "./thread-requests.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
+import { resolveCodexWebSearchPlan } from "./web-search.js";
 
 const appServer = { start: {}, requestTimeoutMs: 1_000 } as CodexAppServerRuntimeOptions;
 
@@ -45,8 +47,8 @@ describe("resolveCodexProviderWebSearchSupport", () => {
 
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it.each(["success", "RPC failure", "timeout"] as const)(
-    "awaits isolated capability probe exit after %s",
+  it.each(["success", "RPC failure", "timeout", "borrowed success"] as const)(
+    "preserves capability client ownership after %s",
     async (result) => {
       vi.useFakeTimers();
       const agentDir = tempDirs.make("codex-capability-probe-");
@@ -75,8 +77,11 @@ describe("resolveCodexProviderWebSearchSupport", () => {
       });
       vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
       const stdinClosed = once(harness.process.stdin, "close");
+      const borrowed = result === "borrowed success";
       const pending = resolveSupport({
-        clientFactory: createIsolatedCodexAppServerClient,
+        clientFactory: borrowed
+          ? (options) => createIsolatedCodexAppServerClient(options)
+          : createIsolatedCodexAppServerClient,
         appServer: {
           ...appServer,
           start: { transport: "stdio", command: process.execPath, args: [], headers: {} },
@@ -92,6 +97,15 @@ describe("resolveCodexProviderWebSearchSupport", () => {
         await awaitGateBeforeSettlement(capabilityRead.promise, outcome, "probe skipped its read");
         if (result === "timeout") {
           await vi.advanceTimersByTimeAsync(appServer.requestTimeoutMs);
+        }
+        if (borrowed) {
+          await expect(outcome).resolves.toBe("supported");
+          await expect(
+            harness.client.request("modelProvider/capabilities/read", {}),
+          ).resolves.toEqual({
+            webSearch: true,
+          });
+          return;
         }
         await awaitGateBeforeSettlement(stdinClosed, outcome, "probe returned without closing");
         expect(settled).toBe(false);
@@ -111,16 +125,53 @@ describe("resolveCodexProviderWebSearchSupport", () => {
     await expect(resolveSupport()).resolves.toBe("unsupported");
   });
 
-  it("does not use default OpenAI capabilities for a copilot thread", async () => {
-    const read = vi.fn(async (method: string) =>
-      method === "config/read" ? { config: { model_provider: undefined } } : { webSearch: true },
-    );
-    clientFactory.mockResolvedValue({ request: read } as unknown as CodexAppServerClient);
-    await expect(resolveSupport({ expectedNativeModelProvider: "copilot" })).resolves.toBe(
-      "unknown",
-    );
-    expect(read.mock.calls.map(([method]) => method)).toEqual(["config/read"]);
-  });
+  it.each([true, false])(
+    "keeps custom-provider native search behind its standalone declaration (%s)",
+    async (declared) => {
+      const read = vi.fn(async (method: string) =>
+        method === "config/read"
+          ? {
+              config: {
+                model_provider: "custom-responses",
+                model_providers: {
+                  "custom-responses": { supports_standalone_web_search: declared },
+                },
+              },
+            }
+          : { webSearch: true },
+      );
+      clientFactory.mockResolvedValue({ request: read } as unknown as CodexAppServerClient);
+      const support = await resolveSupport({ modelProviderOverride: "custom-responses" });
+      const plan = resolveCodexWebSearchPlan({ nativeProviderWebSearchSupport: support });
+      const thread = buildCodexRuntimeThreadConfigForRun({ modelId: "fixture-model" }, undefined, {
+        nativeCodeModeEnabled: true,
+        nativeProviderWebSearchSupport: support,
+      });
+
+      expect(plan).toMatchObject({
+        kind: declared ? "native-hosted" : "managed",
+        suppressManagedWebSearch: declared,
+        threadConfig: {
+          "features.standalone_web_search": declared,
+          web_search: declared ? "cached" : "disabled",
+        },
+      });
+      expect(thread["features.standalone_web_search"]).toBe(declared);
+      expect(thread.web_search).toBe(declared ? "cached" : "disabled");
+    },
+  );
+
+  it.each(["expectedNativeModelProvider", "modelProviderOverride"] as const)(
+    "does not borrow default OpenAI capabilities for a copilot %s",
+    async (field) => {
+      const read = vi.fn(async (method: string) =>
+        method === "config/read" ? { config: { model_provider: undefined } } : { webSearch: true },
+      );
+      clientFactory.mockResolvedValue({ request: read } as unknown as CodexAppServerClient);
+      await expect(resolveSupport({ [field]: "copilot" })).resolves.toBe("unknown");
+      expect(read.mock.calls.map(([method]) => method)).toEqual(["config/read"]);
+    },
+  );
 
   it("forwards one prepared auth handoff to capability startup", async () => {
     request.mockResolvedValue({ webSearch: true });
@@ -140,14 +191,8 @@ describe("resolveCodexProviderWebSearchSupport", () => {
     await expect(resolveSupport()).resolves.toBe("unknown");
   });
 
-  it.each([
-    [" OpenAI ", "supported"],
-    ["amazon-bedrock", "unsupported"],
-  ])(
-    "resolves the %s override without probing native capabilities",
-    async (modelProviderOverride, expected) => {
-      await expect(resolveSupport({ modelProviderOverride })).resolves.toBe(expected);
-      expect(clientFactory).not.toHaveBeenCalled();
-    },
-  );
+  it("resolves an OpenAI override without probing native capabilities", async () => {
+    await expect(resolveSupport({ modelProviderOverride: " OpenAI " })).resolves.toBe("supported");
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
 });

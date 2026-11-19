@@ -5,12 +5,11 @@ import { drainPendingDeliveriesCore } from "../../infra/outbound/delivery-queue-
 import { createRecoveryLog } from "../../infra/outbound/delivery-queue.test-helpers.js";
 import { createOutboundTestPlugin } from "../../test-utils/channel-plugins.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
-import { capturePendingFinalRecoverySource } from "../pending-final-recovery-source.js";
 import { deliverAgentCommandResult } from "./delivery.js";
 
 type MarkerParams = Parameters<typeof persistPendingFinalDeliveryMarker>[0];
 type SessionTarget = Pick<MarkerParams, "agentId" | "storePath"> & { sessionKey: string };
-export const deliveryContext = { channel: "matrix", to: "!owner:example", accountId: "default" };
+const deliveryContext = { channel: "matrix", to: "!owner:example", accountId: "default" };
 export const runtime = { log: () => {}, error: () => {}, exit: () => {} };
 
 export function persistMarker(
@@ -21,7 +20,6 @@ export function persistMarker(
 ) {
   return persistPendingFinalDeliveryMarker({
     ...target,
-    admittedRecoverySource: capturePendingFinalRecoverySource(entry),
     deliver: true,
     sessionStore: { [target.sessionKey]: entry },
     sessionEntry: entry,

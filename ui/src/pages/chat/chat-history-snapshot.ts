@@ -1,5 +1,5 @@
-import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChatInputReceipts,
@@ -9,8 +9,12 @@ import type {
   ChatHistoryResetResult,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { GatewaySessionRow, GatewaySessionsDefaults } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-cache.ts";
-import { nativeHistoryMessageIdentity } from "../../lib/chat/history-message-identity.ts";
+import {
+  nativeHistoryMessageSourceIdentity,
+  oldestNativeHistoryMessage,
+} from "../../lib/chat/history-message-identity.ts";
 import {
   isUiSelectedGlobalSessionKey,
   resolveUiSelectedSessionAgentId,
@@ -19,7 +23,6 @@ import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import { projectChatSessionStateSnapshot } from "./chat-session-state-snapshot.ts";
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
-import { reduceChatSessionProjection } from "./history-merge.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
 import {
   cacheChatSessionSnapshot,
@@ -40,6 +43,7 @@ export type ChatHistoryResult = {
   messages?: Array<unknown>;
   offset?: number;
   nextOffset?: number;
+  olderCursor?: string;
   hasMore?: boolean;
   totalMessages?: number;
   completeSnapshot?: boolean;
@@ -96,15 +100,44 @@ export function isHistoryCursor(
   return "kind" in result;
 }
 
+export function attachHistoryActivity<Result extends ChatHistoryResponse>(result: Result): Result {
+  if (isHistoryCursor(result) && result.kind === "reset") {
+    return result;
+  }
+  if (!result.activity || !result.messages) {
+    return result;
+  }
+  const byId = new Map(result.activity.map((entry) => [entry.messageId, entry.items]));
+  const withActivity = (message: unknown) => {
+    const record = asOptionalRecord(message);
+    const id = record?.messageId ?? asOptionalRecord(record?.["__openclaw"])?.id;
+    const activity = typeof id === "string" ? byId.get(id) : undefined;
+    return record && activity ? { ...record, activity } : message;
+  };
+  return {
+    ...result,
+    messages: result.messages.map((entry) => {
+      if (!isHistoryCursor(result)) {
+        return withActivity(entry);
+      }
+      const envelope = asOptionalRecord(entry);
+      return envelope ? { ...envelope, message: withActivity(envelope.message) } : entry;
+    }),
+  };
+}
+
 export function resolveChatHistoryPagination(
   result: ChatHistoryResult | undefined,
+  totalMessages?: number,
 ): ChatHistoryPagination {
-  const validTotal = asSafeIntegerInRange(result?.totalMessages, { min: 0 });
+  const validTotal = asSafeIntegerInRange(result?.totalMessages ?? totalMessages, { min: 0 });
   const nextOffset = asSafeIntegerInRange(result?.nextOffset, { min: 1 });
-  if (result?.hasMore === true && nextOffset !== undefined) {
+  const olderCursor = normalizeNullableString(result?.olderCursor);
+  if (result?.hasMore === true || olderCursor) {
     return {
       hasMore: true,
-      nextOffset,
+      ...(olderCursor ? { olderCursor } : {}),
+      ...(nextOffset !== undefined ? { nextOffset } : {}),
       ...(validTotal !== undefined ? { totalMessages: validTotal } : {}),
     };
   }
@@ -122,94 +155,18 @@ export function historySessionId(result: ChatHistoryResult): string | null {
   );
 }
 
-function retainedRawHistoryStart(pagination: ChatHistoryPagination): number | null {
-  const totalMessages = asSafeIntegerInRange(pagination.totalMessages, { min: 0 });
-  if (totalMessages === undefined) {
-    return null;
-  }
-  const retainedDepth = pagination.hasMore ? pagination.nextOffset : totalMessages;
-  const start = totalMessages - retainedDepth + 1;
-  return asSafeIntegerInRange(start, { min: 1 }) ?? null;
-}
-
-export function reconcileHistoryTail(options: {
-  nextMessages: unknown[];
-  nextPagination: ChatHistoryPagination;
-  nextSessionId: string | null;
-  previousMessages: unknown[];
-  previousPagination: ChatHistoryPagination;
-  previousSessionId: string | null;
-}): { messages: unknown[]; pagination: ChatHistoryPagination } | null {
+export function reopenChatHistoryBoundary(
+  state: ChatState,
+  boundary: string,
+  pagination: ChatHistoryPagination,
+): void {
   if (
-    !options.previousSessionId ||
-    options.previousSessionId !== options.nextSessionId ||
-    options.previousMessages.length === 0
+    nativeHistoryMessageSourceIdentity(oldestNativeHistoryMessage(state.chatMessages)) !== boundary
   ) {
-    return null;
+    throw new Error(t("chat.thread.earlierInterrupted"));
   }
-  const previousByIdentity = new Map<string, unknown[]>();
-  for (const message of options.previousMessages) {
-    const identity = nativeHistoryMessageIdentity(message);
-    if (identity) {
-      const matches = previousByIdentity.get(identity) ?? [];
-      matches.push(message);
-      previousByIdentity.set(identity, matches);
-    }
-  }
-  // Identical history rows keep their render identity, including projected siblings.
-  const messages = options.nextMessages.map((message) => {
-    const identity = nativeHistoryMessageIdentity(message);
-    return (identity ? previousByIdentity.get(identity)?.shift() : undefined) ?? message;
-  });
-  const reconciled = { messages, pagination: options.nextPagination };
-  const previousTotal = options.previousPagination.totalMessages;
-  const nextTotal = options.nextPagination.totalMessages;
-  const previousStart = retainedRawHistoryStart(options.previousPagination);
-  const nextStart = retainedRawHistoryStart(options.nextPagination);
-  if (
-    typeof previousTotal !== "number" ||
-    typeof nextTotal !== "number" ||
-    previousStart === null ||
-    nextStart === null ||
-    nextTotal < previousTotal ||
-    nextStart > previousTotal + 1 ||
-    nextStart <= previousStart
-  ) {
-    return reconciled;
-  }
-  const prefix = options.previousMessages.filter((message) => {
-    const seq = readSessionMessageSequence(message);
-    return seq !== null && seq < nextStart;
-  });
-  if (prefix.length === 0) {
-    return reconciled;
-  }
-  const retainedDepth = nextTotal - previousStart + 1;
-  return {
-    messages: [...prefix, ...messages],
-    pagination:
-      previousStart > 1
-        ? { hasMore: true, nextOffset: retainedDepth, totalMessages: nextTotal }
-        : { hasMore: false, totalMessages: nextTotal },
-  };
-}
-
-export function applyChatHistoryRefill(state: ChatState, result: ChatHistoryResult): void {
-  // A byte-limited refill can be smaller than the cache. Replace its
-  // window; the projection owner alone retains live and pending rows.
-  const messages = result.messages ?? [];
-  const tail = reconcileHistoryTail({
-    nextMessages: messages,
-    nextPagination: resolveChatHistoryPagination(result),
-    nextSessionId: historySessionId(result),
-    previousMessages: state.chatMessages,
-    previousPagination: state.chatHistoryPagination,
-    previousSessionId: state.currentSessionId ?? null,
-  });
-  reduceChatSessionProjection(state, {
-    type: "snapshotLoaded",
-    messages: tail?.messages ?? messages,
-  });
+  state.chatHistoryPagination = pagination;
+  commitCurrentChatHistorySnapshot(state);
 }
 
 export function commitCurrentChatHistorySnapshot(
@@ -268,10 +225,10 @@ export function clearHistoryCursor(state: ChatState, sessionKey: string, agentId
     sessionKey,
     agentId,
   });
-  if (snapshot?.deltaCursor === undefined) {
+  if (snapshot?.deltaCursor === undefined && snapshot?.historyState === undefined) {
     return;
   }
-  const { deltaCursor: _deltaCursor, ...withoutCursor } = snapshot;
+  const { deltaCursor: _deltaCursor, historyState: _historyState, ...withoutCursor } = snapshot;
   cacheChatSessionSnapshot(
     state.chatMessagesBySession,
     state,

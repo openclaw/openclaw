@@ -2,11 +2,12 @@
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../lib/presentation.ts";
+import { mockDocumentVisibility, restoreMocksAndGlobals } from "../test-helpers/mock-cleanup.ts";
 import { renderSolidRef } from "../test-helpers/render-solid-ref.ts";
-import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { markdownBlocksRef } from "./markdown-element-refs-solid.ts";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(restoreMocksAndGlobals);
 
 it("parks native thread work on hide and releases replaced roots and unmounted owners", async () => {
   const observers: Set<Element>[] = [];
@@ -99,3 +100,73 @@ it("parks native thread work on hide and releases replaced roots and unmounted o
     view.unmount();
   }
 });
+
+it.each(["visible", "hidden"] as const)(
+  "releases syntax workers on tab hide and resumes only presented Markdown (initially %s)",
+  async (initial) => {
+    const show = mockDocumentVisibility(initial);
+    const workers: TestWorker[] = [];
+    class TestWorker extends EventTarget {
+      postMessage = vi.fn();
+      terminate = vi.fn();
+      constructor() {
+        super();
+        workers.push(this);
+      }
+    }
+    vi.stubGlobal("Worker", TestWorker);
+    const root = document.createElement("section");
+    root.className = "chat-text";
+    root.innerHTML =
+      '<div class="code-block-wrapper"><pre class="code-block-viewport"><code data-code-highlight="typescript"></code></pre></div>';
+    const code = root.querySelector("code")!;
+    const source = "const answer = 42;\n".repeat(400);
+    code.textContent = source;
+    let present!: (value: boolean) => void;
+    const view = renderSolidRef(
+      () => {
+        const [presented, setPresented] = createSignal(true);
+        present = setPresented;
+        return markdownBlocksRef(presented);
+      },
+      { targetElement: root },
+    );
+    try {
+      if (initial === "visible") {
+        await waitForSolid(() => expect(workers).toHaveLength(1));
+      } else {
+        await waitForSolid(() => expect(root.isConnected).toBe(true));
+        expect(workers).toHaveLength(0);
+      }
+      show("hidden");
+      flush();
+      for (const worker of workers) {
+        expect(worker.terminate).toHaveBeenCalledOnce();
+      }
+      const previous = workers.length;
+      show("visible");
+      await waitForSolid(() => expect(workers).toHaveLength(previous + 1));
+      expect(workers.at(-1)!.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ source }),
+        { transfer: [] },
+      );
+      expect(root.querySelector("code")).toBe(code);
+      expect(code.textContent).toBe(source);
+
+      present(false);
+      flush();
+      expect(workers.at(-1)!.terminate).toHaveBeenCalledOnce();
+      show("hidden");
+      show("visible");
+      flush();
+      expect(workers).toHaveLength(previous + 1);
+      view.unmount();
+      show("hidden");
+      show("visible");
+      flush();
+      expect(workers).toHaveLength(previous + 1);
+    } finally {
+      view.unmount();
+    }
+  },
+);

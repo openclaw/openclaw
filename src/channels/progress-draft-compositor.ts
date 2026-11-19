@@ -2,6 +2,7 @@ import type {
   ChannelProgressDraftCompositorLine,
   ChannelProgressDraftCompositorSnapshot,
   ChannelProgressDraftCompositorParams,
+  ChannelProgressDraftNoteOptions,
 } from "./progress-draft-compositor.types.js";
 import {
   createProgressDraftDiffStatTracker,
@@ -11,6 +12,7 @@ import {
   createChannelProgressDraftEventHandlers,
   routePreparedProgressItem,
 } from "./progress-draft-events.js";
+import { createChannelProgressDraftGate } from "./progress-draft-gate.js";
 import { removeChannelProgressDraftLine } from "./progress-draft-lines.js";
 import {
   createProgressDraftSnapshotState,
@@ -27,7 +29,6 @@ import { createProgressDraftToolRuns } from "./progress-draft-tool-runs.js";
 import { projectChannelWorkStatus } from "./progress-draft-work-status.js";
 import { settleProgressVisibilityCallbackResult } from "./progress-visibility.js";
 import {
-  createChannelProgressDraftGate,
   type AgentPlanStep,
   type ChannelProgressDraftLine,
   formatChannelProgressDraftTextForStreaming,
@@ -54,6 +55,9 @@ export type {
   ChannelProgressDraftCompositorLine,
   ChannelProgressDraftCompositorSnapshot,
 } from "./progress-draft-compositor.types.js";
+
+// Line kinds a quiet draft still stores: they need the user or report run state.
+const QUIET_STORED_LINE_KINDS = new Set(["approval", "operation-status", "subagent-status"]);
 
 export function createChannelProgressDraftCompositor(params: ChannelProgressDraftCompositorParams) {
   const now = params.now ?? Date.now;
@@ -380,7 +384,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
 
   const noteProgress = async (
     line?: ChannelProgressDraftCompositorLine,
-    options?: { toolName?: string; startImmediately?: boolean; flush?: boolean },
+    options?: ChannelProgressDraftNoteOptions,
   ) => {
     if (!isTurnActive()) {
       return false;
@@ -400,12 +404,11 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     }
     const progressLine = typeof line === "object" ? line : normalized;
     // Approvals require a user decision; intermediate tool failures belong to the tool log.
+    // A channel's reasoning rows are authored text, not tool telemetry: a quiet draft keeps them.
     const shouldStoreLine =
       !quietProgress ||
-      (typeof progressLine === "object" &&
-        (progressLine.kind === "approval" ||
-          progressLine.kind === "operation-status" ||
-          progressLine.kind === "subagent-status"));
+      options?.reasoningLine === true ||
+      (typeof progressLine === "object" && QUIET_STORED_LINE_KINDS.has(progressLine.kind));
     // Failure visibility does not grant protected capacity in the rolling tool log.
     const needsAttention =
       shouldStoreLine &&
@@ -420,8 +423,9 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     if (shouldStoreLine && !lineChanged && !hasUnconfirmedRender && !diffStatChanged) {
       return false;
     }
-    // Hidden work still delimits reasoning bursts so unrelated thoughts do not concatenate.
-    if (quietProgress || (shouldStoreLine && lineChanged)) {
+    // Hidden work still delimits reasoning bursts so unrelated thoughts do not
+    // concatenate; a row that is the reasoning's own projection does not.
+    if (!options?.reasoningLine && (quietProgress || (shouldStoreLine && lineChanged))) {
       reasoningProgress.reset();
       lastReasoningLine = undefined;
     }
@@ -552,14 +556,14 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
           return false;
         }
         // Backend waits override the headline only; the prior work status stays intact.
-        toolRuns?.breakRun();
+        // A wait renders no tool row, so it must not split a consecutive tool run.
         modelWaitText = payload.phase === "end" ? "" : (payload.progressText ?? "");
         return modelWaitText
           ? await startAndRender({ flush: true })
           : await renderAfterRetraction();
       }
       if (params.showWorkStatus && quietProgress && canUpdateProgress()) {
-        const status = projectChannelWorkStatus(payload);
+        const status = projectChannelWorkStatus(payload, { toolIcons: params.toolIcons });
         const current = lines.find(
           (line) => typeof line === "object" && line.kind === "operation-status",
         );

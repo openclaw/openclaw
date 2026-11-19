@@ -93,8 +93,11 @@ export function convertMessages(
     const role = useDeveloperRole ? "developer" : "system";
     let systemPrompt: string;
     if (options.preserveSystemPromptCacheBoundary) {
-      // Explicit message breakpoints retain the existing system layout.
-      systemPrompt = stripSystemPromptRelocatableBoundary(context.systemPrompt);
+      // Verified Anthropic routes need the producer's Runtime seam until the
+      // transport places its shared checkpoint, then strips it before egress.
+      systemPrompt = compat.cacheControlSharedSystem
+        ? context.systemPrompt
+        : stripSystemPromptRelocatableBoundary(context.systemPrompt);
     } else {
       const split = splitSystemPromptRelocatableBoundary(context.systemPrompt);
       if (split && split.relocatable.length > 0) {

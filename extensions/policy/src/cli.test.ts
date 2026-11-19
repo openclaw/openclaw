@@ -475,18 +475,27 @@ describe("policy commands", () => {
   });
 
   it("checks policy file conformance with metadata-backed global rules", async () => {
-    const { exitCode, parsed } = await runPolicyCompareFixture(
-      globalPolicy(false),
-      globalPolicy(true),
-    );
-    expect(exitCode).toBe(0);
-    expect(parsed).toMatchObject({
-      ok: true,
-      baselinePath: "baseline.policy.jsonc",
-      policyPath: "policy.jsonc",
-      findings: [],
-    });
-    expect(parsed.rulesChecked).toBeGreaterThan(10);
+    await writeFixture(join(workspaceDir, "baseline.policy.jsonc"), globalPolicy(false));
+    for (const filename of ["policy.jsonc", " candidate.jsonc", "candidate.jsonc "]) {
+      await writeFixture(join(workspaceDir, filename), globalPolicy(true));
+      if (filename !== filename.trim()) {
+        await writeFixture(join(workspaceDir, filename.trim()), {
+          network: { privateNetwork: { allow: true } },
+        });
+      }
+      const { exitCode, parsed } = await runPolicyCompareJson({
+        baseline: "baseline.policy.jsonc",
+        policy: filename,
+      });
+      expect(exitCode).toBe(0);
+      expect(parsed).toMatchObject({
+        ok: true,
+        baselinePath: "baseline.policy.jsonc",
+        policyPath: filename,
+        findings: [],
+      });
+      expect(parsed.rulesChecked).toBeGreaterThan(10);
+    }
   });
 
   it("accepts exec approval allowlist conformance entries with argPattern", async () => {
@@ -609,6 +618,20 @@ describe("policy commands", () => {
           target: "oc://missing.policy.jsonc",
         },
       ],
+    });
+    await writeFixture(join(workspaceDir, "baseline.policy.jsonc"), {});
+    const missingLiteral = await runPolicyCompareJson({
+      baseline: "baseline.policy.jsonc",
+      policy: "policy.jsonc ",
+    });
+    expect(missingLiteral.exitCode).toBe(1);
+    expect(missingLiteral.parsed).toMatchObject({
+      ok: false,
+      policyPath: "policy.jsonc ",
+      rulesChecked: 0,
+    });
+    expectIncludedFindings(missingLiteral.parsed.findings, {
+      checkId: "policy/policy-conformance-invalid",
     });
   });
 
@@ -736,11 +759,11 @@ describe("policy commands", () => {
     await writeExplicitFleetConfig();
     vi.stubEnv("OPENCLAW_PROFILE", "testprof");
     vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
-
-    const { exitCode, stderr } = await runPolicyCli(["check", "--agent", "ghost", "--json"]);
+    const id = "ghost\u0007\u0085\u202e\nFORGED";
+    const { exitCode, stderr } = await runPolicyCli(["check", "--agent", id, "--json"]);
     expect(exitCode).toBe(2);
     expect(stderr).toContain(
-      'Unknown agent id "ghost". Run openclaw --profile testprof agents list to see configured agents.',
+      'Unknown agent id "ghost\\nFORGED". Run openclaw --profile testprof agents list to see configured agents.',
     );
   });
 });

@@ -1,4 +1,5 @@
-import type { Evidence, LoadedRecord } from "./model.js";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { Envelope, Evidence, LoadedRecord } from "./model.js";
 import type { ClaimInput } from "./mutation-contract.js";
 import type { RememberInput, RememberItem, RememberResult } from "./remember-contract.js";
 import { exactLookup } from "./retrieval.js";
@@ -18,6 +19,29 @@ const normalize = (value: string) =>
   value.normalize("NFKC").trim().replace(/\s+/gu, " ").toLowerCase();
 const sameSet = (a: string[], b: string[]) =>
   a.length === b.length && a.every((v) => b.includes(v));
+
+/** Preserve source precision and assertion scope instead of treating equal words as equal facts. */
+const assertionKey = (
+  metadata: Pick<
+    Envelope,
+    | "assertion_origin"
+    | "occurred_at"
+    | "due_at"
+    | "valid_from"
+    | "valid_until"
+    | "expires_at"
+    | "owner"
+  >,
+) =>
+  JSON.stringify([
+    metadata.assertion_origin ?? "source",
+    metadata.occurred_at,
+    metadata.due_at,
+    metadata.valid_from,
+    metadata.valid_until,
+    metadata.expires_at,
+    metadata.owner,
+  ]);
 
 /**
  * Resolve one item's subject. A named subject uses exact ID/title/alias
@@ -51,7 +75,7 @@ function resolveSubject(data: Snapshot, item: RememberItem, withdrawn: Set<strin
 /**
  * Plan one remember call against the current authorized snapshot.
  * Each item gets a subject resolution and, when an active claim with the same
- * normalized text, kind and linked subjects already exists (or an earlier item
+ * normalized text, kind, linked subjects and assertion metadata exists (or an earlier item
  * in this call says the same thing), a duplicate marker so nothing is rewritten.
  */
 export function planRemember(
@@ -67,15 +91,17 @@ export function planRemember(
     const resolution = resolveSubject(data, item, withdrawn);
     const entities = resolution.subjectId ? [resolution.subjectId] : [];
     const text = normalize(item.text);
-    // Exact repeat of saved knowledge: same words, kind and linked subjects.
+    const assertion = assertionKey({ ...item, assertion_origin: item.origin ?? "source" });
+    // Both saved and within-call duplicates must describe the same assertion.
     const existing = claims.find(
       (r) =>
         r.metadata.claim_kind === item.kind &&
         normalize(r.body) === text &&
-        sameSet(r.metadata.entities ?? [], entities),
+        sameSet(r.metadata.entities ?? [], entities) &&
+        assertionKey(r.metadata) === assertion,
     );
     // Exact repeat inside this call collapses to its first occurrence.
-    const key = `${item.kind}\0${text}\0${entities.join(",")}`,
+    const key = `${item.kind}\0${text}\0${entities.join(",")}\0${assertion}`,
       earlier = keys.indexOf(key);
     keys.push(key);
     planned.push({
@@ -92,7 +118,7 @@ function title(text: string): string {
   if (clean.length <= 200) {
     return clean;
   }
-  const cut = clean.slice(0, 199),
+  const cut = truncateUtf16Safe(clean, 199),
     space = cut.lastIndexOf(" ");
   return `${(space > 100 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }

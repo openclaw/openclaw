@@ -90,7 +90,7 @@ export function SessionRailComposer(props: {
     // Follow-ups stay editable while an answer is pending; submit owns that gate.
     canCommit: () => props.connected,
     onMessage: (message) => props.onDraftChange?.(message.slice(0, SIDE_CHAT_QUESTION_MAX_LENGTH)),
-    onError: (message) => showToast({ message }),
+    onError: (message) => showToast({ severity: "error", message }),
     onSubmit: () => props.submit(),
   });
   const dictation = projectOwner(dictationControl, (owner) => owner);
@@ -175,7 +175,6 @@ export function SessionRailComposer(props: {
         pendingReads={props.attachmentProps.attachmentReads?.pendingReads ?? 0}
       />
       <div class="agent-chat__composer-lede">
-        <ComposerDictationStatus readDictation={() => dictation.read().dictation} />
         <Show when={props.companion.commentsSaving}>
           <div class="muted chat-session-rail__save-status" role="status">
             {t("common.saving")}
@@ -290,6 +289,7 @@ export function SessionRailComposer(props: {
               </div>
             )}
           </Show>
+          <ComposerDictationStatus readDictation={() => dictation.read().dictation} />
           <div class="agent-chat__composer-actions">
             {/* Preparing dictation starts capability reads and follows the settled rail. */}
             <Show when={settled()}>

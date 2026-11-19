@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { packageArchiveBytes, writePackageTarball } from "./docker-all-harness.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const RUNNER_PATH = join(process.cwd(), "scripts/e2e/lib/docker-package-identity.sh");
@@ -20,20 +21,14 @@ const mismatches = [
 function runPackageIdentity(options: PackageIdentityOptions) {
   const root = tempDirs.make("openclaw-docker-package-identity-");
   const binDir = join(root, "bin");
-  const packageDir = join(root, "package");
-  const packageTgz = join(root, "candidate.tgz");
+  const packageTgz = writePackageTarball(
+    root,
+    "openclaw",
+    options.artifactVersion,
+    "candidate.tgz",
+  );
   const identityPath = join(root, "identity.json");
   mkdirSync(binDir);
-  mkdirSync(packageDir);
-  writeFileSync(
-    join(packageDir, "package.json"),
-    JSON.stringify({ name: "openclaw", version: options.artifactVersion }),
-  );
-  const pack = spawnSync("tar", ["-czf", packageTgz, "-C", root, "package"], {
-    encoding: "utf8",
-  });
-  expect(pack.status, pack.stderr).toBe(0);
-
   const dockerPath = join(binDir, "docker");
   writeFileSync(
     dockerPath,
@@ -90,6 +85,48 @@ process.stdout.write(response[1]);
 }
 
 describe.skipIf(process.platform === "win32")("Docker package identity report", () => {
+  it("keeps cached manifest archives independent and keyed by full package identity", () => {
+    const root = tempDirs.make("docker-manifest-archive-");
+    const first = writePackageTarball(root, "@fixture/first", "1.0.0", "first.tgz");
+    writeFileSync(first, "corrupted output");
+    for (const [name, version, fileName] of [
+      ["@fixture/first", "1.0.0", "reused.tgz"],
+      ["@fixture/first", "2.0.0", "version.tgz"],
+      ["@fixture/second", "1.0.0", "name.tgz"],
+    ] as const) {
+      const archive = writePackageTarball(root, name, version, fileName);
+      const result = spawnSync("tar", ["-xOf", archive, "package/package.json"], {
+        encoding: "utf8",
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({ name, version });
+    }
+    const corrupted = spawnSync("tar", ["-tzf", first], { encoding: "utf8" });
+    expect(corrupted.status).not.toBe(0);
+  });
+
+  it("packs complete source trees separately when their manifests match", () => {
+    const root = tempDirs.make("docker-source-archive-");
+    for (const payload of ["first", "second"]) {
+      const packageDir = join(root, payload, "package");
+      mkdirSync(packageDir, { recursive: true });
+      writeFileSync(
+        join(packageDir, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+      );
+      writeFileSync(join(packageDir, "cli.js"), payload);
+      chmodSync(join(packageDir, "cli.js"), 0o755);
+      const archive = join(root, payload + ".tgz");
+      writeFileSync(archive, packageArchiveBytes(packageDir));
+      const extracted = join(root, payload + "-extracted");
+      mkdirSync(extracted);
+      const result = spawnSync("tar", ["-xzpf", archive, "-C", extracted], { encoding: "utf8" });
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(join(extracted, "package/cli.js"), "utf8")).toBe(payload);
+      expect(statSync(join(extracted, "package/cli.js")).mode & 0o777).toBe(0o755);
+    }
+  });
+
   it.each(mismatches)(
     "rejects a stale npm %s version even when it contains the artifact version",
     (field, value, diagnostic) => {

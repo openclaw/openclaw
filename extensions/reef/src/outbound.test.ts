@@ -94,16 +94,18 @@ describe("reefOutboundAdapter", () => {
       authoritySignal: firstAuthority.signal,
     });
     firstAuthority.activate({ flow, friends: {}, reviews: {} } as never);
-    const stale = reefMessageAdapter.send.text({ cfg: {}, to: "reef:alice", text: "stale" });
-    await Promise.race([guardEntered.promise, stale]);
-    expect(classifier.classify).toHaveBeenCalledOnce();
-
+    const stale = reefMessageAdapter.send
+      .text({ cfg: {}, to: "reef:alice", text: "stale" })
+      .catch((error: unknown) => error);
     const replacementAuthority = createReefRuntimeAuthority();
-    const replacement = { flow: {}, friends: {}, reviews: {} } as never;
-    replacementAuthority.activate(replacement);
     try {
+      await Promise.race([guardEntered.promise, stale]);
+      expect(classifier.classify).toHaveBeenCalledOnce();
+
+      const replacement = { flow: {}, friends: {}, reviews: {} } as never;
+      replacementAuthority.activate(replacement);
       guardPaused.resolve();
-      const staleResult = await stale.catch((error: unknown) => error);
+      const staleResult = await stale;
 
       expect(relay.sendEnvelope).not.toHaveBeenCalled();
       expect(staleResult).toBeInstanceOf(PlatformMessageNotDispatchedError);
@@ -111,24 +113,31 @@ describe("reefOutboundAdapter", () => {
     } finally {
       replacementAuthority.release();
       firstAuthority.release();
+      // The held send must settle before the store teardown, even after an assertion fails.
+      guardPaused.resolve();
+      await stale;
     }
   });
 
   it("terminally rejects unapproved Reef peers", async () => {
     const { flow, trusted } = await createFlow();
     await trusted.remove("alice");
-    createReefRuntimeAuthority().activate({ flow, friends: {}, reviews: {} } as never);
+    const authority = createReefRuntimeAuthority();
+    authority.activate({ flow, friends: {}, reviews: {} } as never);
+    try {
+      const error = await reefMessageAdapter.send.text(message).catch((caught: unknown) => caught);
 
-    const error = await reefMessageAdapter.send.text(message).catch((caught: unknown) => caught);
-
-    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
-    expect(error).toMatchObject({
-      cause: {
-        name: "ReefOutboundRejectedError",
-        message: expect.stringContaining("not approved"),
-      },
-      retryable: false,
-    });
+      expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+      expect(error).toMatchObject({
+        cause: {
+          name: "ReefOutboundRejectedError",
+          message: expect.stringContaining("not approved"),
+        },
+        retryable: false,
+      });
+    } finally {
+      authority.release();
+    }
   });
 
   it("keeps guard availability failures retryable before dispatch", async () => {

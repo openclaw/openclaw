@@ -36,65 +36,79 @@ describe("image completion producer context through the QA provider", () => {
     }));
   });
 
-  it.each(["v4 developer", "queued host delivery"] as const)(
-    "recognizes %s without replaying an unavailable image tool",
-    async (projection) => {
-      const server = await startQaMockOpenAiServer();
-      try {
-        const completion =
-          projection === "v4 developer"
-            ? {
-                role: "developer",
-                content: labelRuntimeContextText(
-                  projectRuntimeContextFragments(buildAgentInternalEventContext([event])),
+  it.each([
+    "v4 developer",
+    "v4 host delivery",
+    "v4 quoted delivery",
+    "queued host delivery",
+  ] as const)("recognizes %s without replaying an unavailable image tool", async (projection) => {
+    const server = await startQaMockOpenAiServer();
+    try {
+      const deliveredMediaContext = formatGeneratedMediaDeliveredForPrompt(event.mediaUrls ?? []);
+      const completionEvent =
+        projection === "v4 host delivery"
+          ? { ...event, replyInstruction: `${event.replyInstruction}\n\n${deliveredMediaContext}` }
+          : event;
+      const completion =
+        projection !== "queued host delivery"
+          ? {
+              role: "developer",
+              content: labelRuntimeContextText(
+                projectRuntimeContextFragments(
+                  buildAgentInternalEventContext(
+                    [completionEvent],
+                    projection === "v4 quoted delivery"
+                      ? [{ kind: "conversation-data", text: deliveredMediaContext }]
+                      : [],
+                  ),
                 ),
-              }
-            : user(
-                `${formatGeneratedMediaDeliveredForPrompt(event.mediaUrls ?? [])}\n\n${resolveAcpPromptBody("", [event])}`,
-              );
-        const provenance = labelRuntimeContextText(
-          projectRuntimeContextFragments([
+              ),
+            }
+          : user(`${deliveredMediaContext}\n\n${resolveAcpPromptBody("", [event])}`);
+      const provenance = labelRuntimeContextText(
+        projectRuntimeContextFragments([
+          {
+            kind: "conversation-data",
+            text: "[Inter-session message] sourceSession=image_generate:qa-image sourceChannel=internal sourceTool=image_generate isUser=false",
+          },
+        ]),
+      );
+      const response = await fetch(`${server.baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "gpt-5.6-luna",
+          stream: false,
+          tools: [{ type: "function", name: "message" }],
+          input: [
+            user("Image generation check: generate a QA lighthouse image."),
             {
-              kind: "conversation-data",
-              text: "[Inter-session message] sourceSession=image_generate:qa-image sourceChannel=internal sourceTool=image_generate isUser=false",
+              type: "function_call",
+              name: "image_generate",
+              call_id: "qa-image",
+              arguments: "{}",
             },
-          ]),
-        );
-        const response = await fetch(`${server.baseUrl}/v1/responses`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            model: "gpt-5.6-luna",
-            stream: false,
-            tools: [{ type: "function", name: "message" }],
-            input: [
-              user("Image generation check: generate a QA lighthouse image."),
-              {
-                type: "function_call",
-                name: "image_generate",
-                call_id: "qa-image",
-                arguments: "{}",
-              },
-              {
-                type: "function_call_output",
-                call_id: "qa-image",
-                output: "Background image generation started.",
-              },
-              completion,
-              ...(projection === "queued host delivery" ? [user(provenance)] : []),
-            ],
-          }),
-        });
-        expect(response.ok).toBe(true);
-        const text =
-          "Protocol note: generated the QA lighthouse image successfully." +
-          (projection === "queued host delivery" ? "" : "\nMEDIA:/tmp/qa-lighthouse.png");
-        expect(await response.json()).toMatchObject({
-          output: [{ type: "message", content: [{ type: "output_text", text }] }],
-        });
-      } finally {
-        await server.stop();
-      }
-    },
-  );
+            {
+              type: "function_call_output",
+              call_id: "qa-image",
+              output: "Background image generation started.",
+            },
+            completion,
+            ...(projection === "queued host delivery" ? [user(provenance)] : []),
+          ],
+        }),
+      });
+      expect(response.ok).toBe(true);
+      const text =
+        "Protocol note: generated the QA lighthouse image successfully." +
+        (projection === "queued host delivery" || projection === "v4 host delivery"
+          ? ""
+          : "\nMEDIA:/tmp/qa-lighthouse.png");
+      expect(await response.json()).toMatchObject({
+        output: [{ type: "message", content: [{ type: "output_text", text }] }],
+      });
+    } finally {
+      await server.stop();
+    }
+  });
 });

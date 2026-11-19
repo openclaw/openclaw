@@ -5,8 +5,6 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../c
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
-import * as gatewayWorkAdmission from "../../../process/gateway-work-admission.js";
-import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import {
@@ -16,10 +14,6 @@ import {
 import "../spawn/subagent-spawn-model.mocks.shared.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
-import {
-  getSubagentRequesterSessionActivity,
-  loadRequesterSessionEntry,
-} from "../announce/subagent-announce-delivery.runtime.js";
 import { testing as deliveryTesting } from "../announce/subagent-announce-delivery.test-support.js";
 import { testing as outputTesting } from "../announce/subagent-announce-output.test-support.js";
 import { announceTesting } from "../announce/subagent-announce-overrides.test-support.js";
@@ -333,91 +327,6 @@ function getRequesterWakeCalls() {
     request.params?.idempotencyKey?.startsWith("announce:requester-settle:"),
   );
 }
-
-it("delivers a restart interruption once after the requester becomes available", async () => {
-  const cleanupAttempts: Promise<unknown>[] = [];
-  const cleanupObservation = vi.mocked(gatewayWorkAdmission.runWithGatewayDetachedWorkContinuation);
-  const original = expectDefined(
-    cleanupObservation.getMockImplementation(),
-    "root admission observer",
-  );
-  cleanupObservation.mockImplementation((run, origin) => {
-    const work = original(run, origin);
-    if (origin === "subagents:lifecycle-cleanup") {
-      cleanupAttempts.push(work);
-    }
-    return work;
-  });
-  let operation: ReturnType<typeof createReplyOperation> | undefined;
-  try {
-    const child = await prepareRun("restart-child", "retained child progress");
-    const requester = sessionStore[REQUESTER]!;
-    delete sessionStore[REQUESTER];
-    expect(
-      await mod.finalizeInterruptedSubagentRun({
-        runId: child.runId,
-        error: "Subagent execution was interrupted by a Gateway restart.",
-        endedAt: Date.now(),
-      }),
-    ).toBe(1);
-    await waitForRun(
-      child.runId,
-      (run) => run.cleanupHandled === false && Boolean(run.delivery?.payload),
-    );
-    await expectDefined(cleanupAttempts[0], "failed boot cleanup");
-    expect(findRun(child.runId)?.delivery?.status).toBe("pending");
-    expect(getAgentCalls()).toHaveLength(0);
-
-    sessionStore[REQUESTER] = requester;
-    operation = createReplyOperation({
-      sessionKey: REQUESTER,
-      sessionId: requester.sessionId!,
-      resetTriggered: false,
-      target: expectDefined(
-        getSubagentRequesterSessionActivity(
-          REQUESTER,
-          await loadRequesterSessionEntry(REQUESTER, "main"),
-        ).target,
-        "recovered requester target",
-      ),
-    });
-    operation.setPhase("running");
-    const received: string[] = [];
-    operation.attachBackend({
-      kind: "embedded",
-      cancel() {},
-      supportsTranscriptCommitWait: true,
-      messageInjectionV2: {
-        version: 2,
-        isAvailable: () => true,
-        queueMessage: async (text, options, assertCurrent) => {
-          assertCurrent();
-          received.push(options?.currentInboundContext?.text ?? text);
-          options?.onQueueAccepted?.(true);
-        },
-      },
-    });
-    requesterActive = true;
-    await advanceAndFlush(30_000);
-    for (const cleanup of cleanupAttempts) {
-      await cleanup;
-    }
-    expect(findRun(child.runId)?.delivery?.status).toBe("delivered");
-    operation.complete();
-    requesterActive = false;
-    mod.resumeSubagentRun(child.runId);
-    await advanceAndFlush(30_000);
-    await waitForDeliveredCleanup(child.runId);
-    expect(received).toHaveLength(1);
-    expect(received[0]).toContain(child.runId);
-    expect(getAgentCalls()).toHaveLength(0);
-    expect(getRequesterWakeCalls()).toHaveLength(0);
-  } finally {
-    operation?.complete();
-    requesterActive = false;
-    cleanupObservation.mockImplementation(original);
-  }
-});
 
 it("delivers a yielded visible child exactly once", async () => {
   const requesterTurnRunId = "run-requester-visible-yield";

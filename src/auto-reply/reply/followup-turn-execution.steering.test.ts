@@ -10,7 +10,7 @@ import {
   observeChannelIngressQueueWrite,
 } from "../../channels/message/ingress-drain.test-helpers.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { loadSessionTranscriptEvents } from "../../config/sessions/session-transcript-events.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createChatSendMessageInjectionStarter } from "../../gateway/server-methods/chat-send-message-injection.js";
@@ -42,8 +42,8 @@ import {
 import { completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import { clearFollowupQueue } from "./queue/state.js";
 import { isFollowupRunAborted } from "./queue/types.js";
+import { createReplyActorFixture } from "./reply-actor.test-support.js";
 import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
-import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 import { readChannelSourceTurnId } from "./source-turn-id.js";
 import { createMockTypingController } from "./test-helpers.js";
 
@@ -90,7 +90,6 @@ describe("queued turn steering", () => {
       const entry: SessionEntry = {
         sessionId: target.sessionId,
         updatedAt: 1,
-        restartRecoveryTerminalRunIds: ["previous-input"],
       };
       await replaceSessionEntry(target, entry);
       const operation = createReplyOperation({
@@ -98,7 +97,7 @@ describe("queued turn steering", () => {
         turnKind: "queued_followup",
         resetTriggered: false,
       });
-      await using actor = createReplyRecoveryActorFixture({
+      await using actor = createReplyActorFixture({
         ...target,
         operation,
         getSessionId: () => operation.sessionId,
@@ -231,7 +230,6 @@ describe("queued turn steering", () => {
           completeFollowupRunLifecycle(turn.queued);
           await Promise.allSettled([turn.queued.controllerInput.settlement.promise]);
         }
-        await turn.restartRecovery?.clear();
       }
     },
   );
@@ -372,9 +370,8 @@ describe("queued ingress acceptance", () => {
           if (multipleInputs) {
             const claim = run.controllerClaim ?? run.controllerInput?.claim;
             selectedGroups.push(claim?.sources.map((source) => source.prompt) ?? []);
-            rejectQueuePreparation(run, new Error("ENOSPC: queued preparation failed"));
           }
-          throw new Error("ENOSPC: queued preparation failed");
+          rejectQueuePreparation(run, new Error("ENOSPC: queued preparation failed"));
         });
         const drain = createChannelIngressDrain({
           queue,
@@ -432,6 +429,7 @@ describe("queued ingress acceptance", () => {
             expect(signals.map((signal) => signal.aborted)).toEqual([false, false]);
             await vi.advanceTimersByTimeAsync(60);
             expect(signals.map((signal) => signal.aborted)).toEqual([true, false]);
+            await vi.advanceTimersByTimeAsync(250);
             expect(selectedGroups).toContainEqual(["Second request"]);
             // The waiting input keeps its heartbeat until its own preparation fails.
             await vi.advanceTimersByTimeAsync(90);
@@ -457,6 +455,7 @@ describe("queued ingress acceptance", () => {
         } finally {
           drain.dispose();
           clearFollowupQueue(key);
+          await vi.advanceTimersByTimeAsync(250);
           preparation?.mockRestore();
         }
       });
@@ -489,7 +488,7 @@ describe("queued ingress acceptance", () => {
           resetTriggered: false,
           upstreamAbortSignal: upstreamAbort.signal,
         });
-        await using actor = createReplyRecoveryActorFixture({
+        await using actor = createReplyActorFixture({
           ...target,
           operation,
           getSessionId: () => operation.sessionId,
@@ -526,10 +525,6 @@ describe("queued ingress acceptance", () => {
         const replies: ReplyPayload[] = [];
         const adopted = vi.fn(async () => {
           expect(recorder.hasPersisted()).toBe(true);
-          expect(loadSessionEntry(target)).toMatchObject({
-            restartRecoveryDeliveryRunId: "message-1",
-            restartRecoveryDeliverySourceRunId: sourceId,
-          });
           expect(await loadSessionTranscriptEvents(target)).toContainEqual(
             expect.objectContaining({
               type: "message",
@@ -563,9 +558,6 @@ describe("queued ingress acceptance", () => {
                   }
                   await vi.advanceTimersByTimeAsync(100);
                   expect(operation.abortSignal.aborted).toBe(true);
-                  expect(
-                    loadSessionEntry(target)?.restartRecoveryTerminalRunIds ?? [],
-                  ).not.toContain(sourceId);
                 }
                 await lifecycle.onAdopted();
               },
@@ -603,7 +595,6 @@ describe("queued ingress acceptance", () => {
             completeFollowupRunLifecycle(turn.queued);
             await Promise.allSettled([turn.queued.controllerInput.settlement.promise]);
           }
-          await turn.restartRecovery?.clear();
         }
       });
     },

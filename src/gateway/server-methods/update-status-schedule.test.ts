@@ -1,24 +1,34 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import { createMacosAppInstallOwner } from "../../commands/test-runtime-config-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { UpdateCampaignController } from "../../infra/update-campaign.js";
-import {
-  currentUpdateCheckLifecycle,
-  type UpdateCheckLifecycle,
-} from "../../infra/update-check-lifecycle.js";
+import type { UpdateCheckLifecycle } from "../../infra/update-check-lifecycle.js";
 import type { UpdateCheckResult } from "../../infra/update-check.js";
-import { resolveDevGitCommits } from "../../infra/update-git-metadata.js";
-import { createDevGitStatus } from "../../infra/update-startup-git.test-support.js";
-import { resetUpdateAvailableStateForTest } from "../../infra/update-startup.js";
 import {
-  getUpdateAvailable,
-  getUpdateSchedule,
-  resetUpdateStatusState,
-  setUpdateScheduleCache,
-} from "../../infra/update-status-state.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { updateStatusHandlers } from "./update-status.js";
+  closeUpdateFixtureDatabases,
+  resetUpdateFixtureModules,
+} from "../../infra/update-fixture.test-support.js";
+
+let { createMacosAppInstallOwner } = await import("../../commands/test-runtime-config-helpers.js");
+let { UpdateCampaignController } = await import("../../infra/update-campaign.js");
+let { createGatewayUpdateLifecycle } = await import("../../infra/update-check-lifecycle.js");
+let { resolveDevGitCommits } = await import("../../infra/update-git-metadata.js");
+let { createDevGitStatus } = await import("../../infra/update-startup-git.test-support.js");
+let { getUpdateAvailable, getUpdateSchedule, setUpdateScheduleCache } =
+  await import("../../infra/update-status-state.js");
+let { createTestGatewayScheduler } = await import("../../test-utils/gateway-scheduler-clock.js");
+let { updateStatusHandlers } = await import("./update-status.js");
+
+async function importUpdateFixtureModules() {
+  ({ createMacosAppInstallOwner } = await import("../../commands/test-runtime-config-helpers.js"));
+  ({ UpdateCampaignController } = await import("../../infra/update-campaign.js"));
+  ({ createGatewayUpdateLifecycle } = await import("../../infra/update-check-lifecycle.js"));
+  ({ resolveDevGitCommits } = await import("../../infra/update-git-metadata.js"));
+  ({ createDevGitStatus } = await import("../../infra/update-startup-git.test-support.js"));
+  ({ getUpdateAvailable, getUpdateSchedule, setUpdateScheduleCache } =
+    await import("../../infra/update-status-state.js"));
+  ({ createTestGatewayScheduler } = await import("../../test-utils/gateway-scheduler-clock.js"));
+  ({ updateStatusHandlers } = await import("./update-status.js"));
+}
 
 vi.mock("../../version.js", () => ({ VERSION: "2026.9.7" }));
 
@@ -47,11 +57,12 @@ vi.mock("../server-update-sentinel.js", async (importOriginal) => ({
 }));
 
 let lifecycle: UpdateCheckLifecycle;
-let campaignOwner: UpdateCampaignController;
-beforeEach(() => {
+let campaignOwner: InstanceType<typeof UpdateCampaignController>;
+beforeEach(async () => {
+  await resetUpdateFixtureModules();
+  await importUpdateFixtureModules();
   vi.useFakeTimers();
-  resetUpdateAvailableStateForTest(createTestGatewayScheduler());
-  lifecycle = currentUpdateCheckLifecycle();
+  lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
   campaignOwner = new UpdateCampaignController(lifecycle.scheduler);
   lifecycle.campaign = campaignOwner;
   history.mockClear();
@@ -62,7 +73,7 @@ beforeEach(() => {
 afterEach(async () => {
   await lifecycle.stop();
   await lifecycle.scheduler.stop();
-  resetUpdateStatusState();
+  await closeUpdateFixtureDatabases();
   vi.unstubAllEnvs();
   vi.useRealTimers();
 });

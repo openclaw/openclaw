@@ -18,7 +18,8 @@ import {
 import { isRpcSourceRegistered } from "../../sessions/session-controller.rpc-sources.js";
 import type { SessionTarget } from "../../sessions/session-controller.target.js";
 import { captureChannelSessionStop } from "./abort-operation.js";
-import { tryFastAbortFromMessage, type FastAbortRequestParams } from "./abort.js";
+import { tryFastAbortFromMessage } from "./abort.js";
+import type { FastAbortRequestParams } from "./abort.types.js";
 import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { enqueueFollowupRun } from "./queue.js";
@@ -444,7 +445,6 @@ export function registerAbortAcknowledgmentCases({
     const tracking = createGatewayTerminalTracking({
       getScopedRpcSource: (id) =>
         id === runId && isRpcSourceRegistered(entry) ? entry : undefined,
-      restartRecoveryCandidates: new Map(),
     });
     const onAbandoned = vi.fn(async () => {
       notificationEntered.resolve();

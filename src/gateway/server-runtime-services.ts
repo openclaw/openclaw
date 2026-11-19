@@ -2,7 +2,6 @@
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
-import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { outboundDeliveryNotifications } from "../infra/delivery-queue-cache.js";
 import {
   captureDeliveryQueueStateContext,
@@ -11,6 +10,7 @@ import {
 } from "../infra/delivery-queue-sqlite.js";
 import { computeBackoffMs } from "../infra/delivery-recovery.shared.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { isConstrainedProcessLowOnMemory } from "../infra/host-memory.js";
 import type { DeliverOutboundPayloadsParams } from "../infra/outbound/deliver.js";
 import {
   schedulePendingSessionDeliveries,
@@ -41,7 +41,9 @@ import {
 } from "./server-maintenance-lifecycle.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import type { GatewayRuntimeServiceLogger } from "./server-runtime-service-shared.js";
+import type { GatewaySessionFactsBackfillScheduler } from "./server-startup-session-migration.js";
 import { measureStartup } from "./server-startup-trace.js";
+import { reportSessionAutomationSourceLoadFailed } from "./session-automation-index.js";
 export { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 export { startGatewayChannelHealthMonitor } from "./server-runtime-startup-services.js";
 
@@ -77,6 +79,7 @@ export function startGatewayCronWithLogging(params: {
         await reconciliation.complete();
       } catch (err) {
         params.logCron.error(`failed to start: ${String(err)}`);
+        reportSessionAutomationSourceLoadFailed(err);
         if (err instanceof CronStoreSelectionRequiredError) {
           return;
         }
@@ -99,6 +102,7 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   delayMs: number;
   isClosing: () => boolean;
   waitForPostReadyWork: () => Promise<void>;
+  scheduleSessionFactsBackfill?: GatewaySessionFactsBackfillScheduler;
   startupMaintenance: GatewayStartupMaintenance;
   startMaintenance: () => Promise<GatewayMaintenanceHandles | null>;
   applyMaintenance: (maintenance: GatewayMaintenanceHandles) => Promise<void> | void;
@@ -120,7 +124,7 @@ export function scheduleGatewayPostReadyMaintenance(params: {
     delayMs: params.delayMs,
     retryDelayMs: Math.max(1_000, params.delayMs),
     isClosing: () => params.signal.aborted || params.isClosing(),
-    isBusy: isRecovering,
+    isBusy: () => isRecovering() || isConstrainedProcessLowOnMemory(),
     waitForReady: params.waitForPostReadyWork,
     log: params.log,
   };
@@ -183,10 +187,14 @@ export function scheduleGatewayPostReadyMaintenance(params: {
       return runWithGatewayIndependentRootWorkAdmission(
         async () => {
           await params.waitForPostReadyWork();
-          if (params.isClosing()) {
+          if (params.isClosing() || params.signal.aborted) {
             return;
           }
           try {
+            // Registration must not wait for optional globally idle maintenance.
+            params.scheduleSessionFactsBackfill?.(
+              params.startupMaintenance.startupSessionDatabases,
+            );
             if (!params.isClosing()) {
               const maintenance = await params.startMaintenance();
               if (params.isClosing()) {
@@ -414,7 +422,6 @@ function startPendingSessionDeliveryRuntime(params: {
   deps: import("../cli/deps.types.js").CliDeps;
   log: GatewayRuntimeServiceLogger;
   maxEnqueuedAt: number;
-  sessionRecoveryReady?: Promise<void>;
   resolveGatewayContext?: GatewayContextResolver;
 }): () => Promise<void> {
   const queueContext = captureOpenClawStateWorkerContext();
@@ -425,22 +432,16 @@ function startPendingSessionDeliveryRuntime(params: {
   );
   let stopPromise: Promise<void> | undefined;
   let stopRuntime: (() => Promise<void>) | undefined;
-  // Delay session continuation recovery so the gateway has time to publish ready state and
-  // request routing before replaying restart-sentinel deliveries.
+  // Publish ready state before draining already-produced media delivery.
   scheduler.schedule({
     id: "delivery:session-recovery",
     delayMs: 1_250,
     run: () =>
       runWithGatewayIndependentRootWorkAdmission(
         async () => {
-          // Early session events can invoke main recovery themselves. Join the same
-          // restored sources as the main scan before they can reject an interrupted turn.
-          if (params.sessionRecoveryReady) {
-            await racePromiseWithAbortSignal(params.sessionRecoveryReady, signal);
-          }
           const {
             deliverQueuedSessionDelivery,
-            recoverPendingRestartContinuationDeliveries,
+            recoverPendingProducedSessionDeliveries,
             settleQueuedSessionDelivery,
           } = await import("./server-restart-sentinel.js");
           if (signal.aborted) {
@@ -464,7 +465,7 @@ function startPendingSessionDeliveryRuntime(params: {
           });
           try {
             await runDelivery(() =>
-              recoverPendingRestartContinuationDeliveries({
+              recoverPendingProducedSessionDeliveries({
                 deps: params.deps,
                 queueContext,
                 log: logRecovery,
@@ -505,7 +506,6 @@ export function activateGatewayScheduledServices(params: {
   cfgAtStart: OpenClawConfig;
   deps: import("../cli/deps.types.js").CliDeps;
   sessionDeliveryRecoveryMaxEnqueuedAt: number;
-  sessionRecoveryReady?: Promise<void>;
   log: GatewayRuntimeServiceLogger;
   resolveGatewayContext?: GatewayContextResolver;
 }): { stopScheduledServices: () => Promise<void>; stopDeliveryRecovery: () => Promise<void> } {
@@ -524,7 +524,6 @@ export function activateGatewayScheduledServices(params: {
     deps: params.deps,
     log: params.log,
     maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
-    sessionRecoveryReady: params.sessionRecoveryReady,
     ...(params.resolveGatewayContext
       ? { resolveGatewayContext: params.resolveGatewayContext }
       : {}),

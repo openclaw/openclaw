@@ -132,10 +132,6 @@ const pendingIds = (presentation: AsyncQuestionPresentation) =>
 const panelButton = (name: string) =>
   container.querySelector<HTMLButtonElement>(`.chat-question-panel__${name}`)!;
 const user = (content: string, runId?: string) => ({ role: "user", content, runId });
-const recoveryInput = (runId?: string) => ({
-  ...user("Resume the interrupted work.", runId),
-  provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
-});
 function expectTimeline(initial: unknown[], ...steps: [unknown[], number][]) {
   let messages = initial;
   for (const [appended, pending] of steps) {
@@ -143,20 +139,6 @@ function expectTimeline(initial: unknown[], ...steps: [unknown[], number][]) {
     expectPending(messages, pending);
   }
 }
-
-it("retires a recovered run's older reminder without treating restart input as a human answer", () => {
-  const recovery = recoveryInput("recovered-run");
-  expectPending(
-    [
-      question("old", "interrupted-run"),
-      { ...terminal("interrupted-run"), stopReason: "aborted" },
-      recovery,
-      terminal("recovered-run"),
-    ],
-    0,
-  );
-  expectPending([question(), { ...recovery, runId: undefined }, terminal()], 1);
-});
 
 it("keeps questions from overlapping runs when either run's terminal arrives last", () => {
   const messages = [question("first", "run-1"), question("second", "run-2")];
@@ -225,58 +207,6 @@ it("does not credit a late earlier-run terminal to a newer user turn for an unow
     [[terminal("run-1")], 1],
     [[terminal("run-2")], 1],
     [[user("Another task", "run-3"), terminal("run-3")], 0],
-  );
-});
-
-it("retires the unowned mirrored prompt only after its canonical restart recovery succeeds", async () => {
-  const old = {
-    ...question("old"),
-    phase: undefined,
-    __openclaw: { mirrorOrigin: "codex-app-server", mirrorIdentity: "native-turn:async:old" },
-  };
-  const recovery = {
-    ...recoveryInput(),
-    __openclaw: { runId: "recovery-run", idempotencyKey: "recovery-run:user" },
-  };
-  const recovered = {
-    role: "assistant",
-    content: "The requested work is complete.",
-    __openclaw: { mirrorOrigin: "codex-app-server", runId: "recovery-run", runTerminal: true },
-  };
-  const messages = [
-    { ...user("Complete the work."), __openclaw: { runId: "original-run" } },
-    old,
-    {
-      ...user("The connection is already available."),
-      __openclaw: { runId: "reply-run", steerTargetRunId: "original-run" },
-    },
-    recovery,
-  ];
-  const state = presentationState();
-  expectPending(messages, 1, state);
-  expectPending([...messages, { ...recovered, stopReason: "aborted" }], 1, state);
-  const completed = [...messages, recovered];
-  const archived = present(completed, state);
-  expect(archived.pending).toHaveLength(0);
-  expectPending(completed, 0);
-  expect(pendingIds(present([...messages, question("fresh", "recovery-run"), recovered]))).toEqual([
-    "fresh",
-  ]);
-  await archived.reopen("old");
-  expectPending(completed, 1, state);
-  expectPending([...completed, terminal("next-run")], 0, state);
-  expectPending([...messages.slice(0, -1), recovered], 1);
-  expectPending(
-    [
-      ...messages.slice(0, -1),
-      { ...recovery, provenance: { kind: "internal_system", sourceTool: "cron" } },
-      recovered,
-    ],
-    1,
-  );
-  expectPending(
-    [...messages, { ...recovered, __openclaw: { ...recovered["__openclaw"], runId: "other-run" } }],
-    1,
   );
 });
 

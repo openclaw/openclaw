@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import path from "node:path";
+import { syncKnowledgeDirectory } from "./directory-sync.js";
 import { RECORD_MAX_BYTES, AUXILIARY_MAX_BYTES } from "./limits.js";
 import { digest, MAX_ENTRIES } from "./scan-primitives.js";
 import { SOURCE_DESCRIPTOR_MAX_BYTES } from "./source-descriptors.js";
@@ -29,8 +30,8 @@ const byteLimit = (role: PublicationRole) =>
       ? SOURCE_DESCRIPTOR_MAX_BYTES
       : AUXILIARY_MAX_BYTES;
 
-/** Synchronous file operations keep the SQLite publisher fence held throughout
- * each filesystem boundary. No user path is accepted by the mutation API. */
+/** The storage worker serializes publication; file boundaries preserve editor changes.
+ * No user path is accepted by the mutation API. */
 export class PublicationFiles {
   readonly root: string;
   private readonly stamp: string;
@@ -153,12 +154,7 @@ export class PublicationFiles {
     }
   }
   sync(directory: string) {
-    const fd = fs.openSync(directory, fs.constants.O_RDONLY);
-    try {
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
-    }
+    syncKnowledgeDirectory(directory);
   }
   exclusive(relative: string, raw: string, role = publicationRole(relative)) {
     if (Buffer.byteLength(raw) > byteLimit(role)) {
@@ -176,7 +172,7 @@ export class PublicationFiles {
     } finally {
       fs.closeSync(fd);
     }
-    this.sync(path.dirname(filename));
+    // The journal can recreate a lost stage; publish syncs the installed names.
   }
   /** Move old inode aside, compare *after* displacement, install with no-clobber
    * link. Editor writes through an open old fd remain on the retained inode.

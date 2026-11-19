@@ -40,7 +40,6 @@ import {
 import { readTranscriptStatsFromDatabase } from "../../config/sessions/session-accessor.sqlite-transcript-stats.js";
 import { replaceSqliteTranscriptEventsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { appendTranscriptMessage } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
-import { readSessionPendingInputContext } from "../../config/sessions/session-pending-input-history.js";
 import { discardSessionPendingInput } from "../../config/sessions/session-pending-input-withdrawal.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
@@ -250,7 +249,7 @@ conformance("pending input workers", () => {
   afterEach(async () => {
     const retained = receipts.splice(0);
     for (const receipt of retained) {
-      receipt.finish("interrupted");
+      receipt.finish("interrupted", "failed");
     }
     await Promise.all(retained.map(async (receipt) => receipt.settled?.()));
   });
@@ -274,10 +273,16 @@ conformance("pending input workers", () => {
     return receipt;
   };
 
-  it("retains interrupted history and excludes consumed inputs from counted and context pages", async () => {
+  it("retains failed sends while excluding legacy interrupted and consumed inputs from history", async () => {
     const retained = await stage("retained");
-    retained.finish("interrupted");
+    retained.finish("cancelled", "failed");
     await retained.settled?.();
+    const legacy = await stage("legacy-interrupted");
+    legacy.finish("interrupted", "failed");
+    await legacy.settled?.();
+    expect(await readSessionSubmittedInput(scope, "legacy-interrupted:user")).toEqual(
+      legacy.message,
+    );
     const consumed = await stage("consumed");
     expect(
       await consumed.run(() => appendTranscriptMessage(scope, { message: consumed.message })),
@@ -286,14 +291,13 @@ conformance("pending input workers", () => {
 
     const expected = {
       id: retained.inputId,
-      state: "interrupted",
+      state: "cancelled",
       message: { content: "retained" },
     };
     expect(await listSessionPendingInputs(scope)).toMatchObject({
       total: 1,
       items: [expected],
     });
-    expect(await readSessionPendingInputContext(scope)).toMatchObject({ items: [expected] });
   });
 
   it("recovers submitted input from its retained pending row before transcript consumption", async () => {
@@ -310,7 +314,7 @@ conformance("pending input workers", () => {
     assert(first.completeAsync);
     const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
     expect(await first.completeAsync(outcome)).toEqual(outcome);
-    first.finish("interrupted");
+    first.finish("interrupted", "failed");
     await first.settled?.();
 
     const replay = await stage("completed", true);

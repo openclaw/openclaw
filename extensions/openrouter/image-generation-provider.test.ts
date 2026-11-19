@@ -63,7 +63,24 @@ describe("openrouter image generation provider", () => {
     resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "openrouter-key" });
   });
 
-  it("preserves chat-completion image requests for configured custom bases", async () => {
+  it.each([
+    { name: "without references", inputImages: undefined, content: "draw a sticker" },
+    {
+      name: "with ordered references",
+      inputImages: [
+        { buffer: Buffer.from("first-reference"), mimeType: "image/png" },
+        { buffer: Buffer.from("second-reference"), mimeType: "image/jpeg" },
+      ],
+      content: [
+        { type: "text", text: "draw a sticker" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,Zmlyc3QtcmVmZXJlbmNl" } },
+        {
+          type: "image_url",
+          image_url: { url: "data:image/jpeg;base64,c2Vjb25kLXJlZmVyZW5jZQ==" },
+        },
+      ],
+    },
+  ])("preserves custom-base chat-completion requests $name", async ({ inputImages, content }) => {
     const release = respondWithChat({
       images: [{ imageUrl: { url: "data:image/png;base64,cG5nLW9uZQ==" } }],
     });
@@ -74,6 +91,7 @@ describe("openrouter image generation provider", () => {
       timeoutMs: 12_345,
       ssrfPolicy: { allowRfc2544BenchmarkRange: true },
       cfg: customConfig(),
+      inputImages,
     });
 
     const request = postRequest();
@@ -86,7 +104,7 @@ describe("openrouter image generation provider", () => {
       headers,
       body: {
         model: "google/gemini-3.1-flash-image-preview",
-        messages: [{ role: "user", content: "draw a sticker" }],
+        messages: [{ role: "user", content }],
         modalities: ["image", "text"],
         n: 2,
         image_config: { aspect_ratio: "16:9", image_size: "2K" },
@@ -162,24 +180,53 @@ describe("openrouter image generation provider", () => {
     });
   });
 
-  it("fans out canonical batches into bounded single-image requests", async () => {
-    const model = "openai/gpt-5.4-image-2";
-    postJsonRequestMock
-      .mockResolvedValueOnce(jsonResponse({ data: [{ b64_json: "cG5nLW9uZQ==" }] }))
-      .mockResolvedValueOnce(jsonResponse({ data: [{ b64_json: "cG5nLXR3bw==" }] }));
+  it.each([
+    { name: "without references", inputImages: undefined, inputReferences: undefined },
+    {
+      name: "with ordered references",
+      inputImages: [
+        { buffer: Buffer.from("first-reference"), mimeType: "image/png" },
+        { buffer: Buffer.from("second-reference"), mimeType: "image/jpeg" },
+      ],
+      inputReferences: [
+        { type: "image_url", image_url: { url: "data:image/png;base64,Zmlyc3QtcmVmZXJlbmNl" } },
+        {
+          type: "image_url",
+          image_url: { url: "data:image/jpeg;base64,c2Vjb25kLXJlZmVyZW5jZQ==" },
+        },
+      ],
+    },
+  ])(
+    "fans out canonical batches $name into single-image requests",
+    async ({ inputImages, inputReferences }) => {
+      const model = "openai/gpt-5.4-image-2";
+      postJsonRequestMock
+        .mockResolvedValueOnce(jsonResponse({ data: [{ b64_json: "cG5nLW9uZQ==" }] }))
+        .mockResolvedValueOnce(jsonResponse({ data: [{ b64_json: "cG5nLXR3bw==" }] }));
 
-    const result = await generateImage({ model, prompt: "draw two stickers", count: 2 });
+      const result = await generateImage({
+        model,
+        prompt: "draw two stickers",
+        count: 2,
+        inputImages,
+      });
 
-    expect(postJsonRequestMock.mock.calls).toEqual(
-      Array.from({ length: 2 }, () => [
-        expect.objectContaining({
-          url: "https://openrouter.ai/api/v1/images",
-          body: { model, prompt: "draw two stickers", n: 1 },
-        }),
-      ]),
-    );
-    expect(result.images.map((image) => image.buffer.toString())).toEqual(["png-one", "png-two"]);
-  });
+      expect(postJsonRequestMock.mock.calls).toEqual(
+        Array.from({ length: 2 }, () => [
+          expect.objectContaining({
+            url: "https://openrouter.ai/api/v1/images",
+            body: {
+              model,
+              prompt: "draw two stickers",
+              n: 1,
+              ...(inputReferences ? { input_references: inputReferences } : {}),
+            },
+          }),
+        ]),
+      );
+      expect(result.images.map((image) => image.buffer.toString())).toEqual(["png-one", "png-two"]);
+    },
+  );
 
   it("fails a canonical batch when any request fails", async () => {
     postJsonRequestMock

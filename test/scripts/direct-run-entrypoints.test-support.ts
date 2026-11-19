@@ -3,21 +3,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { inspect } from "node:util";
+import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
 import { runNodeScript } from "../helpers/run-node-script.js";
 
 type NodeResult = Awaited<ReturnType<typeof runNodeScript>>;
 
 export function formatShimResult(result: NodeResult) {
   return `status: ${result.status}\nerror: ${inspect(result.error)}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
-}
-
-function hasUnjoinedTree(error: unknown) {
-  return (
-    error &&
-    typeof error === "object" &&
-    "processTreeState" in error &&
-    error.processTreeState !== "terminated"
-  );
 }
 
 export const TSX_SHIM_WRAPPERS = [
@@ -103,6 +95,8 @@ export async function withShimFixture<T>(
   );
   const commands: Array<Promise<NodeResult>> = [];
   const outcome = (async () => {
+    // Keep artifact ownership in this synthetic checkout, not an enclosing repository.
+    mkdirSync(path.join(checkoutRoot, ".git"), { recursive: true });
     for (const source of [
       wrapper,
       "scripts/tsx.mjs",
@@ -137,9 +131,10 @@ export async function withShimFixture<T>(
     () => undefined,
     (error: unknown) => error,
   );
-  // Callback rejection must not release files still owned by an in-flight command.
+  // Callback rejection can nest cleanup markers in aggregate/cause errors.
+  // Join commands, then retain inputs until every nested owner is verified.
   const results = await Promise.all(commands);
-  const unjoined = [callbackError, ...results.map((result) => result.error)].find(hasUnjoinedTree);
+  const unjoined = [callbackError, ...results.map((result) => result.error)].find(hasUnjoinedWork);
   if (unjoined) {
     const outputPath = path.join(fixtureRoot, "command-output.log");
     writeFileSync(outputPath, results.map(formatShimResult).join("\n\n"));

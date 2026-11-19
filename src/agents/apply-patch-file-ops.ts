@@ -35,7 +35,7 @@ export type ApplyPatchFileOptions = {
   /** Containment boundary when relative paths resolve from a nested cwd. */
   root?: string;
   sandbox?: SandboxApplyPatchConfig;
-  /** Restrict patch paths to the workspace root (cwd). Default: true. Set false to opt out. */
+  /** Restrict patch paths to the workspace root (cwd). Host default: false; sandbox default: true. */
   workspaceOnly?: boolean;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
 };

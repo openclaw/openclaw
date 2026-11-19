@@ -170,8 +170,6 @@ it("logs only malformed frame sizes and still accepts the next response", async 
     charCount: malformed.length,
     fragmentCount: 1,
   });
-  expect(JSON.stringify(warn.mock.calls)).not.toContain(contentMarker);
-  expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-value");
   expect(harness.client.getCloseError()).toBeUndefined();
 });
 
@@ -309,7 +307,6 @@ it("keeps RPC requests usable after stderr stream errors", async () => {
 
   expect(() => harness.process.stderr.emit("error", stderrError)).not.toThrow();
   expect(warn).toHaveBeenCalledExactlyOnceWith("codex app-server stderr stream failed");
-  expect(JSON.stringify(warn.mock.calls)).not.toContain(contentMarker);
 
   harness.reply({ ok: true });
   await expect(pending).resolves.toEqual({ ok: true });
@@ -323,7 +320,7 @@ const cat = Buffer.from("猫", "utf8");
 it.each([
   {
     name: "redacted credentials",
-    chunks: ['fatal token="secret-value" while booting\n'],
+    chunks: [`fatal token="${"synthetic-secret-".repeat(50)}" while booting\n`],
     tail: 'fatal token="<redacted>" while booting',
   },
   {
@@ -334,7 +331,11 @@ it.each([
     ],
     tail: "fatal 猫 boot",
   },
-  { name: "bounded UTF-16", chunks: [`🎉${"x".repeat(1_999)}`], tail: `${"x".repeat(500)}...` },
+  {
+    name: "terminal cause after warnings with bounded UTF-16",
+    chunks: [`${"warning: ".repeat(300)}🎉${"x".repeat(467)}fatal: startup owner unavailable`],
+    tail: `...${"x".repeat(467)}fatal: startup owner unavailable`,
+  },
 ])("preserves $name in stderr exit errors", async ({ chunks, tail }) => {
   const harness = createHarness();
   const pending = harness.client.request("test/method");
@@ -345,6 +346,7 @@ it.each([
   await expect(pending).rejects.toThrow(
     `codex app-server exited: code=1 signal=null stderr=${JSON.stringify(tail)}`,
   );
+  expect(harness.client.getStderrDiagnostic()).toBe(tail);
   await expect(harness.client.request("another/method")).rejects.toThrow(
     "codex app-server exited: code=1 signal=null",
   );

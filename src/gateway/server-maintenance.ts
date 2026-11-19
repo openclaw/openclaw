@@ -2,6 +2,7 @@ import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coe
 import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
 import { formatWorktreeGcResult } from "../agents/worktrees/gc-result.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { pruneRegisteredAgentToolUsage } from "../config/sessions/tool-usage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   hasAgentRunContextExecutionOwner,
@@ -22,15 +23,17 @@ import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
 import { generateSecureInt } from "../infra/secure-random.js";
+import { reclaimAbandonedSqliteSnapshots } from "../infra/sqlite-readonly-worker.js";
 import { checkTelemetryUpdate } from "../infra/telemetry.js";
 import { cleanOldMedia, pruneOutboundMedia, prunePlaybackTranscodeCache } from "../media/store.js";
 import {
   getGatewayRestartDrainSignal,
   isGatewayWorkAdmissionClosed,
+  runWithGatewayDetachedWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { listRpcSourceEntries } from "../sessions/session-controller.rpc-sources.js";
-import { registerSkillUsageTracking } from "../skills/workshop/skill-usage.js";
+import { registerSkillUsageTracking } from "../skills/runtime/skill-usage.js";
 import { pruneExpiredArtifactDownloads } from "./artifact-download-grants.js";
 import {
   captureThawRestartTargets,
@@ -38,9 +41,9 @@ import {
   type ThawRestartManager,
   type ThawRestartTarget,
 } from "./channel-thaw-restart.js";
-import type { RestartRecoveryCandidate } from "./chat-abort.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import type { HealthSummary } from "./health/types.js";
+import { cleanupManagedOutgoingMediaRecords } from "./managed-image-attachments.js";
 import {
   chatAbortMarkerTimestampMs,
   type ChatRunEntry,
@@ -119,7 +122,6 @@ export function startGatewayMaintenanceTimers(params: {
   refreshPresence: () => void;
   resetEventLoopHealth: () => void;
   dedupe: Map<string, DedupeEntry>;
-  restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
   chatRunState: ChatRunState;
   removeChatRun: (
     sessionId: string,
@@ -440,6 +442,40 @@ export function startGatewayMaintenanceTimers(params: {
 
   const skillUsageCleanup = registerSkillUsageTracking();
 
+  scheduleMedia("tool-usage-retention", async () => {
+    try {
+      if (mediaScheduler.signal.aborted || isGatewayWorkAdmissionClosed()) {
+        return;
+      }
+      await runWithGatewayDetachedWorkAdmission(
+        () =>
+          pruneRegisteredAgentToolUsage({
+            now: mediaScheduler.now(),
+            assertCurrent: () => mediaScheduler.signal.throwIfAborted(),
+          }),
+        "runtime:tool-usage-retention",
+        mediaScheduler.signal,
+      );
+    } catch (error) {
+      if (!mediaScheduler.signal.aborted) {
+        params.logHealth.error(`tool usage retention failed: ${formatError(error)}`);
+      }
+    }
+  });
+
+  scheduleMedia("sqlite-snapshots", async () => {
+    try {
+      const result = await reclaimAbandonedSqliteSnapshots(mediaScheduler.signal);
+      if (result.removed || result.skipped) {
+        params.logHealth.info(
+          `SQLite snapshot cleanup: removed ${result.removed} directories (${result.bytes} bytes); retained ${result.skipped} busy, recent, or unrecognized directories`,
+        );
+      }
+    } catch (error) {
+      params.logHealth.error(`SQLite snapshot cleanup failed: ${formatError(error)}`);
+    }
+  });
+
   schedulePeriodic("dedupe", 60_000, () => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = scheduler.now();
@@ -538,7 +574,6 @@ export function startGatewayMaintenanceTimers(params: {
   });
 
   const runManagedOutgoingMediaGc = async () => {
-    const { cleanupManagedOutgoingMediaRecords } = await import("./managed-image-attachments.js");
     return await cleanupManagedOutgoingMediaRecords({
       hasActiveSessionRun: (sessionKey, agentId) => {
         const cfg = params.getRuntimeConfig();

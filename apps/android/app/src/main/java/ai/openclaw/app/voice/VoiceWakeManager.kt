@@ -7,6 +7,8 @@ import ai.openclaw.app.i18n.resolveNativeText
 import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.media.AudioFormat
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -31,6 +33,7 @@ internal sealed interface VoiceWakeRecognitionEvent {
   data class Transcript(
     val text: String,
     val isFinal: Boolean,
+    val sessionEnded: Boolean = true,
   ) : VoiceWakeRecognitionEvent
 
   data class Error(
@@ -65,6 +68,7 @@ internal class VoiceWakeRecognitionSession(
 
 internal class AndroidOnDeviceVoiceWakeRecognizer(
   context: Context,
+  private val scope: CoroutineScope,
 ) : VoiceWakeRecognizer {
   private val appContext = context.applicationContext
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -74,6 +78,8 @@ internal class AndroidOnDeviceVoiceWakeRecognizer(
   private val platformOwnerOperationId = AtomicLong(0)
   private var recognizer: SpeechRecognizer? = null
   private var recognitionSession: VoiceWakeRecognitionSession? = null
+  private var audioSource: SpeechRecognitionAudioSource? = null
+  private var useAudioSource = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
 
   override fun start(
     operationId: Long,
@@ -102,8 +108,10 @@ internal class AndroidOnDeviceVoiceWakeRecognizer(
         val active = createRecognizer(session)
         recognitionSession = session
         recognizer = active
+        if (useAudioSource) audioSource = openSpeechRecognitionAudioSource(scope)
         active.startListening(recognizerIntent())
       } catch (_: Throwable) {
+        useAudioSource = false
         session.retire()
         retireRecognizer()
         if (operationId == latestOperationId.get()) {
@@ -138,8 +146,21 @@ internal class AndroidOnDeviceVoiceWakeRecognizer(
           }
 
           override fun onResults(results: Bundle?) {
-            bestTranscript(results)?.let { session.emit(VoiceWakeRecognitionEvent.Transcript(it, isFinal = true)) }
-              ?: session.emit(VoiceWakeRecognitionEvent.Error(SpeechRecognizer.ERROR_NO_MATCH))
+            finishSession(
+              session,
+              bestTranscript(results)?.let { VoiceWakeRecognitionEvent.Transcript(it, isFinal = true) }
+                ?: VoiceWakeRecognitionEvent.Error(SpeechRecognizer.ERROR_NO_MATCH),
+            )
+          }
+
+          override fun onSegmentResults(segmentResults: Bundle) {
+            bestTranscript(segmentResults)?.let {
+              session.emit(VoiceWakeRecognitionEvent.Transcript(it, isFinal = true, sessionEnded = false))
+            }
+          }
+
+          override fun onEndOfSegmentedSession() {
+            finishSession(session, VoiceWakeRecognitionEvent.Error(SpeechRecognizer.ERROR_NO_MATCH))
           }
 
           override fun onPartialResults(partialResults: Bundle?) {
@@ -149,7 +170,7 @@ internal class AndroidOnDeviceVoiceWakeRecognizer(
           }
 
           override fun onError(error: Int) {
-            session.emit(VoiceWakeRecognitionEvent.Error(error))
+            finishSession(session, VoiceWakeRecognitionEvent.Error(error))
           }
 
           override fun onBeginningOfSpeech() = Unit
@@ -159,11 +180,26 @@ internal class AndroidOnDeviceVoiceWakeRecognizer(
       )
     }
 
+  private fun finishSession(
+    session: VoiceWakeRecognitionSession,
+    event: VoiceWakeRecognitionEvent,
+  ) {
+    if (recognitionSession !== session) return
+    // A supplied-audio session should last until we close the pipe. A recognizer
+    // that ends it anyway falls back to plain sessions (and may play its own tones).
+    if (audioSource != null) useAudioSource = false
+    audioSource?.close()
+    audioSource = null
+    session.emit(event)
+  }
+
   private fun retireRecognizer() {
     // Retire callback ownership before cancel/destroy. Some recognizers emit a
     // late result or error after cancellation; it must not enter a new session.
     recognitionSession?.retire()
     recognitionSession = null
+    audioSource?.close()
+    audioSource = null
     platformOwnerOperationId.set(0)
     val active = recognizer
     recognizer = null
@@ -204,6 +240,15 @@ internal class AndroidOnDeviceVoiceWakeRecognizer(
       putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
       putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
       putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        audioSource?.let { source ->
+          putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, source.readDescriptor)
+          putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
+          putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
+          putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, speechRecognitionSampleRateHz)
+          putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_AUDIO_SOURCE)
+        }
+      }
     }
 
   private fun bestTranscript(bundle: Bundle?): String? =
@@ -251,6 +296,7 @@ internal class VoiceWakeManager(
   private val lock = Any()
   private var enabled = false
   private var foreground = false
+  private var backgroundListeningAllowed = false
   private var sessionGeneration = 0L
   private var sessionActive = false
   private var commandInFlight = false
@@ -281,6 +327,11 @@ internal class VoiceWakeManager(
   fun setForeground(value: Boolean) =
     reconcile {
       foreground = value
+    }
+
+  fun setBackgroundListeningAllowed(value: Boolean) =
+    reconcile {
+      backgroundListeningAllowed = value
     }
 
   fun setSuppressed(
@@ -315,22 +366,10 @@ internal class VoiceWakeManager(
     performRecognizerAction(action)
   }
 
-  fun shutdown() {
-    val action =
-      synchronized(lock) {
-        enabled = false
-        foreground = false
-        val pendingAction = stopSessionLocked(force = true)
-        _statusText.value = nativeText("Off")
-        pendingAction
-      }
-    performRecognizerAction(action)
-  }
-
   private fun reconcileLocked(): RecognizerAction? {
     val blockedStatus = blockedStatusLocked()
     if (blockedStatus != null) {
-      val action = stopSessionLocked(force = !enabled || !foreground)
+      val action = stopSessionLocked(force = !enabled || !(foreground || backgroundListeningAllowed))
       _statusText.value = blockedStatus
       return action
     }
@@ -345,7 +384,7 @@ internal class VoiceWakeManager(
       !enabled -> nativeText("Off")
       !recognizer.isAvailable -> nativeText("On-device speech recognition unavailable")
       !hasRecordAudioPermission() -> nativeText("Microphone permission required")
-      !foreground || suppressionReasons.isNotEmpty() -> nativeText("Paused")
+      !(foreground || backgroundListeningAllowed) || suppressionReasons.isNotEmpty() -> nativeText("Paused")
       else -> null
     }
 
@@ -377,7 +416,7 @@ internal class VoiceWakeManager(
             // has the recognizer's end-of-utterance boundary and is safe to dispatch.
             if (!event.isFinal) return
             val transcriptAction = handleTranscriptLocked(event.text)
-            if (transcriptAction == null) {
+            if (transcriptAction == null && event.sessionEnded) {
               sessionActive = false
               _isListening.value = false
               scheduleRestartLocked()

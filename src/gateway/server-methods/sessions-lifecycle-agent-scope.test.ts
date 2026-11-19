@@ -92,7 +92,7 @@ it("sweep removes the recorded raw child owner without deleting another agent's 
       lifecycleRevision: "research-revision",
     },
   });
-  const h = createSubagentSweeperHarness({}, entry);
+  const h = createSubagentSweeperHarness(entry);
   h.callGateway.mockImplementation(async (request) => {
     await request.prepareDispatchCurrent?.();
     request.assertDispatchCurrent?.();

@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import type { SessionActorHotState } from "./session-actor-contract.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import { createSessionTranscriptTurnKernel } from "./session-turn.kernel.js";
 import type { SessionTurnPlan } from "./session-turn.types.js";
 import type { prepareSessionTurn } from "./session-turn.worker.js";
@@ -66,7 +66,9 @@ export function prepareSessionInputFromReplica(
       return undefined;
     }
     const pending = key ? hot.pendingInputs.find((row) => row.idempotency_key === key) : undefined;
-    if (!pending && key === plan.custody?.idempotencyKey) {
+    // A missing active row may still be a consumed source. Let the worker
+    // perform the exact-key history lookup before deciding this is fresh.
+    if (!pending && key) {
       return undefined;
     }
     if (
@@ -86,7 +88,7 @@ export function prepareSessionInputFromReplica(
     messages,
     coldArchive: undefined,
     version: hot.transcript.version,
-    expectedSessionState: buildRestartRecoveryExpectedState(
+    expectedSessionState: buildSessionTranscriptTurnExpectedState(
       hot.entry ?? { sessionId: scope.sessionId, updatedAt: 0 },
     ),
     goalId: undefined,

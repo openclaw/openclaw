@@ -5,15 +5,18 @@ import {
   logCodeModeDiagnostic,
 } from "../../../logging/code-mode-diagnostic.js";
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
-import { resolveSkillWorkshopToolConstructionBlock } from "../../../skills/workshop/tool-availability.js";
 import {
   finalizeAgentToolAvailability,
   gateAgentToolExecution,
 } from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
+import { isCodeModeControlTool } from "../../code-mode-control-tools.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../../code-mode.js";
-import { logAgentRuntimeToolDiagnostics } from "../../runtime-plan/tools.js";
-import { createToolPolicyMatcher, isToolAllowedByPolicyName } from "../../tool-policy-match.js";
+import {
+  logAgentRuntimeToolDiagnostics,
+  normalizeAgentRuntimeTools,
+} from "../../runtime-plan/tools.js";
+import { createToolPolicyMatcher } from "../../tool-policy-match.js";
 import {
   createToolExecutionMatcher,
   formatToolExecutionGatedMessage,
@@ -23,8 +26,8 @@ import {
   withRuntimeToolSchemaQuarantine,
   type RuntimeToolSchemaQuarantineRecorder,
 } from "../../tool-schema-quarantine.js";
+import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-protocol.js";
 import { createToolSearchSelectionMatcher } from "../../tool-search-selection.js";
-import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
 import {
   collectUniqueCatalogToolNames,
   TOOL_CALL_RAW_TOOL_NAME,
@@ -44,22 +47,6 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type PreparedToolBase = Awaited<ReturnType<typeof prepareEmbeddedAttemptToolBase>>;
 type PreparedBundleTools = Awaited<ReturnType<typeof prepareEmbeddedAttemptBundleTools>>;
 
-function hasExplicitlyAllowedClientTool(params: {
-  clientTools?: PreparedBundleTools["clientTools"];
-  explicitAllowlistSources: Array<{ entries: string[] }>;
-}): boolean {
-  const names = (params.clientTools ?? [])
-    .map((tool) => tool.function?.name)
-    .filter((name): name is string => Boolean(name?.trim()));
-  if (names.length === 0) {
-    return false;
-  }
-  const matchers = params.explicitAllowlistSources.map((source) =>
-    createToolPolicyMatcher({ allow: source.entries }),
-  );
-  return names.some((name) => matchers.some((matches) => matches(name)));
-}
-
 export async function prepareEmbeddedAttemptToolCatalog(input: {
   attempt: EmbeddedRunAttemptParams;
   setup: EmbeddedAttemptSetup;
@@ -68,7 +55,11 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
   abortSignal: AbortSignal;
   executeCodeModeTool: ToolSearchCatalogToolExecutor;
 }) {
-  const buildCatalog = (recordQuarantine: RuntimeToolSchemaQuarantineRecorder) => {
+  let pinToolListing: ((tools: AnyAgentTool[], refresh: boolean) => AnyAgentTool[]) | undefined;
+  const buildCatalog = (
+    recordQuarantine: RuntimeToolSchemaQuarantineRecorder,
+    refreshListing = false,
+  ) => {
     const { attempt, preparedToolBase } = input;
     const {
       codeModeControlsEnabledForRun,
@@ -79,7 +70,9 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
       toolSearchControlsEnabledForRun,
       toolsEnabled,
     } = preparedToolBase;
-    const { clientTools, uncompactedEffectiveTools } = input.bundleTools;
+    const { clientTools, uncompactedEffectiveTools: currentTools } = input.bundleTools;
+    const uncompactedEffectiveTools =
+      pinToolListing?.(currentTools, refreshListing) ?? currentTools;
     const abortSignal = preparedToolBase.toolAbortSignal ?? input.abortSignal;
     // Detached skill review keeps every foreground schema for prompt-cache reuse
     // but executes only the allowed tools. Wrap before catalog compaction so a
@@ -93,7 +86,6 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
       hookContext: catalogToolHookContext,
       prepared: {
         abortSignal,
-        forceRestartSafeTools: attempt.forceRestartSafeTools,
         toolExecutionAllow: attempt.toolExecutionAllow,
         executeTool: input.executeCodeModeTool,
         codeModeSkills,
@@ -109,7 +101,21 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
       sessionKey: attempt.sessionKey,
       sessionId: attempt.sessionId,
     });
-    effectiveTools = compacted.tools.map((tool) =>
+    // Catalog controls (Code Mode exec/wait, tool search) are built after the bundle
+    // provider pass; give them the same schema normalization before diagnostics and dispatch.
+    const providerTools = normalizeAgentRuntimeTools({
+      runtimePlan: attempt.runtimePlan,
+      tools: compacted.tools,
+      provider: attempt.provider,
+      config: attempt.config,
+      workspaceDir: input.setup.effectiveWorkspace,
+      env: process.env,
+      modelId: attempt.modelId,
+      modelApi: attempt.model.api,
+      model: attempt.model,
+      runtimeHandle: input.setup.getProviderRuntimeHandle(),
+    });
+    effectiveTools = providerTools.map((tool) =>
       wrapEmbeddedAttemptToolWithActivity(
         wrapToolWithAbortSignal(tool, abortSignal),
         attempt.runId,
@@ -231,24 +237,31 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
         source.entries.map((entry) => normalizeToolPolicyName(entry)),
       ),
     );
-    const autoAddedControlNames = new Set(
+    const nonTaskControlNames = new Set(
       (controlsEnabled ? controlNames : []).filter(
         (controlName) => !explicitControlAllowlistNames.has(normalizeToolPolicyName(controlName)),
       ),
     );
-    const explicitlyAllowedClientTool = hasExplicitlyAllowedClientTool({
-      clientTools,
-      explicitAllowlistSources: explicitToolAllowlistSources,
-    });
+    // Explicit shell exec grants do not make an empty Code Mode bridge a task tool.
+    for (const tool of effectiveTools.filter(isCodeModeControlTool)) {
+      nonTaskControlNames.add(normalizeToolPolicyName(tool.name));
+    }
+    const clientToolMatchers = explicitToolAllowlistSources.map((source) =>
+      createToolPolicyMatcher({ allow: source.entries }),
+    );
+    const explicitlyAllowedClientTool = (clientTools ?? []).some(({ function: fn }) =>
+      Boolean(fn?.name?.trim() && clientToolMatchers.some((matches) => matches(fn.name))),
+    );
     const emptyAllowlistVisibleToolNames = deferredDirectoryToolsCallable
       ? collectAllowedToolNames({ tools: effectiveTools })
       : visibleAllowedToolNames;
     // Auto-added controls cannot conceal an explicit allowlist that matched nothing.
     const hasCallableTools =
+      preparedToolBase.hasNativeWebSearch ||
       toolSearch.catalogToolCount > 0 ||
       ((catalogedClientToolNames.size > 0 || deferredDirectoryToolsCallable) &&
         explicitlyAllowedClientTool) ||
-      [...emptyAllowlistVisibleToolNames].some((toolName) => !autoAddedControlNames.has(toolName));
+      [...emptyAllowlistVisibleToolNames].some((toolName) => !nonTaskControlNames.has(toolName));
     const toolSearchRunPlan = {
       visibleAllowedToolNames,
       replayAllowedToolNames,
@@ -257,9 +270,6 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
       hasCallableTools,
     };
     const emptyExplicitToolAllowlistError = (() => {
-      if (attempt.forceRestartSafeTools) {
-        return null;
-      }
       const toolsIntentionallyDisabled =
         attempt.disableTools === true ||
         preparedToolBase.effectiveToolsAllow?.length === 0 ||
@@ -275,19 +285,6 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
           (source) => `${source.label}: ${source.entries.map(normalizeToolPolicyName).join(", ")}`,
         )
         .join("; ");
-      const workshopBlock = sources.every((source) =>
-        isToolAllowedByPolicyName("skill_workshop", { allow: source.entries }),
-      )
-        ? resolveSkillWorkshopToolConstructionBlock({
-            sandboxed: input.setup.sandbox?.enabled,
-            libraryAuthoring: attempt.skillLibraryAuthoring,
-          })
-        : undefined;
-      if (toolsEnabled && !toolsIntentionallyDisabled && workshopBlock) {
-        return new Error(
-          `No callable tools remain after resolving explicit tool allowlist (${requested}); ${workshopBlock.detail} ${workshopBlock.fix}`,
-        );
-      }
       const reason =
         attempt.disableTools === true
           ? "tools are disabled for this run"
@@ -331,7 +328,40 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
     liveAllowedToolNames: new Set(current.toolSearchRunPlan.liveAllowedToolNames),
     capabilityToolNames: new Set(current.toolSearchRunPlan.capabilityToolNames),
   };
+  const refreshTools = (
+    recordQuarantine: RuntimeToolSchemaQuarantineRecorder,
+    refreshListing = true,
+  ) => {
+    const next = buildCatalog(recordQuarantine, refreshListing);
+    current.effectiveTools.splice(0, current.effectiveTools.length, ...next.effectiveTools);
+    for (const key of [...promptPlanKeys, "replayAllowedToolNames"] as const) {
+      const target = current.toolSearchRunPlan[key];
+      // Earlier tool calls remain valid history, even after their live authority is revoked.
+      if (key !== "replayAllowedToolNames") {
+        target.clear();
+      }
+      for (const name of next.toolSearchRunPlan[key]) {
+        target.add(name);
+      }
+    }
+    Object.assign(current.toolSearch, next.toolSearch);
+    for (const key of promptPlanKeys) {
+      hostPromptPlan[key] = new Set(next.toolSearchRunPlan[key]);
+    }
+    current.deferredDirectoryToolsCallable = next.deferredDirectoryToolsCallable;
+    current.emptyExplicitToolAllowlistError = next.emptyExplicitToolAllowlistError;
+    current.toolSearchRunPlan.hasCallableTools = next.toolSearchRunPlan.hasCallableTools;
+  };
   return Object.assign(current, {
+    installToolListingPin: async (pin: NonNullable<typeof pinToolListing>) => {
+      pinToolListing = pin;
+      const tools = input.bundleTools.uncompactedEffectiveTools;
+      if (pin(tools, false) === tools) {
+        return false;
+      }
+      await withRuntimeToolSchemaQuarantine((record) => refreshTools(record, false));
+      return true;
+    },
     applyPromptToolPolicy: (allowedNames: ReadonlySet<string>) => {
       if (!current.toolSearch.catalogRegistered) {
         finalizeAgentToolAvailability(current.effectiveTools, {
@@ -348,26 +378,8 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
         }
       }
     },
-    refreshTools: (recordQuarantine: RuntimeToolSchemaQuarantineRecorder) => {
-      const next = buildCatalog(recordQuarantine);
-      current.effectiveTools.splice(0, current.effectiveTools.length, ...next.effectiveTools);
-      for (const key of [...promptPlanKeys, "replayAllowedToolNames"] as const) {
-        const target = current.toolSearchRunPlan[key];
-        // Earlier tool calls remain valid history, even after their live authority is revoked.
-        if (key !== "replayAllowedToolNames") {
-          target.clear();
-        }
-        for (const name of next.toolSearchRunPlan[key]) {
-          target.add(name);
-        }
-      }
-      Object.assign(current.toolSearch, next.toolSearch);
-      for (const key of promptPlanKeys) {
-        hostPromptPlan[key] = new Set(next.toolSearchRunPlan[key]);
-      }
-      current.emptyExplicitToolAllowlistError = next.emptyExplicitToolAllowlistError;
-      current.toolSearchRunPlan.hasCallableTools = next.toolSearchRunPlan.hasCallableTools;
-    },
+    refreshTools: (recordQuarantine: RuntimeToolSchemaQuarantineRecorder) =>
+      refreshTools(recordQuarantine),
   });
 }
 

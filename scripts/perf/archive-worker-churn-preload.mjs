@@ -1,20 +1,16 @@
 // Optional V8 accounting for archive-worker-churn-measure.ts; never loaded by production.
 import { writeFileSync } from "node:fs";
 import path from "node:path";
-import { GCProfiler } from "node:v8";
+import { GCProfiler, getHeapStatistics } from "node:v8";
 import { isMainThread, parentPort, threadId, workerData } from "node:worker_threads";
 
 const output = process.env.OPENCLAW_ARCHIVE_CHURN_PROFILE_DIR;
-if (
-  !isMainThread &&
-  output &&
-  workerData?.type === "sqlite-transcript-archive-v2" &&
-  ["cold-prepare", "archive-session"].includes(workerData.operation)
-) {
+if (!isMainThread && output && workerData?.type === "sqlite-transcript-archive-v2") {
   const profiler = new GCProfiler();
   const started = performance.now();
   const cpu = process.threadCpuUsage();
   const memory = process.memoryUsage();
+  const allocated = getHeapStatistics().total_allocated_bytes;
   let first = true;
   let reclaimedBytes = 0;
   let gcMicroseconds = 0;
@@ -40,6 +36,7 @@ if (
         elapsedMs: performance.now() - started,
         threadCpuMs: (used.user + used.system) / 1000,
         estimatedV8AllocatedBytes: current.heapUsed - memory.heapUsed + reclaimedBytes,
+        v8AllocatedBytes: getHeapStatistics().total_allocated_bytes - allocated,
         reclaimedBytes,
         gcMs: gcMicroseconds / 1000,
         collections,

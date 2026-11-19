@@ -485,7 +485,7 @@ describe("native pending assignment inventory through registered monitor admissi
       });
       f.deliver.mockImplementation(async ({ completionCustody }) => {
         assert(completionCustody?.isCurrent());
-        return { delivered: false, path: "direct", recoveryPending: true };
+        return { delivered: false, path: "direct" };
       });
       const history = threadRead({
         turnId: "child-turn",
@@ -574,6 +574,55 @@ describe("native pending assignment inventory through registered monitor admissi
       client.close();
     },
   );
+
+  it("resolves a follow-up by canonical task name after the parent registers again", async () => {
+    const f = await fixture();
+    const client = createClient();
+    onTestFinished(async () => {
+      await codexNativeSubagentMonitorRuntime.retireParent(client.client, "parent-thread");
+      client.close();
+    });
+    const first = await f.register(client);
+    await first.ready;
+    first.bindTurn("parent-turn");
+    await f.spawn(client);
+    await notifyChildStarted(client, "parent-thread", "child-thread", "/root/worker");
+    await completeInForeground(client);
+    await first.unregister();
+    // The next Gateway turn owns a fresh registration that has not observed the child.
+    const history = threadRead({
+      turnId: "child-turn",
+      result: "Native result",
+      agentPath: "/root/worker",
+      threadStatus: "notLoaded",
+    });
+    history.thread.modelProvider = "provider-b";
+    client.setThreadRead("child-thread", history);
+    const source = createNativeModelSourceFixture(["model-b"]);
+    const next = await f.register(client, f.historyOwner(), source, {
+      assertCurrent: source.assertCurrent,
+      hasProvider: (provider) => provider === "provider-b",
+    });
+    await next.ready;
+    next.bindTurn("next-turn");
+    const followup = (target: string) =>
+      codexNativeSubagentMonitorRuntime.prepareModelInput({
+        client: client.client,
+        threadId: "parent-thread",
+        turnId: "next-turn",
+        itemId: `followup-${target}`,
+        target,
+        readQualification: () => undefined,
+        assertCurrent: () => {},
+      });
+    await expect(followup("worker")).resolves.toBeUndefined();
+    await expect(followup("/root/worker")).resolves.toBeUndefined();
+    // Codex resolves only agent IDs and registered paths; the refusal names the usable ID.
+    await expect(followup("Plato")).rejects.toThrow(
+      "Codex native target is not currently identified. Pass the exact agent ID as the target; agent IDs for this thread: child-thread",
+    );
+    await next.unregister();
+  });
 
   it.each(["followup", "empty", "blocked"] as const)(
     "retires terminal give-up without restoring the completion (%s)",

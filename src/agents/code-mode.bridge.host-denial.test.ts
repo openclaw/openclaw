@@ -29,7 +29,7 @@ import {
   testing,
   waitUntilCompleted,
 } from "./code-mode.test-support.js";
-import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
+import { consumeToolExecutionNotStarted as consumeTrustedToolNoStartError } from "./tool-effect-receipt.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import * as gatewayTool from "./tools/gateway.js";
@@ -397,15 +397,11 @@ describe("Code Mode subscribed host denial", () => {
           : `const results = await Promise.allSettled([${expressions.join(",")}]); throw new Error(results.find(r => r.status === "rejected").reason.message);`;
       let details = await harness.run(code);
       if (order === "late-settlement") {
-        expect(details.status).toBe("waiting");
+        // Rejection settles the cell without replaying or draining its late sibling.
+        expect(details.status).toBe("failed");
         await expect(fs.readFile(marker, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
         releaseLateMutation.resolve();
         await lateMutationFinished.promise;
-        details = resultDetails(
-          await harness.waitTool.execute("settle-late", {
-            runId: details.runId,
-          }),
-        );
         await vi.waitFor(() => expect(harness.subscription.getItemLifecycle().activeCount).toBe(0));
       }
       details = await harness.complete(details);

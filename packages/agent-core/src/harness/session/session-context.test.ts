@@ -12,7 +12,14 @@ import {
 } from "../compaction/shard-fixtures.test-support.js";
 import { convertToLlm } from "../messages.js";
 import type { SessionTreeEntry as Entry } from "../types.js";
-import { buildSessionContext, projectSessionEntryMessage } from "./session.js";
+import {
+  buildSessionContext,
+  collectSessionContextEntryFact,
+  iterateSessionContextEntryFacts,
+  projectSessionEntryMessage,
+} from "./session.js";
+import { selectResetKeptMessageFacts } from "./tool-pairing-facts.js";
+import { collectToolPairingMessageFact, selectResetKeptEntries } from "./tool-result-pairing.js";
 
 const timestamp = "2026-07-17T00:00:00.000Z";
 const historyPrelude = Symbol.for("openclaw.sessionHistoryPrelude");
@@ -106,6 +113,31 @@ function resetContext(entries: [Entry, ...Entry[]], firstKeptEntryId = "kept") {
     user("new", "reset", "new turn"),
   ]);
 }
+
+it("selects reset facts by row identity while preserving public message aliases", () => {
+  const result = toolResult("result", "call", "call-id", "BODY_PAYLOAD");
+  const entries = [
+    user("kept", null, "ask"),
+    toolCall("call", "kept", "call-id"),
+    result,
+    { ...result, id: "alias" },
+    toolResult("orphan", "alias", "unknown", "ORPHAN_PAYLOAD"),
+  ];
+  expect(selectResetKeptEntries(entries).map((entry) => entry.id)).toEqual([
+    "kept",
+    "call",
+    "result",
+    "alias",
+  ]);
+  const facts = entries.map(({ id, message }) => ({
+    role: message.role,
+    pairing: collectToolPairingMessageFact(message),
+    identity: id,
+  }));
+  expect(JSON.stringify(facts)).not.toContain("PAYLOAD");
+  const kept = selectResetKeptMessageFacts(facts).map((fact) => fact.identity);
+  expect(kept).toEqual(["kept", "call", "result"]);
+});
 
 it.each(["reply", "model-change"])(
   "ignores a synthetic %s when selecting the inference model",
@@ -348,4 +380,53 @@ it("keeps tool ownership within the latest reset when resets repeat", () => {
   expect(keptAssistant).not.toHaveProperty("providerReplay");
   expect(Object.getOwnPropertyDescriptor(keptAssistant ?? {}, historyPrelude)?.value).toBe(true);
   expect(JSON.stringify(context.messages)).not.toContain("discarded conversation");
+});
+
+it("selects background reset context from detached facts without validating discarded placements", () => {
+  const entries: Entry[] = [
+    {
+      ...entryBase("invalid", null),
+      type: "custom",
+      customType: "openclaw.background-result-placement",
+      data: {},
+    },
+    user("kept", "invalid", "USER_PAYLOAD"),
+    messageEntry(
+      "pending",
+      "kept",
+      Object.assign(
+        assistantMessage("BACKGROUND_PAYLOAD", {
+          provider: "openclaw",
+          model: "automation-result",
+        }),
+        { excludeFromContext: true, openclawModelPlacement: "pending" },
+      ),
+    ),
+    {
+      ...entryBase("placement", "pending"),
+      type: "custom",
+      customType: "openclaw.background-result-placement",
+      data: { afterEntryId: "kept", resultEntryIds: ["pending"] },
+    },
+    reset("reset", "placement", "kept"),
+    user("new", "reset", "NEW_PAYLOAD"),
+  ];
+  const facts = structuredClone(entries.map(collectSessionContextEntryFact));
+  entries.length = 0;
+  expect(JSON.stringify(facts)).not.toContain("PAYLOAD");
+  expect(
+    [...iterateSessionContextEntryFacts(facts)].map(({ entry, placement, context }) => [
+      entry.id,
+      placement?.id,
+      context,
+    ]),
+  ).toEqual([
+    ["reset", undefined, "current"],
+    ["kept", undefined, "reset-retained"],
+    ["pending", "placement", "reset-retained"],
+    ["new", undefined, "current"],
+  ]);
+  expect(() => [
+    ...iterateSessionContextEntryFacts([...facts.slice(0, 1), ...facts.slice(-1)]),
+  ]).toThrow("Invalid background result placement marker");
 });

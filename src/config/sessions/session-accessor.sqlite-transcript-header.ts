@@ -4,7 +4,7 @@ import type { TranscriptAppendCursor } from "./session-accessor.sqlite-transcrip
 import { hasStoredTranscriptEvents } from "./session-accessor.sqlite-transcript-presence.js";
 import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 
 export function ensureTranscriptHeader(

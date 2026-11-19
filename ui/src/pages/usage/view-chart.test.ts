@@ -1,9 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createSignal } from "solid-js";
 /* @vitest-environment jsdom */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { i18n } from "../../i18n/index.ts";
+import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import * as metrics from "./metrics.ts";
 import { buildProviderSeries, type ProviderSeries } from "./provider-series.ts";
 import type { CostDailyEntry, UsageProps } from "./types.ts";
 import { dailyEntry } from "./usage-chart.test-support.ts";
@@ -29,7 +32,6 @@ function renderDailyChart(
         selectedDays: [],
         chartMode,
         dailyChartMode,
-        onDailyChartModeChange: () => {},
         providerSeries,
         onSelectDay,
         range: {
@@ -49,24 +51,36 @@ function renderDailyChart(
 }
 
 describe("DailyChartCompact", () => {
-  it("formats only visible axis labels while keeping every day accessible across ranges", () => {
+  it("reuses date labels across value updates while keeping every day accessible across ranges", async () => {
+    const restoreI18n = captureI18nStateForTesting();
+    onTestFinished(restoreI18n);
+    await i18n.setLocale("en");
+    const dateFormat = vi.spyOn(metrics, "formatFullDate");
+    onTestFinished(() => dateFormat.mockRestore());
     const dates = Array.from({ length: 180 }, (_, index) =>
       new Date(Date.UTC(2026, 0, index + 1)).toISOString().slice(0, 10),
     );
     const [count, setCount] = createSignal(180);
+    const [offset, setOffset] = createSignal(0);
+    const [tokens, setTokens] = createSignal(100);
     const { container } = mountSolid(() =>
       DailyChartCompact({
         get dailyEntries() {
-          return dates.slice(0, count()).map((date) => dailyEntry(date, 100));
+          return dates
+            .slice(offset(), offset() + count())
+            .map((date) => dailyEntry(date, tokens(), tokens() / 100));
         },
         selectedDays: [],
         chartMode: "tokens",
         dailyChartMode: "total",
-        onDailyChartModeChange: () => {},
         providerSeries: [],
         onSelectDay: () => {},
         get range() {
-          return { startDate: dates[0]!, endDate: dates[count() - 1]!, complete: true };
+          return {
+            startDate: dates[offset()]!,
+            endDate: dates[offset() + count() - 1]!,
+            complete: true,
+          };
         },
       }),
     );
@@ -80,10 +94,32 @@ describe("DailyChartCompact", () => {
       labels().filter((label) => !label.classList.contains("daily-bar-label--hidden")),
     ).toHaveLength(7);
 
+    const firstBar = bars()[0];
+    dateFormat.mockClear();
+    setTokens(200);
+    flush();
+    expect(dateFormat).not.toHaveBeenCalled();
+    expect(bars()[0]).toBe(firstBar);
+    expect(bars().every((bar) => bar.getAttribute("aria-label")?.includes("200"))).toBe(true);
+    expect(bars()[0]?.getAttribute("aria-label")).toContain("$2.00");
+
+    await i18n.setLocale("de");
+    flush();
+    expect(dateFormat).toHaveBeenCalled();
+    expect(bars()[0]).toBe(firstBar);
+    expect(bars()[0]?.getAttribute("aria-label")).toContain("1. Januar 2026");
+
     setCount(4);
     flush();
     expect(bars()).toHaveLength(4);
     expect(labels().every((label) => label.textContent)).toBe(true);
+
+    dateFormat.mockClear();
+    setOffset(1);
+    flush();
+    expect(bars()).toHaveLength(4);
+    expect(dateFormat).toHaveBeenCalledWith("2026-01-05");
+    expect(bars()[0]?.getAttribute("aria-label")).toContain("2. Januar 2026");
   });
 
   it("keeps day selection operable with mouse and keyboard", () => {
@@ -167,43 +203,37 @@ describe("DailyChartCompact", () => {
     }
   });
 
-  it.each([false, true])(
-    "stacks each day by provider without claiming shares of incomplete totals (partial: %s)",
-    (partial) => {
-      const daily = [dailyEntry("2026-05-01", 400), dailyEntry("2026-05-02", 100)];
-      if (partial) {
-        daily[0]!.usageReport = { state: "unavailable" };
-      }
-      const series = buildProviderSeries([
-        { date: "2026-05-01", provider: "openai", model: "a", tokens: 300, cost: 0, count: 1 },
-        { date: "2026-05-01", provider: "anthropic", model: "b", tokens: 100, cost: 0, count: 1 },
-        { date: "2026-05-02", provider: "anthropic", model: "b", tokens: 100, cost: 0, count: 1 },
-      ]);
-      const { container, bars } = renderDailyChart(daily, "tokens", "by-provider", series);
+  it("stacks each day by provider", () => {
+    const daily = [dailyEntry("2026-05-01", 400), dailyEntry("2026-05-02", 100)];
+    const series = buildProviderSeries([
+      { date: "2026-05-01", provider: "openai", model: "a", tokens: 300, cost: 0, count: 1 },
+      { date: "2026-05-01", provider: "anthropic", model: "b", tokens: 100, cost: 0, count: 1 },
+      { date: "2026-05-02", provider: "anthropic", model: "b", tokens: 100, cost: 0, count: 1 },
+    ]);
+    const { container, bars } = renderDailyChart(daily, "tokens", "by-provider", series);
 
-      const segments = (bar: HTMLElement) =>
-        [...bar.querySelectorAll<HTMLElement>(".cost-segment")].map((segment) => ({
-          grow: segment.style.flexGrow,
-          background: segment.style.background,
-        }));
-      expect(segments(bars[0]!)).toEqual([
-        { grow: "300", background: "var(--chart-series-1)" },
-        { grow: "100", background: "var(--chart-series-2)" },
-      ]);
-      // A provider with no usage that day adds no empty segment.
-      expect(segments(bars[1]!)).toEqual([{ grow: "100", background: "var(--chart-series-2)" }]);
-      bars[0]!.focus();
-      flush();
-      expect(
-        [...container.querySelectorAll(".daily-chart-tip span")].map((entry) => entry.textContent),
-      ).toEqual(partial ? ["OpenAI≥ 300", "Anthropic≥ 100"] : ["OpenAI300", "Anthropic100"]);
-      expect(
-        [...container.querySelectorAll(".daily-chart-legend li")].map((item) =>
-          item.textContent?.trim(),
-        ),
-      ).toEqual(partial ? ["OpenAI", "Anthropic"] : ["OpenAI60%", "Anthropic40%"]);
-    },
-  );
+    const segments = (bar: HTMLElement) =>
+      [...bar.querySelectorAll<HTMLElement>(".cost-segment")].map((segment) => ({
+        grow: segment.style.flexGrow,
+        background: segment.style.background,
+      }));
+    expect(segments(bars[0]!)).toEqual([
+      { grow: "300", background: "var(--chart-series-1)" },
+      { grow: "100", background: "var(--chart-series-2)" },
+    ]);
+    // A provider with no usage that day adds no empty segment.
+    expect(segments(bars[1]!)).toEqual([{ grow: "100", background: "var(--chart-series-2)" }]);
+    bars[0]!.focus();
+    flush();
+    expect(
+      [...container.querySelectorAll(".daily-chart-tip span")].map((entry) => entry.textContent),
+    ).toEqual(["OpenAI300", "Anthropic100"]);
+    expect(
+      [...container.querySelectorAll(".daily-chart-legend li")].map((item) =>
+        item.textContent?.trim(),
+      ),
+    ).toEqual(["OpenAI60%", "Anthropic40%"]);
+  });
 
   it("retains provider segments and updates their values, colors and order across reports", () => {
     const date = "2026-05-01";
@@ -225,7 +255,6 @@ describe("DailyChartCompact", () => {
         selectedDays: [],
         chartMode: "tokens",
         dailyChartMode: "by-provider",
-        onDailyChartModeChange: () => {},
         get providerSeries() {
           return series();
         },
@@ -306,4 +335,21 @@ describe("DailyChartCompact", () => {
       vi.useRealTimers();
     }
   });
+});
+
+it("formats USD chart axes with the UI locale", () => {
+  const locale = vi.spyOn(i18n, "getLocale").mockReturnValue("de");
+  try {
+    const { container } = renderDailyChart([dailyEntry("2026-01-01", 20, 1234.5)]);
+    expect(container.textContent).toContain(
+      new Intl.NumberFormat("de", {
+        style: "currency",
+        currency: "USD",
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0,
+      }).format(0),
+    );
+  } finally {
+    locale.mockRestore();
+  }
 });

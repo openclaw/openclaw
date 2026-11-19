@@ -23,9 +23,10 @@ export function createCronSourceIdentity(): string {
 function cronSourceScheduleKey(
   schedule: CronSchedule,
   streamSandbox?: CronStoredJob["streamSandbox"],
+  streamOperatorSource?: CronStoredJob["streamOperatorSource"],
 ): string | undefined {
   if (schedule.kind === "stream") {
-    return cronStreamScheduleKey(schedule, streamSandbox);
+    return cronStreamScheduleKey(schedule, streamSandbox, streamOperatorSource);
   }
   if (schedule.kind === "event") {
     return stableStringify({
@@ -57,8 +58,8 @@ export function setCronSourceIdentity(
 /** Shared admission fence for every externally driven source, including stream batches. */
 export function ownsCronSource(job: CronStoredJob, scheduleKey: string, identity: string): boolean {
   return (
-    cronSourceScheduleKey(job.schedule, job.streamSandbox) === scheduleKey &&
-    cronSourceIdentity(job) === identity
+    cronSourceScheduleKey(job.schedule, job.streamSandbox, job.streamOperatorSource) ===
+      scheduleKey && cronSourceIdentity(job) === identity
   );
 }
 
@@ -68,14 +69,18 @@ export function reconcileCronSourceIdentity(
   next: CronStoredJob,
   streamRestartExhaustedRequested = false,
 ): void {
-  const key = cronSourceScheduleKey(next.schedule, next.streamSandbox);
+  const key = cronSourceScheduleKey(next.schedule, next.streamSandbox, next.streamOperatorSource);
   if (key === undefined) {
     setCronSourceIdentity(next, undefined);
     return;
   }
   const identity = cronSourceIdentity(previous);
   const changed =
-    cronSourceScheduleKey(previous.schedule, previous.streamSandbox) !== key ||
+    cronSourceScheduleKey(
+      previous.schedule,
+      previous.streamSandbox,
+      previous.streamOperatorSource,
+    ) !== key ||
     (previous.enabled ?? true) !== (next.enabled ?? true) ||
     Boolean(previous.state.autoDisabled) !== Boolean(next.state.autoDisabled) ||
     (next.schedule.kind === "stream" &&

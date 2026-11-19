@@ -92,11 +92,9 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
           : null,
       }
     : undefined;
-  const warnings = step.warnings?.length
-    ? step.warnings
-    : step.advisory
-      ? [step.advisory.message]
-      : [];
+  // An explicit empty list records settled warnings without regrading the
+  // original advisory exit as a failure or recreating its warning from display text.
+  const warnings = step.warnings ?? (step.advisory ? [step.advisory.message] : []);
   return [
     {
       step: text(step.name),

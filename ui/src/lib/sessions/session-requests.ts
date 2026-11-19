@@ -34,6 +34,17 @@ export const DEFAULT_SESSION_LIST_QUERY = {
   limit: SIDEBAR_SESSION_ROSTER_LIMIT,
 } as const satisfies SessionListOptions;
 
+/** User-facing session pickers (command palette, section editor) list the same sessions. */
+export const SESSION_SEARCH_SCOPE = {
+  includeGlobal: false,
+  includeUnknown: false,
+  configuredAgentsOnly: true,
+  excludeSubagents: true,
+  excludeCron: true,
+  excludeSystem: true,
+  excludeDock: true,
+} as const satisfies SessionListOptions;
+
 export function dashboardSessionListQuery(agentId?: string | null): SessionListOptions {
   const normalizedAgentId = agentId?.trim();
   return {

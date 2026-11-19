@@ -27,13 +27,13 @@ import { createTestConfigSnapshot, createTestRuntime } from "./test-runtime-conf
 
 const mocks = vi.hoisted(() => ({
   actualOpenNodeSqliteDatabase: vi.fn(),
-  actualPrepareSqliteReadOnlyLocationSync: vi.fn(),
+  actualPrepareSqliteReadOnlyLocation: vi.fn(),
   actualReadConfigFileSnapshot: vi.fn(),
   actualResolveDoctorContributionHealthChecks: vi.fn(),
   buildGatewayProbeConnectionDetails: vi.fn(),
   callGateway: vi.fn(),
   openNodeSqliteDatabase: vi.fn(),
-  prepareSqliteReadOnlyLocationSync: vi.fn(),
+  prepareSqliteReadOnlyLocation: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
   resolveDoctorContributionHealthChecks: vi.fn(),
 }));
@@ -51,15 +51,13 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/sqlite-snapshot-source.js")>();
-  mocks.actualPrepareSqliteReadOnlyLocationSync.mockImplementation(
-    actual.prepareSqliteReadOnlyLocationSync,
+  mocks.actualPrepareSqliteReadOnlyLocation.mockImplementation(
+    actual.prepareSqliteReadOnlyLocation,
   );
-  mocks.prepareSqliteReadOnlyLocationSync.mockImplementation(
-    actual.prepareSqliteReadOnlyLocationSync,
-  );
+  mocks.prepareSqliteReadOnlyLocation.mockImplementation(actual.prepareSqliteReadOnlyLocation);
   return {
     ...actual,
-    prepareSqliteReadOnlyLocationSync: mocks.prepareSqliteReadOnlyLocationSync,
+    prepareSqliteReadOnlyLocation: mocks.prepareSqliteReadOnlyLocation,
   };
 });
 vi.mock("../infra/node-sqlite.js", async (importOriginal) => {
@@ -170,9 +168,9 @@ describe("runDoctorLintCli", () => {
     });
     mocks.callGateway.mockReset().mockResolvedValue({ degradedSecretOwners: [] });
     mocks.openNodeSqliteDatabase.mockImplementation(mocks.actualOpenNodeSqliteDatabase);
-    mocks.prepareSqliteReadOnlyLocationSync.mockReset();
-    mocks.prepareSqliteReadOnlyLocationSync.mockImplementation(
-      mocks.actualPrepareSqliteReadOnlyLocationSync,
+    mocks.prepareSqliteReadOnlyLocation.mockReset();
+    mocks.prepareSqliteReadOnlyLocation.mockImplementation(
+      mocks.actualPrepareSqliteReadOnlyLocation,
     );
     clearHealthChecksForTest();
     stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -450,7 +448,7 @@ describe("runDoctorLintCli", () => {
   });
 
   it.each([false, true])(
-    "runs post-plugin readiness against an isolated state snapshot (inline inspections: %s)",
+    "runs post-plugin readiness on an isolated snapshot without plugin gates (inline inspections: %s)",
     async (includeOptionalInspections) => {
       const config = {
         ...semanticConfig,
@@ -507,18 +505,10 @@ describe("runDoctorLintCli", () => {
           severityMin: "error",
           includeAllChecks: includeOptionalInspections,
         }),
-      ).resolves.toBe(1);
+      ).resolves.toBe(0);
       const report = outputReport();
-      expect(report).toMatchObject({
-        ok: false,
-        findings: [
-          {
-            checkId: MEMORY_CHECK_ID,
-            severity: "error",
-            requirement: "managed-llama-cpp-setup",
-          },
-        ],
-      });
+      // The semantic index needs llama.cpp, but plugin-owned checks never gate an update.
+      expect(report).toMatchObject({ ok: true, findings: [] });
       expect(inspectOptionalDiagnostic).toHaveBeenCalledTimes(includeOptionalInspections ? 1 : 0);
       const inspectionWarnings = (report.warnings ?? []).filter(
         (finding: { checkId: string }) => finding.checkId === "core/doctor/deferred-inspection",
@@ -533,7 +523,7 @@ describe("runDoctorLintCli", () => {
             ]
           : [],
       );
-      expect(mocks.prepareSqliteReadOnlyLocationSync).not.toHaveBeenCalled();
+      expect(mocks.prepareSqliteReadOnlyLocation).not.toHaveBeenCalled();
       expect(fork).toHaveBeenCalledOnce();
       expect(fork.mock.calls[0]?.[0]).not.toBe(databasePath);
       expect(sourceOpenStacks).toEqual([]);
@@ -565,11 +555,11 @@ describe("runDoctorLintCli", () => {
 
   it("fails closed when a semantic index needs plugin state that cannot be prepared", async () => {
     const { databasePath: pluginDatabasePath } = await seedSemanticState(semanticConfig);
-    mocks.prepareSqliteReadOnlyLocationSync.mockImplementation((...args: unknown[]) => {
+    mocks.prepareSqliteReadOnlyLocation.mockImplementation((...args: unknown[]) => {
       if (args[0] === pluginDatabasePath) {
         throw new Error("shared state did not stabilize");
       }
-      return mocks.actualPrepareSqliteReadOnlyLocationSync(...args);
+      return mocks.actualPrepareSqliteReadOnlyLocation(...args);
     });
 
     await expectFailedCheck(
@@ -583,7 +573,10 @@ describe("runDoctorLintCli", () => {
       { severityMin: "error" },
     );
     expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
-    expect(mocks.prepareSqliteReadOnlyLocationSync).toHaveBeenCalledWith(pluginDatabasePath);
+    expect(mocks.prepareSqliteReadOnlyLocation).toHaveBeenCalledWith(pluginDatabasePath, {
+      preserveSourceArtifacts: true,
+      shared: false,
+    });
   });
 
   it("rejects registered checks that claim reserved core doctor ids", async () => {

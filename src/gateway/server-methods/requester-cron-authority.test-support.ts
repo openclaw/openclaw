@@ -22,12 +22,15 @@ import { createNoopLogger } from "../../cron/service.test-harness.js";
 import { loadCronStore } from "../../cron/store.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db-lifecycle.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import { pruneStaleControlPlaneBuckets } from "../control-plane-rate-limit.js";
+import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-grant.types.js";
 import * as mcpGrants from "../mcp-grant-store.js";
 import { json, prepareAdmission, request } from "../mcp-http-request.test-support.js";
 import { getActiveMcpLoopbackRuntime } from "../mcp-http.loopback-runtime.js";
@@ -45,21 +48,28 @@ export let stateDir: string;
 export let cron: CronService;
 
 export function installRequesterCronAuthorityTestHooks(
-  createdActor: SessionCreatedActor = CREATOR,
+  createdActor: SessionCreatedActor | (() => SessionCreatedActor) = CREATOR,
 ) {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   beforeEach(() => {
+    pruneStaleControlPlaneBuckets(Number.MAX_SAFE_INTEGER);
     stateDir = tempDirs.make("openclaw-requester-cron-authority-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     runtimeConfig.setRuntimeConfigSnapshot(cfg);
     replaceSessionEntrySync(
       { sessionKey: SESSION },
-      { sessionId: SESSION_ID, updatedAt: 1, lifecycleRevision: "original", createdActor },
+      {
+        sessionId: SESSION_ID,
+        updatedAt: 1,
+        lifecycleRevision: "original",
+        createdActor: typeof createdActor === "function" ? createdActor() : createdActor,
+      },
     );
   });
 
   afterEach(async () => {
+    pruneStaleControlPlaneBuckets(Number.MAX_SAFE_INTEGER);
     cron?.stop();
     await cron?.waitForIdle();
     revokeRequesterCronAuthority(SESSION);
@@ -90,16 +100,14 @@ export function admission(
           sourceSessionKey: childSessionKey,
         }
       : undefined,
-    hasRestoredCronContinuation: false,
     isOneShotModelRun: false,
-    isRestartRecoveryResumeRun: false,
   });
 }
 
 export type RequesterRun<T> = (
   identity: AgentRuntimeIdentity,
   admittedRun: runContext.AdmittedRunContext,
-  creator?: cronAuthority.CronCreatorAuthorityCapability,
+  creator?: CronCreatorAuthorityCapability,
 ) => Promise<T>;
 
 export async function inRun<T>(
@@ -132,7 +140,7 @@ export async function inRun<T>(
       ...caller,
       delegatedAuthority: { kind: "local", ...authority },
     };
-    const execute = (creator?: cronAuthority.CronCreatorAuthorityCapability) =>
+    const execute = (creator?: CronCreatorAuthorityCapability) =>
       gatewayCaller.withGatewayToolCallerIdentity({ ...caller, approvalAuthority: authority }, () =>
         run(identity, admittedRun, creator),
       );
@@ -198,13 +206,14 @@ export async function createCreatorTransportTools(params: {
   requesterOrigin?: RequesterOrigin;
   config: OpenClawConfig;
   admitted: runContext.AdmittedRunContext;
-  creator?: cronAuthority.CronCreatorAuthorityCapability;
+  creator?: CronCreatorAuthorityCapability;
   senderIsOwner: boolean;
-  forceRestartSafeTools?: boolean;
   workspaceDir?: string;
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
   sandbox?: SandboxContext;
   turnSourceChannel?: string;
+  trigger?: string;
+  inputProvenance?: InputProvenance;
   gatewayUiCommandTarget?: GatewayUiCommandTarget;
 }): Promise<CreatorTransportTools> {
   const { transport, config, admitted, creator, senderIsOwner } = params;
@@ -315,7 +324,8 @@ export async function createCreatorTransportTools(params: {
       config,
       agentId: "main",
       ...toolContext,
-      forceRestartSafeTools: params.forceRestartSafeTools,
+      trigger: params.trigger,
+      inputProvenance: params.inputProvenance,
       sessionPermissionPolicy: params.sessionPermissionPolicy,
       sandbox: params.sandbox,
       cronCreatorToolAllowlistRef: creatorTools,

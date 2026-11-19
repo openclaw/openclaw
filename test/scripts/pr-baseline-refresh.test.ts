@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -14,7 +15,10 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createBaselineFixture } from "./pr-baseline-native.test-support.js";
-import { createCorrectionFixture } from "./pr-correction-preparation.test-support.js";
+import {
+  createCapturedHashProbe,
+  createCorrectionFixture,
+} from "./pr-correction-preparation.test-support.js";
 
 const cases = useAutoCleanupTempDirTracker(afterEach);
 const keys = useAutoCleanupTempDirTracker(afterAll);
@@ -30,6 +34,22 @@ function pass<T extends RunResult>(result: T) {
 function reject<T extends RunResult>(result: T) {
   expect(result.status, `${String(result.stdout)}${String(result.stderr)}`).not.toBe(0);
   return result;
+}
+
+function expectCapturedWrite(probe: ReturnType<typeof createCapturedHashProbe>, size: number) {
+  expect(readFileSync(probe.calls, "utf8").trim().split("\n")).toContain(String(size));
+  expect(readdirSync(probe.scratch).filter((name) => name.startsWith("openclaw-pr-hash-"))).toEqual(
+    [],
+  );
+}
+
+function expectStoredBlob(f: ReturnType<typeof fixture>, bytes: Buffer) {
+  const oid = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+  expect(f.git("rev-parse", "HEAD:docs/fix.md")).toBe(oid);
+  const stored = pass(spawnSync("git", ["cat-file", "blob", oid], { cwd: f.root, env: f.env }));
+  expect(stored.stdout.equals(bytes)).toBe(true);
+  expect(f.read("docs/fix.md").equals(bytes)).toBe(true);
+  return oid;
 }
 
 function fixture(
@@ -270,12 +290,15 @@ describePosix("native correction baseline refresh", () => {
       expect(refused.stderr).toContain("Expected exactly the computed conflict resolutions");
       expect(f.git("rev-parse", "HEAD")).toBe(f.source);
       expect(f.read(".local/correction-review.json")).toEqual(f.review);
-      const content = shape === "delete" ? "" : "resolved\0binary\n";
+      const content = shape === "delete" ? "" : "resolved\0binary\n".repeat(64 * 1024);
       const manifest = f.manifest(content);
-      pass(f.refresh(manifest.args));
-      expect(readFileSync(join(f.root, "docs/fix.md"), "utf8")).toBe(content);
+      const probe = createCapturedHashProbe(f.root, true);
+      pass(f.refresh(manifest.args, "", probe.env));
+      const bytes = Buffer.from(content);
+      expectCapturedWrite(probe, bytes.length);
+      const oid = expectStoredBlob(f, bytes);
       const binding = f.json(".local/prepare-baseline.json");
-      expect(binding.resolutions[0].resolved.oid).toBe(f.git("rev-parse", "HEAD:docs/fix.md"));
+      expect(binding.resolutions[0].resolved.oid).toBe(oid);
       expect(binding.resolutions[0].resolved.file).toBeUndefined();
       expect(f.git("show", "HEAD:upstream.txt")).toBe("unrelated upstream repair");
     },
@@ -283,12 +306,31 @@ describePosix("native correction baseline refresh", () => {
 
   it("combines independent text edits as exact bytes with the baseline executable mode", () => {
     const f = fixture("clean");
-    pass(f.refresh());
-    expect(f.read("docs/fix.md")).toEqual(
-      Buffer.from("source café\r\n2\r\n3\r\n4\r\n5\r\nbaseline 修正\r\n"),
-    );
+    const probe = createCapturedHashProbe(f.root, true);
+    const bytes = Buffer.from("source café\r\n2\r\n3\r\n4\r\n5\r\nbaseline 修正\r\n");
+    pass(f.refresh("", "", probe.env));
+    expectStoredBlob(f, bytes);
+    expectCapturedWrite(probe, bytes.length);
     expect(f.git("ls-tree", "HEAD", "--", "docs/fix.md")).toMatch(/^100755 blob /u);
-    expect(f.run("prepare_correction_review_init 42").status).toBe(0);
+    pass(f.run("prepare_correction_review_init 42", "", probe.env));
+    f.approve();
+    pass(f.run("require_prepared_review 42", "", probe.env));
+    expectCapturedWrite(probe, bytes.length);
+  });
+
+  it("cleans a failed write hash without changing correction authority", () => {
+    const f = fixture("clean");
+    const probe = createCapturedHashProbe(f.root, true);
+    const result = reject(f.refresh("", "", { ...probe.env, FAIL_HASH: "1" }));
+    expect(result.stderr).toContain("fixture Git hash failure");
+    expectCapturedWrite(
+      probe,
+      Buffer.byteLength("source café\r\n2\r\n3\r\n4\r\n5\r\nbaseline 修正\r\n"),
+    );
+    expect(f.git("rev-parse", "HEAD")).toBe(f.source);
+    expect(f.read(".local/correction-review.json")).toEqual(f.review);
+    expect(existsSync(join(f.root, ".local/prepare-baseline.json"))).toBe(false);
+    expect(existsSync(join(f.root, ".local/review-transition.json"))).toBe(false);
   });
 
   it("resolves a native differing add/add without consulting the source worktree", () => {

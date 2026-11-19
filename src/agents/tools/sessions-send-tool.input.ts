@@ -18,8 +18,13 @@ type SendTargetScope = Pick<
   | "a2aPolicy"
 > & { requesterAgentId: string };
 
-export function formatUnknownAgentError(scope: SendTargetScope, agentId: string | undefined) {
-  const { cfg, mainKey, requesterAgentId, restrictToSpawned } = scope;
+export function formatUnknownAgentError(agentId: string | undefined, scope?: SendTargetScope) {
+  const error = `Agent "${agentId}" not found.`;
+  const nextStep = "Run openclaw agents list to see configured agents.";
+  if (!agentId || !scope || scope.restrictToSpawned) {
+    return `${error} ${nextStep}`;
+  }
+  const { cfg, mainKey, requesterAgentId } = scope;
   // The send-access owner decides, so the hint never names a target the retry would be denied.
   const sendAccess = createSessionVisibilityRowChecker({
     action: "send",
@@ -31,22 +36,20 @@ export function formatUnknownAgentError(scope: SendTargetScope, agentId: string 
   });
   const isTarget = (id: string) => {
     const key = resolveConfiguredAgentMainSessionKey({ cfg, agentId: id, mainKey });
-    return (
-      !restrictToSpawned && key !== undefined && sendAccess.check({ key, agentId: id }).allowed
-    );
+    return key !== undefined && sendAccess.check({ key, agentId: id }).allowed;
   };
-  const hint = agentId ? describeAgentIdForName(cfg, agentId, isTarget) : undefined;
-  return `Agent "${agentId}" not found.${hint ? ` ${hint}` : ""} Run openclaw agents list to see configured agents.`;
+  const hint = describeAgentIdForName(cfg, agentId, isTarget);
+  return `${error}${hint ? ` ${hint}` : ""} ${nextStep}`;
 }
 
-export function readSessionsSendTarget(params: Record<string, unknown>, scope: SendTargetScope) {
+export function readSessionsSendTarget(params: Record<string, unknown>, scope?: SendTargetScope) {
   const sessionKeyParam = readToolStringParam(params, "sessionKey");
   const labelParam = readToolStringParam(params, "label");
   const labelAgentIdInput = readToolStringParam(params, "agentId");
   const normalizedLabelAgentId =
     labelAgentIdInput === undefined ? null : normalizeAgentIdStrict(labelAgentIdInput);
   if (normalizedLabelAgentId && !normalizedLabelAgentId.ok) {
-    return { ok: false as const, error: formatUnknownAgentError(scope, labelAgentIdInput) };
+    return { ok: false as const, error: formatUnknownAgentError(labelAgentIdInput, scope) };
   }
   return {
     ok: true as const,

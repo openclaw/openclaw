@@ -11,12 +11,14 @@ import {
 } from "./session-accessor.sqlite-deletion.js";
 import type { retainPreparedSessionSharingFacts } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { createSessionIdentityResultPublisher } from "./session-accessor.sqlite-identity.js";
+import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import { toDatabaseOptions, type ResolvedSqliteScope } from "./session-accessor.sqlite-scope.js";
 import type { SessionMessageCutMutationParams } from "./session-accessor.types.js";
 import { restoreSessionColdTranscript } from "./session-cold-storage.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import { readSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
 import { executeSessionForkOperation } from "./session-fork-domain.js";
+import { prepareMessageCutLocalWorkspace } from "./session-message-cut-local-workspace.js";
 import type {
   SessionMessageCutCandidate,
   SessionMessageCutIntent,
@@ -95,6 +97,44 @@ export async function mutateSessionHistoryInWorker(
     assertCurrent,
   );
   assertCurrent();
+  const mode = intent.mode;
+  if (mode !== "fork") {
+    if (preparedEntry.worktree) {
+      // The precheck reads the same indexed projection the commit uses, in the
+      // database's own worker; a vanished store simply defers to that commit.
+      const refused = await withSessionEntryWorker(
+        database,
+        undefined,
+        assertCurrent,
+        async (reader, workerSource) =>
+          reader.runExisting(workerSource, (worker) =>
+            worker.execute({
+              type: "session.messageCut.preflight",
+              input: {
+                sessionId: preparedEntry.sessionId,
+                entry: preparedEntry,
+                intent: { ...preparedIntent, mode },
+                sourceRepositoryWorkspaceId: preconditions?.sourceRepositoryWorkspaceId,
+              },
+            }),
+          ),
+      );
+      assertCurrent();
+      if (refused) {
+        return refused;
+      }
+    }
+    preparedIntent.settledLocalWorkspace = await prepareMessageCutLocalWorkspace(
+      {
+        agentId: resolved.agentId,
+        env: database.env,
+        sessionKey: intent.sourceKey,
+        storePath: database.path,
+      },
+      preparedEntry,
+      assertCurrent,
+    );
+  }
   const prepareContext = (run: (assertCurrent: () => void) => Promise<SessionMessageCutResult>) =>
     intent.mode === "fork"
       ? run(() => {})
@@ -137,7 +177,12 @@ export async function mutateSessionHistoryInWorker(
         }
         return false;
       },
-      assertCandidate: () => preconditions?.assertUpstreamCurrent?.(),
+      assertCandidate: (candidate) => {
+        preconditions?.assertUpstreamCurrent?.();
+        if (intent.mode === "fork" && candidate.result.status === "created") {
+          preconditions?.assertForkVisibilityAllowed?.(candidate.result.entry.visibility);
+        }
+      },
       candidateKind: "session-message-cut" as const,
       onAcknowledged(candidate: SessionMessageCutCandidate) {
         if (candidate.result.status === "created") {

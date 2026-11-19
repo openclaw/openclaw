@@ -198,7 +198,7 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
 
     // Automatic rebuilds retry after the documented 30-second failure cooldown.
     {
-      using _ = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30_000);
+      using _ = vi.spyOn(performance, "now").mockReturnValue(performance.now() + 30_000);
       await sync();
     }
     await expectRecall(manager, "violet");

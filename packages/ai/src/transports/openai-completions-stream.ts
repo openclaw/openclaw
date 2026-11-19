@@ -35,6 +35,7 @@ import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { createDsmlRecoverer } from "./openai-completions-dsml.js";
 import { createGemmaToolCallRecoverer } from "./openai-completions-gemma.js";
+import { requiresReasoningContentReplay } from "./openai-completions-reasoning-replay.js";
 import { getCompat } from "./openai-transport-params.js";
 import {
   isOpenAICompletionsThinkingEnabled,
@@ -708,10 +709,19 @@ function warnMissingStreamingUsage(model: OpenAIModeModel) {
 export function shouldEmitOpenAICompletionsReasoning(
   model: OpenAIModeModel,
   options: OpenAICompletionsOptions | undefined,
+  mode: "direct" | "managed" = "managed",
 ) {
+  // Effort controls generation, not the reasoning needed to replay a tool turn.
+  if (
+    model.compat?.requiresReasoningContentOnAssistantMessages ||
+    requiresReasoningContentReplay(model.id)
+  ) {
+    return true;
+  }
   if (!model.reasoning) {
     return false;
   }
-  const effort = options?.reasoningEffort ?? options?.reasoning ?? "high";
-  return Boolean(effort) && isOpenAICompletionsThinkingEnabled(effort);
+  const effort =
+    options?.reasoningEffort ?? (mode === "managed" ? (options?.reasoning ?? "high") : undefined);
+  return Boolean(effort && isOpenAICompletionsThinkingEnabled(effort));
 }

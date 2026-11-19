@@ -185,10 +185,10 @@ function normalizeSlackReadTimestamp(
   raw: string | undefined,
   field: "before" | "after",
 ): string | undefined {
-  const trimmed = raw?.trim();
-  if (!trimmed) {
+  if (!raw?.trim()) {
     return undefined;
   }
+  const trimmed = raw.trim().replace(/^"(.*)"$/u, "$1");
   if (SLACK_TIMESTAMP_RE.test(trimmed)) {
     return trimmed;
   }

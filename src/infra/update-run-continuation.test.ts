@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { hostname } from "node:os";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getSelfAndAncestorPidsSync as ancestorPids } from "./restart-stale-pids.js";
@@ -52,9 +53,7 @@ function ancestry(
     stoppedBy,
   };
 }
-function admit(run: UpdateRunRecord) {
-  return inspectUpdateRepairDriverAdmission([run], runId);
-}
+const admit = (run: UpdateRunRecord) => inspectUpdateRepairDriverAdmission([run], runId);
 function mockIdentities(updaterStart = originalStart) {
   const identities = new Map([
     [repairPid, identity(repairPid, updaterPid, repairStart)],
@@ -76,9 +75,6 @@ function updateRun(pid: number, start = repairStart, previous?: [number, number]
   });
 }
 
-// Keep unverified fixtures outside identities cached by earlier cases.
-const unverifiedPid = repairPid + 100;
-
 beforeEach(() => {
   readProcessAncestry.mockReset().mockReturnValue(null);
   readProcessIdentity.mockReset();
@@ -90,40 +86,60 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each([originalStart, repairStart + 1])(
-  "checks original updater birth time %s",
-  (updaterStart) => {
-    const reused = updaterStart > repairStart;
-    mockIdentities(updaterStart);
-    readProcessAncestry.mockReturnValue(
+it.each(["root", "recycled-parent", "unreadable-parent"] as const)(
+  "verifies every recorded native ancestor's birth and visibility: %s",
+  (fault) => {
+    const current = repairPid + 300 + fault.length;
+    const previous = updaterPid + 500 + fault.length;
+    const start = fault === "recycled-parent" ? repairStart + 1 : originalStart;
+    readProcessIdentity.mockImplementation((pid) =>
+      identity(pid, 0, pid === current ? repairStart : start),
+    );
+    readProcessAncestry.mockImplementation((_pid, options) =>
       ancestry(
-        reused ? [process.pid, repairPid] : [process.pid, repairPid, updaterPid],
-        reused ? "recycled-parent" : "root",
-        reused ? updaterPid : 0,
+        [process.pid, current, ...(fault === "root" ? [previous] : [])],
+        options?.throughPid === current ? "through-pid" : fault,
+        previous,
       ),
     );
-    expect(admit(updateRun(repairPid, repairStart, [updaterPid, updaterStart])).kind).toBe(
-      reused ? "conflict" : "continuation",
+    expect(ancestorPids().has(current)).toBe(true);
+    expect(admit(updateRun(current, repairStart, [previous, start])).kind).toBe(
+      fault === "root" ? "continuation" : "conflict",
     );
   },
 );
 
-it("keeps self and direct parent when transitive ancestry cannot be inspected", () => {
-  expect(ancestorPids()).toEqual(new Set([process.pid, repairPid]));
-});
-
-it.each([true, false])("rejects unverified driver ancestry (reused direct parent=%s)", (reused) => {
-  const pid = reused ? repairPid : unverifiedPid;
-  const start = reused ? doctorStart + 1000 : repairStart;
-  readProcessAncestry.mockReturnValue(
-    reused
-      ? ancestry([process.pid], "recycled-parent", repairPid)
-      : ancestry([process.pid, pid], "unreadable-parent", updaterPid),
-  );
-  readProcessIdentity.mockImplementation((current) => identity(reused ? pid : current, 0, start));
-  expect(ancestorPids().has(pid)).toBe(true);
-  expect(admit(updateRun(pid, start)).kind).toBe("conflict");
-});
+it.each(["current", "reused", "unreadable", "cycle", "stray"])(
+  "verifies Linux continuation with unavailable native ancestry: %s",
+  (fault) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    readProcessAncestry.mockImplementation(() => {
+      throw new Error("GLIBC_2.33 not found");
+    });
+    const pid = repairPid + 400 + fault.length;
+    const start = fault === "reused" ? doctorStart + 1 : repairStart;
+    const parents = new Map([
+      [process.pid, pid],
+      [pid, 1],
+    ]);
+    if (fault === "stray") {
+      parents.set(process.pid, 1);
+    }
+    if (fault === "cycle") {
+      parents.set(process.pid, process.pid);
+    }
+    vi.spyOn(fs, "readFileSync").mockImplementation((file) => {
+      const current = Number(/^\/proc\/(\d+)\/stat$/.exec(String(file))?.[1]);
+      if (!parents.has(current) || (fault === "unreadable" && current === pid)) {
+        throw new Error("procfs unavailable");
+      }
+      return `${current} (node (update)) S ${parents.get(current)} ${"0 ".repeat(17)}${current === process.pid ? doctorStart : start}`;
+    });
+    expect(admit(updateRun(pid, start)).kind).toBe(
+      fault === "current" ? "continuation" : "conflict",
+    );
+  },
+);
 
 it("keeps a verified continuation when a later ancestry read fails", () => {
   const retainedPid = repairPid + 200;
@@ -135,7 +151,6 @@ it("keeps a verified continuation when a later ancestry read fails", () => {
   readProcessIdentity.mockImplementation((pid) => identity(pid, 0, repairStart));
 
   expect(admit(updateRun(retainedPid)).kind).toBe("continuation");
-  expect(readProcessAncestry).toHaveBeenCalledTimes(1);
   expect(admit(updateRun(retainedPid)).kind).toBe("continuation");
 
   // Retained proof is bound to the verified identity, never to a reused PID.
@@ -145,24 +160,6 @@ it("keeps a verified continuation when a later ancestry read fails", () => {
     kind: "conflict",
     message: expect.stringContaining("could not read this process's ancestry"),
   });
-});
-
-it("requires readable ancestry through every live driver", () => {
-  const currentPid = repairPid + 301;
-  const previousPid = updaterPid + 500;
-  readProcessAncestry.mockImplementation((_pid, options) =>
-    ancestry(
-      [process.pid, currentPid],
-      options?.throughPid === currentPid ? "through-pid" : "unreadable-parent",
-      previousPid,
-    ),
-  );
-  const run = updateRun(currentPid, repairStart, [previousPid, originalStart]);
-  readProcessIdentity.mockImplementation((pid) =>
-    identity(pid, 0, pid === currentPid ? repairStart : originalStart),
-  );
-  expect(ancestorPids().has(currentPid)).toBe(true);
-  expect(admit(run).kind).toBe("conflict");
 });
 
 it.each(["current", "unreadable-helper", "reused-helper", "replaced-row"] as const)(

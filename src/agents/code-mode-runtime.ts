@@ -150,7 +150,6 @@ export function toToolSearchConfig(config: CodeModeConfig): ToolSearchConfig {
 
 export function readCode(args: unknown): {
   code: string;
-  restartSafe: boolean;
   awaitResults: boolean;
 } {
   const params = asToolParamsRecord(args);
@@ -174,13 +173,8 @@ export function readCode(args: unknown): {
   if (awaitResults !== undefined && typeof awaitResults !== "boolean") {
     throw new ToolInputError("awaitResults must be a boolean.");
   }
-  const restartSafe = params.restartSafe;
-  if (restartSafe !== undefined && typeof restartSafe !== "boolean") {
-    throw new ToolInputError("restartSafe must be a boolean.");
-  }
   return {
     code,
-    restartSafe: restartSafe === true,
     awaitResults: awaitResults === true,
   };
 }

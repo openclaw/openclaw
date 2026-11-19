@@ -10,7 +10,7 @@
 // latency proof. Keep natural GC enabled and report absolute GC deltas.
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { dirname } from "node:path";
 import { PerformanceObserver } from "node:perf_hooks";
@@ -21,6 +21,7 @@ import {
   reduceSessionProjectionRunEvent,
   type SessionProjectionState,
 } from "../../packages/gateway-client/src/session-projection.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -86,10 +87,6 @@ function stream(count: number, sequenceOffset: number) {
   }
 }
 
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-}
-
 const inspector = new Session();
 const collections: { startTime: number; duration: number; kind: number }[] = [];
 const observer = new PerformanceObserver((list) => {
@@ -150,7 +147,7 @@ try {
       ],
     });
   }
-  const allocatedBytes = profile ? allocated(profile.head) : undefined;
+  const allocatedBytes = profile ? sumSampledHeapBytes(profile.head) : undefined;
   const elapsedMs = ended - started;
   // Compare retained heap outside timing, without retaining an allocation profile.
   if (!values.allocations) {

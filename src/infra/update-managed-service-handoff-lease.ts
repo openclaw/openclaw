@@ -78,7 +78,7 @@ export function resolveManagedUpdateLeaseDatabasePath(): string {
   // Other users may own /tmp/openclaw after a reboot; lease placement must not follow it.
   const preferredDir = path.join(base, uid === undefined ? "openclaw" : `openclaw-${uid}`);
   return path.join(
-    resolvePreferredOpenClawTmpDir({ preferredDir, tmpdir: () => base }),
+    resolvePreferredOpenClawTmpDir({ preferredDir, tmpdir: () => base, purpose: "coordination" }),
     "managed-update-handoffs.sqlite",
   );
 }
@@ -571,9 +571,10 @@ function createLeaseStore(
     }
     const localHelper = lease.helper.pid === process.pid && processState(lease.helper) === "live";
     if (managedCommandCustody(lease)) {
-      return managedCommandCustody(lease) === "reserved"
-        ? localHelper && settledReservation
-        : !managedCommandUnsettled(lease);
+      return (
+        (managedCommandCustody(lease) === "reserved" && localHelper && settledReservation) ||
+        !managedCommandUnsettled(lease, processState)
+      );
     }
     const action = lease.action;
     const executorClosed =
@@ -694,6 +695,7 @@ function createLeaseStore(
     processIdentity,
     inspectProcessIdentity,
     isProcessIdentityCurrent,
+    processState,
     readProcessStartIdentity,
     isPidAlive,
     bootIdentity,

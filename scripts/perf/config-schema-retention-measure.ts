@@ -12,13 +12,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { Session } from "node:inspector/promises";
-import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { writeHeapSnapshot } from "node:v8";
+import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 
 const { values } = parseArgs({
   options: {
@@ -32,22 +31,9 @@ const { values } = parseArgs({
 const iterations = Number(values.iterations);
 assert(Number.isSafeInteger(iterations) && iterations >= 2);
 const ownerUrl = new URL("../../src/config/schema.ts", import.meta.url);
-let ownerLoaded = false;
-if (values["owner-file"]) {
-  const replacement = pathToFileURL(path.resolve(values["owner-file"]));
-  registerHooks({
-    load(url, context, nextLoad) {
-      if (url !== ownerUrl.href) {
-        return nextLoad(url, context);
-      }
-      ownerLoaded = true;
-      const loaded = nextLoad(replacement.href, context);
-      return { format: loaded.format, source: loaded.source, shortCircuit: true };
-    },
-  });
-}
+const wasOwnerReplaced = registerPerfOwnerReplacement(ownerUrl.href, values["owner-file"]);
 const { buildConfigSchemaCore } = await import("../../src/config/schema.ts");
-assert(!values["owner-file"] || ownerLoaded, "Requested schema owner was not loaded");
+assert(!values["owner-file"] || wasOwnerReplaced(), "Requested schema owner was not loaded");
 const plugins = Array.from({ length: 40 }, (_plugin, index) => ({
   id: `synthetic-${index}`,
   name: `Synthetic ${index}`,

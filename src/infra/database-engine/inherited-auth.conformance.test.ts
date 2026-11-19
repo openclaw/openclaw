@@ -27,17 +27,8 @@ import {
 import { resetPreparedModelCatalogStateForTest } from "../../agents/prepared-model-runtime.test-support.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { resetConfigRuntimeState } from "../../config/runtime-snapshot.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
-import * as recoveryEntries from "../../config/sessions/session-entry-read-maintenance.js";
-import { listSessionPendingInputs } from "../../config/sessions/session-pending-input-history.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createOperatorRecoveryFixture } from "../../gateway/operator-run-recovery.test-support.js";
 import { installGatewayDatabaseEngine } from "../../gateway/server-database-engine.js";
-import {
-  createChatInputRecovery,
-  normalizeChatSendRequest,
-} from "../../gateway/server-methods/chat-send-request.js";
 import {
   catalogReply,
   catalogSessionRpc,
@@ -50,7 +41,6 @@ import {
   listenModelsEndpoint,
   startModelsGateway,
 } from "../../gateway/server-methods/models-integration.test-support.js";
-import { createContext } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { loadOrCreateDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { clearSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -62,7 +52,6 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { acquireStateDatabaseSchemaLease } from "../gateway-state-owner.js";
 import { dropPostgresTestSchemas } from "../postgres-sync/schema-cleanup.test-support.js";
@@ -82,9 +71,7 @@ const inheritedKey = "synthetic-inheritauth-owner-key";
 const ownerMarkers = (messages: Array<{ role: string; content: unknown }>) =>
   messages.flatMap((message) =>
     message.role === "user"
-      ? ["SAVED_OWNER", "FRESH_OWNER"].filter((marker) =>
-          JSON.stringify(message.content ?? null).includes(marker),
-        )
+      ? ["FRESH_OWNER"].filter((marker) => JSON.stringify(message.content ?? null).includes(marker))
       : [],
   );
 
@@ -102,8 +89,8 @@ async function closeDatabases() {
 }
 
 describe.skipIf(!connection)("PostgreSQL inherited auth startup", () => {
-  // One real PostgreSQL startup, four model turns, and deferred saved-input recovery.
-  it("serves admitted agents and replays a deferred owner's saved input before fresh input", async ({
+  // One real PostgreSQL startup and three model turns prove inherited auth admission.
+  it("serves admitted agents before and after the inherited auth owner becomes ready", async ({
     signal,
   }) => {
     const prefix = `inheritauth_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
@@ -152,11 +139,7 @@ process.emit = function(event, ...args) {
     let gateway: Awaited<ReturnType<typeof startModelsGateway>> | undefined;
     let probe: WebSocket | undefined;
     let unsubscribe: (() => void) | undefined;
-    const recoveryEntered = createDeferredCore();
-    const releaseRecovery = createDeferredCore();
-    const savedInputStarted = createDeferredCore();
-    const freshInputStarted = createDeferredCore();
-    const releaseSavedInput = createDeferredCore();
+    const ownerSessionKey = "agent:owner:admitted-owner";
     const requests: Array<{ authorization: string | undefined; body: string }> = [];
     const ownerInputOrder: string[] = [];
     const ownerAuthorizations: Array<string | undefined> = [];
@@ -181,12 +164,6 @@ process.emit = function(event, ...args) {
         if (ownerInput) {
           ownerInputOrder.push(ownerInput);
           ownerAuthorizations.push(request.headers.authorization);
-        }
-        if (ownerInput === "SAVED_OWNER") {
-          savedInputStarted.resolve();
-          await withinTest(releaseSavedInput.promise, signal);
-        } else if (ownerInput === "FRESH_OWNER") {
-          freshInputStarted.resolve();
         }
         response.writeHead(200, { "content-type": "text/event-stream" });
         response.end(catalogReply("inherited-auth", "fixture", `${ownerInput ?? "INHERITOR"}_OK`));
@@ -275,81 +252,7 @@ process.emit = function(event, ...args) {
           lease.release();
         }
       });
-      const profile = admit(() => ensureProfileForEmail("inherited-auth-recovery@example.test"));
-      const fixture = await createOperatorRecoveryFixture({
-        stateDir: state.stateDir,
-        context: createContext(),
-        profileId: profile.id,
-        config: cfg,
-        agentId: "owner",
-        sessionKey: "agent:owner:recovery-order",
-        sourceRunId: "saved-owner",
-        parentSessionKey: null,
-      });
       await loadOrCreateDeviceIdentityAsync();
-      const normalized = await normalizeChatSendRequest({
-        client: fixture.client,
-        params: {
-          agentId: "owner",
-          sessionKey: fixture.target.sessionKey,
-          idempotencyKey: fixture.target.sourceRunId,
-          message: "SAVED_OWNER",
-          queueMode: "followup",
-          deliver: false,
-        },
-      });
-      if (!normalized.ok) {
-        throw new Error(normalized.error);
-      }
-      const requestFingerprint = expectDefined(
-        normalized.value.requestIdentity,
-        "saved owner input fingerprint",
-      );
-      const recovery = expectDefined(
-        createChatInputRecovery({
-          request: normalized.value,
-          source: fixture.entry.restartRecoveryOperatorSource,
-        }),
-        "saved owner input authority",
-      );
-      // This is saved input, without a separate interrupted predecessor to resume.
-      await replaceSessionEntry(fixture.target, {
-        sessionId: fixture.entry.sessionId,
-        updatedAt: Date.now(),
-        lifecycleRevision: fixture.entry.lifecycleRevision,
-        createdActor: fixture.entry.createdActor,
-      });
-      const receipt = expectDefined(
-        await stageSessionPendingInput(fixture.target, {
-          runId: fixture.target.sourceRunId,
-          requestFingerprint,
-          message: {
-            role: "user",
-            content: "SAVED_OWNER",
-            timestamp: Date.now(),
-            idempotencyKey: `${fixture.target.sourceRunId}:user`,
-            __openclaw: {
-              chatInputRecovery: recovery,
-              chatRequestIdentity: requestFingerprint,
-            },
-          },
-          assertCurrent() {},
-        }),
-        "durable saved owner input",
-      );
-      receipt.finish("interrupted");
-      await receipt.settled?.();
-      const owner = fixture.target;
-      const readRecoveryEntries = recoveryEntries.readPendingInputRecoveryEntriesInWorker;
-      vi.spyOn(recoveryEntries, "readPendingInputRecoveryEntriesInWorker").mockImplementation(
-        async (input) => {
-          if (input.agentId === "owner") {
-            recoveryEntered.resolve();
-            await withinTest(releaseRecovery.promise, signal);
-          }
-          return readRecoveryEntries(input);
-        },
-      );
       expect(resolveSharedAuthStoreOwnership(state.env)).toEqual({ location: "legacy-main" });
       const mainPath = resolveAuthProfileDatabasePath(state.agentDir());
       const ownerPath = resolveAuthProfileDatabasePath(state.agentDir("owner"));
@@ -371,7 +274,7 @@ process.emit = function(event, ...args) {
         await gateway.server.startupSettled;
         await admission.waitForAgentPreparation("main", { env: state.env, signal });
         const rpc = catalogSessionRpc(gateway.client);
-        // Session creation waits for ordinary startup methods, independently of chat recovery.
+        // An admitted agent serves ordinary session creation while its auth owner is pending.
         const session = await rpc.create(`${localProvider}/fixture`, "agent:main:pending-owner");
         const pendingOwner = expectDefined(
           readAgentDatabaseAdmissionRefusal("owner", { env: state.env }),
@@ -408,7 +311,7 @@ process.emit = function(event, ...args) {
         ).toMatchObject({ ok: true });
         const ownerFreshInput = {
           agentId: "owner",
-          sessionKey: owner.sessionKey,
+          sessionKey: ownerSessionKey,
           message: "FRESH_OWNER",
           idempotencyKey: "fresh-owner",
           queueMode: "followup",
@@ -465,36 +368,25 @@ process.emit = function(event, ...args) {
         await withinTest(inheritedPublished.promise, signal);
         await admission.waitForAgentPreparation("owner", { env: state.env, signal });
         expect(readAgentDatabaseAdmissionRefusal("owner", { env: state.env })).toBeUndefined();
-        await withinTest(recoveryEntered.promise, signal);
-        expect(await requestProbe("owner-recovering", "chat.send", ownerFreshInput)).toMatchObject({
-          ok: false,
-          error: { code: "UNAVAILABLE", retryable: true },
-        });
-        expect(ownerInputOrder).toEqual([]);
-        expect((await listSessionPendingInputs(owner)).items).toMatchObject([
-          { runId: owner.sourceRunId, state: "interrupted" },
-        ]);
         const recovered = currentAgentSnapshot();
         expect(getPreparedModelRuntimeAuthStore(recovered!)?.profiles[inheritedProfile]).toEqual({
           type: "api_key",
           provider: inheritedProvider,
           key: inheritedKey,
         });
-        releaseRecovery.resolve();
-        await withinTest(savedInputStarted.promise, signal);
+        await gateway.client.request("sessions.create", {
+          agentId: "owner",
+          model: `${inheritedProvider}/fixture`,
+          key: ownerSessionKey,
+        });
         const fresh = await gateway.client.request<{ runId: string }>("chat.send", ownerFreshInput);
-        expect(ownerInputOrder).toEqual(["SAVED_OWNER"]);
-        releaseSavedInput.resolve();
-        expect(await rpc.wait(owner.sourceRunId)).toMatchObject({ status: "ok" });
-        await withinTest(freshInputStarted.promise, signal);
         expect(await rpc.wait(fresh.runId)).toMatchObject({ status: "ok" });
-        expect(ownerInputOrder).toEqual(["SAVED_OWNER", "FRESH_OWNER"]);
-        expect(ownerAuthorizations).toEqual([`Bearer ${inheritedKey}`, `Bearer ${inheritedKey}`]);
-        const history = await rpc.history(owner.sessionKey);
+        expect(ownerInputOrder).toEqual(["FRESH_OWNER"]);
+        expect(ownerAuthorizations).toEqual([`Bearer ${inheritedKey}`]);
+        const history = await rpc.history(ownerSessionKey);
         expect(ownerMarkers(history.messages as Array<{ role: string; content: unknown }>)).toEqual(
-          ["SAVED_OWNER", "FRESH_OWNER"],
+          ["FRESH_OWNER"],
         );
-        expect((await listSessionPendingInputs(owner)).items).toEqual([]);
         const inheritor = await gateway.client.request<{ key: string }>("sessions.create", {
           agentId: "inheritor",
           model: `${inheritedProvider}/fixture`,
@@ -513,8 +405,6 @@ process.emit = function(event, ...args) {
       unsubscribe?.();
       signal.removeEventListener("abort", releaseInspection);
       releaseInspection();
-      releaseRecovery.resolve();
-      releaseSavedInput.resolve();
       if (probe) {
         await closeGatewayTestWebSocket(probe);
       }

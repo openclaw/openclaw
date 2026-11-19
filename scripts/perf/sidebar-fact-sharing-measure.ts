@@ -11,6 +11,12 @@
  * Acceptance: lower allocation or CPU, unchanged bytes, no material controlled harm.
  * Run matched A/A controls before interpreting adverse timing/GC. Sparse tails are context.
  * Add --cold to replace every row identity (includes shallow fixture copying/freezing).
+ * --transmit serializes each full response, distinguishing avoided reservation work
+ * from work deferred until transport. Default models preparation for conditional replies.
+ * Repeat --source-file <path/session-list-view-cache.ts> (or session-row-serialization.ts)
+ * to pin those owners independently; each source retains its original basename.
+ * Pass --source-file for both baseline and candidate to use the same source transform.
+ * --lists 50 --page-size 200 --stream measures fresh row identities across 50 pages.
  * --max-owner-bytes-per-call <bytes> adds an opt-in sampled allocation regression
  * budget; it requires --allocations and is never an ordinary-CI timing threshold.
  */
@@ -18,12 +24,14 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { Session, type HeapProfiler } from "node:inspector/promises";
-import { registerHooks, stripTypeScriptTypes } from "node:module";
+import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { getHeapStatistics } from "node:v8";
+import { transformSync } from "esbuild";
 import { expandSessionRowFacts } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import type { GatewaySessionRow } from "../../src/gateway/session-utils.types.js";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
@@ -31,10 +39,16 @@ import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 const { values } = parseArgs({
   options: {
     "owner-file": { type: "string" },
+    "source-file": { type: "string", multiple: true },
     output: { type: "string" },
     iterations: { type: "string", default: "3000" },
+    lists: { type: "string", default: "66" },
+    "page-size": { type: "string", default: "500" },
+    stream: { type: "boolean", default: false },
+    "cpu-profile": { type: "string" },
     allocations: { type: "boolean", default: false },
     cold: { type: "boolean", default: false },
+    transmit: { type: "boolean", default: false },
     "max-owner-bytes-per-call": { type: "string" },
   },
 });
@@ -62,24 +76,36 @@ process.env = createGatewayBenchEnv(root, configPath, {
 });
 const ownerFile = values["owner-file"] ?? "src/gateway/session-row-presentation.ts";
 const ownerSource = readFileSync(ownerFile, "utf8");
-let replaced = false;
+const sources = new Map([["session-row-presentation.ts", ownerSource]]);
+for (const file of values["source-file"] ?? []) {
+  sources.set(path.basename(file), readFileSync(file, "utf8"));
+}
+const replaced = new Set<string>();
 const hook = registerHooks({
   load(url, context, next) {
     const loaded = next(url, context);
-    if (url.endsWith("/src/gateway/session-row-presentation.ts")) {
-      replaced = true;
-      return { ...loaded, source: stripTypeScriptTypes(ownerSource) };
+    for (const [name, source] of sources) {
+      if (url.endsWith(`/src/gateway/${name}`)) {
+        replaced.add(name);
+        return {
+          ...loaded,
+          source: transformSync(source, { loader: "ts", format: "esm", target: "esnext" }).code,
+        };
+      }
     }
     return loaded;
   },
 });
 const { shareSidebarSessionRows } = await import("../../src/gateway/session-row-presentation.js");
+const { serializeGatewayFrame } = await import("../../src/gateway/serialized-json.js");
 hook.deregister();
-assert(replaced, "owner substitution did not run");
+assert.equal(replaced.size, sources.size, "owner substitution did not run");
 
 const rowCount = 10_000;
-const pageSize = 500;
-const slots = 66;
+const pageSize = Number(values["page-size"]);
+const slots = Number(values.lists);
+assert(Number.isSafeInteger(pageSize) && pageSize > 1);
+assert(Number.isSafeInteger(slots) && slots > 0 && (slots - 1) * 137 + pageSize <= rowCount);
 const rows: GatewaySessionRow[] = Array.from({ length: rowCount }, (_, index) =>
   Object.freeze({
     key: `agent:main:${index % 5 ? "subagent" : "dashboard"}:synthetic-${index}`,
@@ -106,12 +132,17 @@ function page(index: number) {
   const start = slot * 137;
   const result = rows.slice(start, start + pageSize);
   const changed = Math.floor(index / slots) % pageSize;
-  result[changed] = replacements[start + changed]!;
+  result[changed] = values.stream
+    ? Object.freeze({ ...result[changed]!, updatedAt: 1_800_000_000_000 + rowCount + index })
+    : replacements[start + changed]!;
   return values.cold ? result.map((row) => Object.freeze({ ...row })) : result;
 }
 const retained: ReturnType<typeof shareSidebarSessionRows>[] = [];
 function run(index: number) {
   const result = shareSidebarSessionRows(page(index));
+  if (values.transmit) {
+    serializeGatewayFrame({ type: "res", id: "sidebar", ok: true, payload: result }).toString();
+  }
   retained[index % slots] = result;
   return result;
 }
@@ -120,6 +151,8 @@ for (let index = 0; index < slots * 2; index++) {
   const input = page(index);
   const result = shareSidebarSessionRows(input);
   assert.deepEqual(expandSessionRowFacts(result.sessions, result.sharedFacts), input);
+  const frame = { type: "res", id: "sidebar", ok: true, payload: result };
+  assert.equal(serializeGatewayFrame(frame).toString(), JSON.stringify(frame));
   golden.update(JSON.stringify({ sessions: result.sessions, sharedFacts: result.sharedFacts }));
 }
 for (let index = 0; index < 1000; index++) {
@@ -141,8 +174,14 @@ const observer = new PerformanceObserver((list) => {
   }
 });
 const inspector = new Session();
-if (values.allocations) {
+if (values.allocations || values["cpu-profile"]) {
   inspector.connect();
+}
+if (values["cpu-profile"]) {
+  await inspector.post("Profiler.enable");
+  await inspector.post("Profiler.start");
+}
+if (values.allocations) {
   await inspector.post("HeapProfiler.startSampling", {
     samplingInterval: 32768,
     includeObjectsCollectedByMajorGC: true,
@@ -156,6 +195,7 @@ const loadStart = loadavg();
 const memoryStart = process.memoryUsage();
 const cpuStart = process.threadCpuUsage();
 const latency: number[] = [];
+const allocationStart = getHeapStatistics().total_allocated_bytes;
 start = performance.now();
 for (let index = 0; index < iterations; index++) {
   const at = performance.now();
@@ -164,6 +204,7 @@ for (let index = 0; index < iterations; index++) {
   await nextTurn();
 }
 end = performance.now();
+const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocationStart;
 const cpu = process.threadCpuUsage(cpuStart);
 const memoryEnd = process.memoryUsage();
 loop.disable();
@@ -172,7 +213,6 @@ observer.disconnect();
 let allocation: { totalBytes: number; ownerBytes: number } | undefined;
 if (values.allocations) {
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
-  inspector.disconnect();
   writeFileSync(`${output}.heapprofile`, JSON.stringify(profile));
   allocation = { totalBytes: 0, ownerBytes: 0 };
   const visit = (node: HeapProfiler.SamplingHeapProfileNode, owner = false) => {
@@ -187,11 +227,19 @@ if (values.allocations) {
   };
   visit(profile.head);
 }
+if (values["cpu-profile"]) {
+  const { profile } = await inspector.post("Profiler.stop");
+  writeFileSync(values["cpu-profile"], JSON.stringify(profile));
+}
+if (values.allocations || values["cpu-profile"]) {
+  inspector.disconnect();
+}
 function distribution(samples: number[]) {
   const sorted = samples.toSorted((a, b) => a - b);
   return {
     samples: sorted.length,
     totalMs: sorted.reduce((a, b) => a + b, 0),
+    p50Ms: sorted[Math.ceil(sorted.length * 0.5) - 1] ?? null,
     p95Ms: sorted[Math.ceil(sorted.length * 0.95) - 1] ?? null,
     p99Ms: sorted[Math.ceil(sorted.length * 0.99) - 1] ?? null,
     maxMs: sorted.at(-1) ?? null,
@@ -207,8 +255,23 @@ const result = {
   scope: "Sidebar fact sharing only; no Gateway, selection, authorization, RPC, or model turns",
   node: process.version,
   sourceHash: createHash("sha256").update(ownerSource).digest("hex"),
+  sourceHashes: Object.fromEntries(
+    [
+      "session-row-presentation.ts",
+      "session-list-view-cache.ts",
+      "session-row-serialization.ts",
+      "serialized-json.ts",
+    ].map((name) => [
+      name,
+      createHash("sha256")
+        .update(sources.get(name) ?? readFileSync(path.resolve("src/gateway", name), "utf8"))
+        .digest("hex"),
+    ]),
+  ),
   mode: values.allocations ? "sampled-allocation" : "untraced-timing",
   scenario: values.cold ? "cold-identities" : "warm-identities",
+  transmit: values.transmit,
+  stream: values.stream,
   rowCount,
   pageSize,
   slots,
@@ -217,6 +280,7 @@ const result = {
   elapsedMs: end - start,
   mainCpuMsPerCall: (cpu.user + cpu.system) / 1000 / iterations,
   allocation,
+  allocatedBytes,
   latency: distribution(latency),
   gc: {
     total: gc(),

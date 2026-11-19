@@ -52,6 +52,7 @@ import {
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
 import { registerChannelAutostartRecoveryTests } from "./server-channels.recovery.test-support.js";
 import {
+  createRawHealthOverrideFixture,
   createTestPlugin,
   createTestChannelRegistry,
   createTestChannelManager,
@@ -2360,6 +2361,9 @@ describe("server-channels auto restart", () => {
       },
     );
 
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    expect(startAccount).not.toHaveBeenCalled();
+
     await manager.startChannels();
     expect(startAccount).not.toHaveBeenCalled();
     nativeApprovalRuntime.current = { request } as unknown as GatewayNativeApprovalRuntime;
@@ -2692,39 +2696,6 @@ describe("server-channels auto restart", () => {
     await manager.stopChannel("telegram");
   });
 
-  it("does not start deferred channel accounts after stop wins the startup handoff", async () => {
-    const releaseAccountStart = createDeferred();
-    const measureMock = vi.fn(async (name: string, run: () => unknown) => await run());
-    const startupTrace = {
-      measure: async <T>(name: string, run: () => T | Promise<T>) =>
-        (await measureMock(name, run)) as T,
-    };
-    const startAccount = vi.fn(async () => {});
-
-    const manager = setupChannel(
-      { startAccount },
-      {
-        startupTrace,
-        deferStartupAccountStartsUntil: releaseAccountStart.promise,
-      },
-    );
-
-    await manager.startChannels();
-    await flushMicrotasks();
-    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
-    await flushMicrotasks();
-    await stopTask;
-    await flushMicrotasks();
-    releaseAccountStart.resolve();
-    await flushMicrotasks();
-
-    expect(startAccount).not.toHaveBeenCalled();
-    expect(measureMock.mock.calls.map(([name]) => name)).not.toContain(
-      "channels.discord.start-account-handoff",
-    );
-    expect(readAccount(manager)?.running).not.toBe(true);
-  });
-
   it("logs account startup once before later gateway callbacks", async () => {
     const gatewayEvent = createDeferred();
     const eventHandled = createDeferred();
@@ -2843,23 +2814,10 @@ describe("server-channels auto restart", () => {
   ])(
     "matches health overrides for '$requestedId' against '$rawId'",
     ({ rawId, requestedId, expected }) => {
-      const manager = setupChannel(
-        {
-          resolveAccount: () => ({ enabled: true, configured: true }),
-        },
-        {
-          getRuntimeConfig: () => ({
-            channels: {
-              discord: {
-                accounts: {
-                  [rawId]: { healthMonitor: { enabled: false } },
-                },
-              },
-            },
-          }),
-        },
-      );
+      const { resolveAccount, getRuntimeConfig } = createRawHealthOverrideFixture(rawId);
+      const manager = setupChannel({ resolveAccount }, { getRuntimeConfig });
       expect(manager.isHealthMonitorEnabled("discord", requestedId)).toBe(expected);
+      expect(resolveAccount).not.toHaveBeenCalled();
     },
   );
 

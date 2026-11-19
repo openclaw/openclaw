@@ -15,10 +15,9 @@ import {
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { resolveMessageActionAgentRuntimeIdentity } from "../../agents/tools/gateway.js";
-import { createRecoveryControllerFixture } from "../../auto-reply/reply/recovery-controller.fixture.test-support.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -27,8 +26,6 @@ import {
 } from "../../infra/agent-run-registry.js";
 import type { QaBusStateSnapshot } from "../../plugin-sdk/qa-channel-protocol.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createReplyOperation } from "../../sessions/session-controller.operation.js";
-import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -46,7 +43,7 @@ afterEach(() => resetPluginRuntimeStateForTest());
 
 type QaBusState = { getSnapshot: () => QaBusStateSnapshot };
 
-it("keeps an accepted QA reply pending after a lost HTTP response and refuses a distinct same-source call", async (test) => {
+it("reports a lost HTTP response for an accepted QA reply and reuses its request result", async (test) => {
   await withOpenClawTestState({ prefix: "gateway-qa-reply-ambiguity-" }, async (state) => {
     const { qaChannelPlugin } = await loadBundledPluginFacade<{ qaChannelPlugin: ChannelPlugin }>({
       pluginId: "qa-channel",
@@ -130,35 +127,7 @@ it("keeps an accepted QA reply pending after a lost HTTP response and refuses a 
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "qa-channel", source: "test", plugin: qaChannelPlugin }]),
     );
-    const recovery = resources.use(
-      await createRecoveryControllerFixture(scope, { sessionId: identity.sessionId, updatedAt: 1 }),
-    );
-    const operation = createReplyOperation({ ...identity, resetTriggered: false });
-    const recorder = createUserTurnTranscriptRecorder({
-      message: {
-        role: "user",
-        content: "Send one reply to this conversation.",
-        idempotencyKey: sourceTurnId,
-        timestamp: 1,
-      },
-      target: { ...scope, sessionEntry: recovery.entry },
-      updateMode: "none",
-    });
-    const claim = recovery.controller(
-      {
-        sourceTurnId,
-        admissionRunId: identity.runId,
-        resolveDeliveryContext: () => ({ channel: "qa-channel", to: "dm:alice" }),
-        sourceReplyDeliveryMode: "message_tool_only",
-      },
-      operation,
-    );
-    expect(await claim.admitUserTurn(recorder)).toBe("admitted");
-    expect(recorder.hasPersisted()).toBe(true);
-    expect(loadSessionEntry(scope)).toMatchObject({
-      restartRecoveryDeliveryRunId: identity.runId,
-      restartRecoveryDeliverySourceRunId: sourceTurnId,
-    });
+    await replaceSessionEntry(scope, { sessionId: identity.sessionId, updatedAt: 1 });
     const operationalRunInstance = createOperationalRunInstanceRef(identity.runId);
     const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
     resources.defer(() => {
@@ -240,30 +209,17 @@ it("keeps an accepted QA reply pending after a lost HTTP response and refuses a 
       ),
       test.signal,
     );
-    const pending = {
-      restartRecoveryDeliveryRunId: identity.runId,
-      restartRecoveryDeliverySourceRunId: sourceTurnId,
-      restartRecoveryDeliveryReceiptState: "terminal-pending",
-      restartRecoveryDeliveryToolCallId: "qa-call-first",
-    };
-    expect(loadSessionEntry(scope)).toMatchObject(pending);
     releaseResponse.resolve();
     const failed = await withinTest(first, test.signal);
     expect(exchangeErrors).toEqual([]);
     expect([failed[0], failed[2]?.code]).toEqual([false, "UNAVAILABLE"]);
-    expect(loadSessionEntry(scope)).toMatchObject(pending);
 
-    // New request and tool-call identities exclude the Gateway request-cache replay path.
-    const second = await withinTest(invoke("qa-call-second", "qa-request-second"), test.signal);
-    expect(second.slice(0, 3)).toMatchObject([
-      true,
-      { status: "delivery_ambiguous", delivered: false },
-      undefined,
-    ]);
-    expect(loadSessionEntry(scope)).toMatchObject(pending);
+    // Reconcile the original request; a fresh request has ordinary send semantics.
+    const second = await withinTest(invoke("qa-call-first", "qa-request-first"), test.signal);
+    expect(second.slice(0, 3)).toEqual(failed.slice(0, 3));
+    expect(second[3]?.cached).toBe(true);
     expect(requestCount).toBe(1);
     expect(busState.getSnapshot().messages).toHaveLength(1);
-    expect(operation.sourceReplyDelivered).toBe(false);
     expect(exchangeErrors).toEqual([]);
   });
 });

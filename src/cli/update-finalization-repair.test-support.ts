@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { GatewayRestartResult } from "./daemon-cli/restart-health.types.js";
+import { finalizationFixtureClockUrl } from "./update-finalization-clock.test-support.js";
 
 /** Executable CLI fixture: native service state is shared with the Doctor child. */
 export async function prepareRepairDeadlineFixture(
@@ -89,9 +90,10 @@ export const waitForGatewayHealthyRestart = async () => {
     sourceUrl("./update-cli/update-command-plugins.ts"),
     `${shared}
 import { mutateConfigFileWithRetry } from ${JSON.stringify(sourceUrl("../config/mutate.ts"))};
+import { advanceFinalizationFixtureClock } from ${JSON.stringify(finalizationFixtureClockUrl)};
 export async function updatePluginsAfterCoreUpdate(params) {
   await record('plugins-entered');
-  await new Promise(resolve => setTimeout(resolve, 1_200));
+  advanceFinalizationFixtureClock(1_000);
   try {
     await mutateConfigFileWithRetry({
       writeOptions: { assertCurrent: params.assertCurrent },

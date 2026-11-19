@@ -173,7 +173,7 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
     } catch (error) {
       log.warn(`Side question failed: ${formatErrorMessage(error)}`);
       return rejectQuestion(
-        "⚠️ Couldn't answer that side question. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+        "⚠️ Couldn't answer that side question. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
       );
     }
   },

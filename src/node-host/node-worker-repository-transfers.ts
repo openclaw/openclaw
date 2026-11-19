@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
+import { prepareWorkspaceReconciliation } from "../gateway/worker-environments/workspace-manifest-comparison.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceReconciliationJournal,
@@ -48,7 +49,7 @@ export async function applyNodeRepositoryCheckpoint(params: {
     stagingRoot: params.stagingRoot,
     baseManifestRef: params.baseManifestRef,
     currentManifestRef: params.currentManifestRef,
-    base: params.base,
+    reconciliation: prepareWorkspaceReconciliation(params.base, params.current),
     current: params.current,
     acceptance: { kind: "reconcile" },
     journal: {

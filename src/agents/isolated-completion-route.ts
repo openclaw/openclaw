@@ -26,9 +26,11 @@ import {
   canRunPreparedAgentRuntimeAuthAttempt,
   prepareAgentRuntimeAuth,
   preparedAgentRuntimeProfileAttemptHasCandidate,
-  type PreparedAgentRuntimeAuthAttempt,
 } from "./runtime-plan/prepare-auth.js";
-import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
+import type {
+  PreparedAgentRuntimeAuthAttempt,
+  AgentRuntimeAuthPlan,
+} from "./runtime-plan/types.js";
 
 /** A CLI runtime ref canonicalizes to its model provider but keeps the CLI as its explicit owner. */
 export function resolveIsolatedCompletionProvider(params: {
@@ -135,7 +137,8 @@ export function selectIsolatedHarnessAuthAttempt(
 export function resolveIsolatedCompletionAuthorizationOwner(
   plan: AgentRuntimeAuthPlan | undefined,
 ) {
-  return plan?.harnessAuthProvider && plan.modelRoute?.authRequirement !== "api-key"
+  return plan?.harnessAuthProvider &&
+    (plan.modelRoute?.authRequirement !== "api-key" || plan.selectedAuthMode === "oauth")
     ? ("harness" as const)
     : ("host" as const);
 }

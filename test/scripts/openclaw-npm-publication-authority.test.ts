@@ -1,9 +1,10 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { packToArchive } from "../../src/plugins/test-helpers/archive-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
@@ -35,13 +36,18 @@ async function fixture() {
   const version = "2026.8.28-beta.1";
   json("package.json", { name: "openclaw", version });
   mkdirSync(join(root, "preflight-tarball"));
-  const tarballs = packageNames.map((name, i) => {
+  const tarballs: { packageName: string; tarballName: string }[] = [];
+  for (const [i, name] of packageNames.entries()) {
     const tarballName = "package-" + i + ".tgz";
     json("package/package.json", { name, version });
-    const target = join(root, "preflight-tarball", tarballName);
-    execFileSync("tar", ["-czf", target, "-C", root, "package"]);
-    return { packageName: name, tarballName };
-  });
+    // Finish packing before the next identity rewrites the shared package directory.
+    await packToArchive({
+      pkgDir: join(root, "package"),
+      outDir: join(root, "preflight-tarball"),
+      outName: tarballName,
+    });
+    tarballs.push({ packageName: name, tarballName });
+  }
   json("preflight-tarball/preflight-manifest.json", { corePackageTarballs: tarballs.slice(0, 3) });
   json("full-release-validation/full-release-validation-manifest.json", f.manifest);
   // Candidate code must never run, including during historical/manual recovery.
@@ -63,7 +69,7 @@ async function fixture() {
     api["actions/runs/" + id + "/jobs"] = { total_count: parentJobs.length, jobs: parentJobs };
     const jobs = await f.client.getRunAttemptJobs(id);
     api["actions/runs/" + id + "/attempts/1/jobs"] = { total_count: jobs.length, jobs };
-    api["view/" + id] = f.client.getRunView(id);
+    api["view/" + id] = await f.client.getRunView(id);
     if (id === f.runId) {
       for (const job of parentJobs) {
         respondBytes("actions/jobs/" + job.id + "/logs", await f.client.getJobLog(job.id));
@@ -179,7 +185,7 @@ if (process.argv[1] === root + '/bin/gh') {
   write("bin/npm", "#!/usr/bin/env node\n", true);
   write(
     "bin/git",
-    "#!/bin/sh\n[ \"$*\" = 'rev-parse HEAD' ] || exit 90\nprintf '%s\\n' '" + f.q + "'\n",
+    "#!/bin/sh\n[ \"$*\" = 'rev-parse HEAD' ] || exit 90\nprintf '%s\\n' '" + f.c + "'\n",
     true,
   );
   const env = {
@@ -191,11 +197,14 @@ if (process.argv[1] === root + '/bin/gh') {
     OPENCLAW_GH_BIN: join(bin, "gh"),
     GH_TOKEN: "test-only",
     GITHUB_ACTIONS: "true",
+    // Publication receipts belong to this fixture, including under hosted Actions.
+    GITHUB_OUTPUT: join(root, "github-output"),
+    GITHUB_STEP_SUMMARY: join(root, "github-summary"),
     GITHUB_REPOSITORY: f.repository,
     WORKFLOW_SHA: f.p,
     WORKFLOW_REF: f.admission.producer.workflowHeadBranch,
     WORKFLOW_FULL_REF: f.publisherFullRef,
-    EXPECTED_RELEASE_SHA: f.q,
+    EXPECTED_RELEASE_SHA: f.c,
     PREFLIGHT_WORKFLOW_SHA: f.q,
     PREFLIGHT_WORKFLOW_BRANCH: f.branch,
     PREFLIGHT_WORKFLOW_PATH: ".github/workflows/full-release-validation.yml",
@@ -228,7 +237,7 @@ if (process.argv[1] === root + '/bin/gh') {
       ...Object.entries({
         "full-release-manifest": "full-release-validation/full-release-validation-manifest.json",
         repository: f.repository,
-        "source-sha": f.q,
+        "source-sha": f.c,
         "workflow-sha": f.q,
         "publisher-sha": f.p,
         "publisher-full-ref": f.publisherFullRef,
@@ -242,7 +251,7 @@ if (process.argv[1] === root + '/bin/gh') {
 
 describe("npm final publication authority", () => {
   it.each([true, false])(
-    "publishes through trusted tooling with candidate admission: %s",
+    "publishes only through trusted tooling with candidate admission: %s",
     async (candidate) => {
       const f = await fixture();
       if (!candidate) {
@@ -251,6 +260,13 @@ describe("npm final publication authority", () => {
         f.env.PREFLIGHT_WORKFLOW_SHA = f.env.WORKFLOW_SHA;
       }
       const result = f.publish();
+      expect(result.stderr).not.toContain("CANDIDATE_");
+      if (!candidate) {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("Publication requires authenticated P admission");
+        expect(f.state().writes).toEqual([]);
+        return;
+      }
       expect(result.status, result.stderr).toBe(0);
       expect(f.state().writes.map((args) => args[1])).toEqual(
         [0, 1, 2, 3].map((i) => "./preflight-tarball/package-" + i + ".tgz"),
@@ -258,7 +274,22 @@ describe("npm final publication authority", () => {
       for (const args of f.state().writes) {
         expect(args.slice(2)).toEqual(["--access", "public", "--tag", "beta", "--provenance"]);
       }
-      expect(result.stderr).not.toContain("CANDIDATE_");
+      const publications: { package_name: string; source_commit: string }[] = readFileSync(
+        f.env.GITHUB_OUTPUT,
+        "utf8",
+      )
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line.slice(line.indexOf("=") + 1)));
+      expect(publications.map((publication) => publication.package_name)).toEqual([
+        "@openclaw/gateway-protocol",
+        "openclaw",
+      ]);
+      expect(
+        publications.every(
+          (publication) => publication.source_commit === f.env.EXPECTED_RELEASE_SHA,
+        ),
+      ).toBe(true);
     },
   );
 

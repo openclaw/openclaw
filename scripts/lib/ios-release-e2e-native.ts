@@ -343,6 +343,8 @@ export async function createNativeDependencies(options: {
       "-configuration",
       "Debug",
       "-showBuildTimingSummary",
+      `ARCHS=${process.arch}`,
+      "COMPILER_INDEX_STORE_ENABLE=NO",
       // Simulator Keychain access needs entitlements, but no signing certificate.
       "CODE_SIGNING_ALLOWED=YES",
       "CODE_SIGN_IDENTITY=-",

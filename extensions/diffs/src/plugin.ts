@@ -2,7 +2,10 @@ import fs from "node:fs";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
+import {
+  normalizePluginsConfig,
+  resolveLivePluginConfigObject,
+} from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -23,6 +26,7 @@ import {
 import { VIEWER_ASSET_PREFIX, VIEWER_RUNTIME_PATH, getServedViewerAsset } from "./viewer-assets.js";
 
 const DIFFS_AGENT_GUIDANCE = [
+  "## Diffs",
   "When you need to show edits as a real diff, prefer the `diffs` tool instead of writing a manual summary.",
   "It accepts either `before` + `after` text or a unified `patch`.",
   "Check `details.changed`: identical before/after input returns `false` without creating an artifact; rendered results return `true`.",
@@ -99,6 +103,7 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
     },
     {
       name: "diffs",
+      promptGuidance: DIFFS_AGENT_GUIDANCE,
     },
   );
   const viewerFailureLimiter = createAuthRateLimiter({
@@ -260,9 +265,6 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
       }
     },
   });
-  api.on("before_prompt_build", async () => ({
-    prependSystemContext: DIFFS_AGENT_GUIDANCE,
-  }));
 }
 
 function respondText(res: ServerResponse, statusCode: number, body: string): void {
@@ -287,17 +289,17 @@ function setSharedHeaders(
 
 function resolveDiffsLanguagePackAvailability(api: OpenClawPluginApi): boolean {
   const currentConfig = api.runtime.config.current() as OpenClawConfig;
-  const plugins = currentConfig.plugins;
-  if (plugins?.enabled === false) {
+  const plugins = normalizePluginsConfig(currentConfig.plugins);
+  if (!plugins.enabled) {
     return false;
   }
-  if (plugins?.deny?.includes(DIFFS_LANGUAGE_PACK_PLUGIN_ID)) {
+  if (plugins.deny.includes(DIFFS_LANGUAGE_PACK_PLUGIN_ID)) {
     return false;
   }
-  if (plugins?.allow && !plugins.allow.includes(DIFFS_LANGUAGE_PACK_PLUGIN_ID)) {
+  if (plugins.allow.length > 0 && !plugins.allow.includes(DIFFS_LANGUAGE_PACK_PLUGIN_ID)) {
     return false;
   }
-  if (plugins?.entries?.[DIFFS_LANGUAGE_PACK_PLUGIN_ID]?.enabled === false) {
+  if (plugins.entries[DIFFS_LANGUAGE_PACK_PLUGIN_ID]?.enabled === false) {
     return false;
   }
   const rootDir = api.rootDir;

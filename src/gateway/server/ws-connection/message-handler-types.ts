@@ -68,6 +68,8 @@ export type GatewayWsMessageHandlerParams = {
   pluginNodeCapabilities?: PluginNodeCapabilitySurface[];
   connectNonce: string;
   getResolvedAuth: () => ResolvedGatewayAuth;
+  /** Fixed at startup and advertised to admins, because flags can differ from config. */
+  gatewayExposure?: { bindHost: string; tailscaleMode: "off" | "serve" | "funnel" };
   getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
@@ -175,6 +177,8 @@ export type AuthenticatedGatewayConnect = {
   role: GatewayRole;
   scopes: string[];
   hasRequestedScopes: boolean;
+  /** Original reserved claim before ordinary unbound-scope clearing. */
+  publicationReadScopes?: readonly string[];
   isControlUi: boolean;
   isBrowserOperatorUi: boolean;
   isWebchat: boolean;
@@ -201,6 +205,7 @@ export type AuthenticatedGatewayConnect = {
 };
 
 export type DeviceAuthorizedGatewayConnect = AuthenticatedGatewayConnect & {
+  publicationReader?: import("../../publication-reader.js").PublicationReaderAdmission;
   deviceToken: DeviceAuthToken | null;
   bootstrapDeviceTokens: Array<{
     deviceToken: string;

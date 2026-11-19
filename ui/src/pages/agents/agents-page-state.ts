@@ -3,10 +3,11 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { pathForAgentPanel } from "../../app-route-paths.ts";
 import { togglePinnedAgent } from "../../app/bootstrap-navigation-preferences.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { listSelectableAgents } from "../../lib/agents/display.ts";
-import { buildToolsEffectiveRequestKey, type AgentsState } from "../../lib/agents/index.ts";
+import { canDeleteAgent, deleteAgent } from "../../lib/agents/delete-agent.ts";
+import { buildToolsEffectiveRequestKey } from "../../lib/agents/index.ts";
 import { setDefaultAgent } from "../../lib/agents/mutations.ts";
 import { DEFAULT_AGENT_PANEL, type AgentsPanel } from "../../lib/agents/panels.ts";
+import { resolveAgentSettingsAccess } from "../../lib/agents/settings-access.ts";
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { createInitialCronState } from "../../lib/cron/index.ts";
@@ -14,9 +15,9 @@ import {
   hasCronInventoryEvents,
   isCronInventoryInvalidation,
 } from "../../lib/cron/inventory-connection.ts";
-import type { CronState } from "../../lib/cron/types.ts";
 import {
   canCallGatewayMethod,
+  canPresentGatewayMethod,
   type GatewayMethodOperatorScope,
 } from "../../lib/gateway-methods.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
@@ -29,13 +30,10 @@ import { createAgentConfigActions } from "./agent-config-actions.ts";
 import { createAgentCronPresenter } from "./agent-cron-presenter.ts";
 import { createAgentIdentityEditor } from "./agent-identity-editor.ts";
 import { createAgentModelCatalog } from "./agent-model-catalog.ts";
+import type { AgentsPageData, AgentsViewData } from "./agents-page-data.ts";
 import { createAgentsPageLifetime } from "./agents-page-lifetime.ts";
-import { createAgentFilePanel, type AgentFilesState, type AgentFilesViewState } from "./files.ts";
-import {
-  type AgentIdentityDraft,
-  type AgentIdentityOutcome,
-  resetIdentityDraft,
-} from "./identity-actions.ts";
+import { createAgentFilePanel } from "./files.ts";
+import { resetIdentityDraft } from "./identity-actions.ts";
 import type { AgentMemoryTarget } from "./memory/memory-panel-state.ts";
 import {
   navigateToAgent,
@@ -44,36 +42,8 @@ import {
 } from "./route-navigation.ts";
 import type { AgentsRouteData } from "./route.ts";
 import { createAgentSelectionDrafts } from "./selection-drafts.ts";
-import {
-  createAgentSkillsReset,
-  createAgentSkillsReader,
-  type AgentSkillsState,
-} from "./skills.ts";
+import { createAgentSkillsReset, createAgentSkillsReader } from "./skills.ts";
 import { createAgentToolsCatalog, createAgentEffectiveTools } from "./tools.ts";
-
-type AgentsPageData = Omit<AgentsState, "agentsLoading" | "agentsError" | "agentsList"> &
-  AgentFilesState &
-  AgentFilesViewState &
-  AgentSkillsState & {
-    readonly agentsList: AgentsState["agentsList"];
-    chatModelCatalogRead: Promise<void> | null;
-    identityDraft: AgentIdentityDraft;
-    identitySaving: boolean;
-    identityOutcome: Promise<AgentIdentityOutcome> | null;
-    cron: CronState;
-    sessionKey: string;
-    agentsPanel: AgentsPanel;
-  };
-type AgentsViewData = Omit<
-  AgentsPageData,
-  | "client"
-  | "connected"
-  | "agents"
-  | "sessions"
-  | "sessionsResult"
-  | "sessionKey"
-  | "agentFileWriteRevisions"
->;
 
 export type AgentsPageView = ReturnType<ReturnType<typeof createAgentsPageState>["read"]>;
 
@@ -159,7 +129,6 @@ export function createAgentsPageState(
   const identity = createAgentIdentityEditor(context, state, {
     snapshot: () => gateway.snapshot,
     saves: () => identitySaves,
-    retired: presentation.retired,
     canCall: (method) => canCall(method, "operator.admin"),
     isCurrent: isCurrentRequest,
     onSaved: syncAgentState,
@@ -190,10 +159,8 @@ export function createAgentsPageState(
     getReport: () => state.agentSkillsReport,
     onPrimaryChanged: () => effectiveTools.ensure(true),
   });
-  const githubIdentity = createGitHubIdentityView({
-    runExternalMutation: (task, options) =>
-      context.runtimeConfig.runExternalMutation(task, options),
-  });
+  const githubIdentity = createGitHubIdentityView();
+  let readAccessKey = "";
   const gateway = new GatewayPageBinding(() => publish(), {
     getGateway: () => context.gateway,
     // A new source or client owns a new set of drafts. A same-client reconnect
@@ -210,6 +177,17 @@ export function createAgentsPageState(
       identitySaves = selectionDrafts.bindContext(context);
       selectionDrafts.observeGateway(gatewaySnapshot);
       syncGatewayState();
+      const nextReadAccessKey = Object.values(settingsAccess().reads).join(",");
+      if (readAccessKey !== nextReadAccessKey) {
+        readAccessKey = nextReadAccessKey;
+        ensureInitialData();
+      }
+      if (gatewaySnapshot.phase === "connected" && !canCall("tools.catalog", "operator.read")) {
+        toolsCatalog.reset();
+      }
+      if (gatewaySnapshot.phase === "connected" && !canCall("tools.effective", "operator.read")) {
+        effectiveTools.reset();
+      }
       if (becameConnected && Object.values(state.identityDraft).some((value) => value !== null)) {
         identity.schedule();
       }
@@ -225,10 +203,14 @@ export function createAgentsPageState(
     isCurrentRequest(client, generation, agentId, {});
   const toolsCatalog = createAgentToolsCatalog({
     scope: () => state,
+    canRead: () =>
+      canPresentGatewayMethod(context.gateway.snapshot, "tools.catalog", "operator.read"),
     isCurrent: isCurrentToolsRead,
   });
   const effectiveTools = createAgentEffectiveTools({
     scope: () => state,
+    canRead: () =>
+      canPresentGatewayMethod(context.gateway.snapshot, "tools.effective", "operator.read"),
     isCurrent: isCurrentToolsRead,
     isSessionAgent: (agentId) => agentId === chatAgentId(),
     isPresented: () => state.agentsPanel === "tools",
@@ -349,12 +331,14 @@ export function createAgentsPageState(
     if (!state.connected || !state.client || !routeDataInitialized || !routeData) {
       return;
     }
-    void context.runtimeConfig.ensureLoaded();
+    if (settingsAccess().reads.config) {
+      void context.runtimeConfig.ensureLoaded();
+    }
     if (!state.agentsList && !context.agents.state.agentsLoading) {
       void refreshAgents("ensure");
       return;
     }
-    ensureAgentIdentities();
+    ensureSelectedIdentity();
     loadActivePanelData();
   }
 
@@ -375,10 +359,17 @@ export function createAgentsPageState(
     );
   }
 
-  function ensureAgentIdentities() {
-    void context.agentIdentity.ensure(
-      listSelectableAgents(state.agentsList?.agents ?? []).map((entry) => entry.id),
+  function settingsAccess() {
+    return resolveAgentSettingsAccess(
+      context.gateway.snapshot,
+      state.agentsSelectedId === chatAgentId(),
     );
+  }
+
+  function ensureSelectedIdentity() {
+    if (settingsAccess().reads.identity) {
+      void context.agentIdentity.ensure([state.agentsSelectedId]);
+    }
   }
 
   function loadActivePanelData() {
@@ -387,11 +378,13 @@ export function createAgentsPageState(
       return;
     }
     const agentId = state.agentsSelectedId;
-    if (!agentId) {
+    if (!agentId || settingsAccess().panels[state.agentsPanel] !== "available") {
       return;
     }
     if (state.agentsPanel === "overview") {
-      modelCatalog.ensure();
+      if (settingsAccess().reads.models) {
+        modelCatalog.ensure();
+      }
       return;
     }
     if (state.agentsPanel === "files" && state.agentFilesList?.agentId !== agentId) {
@@ -447,12 +440,9 @@ export function createAgentsPageState(
           }
         : null,
       statusReadable: hasScope("tools.github.status", "operator.read"),
-      configurable: hasScope("tools.github.configure", "operator.admin"),
-      authorizable: [
-        "tools.github.authorize.start",
-        "tools.github.authorize.poll",
-        "tools.github.authorize.cancel",
-      ].every((method) => hasScope(method, "operator.admin")),
+      // This panel only reads the account; Profile → GitHub accounts changes it.
+      configurable: false,
+      authorizable: false,
       clientRevision: state.requestGeneration,
     });
   }
@@ -476,26 +466,20 @@ export function createAgentsPageState(
     });
   }
 
-  async function refreshAgents(mode: "ensure" | "refresh" | "save" = "refresh") {
+  async function refreshAgents(mode: "ensure" | "refresh" = "refresh") {
     const client = state.client;
-    if (!client || (mode === "save" && !canCall("config.set", "operator.admin"))) {
+    if (!client) {
       return;
     }
     const generation = state.requestGeneration;
     const agents = context.agents;
-    if (mode === "save" && !(await context.runtimeConfig.save())) {
-      return;
-    }
     await (mode === "ensure" ? agents.ensureList() : agents.refreshList());
     if (!isCurrentRequest(client, generation, undefined, { agents })) {
       return;
     }
-    if (mode === "save") {
-      effectiveTools.reset();
-    }
     syncAgentState(agents);
-    if (mode !== "refresh") {
-      ensureAgentIdentities();
+    if (mode === "ensure") {
+      ensureSelectedIdentity();
     }
     loadActivePanelData();
   }
@@ -523,6 +507,8 @@ export function createAgentsPageState(
     const configState = context.runtimeConfig.state;
     const selectedAgentId = state.agentsSelectedId;
     const access = {
+      settings: settingsAccess(),
+      canDeleteAgent: Boolean(selectedAgentId && canDeleteAgent(context, selectedAgentId)),
       canCreateAgent: canCall("openclaw.chat", "operator.admin"),
       canPatchConfig: canCall("config.patch", "operator.admin"),
       canUpdateConfig: canCall("config.set", "operator.admin"),
@@ -566,7 +552,11 @@ export function createAgentsPageState(
         // Availability facts (provider keys added/removed, new models) go
         // stale in the per-agent cache; opening the picker re-reads them,
         // mirroring the chat composer's on-open refresh.
-        onModelCatalogOpen: () => modelCatalog.ensure({ refresh: true }),
+        onModelCatalogOpen: () => {
+          if (settingsAccess().reads.models) {
+            modelCatalog.ensure({ refresh: true });
+          }
+        },
       },
       agentSkills: {
         get filter() {
@@ -576,7 +566,7 @@ export function createAgentsPageState(
           setSkillsFilter(next);
         },
         onRefresh: () => {
-          if (selectedAgentId) {
+          if (selectedAgentId && canCall("skills.status", "operator.read")) {
             skills.refresh(selectedAgentId);
           }
         },
@@ -602,8 +592,25 @@ export function createAgentsPageState(
         ...configActions.tools,
       },
       pinnedAgentIds: navigation.read().pinnedAgentIds,
+      onDeleteAgent: (agentId: string) => {
+        const isSelected = () => active && state.agentsSelectedId === agentId;
+        const agent = context.agents.state.agentsList?.agents.find((entry) => entry.id === agentId);
+        if (!agent || !isSelected()) {
+          return;
+        }
+        const name = agent.identity?.name ?? agent.name ?? agent.id;
+        void deleteAgent(context, { id: agent.id, name }, isSelected);
+      },
       onTogglePinnedAgent: (agentId: string) => togglePinnedAgent(context.navigation, agentId),
-      onRefresh: () => void refreshAgents(),
+      // Refresh is this page's one way to pick up edits made outside it, config included.
+      onRefresh: () => {
+        if (canCall("agents.list", "operator.read")) {
+          void refreshAgents();
+        }
+        if (settingsAccess().reads.config) {
+          void context.runtimeConfig.refresh({ background: true });
+        }
+      },
       onCreateAgent: () => {
         if (canCall("openclaw.chat", "operator.admin")) {
           context.navigate("custodian", { search: "?intent=new-agent" });
@@ -611,8 +618,7 @@ export function createAgentsPageState(
       },
       onSelectPanel: (panel: AgentsPanel) =>
         navigateToAgentPanel(context, selectedAgentId, state.agentsPanel, panel),
-      onConfigReload: () => context.runtimeConfig.discardDraft({ reloadOnly: true }),
-      onConfigSave: () => refreshAgents("save"),
+      onConfigRetry: () => void context.runtimeConfig.refresh(),
       onOpenMemoryImport: () => context.navigate("memory-import"),
       onOpenMemorySettings: () => context.navigate("memory"),
       onOpenAgentDefaults: () => context.navigate("ai-agents"),
@@ -627,7 +633,7 @@ export function createAgentsPageState(
   onSettled(() => {
     gateway.connect();
     syncAgentState();
-    ensureAgentIdentities();
+    ensureSelectedIdentity();
     const selection = context.settingsAgentSelection;
     let intentRevision = selection.intentRevision;
     const stops = [
@@ -651,6 +657,7 @@ export function createAgentsPageState(
         intentRevision = selection.intentRevision;
         const previousId = state.agentsSelectedId;
         syncSettingsSelection();
+        ensureSelectedIdentity();
         const agentId = state.agentsSelectedId;
         const route = context.router.getState();
         if (
@@ -670,7 +677,7 @@ export function createAgentsPageState(
       // Roster and file publications adopt metadata before dependent file reads can settle.
       context.agents.subscribe(() => {
         syncAgentState();
-        ensureAgentIdentities();
+        ensureSelectedIdentity();
         loadActivePanelData();
         publish();
       }),
@@ -702,7 +709,6 @@ export function createAgentsPageState(
     };
   });
   return {
-    identitySavePending: () => identity.saving() || readData().identitySaving,
     read() {
       observation.read();
       return viewProps();

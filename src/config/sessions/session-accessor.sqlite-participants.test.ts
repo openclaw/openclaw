@@ -430,7 +430,7 @@ describe("SQLite session participants", () => {
         }, scope);
         expect(observed).toEqual([]);
       }, scope);
-      expect(observed).toHaveLength(2);
+      expect(observed).toHaveLength(1);
       for (const observation of observed) {
         expect(observation).toMatchObject({
           inTransaction: false,

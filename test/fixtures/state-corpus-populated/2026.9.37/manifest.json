@@ -1,0 +1,2410 @@
+{
+  "release": "2026.9.37",
+  "variant": "normal",
+  "source": "81da850122080b7187816ab70f145f3bc9e5efff",
+  "generatedAt": 1788393600000,
+  "schemaVersions": {
+    "agents/main/agent/openclaw-agent.sqlite": 24,
+    "agents/ops/agent/openclaw-agent.sqlite": 24,
+    "state/openclaw-quarantine.sqlite": 2,
+    "state/openclaw.sqlite": 19
+  },
+  "surfaces": {
+    "prepare.runtimeConfig": {
+      "status": "ok",
+      "expected": {
+        "prepared": true
+      }
+    },
+    "sessions": {
+      "status": "ok",
+      "expected": {
+        "agents": [
+          "main",
+          "ops"
+        ],
+        "sessionUpdatedAt": 1794579228427,
+        "sessions": [
+          {
+            "agentId": "main",
+            "sessionKey": "agent:main:corpus-alpha",
+            "sessionId": "00000000-0000-4000-8000-000000000001",
+            "label": "Corpus main alpha",
+            "messages": [
+              {
+                "role": "user",
+                "text": "Synthetic user message main/alpha: こんにちは世界 🦀🎉 测试 — naïve café"
+              },
+              {
+                "role": "assistant",
+                "text": "Checking the workspace.",
+                "toolCall": "read"
+              },
+              {
+                "role": "toolResult",
+                "text": "# Fixture README こんにちは世界 🦀🎉 测试 — naïve café",
+                "toolCallId": "call_corpus_1"
+              },
+              {
+                "role": "assistant",
+                "text": "Synthetic assistant reply main/alpha ✅ 完了"
+              }
+            ]
+          },
+          {
+            "agentId": "main",
+            "sessionKey": "agent:main:corpus-beta",
+            "sessionId": "00000000-0000-4000-8000-000000000002",
+            "label": "Corpus main beta",
+            "messages": [
+              {
+                "role": "user",
+                "text": "Synthetic user message main/beta"
+              },
+              {
+                "role": "assistant",
+                "text": "Synthetic assistant reply main/beta"
+              }
+            ]
+          },
+          {
+            "agentId": "ops",
+            "sessionKey": "agent:ops:corpus-alpha",
+            "sessionId": "00000000-0000-4000-8000-000000000003",
+            "label": "Corpus ops alpha",
+            "messages": [
+              {
+                "role": "user",
+                "text": "Synthetic user message ops/alpha"
+              },
+              {
+                "role": "assistant",
+                "text": "Checking the workspace.",
+                "toolCall": "read"
+              },
+              {
+                "role": "toolResult",
+                "text": "# Fixture README こんにちは世界 🦀🎉 测试 — naïve café",
+                "toolCallId": "call_corpus_3"
+              },
+              {
+                "role": "assistant",
+                "text": "Synthetic assistant reply ops/alpha"
+              }
+            ]
+          },
+          {
+            "agentId": "ops",
+            "sessionKey": "agent:ops:corpus-beta",
+            "sessionId": "00000000-0000-4000-8000-000000000004",
+            "label": "Corpus ops beta",
+            "messages": [
+              {
+                "role": "user",
+                "text": "Synthetic user message ops/beta"
+              },
+              {
+                "role": "assistant",
+                "text": "Synthetic assistant reply ops/beta"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "authProfiles": {
+      "status": "ok",
+      "expected": {
+        "main": {
+          "openai:corpus-api": {
+            "type": "api_key",
+            "provider": "openai",
+            "key": "fixture-api-key"
+          },
+          "openai:corpus-oauth": {
+            "type": "oauth",
+            "provider": "openai",
+            "access": "fixture-oauth-access",
+            "refresh": "fixture-oauth-refresh",
+            "expires": 4102444800000
+          },
+          "anthropic:claude-cli": {
+            "type": "oauth",
+            "provider": "anthropic",
+            "access": "fixture-cli-access",
+            "refresh": "fixture-cli-refresh",
+            "expires": 4102444800000,
+            "subscriptionType": "pro",
+            "rateLimitTier": "default"
+          }
+        },
+        "ops": {
+          "openai:ops-api": {
+            "type": "api_key",
+            "provider": "openai",
+            "key": "fixture-ops-api-key"
+          }
+        }
+      }
+    },
+    "cron": {
+      "status": "ok",
+      "expected": {
+        "cronStorePath": "/home/fixture/.openclaw/cron/jobs.json",
+        "jobs": [
+          {
+            "id": "corpus-enabled-job",
+            "name": "Corpus enabled digest ☕",
+            "enabled": true,
+            "schedule": {
+              "kind": "cron",
+              "expr": "0 9 * * *",
+              "tz": "UTC"
+            },
+            "sessionTarget": "isolated",
+            "wakeMode": "now",
+            "payload": {
+              "kind": "agentTurn",
+              "message": "Summarize the fixture workspace"
+            }
+          },
+          {
+            "id": "corpus-disabled-job",
+            "name": "Corpus disabled reminder",
+            "enabled": false,
+            "schedule": {
+              "kind": "every",
+              "everyMs": 86400000
+            },
+            "sessionTarget": "main",
+            "wakeMode": "next-heartbeat",
+            "payload": {
+              "kind": "systemEvent",
+              "text": "Synthetic upgrade reminder"
+            }
+          }
+        ]
+      }
+    },
+    "configMachineState.cronStore": {
+      "status": "ok",
+      "expected": {
+        "key": "cron.store",
+        "value": "/home/fixture/.openclaw/cron/jobs.json"
+      }
+    },
+    "controlUi": {
+      "status": "ok",
+      "expected": {
+        "email": "fixture@example.invalid",
+        "userId": "6a47568c-4ded-4698-8e34-dd67f5c6209c",
+        "settings": {
+          "ui.themeMode": "dark",
+          "ui.locale": "ja-JP"
+        }
+      }
+    },
+    "pluginStateKv": {
+      "status": "ok",
+      "expected": {
+        "pluginId": "corpus-plugin",
+        "namespace": "fixture",
+        "entries": {
+          "greeting": {
+            "text": "hello こんにちは世界 🦀🎉 测试 — naïve café"
+          },
+          "counter": {
+            "value": 42
+          }
+        }
+      }
+    },
+    "pluginBlobStore": {
+      "status": "ok",
+      "expected": {
+        "pluginId": "corpus-plugin",
+        "namespace": "fixture-blobs",
+        "key": "corpus-blob",
+        "byteLength": 67
+      }
+    },
+    "channelPairing": {
+      "status": "ok",
+      "expected": {
+        "request": {
+          "code": "5G2YRGUM",
+          "created": true
+        },
+        "allowFrom": {
+          "changed": true,
+          "allowFrom": [
+            "2002"
+          ]
+        }
+      }
+    },
+    "deviceIdentity": {
+      "status": "ok",
+      "expected": {
+        "deviceId": "0c8e652c0e09cb76106654ac0deb2a1140bda50e1632842f0e7f326f212565d0"
+      }
+    },
+    "devicePairingRequest": {
+      "status": "ok",
+      "expected": {
+        "deviceId": "corpus-device-1",
+        "requestId": "03969405-b3f8-4626-9608-2b806a030209"
+      }
+    },
+    "deliveryQueue": {
+      "status": "ok",
+      "expected": {
+        "id": "04a6f94c-ac71-4c58-98f2-409deb8c7ea3",
+        "channel": "telegram",
+        "to": "1001",
+        "accountId": "default",
+        "payloads": [
+          {
+            "text": "queued こんにちは世界 🦀🎉 测试 — naïve café"
+          }
+        ]
+      }
+    },
+    "webPushSubscription": {
+      "status": "ok",
+      "expected": {
+        "endpoint": "https://push.example.invalid/corpus-1",
+        "subscriptionId": "0a1c2224-e74a-4b87-aa97-c7eb47c3b3f0"
+      }
+    },
+    "apnsRegistration": {
+      "status": "ok",
+      "expected": {
+        "nodeId": "corpus-node-1",
+        "transport": "direct",
+        "token": "ABCD1234ABCD1234ABCD1234ABCD1234",
+        "topic": "ai.openclaw.ios",
+        "environment": "sandbox"
+      }
+    },
+    "subagentRun": {
+      "status": "ok",
+      "expected": {
+        "runId": "corpus-subagent-run-1",
+        "childSessionKey": "agent:main:subagent:corpus-child",
+        "task": "Synthetic subagent task 🔍"
+      }
+    },
+    "taskRun": {
+      "status": "unsupported",
+      "reason": "no createRunningTaskRun export"
+    },
+    "cronRunHistory": {
+      "status": "ok",
+      "expected": {
+        "storeKey": "/home/fixture/.openclaw/cron/jobs.json",
+        "jobId": "corpus-enabled-job",
+        "runId": "corpus-cron-run-1",
+        "startedAt": 1794579168427,
+        "endedAt": 1794579198427,
+        "status": "succeeded",
+        "detail": {
+          "summary": "Synthetic cron run ✓"
+        }
+      }
+    },
+    "voicewake": {
+      "status": "ok",
+      "expected": {
+        "triggers": [
+          "hey claw",
+          "おーい claw"
+        ]
+      }
+    },
+    "currentConversationBinding": {
+      "status": "ok",
+      "expected": {
+        "targetSessionKey": "agent:main:corpus-beta"
+      }
+    },
+    "projectRegistry": {
+      "status": "ok",
+      "expected": {
+        "path": "/home/fixture/projects/corpus-repo",
+        "name": "Corpus Project 📦",
+        "id": "corpus-project"
+      }
+    },
+    "sessionGroup": {
+      "status": "ok",
+      "expected": {
+        "name": "Corpus Work 仕事"
+      }
+    },
+    "restartSentinel": {
+      "status": "ok",
+      "expected": {
+        "kind": "restart",
+        "status": "ok",
+        "ts": 1788393600000,
+        "message": "Synthetic restart"
+      }
+    },
+    "pluginInstallLedger": {
+      "status": "unsupported",
+      "reason": "populated via CLI in run.sh (see cli surfaces in manifest)"
+    }
+  },
+  "writerModules": {
+    "captureRuntimeConfigAsyncReader": "src/config/io.runtime.ts",
+    "createSessionEntryWithTranscript": "src/config/sessions/session-accessor.entry-mutation.ts",
+    "appendTranscriptMessage": "src/config/sessions/session-accessor.sqlite-transcript-write.ts",
+    "upsertAuthProfile": "src/agents/auth-profiles/profiles.ts",
+    "saveCronJobsStore": "src/cron/store.ts",
+    "resolveCronJobsStorePath": "src/cron/store.ts",
+    "writeConfigMachineState": "src/state/config-machine-state-write.ts",
+    "ensureCanonicalUserProfileForEmail": "src/state/user-profile-writes.ts",
+    "ensureProfileForEmail": "src/state/user-profiles.ts",
+    "setCanonicalUserPreferences": "src/state/user-preferences.ts",
+    "createPluginStateKeyedStore": "src/plugin-state/plugin-state-store.ts",
+    "createPluginBlobStore": "src/plugin-state/plugin-blob-store.ts",
+    "upsertChannelPairingRequest": "src/pairing/pairing-store.ts",
+    "addChannelAllowFromStoreEntry": "src/pairing/pairing-store.ts",
+    "loadOrCreateDeviceIdentity": "src/infra/device-identity.ts",
+    "requestDevicePairing": "src/infra/device-pairing.ts",
+    "enqueueDelivery": "src/infra/outbound/delivery-queue-storage.ts",
+    "registerWebPushSubscription": "src/infra/push-web.ts",
+    "registerApnsRegistration": "src/infra/push-apns-store.ts",
+    "registerSubagentRun": "src/agents/subagents/registry/subagent-registry.ts",
+    "recordCronRun": "src/cron/store/run-history.ts",
+    "setVoiceWakeTriggers": "src/infra/voicewake.ts",
+    "bindGenericCurrentConversation": "src/infra/outbound/current-conversation-bindings.ts",
+    "registerProjectRegistry": "src/projects/project-registry.ts",
+    "ensureSessionGroupRegistered": "src/gateway/session-groups.ts",
+    "writeRestartSentinel": "src/infra/restart-sentinel.ts",
+    "closeAuthProfileReadPool": "src/agents/auth-profiles/sqlite-read-pool.ts",
+    "closeOpenClawAgentDatabases": "src/state/openclaw-agent-db-lifecycle.ts",
+    "closeOpenClawStateDatabase": "src/state/openclaw-state-db-cache.ts"
+  },
+  "ownersClosed": {
+    "closeAuthProfileReadPool": "closed",
+    "closeOpenClawAgentDatabases": "closed",
+    "closeOpenClawStateDatabase": "closed"
+  },
+  "lateAsyncErrors": [],
+  "cliSteps": [
+    {
+      "cmd": "openclaw setup --baseline --workspace /home/fixture/workspace --json",
+      "rc": 0
+    },
+    {
+      "cmd": "openclaw agents add ops --workspace /home/fixture/workspace-ops --non-interactive --json",
+      "rc": 0
+    },
+    {
+      "cmd": "openclaw approvals allowlist add --agent main /usr/bin/git --json",
+      "rc": 0
+    },
+    {
+      "cmd": "openclaw approvals allowlist add --agent ops /usr/bin/rg --json",
+      "rc": 0
+    },
+    {
+      "cmd": "openclaw plugins install /home/fixture/src/corpus-plugin",
+      "rc": 1
+    },
+    {
+      "cmd": "openclaw plugins install /home/fixture/src/corpus-plugin --force",
+      "rc": 1
+    },
+    {
+      "cmd": "openclaw plugins install /home/fixture/src/corpus-plugin --force --accept-capabilities",
+      "rc": 0
+    },
+    {
+      "cmd": "openclaw plugins list --json",
+      "rc": 0
+    },
+    {
+      "cmd": "openclaw backup create --output /home/fixture/backups --no-include-workspace --json",
+      "rc": 0
+    },
+    {
+      "cmd": "generate.mjs",
+      "rc": 0
+    }
+  ],
+  "databases": [
+    {
+      "db": "agents/main/agent/openclaw-agent.sqlite",
+      "kind": "other",
+      "user_version": 24,
+      "integrity_check": [
+        "ok"
+      ],
+      "tables": {
+        "acp_parent_stream_events": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "auth_profile_state": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "auth_profile_store": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "board_tabs": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "board_widgets": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "cache_entries": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "context_engine_turn_outbox": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "conversation_deliveries": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "conversations": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "heartbeat_outcomes": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "memory_embedding_cache": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "memory_entry_origins": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "memory_index_chunk_provenance": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "memory_index_chunk_recall_metadata": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "memory_index_chunks": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "memory_index_meta": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "memory_index_sources": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "memory_index_state": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "memory_session_tombstones": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "message_tool_run_outcomes": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "schema_meta": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "session_canonical_validation_pending": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_conversations": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_entry_snapshots": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_goal_operations": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_input_completions": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_key_contract": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_members": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_nodes": {
+          "rows": 2,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_participants": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_pending_inputs": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_progress_cards": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_suggestions": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_transcript_active_events": {
+          "rows": 6,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_transcript_archives": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_transcript_cold_archives": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_transcript_fts": {
+          "rows": 5,
+          "strict": false,
+          "virtual": true,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "session_transcript_fts_config": {
+          "rows": 1,
+          "strict": false,
+          "virtual": false,
+          "shadow": true,
+          "source_of_truth": false
+        },
+        "session_transcript_fts_content": {
+          "rows": 5,
+          "strict": false,
+          "virtual": false,
+          "shadow": true,
+          "source_of_truth": false
+        },
+        "session_transcript_fts_data": {
+          "rows": 7,
+          "strict": false,
+          "virtual": false,
+          "shadow": true,
+          "source_of_truth": false
+        },
+        "session_transcript_fts_docsize": {
+          "rows": 5,
+          "strict": false,
+          "virtual": false,
+          "shadow": true,
+          "source_of_truth": false
+        },
+        "session_transcript_fts_idx": {
+          "rows": 5,
+          "strict": false,
+          "virtual": false,
+          "shadow": true,
+          "source_of_truth": false
+        },
+        "session_transcript_fts_rows": {
+          "rows": 5,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "session_transcript_index_state": {
+          "rows": 2,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "session_windows": {
+          "rows": 2,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "standing_intents": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "standing_intents_fts": {
+          "rows": 0,
+          "strict": false,
+          "virtual": true,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "standing_intents_fts_config": {
+          "rows": 1,
+          "strict": false,
+          "virtual": false,
+          "shadow": true,
+          "source_of_truth": false
+        },
+        "standing_intents_fts_data": {
+          "rows": 2,
+          "strict": false,
+          "virtual": false,
+          "shadow": true,
+          "source_of_truth": false
+        },
+        "standing_intents_fts_docsize": {
+          "rows": 0,
+          "strict": false,
+          "virtual": false,
+          "shadow": true,
+          "source_of_truth": false
+        },
+        "standing_intents_fts_idx": {
+          "rows": 0,
+          "strict": false,
+          "virtual": false,
+          "shadow": true,
+          "source_of_truth": false
+        },
+        "trajectory_runtime_events": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "transcript_event_identities": {
+          "rows": 8,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "transcript_events": {
+          "rows": 8,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "transcript_rewrite_watermarks": {
+          "rows": 2,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        }
+      }
+    },
+    {
+      "db": "agents/ops/agent/openclaw-agent.sqlite",
+      "kind": "other",
+      "user_version": 24,
+      "integrity_check": [
+        "ok"
+      ],
+      "tables": {
+        "acp_parent_stream_events": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "auth_profile_state": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "auth_profile_store": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "board_tabs": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "board_widgets": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "cache_entries": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "context_engine_turn_outbox": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "conversation_deliveries": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "conversations": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "heartbeat_outcomes": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "memory_embedding_cache": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "memory_entry_origins": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "memory_index_chunk_provenance": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "memory_index_chunk_recall_metadata": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "memory_index_chunks": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "memory_index_meta": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "memory_index_sources": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "memory_index_state": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "memory_session_tombstones": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "message_tool_run_outcomes": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "schema_meta": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "session_canonical_validation_pending": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_conversations": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_entry_snapshots": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_goal_operations": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_input_completions": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_key_contract": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_members": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_nodes": {
+          "rows": 2,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_participants": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_pending_inputs": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_progress_cards": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_suggestions": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_transcript_active_events": {
+          "rows": 6,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_transcript_archives": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_transcript_cold_archives": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_transcript_fts": {
+          "rows": 5,
+          "strict": false,
+          "virtual": true,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "session_transcript_fts_config": {
+          "rows": 1,
+          "strict": false,
+          "virtual": false,
+          "shadow": true,
+          "source_of_truth": false
+        },
+        "session_transcript_fts_content": {
+          "rows": 5,
+          "strict": false,
+          "virtual": false,
+          "shadow": true,
+          "source_of_truth": false
+        },
+        "session_transcript_fts_data": {
+          "rows": 7,
+          "strict": false,
+          "virtual": false,
+          "shadow": true,
+          "source_of_truth": false
+        },
+        "session_transcript_fts_docsize": {
+          "rows": 5,
+          "strict": false,
+          "virtual": false,
+          "shadow": true,
+          "source_of_truth": false
+        },
+        "session_transcript_fts_idx": {
+          "rows": 5,
+          "strict": false,
+          "virtual": false,
+          "shadow": true,
+          "source_of_truth": false
+        },
+        "session_transcript_fts_rows": {
+          "rows": 5,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "session_transcript_index_state": {
+          "rows": 2,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "session_windows": {
+          "rows": 2,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "standing_intents": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "standing_intents_fts": {
+          "rows": 0,
+          "strict": false,
+          "virtual": true,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "standing_intents_fts_config": {
+          "rows": 1,
+          "strict": false,
+          "virtual": false,
+          "shadow": true,
+          "source_of_truth": false
+        },
+        "standing_intents_fts_data": {
+          "rows": 2,
+          "strict": false,
+          "virtual": false,
+          "shadow": true,
+          "source_of_truth": false
+        },
+        "standing_intents_fts_docsize": {
+          "rows": 0,
+          "strict": false,
+          "virtual": false,
+          "shadow": true,
+          "source_of_truth": false
+        },
+        "standing_intents_fts_idx": {
+          "rows": 0,
+          "strict": false,
+          "virtual": false,
+          "shadow": true,
+          "source_of_truth": false
+        },
+        "trajectory_runtime_events": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "transcript_event_identities": {
+          "rows": 8,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "transcript_events": {
+          "rows": 8,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "transcript_rewrite_watermarks": {
+          "rows": 2,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        }
+      }
+    },
+    {
+      "db": "state/openclaw-quarantine.sqlite",
+      "kind": "other",
+      "user_version": 2,
+      "integrity_check": [
+        "ok"
+      ],
+      "tables": {
+        "agent_integrity_verifications": {
+          "rows": 2,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "quarantined_databases": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        }
+      }
+    },
+    {
+      "db": "state/openclaw.sqlite",
+      "kind": "shared",
+      "user_version": 19,
+      "integrity_check": [
+        "ok"
+      ],
+      "tables": {
+        "acp_replay_events": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "acp_replay_sessions": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "acp_sessions": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "agent_database_leases": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "agent_databases": {
+          "rows": 2,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "agent_deletion_journal": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "agent_provenance": {
+          "rows": 2,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "apns_registration_tombstones": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "apns_registrations": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "audit_events": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "audit_identity_keys": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "backup_runs": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "capture_blobs": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "capture_events": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "capture_sessions": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "channel_ingress_events": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "channel_pairing_allow_entries": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "channel_pairing_requests": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "claw_cron_refs": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "claw_installs": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "claw_mcp_server_refs": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "claw_package_refs": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "claw_workspace_files": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "clawhub_promotion_claims": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "config_health_entries": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "config_machine_state": {
+          "rows": 6,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "config_revision_keys": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "cron_job_scratch": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "cron_jobs": {
+          "rows": 2,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "cron_run_receipts": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "current_conversation_bindings": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "delivery_queue_entries": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "device_auth_tokens": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "device_bootstrap_tokens": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "device_identities": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "device_pair_setup_completions": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "device_pairing_join_codes": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "device_pairing_paired": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "device_pairing_pending": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "diagnostic_events": {
+          "rows": 5,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "exec_approvals_config": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "fleet_cells": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "flow_runs": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "gateway_boot_lifecycle": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "gateway_origin_device_tokens": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "gateway_restart_handoff": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "gateway_restart_intent": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "gateway_restart_sentinel": {
+          "rows": 2,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "github_publication_requests": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "macos_port_guardian_records": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "managed_outgoing_image_records": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "mcp_oauth_stores": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "meeting_transcript_sessions": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "meeting_transcript_summaries": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "meeting_transcript_utterances": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "migration_runs": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "migration_sources": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "native_hook_relay_bridges": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "official_external_plugin_catalog_snapshots": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "operator_approvals": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "outbound_media_provenance": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "plugin_binding_approvals": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "plugin_blob_entries": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "plugin_state_entries": {
+          "rows": 2,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "projects": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "sandbox_registry_entries": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "schema_meta": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "secret_store_entries": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_groups": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_state_events": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_state_heads": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_upstream_links": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "session_watch_cursors": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "skill_upload_chunks": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "skill_uploads": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "skill_usage": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "skill_workshop_collection_reviews": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "skill_workshop_proposal_events": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "skill_workshop_proposal_rollbacks": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "skill_workshop_proposals": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "state_leases": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": false
+        },
+        "subagent_runs": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "task_delivery_state": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "task_runs": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "user_preferences": {
+          "rows": 2,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "user_profile_emails": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "user_profile_identities": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "user_profiles": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "web_push_subscriptions": {
+          "rows": 1,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "worker_environment_credentials": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "worker_environment_ssh_fallback_ports": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "worker_environments": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "worker_inference_turns": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "worker_session_placement_moves": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "worker_session_placements": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "worker_session_tool_operations": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "worker_transcript_commit_heads": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "worker_transcript_commits": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "worker_turn_tool_authorities": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "worker_workspace_pending_results": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "worker_workspace_reconciliations": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "workspace_generated_bootstrap_hashes": {
+          "rows": 8,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "workspace_path_aliases": {
+          "rows": 2,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "workspace_setup_state": {
+          "rows": 2,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "worktree_provisioned_file_chunks": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "worktree_templates": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        },
+        "worktrees": {
+          "rows": 0,
+          "strict": true,
+          "virtual": false,
+          "shadow": false,
+          "source_of_truth": true
+        }
+      }
+    }
+  ],
+  "sidecars": [],
+  "verification": {
+    "sessions": [
+      {
+        "value": "agent:main:corpus-alpha",
+        "found_in": [
+          "agents/main/agent/openclaw-agent.sqlite:session_nodes.session_key",
+          "agents/main/agent/openclaw-agent.sqlite:session_windows.session_key",
+          "state/openclaw.sqlite:subagent_runs.controller_session_key",
+          "state/openclaw.sqlite:subagent_runs.requester_session_key",
+          "state/openclaw.sqlite:subagent_runs.payload_json"
+        ]
+      },
+      {
+        "value": "Synthetic user message main/alpha: こんにちは世界 🦀🎉 测试 — naïve café",
+        "found_in": [
+          "agents/main/agent/openclaw-agent.sqlite:transcript_events.event_json"
+        ]
+      },
+      {
+        "value": "Checking the workspace.",
+        "found_in": [
+          "agents/main/agent/openclaw-agent.sqlite:transcript_events.event_json",
+          "agents/ops/agent/openclaw-agent.sqlite:transcript_events.event_json"
+        ]
+      },
+      {
+        "value": "# Fixture README こんにちは世界 🦀🎉 测试 — naïve café",
+        "found_in": [
+          "agents/main/agent/openclaw-agent.sqlite:transcript_events.event_json",
+          "agents/ops/agent/openclaw-agent.sqlite:transcript_events.event_json"
+        ]
+      },
+      {
+        "value": "call_corpus_1",
+        "found_in": [
+          "agents/main/agent/openclaw-agent.sqlite:transcript_events.event_json"
+        ]
+      },
+      {
+        "value": "Synthetic assistant reply main/alpha ✅ 完了",
+        "found_in": [
+          "agents/main/agent/openclaw-agent.sqlite:transcript_events.event_json"
+        ]
+      },
+      {
+        "value": "agent:main:corpus-beta",
+        "found_in": [
+          "agents/main/agent/openclaw-agent.sqlite:session_nodes.session_key",
+          "agents/main/agent/openclaw-agent.sqlite:session_windows.session_key"
+        ]
+      },
+      {
+        "value": "Synthetic user message main/beta",
+        "found_in": [
+          "agents/main/agent/openclaw-agent.sqlite:transcript_events.event_json"
+        ]
+      },
+      {
+        "value": "Synthetic assistant reply main/beta",
+        "found_in": [
+          "agents/main/agent/openclaw-agent.sqlite:transcript_events.event_json"
+        ]
+      },
+      {
+        "value": "agent:ops:corpus-alpha",
+        "found_in": [
+          "agents/ops/agent/openclaw-agent.sqlite:session_nodes.session_key",
+          "agents/ops/agent/openclaw-agent.sqlite:session_windows.session_key"
+        ]
+      },
+      {
+        "value": "Synthetic user message ops/alpha",
+        "found_in": [
+          "agents/ops/agent/openclaw-agent.sqlite:transcript_events.event_json"
+        ]
+      },
+      {
+        "value": "Checking the workspace.",
+        "found_in": [
+          "agents/main/agent/openclaw-agent.sqlite:transcript_events.event_json",
+          "agents/ops/agent/openclaw-agent.sqlite:transcript_events.event_json"
+        ]
+      },
+      {
+        "value": "# Fixture README こんにちは世界 🦀🎉 测试 — naïve café",
+        "found_in": [
+          "agents/main/agent/openclaw-agent.sqlite:transcript_events.event_json",
+          "agents/ops/agent/openclaw-agent.sqlite:transcript_events.event_json"
+        ]
+      },
+      {
+        "value": "call_corpus_3",
+        "found_in": [
+          "agents/ops/agent/openclaw-agent.sqlite:transcript_events.event_json"
+        ]
+      },
+      {
+        "value": "Synthetic assistant reply ops/alpha",
+        "found_in": [
+          "agents/ops/agent/openclaw-agent.sqlite:transcript_events.event_json"
+        ]
+      },
+      {
+        "value": "agent:ops:corpus-beta",
+        "found_in": [
+          "agents/ops/agent/openclaw-agent.sqlite:session_nodes.session_key",
+          "agents/ops/agent/openclaw-agent.sqlite:session_windows.session_key"
+        ]
+      },
+      {
+        "value": "Synthetic user message ops/beta",
+        "found_in": [
+          "agents/ops/agent/openclaw-agent.sqlite:transcript_events.event_json"
+        ]
+      },
+      {
+        "value": "Synthetic assistant reply ops/beta",
+        "found_in": [
+          "agents/ops/agent/openclaw-agent.sqlite:transcript_events.event_json"
+        ]
+      }
+    ],
+    "authProfiles": [
+      {
+        "value": "openai:corpus-api",
+        "found_in": [
+          "agents/ops/agent/openclaw-agent.sqlite:auth_profile_store.store_json",
+          "state/openclaw.sqlite:config_machine_state.value_json"
+        ]
+      },
+      {
+        "value": "fixture-api-key",
+        "found_in": [
+          "agents/ops/agent/openclaw-agent.sqlite:auth_profile_store.store_json",
+          "state/openclaw.sqlite:config_machine_state.value_json"
+        ]
+      },
+      {
+        "value": "openai:corpus-oauth",
+        "found_in": [
+          "state/openclaw.sqlite:config_machine_state.value_json"
+        ]
+      },
+      {
+        "value": "fixture-oauth-access",
+        "found_in": [
+          "state/openclaw.sqlite:config_machine_state.value_json"
+        ]
+      },
+      {
+        "value": "anthropic:claude-cli",
+        "found_in": [
+          "state/openclaw.sqlite:config_machine_state.value_json"
+        ]
+      },
+      {
+        "value": "fixture-cli-access",
+        "found_in": [
+          "state/openclaw.sqlite:config_machine_state.value_json"
+        ]
+      },
+      {
+        "value": "openai:ops-api",
+        "found_in": [
+          "agents/ops/agent/openclaw-agent.sqlite:auth_profile_store.store_json"
+        ]
+      },
+      {
+        "value": "fixture-ops-api-key",
+        "found_in": [
+          "agents/ops/agent/openclaw-agent.sqlite:auth_profile_store.store_json"
+        ]
+      }
+    ],
+    "cron": [
+      {
+        "value": "corpus-enabled-job",
+        "found_in": [
+          "state/openclaw.sqlite:cron_jobs.job_id",
+          "state/openclaw.sqlite:cron_jobs.job_json",
+          "state/openclaw.sqlite:task_runs.source_id",
+          "state/openclaw.sqlite:task_runs.task"
+        ]
+      },
+      {
+        "value": "Corpus enabled digest ☕",
+        "found_in": [
+          "state/openclaw.sqlite:cron_jobs.name",
+          "state/openclaw.sqlite:cron_jobs.job_json"
+        ]
+      },
+      {
+        "value": "corpus-disabled-job",
+        "found_in": [
+          "state/openclaw.sqlite:cron_jobs.job_id",
+          "state/openclaw.sqlite:cron_jobs.job_json"
+        ]
+      },
+      {
+        "value": "Corpus disabled reminder",
+        "found_in": [
+          "state/openclaw.sqlite:cron_jobs.name",
+          "state/openclaw.sqlite:cron_jobs.job_json"
+        ]
+      }
+    ],
+    "controlUi": [
+      {
+        "value": "6a47568c-4ded-4698-8e34-dd67f5c6209c",
+        "found_in": [
+          "state/openclaw.sqlite:user_preferences.profile_id",
+          "state/openclaw.sqlite:user_profile_emails.profile_id",
+          "state/openclaw.sqlite:user_profiles.id"
+        ]
+      },
+      {
+        "value": "fixture@example.invalid",
+        "found_in": [
+          "state/openclaw.sqlite:user_profile_emails.email"
+        ]
+      },
+      {
+        "value": "ja-JP",
+        "found_in": [
+          "state/openclaw.sqlite:user_preferences.value_json"
+        ]
+      }
+    ],
+    "pluginStateKv": [
+      {
+        "value": "corpus-plugin",
+        "found_in": [
+          "state/openclaw.sqlite:config_machine_state.value_json",
+          "state/openclaw.sqlite:diagnostic_events.payload_json",
+          "state/openclaw.sqlite:plugin_blob_entries.plugin_id",
+          "state/openclaw.sqlite:plugin_state_entries.plugin_id"
+        ]
+      },
+      {
+        "value": "greeting",
+        "found_in": [
+          "state/openclaw.sqlite:plugin_state_entries.entry_key"
+        ]
+      }
+    ],
+    "channelPairing": [
+      {
+        "value": "fixture_user",
+        "found_in": [
+          "state/openclaw.sqlite:channel_pairing_requests.meta_json"
+        ]
+      }
+    ],
+    "devicePairingRequest": [
+      {
+        "value": "corpus-device-1",
+        "found_in": [
+          "state/openclaw.sqlite:device_pairing_pending.device_id"
+        ]
+      }
+    ],
+    "deliveryQueue": [
+      {
+        "value": "queued ",
+        "found_in": [
+          "state/openclaw.sqlite:delivery_queue_entries.entry_json"
+        ]
+      }
+    ],
+    "webPushSubscription": [
+      {
+        "value": "https://push.example.invalid/corpus-1",
+        "found_in": [
+          "state/openclaw.sqlite:web_push_subscriptions.endpoint"
+        ]
+      }
+    ],
+    "apnsRegistration": [
+      {
+        "value": "corpus-node-1",
+        "found_in": [
+          "state/openclaw.sqlite:apns_registrations.node_id"
+        ]
+      }
+    ],
+    "subagentRun": [
+      {
+        "value": "corpus-subagent-run-1",
+        "found_in": [
+          "state/openclaw.sqlite:session_state_events.dedupe_key",
+          "state/openclaw.sqlite:session_state_events.run_id",
+          "state/openclaw.sqlite:subagent_runs.run_id",
+          "state/openclaw.sqlite:subagent_runs.payload_json"
+        ]
+      }
+    ],
+    "restartSentinel": [
+      {
+        "value": "Synthetic restart",
+        "found_in": [
+          "state/openclaw.sqlite:gateway_restart_sentinel.message",
+          "state/openclaw.sqlite:gateway_restart_sentinel.payload_json"
+        ]
+      }
+    ],
+    "cronRunHistory": [
+      {
+        "value": "corpus-cron-run-1",
+        "found_in": [
+          "state/openclaw.sqlite:task_runs.run_id"
+        ]
+      }
+    ],
+    "voicewake": [
+      {
+        "value": "hey claw",
+        "found_in": [
+          "state/openclaw.sqlite:config_machine_state.value_json"
+        ]
+      }
+    ],
+    "projectRegistry": [
+      {
+        "value": "Corpus Project",
+        "found_in": [
+          "state/openclaw.sqlite:projects.display_name"
+        ]
+      }
+    ],
+    "sessionGroup": [
+      {
+        "value": "Corpus Work",
+        "found_in": [
+          "state/openclaw.sqlite:session_groups.name"
+        ]
+      }
+    ],
+    "currentConversationBinding": [
+      {
+        "value": "corpus-binding",
+        "found_in": []
+      }
+    ],
+    "configMachineState.cronStore": [
+      {
+        "value": "cron.store",
+        "found_in": [
+          "state/openclaw.sqlite:config_machine_state.state_key"
+        ]
+      }
+    ],
+    "pluginBlobStore": [
+      {
+        "value": "corpus-blob",
+        "found_in": [
+          "state/openclaw.sqlite:plugin_blob_entries.entry_key"
+        ]
+      }
+    ],
+    "cli.agentsAdd": [
+      {
+        "value": "workspace-ops",
+        "found_in": [
+          "state/openclaw.sqlite:diagnostic_events.payload_json",
+          "state/openclaw.sqlite:workspace_path_aliases.alias_path",
+          "state/openclaw.sqlite:workspace_path_aliases.workspace_path",
+          "state/openclaw.sqlite:workspace_setup_state.workspace_path"
+        ]
+      }
+    ],
+    "cli.execApprovals": [
+      {
+        "value": "/usr/bin/git",
+        "found_in": [
+          "state/openclaw.sqlite:exec_approvals_config.raw_json"
+        ]
+      }
+    ],
+    "cli.pluginInstallLedger": [
+      {
+        "value": "/home/fixture/src/corpus-plugin",
+        "found_in": [
+          "state/openclaw.sqlite:config_machine_state.value_json",
+          "state/openclaw.sqlite:diagnostic_events.payload_json"
+        ]
+      }
+    ],
+    "deviceIdentity": [
+      {
+        "value": "0c8e652c0e09cb76106654ac0deb2a1140bda50e1632842f0e7f326f212565d0",
+        "found_in": [
+          "state/openclaw.sqlite:device_identities.device_id"
+        ]
+      }
+    ]
+  }
+}

@@ -30,11 +30,7 @@ import {
 } from "./session-sqlite-migration-readers.js";
 import { verifyCanonicalSessionTranscriptSources } from "./session-sqlite-transcript-verification.js";
 import { runSqliteReadOnlyOperation } from "./sqlite-readonly-worker.js";
-import {
-  databaseFileIdentityKey,
-  readDatabasePathIdentitySync,
-  readDatabaseIdentityBirthtime,
-} from "./sqlite-worker-identity.js";
+import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 /** Capture originals before deferral; settlement may only archive these verified identities. */
 export function captureDeferredPluginSessionSources(params: {
@@ -89,7 +85,7 @@ export async function verifyDeferredSessionDatabase(params: {
   const stats = readOnlySqliteDbStats(target);
   if (!snapshot.ok || !stats.ok || stats.stats.integrityCheck !== "ok") {
     throw new Error(
-      `Cannot verify retained session history against ${params.sqlitePath}; inspect SQLite integrity with openclaw doctor --session-sqlite validate. Sources remain protected.`,
+      `Cannot verify retained session history against ${params.sqlitePath}; inspect SQLite integrity with ${formatCliCommand("openclaw doctor --session-sqlite validate", params.env)}. Sources remain protected.`,
     );
   }
   const resolved = new Map(params.sources.map((source) => [source.originalPath, source.path]));
@@ -122,7 +118,7 @@ export async function verifyDeferredSessionDatabase(params: {
       snapshot.snapshot.sessionKeysBySessionId.get(record.entry.sessionId) !== record.sessionKey
     ) {
       throw new Error(
-        `Retained session ${record.sessionKey} is not present in ${params.sqlitePath}; sources remain protected. Preserve ${record.transcriptPath ?? target.storePath} and its backups. Restore the intended session from a verified backup to ${params.sqlitePath}, then run openclaw doctor --session-sqlite recover --session-sqlite-all-agents against the same state directory. Canonical edits and deletions were not replayed.`,
+        `Retained session ${record.sessionKey} is not present in ${params.sqlitePath}; sources remain protected. Preserve ${record.transcriptPath ?? target.storePath} and its backups. Restore the intended session from a verified backup to ${params.sqlitePath}, then run ${formatCliCommand("openclaw doctor --session-sqlite recover --session-sqlite-all-agents", params.env)} against the same state directory. Canonical edits and deletions were not replayed.`,
       );
     }
   }
@@ -197,29 +193,6 @@ export function preservesRecordedIndexValue(
       sha256Hex(original) === identity.sha256 &&
       isDeepStrictEqual(JSON.parse(original.toString("utf8")), value),
   );
-}
-
-export function databaseIdentity(
-  sqlitePath: string,
-  kind: "receipt" | "physical" = "receipt",
-): string {
-  const file = fs.lstatSync(sqlitePath, { bigint: true, throwIfNoEntry: false });
-  if (!file?.isFile()) {
-    throw new Error(
-      `The imported session database is missing or no longer a regular file: ${sqlitePath}. Run ${formatCliCommand("openclaw doctor --session-sqlite recover --session-sqlite-all-agents")} against the same state/config before retrying repair.`,
-    );
-  }
-  // Device numbers can change after a VM reboot; durable receipts bind file creation instead.
-  return kind === "physical"
-    ? databaseFileIdentityKey(file)
-    : `inode:${file.ino}:birthtime:${readDatabaseIdentityBirthtime(file)}`;
-}
-
-export function sameSourceContent(
-  left: MigrationArtifactIdentity,
-  right: MigrationArtifactIdentity,
-) {
-  return left.sha256 === right.sha256 && left.size === right.size;
 }
 
 /** Only an exact byte match can replace a missing original; row counts cannot prove coverage. */

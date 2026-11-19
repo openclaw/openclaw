@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Value } from "typebox/value";
-import { expect, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import { SessionGitHubPullRequestPrepareResultSchema } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import * as sandboxEngine from "../agents/sandbox/docker.js";
@@ -31,14 +31,19 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { addSessionMember } from "../config/sessions/session-sharing-store.js";
+import * as skillsRuntime from "../skills/runtime/refresh.js";
 import { syncCanonicalGitHubIdentity } from "../state/user-profile-writes.js";
 import {
   createPublicationRepositories,
   createRequesterPublicationFixture,
 } from "./github-publication-requester.test-support.js";
 import { commandResult, githubPublicationTestMocks } from "./github-publication.test-support.js";
+import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { handleGatewayRequest } from "./server-methods.js";
+import type { GatewayRequestOptions } from "./server-methods/types.js";
 import { createContext as createRequestContext } from "./server-plugin-in-process-dispatch.test-support.js";
+import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
 import {
   resolveLocalWorkspaceOwner,
   withLocalWorkspaceProjection,
@@ -47,6 +52,42 @@ import * as workspaceStore from "./worker-environments/local-workspace-store.js"
 import { isLocalWorkspaceBaseRefreshRef } from "./worker-environments/workspace-result-inventory.js";
 
 export const mocks = githubPublicationTestMocks();
+
+export function observeManagedLayoutCaptures() {
+  let layoutChanged = false;
+  const ensureMounts = skillsRuntime.prepareSandboxMountSources;
+  const mounts = vi
+    .spyOn(skillsRuntime, "prepareSandboxMountSources")
+    .mockImplementation(async (...args) => (layoutChanged = await ensureMounts(...args)));
+  const observations: string[] = [];
+  const withStore = workspaceStore.withLocalWorkspaceStore;
+  const storeObserver = vi
+    .spyOn(workspaceStore, "withLocalWorkspaceStore")
+    .mockImplementation((params, run) =>
+      withStore(params, (store) =>
+        run({
+          ...store,
+          manifest: async (row, action) => {
+            if (
+              layoutChanged &&
+              (action.kind === "probe" || action.kind === "scan") &&
+              !action.prehash
+            ) {
+              observations.push(`${action.kind}:${action.target}`);
+            }
+            return await store.manifest(row, action);
+          },
+        }),
+      ),
+    );
+  return {
+    observations,
+    [Symbol.dispose]() {
+      storeObserver.mockRestore();
+      mounts.mockRestore();
+    },
+  };
+}
 
 const isolatedGitEnv = (env: NodeJS.ProcessEnv = {}) => ({
   ...process.env,
@@ -59,7 +100,17 @@ const isolatedGitEnv = (env: NodeJS.ProcessEnv = {}) => ({
 });
 
 export async function fixture(
-  options: { fork?: boolean; empty?: boolean; conflict?: boolean; priorPublication?: boolean } = {},
+  options: {
+    fork?: boolean;
+    empty?: boolean;
+    conflict?: boolean;
+    priorPublication?: boolean;
+    linked?: boolean;
+    newerProjectBase?: boolean;
+    unpublishedProjectWork?: boolean;
+    baseBranch?: string;
+    projectFork?: boolean;
+  } = {},
 ) {
   const original = { ...mocks.findWorktree("session", "unused"), id: randomUUID() };
   mocks.findWorktree.mockImplementation((_kind: string, ownerId: string) => ({
@@ -70,15 +121,18 @@ export async function fixture(
   const local = f.local!;
   const scope = { agentId: "main", sessionKey: f.session.sessionKey };
   const readSession = () => loadSessionEntryReadOnly(scope)!;
+  let priorPublication: Awaited<ReturnType<typeof f.coordinator.requestForSessionV2>> | undefined;
   if (options.priorPublication) {
-    const previous = await f.coordinator.requestForSessionV2(f.request("earlier-pr", f.guest));
-    expect(previous.status).toBe("published");
+    priorPublication = await f.coordinator.requestForSessionV2(f.request("earlier-pr", f.guest));
+    expect(priorPublication.status).toBe("published");
     f.externalWrites.length = 0;
   }
-  await syncCanonicalGitHubIdentity({
-    identity: { accountId: 101, login: "contributor" },
-    authenticationAlias: { kind: "email", email: "publication-guest@example.test" },
-  });
+  if (options.linked !== false) {
+    await syncCanonicalGitHubIdentity({
+      identity: { accountId: 101, login: "contributor" },
+      authenticationAlias: { kind: "email", email: "publication-guest@example.test" },
+    });
+  }
   const upstream = path.join(path.dirname(local.cwd), "upstream");
   const upstreamGit = (...args: string[]) => local.git("-C", upstream, ...args);
   const commitUpstream = async (message: string, files: Record<string, string>) => {
@@ -100,14 +154,30 @@ export async function fixture(
   const baseCommit = await commitUpstream("Newer base work", {
     "newer-base.txt": "base advanced after PR\n",
   });
+  if (options.baseBranch && options.baseBranch !== "main") {
+    await upstreamGit("branch", options.baseBranch, baseCommit);
+  }
+  let projectCommit = baseCommit;
+  if (options.newerProjectBase) {
+    for (let revision = 1; revision <= 5; revision++) {
+      projectCommit = await commitUpstream("Advance published project base", {
+        "published-base.txt": `Published revision ${revision}\n`,
+      });
+    }
+  }
   // The publication harness starts with staged work. A fresh selected-project
   // fixture instead starts at the real, clean project base; prior publications
   // retain their existing work and must be refused by initial preparation.
   if (!options.empty) {
     await local.git("fetch", "--no-write-fetch-head", upstream, "main");
-    await local.git("update-ref", "refs/heads/main", baseCommit);
+    await local.git("update-ref", "refs/heads/main", projectCommit);
     if (!options.priorPublication) {
-      await local.git("reset", "--hard", baseCommit);
+      await local.git("reset", "--hard", projectCommit);
+    }
+    if (options.unpublishedProjectWork) {
+      await fs.writeFile(path.join(local.cwd, "notes.txt"), "unpublished project work\n");
+      await local.git("add", "notes.txt");
+      await local.git("commit", "-m", "Unpublished project work");
     }
   }
   let cwd = local.cwd;
@@ -139,6 +209,12 @@ export async function fixture(
   }
   const git = (...args: string[]) => local.git("-C", cwd, ...args);
   const { baseRepo, headRepo } = createPublicationRepositories(options.fork);
+  if (options.projectFork) {
+    mocks.resolveRepository.mockResolvedValue({
+      ...(await mocks.resolveRepository(cwd)),
+      originUrl: `https://github.com/${headRepo.full_name}.git`,
+    });
+  }
   const pr = {
     number: 7,
     html_url: "https://github.com/openclaw/openclaw/pull/7",
@@ -147,7 +223,7 @@ export async function fixture(
     draft: false,
     merged: false,
     maintainer_can_modify: true,
-    base: { repo: baseRepo, ref: "main", sha: baseCommit },
+    base: { repo: baseRepo, ref: options.baseBranch ?? "main", sha: baseCommit },
     head: { repo: headRepo, ref: "topic/existing", sha: headCommit },
   };
   const branch = { name: pr.head.ref, commit: { sha: pr.head.sha }, protected: false };
@@ -160,15 +236,43 @@ export async function fixture(
       argv: string[],
       commandOptions?: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string },
     ) => {
-      if (argv.includes("push") || (argv[0] === "gh" && !argv.includes("GET"))) {
+      const method = argv.indexOf("--method");
+      if (
+        argv.includes("push") ||
+        (argv[0] === "gh" && method >= 0 && argv[method + 1] !== "GET")
+      ) {
         writes.push(argv);
         throw new Error("PR preparation attempted a GitHub write");
       }
       if (argv[0] === "gh") {
-        const endpoint = argv.at(-1)!;
+        const endpoint = argv.find((arg) => /^(repos|user)\//u.test(arg))!;
+        const reference =
+          /^repos\/((?:openclaw|contributor)\/openclaw)\/git\/ref\/heads\/(.+)$/u.exec(endpoint);
+        if (reference) {
+          const [, repository, ref] = reference;
+          return commandResult(
+            JSON.stringify({
+              ref: `refs/heads/${ref}`,
+              // The fork's main may advance independently of the upstream base.
+              sha:
+                options.projectFork && repository === baseRepo.full_name && ref === "main"
+                  ? baseCommit
+                  : await upstreamGit("rev-parse", ref!),
+            }),
+          );
+        }
         const reads: Record<string, unknown> = {
           "repos/openclaw/openclaw": baseRepo,
           "repos/contributor/openclaw": headRepo,
+          "user/101": { id: 101, login: "contributor" },
+          "repos/openclaw/openclaw/collaborators/contributor/permission": {
+            permission: "read",
+            user: { id: 101, login: "contributor" },
+          },
+          "repos/contributor/openclaw/collaborators/contributor/permission": {
+            permission: "read",
+            user: { id: 101, login: "contributor" },
+          },
           [`repos/openclaw/openclaw/pulls/${pr.number}`]: pr,
         };
         const value = endpoint.includes("/branches/") ? branch : reads[endpoint];
@@ -249,7 +353,23 @@ export async function fixture(
     args: Record<string, unknown> = {},
     prepared: SandboxContext | null = sandbox,
     signal?: AbortSignal,
+    invocation: {
+      requester?: "guest" | "maintainer";
+      caller?: "guest" | "maintainer" | null;
+      client?: GatewayRequestOptions["client"];
+    } = {},
   ) => {
+    const principal = invocation.requester === "maintainer" ? f.maintainerSource : f.guestSource;
+    const caller = invocation.caller === undefined ? invocation.requester : invocation.caller;
+    const callerSource = caller === "maintainer" ? f.maintainerSource : f.guestSource;
+    const operator =
+      caller === null
+        ? undefined
+        : await captureGatewayOperatorRunAuthority({
+            ...callerSource,
+            client: invocation.client ?? callerSource.client,
+          });
+    using _ = { [Symbol.dispose]: () => operator?.release() };
     const callGateway: InProcessGatewayCaller = async <T>(
       method: string,
       params: Record<string, unknown>,
@@ -257,8 +377,8 @@ export async function fixture(
       const respond = vi.fn();
       await handleGatewayRequest({
         req: { type: "req", id: randomUUID(), method, params },
-        client: f.guestSource.client,
-        context: Object.assign(createRequestContext(), f.guestSource.context, {
+        client: invocation.client ?? principal.client,
+        context: Object.assign(createRequestContext(), principal.context, {
           githubPublicationService: f.coordinator,
           workerSessionPlacementService: f.placements,
         }),
@@ -274,13 +394,15 @@ export async function fixture(
       return result as T;
     };
     const toolArgs = { action: "prepare_pr", pullRequestUrl: pr.html_url, ...args };
-    const result = await withGatewayToolCallerIdentity(scope, () =>
-      withPublicationToolTransport(callGateway, () =>
-        createGitHubPublishTool({ sandbox: prepared }).execute(
-          "prepare",
-          Object.fromEntries(Object.entries(toolArgs).filter(([, value]) => value !== undefined)),
+    const result = await withGatewayToolCallerIdentity(
+      { ...scope, operatorAuthority: operator?.authority },
+      () =>
+        withPublicationToolTransport(callGateway, () =>
+          createGitHubPublishTool({ sandbox: prepared }).execute(
+            "prepare",
+            Object.fromEntries(Object.entries(toolArgs).filter(([, value]) => value !== undefined)),
+          ),
         ),
-      ),
     );
     if ((args.action ?? "prepare_pr") === "prepare_pr") {
       expect(Value.Check(SessionGitHubPullRequestPrepareResultSchema, result.details)).toBe(true);
@@ -295,6 +417,7 @@ export async function fixture(
   };
   return {
     ...f,
+    priorPublication,
     cwd,
     git,
     guestGit,
@@ -310,6 +433,37 @@ export async function fixture(
     invoke,
     advanceHead,
     writes,
+  };
+}
+
+export async function admitSharedParent(
+  f: Awaited<ReturnType<typeof fixture>>,
+  sharingScope: { agentId: string; sessionKey: string },
+) {
+  const sessionId = randomUUID();
+  await upsertSessionEntryCore(sharingScope, {
+    sessionId,
+    sandbox: "required",
+    createdActor: { type: "human", source: "profile", id: f.maintainerProfile },
+    visibility: "read-only",
+  });
+  await addSessionMember(sharingScope, {
+    identityId: f.guestProfile,
+    addedBy: f.maintainerProfile,
+  });
+  const principal = await prepareSessionPrincipalRunAuthority({
+    context: Object.assign(createRequestContext(), f.guestSource.context),
+    ...sharingScope,
+    sessionId,
+    profileId: f.guestProfile,
+  });
+  onTestFinished(principal.release);
+  return {
+    ...f.guestSource.client,
+    internal: {
+      ...f.guestSource.client.internal,
+      operatorRunAuthority: principal.authority,
+    },
   };
 }
 

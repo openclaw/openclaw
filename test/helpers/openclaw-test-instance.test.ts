@@ -1179,9 +1179,9 @@ describe("openclaw test instance", () => {
     expect(await response.json()).toEqual({ ready: true });
   });
 
-  it.each(["pending probe", "readiness handoff"] as const)(
+  it.for(["pending probe", "readiness handoff"] as const)(
     "rolls back the real child after owner cancellation during %s",
-    async (phase) => {
+    async (phase, { signal }) => {
       const controller = new AbortController();
       const cancelled = new Error(`instance owner cancelled during ${phase}`);
       const pending = phase === "pending probe";
@@ -1190,6 +1190,8 @@ describe("openclaw test instance", () => {
         control,
         signal: controller.signal,
       });
+      // Cancellation owns this proof; native bootstrap must not consume its policy budget.
+      const { restoreClock } = freezePolicyClock(signal);
       const nativeFetch = globalThis.fetch;
       let child: typeof instance.child;
       const fetchSpy = pending
@@ -1227,6 +1229,7 @@ describe("openclaw test instance", () => {
           await expect(fs.stat(instance.state.root)).resolves.toBeDefined();
         }
       } finally {
+        restoreClock();
         fetchSpy?.mockRestore();
       }
     },
@@ -1239,6 +1242,8 @@ describe("openclaw test instance", () => {
       control,
       signal: controller.signal,
     });
+    // The cancellation gate owns startup; keep command and cleanup deadlines separate.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const command = trackOperation(instance.cli(["wait"], { timeoutMs: 1_000 }));
     const outcome = command.catch((error: unknown) => error);
     try {
@@ -1252,6 +1257,7 @@ describe("openclaw test instance", () => {
       );
       const [attempt] = await readAttempts();
       expect(isProcessAlive(attempt!.pid)).toBe(true);
+      vi.useRealTimers();
       controller.abort(new Error("instance owner cancelled during CLI"));
       expect(await outcome).toMatchObject({ message: expect.stringContaining("aborted") });
       expect(isProcessAlive(attempt!.pid)).toBe(false);
@@ -1260,6 +1266,7 @@ describe("openclaw test instance", () => {
       await instance.cleanup();
       await expectPathMissing(instance.state.root);
     } finally {
+      vi.useRealTimers();
       controller.abort();
       control.unblock();
       await outcome;

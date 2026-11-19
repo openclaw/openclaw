@@ -30,6 +30,7 @@ if (parentPort) {
         env: input.env,
         agentId: input.target.agentId,
         pathname: input.target.path,
+        maintenance: { signal: new AbortController().signal },
       }),
     };
   } catch (error) {

@@ -3,6 +3,7 @@ import { stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { Type, type Static } from "typebox";
 import { resolveZalouserAccountSync } from "./accounts.js";
@@ -138,7 +139,12 @@ export function createZalouserTool(context?: ZalouserToolContext): AnyAgentTool 
               signal,
               profile: params.profile,
               ...(params.action === "image"
-                ? { mediaMaxBytes: resolveToolMediaMaxBytes(params.profile, context) }
+                ? {
+                    mediaMaxBytes: resolveToolMediaMaxBytes(params.profile, context),
+                    mediaAccess: resolveOutboundMediaAccessForConfig(
+                      context?.getRuntimeConfig?.() ?? context?.runtimeConfig ?? context?.config,
+                    ),
+                  }
                 : {}),
               ...(params.action !== "send" ? { caption: params.message } : {}),
               isGroup: target.isGroup,

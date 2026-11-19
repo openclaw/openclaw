@@ -15,9 +15,10 @@ import { createDeferredCore } from "../shared/deferred.js";
 import * as validation from "./openclaw-agent-db-validation-cache.js";
 import {
   cleanupRetiredAgentDatabaseLease,
-  publishAgentDatabaseCloseCheckpoint,
+  closeAgentDatabaseNativeGeneration,
   readAgentDatabaseClosedReceipt,
 } from "./openclaw-agent-execution-cleanup.js";
+import type { AgentDatabaseNativeStore } from "./openclaw-agent-execution-contract.js";
 import * as schema from "./openclaw-state-db-schema-policy.js";
 import type { OpenClawStateWorkerCleanupOperations } from "./openclaw-state-worker-contract.js";
 
@@ -179,6 +180,15 @@ it.each(["current", "replaced", "revoked"] as const)(
         warning: false,
       },
     };
+    const lease = {
+      leaseId: "closed-lease",
+      agentId: "main",
+      path: nativePath,
+      ownerPid: process.pid,
+      ownerStartTime: null,
+      sharedStatePath: statePath,
+      sharedStateIdentity: shared.key,
+    };
     const closed = readAgentDatabaseClosedReceipt(
       { identity, incarnation: "closed-worker", checkpoint },
       {
@@ -187,15 +197,7 @@ it.each(["current", "replaced", "revoked"] as const)(
         incarnation: "closed-worker",
         nativeLocation: nativePath,
       },
-      {
-        leaseId: "closed-lease",
-        agentId: "main",
-        path: nativePath,
-        ownerPid: process.pid,
-        ownerStartTime: null,
-        sharedStatePath: statePath,
-        sharedStateIdentity: shared.key,
-      },
+      lease,
     );
     expect(closed).toBeDefined();
     const observation = vi.fn();
@@ -210,14 +212,47 @@ it.each(["current", "replaced", "revoked"] as const)(
     });
     const syncInspection = vi.spyOn(fs, "statSync");
     let owned = true;
-    const publishing = publishAgentDatabaseCloseCheckpoint(selectedPath, closed, () => {
-      if (!owned) {
-        throw new Error("cleanup authority revoked");
-      }
+    const stopped = createDeferredCore();
+    let closeReceipt: typeof closed;
+    const store: AgentDatabaseNativeStore = {
+      async execute() {
+        return expect.unreachable("Unexpected database operation during close");
+      },
+      async close() {
+        closeReceipt = closed;
+        stopped.resolve();
+      },
+    };
+    const publishing = closeAgentDatabaseNativeGeneration({
+      pathname: selectedPath,
+      context: {
+        environment: { OPENCLAW_STATE_DIR: dir },
+        existingSchemaPath: statePath,
+        admission: {
+          coordinationKey: shared.key,
+          databasePath: statePath,
+          identity: shared,
+          assertCurrent() {},
+        },
+      },
+      processOwner: undefined,
+      opening: Promise.resolve(store),
+      readOpenedStore: () => store,
+      assertCleanupOwned() {
+        if (!owned) {
+          throw new Error("cleanup authority revoked");
+        }
+      },
+      readRetirement: () => ({
+        stopped: stopped.promise,
+        lease,
+        readOpenRefused: undefined,
+        closed: closeReceipt,
+      }),
     });
     try {
-      expect(inspection).toHaveBeenCalledWith(selectedPath, { bigint: true });
       await entered.promise;
+      expect(inspection).toHaveBeenCalledWith(selectedPath, { bigint: true });
       await setImmediate();
       expect(syncInspection).not.toHaveBeenCalled();
       expect(observation).not.toHaveBeenCalled();

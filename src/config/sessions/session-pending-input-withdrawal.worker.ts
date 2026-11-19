@@ -5,18 +5,60 @@ import {
 } from "../../infra/kysely-sync.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
+import {
+  ensureSessionPendingInputsSchema,
+  hasSessionPendingInputsSchema,
+} from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
+import type { SessionPendingInputEndCause } from "./session-pending-input-end-cause.types.js";
+import type {
+  PendingInputOrphansWorkerInput,
+  PendingInputOrphanTarget,
+} from "./session-pending-input-history.types.js";
 import { parseSessionPendingInputMessage } from "./session-pending-input-value.js";
+
+/** Read the pending-input index once per store, never once per session. */
+export function readOrphanedSessionPendingInputTargetsInWorker(
+  request: PendingInputOrphansWorkerInput,
+): PendingInputOrphanTarget[] {
+  const read = withOpenClawAgentDatabaseReadOnly(
+    (database) => {
+      assertCapturedSessionEntryReadSource(request.source, database);
+      if (!hasSessionPendingInputsSchema(database.db)) {
+        return [];
+      }
+      return executeSqliteQuerySync(
+        database.db,
+        getSessionKysely(database.db)
+          .selectFrom("session_pending_inputs as pending")
+          .innerJoin("session_nodes as node", (join) =>
+            join
+              .onRef("node.session_key", "=", "pending.session_key")
+              .onRef("node.current_session_id", "=", "pending.session_id"),
+          )
+          .select(["pending.session_key as sessionKey", "pending.session_id as sessionId"])
+          .distinct()
+          .where("pending.state", "=", "queued")
+          .where("pending.consumed_event_id", "is", null)
+          .where("pending.lifecycle_generation", "!=", request.lifecycleGeneration),
+      ).rows;
+    },
+    { ...request.database, env: request.env },
+  );
+  return read.found ? read.value : [];
+}
 
 export type SessionPendingInputWithdrawal = {
   sessionKey: string;
   sessionId: string;
+  endCause: SessionPendingInputEndCause;
 } & ({ runId: string } | { inputIds: readonly string[] });
 
 export type RetiredPendingInputDismissalOutcome =
@@ -52,7 +94,7 @@ export function discardSessionPendingInputInWorker(
       if (!hasSessionPendingInputsSchema(current.db)) {
         admit("transaction");
         return commitResult(
-          "runId" in input
+          !("inputIds" in input)
             ? false
             : {
                 kind: "dismissed",
@@ -63,6 +105,7 @@ export function discardSessionPendingInputInWorker(
         );
       }
       const db = getSessionKysely(current.db);
+      ensureSessionPendingInputsSchema(current.db);
       const session = executeSqliteQueryTakeFirstSync(
         current.db,
         db
@@ -76,7 +119,7 @@ export function discardSessionPendingInputInWorker(
       }
       const query = db
         .selectFrom("session_pending_inputs")
-        .select(["input_id", "run_id", "state", "message_json"])
+        .select(["input_id", "run_id", "state", "message_json", "end_cause"])
         .where("session_key", "=", input.sessionKey)
         .where("session_id", "=", input.sessionId)
         .where("consumed_event_id", "is", null);
@@ -98,7 +141,7 @@ export function discardSessionPendingInputInWorker(
               const row = byId.get(id);
               return row ? [row] : [];
             });
-      const active = "inputIds" in input ? rows.filter((row) => row.state === "queued") : [];
+      const active = "inputIds" in input ? rows.filter((row) => row.state !== "cancelled") : [];
       if (active.length) {
         admit("transaction");
         return commitResult({ kind: "active", inputIds: active.map((row) => row.input_id) });
@@ -119,6 +162,8 @@ export function discardSessionPendingInputInWorker(
             .updateTable("session_pending_inputs")
             .set({
               state: "cancelled",
+              end_cause: input.endCause,
+              origin_source_json: null,
               message_json: JSON.stringify({ ...message, display: false }),
             })
             .where("input_id", "=", row.input_id)

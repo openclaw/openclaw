@@ -10,7 +10,6 @@ import {
 import {
   isRetainedUnendedSubagentRun,
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
-  isStaleUnendedSubagentRun,
   shouldKeepSubagentRunChildLink,
 } from "./subagent-run-liveness.js";
 
@@ -64,9 +63,8 @@ describe("subagent run liveness", () => {
     ["ended", { createdAt: stale, execution: { endedAt: now - 1 } }, false],
     ["long timeout", { createdAt: stale, runTimeoutSeconds: 6 * 60 * 60, execution: {} }, true],
     ["unknown fixture timestamp", { createdAt: 100, execution: {} }, true],
-  ] as const)("does not mark %s stale", (_case, fields, retained) => {
+  ] as const)("checks unended retention for %s", (_case, fields, retained) => {
     const entry = { runId: "unowned-retention-row", ...fields };
-    expect(isStaleUnendedSubagentRun(entry, now)).toBe(false);
     expect(isRetainedUnendedSubagentRun(entry, now)).toBe(retained);
   });
 

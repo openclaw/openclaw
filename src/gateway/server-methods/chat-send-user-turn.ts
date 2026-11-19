@@ -1,12 +1,17 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+import {
+  GATEWAY_CLIENT_IDS,
+  isNativeAppUiClient,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { bindRequesterProfile } from "../../auto-reply/requester-profile.js";
 import type { RuntimeMsgContext as MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { DEFAULT_ECHO_TRANSCRIPT_FORMAT } from "../../media-understanding/echo-transcript.js";
+import {
+  DEFAULT_ECHO_TRANSCRIPT_FORMAT,
+  formatAudioTranscriptForAgent,
+} from "../../media-understanding/echo-transcript.js";
 import { readPersistedMediaFacts, type MediaFact } from "../../media/media-facts.js";
-import { formatAudioTranscriptForAgent } from "../../plugin-sdk/media-understanding-runtime.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
@@ -23,14 +28,13 @@ import {
   discardPreparedInboundMedia,
   persistInboundImagesForTranscript,
 } from "../chat-attachments.js";
-import { readChatInputRecoveryAdmission } from "../chat-input-recovery-source.js";
 import { transferGatewayLocalUserIngress } from "../local-user-ingress.js";
 import { resolveCreatorSandbox } from "../operator-role-policy.js";
+import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { resolveGatewayInputParticipant } from "../session-input-participant.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
-import { isAcpBridgeClient } from "./chat-origin-routing.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { PreparedChatSendAttachments } from "./chat-send-attachments.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
@@ -177,10 +181,7 @@ export function prepareChatSendUserTurn(params: {
   const persistedMediaForTranscriptPromise = (async (): ReturnType<
     typeof persistInboundImagesForTranscript
   > => {
-    if (
-      (attachments.parsedImages.length === 0 && attachments.offloadedRefs.length === 0) ||
-      isAcpBridgeClient(client)
-    ) {
+    if (attachments.parsedImages.length === 0 && attachments.offloadedRefs.length === 0) {
       return { entries: [], omission: "none" };
     }
     return await persistInboundImagesForTranscript({
@@ -289,16 +290,28 @@ export function prepareChatSendUserTurn(params: {
     GatewayRunToolBindings: request.toolBindings,
     GatewayUiCommandTarget: gatewayUiCommandTarget,
   };
-  const recoveredRequester = readChatInputRecoveryAdmission(session.clientRunId)?.requesterProfile;
+  const recoveredRequester = readQueuedChatInputAdmission(session.clientRunId)?.requesterProfile;
   const requester = client?.authenticatedUserProfile;
   const externalInput =
     !request.systemInputProvenance || request.systemInputProvenance.kind === "external_user";
-  if (
+  if (recoveredRequester && externalInput) {
+    bindRequesterProfile(ctx, {
+      ...recoveredRequester,
+      isCurrent: () => {
+        try {
+          admission.assertWorkAdmissionCurrent?.();
+          return recoveredRequester.isCurrent();
+        } catch {
+          return false;
+        }
+      },
+    });
+  } else if (
     client &&
     requester &&
-    (recoveredRequester || client.authenticatedUserId || client.internal?.authenticatedOperator) &&
-    isBrowserOperatorUiClient(request.clientInfo) &&
-    (recoveredRequester || !isSyntheticGatewayCaller(client)) &&
+    (client.authenticatedUserId || client.internal?.authenticatedOperator) &&
+    (isBrowserOperatorUiClient(request.clientInfo) || isNativeAppUiClient(request.clientInfo)) &&
+    !isSyntheticGatewayCaller(client) &&
     externalInput
   ) {
     const authenticatedUserId = client.authenticatedUserId;
@@ -311,9 +324,6 @@ export function prepareChatSendUserTurn(params: {
           admission.assertWorkAdmissionCurrent?.();
         } catch {
           return false;
-        }
-        if (recoveredRequester) {
-          return recoveredRequester.id === profileId && recoveredRequester.isCurrent();
         }
         return (
           !client.invalidated &&
@@ -330,8 +340,7 @@ export function prepareChatSendUserTurn(params: {
     transferGatewayLocalUserIngress(client, ctx);
   }
   if (attachments.mediaPathOffloads.length > 0) {
-    // Pre-staged offloads must use structured facts and marker text so the
-    // dispatch path renders their prompt note without staging them a second time.
+    // Carry durable originals into turn preparation, which owns workspace staging.
     ctx.media = attachments.mediaPathOffloads;
   }
   const mediaPathOffloadsIncludeImages = attachments.mediaPathOffloads.some((fact) =>

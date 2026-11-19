@@ -1,6 +1,6 @@
 import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import { isImageWithMediaPayload } from "./media-payload.js";
-import { resolveModelBoundThinkingReplayMode } from "./providers/anthropic-model-contract.js";
+import { prepareModelBoundThinkingReplay } from "./providers/anthropic-model-contract.js";
 import {
   FAILED_ASSISTANT_REPLAY_TEXT,
   resolveFailedAssistantReplay,
@@ -48,21 +48,14 @@ function transformAssistant<TApi extends Api>(
   message: AssistantMessage,
   model: Model<TApi>,
   toolCallIdMap: Map<string, string>,
+  thinkingReplay: ReturnType<typeof prepareModelBoundThinkingReplay>,
   normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
 ): AssistantMessage {
-  const replayMode = resolveModelBoundThinkingReplayMode({
-    source: {
-      provider: message.provider,
-      api: message.api,
-      modelId: message.model,
-      responseModelId: message.responseModel,
-    },
-    target: {
-      provider: model.provider,
-      api: model.api,
-      modelId: model.id,
-      modelParams: model.params,
-    },
+  const replayMode = thinkingReplay({
+    provider: message.provider,
+    api: message.api,
+    modelId: message.model,
+    responseModelId: message.responseModel,
   });
   const sameModel =
     replayMode === "preserve" ||
@@ -119,6 +112,7 @@ export function transformMessages<TApi extends Api>(
   normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
 ): Message[] {
   const toolCallIdMap = new Map<string, string>();
+  const thinkingReplay = prepareModelBoundThinkingReplay(model);
   // Other model contracts require ordinary adjacent call/results. Preserve real
   // delayed outcomes before stripping the source model's async capability.
   const asyncOwners = new Map<string, AssistantMessage>();
@@ -193,7 +187,13 @@ export function transformMessages<TApi extends Api>(
     }
     if (message.role === "assistant") {
       const failedReplay = resolveFailedAssistantReplay(message, { pairingAware: false });
-      message = transformAssistant(message, model, toolCallIdMap, normalizeToolCallId);
+      message = transformAssistant(
+        message,
+        model,
+        toolCallIdMap,
+        thinkingReplay,
+        normalizeToolCallId,
+      );
       flushToolCalls();
       if (failedReplay === "drop") {
         continue;

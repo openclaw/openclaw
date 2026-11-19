@@ -3,6 +3,7 @@ const OPERATOR_ADMIN_SCOPE = "operator.admin";
 const OPERATOR_READ_SCOPE = "operator.read";
 const OPERATOR_TALK_SCOPE = "operator.talk";
 const OPERATOR_WRITE_SCOPE = "operator.write";
+const OPERATOR_CRON_SCOPE = "operator.cron";
 const OPERATOR_SESSION_READ_SCOPE = "operator.sessions.read";
 const OPERATOR_SESSION_WRITE_SCOPE = "operator.sessions.write";
 const OPERATOR_SCOPE_PREFIX = "operator.";
@@ -19,6 +20,7 @@ export function operatorScopeSatisfied(
     granted.includes(OPERATOR_ADMIN_SCOPE) ||
     ((requestedScope === OPERATOR_READ_SCOPE ||
       requestedScope === OPERATOR_TALK_SCOPE ||
+      requestedScope === OPERATOR_CRON_SCOPE ||
       requestedScope === OPERATOR_SESSION_READ_SCOPE ||
       requestedScope === OPERATOR_SESSION_WRITE_SCOPE) &&
       granted.includes(OPERATOR_WRITE_SCOPE)) ||

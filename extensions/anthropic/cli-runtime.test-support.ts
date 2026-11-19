@@ -14,13 +14,18 @@ import { buildAnthropicCliBackend } from "./cli-backend.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { executeClaudeCli } from "./cli.runtime.js";
 
+export function withClaudeCliTestDeadline(context: CliBackendExecuteContext) {
+  // Default deadlines belong to one request, not its reusable native session.
+  return { ...context, abortSignal: context.abortSignal ?? AbortSignal.timeout(10_000) };
+}
+
 export async function collectClaudeCli(
   context: CliBackendExecuteContext,
   secretInput?: Parameters<typeof executeClaudeCli>[1],
   execute = executeClaudeCli,
 ) {
   const records: Record<string, unknown>[] = [];
-  for await (const record of execute(context, secretInput)) {
+  for await (const record of execute(withClaudeCliTestDeadline(context), secretInput)) {
     records.push(record);
   }
   return records;
@@ -43,13 +48,19 @@ export function createCliTestHarness(prefix = "openclaw-claude-stderr-") {
         command: process.execPath,
         args: [command],
         cwd: root,
-        env: { PATH: process.env.PATH ?? "", HOME: root, CLAUDE_CONFIG_DIR: root, ...env },
+        env: {
+          PATH: process.env.PATH ?? "",
+          HOME: root,
+          TMPDIR: root,
+          OPENCLAW_STATE_DIR: root,
+          CLAUDE_CONFIG_DIR: root,
+          ...env,
+        },
         prompt: "Synthetic subprocess diagnostic probe.",
         systemPrompt: "Synthetic subprocess diagnostic probe.",
         modelId: "claude-sonnet-4-6",
         useResume: false,
         timeoutMs: 10_000,
-        abortSignal: AbortSignal.timeout(10_000),
         requestToolPermission: async () => ({ behavior: "deny", message: "No tools." }),
         requestUserInput: async () => ({ status: "cancelled", message: "No input in this probe." }),
         ...overrides,

@@ -63,9 +63,12 @@ export async function runUpdateSnapshotIsolationProof(
   }
   const writeFile = fsp.writeFile.bind(fsp);
   const copyFile = fsp.copyFile.bind(fsp);
+  const rename = fsp.rename.bind(fsp);
   const openSync = fs.openSync.bind(fs);
+  // Rename stays available (the snapshot publishes through it) but both of its
+  // endpoints must stay inside the fixture.
   const mutationAPIs = (
-    "appendFile chmod chown lchmod lchown lutimes mkdir mkdtemp open rename rm rmdir " +
+    "appendFile chmod chown lchmod lchown lutimes mkdir mkdtemp open rm rmdir " +
     "symlink link truncate unlink utimes write writev writeFile copyFile cp createWriteStream"
   ).split(" ");
   for (const name of mutationAPIs) {
@@ -95,6 +98,11 @@ export async function runUpdateSnapshotIsolationProof(
     checkTarget(destination);
     writes.push(destination);
     return copyFile(source, destination, ...args);
+  };
+  fsp.rename = async (source, destination, ...args) => {
+    checkTarget(source);
+    checkTarget(destination);
+    return rename(source, destination, ...args);
   };
   fs.openSync = (file, flags, ...args) => {
     assert.ok(flags === "r" || flags === 0, "Only read-only opens are allowed");
@@ -136,7 +144,10 @@ export async function runUpdateSnapshotIsolationProof(
   if (process.platform !== "win32") {
     assert.equal(fs.statSync(`${configB}.pre-update`).mode & 0o777, 0o600);
   }
-  assert.deepEqual(writes, [`${configB}.pre-update`]);
+  // Publication must stage bytes beside the rollback point without overwriting it.
+  assert.equal(writes.length, 1);
+  assert.equal(path.dirname(writes[0]!), path.dirname(configB));
+  assert.notEqual(writes[0], `${configB}.pre-update`);
   assert.deepEqual(blocked, []);
   assert.deepEqual(
     new Set(listDirectoryTreeStrictSync(root).map((walkEntry) => walkEntry.relativePath)),

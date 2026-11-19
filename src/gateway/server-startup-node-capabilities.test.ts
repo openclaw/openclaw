@@ -119,7 +119,6 @@ it("reconnects affected nodes when plugins attach after their handshake", async 
     return {
       stopGatewayUpdateCheck: async () => {},
       startupSettled: Promise.resolve(),
-      subagentRecoverySettled: Promise.resolve(),
     };
   });
   const token = "startup-node-capability-token";

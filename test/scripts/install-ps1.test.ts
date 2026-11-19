@@ -103,6 +103,29 @@ runWithPowerShell.each(["valid", "missing-head", "broken-gitfile", "subdirectory
     expect(result.status, result.stdout + result.stderr).toBe(0);
   },
 );
+const runHandoffFixture = (scenario: string) => {
+  const result = runPowerShell([
+    "-File",
+    "test/scripts/install-ps1-handoff.ps1",
+    "-InstallerPath",
+    join(process.cwd(), SCRIPT_PATH),
+    "-FixtureRoot",
+    harness.createTempDir("openclaw-install-handoff-"),
+    "-Scenario",
+    scenario,
+  ]);
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+};
+runWithPowerShell("prints a manual setup command after batch process creation fails", () => {
+  runHandoffFixture("failure");
+});
+const runWithWindowsPowerShell = process.platform === "win32" ? runWithPowerShell : it.skip;
+runWithWindowsPowerShell(
+  "executes a batch shim in a literal special-character path and preserves its exit status",
+  () => {
+    runHandoffFixture("launch");
+  },
+);
 runWithPowerShell("restores a conflicted pull before continuing a Git install", () => {
   const result = runPowerShell([
     "-File",

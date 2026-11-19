@@ -1,8 +1,8 @@
 import { PluginHostObject } from "../plugins/plugin-instance-owned-values.js";
-import { resolveCoreToolFacts, TOOL_CALL_RAW_TOOL_NAME } from "./tool-catalog.js";
+import { resolveCoreToolFacts } from "./tool-catalog.js";
 import { normalizeToolPolicyName } from "./tool-policy-shared.js";
 
-type AgentToolReplaySafety = "bounded-read" | "dispatcher";
+type AgentToolReplaySafety = "bounded-read";
 
 /** Private source-instance metadata survives only the host's canonical tool copies. */
 class ToolReplaySafety extends PluginHostObject {
@@ -68,27 +68,6 @@ export function isAgentToolReplaySafe(
   }
   const safety = resolveCoreToolFacts(normalizeToolPolicyName(tool.name ?? ""))?.replay;
   return ToolReplaySafety.get(tool) === "bounded-read" || safety === "both" || safety === "blind";
-}
-
-/**
- * Classify one concrete tool instance for an explicitly restart-safe turn.
- * Unlike blind name-only replay, an owner declaration is sufficient because
- * the host filters the concrete registered instance before execution.
- */
-export function isAgentToolRestartSafe(
-  tool: { name?: string },
-  options?: { declaredReplaySafe?: (tool: { name?: string }) => boolean | undefined },
-): boolean {
-  const declaredReplaySafe = options?.declaredReplaySafe?.(tool);
-  if (declaredReplaySafe !== undefined) {
-    return declaredReplaySafe;
-  }
-  // Tool Search can dispatch only into the catalog built after this filter.
-  // Do not infer safety for other dispatchers or name-only interrupted calls.
-  return (
-    isAgentToolReplaySafe(tool) ||
-    (tool.name === TOOL_CALL_RAW_TOOL_NAME && ToolReplaySafety.get(tool) === "dispatcher")
-  );
 }
 
 /**

@@ -33,6 +33,78 @@ function capturePostimage(entry: SubagentRunRecord) {
   };
 }
 
+export function registerCleanupBurstAuthorityTest({
+  createRunEntry,
+  createLifecycleController,
+  waitForLifecycleState,
+}: fixtures.LifecycleTestDrivers) {
+  it("bounds a cleanup burst while retaining admitted work when admission closes", async () => {
+    rootWork.resetGatewayWorkAdmission();
+    const joinCleanup = observeRootWork();
+    const entries = Array.from({ length: 130 }, (_, index) =>
+      createRunEntry({
+        runId: `bounded-cleanup-${index}`,
+        childSessionKey: `agent:main:subagent:bounded-cleanup-${index}`,
+        endedAt: 4_000,
+        expectsCompletionMessage: true,
+      }),
+    );
+    const runs = new Map(entries.map((entry) => [entry.runId, entry]));
+    const gate = createDeferredCore();
+    const started: string[] = [];
+    const announce = vi.fn(
+      async (_params: Parameters<SubagentLifecycleOptions["runSubagentAnnounceFlow"]>[0]) => {
+        await gate.promise;
+        return "delivered" as const;
+      },
+    );
+    const controller = createLifecycleController({
+      entry: entries[0]!,
+      runs,
+      runSubagentAnnounceFlow: announce,
+    });
+    const runBackgroundWork = controller.runBackgroundWork;
+    using preparation = vi.spyOn(controller, "runBackgroundWork");
+    preparation.mockImplementation((entry, run) =>
+      runBackgroundWork(entry, (release) => {
+        // The first callback starts preparation; later callbacks settle the same run.
+        if (!started.includes(entry.childSessionKey)) {
+          started.push(entry.childSessionKey);
+        }
+        return run(release);
+      }),
+    );
+    try {
+      for (const entry of entries) {
+        expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
+      }
+      await waitForLifecycleState(() => expect(announce).toHaveBeenCalledTimes(2));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(started).toEqual(entries.slice(0, 2).map((entry) => entry.childSessionKey));
+      expect(rootWork.getActiveGatewayRootWorkCount()).toBe(entries.length);
+      rootWork.markGatewayRestartDraining();
+      gate.resolve();
+      await joinCleanup(true);
+      expect(rootWork.getActiveGatewayRootWorkCount()).toBe(0);
+      expect(started).toEqual(entries.map((entry) => entry.childSessionKey));
+      expect(announce).toHaveBeenCalledTimes(entries.length);
+      expect(new Set(announce.mock.calls.map(([params]) => params.childSessionKey))).toEqual(
+        new Set(entries.map((entry) => entry.childSessionKey)),
+      );
+      expect([...runs.values()].every((entry) => entry.cleanupCompletedAt !== undefined)).toBe(
+        true,
+      );
+    } finally {
+      gate.resolve();
+      await joinCleanup();
+      controller.clearRuntimeState();
+      rootWork.resetGatewayWorkAdmission();
+    }
+  });
+}
+
 export function registerDetachedCleanupAuthorityTest({
   createRunEntry,
   createLifecycleController,
@@ -112,17 +184,13 @@ export function registerDetachedCleanupAuthorityTest({
 export function registerDirectSessionCleanupAuthorityTests({
   createRunEntry,
   createLifecycleController,
-  completeRun,
   completeAndJoinCleanup,
   gatewayMocks,
-  helperMocks,
 }: Pick<fixtures.LifecycleTestDrivers, "createRunEntry" | "createLifecycleController"> & {
-  completeRun: fixtures.CompleteLifecycleRun;
   completeAndJoinCleanup: fixtures.CompleteLifecycleRun;
   gatewayMocks: {
     callGateway: Mock<(options: CallGatewayOptions) => Promise<Record<string, unknown>>>;
   };
-  helperMocks: { persistSubagentSessionTiming: Mock<() => Promise<void>> };
 }) {
   it("preserves a delivered receipt while cleaning up a suppressed completion", async () => {
     const entry = createRunEntry({
@@ -181,45 +249,6 @@ export function registerDirectSessionCleanupAuthorityTests({
     expect(persisted.read()?.pauseReason).toBeUndefined();
     expect(cleanupBrowser).toHaveBeenCalledOnce();
     expect(committedBeforeCleanup).toBe(true);
-  });
-
-  it("allows terminal effects after a rejected recovery supplied a retired child guard", async () => {
-    const entry = createRunEntry();
-    const emitProgress = vi.fn(async () => {});
-    const controller = createLifecycleController({
-      entry,
-      emitSubagentProgressEndedForRun: emitProgress,
-    });
-    const prepareRecoveryCurrent = vi.fn(async () => false);
-    const assertRetired = () => {
-      throw new Error("Recovery no longer owns the child session");
-    };
-    await controller.completeSubagentRun({
-      runId: entry.runId,
-      expectedEntry: entry,
-      outcome: { status: "error", error: "rejected recovery" },
-      reason: ended.SUBAGENT_ENDED_REASON_ERROR,
-      triggerCleanup: false,
-      recoverInterrupted: true,
-      recoveryCurrent: {
-        prepare: prepareRecoveryCurrent,
-        isHostCurrent: () => true,
-      },
-      sessionEffects: {
-        isCurrent: async () => false,
-        assertHostCurrent: assertRetired,
-        assertCurrentEntry: assertRetired,
-      },
-    });
-    expect(fixtures.readLifecycleRun(entry).execution.status).toBe("running");
-    expect(helperMocks.persistSubagentSessionTiming).not.toHaveBeenCalled();
-    expect(emitProgress).not.toHaveBeenCalled();
-
-    await completeRun(controller, entry, { triggerCleanup: false });
-
-    expect(fixtures.readLifecycleRun(entry).execution.status).toBe("terminal");
-    expect(helperMocks.persistSubagentSessionTiming).toHaveBeenCalledOnce();
-    expect(emitProgress).toHaveBeenCalledOnce();
   });
 
   it.each(["changed during read", "missing lifecycle revision"] as const)(
@@ -357,7 +386,7 @@ export function registerDeliveryRetryOwnerTests({
     },
   );
 
-  it("retains a child result and retries parent restart admission without a sweep", async () => {
+  it("retains a child result and retries parent admission without a sweep", async () => {
     await useRetryTimers();
     vi.setSystemTime(10_000);
     const actualPolicy = await vi.importActual<typeof cleanupPolicy>(

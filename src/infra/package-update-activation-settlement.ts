@@ -10,6 +10,7 @@ import {
   PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
 } from "../../scripts/lib/package-dist-inventory-contract.mts";
+import { hasErrnoCode } from "./errno.js";
 import { readRootJsonObjectSync } from "./json-files.js";
 import { packageActivationIdentityOrAbsent as entryIdentity } from "./package-update-activation-custody.js";
 import {
@@ -32,11 +33,54 @@ import {
   packageIntegrityMatches,
   packageStatUnchanged,
 } from "./package-update-integrity.js";
+import { captureManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
 
 // Published npm openclaw@2026.9.9 uses the same digest encoding as 2026.9.8.
 // This pin selects encoding only, not the older previous-tree recovery allowances.
 const PACKAGE_RECOVERY_2026_9_9_HELPER =
   "6ae5112de5a98832da6c8151c65a9cc1e42c59f210284e539e45cf4f280a427f";
+
+export function isForeignLeaseDirectory(databasePath: string): boolean {
+  const uid = process.getuid?.();
+  if (uid === undefined) {
+    return false;
+  }
+  const directory = fs.lstatSync(path.dirname(databasePath), { throwIfNoEntry: false });
+  return directory?.isDirectory() === true && directory.uid !== uid;
+}
+
+export function inspectPackageActivationLease({
+  databasePath,
+  databaseIdentity,
+  parentIdentity,
+}: PackageActivationRecord["descriptor"]["authority"]) {
+  let current: ReturnType<typeof captureManagedUpdateLeaseDatabaseIdentity> | undefined;
+  // Historical receipts do not grant access to another user's replacement directory.
+  if (isForeignLeaseDirectory(databasePath)) {
+    return { current, changed: true, foreignDirectory: true };
+  }
+  try {
+    current = captureManagedUpdateLeaseDatabaseIdentity(databasePath);
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT") || fs.lstatSync(databasePath, { throwIfNoEntry: false })) {
+      throw error;
+    }
+  }
+  return {
+    current,
+    changed: !isDeepStrictEqual(current, { databasePath, databaseIdentity, parentIdentity }),
+    foreignDirectory: false,
+  };
+}
+
+export function isUnpublishedPreparation(record: PackageActivationRecord, installed: string) {
+  return (
+    record.phase === "prepared" &&
+    record.intent === null &&
+    record.publications.length === 0 &&
+    installed === record.descriptor.previous.identity
+  );
+}
 
 /** Qualify untouched preparation or a lost publish acknowledgement, never arbitrary stale custody. */
 export function inspectRemountedPackagePublication(
@@ -79,9 +123,12 @@ export function inspectRemountedPackagePublication(
     // does not authorize accepting a replacement inode.
     const previous = entry.previousIdentity;
     const historical =
-      previous && previous.split(":")[1] === current?.split(":")[1]
+      (selected === "candidate"
+        ? record.publications.find((published) => published.name === entry.name)?.identity
+        : undefined) ??
+      (previous && previous.split(":")[1] === current?.split(":")[1]
         ? previous
-        : entry.candidateIdentity;
+        : entry.candidateIdentity);
     if (
       selected === "candidate" &&
       historical === previous &&

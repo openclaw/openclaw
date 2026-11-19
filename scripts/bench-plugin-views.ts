@@ -1062,7 +1062,9 @@ try {
                     ).toHaveCount(0);
                     await expect(page.locator(".new-session-page__message")).toBeEditable();
                   },
-                  settle: () => frames(page),
+                  settle: async () => {
+                    await frames(page);
+                  },
                   update: async (sequence) => {
                     if (plugin === "workboard") {
                       const title = `Leak cycle ${sequence}`;

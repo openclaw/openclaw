@@ -2,11 +2,11 @@ import { Type } from "typebox";
 import { copyInternalToolResultState } from "../../packages/agent-core/src/internal-hooks.js";
 import { getAgentToolAssistantTurnId } from "../../packages/agent-core/src/tool-execution-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { CODE_MODE_NODES_TOOL_ID, isCodeModeSwarmAvailable } from "./code-mode-bridge.js";
-import { createCodeModeCatalogBindings, type CodeModeCatalogBinding } from "./code-mode-catalog.js";
-import { markCodeModeCheckpoint } from "./code-mode-checkpoint.js";
+import type { CodeModeCatalogBinding } from "./code-mode-catalog.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
@@ -22,32 +22,37 @@ import { runCodeModeExec, runWait } from "./code-mode-execution.js";
 import { runCodeModeScriptHeadless } from "./code-mode-headless.js";
 import { describeCodeModeNamespacesForPrompt } from "./code-mode-namespaces.js";
 import { markCodeModePermissionChangeResult } from "./code-mode-permission-change.js";
+import { getPreparedCodeModeCatalogBindings } from "./code-mode-prepared-catalog.js";
 import {
   isCodeModeEngagedForModel,
   readCode,
   readRunId,
   resolveCodeModeConfig,
 } from "./code-mode-runtime.js";
-import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { executionTitleSchema } from "./schema/typebox.js";
 import { isCoreCodingSurfaceToolName } from "./tool-catalog.js";
+import { describeRequiredHumanActionTool } from "./tool-description-presets.js";
 import { resolveToolResultBudget } from "./tool-result-limits.js";
-import {
-  applyToolCatalogCompaction,
-  compactToolSearchCatalogEntry,
-  isDirectVisibleCatalogTool,
-} from "./tool-search-catalog.js";
-import { formatToolSearchControlResult, type ToolSearchRuntime } from "./tool-search-runtime.js";
+import { applyToolCatalogCompaction, isDirectVisibleCatalogTool } from "./tool-search-catalog.js";
+import { getToolSearchCatalogDescriptors } from "./tool-search-prepared-catalog.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
-  type ToolSearchCatalogEntry,
-  type ToolSearchCatalogRef,
-  type ToolSearchToolContext,
+} from "./tool-search-protocol.js";
+import { formatToolSearchControlResult, type ToolSearchRuntime } from "./tool-search-runtime.js";
+import type {
+  ToolSearchCatalogEntry,
+  ToolSearchCatalogRef,
+  ToolSearchToolContext,
 } from "./tool-search-types.js";
+import {
+  hasToolUsageRanking,
+  selectUsageRankedToolRows,
+  type ToolUsageRankingSnapshot,
+} from "./tool-usage-ranking.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 export { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME };
@@ -63,6 +68,29 @@ export type { CodeModeFailureCode, CodeModeHeadlessResult } from "./code-mode-ru
 type CodeModeToolContext = ToolSearchToolContext & { modelContextWindowTokens?: number };
 
 const MAX_CODE_MODE_CATALOG_INDEX_CHARS = 8_000;
+
+const CODE_MODE_EXEC_PARAMETERS = Type.Object({
+  title: Type.Optional(executionTitleSchema({ required: true })),
+  // `command` stays runtime-only for hook compatibility. Requiring `code`
+  // prevents schema-valid empty calls from constrained models.
+  code: Type.String({
+    description:
+      "Required JavaScript; no TypeScript annotations, Python, shell, `require`, or `import`. Use `return value`; a trailing expression yields `null`.",
+  }),
+  awaitResults: Type.Optional(
+    Type.Boolean({
+      description:
+        "Required task results: keep this call owned through event-driven tool waits, without model polling. Explicit background services stay detached. Guest budget and run/tool deadlines still apply.",
+    }),
+  ),
+});
+
+const CODE_MODE_WAIT_PARAMETERS = Type.Object({
+  runId: Type.String({
+    description:
+      'Top-level runId from an exec result with status "waiting", never a nested tool sessionId.',
+  }),
+});
 
 const CODE_MODE_CATALOG_INDEX_HEADING = [
   "Enabled async tool globals (descriptions are intentionally deferred):",
@@ -86,26 +114,47 @@ function renderCodeModeCatalogIndex(lines: readonly string[], total: number): st
   ].join("\n");
 }
 
-function formatCodeModeCatalogIndex(bindings: readonly CodeModeCatalogBinding[]): string {
+function formatCodeModeCatalogIndex(
+  bindings: readonly CodeModeCatalogBinding[],
+  usageRanking?: ToolUsageRankingSnapshot,
+): string {
   const priority = (entry: CodeModeCatalogBinding) =>
     entry.id === `openclaw:core:${entry.name}` && isCoreCodingSurfaceToolName(entry.name)
       ? 0
       : entry.output
         ? 1
         : 2;
-  const lines = bindings
+  const rows = bindings
     // Keep the same core file/shell contracts visible as Tool Search, even without
     // declared outputs. Otherwise catalog growth hides their input argument names.
     .toSorted((a, b) => priority(a) - priority(b) || a.callableName.localeCompare(b.callableName))
-    .map(
-      (entry) => `- ${entry.callableName} ${entry.input ?? "unknown"} -> ${entry.output ?? "?"}`,
-    );
+    .map((entry) => ({
+      id: entry.id,
+      line: `- ${entry.callableName} ${entry.input ?? "unknown"} -> ${entry.output ?? "?"}`,
+      pinned: priority(entry) === 0,
+    }));
+  const lines = rows.map((row) => row.line);
   if (lines.length === 0) {
     return "";
   }
   const fullIndex = renderCodeModeCatalogIndex(lines, lines.length);
   if (fullIndex.length <= MAX_CODE_MODE_CATALOG_INDEX_CHARS) {
     return fullIndex;
+  }
+  if (hasToolUsageRanking(usageRanking)) {
+    const selected = selectUsageRankedToolRows(
+      rows,
+      usageRanking,
+      MAX_CODE_MODE_CATALOG_INDEX_CHARS,
+      (included) =>
+        CODE_MODE_CATALOG_INDEX_HEADING.length +
+        2 +
+        codeModeCatalogIndexFooter(included, lines.length).length,
+    );
+    return renderCodeModeCatalogIndex(
+      selected.map((row) => row.line),
+      lines.length,
+    );
   }
 
   // Skip oversized entries instead of letting one blank the remaining index.
@@ -130,13 +179,20 @@ function formatCodeModeCatalogIndex(bindings: readonly CodeModeCatalogBinding[])
 export function buildCodeModeCatalogPrompt(
   ctx: CodeModeToolContext,
   catalog: readonly ToolSearchCatalogEntry[],
+  usageRanking?: ToolUsageRankingSnapshot,
 ): string {
-  const namespacePrompt = describeCodeModeNamespacesForPrompt(catalog);
+  const { descriptors, prompts } = getToolSearchCatalogDescriptors(catalog);
+  const swarmEnabled = isCodeModeSwarmAvailable({ ...ctx, toolExecutionAllow: undefined }, catalog);
+  const cacheKey = `code-mode:${swarmEnabled}:${hasToolUsageRanking(usageRanking) ? JSON.stringify(usageRanking) : ""}`;
+  const cached = prompts.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const namespacePrompt = describeCodeModeNamespacesForPrompt(descriptors);
   // Native tools have schema-derived declarations too; keep remote schemas deferred.
   const hasMcp = catalog.some((entry) => entry.source === "mcp") ?? false;
   // Detached reviews retain the admitted catalog. Execution-only restrictions
   // belong to the bridge; applying them here rewrites the shared prompt prefix.
-  const swarmEnabled = isCodeModeSwarmAvailable({ ...ctx, toolExecutionAllow: undefined }, catalog);
   const apiGuidance =
     catalog.length > 0 || swarmEnabled
       ? " Read types with `API.list(prefix?)` and `API.read(path)`; read returns `{ path, description, content, bytes }`, not a string. Use `.content` for declaration text. Native tools: `tools/`. Types are documentation; write plain JavaScript."
@@ -160,27 +216,48 @@ export function buildCodeModeCatalogPrompt(
       ? " Installed skills: use `await skills.search(query, limit)` to find relevant skills. `await skills.list()` lists up to 20 entries; pass an offset for later pages."
       : "") +
     (hasSkillTool("skills_read")
-      ? " Use `await skills.read(name)` for complete installed skill instructions. A known exact name can be read directly."
+      ? " Use `await skills.read(name)` for complete installed skill instructions. A known exact name can be read directly. For local skill companions use `await skills.read(name, relativePath)`; restricted placements are instruction-only."
       : "");
   // The catalog already reserves built-in namespace globals without constructing their runtimes.
-  const bindings = createCodeModeCatalogBindings(
-    catalog.map((entry) => compactToolSearchCatalogEntry(entry)),
-  );
-  const catalogIndex = formatCodeModeCatalogIndex(bindings);
+  // MCP tools bind through namespaces, so skip rendering their compact hints here.
+  const bindings = getPreparedCodeModeCatalogBindings(catalog);
+  const catalogIndex = formatCodeModeCatalogIndex(bindings, usageRanking);
   // Only the effective core binding proves shell capability after client overrides.
   const shellTool = bindings.find((entry) => entry.id === "openclaw:core:exec");
   const shellGuidance = shellTool
-    ? ` Use the shell tool \`${shellTool.callableName}\` for heavier computation.`
+    ? ` Use the shell tool \`${shellTool.callableName}\` for commands and heavier computation. For multiline commands, join JavaScript strings with \`"\\n"\`, e.g. \`${shellTool.callableName}({command:["pwd","git diff --check"].join("\\n")})\`; never put literal newlines inside ordinary quoted strings.`
     : "";
-  return [
-    [shellGuidance, apiGuidance, mcpGuidance, swarmGuidance, nodesGuidance, skillsGuidance]
+  const editTools = bindings.filter(
+    (entry) => entry.id === "openclaw:core:edit" || entry.id === "openclaw:core:apply_patch",
+  );
+  const editGuidance = editTools.length
+    ? ` Prefer ${editTools.map((entry) => `\`${entry.callableName}\``).join(" or ")} for file changes instead of shell/Python rewriting with nested escaping.`
+    : "";
+  const askUserTool = bindings.find((entry) => entry.id === "openclaw:core:ask_user");
+  const humanActionGuidance = askUserTool
+    ? describeRequiredHumanActionTool(askUserTool.callableName)
+    : "";
+  const prompt = [
+    [
+      shellGuidance,
+      editGuidance,
+      apiGuidance,
+      mcpGuidance,
+      swarmGuidance,
+      nodesGuidance,
+      skillsGuidance,
+    ]
       .join("")
       .trim(),
     namespacePrompt,
+    humanActionGuidance,
     catalogIndex,
   ]
     .filter(Boolean)
     .join("\n\n");
+  prompts.set(cacheKey, prompt);
+  pruneMapToMaxSize(prompts, 12);
+  return prompt;
 }
 
 function createCodeModeExecDescription(config: ReturnType<typeof resolveCodeModeConfig>): string {
@@ -195,13 +272,11 @@ function createCodeModeExecDescription(config: ReturnType<typeof resolveCodeMode
 export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
   const runtimeRefresh = captureAgentPluginRuntimeRefresh();
   // The surface planner owns activation. Capture limits once so an admitted
-  // control remains executable during model overrides and restart recovery.
+  // control remains executable during model overrides.
   const config = resolveCodeModeConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId);
   const resultBudget = resolveToolResultBudget(ctx.modelContextWindowTokens);
   const formatResult = (
     rawResult: Awaited<ReturnType<typeof runCodeModeExec | typeof runWait>>,
-    toolCallId: string,
-    toolName: string,
     runtime: ToolSearchRuntime | undefined,
     signal?: AbortSignal,
   ) => {
@@ -209,43 +284,18 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     markCodeModePermissionChangeResult(result, signal);
     const controlResult = formatToolSearchControlResult(result, runtime, {
       terminalBatchStatus: result.status,
-      compact: true,
     });
     runtime?.sourceReplyCell.attach(controlResult, result.status);
-    markCodeModeCheckpoint(controlResult, toolCallId, toolName, result);
-    return recordCodeModeToolOutcome(
-      copyInternalToolResultState(controlResult, {
-        ...controlResult,
-        ...(runtimeRefresh.isRequested() ? { terminate: runtimeRefresh.isPending() } : {}),
-      }),
-      result,
-    );
+    return copyInternalToolResultState(controlResult, {
+      ...controlResult,
+      ...(runtimeRefresh.isRequested() ? { terminate: runtimeRefresh.isPending() } : {}),
+    });
   };
   const execTool = markCodeModeControlTool({
     name: CODE_MODE_EXEC_TOOL_NAME,
     label: "exec",
     description: createCodeModeExecDescription(config),
-    parameters: Type.Object({
-      title: Type.Optional(executionTitleSchema({ required: true })),
-      // `command` stays runtime-only for hook compatibility. Requiring `code`
-      // prevents schema-valid empty calls from constrained models.
-      code: Type.String({
-        description:
-          "Required JavaScript; no TypeScript annotations, Python, shell, `require`, or `import`. Use `return value`; a trailing expression yields `null`.",
-      }),
-      awaitResults: Type.Optional(
-        Type.Boolean({
-          description:
-            "Required task results: keep this call owned through event-driven tool waits, without model polling. Explicit background services stay detached. Guest budget and run/tool deadlines still apply.",
-        }),
-      ),
-      restartSafe: Type.Optional(
-        Type.Boolean({
-          description:
-            "Do not set on a new exec. Set true only when OpenClaw explicitly requests replay after a gateway restart; never for write, edit, exec, or any mutation. True rejects unmarked or namespace surfaces.",
-        }),
-      ),
-    }),
+    parameters: CODE_MODE_EXEC_PARAMETERS,
     execute: async (
       toolCallId: string,
       args: unknown,
@@ -265,7 +315,6 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
         resultBudget,
         code: input.code,
         assistantTurnId: getAgentToolAssistantTurnId(),
-        restartSafe: ctx.forceRestartSafeTools === true || input.restartSafe,
         awaitResults: input.awaitResults,
         signal,
         onUpdate,
@@ -273,21 +322,17 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
           runtime = value;
         },
       });
-      return formatResult(result, toolCallId, CODE_MODE_EXEC_TOOL_NAME, runtime, signal);
+      return formatResult(result, runtime, signal);
     },
   } as AnyAgentTool);
   const waitTool = markCodeModeControlTool({
     name: CODE_MODE_WAIT_TOOL_NAME,
     label: "wait",
     hideFromChannelProgress: true,
+    repeatable: true,
     description:
       'Resume only when the outer exec result has status "waiting", using its top-level runId. A completed exec may return a still-running tool operation inside value; manage that operation through its enabled tool in a new exec. Never pass a nested sessionId or process ID to wait.',
-    parameters: Type.Object({
-      runId: Type.String({
-        description:
-          'Top-level runId from an exec result with status "waiting", never a nested tool sessionId.',
-      }),
-    }),
+    parameters: CODE_MODE_WAIT_PARAMETERS,
     execute: async (
       toolCallId: string,
       args: unknown,
@@ -307,7 +352,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
           runtime = value;
         },
       });
-      return formatResult(result, toolCallId, CODE_MODE_WAIT_TOOL_NAME, runtime, signal);
+      return formatResult(result, runtime, signal);
     },
   } as AnyAgentTool);
   return [execTool, waitTool];

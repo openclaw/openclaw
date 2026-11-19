@@ -34,11 +34,12 @@ export function AgentIdentityAvatar(props: {
   agent: AgentIdentity;
   class?: string;
   onImageError?: () => void;
+  cachedOnly?: boolean;
 }) {
   const gateway = useAvatarGatewayContext();
   const view = createMemo(() => {
     gateway();
-    return resolveAgentIdentityAvatarView(props.agent);
+    return resolveAgentIdentityAvatarView(props.agent, props.cachedOnly);
   });
   const presentation = createIdentityAvatarPresentation(view);
   function SystemAgentAvatar(childProps: { branding: ThemeBranding }) {
@@ -181,8 +182,12 @@ export function AgentAvatarHat(props: { agentId: string; branding: ThemeBranding
 
 export function IdentityAvatar(props: {
   identity: IdentityAvatarInput;
+  cachedOnly?: boolean;
   children: (view: Accessor<IdentityAvatarView>) => JSX.Element;
 }) {
-  const view = useIdentityAvatarView(() => props.identity);
+  const view = useIdentityAvatarView(
+    () => props.identity,
+    () => props.cachedOnly === true,
+  );
   return <>{props.children(view)}</>;
 }

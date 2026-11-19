@@ -16,6 +16,14 @@ import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 
 type DiscordRuntime = Parameters<typeof setDiscordRuntime>[0];
 
+const realAcpSessionReader = vi.hoisted<{
+  read?: typeof import("openclaw/plugin-sdk/acp-runtime").readAcpSessionEntryAsync;
+}>(() => ({}));
+
+const realBindingClassifier = vi.hoisted<{
+  resolve?: typeof import("openclaw/plugin-sdk/thread-bindings-session-runtime").resolveThreadBindingTargetKind;
+}>(() => ({}));
+
 const hoisted = vi.hoisted(() => {
   const restGet = vi.fn(async (..._args: unknown[]) => ({
     id: "thread-1",
@@ -36,6 +44,10 @@ const hoisted = vi.hoisted(() => {
     })),
     createThreadDiscord: vi.fn(async (..._args: unknown[]) => ({ id: "thread-created" })),
     readAcpSessionEntryAsync: vi.fn(),
+    resolveThreadBindingTargetKind:
+      vi.fn<
+        typeof import("openclaw/plugin-sdk/thread-bindings-session-runtime").resolveThreadBindingTargetKind
+      >(),
   };
 });
 
@@ -50,12 +62,20 @@ vi.mock("../send.messages.js", () => ({
   createThreadDiscord: hoisted.createThreadDiscord,
 }));
 
-vi.mock("openclaw/plugin-sdk/acp-runtime", async () => ({
-  ...(await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
-    "openclaw/plugin-sdk/acp-runtime",
-  )),
-  readAcpSessionEntryAsync: hoisted.readAcpSessionEntryAsync,
-}));
+// Cleanup owns its public ACP reader independently of target classification.
+vi.mock("openclaw/plugin-sdk/acp-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/acp-runtime")>();
+  realAcpSessionReader.read = actual.readAcpSessionEntryAsync;
+  return { ...actual, readAcpSessionEntryAsync: hoisted.readAcpSessionEntryAsync };
+});
+
+// Adapter-isolation cases override the public operation; producer flows delegate to its real owner.
+vi.mock("openclaw/plugin-sdk/thread-bindings-session-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/thread-bindings-session-runtime")>();
+  realBindingClassifier.resolve = actual.resolveThreadBindingTargetKind;
+  return { ...actual, resolveThreadBindingTargetKind: hoisted.resolveThreadBindingTargetKind };
+});
 
 const { createThreadBindingManager } = await import("./thread-bindings.manager.js");
 const discordClientModule = await import("../client.js");
@@ -104,6 +124,13 @@ export function installThreadBindingLifecycleTestHooks() {
       mock.mockReset();
     }
     hoisted.readAcpSessionEntryAsync.mockResolvedValue(null);
+    hoisted.resolveThreadBindingTargetKind.mockImplementation((input) => {
+      const classify = realBindingClassifier.resolve;
+      if (!classify) {
+        throw new Error("Real binding classifier fixture was not initialized");
+      }
+      return classify(input);
+    });
     vi.spyOn(discordClientModule, "createDiscordRestClient").mockImplementation(
       (...args) =>
         hoisted.createDiscordRestClient(...args) as unknown as ReturnType<
@@ -154,6 +181,16 @@ export function installThreadBindingLifecycleTestHooks() {
       },
     );
     vi.useRealTimers();
+  });
+}
+
+export function useRealAcpSessionEntryRead() {
+  hoisted.readAcpSessionEntryAsync.mockImplementation((input) => {
+    const read = realAcpSessionReader.read;
+    if (!read) {
+      throw new Error("Real ACP reader fixture was not initialized");
+    }
+    return read(input);
   });
 }
 

@@ -78,7 +78,7 @@ export function hasInlineCommandTokens(text?: string): boolean {
 }
 
 /** Detects command syntax without broadening it for channel authorization metadata. */
-export function hasCommandSyntax(
+function hasCommandSyntax(
   text?: string,
   cfg?: OpenClawConfig,
   options?: CommandNormalizeOptions,

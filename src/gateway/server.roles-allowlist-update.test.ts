@@ -20,55 +20,21 @@ import type { GatewayClient } from "./client.js";
 import type { HealthSummary } from "./health/types.js";
 import type { ManagedGatewayConfigReloaderParams } from "./server-reload-contracts.js";
 
-const readonlyPreparation = vi.hoisted(() => ({
-  prepared: [] as Array<{ pathname: string; location?: string; progressed: boolean }>,
-  turns: [] as Promise<void>[],
-}));
+const readonlyPreparation = vi.hoisted(() => [] as string[]);
 
 vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/sqlite-snapshot-source.js")>();
-  const observe = (pathname: string) => {
-    let progressed = false;
-    readonlyPreparation.turns.push(
-      new Promise<void>((resolve) => {
-        setImmediate(() => {
-          progressed = true;
-          resolve();
-        });
-      }),
-    );
-    return (prepared?: { location: string }) =>
-      readonlyPreparation.prepared.push({ pathname, location: prepared?.location, progressed });
-  };
   const track =
-    <Args extends [string, ...unknown[]], Prepared extends { location: string }, Result>(
-      prepare: (...args: Args) => Result,
-      location: (result: Result) => Prepared | Promise<Prepared>,
-    ) =>
+    <Args extends [string, ...unknown[]], Result>(prepare: (...args: Args) => Result) =>
     (...args: Args) => {
-      const finish = observe(args[0]);
-      try {
-        const result = prepare(...args);
-        const prepared = location(result);
-        if (prepared instanceof Promise) {
-          void prepared.then(finish, () => finish());
-        } else {
-          finish(prepared);
-        }
-        return result;
-      } catch (error) {
-        finish();
-        throw error;
-      }
+      readonlyPreparation.push(args[0]);
+      return prepare(...args);
     };
   return {
     ...actual,
-    prepareSqliteReadOnlyLocationSync: track(actual.prepareSqliteReadOnlyLocationSync, (p) => p),
-    prepareSqliteReadOnlyLocation: track(actual.prepareSqliteReadOnlyLocation, (p) => p),
-    startSqliteReadOnlyLocationAsync: track(
-      actual.startSqliteReadOnlyLocationAsync,
-      (p) => p.result,
-    ),
+    prepareSqliteReadOnlyLocationSync: track(actual.prepareSqliteReadOnlyLocationSync),
+    prepareSqliteReadOnlyLocation: track(actual.prepareSqliteReadOnlyLocation),
+    startSqliteReadOnlyLocationAsync: track(actual.startSqliteReadOnlyLocationAsync),
   };
 });
 
@@ -358,6 +324,40 @@ test("gateway enforces operator and node permissions", async () => {
 
 registerGatewayUpdateHistoryTests(() => port, readonlyPreparation);
 
+test("a write-scoped client cannot start an installation update", async () => {
+  const install = await import("../infra/update-install-status.js");
+  const root = updateDirs.make("denied-installation-update-");
+  const entry = path.join(root, "index.js");
+  const initial = "// installed runtime fixture\n";
+  await fs.writeFile(entry, initial);
+  const discovery = vi.spyOn(install, "resolveStartupInstallStatus").mockResolvedValue({
+    root,
+    status: { root, installKind: "git", packageManager: "pnpm" },
+    installReceipt: null,
+  });
+  try {
+    const client = await connectGatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      token: "secret",
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+      scopes: ["operator.read", "operator.write"],
+    });
+    try {
+      expect((await client.request<HealthSummary>("health", {})).ok).toBe(true);
+      await expect(client.request("update.run", {})).rejects.toThrow(/operator\.admin/);
+      expect(discovery).not.toHaveBeenCalled();
+      expect(await fs.readdir(root)).toEqual(["index.js"]);
+      expect(await fs.readFile(entry, "utf8")).toBe(initial);
+      expect((await client.request<HealthSummary>("health", {})).ok).toBe(true);
+    } finally {
+      await client.stopAndWait();
+    }
+  } finally {
+    discovery.mockRestore();
+  }
+});
+
 test("update.run persists the accepted handoff before parking and restarting its foreground owner", async () => {
   await withEnvAsync(
     Object.fromEntries(SUPERVISOR_HINT_ENV_VARS.map((key) => [key, undefined])),
@@ -383,7 +383,7 @@ test("update.run persists the accepted handoff before parking and restarting its
           installReceipt: null,
         });
       // The shared server starts below the CLI run loop that publishes its owner.
-      const readOwner = vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue({
+      const readOwner = vi.spyOn(gatewayOwner, "readGatewayOwnerLeaseAsync").mockResolvedValue({
         ...foregroundOrigin,
         host: os.hostname(),
         mode: "foreground",
@@ -427,7 +427,7 @@ test("update.run persists the accepted handoff before parking and restarting its
           });
           return true;
         });
-      const claim = vi.spyOn(handoff, "claimManagedServiceUpdateHandoff").mockReturnValue(true);
+      const claim = vi.spyOn(handoff, "claimManagedServiceUpdateHandoff").mockResolvedValue(true);
       const schedule = vi.spyOn(restart, "scheduleGatewayRestart");
       const restartSignal = vi.fn();
       process.on("SIGUSR2", restartSignal);

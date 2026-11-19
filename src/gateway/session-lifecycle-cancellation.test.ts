@@ -27,9 +27,9 @@ import {
 import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 it.each([
-  { cancellation: "restart", status: "interrupted", replacement: false },
+  { cancellation: "restart", status: "killed", replacement: false },
   { cancellation: "user", status: "killed", replacement: false },
-  { cancellation: "restart", status: "interrupted", replacement: true },
+  { cancellation: "restart", status: "killed", replacement: true },
 ] as const)(
   "settles $cancellation, replacement=$replacement",
   async ({ cancellation, status, replacement }) => {

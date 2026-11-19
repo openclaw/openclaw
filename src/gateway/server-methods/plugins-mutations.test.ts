@@ -217,7 +217,7 @@ describe("plugin management Gateway mutation handlers", () => {
     "accepts staged capabilities only for a %s request",
     async (state) => {
       const config = {
-        plugins: { entries: { workboard: { hooks: { allowPromptInjection: false } } } },
+        plugins: { entries: { workboard: { hooks: { allowPromptModification: false } } } },
       };
       const originalConfig = structuredClone(config);
       const review = buildPluginCapabilityConsentReview({

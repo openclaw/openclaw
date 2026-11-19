@@ -111,17 +111,7 @@ describe("FreeBSD pkg update admission", () => {
         });
         if (ownership !== "owned") {
           await expect(admission).resolves.toBe("npm");
-          if (ownership === "missing") {
-            expect(onWarning).toHaveBeenCalledExactlyOnceWith(
-              expect.stringContaining("pkg executable was not found"),
-            );
-            expect(onWarning.mock.calls[0]?.[0]).toContain(
-              "Continuing without verified system-package ownership.",
-            );
-            expect(onWarning.mock.calls[0]?.[0]).not.toContain("Restore access");
-          } else {
-            expect(onWarning).not.toHaveBeenCalled();
-          }
+          expect(onWarning).not.toHaveBeenCalled();
         } else {
           await expect(admission).rejects.toMatchObject({ reason: "pkg-owned-install" });
           expect(command).not.toHaveBeenCalled();

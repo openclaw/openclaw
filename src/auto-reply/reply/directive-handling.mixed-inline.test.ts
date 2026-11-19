@@ -3,8 +3,8 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { prepareSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.js";
 import * as authProfileStore from "../../agents/auth-profiles/store-runtime.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { loadProviderScopedThinkingCatalog } from "../../agents/model-catalog.runtime.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
@@ -319,8 +319,10 @@ describe("mixed inline directives", () => {
     expectQueuedUpdate({ nextAuthProfileId: "openai:work", nextAuthProfileIdSource: "auto" });
   });
 
-  it("preserves a mixed alias named list as a model selection", async () => {
-    const body = "please reply /list -s";
+  it.each([
+    { body: "please reply /list -s", selectsModel: false },
+    { body: "/list -s please reply", selectsModel: true },
+  ])("admits the list model alias only at message start: $body", async ({ body, selectsModel }) => {
     const cfg: OpenClawConfig = {
       commands: { text: true },
       agents: { defaults: { models: { "openai/gpt-5.6-luna": { alias: "list" } } } },
@@ -337,17 +339,25 @@ describe("mixed inline directives", () => {
     });
 
     expect(directives).toMatchObject({
-      cleaned: "please reply",
-      hasModelDirective: true,
-      modelDirectiveSource: "alias",
-      rawModelDirective: "list",
+      cleaned: selectsModel ? "please reply" : body,
+      hasModelDirective: selectsModel,
+      modelDirectiveSource: selectsModel ? "alias" : undefined,
+      rawModelDirective: selectsModel ? "list" : undefined,
     });
-    expect(result).toMatchObject(continuedLuna);
-    expect(sessionEntry).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.6-luna",
-      modelOverrideSource: "user",
-    });
+    expect(result).toMatchObject(
+      selectsModel
+        ? continuedLuna
+        : { kind: "continue", provider: "anthropic", model: "claude-opus-4-6" },
+    );
+    if (selectsModel) {
+      expect(sessionEntry).toMatchObject({
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-luna",
+        modelOverrideSource: "user",
+      });
+    } else {
+      expect(sessionEntry).toEqual(createSessionEntry());
+    }
   });
 
   it("reports immutable config for a mixed agent-default selection", async () => {
@@ -406,7 +416,8 @@ describe("mixed inline directives", () => {
     const sessionEntry = createSessionEntry({ execHost: "node", execNode: "worker-1" });
     const initialEntry = { ...sessionEntry };
     for (const [body, security, ask] of [
-      ["please reply /exec host=gateway node=other security=deny ask=always", "deny", "always"],
+      ["/exec host=gateway node=other security=deny ask=always please reply", "deny", "always"],
+      ["please reply /exec host=gateway node=other security=deny ask=always", undefined, undefined],
       ["please reply again", undefined, undefined],
     ] as const) {
       const directives = await routeDirectives(body, cfg);

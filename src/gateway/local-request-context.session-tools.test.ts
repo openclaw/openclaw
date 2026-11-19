@@ -381,9 +381,9 @@ describe("built-in session tool role authority", () => {
       });
       try {
         expect(custody?.isCurrent()).toBe(true);
-        // The closed recovery principal owns accepted cross-session delivery independently.
+        // The closed lifecycle principal owns accepted cross-session delivery independently.
         await expect(
-          runtime.recovery.dispatchSessionMethod("chat.history", {
+          runtime.lifecycle.dispatchSessionMethod("chat.history", {
             sessionKey: PARTICIPANT_DRAFT,
           }),
         ).resolves.toMatchObject(draftMessages);
@@ -736,7 +736,7 @@ describe("built-in session tool role authority", () => {
     }));
 
   it.each(["system", "operator", "closed request", "revoked device"] as const)(
-    "settles self-archive with live source authority after caller closure (%s)",
+    "keeps admitted self-archive through caller closure and device changes (%s)",
     (caller) =>
       withSessionToolsFixture(async (cfg) => {
         const context = localContext();
@@ -830,11 +830,6 @@ describe("built-in session tool role authority", () => {
           current = false;
           source.release();
           admission.release();
-        }
-        if (caller === "revoked device") {
-          await expect(settled.promise).rejects.toThrow(/authority.*no longer active/);
-          expect(mainSession(sessionKey)?.archivedAt).toBeUndefined();
-          return;
         }
         await settled.promise;
         await archived.promise;

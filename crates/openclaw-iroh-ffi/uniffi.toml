@@ -1,0 +1,7 @@
+[bindings.swift]
+module_name = "OpenClawIroh"
+ffi_module_name = "OpenClawIrohFFI"
+
+[bindings.kotlin]
+package_name = "ai.openclaw.iroh"
+cdylib_name = "openclaw_iroh_ffi"

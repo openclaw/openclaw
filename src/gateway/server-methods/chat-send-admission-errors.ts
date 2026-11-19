@@ -2,6 +2,7 @@ import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_RESTART_UNAVAILABLE_REASON } from "../../../packages/gateway-protocol/src/restart-unavailable.js";
 import { renderStorageFailureSummary } from "../../agents/failover/assistant-request-failure-copy.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
+import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
@@ -40,6 +41,11 @@ export function respondChatSendAdmissionError(
       },
     );
   }
+  if (error instanceof SessionGoalOperationError) {
+    return respondError(respond, ErrorCodes.INVALID_REQUEST, error.message, {
+      details: { reason: `goal-${error.code}` },
+    });
+  }
   const reason = error instanceof Error ? error.message : undefined;
   if (reason === "goal-session-busy") {
     return respondError(
@@ -69,7 +75,7 @@ export function respondChatSendAdmissionError(
     return respondError(
       respond,
       ErrorCodes.UNAVAILABLE,
-      "session transcript is rebuilding; retry shortly",
+      "Chat history is rebuilding. Try again shortly.",
       {
         details: { method: "chat.send" },
         retryable: true,

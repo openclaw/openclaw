@@ -61,6 +61,8 @@ export function createQueuedDeliveryOwner(
     queueId: params.queueId,
     stateDir: context?.stateDir ?? params.stateDir,
     claimId: params.expectedPlatformSendAttemptId,
+    // Lease cancellation fences unsent work; a concrete receipt retires this
+    // local gate while canonical settlement continues to check the exact claim.
     signal: params.signal,
     get custody() {
       return custody;

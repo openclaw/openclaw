@@ -112,6 +112,12 @@ describe("updateNpmInstalledHookPacks", () => {
     expect(installNpm).not.toHaveBeenCalled();
   });
 
+  it("starts no hook pack update once interrupted", async () => {
+    const result = await update({ config: configFor(), signal: AbortSignal.abort() });
+    expect(installNpm).not.toHaveBeenCalled();
+    expect(result.outcomes).toEqual([]);
+  });
+
   it("aborts exact pinned hook pack updates on integrity drift by default", async () => {
     const warn = vi.fn();
     const error = "aborted: npm package integrity drift detected for @openclaw/demo-hooks@1.0.0";

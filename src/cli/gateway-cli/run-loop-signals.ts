@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
+import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { isGatewayStateProcessOwnerRetiredError } from "../../infra/gateway-state-owner-errors.js";
 import {
   consumeGatewaySuspendHandoff,
   type GatewaySuspendHandoffOwner,
@@ -38,12 +38,12 @@ export function createGatewayRunSignals(params: {
   isTerminal: () => boolean;
   isForcedExitStarted: () => boolean;
   isForegroundUpdateClosed: () => boolean;
+  getRequest: () => GatewayRunSignalRequest | null;
   isRuntimeResetPending: () => boolean;
   isShuttingDown: () => boolean;
   getExternalRestartOwner: () => GatewaySuspendHandoffOwner | undefined;
   getTerminalHostedStop: () => ReturnType<typeof createGatewayHostLifecycle> | undefined;
   updateSuccessor: Pick<GatewayUpdateSuccessor, "stop" | "stopRequested">;
-  forceExit: (reason: string) => void;
   request: (
     action: GatewayRunSignalAction,
     signal: GatewayRunSignalRequest["signal"],
@@ -61,6 +61,8 @@ export function createGatewayRunSignals(params: {
   let signalStoreOpening: Promise<void> | undefined;
   let reopenSignalStore: (() => void) | undefined;
   let signalsActive = true;
+  let sigtermIteration: object | undefined;
+  let duplicateSigtermLogged = false;
   const sealSignalStore = () => {
     signalStoreOpen = false;
     signalStoreOpening ??= new Promise<void>((resolve) => {
@@ -92,6 +94,8 @@ export function createGatewayRunSignals(params: {
   ) => {
     const iteration = params.getIteration();
     const acceptedAtMs = performance.now();
+    const controller = new AbortController();
+    let waitingFor = "earlier signal settlement";
     signalAdmission = beginGatewayRestartSignalAdmission() ?? signalAdmission;
     const isCurrent = () =>
       signalsActive &&
@@ -99,6 +103,7 @@ export function createGatewayRunSignals(params: {
       !params.isForcedExitStarted() &&
       params.getIteration() === iteration;
     const assertCurrent = () => {
+      controller.signal.throwIfAborted();
       if (!isCurrent()) {
         throw new Error("Gateway signal belongs to a retired lifecycle iteration");
       }
@@ -111,50 +116,51 @@ export function createGatewayRunSignals(params: {
             undefined,
             undefined,
             assertCurrent,
+            controller.signal,
           )
         : undefined;
     } catch (error) {
       preparationFailure = { error };
     }
-    const deadline = consumeIntent
-      ? setTimeout(
-          () => {
-            params.forceExit("gateway.restart_signal_settlement_timeout");
-          },
-          Math.max(0, params.timeoutMs - (performance.now() - acceptedAtMs)),
-        )
-      : undefined;
-    deadline?.unref?.();
     const processSignal = async () => {
-      try {
-        if (!isCurrent()) {
-          return;
-        }
-        if (preparationFailure) {
-          throw preparationFailure.error;
-        }
-        for (;;) {
-          if (!consumeIntent || signalStoreOpen) {
-            break;
-          }
-          await signalStoreOpening;
-          if (!isCurrent()) {
-            return;
-          }
-        }
-        const restartIntent = consumeIntent ? await consumeIntent() : null;
-        if (isCurrent()) {
-          handle(restartIntent, acceptedAtMs);
-        }
-      } catch (error) {
-        if (isCurrent()) {
-          failed(error, acceptedAtMs);
-        }
-      } finally {
-        clearTimeout(deadline);
+      if (!isCurrent() || controller.signal.aborted) {
+        return;
       }
+      if (preparationFailure) {
+        throw preparationFailure.error;
+      }
+      waitingFor = "restart-intent store to reopen";
+      for (;;) {
+        if (!consumeIntent || signalStoreOpen) {
+          break;
+        }
+        await signalStoreOpening;
+        assertCurrent();
+      }
+      waitingFor = "restart-intent consumption";
+      const restartIntent = consumeIntent ? await consumeIntent() : null;
+      assertCurrent();
+      handle(restartIntent, acceptedAtMs);
     };
-    const settled = signalSettlement ? signalSettlement.then(processSignal) : processSignal();
+    // Intent metadata must not spend the shutdown budget or prevent resume markers.
+    // Native writes still settle with their owner; abort refuses any late consumption.
+    const timeoutMs = Math.min(1_000, params.timeoutMs);
+    const settled = raceWithTimeout(
+      () => (signalSettlement ? signalSettlement.then(processSignal) : processSignal()),
+      Math.max(0, timeoutMs - (performance.now() - acceptedAtMs)),
+      () => {
+        const error = new Error(
+          `restart signal settlement exceeded ${timeoutMs}ms waiting for ${waitingFor}`,
+        );
+        controller.abort(error);
+        throw error;
+      },
+      { ref: false },
+    ).catch((error: unknown) => {
+      if (isCurrent()) {
+        failed(error, acceptedAtMs);
+      }
+    });
     signalSettlement = settled;
     void settled.then(() => {
       if (signalSettlement === settled) {
@@ -170,7 +176,6 @@ export function createGatewayRunSignals(params: {
     if (!signalsActive || params.isTerminal()) {
       return;
     }
-    observeSignal("SIGTERM");
     const terminalHostedStop = params.getTerminalHostedStop();
     if (terminalHostedStop) {
       // Kernel cleanup is already joined. A native stop signal belongs to this
@@ -182,19 +187,32 @@ export function createGatewayRunSignals(params: {
       updateSuccessor.stop("SIGTERM");
       return;
     }
+    const iteration = params.getIteration();
+    if (params.isShuttingDown() && sigtermIteration === iteration) {
+      if (!duplicateSigtermLogged) {
+        duplicateSigtermLogged = true;
+        gatewayLog.info("duplicate SIGTERM ignored");
+      }
+      return;
+    }
+    sigtermIteration = iteration;
+    duplicateSigtermLogged = false;
     if (params.isForcedExitStarted()) {
       request("stop", "SIGTERM");
       return;
     }
-    // Transfer this in-memory authority before even the reversible signal fence.
+    if (params.isShuttingDown() && !params.getRequest()?.foregroundUpdate) {
+      // Only a foreground updater's first SIGTERM can carry another restart intent.
+      // Ordinary shutdown owns the sealed store; in-place restart stops directly.
+      request("stop", "SIGTERM");
+      return;
+    }
+    observeSignal("SIGTERM");
     let suspendHandoff: ReturnType<typeof consumeGatewaySuspendHandoff> | undefined;
-    const duringShutdown = params.isShuttingDown();
-    if (!duringShutdown) {
-      try {
-        suspendHandoff = consumeGatewaySuspendHandoff(params.getExternalRestartOwner());
-      } catch (error) {
-        suspendHandoff = { ok: false, error: formatErrorMessage(error) };
-      }
+    try {
+      suspendHandoff = consumeGatewaySuspendHandoff(params.getExternalRestartOwner());
+    } catch (error) {
+      suspendHandoff = { ok: false, error: formatErrorMessage(error) };
     }
     enqueueSignal(
       true,
@@ -210,15 +228,7 @@ export function createGatewayRunSignals(params: {
         );
       },
       (err, acceptedAtMs) => {
-        if (duringShutdown && isGatewayStateProcessOwnerRetiredError(err)) {
-          // A closing iteration (e.g. an in-process restart) already released
-          // state; no restart intent can be read, and stopping is the outcome.
-          gatewayLog.info(
-            "received SIGTERM after shutdown released Gateway state; stopping without a restart intent",
-          );
-        } else {
-          gatewayLog.error(`failed to handle SIGTERM: ${String(err)}`);
-        }
+        gatewayLog.error(`failed to handle SIGTERM: ${String(err)}`);
         request("stop", "SIGTERM", undefined, undefined, undefined, {
           acceptedAtMs,
           suspendHandoff,
@@ -239,7 +249,10 @@ export function createGatewayRunSignals(params: {
       false,
       (_intent, acceptedAtMs) =>
         request("stop", "SIGINT", undefined, undefined, undefined, { acceptedAtMs }),
-      (error) => gatewayLog.error(`failed to handle SIGINT: ${formatErrorMessage(error)}`),
+      (error, acceptedAtMs) => {
+        gatewayLog.error(`failed to handle SIGINT: ${formatErrorMessage(error)}`);
+        request("stop", "SIGINT", undefined, undefined, undefined, { acceptedAtMs });
+      },
     );
   });
   const restartSignalFailed = (err: unknown, releaseToken = true) => {

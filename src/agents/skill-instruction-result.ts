@@ -42,6 +42,7 @@ export function getSkillInstructionFingerprint(result: unknown): string | undefi
 
 export type SkillInstructionResult = {
   name: string;
+  relativePath?: string;
   location: string;
   locationNote?: string;
   content: string;
@@ -49,6 +50,9 @@ export type SkillInstructionResult = {
 
 /** Keep model-facing context separate from the complete, unmodified instruction body. */
 export function formatSkillInstructions(result: SkillInstructionResult): string {
+  if (result.relativePath !== undefined) {
+    return result.content;
+  }
   const context = [
     `Skill location: ${result.location}`,
     "Resolve relative resource paths from the directory containing this SKILL.md.",

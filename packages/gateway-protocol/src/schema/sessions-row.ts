@@ -197,13 +197,13 @@ export const SessionRowSchema = Type.Object(
     lastActivityAt: Type.Optional(Type.Number()),
     lastInteractionAt: Type.Optional(Type.Number()),
     status: Type.Optional(SessionRunStatusSchema),
+    /** Running background exec processes; absent when none remain. */
+    backgroundProcessCount: Type.Optional(Type.Integer({ minimum: 1 })),
     lastRunError: Type.Optional(Type.String()),
     suppressErrorNotice: Type.Optional(Type.Boolean()),
     providerReview: Type.Optional(SessionProviderReviewProjectionSchema),
     /** Exact run that produced the latest terminal lifecycle projection. */
     lastRunId: Type.Optional(NonEmptyString),
-    restartRecoveryStatus: Type.Optional(Type.Literal("tombstoned")),
-    restartRecoveryCycleId: Type.Optional(NonEmptyString),
     activeLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.String()),
     parentSessionKey: Type.Optional(Type.String()),
@@ -267,7 +267,9 @@ export const SessionRowSchema = Type.Object(
       ]),
     ),
     /** Immutable presentation surface; independent of creation provenance. */
-    createdSurface: Type.Optional(Type.Literal("plugin-dock")),
+    createdSurface: Type.Optional(
+      Type.Union([Type.Literal("plugin-dock"), Type.Literal("github-publication")]),
+    ),
     createdActor: Type.Optional(SessionCreatedActorSchema),
     owner: Type.Optional(SessionOwnerSchema),
     participants: Type.Optional(
@@ -281,6 +283,8 @@ export const SessionRowSchema = Type.Object(
     sharingRole: Type.Optional(SessionSharingRoleSchema),
     /** Recipient-local send admission; null explicitly clears a previous restriction. */
     sendDisabledReason: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    /** Recipient-local workspace admission; null clears a previous read restriction. */
+    workspaceReadDisabledReason: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     createdAt: Type.Optional(Type.Number()),
     forkSource: Type.Optional(
       Type.Object({

@@ -2,47 +2,16 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isMissingPathError } from "../../infra/errors.js";
-import { createGitCommandError, requireGitCommandOutput } from "../../infra/git-exec.js";
+import { createGitCommandError } from "../../infra/git-exec.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { rawPathStat } from "./git-path-inventory.js";
 import type { GitWorktreeOperations } from "./git-worktree-operations.js";
+import { requireGit, requireGitBuffer, runGitBuffered } from "./git.js";
 import {
-  requireGit,
-  requireGitBuffer,
-  runGit,
-  runGitBuffered,
-  WORKTREE_CHECKOUT_TIMEOUT_MS,
-} from "./git.js";
-
-const log = createSubsystemLogger("agents/worktrees");
-
-async function missingCommitObjects(repoRoot: string, commit: string): Promise<string[]> {
-  const objects = (
-    await requireGitBuffer(
-      repoRoot,
-      ["rev-list", "--objects", "--missing=print", "--no-object-names", "--max-count=1", commit],
-      { env: { GIT_NO_LAZY_FETCH: "1" } },
-    )
-  ).toString("utf8");
-  return objects
-    .split("\n")
-    .filter((line) => line.startsWith("?"))
-    .map((line) => line.slice(1));
-}
-
-async function readOptionalGitConfig(repoRoot: string, args: string[]): Promise<string> {
-  const result = await runGit(repoRoot, ["config", ...args]);
-  return result.termination === "exit" && result.code === 1
-    ? ""
-    : requireGitCommandOutput(`git config ${args.join(" ")}`, result).trim();
-}
-
-function missingObjectsError(commit: string, count: number): Error {
-  return new Error(
-    `Repository is missing ${count} objects for ${commit}; fetch or repair the clone.`,
-  );
-}
+  hydrateCommitObjects,
+  missingCommitObjects,
+  missingObjectsError,
+} from "./object-hydration.js";
 
 async function resolveCommit(repoRoot: string, ref: string): Promise<string> {
   return await requireGit(repoRoot, [
@@ -51,51 +20,6 @@ async function resolveCommit(repoRoot: string, ref: string): Promise<string> {
     "--end-of-options",
     `${ref === "-" ? "@{-1}" : ref}^{commit}`,
   ]);
-}
-
-async function hydrateCommitObjects(
-  repoRoot: string,
-  commit: string,
-  knownMissing?: string[],
-): Promise<void> {
-  const missing = knownMissing ?? (await missingCommitObjects(repoRoot, commit));
-  if (missing.length > 0) {
-    const remote =
-      (await readOptionalGitConfig(repoRoot, ["--get", "extensions.partialclone"])) ||
-      /^remote\.(.+)\.promisor true$/m.exec(
-        await readOptionalGitConfig(repoRoot, [
-          "--bool",
-          "--get-regexp",
-          "^remote\\..*\\.promisor$",
-        ]),
-      )?.[1];
-    if (!remote) {
-      throw missingObjectsError(commit, missing.length);
-    }
-    // Hydrate once under the checkout budget; objectsize must never fetch one blob at a time.
-    // Shared commits do not prove that their promised blobs are present.
-    // --refetch hints auto-maintenance to repack (gc.autoPackLimit=1); that repack must
-    // never run inside the allocation lease.
-    await requireGit(
-      repoRoot,
-      [
-        "fetch",
-        "--refetch",
-        "--no-auto-maintenance",
-        remote,
-        "--no-tags",
-        "--no-write-fetch-head",
-        "--recurse-submodules=no",
-        "--stdin",
-      ],
-      { input: Buffer.from(`${missing.join("\n")}\n`), timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS },
-    ).catch((error: unknown) => {
-      log.warn(
-        `worktree prefetch failed: ${missing.length} missing objects for ${commit}; check the promisor remote.`,
-      );
-      throw error;
-    });
-  }
 }
 
 function allocatedBlobBytes(size: string): number {

@@ -28,9 +28,8 @@ export function deriveGatewaySessionLifecycleProjectionPatch(params: {
   event: LifecycleEventLike;
 }): ReturnType<typeof deriveGatewaySessionLifecycleSnapshot> {
   const {
-    restartRecoveryRuns: _restartRecoveryRuns,
-    restartRecoveryForceSafeTools: _restartRecoveryForceSafeTools,
     lifecycleRunId: _lifecycleRunId,
+    lifecycleRestartScope: _lifecycleRestartScope,
     ...patch
   } = derivePersistedSessionLifecyclePatch({
     ...params,

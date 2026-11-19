@@ -2,7 +2,8 @@ import type { JSX as SolidJSX } from "@solidjs/web";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import type { ChatMessageGetResult } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionFileDownload } from "../../../api/session-file-download.ts";
-import type { SessionWorkspaceListResult } from "../../../api/types.ts";
+import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../../../api/types.ts";
+import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import type {
@@ -68,6 +69,8 @@ export type TranscriptAttachmentEntry = {
   key: string;
   label: string;
   mimeType?: string;
+  /** Timestamp of the message that carried the media, when the transcript recorded one. */
+  timestamp?: number;
   options: ImageRenderOptions;
   onOpenSidebar: (content: SidebarContent) => void;
 } & ({ kind: "image"; image: ImageBlock } | { kind: "attachment"; item: AssistantAttachmentItem });
@@ -93,7 +96,7 @@ export type SessionDiffScope =
 
 type SessionDiffLoader = (
   params: SessionDiffScope,
-  options?: { refresh?: boolean },
+  options?: { refresh?: boolean; summaryOnly?: boolean },
 ) => Promise<SessionsDiffResult>;
 
 type SessionDiffFileTextLoader = (path: string) => Promise<string | null>;
@@ -304,6 +307,8 @@ export type FileSidebarContent = {
   content: string;
   download?: (signal: AbortSignal) => Promise<FileReaderDownload | null>;
   sessionFileSource?: SessionFileSource;
+  /** Captured read identity, separate from the request fields used by HTML asset reads. */
+  workspaceSource?: SessionWorkspaceGetResult["source"];
   /** Stable per-session identity used to retain an unsaved in-memory draft. */
   draftKey?: string;
   /** Captured display context; the draft key is opaque and never a UI label. */
@@ -316,6 +321,11 @@ export type FileSidebarContent = {
   navigation?: FileSidebarNavigation;
   rawText?: string | null;
   edit?: FileSidebarEdit;
+};
+
+export type WorkspaceFileLinkTarget = MarkdownFileLinkTarget & {
+  /** Retained document context; never serialized into rendered Markdown or a Gateway request. */
+  relativeTo?: FileSidebarContent;
 };
 
 export type ToolOutputSidebarContent = {
@@ -334,6 +344,13 @@ type McpAppSidebarContent = {
 };
 
 export type SidebarContent =
+  | {
+      kind: "mcp-app-preview";
+      title: string;
+      view: import("../../../components/mcp-app-view-types.ts").McpAppViewElement;
+      appIdentity?: import("../../../../../src/shared/mcp-app-extensions.js").McpAppIdentity;
+      rawText?: null;
+    }
   | McpAppSidebarContent
   | ToolOutputSidebarContent
   | MarkdownSidebarContent
@@ -350,7 +367,7 @@ export type SidebarSelection = (
   | { kind: "loading" }
   // Keep failed opens attached to their selected surface instead of falling back
   // to unrelated content.
-  | { kind: "unavailable"; message: string }
+  | { kind: "unavailable"; message: string; permission?: true }
 ) & {
   fileTab?: { id: string; label: string; disposition?: "pinned" | "preview"; intent?: "navigate" };
 };

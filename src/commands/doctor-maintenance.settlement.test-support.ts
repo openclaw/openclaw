@@ -1,4 +1,5 @@
 import * as childProcess from "node:child_process";
+import path from "node:path";
 import { promisify as promisifyCaptured } from "node:util";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -8,10 +9,11 @@ import type {
   revalidateManagedGatewayServiceAfterUpdate,
 } from "../cli/update-cli/update-command-service-maintenance.js";
 import type { GatewayService, readGatewayServiceState } from "../daemon/service.js";
+import * as bootReader from "../infra/update-managed-service-handoff-boot.js";
 import type { recordUpdateRunStep, finishUpdateRun } from "../infra/update-run-ledger.js";
 import { resolveCommandProcessSignal, retainCommandProcessCleanup } from "../process/exec-spawn.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { readActiveOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease.js";
+import type { readActiveOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease-inspection.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 
 const boundary = vi.hoisted(() => ({
@@ -100,6 +102,13 @@ vi.mock("../infra/update-run-activity.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-run-activity.js")>()),
   inspectUpdateRepairDriverAdmission: boundary.admission,
 }));
+vi.mock("../infra/update-managed-service-handoff-boot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-managed-service-handoff-boot.js")>()),
+  createManagedHandoffBootIdentityReader: () => () => ({
+    platform: "darwin",
+    identity: "01234567-89ab-cdef-0123-456789abcdef",
+  }),
+}));
 vi.mock("../utils/sleep.js", () => ({ sleep: boundary.sleep }));
 vi.mock("node:timers/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:timers/promises")>()),
@@ -137,8 +146,8 @@ vi.mock("../state/openclaw-state-maintenance-context.js", async (importOriginal)
   ...(await importOriginal<typeof import("../state/openclaw-state-maintenance-context.js")>()),
   admitOpenClawMaintenanceLiveAuthorityReads: () => {},
 }));
-vi.mock("../state/openclaw-agent-db-lease.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../state/openclaw-agent-db-lease.js")>()),
+vi.mock("../state/openclaw-agent-db-lease-inspection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-agent-db-lease-inspection.js")>()),
   assertNoOpenClawAgentDatabaseLeasesReadOnly: boundary.lease,
   readActiveOpenClawAgentDatabaseLeasesReadOnly: boundary.readLeases,
 }));
@@ -206,11 +215,15 @@ const nativeFunctions = [
 let stopped: PreManagedServiceStop;
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
+    platform: "linux",
+    identity: "01234567-89ab-cdef-0123-456789abcdef",
+  }));
   for (const native of nativeFunctions) {
     vi.mocked(native).mockImplementation(boundary.native);
   }
   boundary.external.mockReturnValue(false);
-  boundary.readLeases.mockReturnValue([]);
+  boundary.readLeases.mockResolvedValue([]);
   boundary.schemas.mockResolvedValue({ indeterminate: [] });
   boundary.scopeAssert = undefined;
   boundary.admission.mockReturnValue({ kind: "recovery", runs: [] });
@@ -226,13 +239,15 @@ beforeEach(() => {
     },
   }));
   vi.stubEnv("OPENCLAW_PROFILE", "default");
-  vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/doctor-state");
-  vi.stubEnv("OPENCLAW_CONFIG_PATH", "/synthetic/doctor-state/openclaw.json");
+  const stateDir = tempDirs.make("doctor-settlement-state-");
+  const configPath = path.join(stateDir, "openclaw.json");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
   vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
   vi.spyOn(process, "kill").mockImplementation(boundary.native);
   const serviceEnv = {
-    OPENCLAW_STATE_DIR: "/synthetic/doctor-state",
-    OPENCLAW_CONFIG_PATH: "/synthetic/doctor-state/openclaw.json",
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: configPath,
   };
   const verdict = {
     kind: "owned" as const,

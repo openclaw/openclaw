@@ -1,10 +1,10 @@
 import type { ControlUiViewContext } from "openclaw/plugin-sdk/control-ui";
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
-import type { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
 import type { loadVocabulary } from "./inspection-client.js";
 import { locationKey, type KnowledgeLocation } from "./page-location.js";
 
-type StoresSnapshot = FeatureOutput<typeof contract, "stores_snapshot">;
+type StoresSnapshot = FeatureOutput<FullOutputContract, "stores_snapshot">;
 export type RecentCursor = { upperSequence: number; beforeSequence: number } | undefined;
 
 /** Mutable state of one mounted Knowledge page, shared by its view modules. */
@@ -18,7 +18,7 @@ export type PageState = {
   routeKey: string;
   scopeChecked: boolean;
   scopeMismatch: boolean;
-  storeState: FeatureOutput<typeof contract, "status">["store"];
+  storeState: FeatureOutput<FullOutputContract, "status">["store"];
   storeMessage: string | undefined;
   tab: KnowledgeLocation["tab"];
   selectedId: string;
@@ -57,6 +57,10 @@ export type PageState = {
   timer: ReturnType<typeof setTimeout> | undefined;
   suggestGeneration: number;
   vocabulary: Awaited<ReturnType<typeof loadVocabulary>> | undefined;
+  /** Agent whose Scribes tab count is shown; another agent's count is read again. */
+  scribesCountAgent: string;
+  /** Last committed content of recently left views, keyed by view key, shown again on return. */
+  retainedViews: Map<string, Node[]>;
   refreshing: boolean;
   refreshAgain: boolean;
   pendingReplaceLocation: boolean;
@@ -115,6 +119,8 @@ export function createPageState(
     timer: undefined,
     suggestGeneration: 0,
     vocabulary: undefined,
+    scribesCountAgent: "",
+    retainedViews: new Map(),
     refreshing: false,
     refreshAgain: false,
     pendingReplaceLocation: true,

@@ -17,7 +17,10 @@ import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store
 import { withEnvAsync } from "../test-utils/env.js";
 import { createDoctorPluginMigrationPreparation } from "./doctor-config-preflight-plugin-migrations.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
-import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import {
+  trackDoctorPreflightCache,
+  useDoctorConfigPreflightHome,
+} from "./doctor-config-preflight.test-support.js";
 import { prepareLegacyConfigMigrationRuntime } from "./doctor/shared/legacy-config-migrate.test-support.js";
 import { inspectPluginMigrationAvailability } from "./doctor/shared/plugin-migration-availability.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
@@ -276,12 +279,20 @@ describe("unavailable plugin migration owners", () => {
           entries: { webhooks: { config: {} }, "disabled-fixture": { enabled: false, config: {} } },
         },
       });
-      await defer(...pluginIds.map((id) => makePending(id, { configPaths: protectedConfig(id) })));
+      await defer(
+        ...pluginIds.map((id) =>
+          makePending(id, {
+            configPaths: protectedConfig(id),
+            ...(id === "absent-fixture" ? { requiresDoctorInspection: true } : {}),
+            ...(id === "disabled-fixture" ? { requiresStateMigration: true } : {}),
+          }),
+        ),
+      );
       // Startup is a reader; Doctor owns settlement of this shipped pending row.
-      await runStartupConfigPreflight({ gateway: true, observe: false });
+      trackDoctorPreflightCache(await runStartupConfigPreflight({ gateway: true, observe: false }));
       expect(readDeferredPluginMigrations()).toHaveLength(3);
       for (let run = 0; run < 2; run++) {
-        const repaired = await runDoctorConfigPreflight(options);
+        const repaired = trackDoctorPreflightCache(await runDoctorConfigPreflight(options));
         expect(readDeferredPluginMigrations()).toEqual([]);
         expect(repaired.deferredPluginMigrations).toBeUndefined();
         expect(
@@ -291,12 +302,14 @@ describe("unavailable plugin migration owners", () => {
               receipt.outcome === "deferred",
           ) ?? [],
         ).toEqual([]);
-        await runStartupConfigPreflight({ gateway: true, observe: false });
+        trackDoctorPreflightCache(
+          await runStartupConfigPreflight({ gateway: true, observe: false }),
+        );
         expect(readDeferredPluginMigrations()).toEqual([]);
       }
       for (const pluginId of pluginIds) {
         expect(await readReceipt(home, pluginId)).toMatchObject({
-          status: "completed",
+          status: pluginId === "webhooks" ? "completed" : "deferred",
           report: { reason: expect.stringContaining("no protected config") },
         });
       }
@@ -327,7 +340,7 @@ describe("unavailable plugin migration owners", () => {
               entries: { [pluginId]: { enabled: true, config: { retained: "authored" } } },
             },
           });
-          const result = await runDoctorConfigPreflight(options);
+          const result = trackDoctorPreflightCache(await runDoctorConfigPreflight(options));
           const pending = readDeferredPluginMigrations().find(
             (entry) => entry.pluginId === pluginId,
           );
@@ -364,7 +377,7 @@ describe("unavailable plugin migration owners", () => {
       });
       await defer(makePending(pluginId, { configPaths: protectedConfig(pluginId) }));
       {
-        const result = await runDoctorConfigPreflight(options);
+        const result = trackDoctorPreflightCache(await runDoctorConfigPreflight(options));
         expect(readDeferredPluginMigrations()).toEqual([expect.objectContaining({ pluginId })]);
         expect(result.snapshot.sourceConfig.plugins?.entries?.[pluginId]?.config).toEqual(config);
         expect(result.stateMigrationStepReceipts).toContainEqual(

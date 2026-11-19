@@ -88,7 +88,6 @@ it("cleanup wakes the registered source runner only after its operation clears",
     ).toBe(true);
     await cleanupReplyAgentRun({
       blockReplyPipeline: null,
-      clearRestartRecoveryDeliveryClaim: async () => {},
       providedReplyOperation: operation,
       replyOperation: operation,
       queueKey: key,

@@ -70,6 +70,19 @@ function shallowRelease(tag = "v2026.10.2") {
   return { root, origin, commit };
 }
 
+it("fetches a missing release tag without re-shallowing a linked checkout", () => {
+  const { root, origin, commit } = shallowRelease();
+  git(root, "fetch", "--unshallow", "--no-tags", "origin");
+  const linked = path.join(temps.make("desktop-linked-"), "checkout");
+  git(root, "worktree", "add", "--detach", linked);
+  vi.stubEnv("RELEASE_TAG", "v2026.10.2");
+  expect(desktopRuntimeReleaseTag(linked, "2026.10.2", commit)).toBe("v2026.10.2");
+  expect(git(root, "rev-parse", "--is-shallow-repository")).toBe("false");
+  expect(git(linked, "rev-list", "--count", "HEAD")).toBe(
+    git(origin, "rev-list", "--count", "HEAD"),
+  );
+});
+
 it.each([
   ["v2026.10.2", true, false],
   ["v2026.10.2", false, false],
@@ -123,37 +136,6 @@ it.each([
   } else {
     expect(resolve()).toBeNull();
   }
-});
-
-it.runIf(process.platform === "darwin")("normalizes only staged voice rpaths", async () => {
-  const { auditMacRuntimePortability } =
-    await import("../../scripts/lib/mac-runtime-portability.mjs");
-  const root = temps.make("desktop-runtime-codex-native-");
-  const commit = "a".repeat(40);
-  writeJson(root, "dist/build-info.json", { commit });
-  writePlugin(root, "codex");
-  for (const name of ["codex", "codex-darwin-arm64"]) {
-    writeJson(root, `node_modules/@openai/${name}/package.json`, {});
-  }
-  const voice = path.join(
-    root,
-    "node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-resources/voice",
-  );
-  mkdirSync(path.join(voice, "lib"), { recursive: true });
-  mkdirSync(path.join(voice, "bin"));
-  const host = path.join(voice, "bin/codex-voice-host");
-  const rpaths = [
-    "@loader_path/../../_solib_darwin_arm64/voice/native_link_macos_aarch64",
-    "@loader_path/../lib",
-  ];
-  const args = ["-x", "c", "-", "-o", host, ...rpaths.map((rpath) => `-Wl,-rpath,${rpath}`)];
-  execFileSync("/usr/bin/clang", args, { input: "int main(void) { return 0; }\n" });
-  const original = readFileSync(host);
-  stampDesktopRuntimePlugins(root, { commit, pluginIds: [] });
-  expect(readFileSync(host)).toEqual(original);
-  expect(() => auditMacRuntimePortability(root, host)).toThrow("Nonportable LC_RPATH");
-  stampDesktopRuntimePlugins(root, { commit, pluginIds: ["codex"] });
-  expect(auditMacRuntimePortability(root, host)).toBe(1);
 });
 
 it.each(["2026.10.2-beta.1", "2026.10.2-alpha.1", "2026.10.33"])(

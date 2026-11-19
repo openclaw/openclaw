@@ -58,7 +58,7 @@ describe("native session-only preparation admission", () => {
     expect(mocks.closeAdmission).toHaveBeenCalledOnce();
   });
   it("closes admission when source authority disappears during credential preparation", async () => {
-    const pending = createDeferred<undefined>();
+    const pending = createDeferred<{ version: 1; profiles: Record<string, never> }>();
     const reached = createDeferred();
     mocks.credentials.mockImplementation(() => {
       reached.resolve();
@@ -76,8 +76,8 @@ describe("native session-only preparation admission", () => {
     });
     await reached.promise;
     active = false;
-    pending.resolve(undefined);
-    await expect(run).rejects.toThrow();
+    pending.resolve({ version: 1, profiles: {} });
+    await expect(run).rejects.toThrow("revoked");
     expect(mocks.createHost).not.toHaveBeenCalled();
     expect(mocks.closeAdmission).toHaveBeenCalledOnce();
   });

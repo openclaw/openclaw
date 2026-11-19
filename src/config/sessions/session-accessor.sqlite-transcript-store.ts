@@ -55,8 +55,8 @@ import {
   writableSessionActorMap,
   writableSessionActorNavigation,
 } from "./session-actor-transaction.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { PriorWorkspaceRewriteRows } from "./session-prior-workspace-boundary.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import type { TranscriptWindowUpdate } from "./session-transcript-index-postgres.js";
 import {
   createTranscriptIndexAppenderInTransaction,
@@ -69,11 +69,7 @@ import { hasTranscriptMessage } from "./session-transcript-projection-append.js"
 import { scheduleTranscriptProjectionReconcile } from "./session-transcript-reconcile.js";
 import { canonicalizeTranscriptEventMedia } from "./transcript-event-media.js";
 import { projectTranscriptNavigationFields } from "./transcript-navigation-fields.js";
-import {
-  createTranscriptEventInserter,
-  prepareTranscriptPayloadForReuse,
-  transcriptSerializedBytes,
-} from "./transcript-payload.js";
+import { createTranscriptEventInserter, transcriptSerializedBytes } from "./transcript-payload.js";
 
 export {
   rewriteSqliteTranscriptEventRowsInTransaction,
@@ -151,6 +147,7 @@ export function appendTranscriptEventInTransaction(
             throw new SessionTranscriptColdError(scope.sessionId);
           }
           cursor.nextSeq = initial.nextSeq;
+          cursor.generation = initial.generation ?? undefined;
           cursor.appendToIndex = createTranscriptIndexAppenderInTransaction(
             database.db,
             scope.sessionId,
@@ -218,12 +215,8 @@ export function appendTranscriptEventInTransaction(
           parsedEvent: options.eventJson === undefined ? undefined : persistedEvent,
           preparedPayload: options.preparedPayload,
         };
+        row.preparedPayload = insertEvent.prepare(row);
         if (batch) {
-          row.preparedPayload ??= prepareTranscriptPayloadForReuse(
-            database.db,
-            eventJson,
-            persistedEvent,
-          );
           batch.events.push(row);
           batch.bytes += serializedBytes;
         } else {
@@ -258,6 +251,8 @@ export function appendTranscriptEventInTransaction(
           scope.sessionId,
         );
         projectionNeedsRebuild = cursor.appendToIndex.append({
+          preparedPayload: row.preparedPayload,
+          serializedBytes,
           seq,
           event: persistedEvent,
           eventId: identity?.eventId ?? null,
@@ -554,7 +549,13 @@ export function replaceSqliteTranscriptEventsInTransaction(
           const eventJson = withoutSqliteDatabaseWriteScope(database.db, () =>
             JSON.stringify(persistedEvent),
           );
-          insertEvent({ seq, eventJson, createdAt });
+          const payload = insertEvent.prepare({
+            seq,
+            eventJson,
+            createdAt,
+            parsedEvent: persistedEvent,
+          });
+          insertEvent({ seq, eventJson, createdAt, preparedPayload: payload });
           if (priorWorkspace) {
             nextIdentities.push({
               id: identity?.eventId ?? null,
@@ -564,6 +565,8 @@ export function replaceSqliteTranscriptEventsInTransaction(
           }
           options.writtenRows?.push({ seq, eventJson });
           appendToIndex.append({
+            preparedPayload: payload,
+            serializedBytes: transcriptSerializedBytes(database.db, eventJson),
             seq,
             event: persistedEvent,
             eventId: identity?.eventId ?? null,

@@ -244,7 +244,7 @@ describe("verifyTelnyxWebhook", () => {
     const urlSafeSignature = request.signature
       .replace(/\+/g, "-")
       .replace(/\//g, "_")
-      .replace(/=+$/g, "");
+      .replace(/[=]+$/g, "");
     expectReplay(request.verify(), request.verify(urlSafeSignature));
   });
 });

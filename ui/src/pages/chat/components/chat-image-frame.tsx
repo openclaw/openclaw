@@ -4,8 +4,10 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { ChatImageActions } from "./chat-image-actions.tsx";
 import { imageTitle } from "./chat-image-presentation.ts";
 import {
+  fitChatImagePreview,
   MIN_CHAT_IMAGE_PREVIEW_WIDTH,
   resolveChatImagePreviewSize,
+  type ChatImagePreviewSize,
 } from "./chat-image-preview-size.ts";
 import {
   AssistantAttachmentStatusCard,
@@ -35,6 +37,7 @@ export function ImageFrame(props: {
     renderPreviewElement: (image: ImageBlock, url: string, title: string) => HTMLImageElement;
   };
   options: ImageRenderOptions;
+  previewBounds?: ChatImagePreviewSize;
 }): JSX.Element {
   const image = () => props.model.image;
   const title = () => imageTitle(image());
@@ -47,9 +50,12 @@ export function ImageFrame(props: {
     !props.model.originalUnavailable &&
     (props.model.managed || (compact() && isLocalAssistantAttachmentSource(image().url ?? "")));
   // Decode and upload receipts replace the temporary fallback without remounting the image.
-  const dimensions = createMemo(
-    () => props.model.previewSize ?? resolveChatImagePreviewSize(image()),
-  );
+  const dimensions = createMemo(() => {
+    const size = props.model.previewSize ?? resolveChatImagePreviewSize(image());
+    return !compact() && props.previewBounds
+      ? fitChatImagePreview(size, props.previewBounds)
+      : size;
+  });
   const smallPreview = () => !compact() && (dimensions().width < 80 || dimensions().height < 32);
   return (
     <span
@@ -88,10 +94,17 @@ export function ImageFrame(props: {
             type="button"
             class="chat-message-image-button"
             aria-label={t("chat.imageLightbox.open", { title: title() })}
-            aria-disabled={props.model.previewUrl ? undefined : "true"}
+            aria-disabled={
+              props.options.mediaReadAllowed !== false && props.model.previewUrl
+                ? undefined
+                : "true"
+            }
             onFocus={() => props.presentation.admit()}
             onClick={(event) => {
               event.stopPropagation();
+              if (props.options.mediaReadAllowed === false) {
+                return;
+              }
               if (props.model.previewUrl) {
                 openMessageImage(image(), props.model.previewUrl, props.options);
               } else {
@@ -110,6 +123,7 @@ export function ImageFrame(props: {
       </Show>
       <Show when={!pending() && hasFileActions()}>
         <ChatImageActions
+          disabled={props.options.mediaReadAllowed === false}
           title={title()}
           readOriginalBlob={loadOriginal}
           overlay={!compact() && !smallPreview()}
