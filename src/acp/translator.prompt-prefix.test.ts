@@ -95,23 +95,29 @@ describe("acp prompt metadata", () => {
     expect(retry.systemProvenanceReceipt).toBeUndefined();
   });
 
-  it("subscribes to session messages before a deliver prompt and releases them on close", async () => {
+  it("subscribes once per connection before deliver prompts and releases on close", async () => {
     const { agent, request } = fixture();
-    for (const deliver of [false, true]) {
-      await expect(
-        agent.prompt(createPromptRequest(sessionId, "hello", { deliver })),
-      ).rejects.toThrow("stop-after-send");
-    }
+    const send = async (deliver: boolean) =>
+      expect(agent.prompt(createPromptRequest(sessionId, "hello", { deliver }))).rejects.toThrow(
+        "stop-after-send",
+      );
+    await send(false);
+    await send(true);
+    await send(true);
+    // A new Gateway connection starts without the old connection's subscriptions.
+    agent.handleGatewayDisconnect("1006: test");
+    agent.handleGatewayReconnect();
+    await send(true);
     await agent.closeSession({ sessionId });
     const subscription = { key: sessionKey, subscriptionId: `acp:${sessionId}` };
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "chat.send",
-      "sessions.messages.subscribe",
-      "chat.send",
-      "sessions.messages.unsubscribe",
+    expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual([
+      ["chat.send", expect.objectContaining({ deliver: false })],
+      ["sessions.messages.subscribe", subscription],
+      ["chat.send", expect.objectContaining({ deliver: true })],
+      ["chat.send", expect.objectContaining({ deliver: true })],
+      ["sessions.messages.subscribe", subscription],
+      ["chat.send", expect.objectContaining({ deliver: true })],
+      ["sessions.messages.unsubscribe", subscription],
     ]);
-    expect(request.mock.calls[1]?.[1]).toEqual(subscription);
-    expect(payload(request, 2).deliver).toBe(true);
-    expect(request.mock.calls[3]?.[1]).toEqual(subscription);
   });
 });

@@ -69,7 +69,7 @@ export class AcpTranslatorPromptStream {
   private readonly pendingPrompts = new Map<string, AcpPendingPrompt>();
   private readonly pendingPromptAdmissions = new Map<string, AcpPendingPromptAdmission>();
   private readonly settlingPromptKeys = new Set<string>();
-  /** Session key of each ACP session whose messages this bridge subscribed. */
+  /** Session key each ACP session subscribed on the current Gateway connection. */
   private readonly messageSubscriptions = new Map<string, string>();
   private readonly agentEvents: AcpTranslatorAgentEvents;
   private readonly disconnects: AcpTranslatorDisconnects;
@@ -134,6 +134,8 @@ export class AcpTranslatorPromptStream {
   }
 
   handleGatewayDisconnect(reason: string): void {
+    // The Gateway drops a connection's subscriptions when it closes.
+    this.messageSubscriptions.clear();
     this.disconnects.handleGatewayDisconnect(reason);
   }
 
@@ -306,12 +308,11 @@ export class AcpTranslatorPromptStream {
       }
 
       const deliver = readBool(params["_meta"], ["deliver"]);
-      if (deliver) {
+      if (deliver && this.messageSubscriptions.get(session.sessionId) !== session.sessionKey) {
         // Runs that deliver to an external channel are hidden from operator
         // broadcasts; the Gateway streams them only to session message
-        // subscribers. Subscribing per prompt re-subscribes the next prompt
-        // after a Gateway reconnect; a run in flight across a reconnect still
-        // settles through disconnect recovery but loses its live text.
+        // subscribers. A run in flight across a reconnect still settles
+        // through disconnect recovery but loses its live text.
         await this.gateway.request("sessions.messages.subscribe", {
           key: session.sessionKey,
           subscriptionId: `acp:${session.sessionId}`,
