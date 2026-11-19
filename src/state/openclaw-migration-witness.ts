@@ -23,14 +23,16 @@ import {
   MEDIA_ROWS_MIGRATION_META_KEY,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db-contract.js";
+import {
+  assertOpenClawAgentSchemaContains,
+  getOpenClawAgentMigrationSchema,
+} from "./openclaw-agent-db-schema-helpers.js";
 import { AGENT_JSON_PREDICATE_COLUMNS } from "./openclaw-agent-json-predicate-schema.js";
 import { LEGACY_MEMORY_REVISION_TRIGGER_NAMES } from "./openclaw-agent-memory-revision-migration.js";
 import { withoutOutboxEnqueueSequence } from "./openclaw-agent-outbox-sequence-migration.js";
 import { assertMigrationWitnessRegistryPreserved } from "./openclaw-migration-witness-registry.js";
 import {
   AGENT_WITNESS_SCHEMA_VERSIONS,
-  assertAgentWitnessHistoricalSchema,
-  isJump13AuthorityWitness,
   omitAddedRecipientAuthority,
   RECIPIENT_AUTHORITY_TABLE,
 } from "./openclaw-migration-witness.continuation.js";
@@ -110,8 +112,7 @@ function parseOpenClawMigrationWitness(value: unknown): OpenClawMigrationWitness
           "transcript_events",
           "session_key_contract",
           "session_canonical_validation_pending",
-          ...(witness.schemaVersion >= AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION &&
-          !isJump13AuthorityWitness(witness)
+          ...(witness.schemaVersion >= AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION
             ? ["session_transcript_active_event_facts"]
             : []),
           ...(witness.schemaVersion >= AGENT_CREATION_OPERATIONS_SCHEMA_VERSION
@@ -132,7 +133,6 @@ function parseOpenClawMigrationWitness(value: unknown): OpenClawMigrationWitness
 
 // Schemas 25 and 26 change these derived facts only. persistAgentSchemaMetadata also
 // publishes the target app version and timestamp; payload and creation time stay exact.
-
 function migrationColumn(role: OpenClawMigrationWitness["role"], table: string, column: string) {
   return !(
     role === "agent" &&
@@ -395,8 +395,6 @@ export function captureOpenClawMigrationWitness(
         .select("application_id"),
     )?.application_id;
     const schemaVersion = role === "global" ? readStateSchemaContentVersion(database) : userVersion;
-    // Schema 24 and the fleet's schema 25 still carry the legacy validation triggers.
-    let legacyValidationTriggers = role === "agent" && schemaVersion === 24;
     if (owner) {
       const metadata = executeSqliteQueryTakeFirstSync(
         database,
@@ -417,9 +415,11 @@ export function captureOpenClawMigrationWitness(
         if (!AGENT_WITNESS_SCHEMA_VERSIONS.has(schemaVersion)) {
           throw new Error(`Unsupported agent migration witness schema: ${schemaVersion}`);
         }
-        // Assert first: `||=` would skip the schema check whenever schema 24 already set the flag.
-        legacyValidationTriggers =
-          assertAgentWitnessHistoricalSchema(database, schemaVersion) || legacyValidationTriggers;
+        assertOpenClawAgentSchemaContains(
+          database,
+          "migration witness",
+          getOpenClawAgentMigrationSchema(schemaVersion),
+        );
       } else {
         if (schemaVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
           throw new Error(`Unsupported shared-state migration witness schema: ${schemaVersion}`);
@@ -507,7 +507,7 @@ export function captureOpenClawMigrationWitness(
       const indexKey = `${object.tbl_name}.${object.name}`;
       if (
         role === "agent" &&
-        ((legacyValidationTriggers &&
+        ((schemaVersion === 24 &&
           object.type === "trigger" &&
           LEGACY_CANONICAL_VALIDATION_TRIGGER_NAMES.includes(object.name)) ||
           (schemaVersion < AGENT_MEMORY_REVISION_SCHEMA_VERSION &&
@@ -719,7 +719,7 @@ export function assertOpenClawMigrationWitnessPreserved(
     }
     currentTables.delete(table.name);
   }
-  omitAddedRecipientAuthority(currentTables, crossing, original);
+  omitAddedRecipientAuthority(currentTables, crossing);
   if (currentTables.size > 0) {
     throw new Error("Migration added unclassified database content");
   }

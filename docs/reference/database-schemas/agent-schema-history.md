@@ -446,73 +446,17 @@ returns, on top of upstream's schema 41. The generation survives session materia
 and deletion; the table has no `session_nodes` foreign key because deletion is one of
 its generation edges.
 
-The existing startup/Doctor schema owner creates the table in the same transaction
-that advances both schema markers. Some databases written before schema 42 already
-carry the table; creation is idempotent and retains their rows. Some earlier
-databases also stored the epoch inside `session_nodes.entry_json`; the migration
-imports only valid UUID-v4 values and removes the field from valid JSON. Invalid
-values never create authority, and malformed Doctor-owned session entries remain
-unchanged for Doctor repair. Transcript bytes, retention, and permissions are
-unchanged.
+The existing startup/Doctor schema owner checks a database against its own version's
+upstream schema, runs upstream's remaining steps, and then creates the table in the same
+transaction that advances both schema markers. Some earlier databases stored the epoch
+inside `session_nodes.entry_json`; the migration imports only valid UUID-v4 values and
+removes the field from valid JSON. Invalid values never create authority, and malformed
+Doctor-owned session entries remain unchanged for Doctor repair. Transcript bytes,
+retention, and permissions are unchanged. Doctor's declared backup scope for the step is
+the new table alone.
 
 Older builds refuse schema 42; rollback requires the pre-upgrade database backup and
-matching build, not lower version markers. A continuation lane build briefly numbered
-this step 27; those unreleased databases are not recognised (upstream's schema 27 is
-the outbox sequence) and must be recreated or restored from their pre-upgrade backup.
-Earlier continuation candidates numbered this step 32, then 35, then 36, then 38, then
-39, then 40, then 41; upstream's 32–36 and 38 now name PostgreSQL-only steps, upstream's 39
-widens the transcript payload CHECK, upstream's 40 adds `session_creation_operations`, and
-upstream's 41 adds `session_transcript_active_event_facts`. On
-SQLite a database at one of the candidate numbers below 38 is upstream's same-numbered
-schema plus this table, because those upstream steps advance SQLite metadata only, so
-upstream's later steps run (below 37 the schema-37 step adds the empty cold-archive chunk
-table) and the idempotent authority step admits the database and keeps its rows. The 39
-candidate is upstream's 38 plus this table, and the 40 candidate is upstream's 39 plus
-this table; neither is admitted. The 41 candidate is classified by the bridge below. A
-PostgreSQL agent database at any candidate's number, including the 41 candidate's, fails
-closed before upstream's next step; restore it from its pre-upgrade backup or re-port it
-from SQLite.
-
-Some fleet databases carry this table under earlier version markers, because the
-fleet received recipient authority as an unreleased schema 25 and then 26:
-
-- The fleet's schema 25 kept the legacy entry-validity and canonical-pending triggers
-  instead of upstream's schema 25. The schema 42 owner tells the two schema-25 shapes
-  apart by their physical schema (authority table plus legacy triggers, or neither).
-  For the fleet shape it runs the canonical-writer validation, JSON predicate, upstream's
-  schema 27–41 steps, and the idempotent authority migration in one transaction.
-- The fleet's schema 26 is upstream's schema 25 plus the authority table, without
-  upstream's schema-26 JSON predicate columns. The owner tells the two schema-26 shapes
-  apart by the authority table and the predicate columns on `session_nodes` and
-  `transcript_events` (all or none). For the fleet shape it runs the JSON predicate
-  backfill and upstream's schema 27–41 steps and keeps the authority rows; for upstream's
-  shape it runs the same upstream steps and adds the table.
-
-<!-- Frond (karmaterminal): fleet-38 bridge. Fork-only; omitted from the upstream presentation. -->
-
-The deployed fleet's schema 38 is upstream's schema 38 plus the authority table, and the
-jump-13 candidate's schema 41 is upstream's schema 40 plus the authority table (it numbered
-this step 41 before upstream's 41 added active event facts). Before a migration reaches
-schema 42, a fork-only bridge classifies a database stamped 38, 39, 40 or 41 by the
-authority table, the `session_creation_operations` and
-`session_transcript_active_event_facts` tables, and the transcript payload CHECK; the
-version number alone never admits a shape. It admits upstream's own 38–41, the fleet's 38
-(authority table, prior CHECK, no creation receipts or active event facts) and the jump-13
-41 (authority table, widened CHECK, creation receipts, no active event facts). For the
-fleet's 38 the owner runs upstream's schema-39, schema-40 and schema-41 steps and the
-idempotent authority step in one transaction and stamps 42; for the jump-13 41 it runs
-upstream's schema-41 step and the idempotent authority step and stamps 42. Both keep the
-authority table and its rows. Doctor backs up `transcript_events`,
-`session_creation_operations`, `session_transcript_active_event_facts` and the authority
-table first for the fleet's 38, and keeps a full image for the jump-13 41, whose crossing of
-upstream's step 41 under a 41 marker has no declared backup scope. Every other shape is
-refused before any write, including a 38 with the widened CHECK, creation receipts or
-active event facts, a 39 with the authority table, a 40 with the authority table or without
-creation receipts, and a 41 with both the authority table and active event facts, with
-neither, or with any other marker combination.
-
-Any other mixed shape is refused. Existing authority rows are kept. Rolling back means
-restoring the pre-migration backup with its matching build.
+matching build, not lower version markers.
 
 ### Session hot facts and snapshots
 

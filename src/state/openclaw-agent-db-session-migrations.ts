@@ -379,8 +379,8 @@ export function ensureSessionAdditiveColumns(db: DatabaseSync): void {
 }
 
 /**
- * Continuation schema step (AGENT_RECIPIENT_AUTHORITY_SCHEMA_VERSION). The fleet's schemas 25
- * and 26 already carry the table, so creation is idempotent; valid entry-local epochs move to it.
+ * Continuation schema step (AGENT_RECIPIENT_AUTHORITY_SCHEMA_VERSION): creates the authority
+ * table and moves valid entry-local epochs to it.
  */
 export function migrateSessionRecipientAuthorityInTransaction(db: DatabaseSync): void {
   // sqlite-allow-raw -- Versioned schema DDL precedes the epoch data migration.

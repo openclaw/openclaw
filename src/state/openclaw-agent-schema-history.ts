@@ -168,11 +168,8 @@ BEGIN
 END;
 `;
 
-/**
- * Historical preflight compares the trigger contract those releases actually wrote. The
- * fleet's schema-25 shape (continuation) reuses it.
- */
-export function withLegacyCanonicalSessionValidationTriggers(schema: string): string {
+/** Historical preflight compares the trigger contract those releases actually wrote. */
+function withLegacyCanonicalSessionValidationTriggers(schema: string): string {
   return schema
     .replace(
       "CREATE TABLE IF NOT EXISTS session_windows (",
@@ -236,11 +233,8 @@ export const AGENT_JSON_PREDICATE_COLUMN_DECLARATIONS = {
   navigation_valid: "INTEGER NOT NULL DEFAULT 1",
 };
 
-/**
- * Historical admission compares the schema before predicate columns existed. The fleet's
- * schema-26 shape (continuation) reuses it.
- */
-export function withoutAgentJsonPredicateColumns(schema: string): string {
+/** Historical admission compares the schema before predicate columns existed. */
+function withoutAgentJsonPredicateColumns(schema: string): string {
   let historicalSchema = schema;
   for (const [column, declaration] of Object.entries(AGENT_JSON_PREDICATE_COLUMN_DECLARATIONS)) {
     historicalSchema = historicalSchema.replace(`  ${column} ${declaration},\n`, "");

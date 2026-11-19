@@ -46,10 +46,7 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     40: ["session_creation_operations"],
     // Empty companion only; transcript payloads and the active projection stay untouched.
     41: ["session_transcript_active_event_facts"],
-    // Continuation (karmaterminal): the authority step only creates its table. The fleet's own
-    // schema 26, the fleet-shaped 39 and jump 13's 41 also cross upstream steps outside these
-    // scopes, so Doctor keeps their full image (isAgentFleetSchema26Migration,
-    // isAgentBridgedSchemaBelowMarkerMigration).
+    // Continuation (karmaterminal): the authority step only creates its table.
     [AGENT_RECIPIENT_AUTHORITY_SCHEMA_VERSION]: ["session_recipient_authority"],
   },
   state: {

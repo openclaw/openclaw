@@ -1,2 +1,3 @@
-# Jump 12 new regression coverage, measured on the combined head 9ee45c832c: fork-39 agent-schema bridge fixtures a–g (SQLite, PostgreSQL, Doctor backup and restore) +436; durable-3 fixture close +3; F-1 detached continuation re-entry generation fossils +332 (reload fixture 148, durable-7 89, terminal-notice durability 60, hedge work-scope 35). 🌊-approved (2026-10-31).
-771
+# Jump 12 new regression coverage, measured on the combined head 9ee45c832c: durable-3 fixture close +3; F-1 detached continuation re-entry generation fossils +332 (reload fixture 148, durable-7 89, terminal-notice durability 60, hedge work-scope 35). 🌊-approved (2026-10-31).
+# -436 (bridge strip, 2026-11-19): the schema-39 bridge fixtures a–g (SQLite, PostgreSQL, Doctor backup and restore) left with the bridge on 🌊's ruling (a).
+335

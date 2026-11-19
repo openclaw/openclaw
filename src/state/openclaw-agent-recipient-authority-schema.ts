@@ -1,19 +1,9 @@
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 
 // Continuation (karmaterminal): durable session-key recipient-authority generations sit on top of
-// upstream's agent schema 41. The fleet first received them at its own schemas 25 and 26
-// (openclaw-agent-fleet-schema-history.ts); the lane's unreleased 27 is not recognised. Earlier
-// candidates numbered this step 32, 35, 36, 38, 39, 40 and then 41, all since taken upstream
-// (32-36 and 38 are PostgreSQL-only steps); on SQLite such a database below 38 is upstream's
-// same-numbered schema plus this table, so the idempotent step admits it after upstream's later
-// steps run. The deployed fleet's 38 and the jump-13 candidate's 41 (upstream's 40 plus this
-// table, beside upstream's own 41) are classified explicitly by their markers
-// (openclaw-agent-fleet38-bridge.ts).
-// The 39 and 40 candidates are neither upstream's same-numbered schema plus this table, so they are
-// refused, as are earlier PostgreSQL candidates and every unrecognized schema-41 shape.
+// upstream's agent schema 41. Each version check keeps upstream's own historical schema; the
+// authority step runs after upstream's steps in the same migration transaction.
 export const AGENT_RECIPIENT_AUTHORITY_SCHEMA_VERSION = 42;
-/** The jump-13 candidate's number for this step; upstream's 41 is active event facts. */
-export const AGENT_RECIPIENT_AUTHORITY_JUMP13_SCHEMA_VERSION = 41;
 export const RECIPIENT_AUTHORITY_TABLE = "session_recipient_authority";
 
 export function sessionRecipientAuthoritySchemaSql(schema: string): string {

@@ -1,7 +1,5 @@
 // Continuation (karmaterminal): Doctor's exact pre-migration PostgreSQL export of upstream's agent
-// schemas 39 and 40, the migration to recipient authority (42), its exact restore, and the earlier
-// candidates' 39, 40 and 41 (upstream's 38, 39 or 40 plus the authority table) refused at the
-// export before any write.
+// schemas 39 and 40, the migration to recipient authority (42), and its exact restore.
 import "./backup-worker.test-support.js";
 import { randomUUID } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
@@ -20,18 +18,10 @@ import {
   readBackupEngine,
   verifyMatchedPostgresBackup,
 } from "../../snapshot/database-backup.js";
-import {
-  AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION,
-  withoutAgentPostgresActiveEventFacts,
-} from "../../state/openclaw-agent-active-event-facts-schema.js";
-import { withoutAgentPostgresColdNavigation } from "../../state/openclaw-agent-cold-navigation-schema.js";
-import { withoutAgentPostgresCreationOperations } from "../../state/openclaw-agent-creation-operations-schema.js";
+import { AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION } from "../../state/openclaw-agent-active-event-facts-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { agentEngineSchema } from "../../state/openclaw-agent-db-engine.js";
-import {
-  AGENT_RECIPIENT_AUTHORITY_SCHEMA_VERSION,
-  sessionRecipientAuthorityPostgresSql,
-} from "../../state/openclaw-agent-recipient-authority-schema.js";
+import { AGENT_RECIPIENT_AUTHORITY_SCHEMA_VERSION } from "../../state/openclaw-agent-recipient-authority-schema.js";
 import { withOpenClawStateReadOnlyLocation } from "../../state/openclaw-state-db-read-connection.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -131,67 +121,8 @@ const historical = (from: Predecessor, version: number): StoreSchema => ({
   version,
   postgresMigrations: [],
 });
-const authorityTable = sessionRecipientAuthorityPostgresSql(agentEngineSchema.postgres!);
 // Upstream's 40 is the predecessor of its own step 41; authority (42) follows that step.
 const upstream40 = step(AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION).fromSchema;
-// The jump-13 candidate's 41: upstream's 40 plus the authority table, without active event facts.
-const jump13Postgres = withoutAgentPostgresActiveEventFacts(agentEngineSchema.postgres!);
-// The earlier candidates' 40: upstream's 39 (no creation receipts) plus the authority table.
-const earlier40: Predecessor = {
-  ...upstream40,
-  postgres: withoutAgentPostgresCreationOperations(jump13Postgres),
-};
-// The earlier candidates' 39: upstream's 38 (its token split included) plus the authority table.
-const earlier39: Predecessor = {
-  ...earlier40,
-  postgres: withoutAgentPostgresColdNavigation(earlier40.postgres),
-};
-// No 39 or 40 carrying (or missing) the authority table this way is an exact predecessor.
-const ambiguous = [
-  { name: "the earlier candidates' 39", from: earlier39, version: 39, authority: "full" },
-  {
-    name: "upstream's 39 with the authority table",
-    from: earlier40,
-    version: 39,
-    authority: "full",
-  },
-  {
-    name: "the earlier candidates' 39 with a partial authority table",
-    from: {
-      ...earlier39,
-      postgres: earlier39.postgres.replace(
-        authorityTable,
-        authorityTable.replace('  "updated_at" bigint NOT NULL,\n', ""),
-      ),
-    },
-    version: 39,
-    authority: "partial",
-  },
-  {
-    name: "upstream's 38 relabeled 39 without the authority table",
-    from: step(39).fromSchema,
-    version: 39,
-    authority: "none",
-  },
-  { name: "the earlier candidates' 40", from: earlier40, version: 40, authority: "full" },
-  {
-    name: "upstream's 40 with the authority table",
-    from: { ...upstream40, postgres: jump13Postgres },
-    version: 40,
-    authority: "full",
-  },
-  // Ronan's j14 ruling: an unknown same-version 41 is refused, never relabelled. The fleet's
-  // jump-13 41 runs SQLite and migrates there by its markers.
-  {
-    name: "the jump-13 candidate's 41",
-    from: {
-      ...step(AGENT_RECIPIENT_AUTHORITY_SCHEMA_VERSION).fromSchema,
-      postgres: jump13Postgres,
-    },
-    version: 41,
-    authority: "full",
-  },
-] as const;
 
 describe.skipIf(!connection)("Doctor PostgreSQL export of agent schemas 39 and 40", () => {
   // A private database: the scratch-schema checks below see no other suite's restores.
@@ -282,12 +213,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL export of agent schemas 39 and 4
   }
 
   /** A populated agent store at `from`, registered where Doctor discovers it. */
-  async function agentStore(
-    name: string,
-    from: Predecessor,
-    version: number,
-    authority: "full" | "partial" | "none",
-  ) {
+  async function agentStore(name: string, from: Predecessor, version: number) {
     const agentPath = path.join(
       env.OPENCLAW_STATE_DIR!,
       name,
@@ -349,14 +275,6 @@ describe.skipIf(!connection)("Doctor PostgreSQL export of agent schemas 39 and 4
       INSERT INTO "${namespace}".session_transcript_index_state (session_id, indexed_seq,
         leaf_event_id, needs_rebuild, active_event_count, active_message_count, updated_at)
         VALUES ('session', 2, 'second', 0, 2, 2, 1)`);
-    if (authority === "full") {
-      await client.query(`INSERT INTO "${namespace}".session_recipient_authority
-        (session_key, epoch, created_at, updated_at)
-        VALUES ('agent:main:main', 'epoch-1', 1, 2), ('agent:main:deleted', 'epoch-7', 3, 4)`);
-    } else if (authority === "partial") {
-      await client.query(`INSERT INTO "${namespace}".session_recipient_authority
-        (session_key, epoch, created_at) VALUES ('agent:main:main', 'epoch-1', 1)`);
-    }
     // The transcript owner's projection, exactly what the runtime and the port rebuild derive.
     await client.query(`SET search_path = "${namespace}"`);
     try {
@@ -497,7 +415,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL export of agent schemas 39 and 4
   });
 
   it("exports upstream's 40 losslessly, restores it exactly, and migrates it to 42", async () => {
-    const { agentPath, namespace } = await agentStore("upstream40", upstream40, 40, "none");
+    const { agentPath, namespace } = await agentStore("upstream40", upstream40, 40);
     const before = await snapshot(namespace);
     expect(before.tables.session_recipient_authority).toBeUndefined();
     expect(before.tables.session_creation_operations).toBe("[]");
@@ -574,7 +492,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL export of agent schemas 39 and 4
   });
 
   it("leaves the store unchanged and never starts the migration when its export fails", async () => {
-    const { agentPath, namespace } = await agentStore("upstream40-failed", upstream40, 40, "none");
+    const { agentPath, namespace } = await agentStore("upstream40-failed", upstream40, 40);
     const anchorBytes = fs.readFileSync(agentPath);
     const before = await snapshot(namespace);
     const scratch = await scratchNamespaces();
@@ -599,45 +517,9 @@ describe.skipIf(!connection)("Doctor PostgreSQL export of agent schemas 39 and 4
     }
   });
 
-  it.each(ambiguous)(
-    "refuses $name before any write",
-    async ({ name, from, version, authority }) => {
-      const { agentPath, namespace } = await agentStore(
-        `ambiguous-${ambiguous.findIndex((shape) => shape.name === name)}`,
-        from,
-        version,
-        authority,
-      );
-      const anchorBytes = fs.readFileSync(agentPath);
-      const before = await snapshot(namespace);
-      const scratch = await scratchNamespaces();
-      {
-        using observation = observeStatements();
-        await expect(runDoctor(agentPath, version)).rejects.toThrow(
-          "PostgreSQL catalog differs from its generated contract",
-        );
-        expect(migrationStatements(observation.statements)).toEqual([]);
-      }
-      // The export refused it: the only capture is incomplete, so the migration never ran.
-      const [directory, ...extra] = backups(agentPath);
-      expect(extra).toEqual([]);
-      await expect(verifyMatchedPostgresBackup(directory!, "exact")).rejects.toThrow(
-        "PostgreSQL backup is incomplete.",
-      );
-      expect(await snapshot(namespace)).toEqual(before);
-      expect(fs.readFileSync(agentPath)).toEqual(anchorBytes);
-      expect(await scratchNamespaces()).toEqual(scratch);
-    },
-  );
-
   // The declared layout still serves upstream's own 39: no authority table, the widened CHECK.
   it("still exports upstream's own schema-39 store with its declared layout", async () => {
-    const { agentPath, namespace } = await agentStore(
-      "upstream39",
-      step(40).fromSchema,
-      39,
-      "none",
-    );
+    const { agentPath, namespace } = await agentStore("upstream39", step(40).fromSchema, 39);
     const { changes } = await backupDoctorPostgresMigration(agentPath, input, {
       assertAdmission() {},
     });

@@ -23,35 +23,11 @@ Golden source contracts:
 
 Historical fixtures read these sources without deriving old tables from current DDL.
 
-`openclaw-agent-schema-v25.sql` is the exact agent DDL from commit
-`6a8b0dceaf` (#167932), upstream's canonical-writer schema 25.
-`openclaw-agent-schema-v25-fleet-captured.sql` is the DDL captured on 2026-10-13
-from a fleet agent database at the fleet's recipient-authority schema 25, written
-by deployed build `7d8a1a91c6`: `sqlite_master` statements in creation order, no
-rows, with memory-core FTS/vector tables and FTS5 shadow tables omitted. Unlike a
-fresh install it carries migration history (appended and reordered columns,
-quoted rebuilt tables, unmaterialized additive columns). Together they are the
-two real inputs to the schema-25 bridge.
-
-Agent schema 26 also has two histories. `openclaw-agent-schema-v26.sql` is the exact
-agent DDL from commit `84a834e233` (#169315), upstream's JSON-predicate schema 26.
-`openclaw-agent-schema-v26-fleet.sql` is the exact agent DDL of deployed build
-`03de0ce5d3` (the 2026-10-19 fleet cut), the fleet's recipient-authority schema 26 as a
-fresh install writes it. `openclaw-agent-schema-v26-fleet-migrated.sql` is the DDL that
-build's own schema owner wrote when it migrated `openclaw-agent-schema-v25-fleet-captured.sql`
-to schema 26, the path fleet seats took through `doctor --fix`; it keeps that file's
-migration history. Together they are the inputs to the schema-26 bridge.
-
-<!-- Frond (karmaterminal): fleet-38 bridge. Fork-only; omitted from the upstream presentation. -->
-
-Agent schema 38 also has two histories. `openclaw-agent-schema-v38-fleet.sql` is the exact agent
-DDL of deployed fleet build `3d3364ddc5`, the fleet's recipient-authority schema 38 as a fresh
-install writes it (Git blob `0800da7d05`; fork commits from jump 9, `48a4a4b441`, through F″,
-`20a1ffd3d9`, wrote the same DDL stamped 39). `openclaw-agent-schema-v39.sql` is the exact agent
-DDL from commit `b8b054c13a` (U12), upstream's cold-navigation schema 39 (Git blob `2e1c9fa973`).
-`openclaw-agent-schema-v40.sql` is the exact agent DDL from commit `480d503053` (U13), upstream's
-session-creation-receipt schema 40 (Git blob `94ea951a61`). Together they are the inputs to the
-fleet-38 bridge.
+`openclaw-agent-schema-v39.sql`, `openclaw-agent-schema-v40.sql` and
+`openclaw-agent-schema-v41.sql` are the exact agent DDL of upstream's schemas 39, 40
+and 41: Git blobs `2e1c9fa973` (commit `b8b054c13a`), `94ea951a61` (commit
+`480d503053`) and `99031ffc21` (commit `401a1de38b`) of `src/state/openclaw-agent-schema.sql`.
+They are the pre-42 inputs to the recipient-authority migration tests.
 
 `openclaw-state-v2026.7.1-2.sqlite.gz` is a deterministic fixture for the
 shared state database created by OpenClaw tag `v2026.7.1-2` at commit

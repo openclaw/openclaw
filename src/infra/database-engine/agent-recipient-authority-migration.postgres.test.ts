@@ -1,7 +1,7 @@
 // Continuation (karmaterminal): recipient authority is agent schema 42, above upstream's
 // PostgreSQL-only steps 34-36 and 38, the cold-archive chunk step 37, the cold-navigation step 39,
 // the creation-receipt step 40 and the active-event-facts step 41. These cases run that ladder in
-// place through the agent owner and refuse earlier candidates, including the jump-13 41.
+// place through the agent owner.
 import { channel } from "node:diagnostics_channel";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
@@ -9,18 +9,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Client, type QueryResultRow } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { withoutAgentPostgresActiveEventFacts } from "../../state/openclaw-agent-active-event-facts-schema.js";
-import { withoutAgentPostgresColdArchiveChunks } from "../../state/openclaw-agent-cold-archive-chunks-schema.js";
-import { withoutAgentPostgresColdNavigation } from "../../state/openclaw-agent-cold-navigation-schema.js";
-import { withoutAgentPostgresCreationOperations } from "../../state/openclaw-agent-creation-operations-schema.js";
 import { agentEngineSchema, openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
 import { runWithAgentDatabaseMaintenanceAuthority } from "../../state/openclaw-agent-db-lease.js";
-import { withLegacyAgentPostgresMemoryPaths } from "../../state/openclaw-agent-memory-path-migration.js";
-import {
-  AGENT_RECIPIENT_AUTHORITY_SCHEMA_VERSION,
-  sessionRecipientAuthorityPostgresSql,
-  withoutSessionRecipientAuthorityPostgresSchema,
-} from "../../state/openclaw-agent-recipient-authority-schema.js";
+import { AGENT_RECIPIENT_AUTHORITY_SCHEMA_VERSION } from "../../state/openclaw-agent-recipient-authority-schema.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { PostgresSyncConnection } from "../postgres-sync/connection.js";
 import { isPostgresSqlConnection } from "../sql-connection.js";
@@ -31,7 +22,6 @@ import type { StoreSchema } from "./contract.js";
 import { openPostgresEngineTestStore } from "./engine-store.test-support.js";
 import { getPostgresPhysicalFacts } from "./physical-facts.js";
 import { postgresCatalogQuery, readPostgresCatalog } from "./postgres-catalog.js";
-import { withLegacyPostgresIndexOrdering } from "./postgres-index-ordering.js";
 import { resolveDatabaseFamilyEngines } from "./registry.js";
 
 const configured = getEnvironmentData("openclaw.test.state.conformance.connection");
@@ -41,12 +31,6 @@ const step = (version: number) =>
   agentEngineSchema.postgresMigrations!.find((migration) => migration.version === version)!;
 type Predecessor = ReturnType<typeof step>["fromSchema"];
 /** A historical layout; search versions it omits stay historical instead of inheriting current. */
-// The current schema without upstream's 41 active event facts: the jump-13 candidate's layout.
-const upstream40WithAuthority = () =>
-  withoutAgentPostgresActiveEventFacts(agentEngineSchema.postgres!);
-// Without upstream's 40 creation receipts too: an earlier candidate's layout.
-const upstream39WithAuthority = () =>
-  withoutAgentPostgresCreationOperations(upstream40WithAuthority());
 const historical = (version: number, from: Predecessor): StoreSchema => ({
   ...agentEngineSchema,
   ...from,
@@ -334,132 +318,6 @@ describe.skipIf(!connection)("PostgreSQL agent recipient-authority migration", (
         ).toEqual([]);
       }
       expect(await snapshot(namespace)).toEqual(after);
-    },
-  );
-
-  // The jump-8 candidate (the deployed fleet's build) numbered recipient authority 38: upstream's 37
-  // plus the authority table, without upstream's 38 text search. Upstream's 39 has no authority
-  // table, so step 39 refuses it unchanged (Doctor's export already did). The fleet runs SQLite.
-  it("refuses the jump-8 candidate's populated schema-38 store before step 39, unchanged", async () => {
-    const anchorPath = path.join(dirs.make("pg-authority-jump8-"), "openclaw-agent.sqlite");
-    const namespace = install(
-      historical(38, {
-        postgres: withoutAgentPostgresColdNavigation(upstream39WithAuthority()),
-        postgresVectorDecoderVersion: 2,
-        postgresVectorSearchVersion: 2,
-      }),
-      anchorPath,
-    );
-    await seed(namespace, 38);
-    await client.query(`INSERT INTO "${namespace}".session_recipient_authority
-      (session_key, epoch, created_at, updated_at) VALUES ('agent:main:main', 'epoch-1', 1, 2)`);
-    const before = await snapshot(namespace);
-    await expect(openAgent(anchorPath)).rejects.toMatchObject({
-      message:
-        "PostgreSQL schema drift detected against generated DDL. Use a compatible OpenClaw binary or restore the matching PostgreSQL schema and anchor; do not edit schema metadata.",
-    });
-    expect(await snapshot(namespace)).toEqual(before);
-  });
-
-  // Upstream's text search with the authority table is neither predecessor: refused unchanged.
-  it("refuses a schema-38 store carrying both the token split and the authority table", async () => {
-    const anchorPath = path.join(dirs.make("pg-authority-mixed38-"), "openclaw-agent.sqlite");
-    const namespace = install(
-      historical(38, {
-        ...step(39).fromSchema,
-        postgres: withoutAgentPostgresColdNavigation(upstream39WithAuthority()),
-      }),
-      anchorPath,
-    );
-    await seed(namespace, 38);
-    const before = await snapshot(namespace);
-    {
-      using observation = observeStatements();
-      await expect(openAgent(anchorPath)).rejects.toMatchObject({
-        message:
-          "PostgreSQL schema drift detected against generated DDL. Use a compatible OpenClaw binary or restore the matching PostgreSQL schema and anchor; do not edit schema metadata.",
-      });
-      expect(
-        // Checking the source builds its DDL only in a rolled-back scratch schema.
-        observation.statements.filter((sql) =>
-          /\bUPDATE (?:openclaw_)?schema_meta\b|DROP EXPRESSION/u.test(sql),
-        ),
-      ).toEqual([]);
-    }
-    expect(await snapshot(namespace)).toEqual(before);
-  });
-
-  // Earlier candidates numbered recipient authority 35 (upstream's 34 plus the authority table,
-  // without upstream's 35 index ordering), 36 (jump 6: upstream's 35 plus the table, without
-  // upstream's 36 exact-path indexes), 39 (jumps 9-12: upstream's 38 plus the table, without its
-  // 39 payload constraint), 40 (j12: upstream's 39 plus the table, without its 40 receipts) and
-  // 41 (jump 13: upstream's 40 plus the table, without its 41 active event facts). None is an
-  // upstream schema, so the PostgreSQL owner refuses it; the fleet's jump-13 41 runs SQLite.
-  const earlier36 = withLegacyAgentPostgresMemoryPaths(
-    withoutAgentPostgresColdArchiveChunks(
-      withoutAgentPostgresColdNavigation(upstream39WithAuthority()),
-    ),
-  );
-  // Each pattern names DDL only a later step writes: the source check builds its predecessor's DDL
-  // in a rolled-back scratch schema, and from 37 that DDL holds the cold-archive chunk table.
-  const laterSteps =
-    /"session_recipient_authority"|"session_transcript_cold_archive_chunks"|\bUPDATE (?:openclaw_)?schema_meta\b/u;
-  it.each([
-    {
-      version: 35,
-      ddl: withLegacyPostgresIndexOrdering(earlier36, "schema-nullability"),
-      next: laterSteps,
-    },
-    { version: 36, ddl: earlier36, next: laterSteps },
-    {
-      version: 39,
-      ddl: withoutAgentPostgresColdNavigation(upstream39WithAuthority()),
-      next: /"session_creation_operations"|"session_recipient_authority"|\bUPDATE (?:openclaw_)?schema_meta\b/u,
-    },
-    {
-      version: 40,
-      ddl: upstream39WithAuthority(),
-      next: /"session_recipient_authority"|\bUPDATE (?:openclaw_)?schema_meta\b/u,
-    },
-    {
-      version: 41,
-      ddl: upstream40WithAuthority(),
-      next: /"session_recipient_authority"|\bUPDATE (?:openclaw_)?schema_meta\b/u,
-    },
-  ])(
-    "refuses an earlier candidate's schema-$version store before the next step, leaving it byte-unchanged",
-    async ({ version, ddl, next }) => {
-      expect(ddl).toContain(sessionRecipientAuthorityPostgresSql(agentEngineSchema.postgres!));
-      expect(withoutSessionRecipientAuthorityPostgresSchema(ddl)).toBe(
-        step(version).fromSchema.postgres,
-      );
-      const anchorPath = path.join(
-        dirs.make(`pg-authority-earlier-${version}-`),
-        "openclaw-agent.sqlite",
-      );
-      const namespace = install(
-        historical(version, { ...step(version).schema, postgres: ddl }),
-        anchorPath,
-      );
-      await seed(namespace, version);
-      await client.query(`INSERT INTO "${namespace}".session_recipient_authority
-        (session_key, epoch, created_at, updated_at) VALUES ('agent:main:main', 'epoch-1', 1, 1)`);
-      const before = await snapshot(namespace);
-      expect(before.tables.session_recipient_authority).toContain('"epoch-1"');
-
-      {
-        using observation = observeStatements();
-        await expect(openAgent(anchorPath)).rejects.toMatchObject({
-          message:
-            "PostgreSQL schema drift detected against generated DDL. Use a compatible OpenClaw binary or restore the matching PostgreSQL schema and anchor; do not edit schema metadata.",
-        });
-        // The source check refuses before the next step's DDL or any version or seal write runs.
-        expect(observation.statements.filter((sql) => next.test(sql))).toEqual([]);
-      }
-      expect(await snapshot(namespace)).toEqual(before);
-      expect(
-        await rows(`SELECT nspname FROM pg_namespace WHERE nspname LIKE 'openclaw\\_check\\_%'`),
-      ).toEqual([]);
     },
   );
 });

@@ -1,3 +1,4 @@
 # openclaw/openclaw#129388 (continuation feature): its fossils and regression suites for continuation work, delegates, custody, restart custody and the subagent hop-2 wake.
 # -133 (pure rebuild, 2026-11-19): openclaw-state-db.continuation-records-fleet.test.ts left with the fleet-composite continuation_records compatibility row it covered.
-44393
+# -1057 (bridge strip, 2026-11-19): the rest of the agent-schema bridge's test lines (the schema-25/26 bridge suites and their shared support, and the earlier-candidate rows in the recipient-authority, Doctor and PostgreSQL suites), net of the schema-42 pins that replace them; the j12-j14 bridge entries left from their own files. 🌊's ruling (a).
+43336

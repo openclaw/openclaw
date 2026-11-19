@@ -1,8 +1,6 @@
 // Continuation (karmaterminal): agent schema 42 is recipient authority on top of upstream's 41.
-// Version 38 has two SQLite histories: upstream's (a metadata-only advance over 37) and the
-// jump-8 candidate's (upstream's 37 plus the authority table and its rows). Doctor's version
-// phase must take both, an upstream 37 store and upstream's own 40 and 41, to 42 inside the
-// declared backup scope, keep authority rows, re-run as a no-op, and restore the exact predecessor.
+// Doctor's version phase must take upstream's 37-41 stores to 42 inside the declared backup scope,
+// re-run as a no-op, and restore the exact predecessor.
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -26,33 +24,23 @@ import { restoreDoctorMigrationBackup } from "./doctor-migration-backup-restore.
 import { prepareDoctorDatabaseMigrations } from "./doctor-schema-migrations.js";
 import { withMaintenance } from "./doctor-schema-migrations.test-support.js";
 
-const AUTHORITY_ROW = {
-  session_key: "agent:main:jump8-authority",
-  epoch: "66666666-6666-4666-8666-666666666666",
-  created_at: 5,
-  updated_at: 6,
-};
-const SHAPES = [
-  { shape: "jump-8 candidate 38", version: 38, authority: true },
-  { shape: "upstream 38", version: 38, authority: false },
-  { shape: "upstream 37", version: 37, authority: false },
-  { shape: "upstream 40", version: 40, authority: false },
-  { shape: "upstream 41", version: 41, authority: false },
-] as const;
-
-function stageAgentDatabase(pathname: string, version: number, authority: boolean) {
+function stageAgentDatabase(pathname: string, version: number) {
   fs.mkdirSync(path.dirname(pathname), { recursive: true });
   const database = new DatabaseSync(pathname);
-  // Both 38 histories predate upstream's 39 transcript payload constraint, 40 receipt table and 41
+  // Upstream's 37 and 38 predate its 39 transcript payload constraint, 40 receipt table and 41
   // active-event-facts companion.
-  const upstream40 = withoutAgentActiveEventFacts(OPENCLAW_AGENT_SCHEMA_SQL);
-  const schema =
-    version < 40
-      ? withoutAgentColdNavigation(withoutAgentCreationOperations(upstream40))
-      : version < 41
-        ? upstream40
-        : OPENCLAW_AGENT_SCHEMA_SQL;
-  database.exec(authority ? schema : withoutSessionRecipientAuthoritySchema(schema));
+  const upstream41 = withoutSessionRecipientAuthoritySchema(OPENCLAW_AGENT_SCHEMA_SQL);
+  const upstream40 = withoutAgentActiveEventFacts(upstream41);
+  const upstream39 = withoutAgentCreationOperations(upstream40);
+  database.exec(
+    version < 39
+      ? withoutAgentColdNavigation(upstream39)
+      : version < 40
+        ? upstream39
+        : version < 41
+          ? upstream40
+          : upstream41,
+  );
   database.exec(`
     PRAGMA user_version = ${version};
     INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
@@ -62,18 +50,6 @@ function stageAgentDatabase(pathname: string, version: number, authority: boolea
       VALUES ('agent:main:main', 'kept', '{"sessionId":"kept","updatedAt":1}', 1);
     UPDATE session_nodes SET entry_valid = 1;
   `);
-  if (authority) {
-    database
-      .prepare(
-        "INSERT INTO session_recipient_authority (session_key, epoch, created_at, updated_at) VALUES (?, ?, ?, ?)",
-      )
-      .run(
-        AUTHORITY_ROW.session_key,
-        AUTHORITY_ROW.epoch,
-        AUTHORITY_ROW.created_at,
-        AUTHORITY_ROW.updated_at,
-      );
-  }
   return database;
 }
 
@@ -97,16 +73,16 @@ function readStore(database: DatabaseSync) {
   };
 }
 
-it.each(SHAPES)(
-  "takes the $shape agent store to 42 through Doctor, re-runs as a no-op, and restores it",
-  async ({ version, authority }) => {
+it.each([37, 38, 39, 40, 41])(
+  "takes upstream's schema-%i agent store to 42 through Doctor, re-runs as a no-op, and restores it",
+  async (version) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const stateDatabase = openOpenClawStateDatabase({ env: state.env });
       expect(stateDatabase.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
         OPENCLAW_STATE_SCHEMA_VERSION,
       );
       const pathname = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
-      using database = stageAgentDatabase(pathname, version, authority);
+      using database = stageAgentDatabase(pathname, version);
       const original = readStore(database);
       const migration = {
         kind: "agent" as const,
@@ -138,7 +114,7 @@ it.each(SHAPES)(
       expect(migrated).toMatchObject({
         userVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
         schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
-        authority: authority ? [AUTHORITY_ROW] : [],
+        authority: [],
         sessions: original.sessions,
       });
       expect(database.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
@@ -162,7 +138,7 @@ it.each(SHAPES)(
       });
       expect(readStore(database)).toEqual(migrated);
 
-      // The declared-scope backup holds the predecessor's authority rows and restores it exactly.
+      // The declared-scope backup restores the predecessor exactly, without the authority table.
       const archive = fs
         .readdirSync(path.dirname(pathname))
         .find((name) => name.endsWith(".scoped.bak"));
