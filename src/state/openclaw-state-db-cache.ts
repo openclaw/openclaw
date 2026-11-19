@@ -613,6 +613,11 @@ export function publishOpenClawStateDatabaseWorkerAdmission(
 }
 
 /** Drain worker resources before native checkpoint/close at one exact path. */
+/** Drain worker-held connections while retaining the native owner at this path. */
+export function closeOpenClawStateDatabaseWorkersByPathAsync(pathname: string): Promise<boolean> {
+  return asyncResources.close(resolveDatabasePath({ path: pathname }), () => false);
+}
+
 export function closeOpenClawStateDatabaseByPathAsync(
   pathname: string,
   options?: OpenClawStateDatabaseCloseOptions,
