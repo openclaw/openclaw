@@ -1,5 +1,9 @@
 import { randomBytes } from "node:crypto";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import {
+  collectNestedErrorCandidates,
+  toErrorObject,
+} from "@openclaw/normalization-core/error-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   positiveSecondsToSafeMilliseconds,
   resolveExpiresAtMsFromDurationMs,
@@ -7,16 +11,25 @@ import {
 } from "../../packages/normalization-core/src/number-coercion.js";
 import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import type { Model } from "../llm/types.js";
+import {
+  createOAuthRefreshError,
+  createOAuthRefreshResponseError,
+  isRecoverableOAuthRefreshFailure,
+  readOAuthRefreshErrorReason,
+  type OAuthRefreshErrorReason,
+  type OAuthRefreshOutcome,
+} from "../shared/oauth-refresh-outcome.js";
 import { generatePkceVerifierChallenge } from "./oauth-utils.js";
+import { classifyTransientNetworkErrorCode } from "./retry-runtime.js";
 export { oauthErrorHtml, oauthSuccessHtml } from "../shared/oauth-page.js";
 export {
   createOAuthRefreshError,
   createOAuthRefreshResponseError,
   isRecoverableOAuthRefreshFailure,
   readOAuthRefreshErrorReason,
-  type OAuthRefreshOutcome,
   type OAuthRefreshErrorReason,
-} from "../shared/oauth-refresh-outcome.js";
+  type OAuthRefreshOutcome,
+};
 
 export { CODEX_CLI_PROFILE_ID } from "../agents/auth-profiles/profile-ids.js";
 export { isFailedOAuthRefreshFence } from "../agents/auth-profiles/oauth-refresh-marker.js";
@@ -208,6 +221,52 @@ export function resolveOAuthTokenExpiresAt(
         nowMs: options.nowMs,
         bufferMs: options.refreshSkewMs,
       });
+}
+
+/**
+ * Returns a before-dispatch/not-attempted refresh error when the failure proves the
+ * refresh grant never reached the provider, otherwise undefined.
+ *
+ * Only two kinds of evidence qualify, and only while the caller has seen no
+ * response (a response of any kind means the provider may have consumed the
+ * rotating grant):
+ * - a pre-connect transport code from the shared retry classifier (DNS failure,
+ *   refused/unreachable connection, connect timeout), read from the nested
+ *   cause chain so undici's `fetch failed` wrapper does not hide it;
+ * - an `SsrFBlockedError`, which the guarded fetch raises before opening a
+ *   socket (its post-redirect throw is excluded by the caller's response flag).
+ * Anything else — resets, timeouts after dispatch, aborts, unknown errors —
+ * stays unknown so the manager never replays a possibly consumed grant.
+ */
+export function createNotAttemptedOAuthRefreshError(
+  /** Provider refresh context shown in the error message, for example `xAI OAuth refresh`. */
+  context: string,
+  /** Transport failure thrown before any response was received. */
+  cause: unknown,
+): ReturnType<typeof createOAuthRefreshError> | undefined {
+  for (const candidate of collectNestedErrorCandidates(cause)) {
+    const record = asOptionalRecord(candidate);
+    if (!record) {
+      continue;
+    }
+    const code = typeof record.code === "string" ? record.code : undefined;
+    if (
+      record.name === "SsrFBlockedError" ||
+      classifyTransientNetworkErrorCode(code) === "pre-connect"
+    ) {
+      return createOAuthRefreshError(
+        `${context} transport failed before dispatch`,
+        {
+          version: 1,
+          phase: "before-dispatch",
+          outcome: "not-attempted",
+          recovery: { kind: "later", evidence: "dispatch-not-started" },
+        },
+        { cause },
+      );
+    }
+  }
+  return undefined;
 }
 
 /**
