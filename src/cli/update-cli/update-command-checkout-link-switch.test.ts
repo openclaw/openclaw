@@ -61,7 +61,6 @@ const inspect = (overrides: Partial<Parameters<typeof inspectCheckoutLinkPackage
     installTarget: pnpmTarget(),
     serviceRunsCheckout: true,
     targetSpec: `openclaw@${TARGET}`,
-    targetSchemaVersions: CURRENT_SCHEMA_VERSIONS,
     storedChannel: "beta",
     requestedChannel: "beta",
     ...overrides,
@@ -113,20 +112,18 @@ it("names a pnpm global link to the checkout whose Gateway runs that checkout", 
   const refusal = await inspect();
   expect(refusal).toMatchObject({
     reason: "unsupported-package-target",
-    recoverySteps: [
-      { kind: "continue-update", command: `pnpm add -g openclaw@${TARGET}` },
-      { kind: "continue-update", command: "openclaw gateway install --force" },
-      { kind: "continue-update", command: "openclaw gateway restart" },
-    ],
+    recoverySteps: [{ kind: "continue-update", command: "openclaw update" }],
   });
   expect(refusal?.message).toContain(`${link} -> ${await fs.realpath(checkout)}`);
   expect(refusal?.message).toContain("nothing was stopped or changed");
   expect(refusal?.message).toContain("the CLI and Gateway still run the checkout");
   expect(refusal?.message).toContain("run `openclaw update`.");
   expect(refusal?.message).toContain("`openclaw triage`");
+  // A manual install would bypass the schema, runtime and service-definition checks.
+  expect(refusal?.message).not.toMatch(/pnpm add|gateway install/u);
 });
 
-it("names Bun's installer and a channel change when the stored channel differs", async () => {
+it("names Bun's link and a channel change when the stored channel differs", async () => {
   const refusal = await inspect({
     installTarget: { ...pnpmTarget(), manager: "bun", command: "bun" },
     storedChannel: "dev",
@@ -134,30 +131,14 @@ it("names Bun's installer and a channel change when the stored channel differs",
     serviceRunsCheckout: false,
   });
   expect(refusal?.recoverySteps).toEqual([
-    { kind: "continue-update", command: `bun add -g --trust openclaw@${TARGET}` },
+    { kind: "continue-update", command: "openclaw config set update.channel beta" },
+    { kind: "continue-update", command: "openclaw update" },
   ]);
+  expect(refusal?.message).toContain("is a bun global link");
   expect(refusal?.message).toContain("the CLI still runs the checkout");
   expect(refusal?.message).toContain(
     "run `openclaw config set update.channel beta`, then `openclaw update`.",
   );
-});
-
-it("names no manual install for a package older than the checkout's databases", async () => {
-  await fs.writeFile(
-    path.join(checkout, "package.json"),
-    JSON.stringify({
-      name: "openclaw",
-      version: "2026.11.5",
-      openclaw: { schemaVersions: CURRENT_SCHEMA_VERSIONS },
-    }),
-  );
-  const older = { state: CURRENT_SCHEMA_VERSIONS.state - 1, agent: CURRENT_SCHEMA_VERSIONS.agent };
-  const refusal = await inspect({ targetSchemaVersions: older });
-  // A manual install would bypass the updater's schema guard and strand the Gateway.
-  expect(refusal?.recoverySteps).toEqual([]);
-  expect(refusal?.message).toContain(`supports database schemas up to state ${older.state}`);
-  expect(refusal?.message).not.toContain("pnpm add -g");
-  expect(refusal?.message).toContain("run `openclaw update`.");
 });
 
 it.each([
@@ -224,18 +205,16 @@ it.each([true, false])(
         reason: "unsupported-package-target",
         failedStep: {
           failureFacts: [expect.objectContaining({ code: "unsupported-package-target" })],
-          // Agents read the commands that finish the switch from the failed step.
+          // Agents read the command that keeps following the channel from the failed step.
           recoverySteps: [
-            { kind: "continue-update", command: `pnpm add -g openclaw@${TARGET}` },
-            { kind: "continue-update", command: "openclaw gateway install --force" },
-            { kind: "continue-update", command: "openclaw gateway restart" },
+            { kind: "continue-update", command: "openclaw config set update.channel beta" },
+            { kind: "continue-update", command: "openclaw update" },
           ],
         },
       });
     } else {
       expect(text).toContain(`Switch to openclaw@${TARGET} not started`);
-      expect(text).toContain(`pnpm add -g openclaw@${TARGET}`);
-      expect(text).toContain("openclaw gateway install --force");
+      expect(text).toContain("run `openclaw triage` or ask this instance's agent");
       expect(text).toContain(
         "run `openclaw config set update.channel beta`, then `openclaw update`",
       );

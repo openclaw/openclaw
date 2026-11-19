@@ -569,7 +569,6 @@ export async function resolveUpdateCommandTarget(
               // The plan records a service only when it runs this same installation.
               serviceRunsCheckout: Boolean(managedServicePlan?.service) && !managedServiceRoot,
               targetSpec: packageInstallSpec,
-              targetSchemaVersions: packageTargetSchemaVersions,
               storedChannel,
               requestedChannel: channel,
             }));
