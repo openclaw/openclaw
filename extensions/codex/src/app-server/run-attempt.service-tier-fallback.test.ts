@@ -1,10 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { CodexAppServerRpcError } from "./client.js";
 import { turnCompleted } from "./protocol.test-helpers.js";
 import {
   createTestParams,
   createStartedThreadHarness,
-  fastWait,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   threadStartResult,
@@ -94,9 +93,13 @@ describe("Codex same-model service tier fallback", () => {
     params.timeoutMs = 15_000;
     let starts = 0;
     let accepted = 0;
+    const secondAccepted = Promise.withResolvers<void>();
     params.onExecutionPhase = (event) => {
       if (event.phase === "turn_accepted") {
         accepted++;
+        if (accepted === 2) {
+          secondAccepted.resolve();
+        }
       }
     };
     const harness = createStartedThreadHarness(
@@ -113,6 +116,22 @@ describe("Codex same-model service tier fallback", () => {
     );
     const run = runCodexAppServerAttempt(params);
     await run.waitForTurnAccepted();
+    const recordUsage = (turnId: string, responseId: string, inputTokens: number) =>
+      harness.notify({
+        method: "rawResponse/completed",
+        params: {
+          threadId: "thread-1",
+          turnId,
+          responseId,
+          usage: {
+            inputTokens,
+            cachedInputTokens: 0,
+            outputTokens: 1,
+            totalTokens: inputTokens + 1,
+          },
+        },
+      });
+    await recordUsage("turn-1", "response-1", 5);
     await harness.notify(
       turnCompleted({
         id: "turn-1",
@@ -120,9 +139,18 @@ describe("Codex same-model service tier fallback", () => {
         error: { message: "service overloaded", codexErrorInfo: "serverOverloaded" },
       }),
     );
-    await vi.waitFor(() => expect(accepted).toBe(2), fastWait);
+    await secondAccepted.promise;
+    await recordUsage("turn-2", "response-2", 7);
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-2" });
-    expect((await run).terminal.kind).toBe("ok");
+    const result = await run;
+    expect(result.terminal.kind).toBe("ok");
+    expect(result.modelIterations).toBe(2);
+    expect(result.attemptUsage).toMatchObject({
+      input: 12,
+      output: 2,
+      total: 14,
+      contextUsage: { state: "available", promptTokens: 7, totalTokens: 8 },
+    });
     expect(
       harness.requests
         .filter(({ method }) => method === "turn/start")
