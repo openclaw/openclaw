@@ -1,2 +1,2 @@
-# Q-only waiver regression coverage: independent admission, raw failed/successful receipt reuse through the CLI, authenticated final verification, operator continuation/status, and publication consumers. Separate owning boundaries and negative integrity/unwaived-gate controls cannot be replaced by one helper test. Exact excess above the 400-line allowance.
-378
+# Q-only waiver regression coverage: independent admission, raw failed/successful receipt reuse through the CLI, authenticated final verification, operator continuation/status, joined publication status, and immutable hosted watcher selection. Separate owning boundaries and negative integrity/unwaived-gate controls cannot be replaced by one helper test. Exact excess above the 400-line allowance.
+504

@@ -8,6 +8,7 @@ import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import {
   buildReleaseStateArtifact,
+  composeReleaseAttemptJobs,
   readReleaseJobListing,
   releaseExecutionPlanSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
@@ -716,6 +717,106 @@ else process.stdout.write(JSON.stringify(value));
 }
 
 describe("publication status real CLI", () => {
+  it.each(["current grant", "removed grant", "pre-ledger", "missing new ledger", "forbidden"])(
+    "joins publication status with authenticated Q policy: %s",
+    async (mode) => {
+      const fixture = publicationFixture();
+      const failed = mode === "current grant" || mode === "removed grant";
+      const failedJob = {
+        ...job("synthetic joined failure", "failure"),
+        id: 1010,
+        run_id: 101,
+        run_attempt: 1,
+      };
+      if (failed) {
+        const composite = composeReleaseAttemptJobs([{ runAttempt: 1, jobs: [failedJob] }], {
+          plannedRunAttempt: 1,
+          effectiveRunAttempt: 1,
+        });
+        Object.assign(fixture.manifest, {
+          validationInputs: { targetVersion: "2099.1.1" },
+          childEvidence: {
+            normalCi: {
+              runId: "101",
+              plannedRunAttempt: 1,
+              effectiveRunAttempt: 1,
+              observedRunAttempts: [1],
+              jobs: composite.jobs,
+              compositeJobsSha256: composite.sha256,
+              dispatchActor: "github-actions[bot]",
+              triggeringActor: "github-actions[bot]",
+              repository: REPOSITORY,
+            },
+          },
+        });
+        fixture.executionPlan.targetVersion = "2099.1.1";
+        fixture.executionPlan.sha256 = releaseExecutionPlanSha256(fixture.executionPlan);
+        fixture.manifest.executionPlanSha256 = fixture.executionPlan.sha256;
+      }
+      const result = await runPublicationCli(fixture, undefined, (responses) => {
+        const sourcePath = "scripts/lib/release-validation-waivers.json";
+        const prefix = "repos/" + REPOSITORY + "/";
+        const contents = (path: string, source: string) => ({
+          type: "file",
+          path,
+          encoding: "base64",
+          size: Buffer.byteLength(source),
+          content: Buffer.from(source).toString("base64"),
+          sha: createHash("sha1")
+            .update("blob " + Buffer.byteLength(source) + "\0" + source)
+            .digest("hex"),
+        });
+        responses[prefix + "contents/" + sourcePath + "?ref=" + SHA] = failed
+          ? contents(
+              sourcePath,
+              JSON.stringify({
+                schema: "openclaw.release-validation-waivers/v1",
+                waivers:
+                  mode === "current grant"
+                    ? [
+                        {
+                          targetVersion: "2099.1.1",
+                          childRole: "normalCi",
+                          jobName: failedJob.name,
+                          reason: "Synthetic joined status grant",
+                          aggregates: [],
+                        },
+                      ]
+                    : [],
+              }),
+            )
+          : {
+              failure:
+                mode === "forbidden" ? "gh: Forbidden (HTTP 403)" : "gh: Not Found (HTTP 404)",
+            };
+        const oldPath = "scripts/lib/release-validation-waivers.mjs";
+        responses[prefix + "contents/" + oldPath + "?ref=" + SHA] = contents(
+          oldPath,
+          mode === "pre-ledger"
+            ? "const RELEASE_VALIDATION_WAIVERS = [];"
+            : 'import data from "./release-validation-waivers.json";',
+        );
+        if (failed) {
+          Object.assign(responses[prefix + "actions/runs/101"] as object, {
+            conclusion: "failure",
+          });
+          responses[prefix + "actions/runs/101/attempts/1/jobs?per_page=100&page=1"] = {
+            total_count: 1,
+            jobs: [failedJob],
+          };
+        }
+      });
+      const value = JSON.parse(result.stdout);
+      const accepted = mode === "current grant" || mode === "pre-ledger";
+      expect(result.status, result.stderr + result.stdout).toBe(accepted ? 0 : 1);
+      expect(value.publication.collection.complete).toBe(accepted);
+      if (accepted) {
+        expect(value.publication.relationship.status).toBe("verified");
+      }
+      expect(result.calls.flat()).not.toContain("POST");
+    },
+  );
+
   it.each([
     "failed publisher",
     "truncated packages",
