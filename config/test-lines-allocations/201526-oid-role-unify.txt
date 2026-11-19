@@ -15,5 +15,7 @@
 # Individual admitted requests finish while retained runs, queues and children stop.
 # Sandbox stream migration survives database reopen without changing target or grant;
 # payload execution bindings migrate only when valid, and stale bindings remain stale.
-# Measured against the merged PR base: 2302 net test lines; 400 ordinary + 1902 allocated.
-1902
+# Retained question producers cancel ordinary, secret and sessionless waiters, including
+# role loss during preparation and independent owner cleanup; admitted requests settle.
+# Measured against the merged PR base: 2443 net test lines; 400 ordinary + 2043 allocated.
+2043
