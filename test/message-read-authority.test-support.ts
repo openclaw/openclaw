@@ -53,6 +53,12 @@ export function createMessageReadAuthority<T extends InternalChannelThreadingToo
     },
   } as GatewayClient;
   const validate = createAgentRuntimeApprovalAuthorityValidator();
+  // Runtime admission is request-scoped; caller turn authority remains a live fence.
+  const assert = () => {
+    if (!resolveMessageActionTurnCapability({ token: capability, ...identity })) {
+      throw new Error("Message-read turn authority is no longer active");
+    }
+  };
   const options = {
     agentId: "main",
     agentAccountId: "default",
@@ -71,6 +77,7 @@ export function createMessageReadAuthority<T extends InternalChannelThreadingToo
   const revokeTurn = () => revokeMessageActionTurnCapability(capability);
   const releaseClaim = () => releaseAgentRunDelegatedAuthority(delegated);
   return {
+    assert,
     client,
     validate,
     toolContext,

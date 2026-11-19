@@ -333,11 +333,6 @@ function dedupeRouteFixture() {
   };
 }
 
-function expectAuthorityDenied(respond: ReturnType<typeof vi.fn>) {
-  expect(firstRespondCall(respond)[0]).toBe(false);
-  expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
-}
-
 function expectFailure(respond: ReturnType<typeof vi.fn>, error: Record<string, unknown>) {
   const response = firstRespondCall(respond);
   expect(response[0]).toBe(false);
@@ -645,7 +640,7 @@ describe("gateway send conversation ownership", () => {
 
     const { respond } = await request;
     expect(firstRespondCall(respond)[0]).toBe(false);
-    expect(firstRespondCall(respond)[2]?.message).toContain("in-process caller closed");
+    expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(mocks.ensureOutboundSessionEntry).not.toHaveBeenCalled();
   });

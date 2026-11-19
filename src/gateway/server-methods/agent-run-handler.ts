@@ -1,4 +1,8 @@
-import { validateAgentParams } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  validateAgentParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
@@ -33,7 +37,9 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     (assertSource) => {
       assertSource();
       if (hasCurrentClientAuthority?.() === false) {
-        throw new Error("Gateway caller authority is no longer active.");
+        throw new SessionMutationAuthorizationChangedError(
+          errorShape(ErrorCodes.INVALID_REQUEST, "Gateway caller authority is no longer active."),
+        );
       }
     },
   );

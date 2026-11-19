@@ -28,6 +28,7 @@ import { createMessageReadAuthority } from "./message-read-authority.test-suppor
 const interleaving = vi.hoisted(() => ({
   lookup: undefined as ((hostname: string) => Promise<LookupAddress[]>) | undefined,
   afterMime: undefined as (() => void) | undefined,
+  afterGatewayMirror: undefined as (() => Promise<void>) | undefined,
 }));
 
 vi.mock("node:dns/promises", async (importOriginal) => {
@@ -48,6 +49,22 @@ vi.mock("@openclaw/media-core/mime", async (original) => {
     detectMime: async (...args: Parameters<typeof actual.detectMime>) => {
       const result = await actual.detectMime(...args);
       interleaving.afterMime?.();
+      return result;
+    },
+  };
+});
+
+vi.mock("../src/infra/outbound/source-reply-mirror.js", async (original) => {
+  const actual = await original<typeof import("../src/infra/outbound/source-reply-mirror.js")>();
+  return {
+    ...actual,
+    mirrorDeliveredSourceReplyToTranscript: async (
+      ...args: Parameters<typeof actual.mirrorDeliveredSourceReplyToTranscript>
+    ) => {
+      const result = await actual.mirrorDeliveredSourceReplyToTranscript(...args);
+      if (args[0].action === "download-file" && interleaving.afterGatewayMirror) {
+        await interleaving.afterGatewayMirror();
+      }
       return result;
     },
   };
@@ -78,7 +95,8 @@ type Phase =
   | "prepublication"
   | "published"
   | "image-read"
-  | "result";
+  | "result"
+  | "gateway-mirror";
 type Revocation = "plugin" | "turn" | "claim" | "signal";
 type DownloadResult = Awaited<ReturnType<typeof dispatchChannelMessageAction>>;
 type FixtureOptions = {
@@ -108,6 +126,11 @@ type GatewayResponse = {
   payload?: unknown;
   error?: Parameters<RespondFn>[2];
   meta?: Parameters<RespondFn>[3];
+};
+type GatewayMirrorSnapshot = {
+  artifacts: string[];
+  responses: number;
+  cacheWrites: number;
 };
 
 function createOriginatingRun(currentProvider: string, currentChannelId: string) {
@@ -161,6 +184,7 @@ function resultPath(result: DownloadResult): string {
 afterEach(() => {
   interleaving.lookup = undefined;
   interleaving.afterMime = undefined;
+  interleaving.afterGatewayMirror = undefined;
   __setFsSafeTestHooksForTest(undefined);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -178,6 +202,7 @@ async function withDownloadFixture(
     invokeGateway: () => Promise<GatewayResponse>;
     gatewayResponses: GatewayResponse[];
     gatewayCacheWrites: DedupeEntry[];
+    gatewayMirrorSnapshots: GatewayMirrorSnapshot[];
     requests: RequestRecord[];
     terminalRequests: URL[];
     phases: Set<Phase>;
@@ -301,6 +326,7 @@ async function withDownloadFixture(
         const pending: Promise<unknown>[] = [];
         const gatewayResponses: GatewayResponse[] = [];
         const gatewayCacheWrites: DedupeEntry[] = [];
+        const gatewayMirrorSnapshots: GatewayMirrorSnapshot[] = [];
         const dedupe = new Map<string, DedupeEntry>();
         const cacheResult = dedupe.set.bind(dedupe);
         vi.spyOn(dedupe, "set").mockImplementation((key, value) => {
@@ -373,6 +399,19 @@ async function withDownloadFixture(
           },
         });
         interleaving.afterMime = () => hit("mime");
+        interleaving.afterGatewayMirror =
+          options.phase === "gateway-mirror"
+            ? async () => {
+                gatewayMirrorSnapshots.push({
+                  artifacts: (await filesUnder(mediaDir)).filter(
+                    (artifact) => artifact !== preservedPath,
+                  ),
+                  responses: gatewayResponses.length,
+                  cacheWrites: gatewayCacheWrites.length,
+                });
+                hit("gateway-mirror");
+              }
+            : undefined;
         interleaving.lookup = async (hostname) => {
           if (!FILE_HOSTS.has(hostname)) {
             throw new Error(`Unexpected fixture DNS lookup: ${hostname}`);
@@ -500,6 +539,7 @@ async function withDownloadFixture(
                   requesterSenderId: "synthetic-requester",
                   conversationReadOrigin:
                     options.entry === "direct" ? "direct-operator" : "delegated",
+                  assertDirectAdapterHandoff: options.entry === "direct" ? undefined : run.assert,
                   toolContext: run.toolContext,
                 };
                 const operation =
@@ -541,6 +581,8 @@ async function withDownloadFixture(
                     },
                     context: gatewayContext,
                     client: run.client,
+                    // Keep the outer read scope alive through mirror and artifact completion.
+                    sessionMutationCommitGuard: run.assert,
                     isWebchatConnect: () => false,
                   });
                   const response = gatewayResponses[responseOffset];
@@ -557,6 +599,7 @@ async function withDownloadFixture(
                 invokeGateway,
                 gatewayResponses,
                 gatewayCacheWrites,
+                gatewayMirrorSnapshots,
                 requests,
                 terminalRequests,
                 phases,
@@ -578,6 +621,7 @@ async function withDownloadFixture(
           await Promise.all(pending);
           interleaving.lookup = undefined;
           interleaving.afterMime = undefined;
+          interleaving.afterGatewayMirror = undefined;
           __setFsSafeTestHooksForTest(undefined);
         }
       } finally {
@@ -804,4 +848,30 @@ describe("Gateway message.action Slack download completion", () => {
       expect(await filesUnder(fixture.mediaDir)).toEqual([fixture.preservedPath]);
     });
   });
+
+  // Runtime run-claim release is not a completion fence; turn and plugin retirement are.
+  it.each([
+    { name: "the provider result", phase: "result", revoke: "turn" },
+    { name: "late completion after plugin disablement", phase: "gateway-mirror", revoke: "plugin" },
+  ] satisfies Array<FixtureOptions & { name: string; phase: Phase }>)(
+    "does not return or cache revoked download success at $name",
+    async (options) => {
+      await withDownloadFixture(options, async (fixture) => {
+        const response = await fixture.invokeGateway();
+        expect(fixture.phases.has(options.phase)).toBe(true);
+        expect(fixture.binaryRequests()).toHaveLength(1);
+        if (options.phase === "gateway-mirror") {
+          expect(fixture.gatewayMirrorSnapshots).toHaveLength(1);
+          expect(fixture.gatewayMirrorSnapshots[0]).toMatchObject({ responses: 0, cacheWrites: 0 });
+          expect(fixture.gatewayMirrorSnapshots[0]?.artifacts).toHaveLength(1);
+        }
+        expect(response.ok).toBe(false);
+        expect(response.payload).toBeUndefined();
+        expect(response.error?.message).toMatch(/no longer active/i);
+        expect(fixture.gatewayResponses).toHaveLength(1);
+        expect(fixture.gatewayCacheWrites.some((entry) => entry.ok)).toBe(false);
+        expect(await filesUnder(fixture.mediaDir)).toEqual([fixture.preservedPath]);
+      });
+    },
+  );
 });

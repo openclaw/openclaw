@@ -8,7 +8,6 @@ import {
   ErrorCodes,
   errorShape,
   validateMessageActionParams,
-  validatePollParams,
   validateSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { sendDurableMessageBatchCore } from "../../channels/message/runtime.js";
@@ -34,7 +33,6 @@ import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
-import { normalizePollInput } from "../../polls.js";
 import {
   isAgentHarnessSessionKey,
   resolveMissingAgentHarnessSessionError,
@@ -61,6 +59,7 @@ import {
 } from "./message-action-context.js";
 import {
   buildGatewayDeliveryPayload,
+  createGatewayInflightAuthorityFailure,
   createGatewayInflightResult,
   createGatewayInflightSuccess,
   createGatewayInflightFailure,
@@ -72,6 +71,7 @@ import {
   resolveGatewayOutboundTarget,
   resolveRequestedChannel,
 } from "./send-channel-resolution.js";
+import { pollHandler } from "./send-poll.js";
 import { authorizeMessageActionSendAgent } from "./send-role-authorization.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -133,6 +133,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         binding?.reservedRoute?.accountId,
       ],
       conflictMessage: "message.action accountId does not match params.accountId",
+      authority: messageAuthority,
       assertNewInputAllowed: assertClientUploadAllowed,
       replayResults: messageAuthority.assertReadCurrent === undefined,
       resolveChannel: async (requestChannel) => {
@@ -166,7 +167,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         }
         return { cfg, channel, plugin, canonicalAction };
       },
-      work: async ({ cfg, channel, plugin, canonicalAction, accountId, dedupeKey }) => {
+      work: async ({ cfg, channel, plugin, canonicalAction, accountId, dedupeKey, authorize }) => {
         try {
           return await withChannelReadAuthority(
             request.action === "download-file" || messageAuthority.assertReadCurrent
@@ -275,6 +276,10 @@ export const sendHandlers: GatewayRequestHandlers = {
                 sourceReplyFinal: trustedContext.sourceReplyFinal,
                 runId: client?.internal?.agentRuntimeIdentity?.operationalRunInstance.runId,
               };
+              // Attachment preparation may outlive the caller's turn capability.
+              if (!authorize()) {
+                return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
+              }
               const gatewayClientScopes = client?.connect?.scopes ?? [];
               const inboundEventKind: "room_event" | "user_request" =
                 request.inboundTurnKind === "room_event" ? "room_event" : "user_request";
@@ -381,7 +386,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             },
           );
         } catch (err) {
-          return createGatewayInflightFailure({ context, dedupeKey, channel, err });
+          return createGatewayInflightFailure({ context, dedupeKey, channel, err }, authorize);
         }
       },
     });
@@ -433,6 +438,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       bindingAccountIds: [request.accountId],
       routeAccountIds: (binding) => [requestedAccountId, binding?.reservedRoute?.accountId],
       conflictMessage: "send account selections do not match",
+      authority: messageAuthority,
       assertNewInputAllowed: assertClientUploadAllowed,
       resolveChannel: async (requestChannel) => {
         const resolved = await resolveRequestedChannel({
@@ -454,7 +460,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         }
         return { cfg, channel, plugin };
       },
-      work: async ({ cfg, channel, accountId, idem, dedupeKey }) => {
+      work: async ({ cfg, channel, accountId, idem, dedupeKey, authorize }) => {
         try {
           const resolvedTarget = await resolveGatewayOutboundTarget({
             channel,
@@ -609,6 +615,10 @@ export const sendHandlers: GatewayRequestHandlers = {
             policySessionKey: outboundSessionKey,
             conversationType: derivedRoute?.chatType,
           });
+          // Target, attachment, route, and session preparation may all yield.
+          if (!authorize()) {
+            return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
+          }
           await messageAuthority.beforeDeliveryAttempt();
           assertDirectAdapterHandoff?.();
           const send = await sendDurableMessageBatchCore(
@@ -673,109 +683,10 @@ export const sendHandlers: GatewayRequestHandlers = {
             channel,
           });
         } catch (err) {
-          return createGatewayInflightFailure({ context, dedupeKey, channel, err });
+          return createGatewayInflightFailure({ context, dedupeKey, channel, err }, authorize);
         }
       },
     });
   },
-  poll: async ({ params: request, respond, context, client, sessionMutationCommitGuard }) => {
-    if (!assertValidParams(request, validatePollParams, "poll", respond)) {
-      return;
-    }
-    const messageAuthority = createMessageActionRuntimeAuthority({
-      sessionMutationCommitGuard,
-      request: { action: "poll", accountId: request.accountId, params: {} },
-      authorization: resolveAgentRuntimeMessageActionAuthorization(client),
-    });
-    const messageActionConfig = resolveAgentRuntimeMessageActionConfig(client);
-    const assertDirectAdapterHandoff = messageAuthority.assertDirectAdapterHandoff;
-    const onPlatformSendDispatch = messageAuthority.onPlatformSendDispatch;
-    await withMessageOperationRoute({
-      context,
-      prefix: "poll",
-      idempotencyKey: request.idempotencyKey,
-      respond,
-      requestChannel: request.channel,
-      bindingAccountIds: [request.accountId],
-      routeAccountIds: (binding) => [request.accountId, binding?.reservedRoute?.accountId],
-      conflictMessage: "poll account selections do not match",
-      resolveChannel: async (requestChannel) => {
-        const resolved = await resolveRequestedChannel({
-          requestChannel,
-          unsupportedMessage: (input) => `unsupported poll channel: ${input}`,
-          context,
-          config: messageActionConfig,
-        });
-        if ("error" in resolved) {
-          respond(false, undefined, resolved.error);
-          return undefined;
-        }
-        const { cfg, channel } = resolved;
-        const plugin = resolveOutboundChannelPlugin({ channel, cfg });
-        const outbound = plugin?.outbound;
-        // Reject channel-specific options before normalization can silently truncate them.
-        for (const [parameter, capability] of [
-          ["durationSeconds", "supportsPollDurationSeconds"],
-          ["isAnonymous", "supportsAnonymousPolls"],
-        ] as const) {
-          if (request[parameter] !== undefined && outbound?.[capability] !== true) {
-            respondError(
-              respond,
-              ErrorCodes.INVALID_REQUEST,
-              `${parameter} is not supported for ${channel} polls`,
-            );
-            return undefined;
-          }
-        }
-        if (!plugin || !outbound?.sendPoll) {
-          respondError(respond, ErrorCodes.INVALID_REQUEST, `unsupported poll channel: ${channel}`);
-          return undefined;
-        }
-        return { cfg, channel, plugin, outbound, sendPoll: outbound.sendPoll };
-      },
-      work: async ({ cfg, channel, accountId, idem, dedupeKey, outbound, sendPoll }) => {
-        const poll = {
-          question: request.question,
-          options: request.options,
-          maxSelections: request.maxSelections,
-          durationSeconds: request.durationSeconds,
-          durationHours: request.durationHours,
-        };
-        const threadId = normalizeOptionalString(request.threadId);
-        try {
-          const resolvedTarget = await resolveGatewayOutboundTarget({
-            channel,
-            to: request.to.trim(),
-            cfg,
-            accountId,
-          });
-          if (!resolvedTarget.ok) {
-            return { ok: false, error: resolvedTarget.error };
-          }
-          const normalized = outbound.pollMaxOptions
-            ? normalizePollInput(poll, { maxOptions: outbound.pollMaxOptions })
-            : normalizePollInput(poll);
-          await messageAuthority.beforeDeliveryAttempt();
-          assertDirectAdapterHandoff?.();
-          const result = await sendPoll({
-            cfg,
-            to: resolvedTarget.to,
-            poll: normalized,
-            accountId,
-            threadId,
-            silent: request.silent,
-            isAnonymous: request.isAnonymous,
-            gatewayClientScopes: client?.connect?.scopes ?? [],
-            onPlatformSendDispatch,
-            assertDirectAdapterHandoff,
-          });
-          const payload = buildGatewayDeliveryPayload({ runId: idem, channel, result });
-          return createGatewayInflightSuccess({ context, dedupeKey, payload, channel });
-        } catch (err) {
-          return createGatewayInflightFailure({ context, dedupeKey, channel, err });
-        }
-      },
-    });
-  },
+  poll: pollHandler,
 };
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

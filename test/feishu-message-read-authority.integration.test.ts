@@ -17,6 +17,7 @@ import {
 } from "../src/config/config.js";
 import {
   mintMessageActionTurnCapability,
+  resolveMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../src/gateway/message-action-turn-capability.js";
 import {
@@ -74,6 +75,19 @@ function createOriginatingRun(currentChat = CURRENT) {
     toolContext,
   });
   return {
+    // Runtime admission does not replace the caller's live turn fence.
+    assert: () => {
+      if (
+        !resolveMessageActionTurnCapability({
+          token: turnCapability,
+          agentId: "main",
+          runId: operationalRunInstance.runId,
+          sessionKey,
+        })
+      ) {
+        throw new Error("Message-read turn authority is no longer active");
+      }
+    },
     toolContext,
     revokeTurn: () => revokeMessageActionTurnCapability(turnCapability),
     releaseClaim: () => releaseAgentRunDelegatedAuthority(delegatedAuthority),
@@ -349,6 +363,7 @@ function createFixture(
         requesterAccountId: "default",
         requesterSenderId: SELF,
         conversationReadOrigin: "delegated",
+        assertDirectAdapterHandoff: run.assert,
         toolContext: run.toolContext,
         ...overrides,
       }),
@@ -551,13 +566,18 @@ it.each(["account", "origin", "target", "reactions", "sticker", "catalog"] as co
 it.each([
   ["plugin", "metadata"],
   ["plugin", "result"],
-] as const)("rejects %s retirement at %s", async (_owner, phase) => {
+  ["turn", "result"],
+] as const)("rejects %s retirement at %s", async (owner, phase) => {
   const fixture = createFixture();
   beforeReply = (request) => {
     if (request.path !== (phase === "metadata" ? CHAT_PATH : PINS_PATH)) {
       return;
     }
-    fixture.record.enabled = false;
+    if (owner === "plugin") {
+      fixture.record.enabled = false;
+    } else {
+      fixture.run.revokeTurn();
+    }
   };
   await expect(fixture.dispatch("list-pins", { chatId: ALLOWED })).rejects.toThrow(
     "no longer active",
@@ -565,17 +585,32 @@ it.each([
   expect(contentRequests()).toEqual(phase === "metadata" ? [CHAT_PATH] : [CHAT_PATH, PINS_PATH]);
 });
 
-it("rejects a retired local channel-list result", async () => {
-  const fixture = createFixture();
-  let observed: ActionResult | undefined;
-  afterProviderResult = (result) => {
-    observed = result;
-    fixture.record.enabled = false;
-  };
-  await expect(fixture.dispatch("channel-list", {})).rejects.toThrow("no longer active");
-  expectResult(observed ?? null, { groups: [{ id: ALLOWED }], peers: [{ id: SELF }] });
-  expect(contentRequests()).toEqual([]);
-});
+it.each(["channel-list", "member-info"] as const)(
+  "rejects a retired local %s result",
+  async (action) => {
+    const fixture = createFixture({ currentChat: action === "member-info" ? DIRECT : CURRENT });
+    let observed: ActionResult | undefined;
+    afterProviderResult = (result) => {
+      observed = result;
+      if (action === "channel-list") {
+        fixture.record.enabled = false;
+      } else {
+        fixture.run.revokeTurn();
+      }
+    };
+    await expect(
+      fixture.dispatch(action, action === "member-info" ? { chatId: DIRECT } : {}),
+    ).rejects.toThrow("no longer active");
+    if (action === "channel-list") {
+      expectResult(observed ?? null, { groups: [{ id: ALLOWED }], peers: [{ id: SELF }] });
+    } else {
+      expectResult(observed ?? null, { members: [{ member_id: SELF }] });
+    }
+    expect(contentRequests()).toEqual(
+      action === "member-info" ? [`/open-apis/im/v1/chats/${DIRECT}`] : [],
+    );
+  },
+);
 
 it.each(["allowed", "turn", "claim"] as const)(
   "uses the normal local message tool (%s)",

@@ -50,6 +50,10 @@ export function resolveAgentRuntimeMessageActionConfig(
     : undefined;
 }
 
+export type MessageActionCallerAuthority = {
+  authorize: () => boolean;
+};
+
 /** Retain the live caller and scheduled source through this action's requests. */
 export function createMessageActionRuntimeAuthority(
   params: Pick<
@@ -100,6 +104,14 @@ export function createMessageActionRuntimeAuthority(
       ? undefined
       : params.authorization?.deliveryAttempt?.beforeAttempt();
   return {
+    authorize(): boolean {
+      try {
+        assertAdmissionCurrent?.();
+        return true;
+      } catch {
+        return false;
+      }
+    },
     assertReadCurrent,
     assertScheduledWriteCurrent,
     beforeDeliveryAttempt,

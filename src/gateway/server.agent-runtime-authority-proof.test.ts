@@ -12,7 +12,6 @@ import {
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import { validateAgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import {
   captureSessionTarget,

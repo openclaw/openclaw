@@ -12,6 +12,7 @@ import * as commandSecretGateway from "../src/cli/command-secret-gateway.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import {
   mintMessageActionTurnCapability,
+  resolveMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../src/gateway/message-action-turn-capability.js";
 import {
@@ -69,6 +70,19 @@ function createOriginatingRun(
     toolContext,
   });
   return {
+    // Only the caller turn is rechecked after runtime admission.
+    assert: () => {
+      if (
+        !resolveMessageActionTurnCapability({
+          token: turnCapability,
+          agentId: "main",
+          runId: operationalRunInstance.runId,
+          sessionKey,
+        })
+      ) {
+        throw new Error("Message-read turn authority is no longer active");
+      }
+    },
     wrapTool: (tool: ReturnType<typeof createMessageTool>) =>
       wrapToolWithGatewayCallerIdentity(tool, {
         agentId: "main",
@@ -181,6 +195,8 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
     ["denied", 0],
     ["revoked", 0, 1],
     ["result-revoked", 1],
+    ["run-revoked-direct", 0],
+    ["run-result-revoked-direct", 1],
     ["bundled-allowed", 1],
     ["bundled-revoked", 0, 1],
   ];
@@ -306,6 +322,7 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
         accountId: "default",
         requesterAccountId: "default",
         conversationReadOrigin: "delegated" as const,
+        assertDirectAdapterHandoff: run?.assert,
         toolContext: {
           currentChannelProvider: channel,
           currentChannelId: channel === "discord" ? current : "C9876543210",
@@ -463,6 +480,7 @@ async function withSlackMetadataHarness(
         params: {},
         accountId: "ops",
         conversationReadOrigin: "delegated",
+        assertDirectAdapterHandoff: run.assert,
         ...run.actionContext,
       },
     });

@@ -258,7 +258,7 @@ test.each([
   { stage: "chat.history", change: "metadata", policy: "named role" },
   { stage: "chat.history", change: "lifecycle", policy: "embedded" },
 ] as const)(
-  "rechecks $policy enrichment after a $change change during $stage",
+  "applies $policy enrichment policy after a $change change during $stage",
   async ({ stage, change, policy }) => {
     await withInventory(async ({ cfg, viewerId, context, asReader, setConfig }) => {
       const embedded = policy === "embedded";
@@ -325,10 +325,9 @@ test.each([
         const invoke = () => list(cfg, args, options);
         const pending = embedded ? invoke() : asReader(invoke);
         if (change === "role") {
-          await expect(pending).rejects.toThrow(
-            "Your operator role changed; reconnect before continuing.",
-          );
-          expect(changed).toBe(true);
+          const started = await pending;
+          expect(started.details).toMatchObject({ count: 2 });
+          expect(JSON.stringify(started)).toContain(bufferedText);
         }
         const result =
           change === "role"
