@@ -117,14 +117,11 @@ function expectPreparedProject(
   sessionId: string,
   project: Awaited<ReturnType<typeof registerProjectRegistry>>,
   projectRoot: string,
-  worktree: boolean,
 ) {
   expect(entry).toMatchObject({
     sessionId,
     projectId: project.id,
-    ...(worktree
-      ? { worktree: { canonicalWorkspaceDir: projectRoot } }
-      : { spawnedCwd: projectRoot, sessionRoot: projectRoot }),
+    worktree: { canonicalWorkspaceDir: projectRoot },
   });
 }
 async function remoteProjectFixture<T = Awaited<ReturnType<typeof registerProjectRegistry>>>(
@@ -337,13 +334,13 @@ test.each([
           );
         }
         const prepared = readEntry(storePath, key);
-        expectPreparedProject(prepared, sessionId, project, projectRoot, worktree);
-        if (worktree) {
-          expect((await managedWorktrees.findLiveByOwner("session", key))?.baseRef).toBe("main");
-          expect(prepared?.spawnedCwd).not.toBe(projectRoot);
-          expect(await readReadme(prepared!.spawnedCwd!)).toBe("project\n");
-          await removeWorktree(prepared!.worktree!.id);
-        }
+        expectPreparedProject(prepared, sessionId, project, projectRoot);
+        expect((await managedWorktrees.findLiveByOwner("session", key))?.baseRef).toBe(
+          baseRef ?? "origin/main",
+        );
+        expect(prepared?.spawnedCwd).not.toBe(projectRoot);
+        expect(await readReadme(prepared!.spawnedCwd!)).toBe("project\n");
+        await removeWorktree(prepared!.worktree!.id);
       } else if (mode === "abort") {
         expect(created?.runStarted).toBe(true);
         await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledOnce());
@@ -418,6 +415,12 @@ test.each([
           });
         }
 
+        if (!worktree) {
+          await replaceSessionEntry(
+            { agentId: "main", sessionKey: key, storePath },
+            { ...entryAfterFailure!, pendingWorktree: undefined },
+          );
+        }
         const retriedMaterialization = createDeferredCore<typeof project>();
         projectCloneMocks.materialize.mockReturnValueOnce(retriedMaterialization.promise);
         const restartedContext = { broadcast, dedupe: new Map() };
@@ -458,7 +461,7 @@ test.each([
           expect(error?.[1]).toBeUndefined();
           expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
           const preparedEntry = readEntry(storePath, key);
-          expectPreparedProject(preparedEntry, sessionId, project, projectRoot, worktree);
+          expectPreparedProject(preparedEntry, sessionId, project, projectRoot);
           expect(preparedEntry).not.toHaveProperty("pendingProjectGitUrl");
           expect(preparedEntry).not.toHaveProperty("pendingWorktree");
           if (preparedEntry?.worktree) {
@@ -653,7 +656,7 @@ test("chat.send visibly rejects corrupt persisted project intent without default
   expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 });
 
-test("sessions.create terminalizes remote project preparation outside a sandboxed agent workspace", async () => {
+test("sessions.create isolates a remote project outside a sandboxed agent workspace", async () => {
   const root = tempDirs.make("openclaw-session-remote-project-sandbox-");
   const workspace = await initializeRepository(root, "workspace");
   const outside = await initializeRepository(root, "outside");
@@ -664,6 +667,7 @@ test("sessions.create terminalizes remote project preparation outside a sandboxe
   projectCloneMocks.materialize.mockReturnValueOnce(materialization.promise);
   const broadcast = vi.fn();
   const context = { broadcast };
+  mockDispatch();
 
   let key: string | undefined;
   try {
@@ -678,20 +682,17 @@ test("sessions.create terminalizes remote project preparation outside a sandboxe
 
     materialization.resolve(project);
     await settleWorkspaceRuns(context, storePath, key);
-    expectChatEvent(broadcast, {
-      runId,
-      sessionKey: key,
-      state: "error",
-      errorMessage: expect.stringContaining(
-        "sessions.create project is outside the sandboxed agent workspace",
-      ),
-    });
-    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-    expect(readEntry(storePath, key)?.projectId).toBe(undefined);
+    expectChatEvent(broadcast, { runId, sessionKey: key, state: "final" });
+    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+    const prepared = readEntry(storePath, key);
+    expect(prepared?.projectId).toBe(project.id);
+    expect(prepared?.worktree?.id).toBeDefined();
+    expect(prepared?.spawnedCwd).not.toBe(outside);
     expect(readEntry(storePath, key)?.status).not.toBe("running");
   } finally {
     materialization.resolve(project);
     await settleWorkspaceRuns(context, storePath, key, true);
+    await removeOwnedSessionWorktree(key);
   }
 });
 

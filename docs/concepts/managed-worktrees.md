@@ -10,6 +10,15 @@ title: "Managed worktrees"
 
 Managed worktrees give an agent task its own git branch and checkout without placing temporary directories inside the source repository. OpenClaw records them in the shared state database and snapshots their tracked and non-ignored untracked contents before ordinary removal. [Capacity eviction](#capacity-and-eviction) also preserves the checkout if its recovery snapshot cannot be completed.
 
+Projects cloned by OpenClaw always start new sessions in managed worktrees,
+including requests that omit `worktree` or set it to `false`. The shared clone is
+the maintenance-owned source for refreshes, Git objects, and templates. The
+project picker offers **New worktree** for these clones; explicitly registered
+folders and agent workspaces can still use **Current checkout**. Opening a
+repository URL also allocates a managed worktree. Existing sessions retain their
+accepted working directories; start a new project session to leave a previously
+selected shared checkout.
+
 When a new chat starts a managed worktree, OpenClaw can begin the first model
 turn while the checkout finishes. It first prepares the project instructions,
 workspace skills, and other prompt files from the selected Git commit in the

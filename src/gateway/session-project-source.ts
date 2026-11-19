@@ -63,6 +63,9 @@ export async function resolveSessionProjectCheckoutOptions(params: {
   if (!project) {
     return { current: false, worktree: false };
   }
+  if (project.source === "cloned") {
+    return { current: false, worktree: true };
+  }
   const [direct, managed] = await Promise.all([
     resolveSessionProjectRootForRecord(project, false),
     resolveSessionProjectRootForRecord(project, true),
