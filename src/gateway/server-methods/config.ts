@@ -686,7 +686,9 @@ async function commitGatewayConfigWriteOrRespond(
       undefined,
       errorShape(
         ErrorCodes.INVALID_REQUEST,
-        error.retryable ? `${error.message}; re-run config.get and retry` : error.message,
+        redactToolDetail(
+          error.retryable ? `${error.message}; re-run config.get and retry` : error.message,
+        ),
       ),
     );
     return null;
