@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { threadStartResult } from "./codex-app-server.test-fixtures.js";
 import { createClientHarness } from "./test-support.js";
 import {
   createThreadRequestAppServerOptions,
   createThreadRequestAttemptParams,
 } from "./thread-lifecycle.test-fixtures.js";
-import { refreshCodexThreadPolicy } from "./thread-policy.js";
+import {
+  assertAdoptedCodexThreadResumeAllowed,
+  refreshCodexThreadPolicy,
+} from "./thread-policy.js";
 import { buildThreadResumeParams, buildThreadStartParams } from "./thread-requests.js";
 
 describe("native thread policy refresh", () => {
@@ -86,4 +90,46 @@ describe("native thread policy refresh", () => {
       }
     },
   );
+});
+
+describe("adopted thread restart wait", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("refuses a restart input when the earlier turn is still active after the wait", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const h = createClientHarness();
+    const params = createThreadRequestAttemptParams({ provider: "openai" });
+    params.inputProvenance = { kind: "internal_system", sourceTool: "restart" };
+    try {
+      const waiting = assertAdoptedCodexThreadResumeAllowed(
+        { client: h.client, params },
+        "root",
+        {
+          lifecycleTiming: { measure: async (_label, run) => await run() },
+          throwIfAborted: () => {},
+        },
+        () => {},
+      );
+      void waiting.catch(() => {});
+      const request = JSON.parse(await h.waitForWrite(0));
+      expect(request.method).toBe("thread/read");
+      vi.setSystemTime(Date.now() + 120_000);
+      h.send({
+        id: request.id,
+        result: {
+          thread: { ...threadStartResult("root", "/repo").thread, status: { type: "active" } },
+        },
+      });
+      await expect(waiting).rejects.toMatchObject({
+        name: "CodexAdoptedThreadActiveError",
+        message: expect.stringContaining("still active after the restart wait"),
+        userMessage: expect.stringContaining("That work is still running"),
+      });
+      expect(h.writes).toHaveLength(1);
+    } finally {
+      await h.client.closeAndWait();
+    }
+  });
 });
