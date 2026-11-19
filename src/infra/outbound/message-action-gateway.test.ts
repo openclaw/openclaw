@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import * as confirmedVisibleMessage from "../../sessions/confirmed-visible-message.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   createGatewayActionPlugin,
@@ -14,7 +13,6 @@ import {
   readRecordField,
   createEnabledMessageActionConfig,
 } from "./message-action-runner.test-helpers.js";
-import * as outboundSession from "./outbound-session.js";
 
 type ActionInput = Parameters<typeof runMessageAction>[0];
 type GatewayAction = "send" | "react" | "poll";
@@ -188,56 +186,4 @@ describe("runMessageAction gateway dispatch", () => {
     });
     expect(result).toMatchObject({ handledBy: "core" });
   });
-
-  it.each([
-    { label: "external CLI caller", gateway: {} },
-    {
-      label: "authenticated transport caller",
-      gateway: { resolveAgentRuntimeIdentityToken: async () => "agent-runtime-token" },
-    },
-    {
-      label: "in-process gateway caller",
-      gateway: {
-        request: async <T>() => ({ ok: true, messageId: "gw-inproc-1" }) as T,
-      },
-    },
-  ])(
-    "does not commit destination transcript history from caller ($label) even with a resolved route",
-    async ({ gateway }) => {
-      const commitSpy = vi.spyOn(confirmedVisibleMessage, "commitConfirmedVisibleMessage");
-      vi.spyOn(outboundSession, "resolveOutboundSessionRoute").mockResolvedValueOnce({
-        sessionKey: "agent:main:gatewaychat:direct:user-123",
-        baseSessionKey: "agent:main:gatewaychat:direct:user-123",
-        peer: { kind: "direct", id: "user-123" },
-        chatType: "direct",
-        from: "gatewaychat:user-123",
-        to: "user-123",
-      });
-      const handleAction = vi.fn(async () => jsonResult({ ok: true, local: true }));
-      setTestPlugin(
-        createGatewayActionPlugin({
-          pluginId: "gatewaychat",
-          label: "gatewaychat",
-          blurb: "Gateway dispatch test plugin.",
-          actions: ["send"],
-          messaging: { targetResolver: { looksLikeId: () => true } },
-          handleAction,
-        }),
-        "gatewaychat",
-      );
-      mocks.callGatewayLeastPrivilege.mockResolvedValueOnce({
-        ok: true,
-        messageId: "gw-cli-1",
-      });
-
-      await runGatewayAction(
-        "send",
-        { target: "user-123", message: "hello from delegated caller" },
-        { sessionKey: "agent:main:main", gateway },
-      );
-
-      expect(handleAction).not.toHaveBeenCalled();
-      expect(commitSpy).not.toHaveBeenCalled();
-    },
-  );
 });

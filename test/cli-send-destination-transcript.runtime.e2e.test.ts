@@ -116,7 +116,6 @@ it(
       },
     });
     let client: Awaited<ReturnType<typeof connectProofClient>> | undefined;
-    let stage = "startup";
     try {
       const pluginRoot = instance.state.statePath("fixture-plugin");
       const meta = {
@@ -175,7 +174,6 @@ it(
           expect(finished.status, JSON.stringify(finished) + instance.logs()).toBe("ok");
         }
       };
-      stage = "warmup";
       await turn("SYNTHETIC_WARMUP_USER");
       const storePath = path.join(instance.state.sessionsDir("main"), "sessions.json");
       const entry = loadSessionEntry({
@@ -203,7 +201,6 @@ it(
       };
       const sentRows = async () =>
         (await history()).filter((row) => JSON.stringify(row.event).includes(sentText));
-      stage = "cli-send";
       const cli = await instance.cli(
         [
           "message",
@@ -230,7 +227,6 @@ it(
         displayName: entry!.displayName,
       });
       expect(idempotencyKey).toBeTruthy();
-      stage = "replay";
       await client.request("message.action", {
         channel,
         action: "send",
@@ -242,7 +238,6 @@ it(
       });
       expect(platformSends).toBe(1);
       expect(await sentRows()).toHaveLength(1);
-      stage = "resident-followup";
       await turn("SYNTHETIC_FOLLOWUP_USER");
       const rows = await history();
       const serialized = rows.map((row) => JSON.stringify(row.event));
@@ -270,35 +265,6 @@ it(
       expect(instance.logs()).not.toMatch(
         /UNIQUE constraint failed.*transcript|sequence collision/i,
       );
-      process.stdout.write(
-        JSON.stringify({
-          proof: "cli-destination-transcript",
-          cliExit: cli.code,
-          platformSends,
-          destinationRows: 1,
-          modelCalls,
-          transcriptRows: rows.length,
-          uniqueSequences: true,
-          orderedMarkers,
-          markerSequences: markerRows.map((index) => rows[index]?.seq),
-          residentFollowup: "user + tool call/result + assistant",
-          externalIO: "synthetic loopback HTTP only",
-        }) + "\n",
-      );
-    } catch (error) {
-      process.stderr.write(
-        JSON.stringify({
-          stage,
-          platformSends,
-          modelCalls,
-          diagnostics: instance
-            .logs()
-            .split("\n")
-            .filter((line) => /conflict|collision|constraint|seq|error/i.test(line))
-            .map((line) => line.replaceAll(instance.state.root, "<isolated-state>")),
-        }) + "\n",
-      );
-      throw error;
     } finally {
       if (client) {
         await disconnectGatewayClient(client);
