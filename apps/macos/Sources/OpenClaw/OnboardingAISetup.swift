@@ -67,6 +67,10 @@ final class OnboardingAISetupModel {
     private let defaults: UserDefaults
     private let routeIdentityProvider: @MainActor () -> String?
     private let connectionModeProvider: @MainActor () -> AppState.ConnectionMode
+    var gatewayIsRemote: Bool {
+        self.connectionModeProvider() == .remote
+    }
+
     private var started = false
     private var attemptToken = UUID()
     @ObservationIgnored private var pendingVerification: PendingVerification?

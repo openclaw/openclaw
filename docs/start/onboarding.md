@@ -126,7 +126,8 @@ if you want to use Git.
 <Step title="Connect your AI">
 Pick one entry from the list: **ChatGPT**, **Claude**, **Gemini**, **API key**,
 or **A model on your own computer** (Ollama or LM Studio). Logins OpenClaw
-finds on the Gateway host are tagged **On this Mac**. Nothing is tested,
+finds on the Gateway host are tagged **On this Mac**, or **On your Gateway**
+when the Gateway runs elsewhere. Nothing is tested,
 installed, or saved until you pick an entry. Picking an entry, or a sign-in
 under **More providers**, replaces the list with that provider's card: its
 sign-in steps, key form, and live AI test. **Choose another AI** returns to the

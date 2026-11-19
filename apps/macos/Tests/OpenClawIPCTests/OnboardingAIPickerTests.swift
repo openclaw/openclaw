@@ -50,12 +50,12 @@ struct OnboardingAIPickerTests {
             return
         }
         #expect(chatGPT.id == "openai")
-        #expect(rows[.chatGPT]?.onThisMac == false)
+        #expect(rows[.chatGPT]?.detected == false)
         #expect(rows[.claude]?.action == .candidate("claude-cli"))
-        #expect(rows[.claude]?.onThisMac == true)
+        #expect(rows[.claude]?.detected == true)
         // No Google sign-in exists for setup, so Gemini opens its key.
         #expect(rows[.gemini]?.action == .apiKey("gemini-api-key"))
-        #expect(rows[.localModel]?.onThisMac == true)
+        #expect(rows[.localModel]?.detected == true)
         #expect(picker.localCandidates.map(\.kind) == ["ollama-auto"])
         // Options no row uses stay reachable behind More providers.
         #expect(picker.moreAuthOptions.map(\.id) == [

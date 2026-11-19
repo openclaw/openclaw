@@ -2152,6 +2152,7 @@
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-call","surface":"apple","id":"native.apple.84c56bb98785b36f","source":"Not connected"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-call","surface":"apple","id":"native.apple.413b7b09c221d1eb","source":"Ollama or LM Studio"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-call","surface":"apple","id":"native.apple.d78a0eb01a7c6ef2","source":"On this Mac"},
+    {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-call","surface":"apple","id":"native.apple.2c7b06bf03e2286d","source":"On your Gateway"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-call","surface":"apple","id":"native.apple.319b3b1f1ad14dd9","source":"Open help…"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-call","surface":"apple","id":"native.apple.7c665e47d26797c8","source":"OpenAI, Anthropic, OpenRouter and more"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-call","surface":"apple","id":"native.apple.f74c9fb13a4faf6e","source":"OpenClaw checks again before it changes your AI setup."},

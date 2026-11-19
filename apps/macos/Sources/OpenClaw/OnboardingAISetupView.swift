@@ -165,7 +165,7 @@ struct OnboardingAISetupView: View {
                 } else {
                     // The usual providers show while the Gateway answers; they turn on once it does.
                     self.rowList(OnboardingAIPicker.placeholderRows.map {
-                        OnboardingAIPicker.Row(id: $0, action: .localModel, onThisMac: false)
+                        OnboardingAIPicker.Row(id: $0, action: .localModel, detected: false)
                     })
                     .disabled(true)
                 }
@@ -344,8 +344,9 @@ struct OnboardingAISetupView: View {
                 HStack(spacing: 6) {
                     self.title(for: row)
                         .font(.callout.weight(.semibold))
-                    if row.onThisMac {
-                        Text("On this Mac")
+                    if row.detected {
+                        // Detection runs on the Gateway host, which is not this Mac for a remote Gateway.
+                        (self.model.gatewayIsRemote ? Text("On your Gateway") : Text("On this Mac"))
                             .font(.caption2.weight(.semibold))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)

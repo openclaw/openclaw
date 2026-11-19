@@ -27,7 +27,7 @@ struct OnboardingAIPicker: Equatable {
     struct Row: Identifiable, Equatable {
         let id: RowID
         let action: Action
-        let onThisMac: Bool
+        let detected: Bool
         var candidate: Model.Candidate?
     }
 
@@ -56,14 +56,14 @@ struct OnboardingAIPicker: Equatable {
         func accountRow(_ id: RowID, candidateKind: String, brand: String, allowsInstall: Bool) -> Row? {
             if let candidate = usable.first(where: { $0.kind == candidateKind }) {
                 claimed.insert(candidate.kind)
-                return Row(id: id, action: .candidate(candidate.kind), onThisMac: true, candidate: candidate)
+                return Row(id: id, action: .candidate(candidate.kind), detected: true, candidate: candidate)
             }
             let kinds = allowsInstall ? ["oauth", "device-code", "install"] : ["oauth", "device-code"]
             // Gateway order already ranks options; a browser sign-in beats a device code on this Mac.
             let options = authOptions.filter { $0.brandId == brand && kinds.contains($0.kind) }
             guard let option = options.first(where: { $0.kind == "oauth" }) ?? options.first else { return nil }
             usedOptions.insert(option.id)
-            return Row(id: id, action: .signIn(option), onThisMac: false)
+            return Row(id: id, action: .signIn(option), detected: false)
         }
 
         if let row = accountRow(.chatGPT, candidateKind: "codex-cli", brand: "openai", allowsInstall: false) {
@@ -76,16 +76,16 @@ struct OnboardingAIPicker: Equatable {
         if let row = accountRow(.gemini, candidateKind: "gemini-cli", brand: "google", allowsInstall: false) {
             rows.append(row)
         } else if let key = manualProviders.first(where: { $0.brandId == "google" }) {
-            rows.append(Row(id: .gemini, action: .apiKey(key.id), onThisMac: false))
+            rows.append(Row(id: .gemini, action: .apiKey(key.id), detected: false))
         }
         if !manualProviders.isEmpty {
-            rows.append(Row(id: .apiKey, action: .apiKey(nil), onThisMac: false))
+            rows.append(Row(id: .apiKey, action: .apiKey(nil), detected: false))
         }
         if !local.isEmpty || !localOptions.isEmpty || !prepareOptions.isEmpty {
-            rows.append(Row(id: .localModel, action: .localModel, onThisMac: !local.isEmpty))
+            rows.append(Row(id: .localModel, action: .localModel, detected: !local.isEmpty))
         }
         let found = usable.filter { !claimed.contains($0.kind) }.map {
-            Row(id: .found($0.kind), action: .candidate($0.kind), onThisMac: true, candidate: $0)
+            Row(id: .found($0.kind), action: .candidate($0.kind), detected: true, candidate: $0)
         }
         self.rows = found + rows
         self.localCandidates = local
