@@ -660,7 +660,15 @@ function IdentityCompletion(props: { request: Promise<AgentIdentityOutcome> | nu
     if (outcome?.error) {
       throw new Error(outcome.error);
     }
-    return null;
+    return outcome?.notice ?? null;
   });
-  return <>{completion()}</>;
+  return (
+    <Show when={completion()}>
+      {(notice) => (
+        <div class="agent-identity-status" role="status">
+          {notice()}
+        </div>
+      )}
+    </Show>
+  );
 }
