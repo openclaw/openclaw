@@ -1,5 +1,6 @@
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { WebSearchProviderToolExecutionContext } from "../plugins/web-provider-types.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 
 // Shared web_search runtime contracts. Keep these in a types-only module so
@@ -24,6 +25,7 @@ export type RunWebSearchParams = ResolveWebSearchDefinitionParams & {
   signal?: AbortSignal;
   /** Caller-owned synchronous authority check, repeated immediately before external requests. */
   assertCurrent?: () => void;
+  modelSelection?: WebSearchProviderToolExecutionContext["modelSelection"];
 };
 
 export type RunWebSearchResult = {

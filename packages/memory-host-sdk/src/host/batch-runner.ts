@@ -4,7 +4,7 @@ import { readEmbeddingBatchJsonl } from "./batch-output.js";
 import type { EmbeddingBatchStatus, ProviderBatchOutputLine } from "./batch-provider-common.js";
 import { getBatchResponseError } from "./batch-response-error.js";
 import {
-  resolveCompletedBatchResult,
+  resolveBatchCompletionFromStatus,
   throwIfBatchCompletionError,
   type BatchCompletionResult,
 } from "./batch-status.js";
@@ -180,13 +180,28 @@ export async function runEmbeddingBatches<
         status,
         readError: params.readError,
       });
-      const completed = await resolveCompletedBatchResult({
-        provider: params.provider,
-        status,
-        wait: params.wait,
-        waitForBatch: () =>
-          params.waitForBatch({ ...status, id: batchId }, pollIntervalMs, timeoutMs),
-      });
+      let completed: BatchCompletionResult;
+      if (status.status === "completed") {
+        completed = resolveBatchCompletionFromStatus({
+          provider: params.provider,
+          batchId,
+          status,
+        });
+      } else {
+        if (!params.wait) {
+          throw new Error(
+            `${params.provider} batch ${batchId} submitted; enable remote.batch.wait to await completion`,
+          );
+        }
+        completed = await params.waitForBatch(
+          { ...status, id: batchId },
+          pollIntervalMs,
+          timeoutMs,
+        );
+        if (!completed.outputFileId) {
+          throw new Error(`${params.provider} batch ${batchId} completed without output file`);
+        }
+      }
       const errors: string[] = [];
       const remaining = new Set(group.map((request) => request.custom_id));
       await params.readOutput(completed.outputFileId, async (response) => {

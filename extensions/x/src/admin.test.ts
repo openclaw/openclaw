@@ -20,6 +20,34 @@ type Handler = Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
 type Request = Parameters<Handler>[0];
 let gatewaySequence = 0;
 
+const configuredEntries = [
+  { userId: "10", configured: true, editable: false },
+  { userId: "20", configured: true, editable: false },
+];
+const emptySpend = {
+  dayUsd: 0,
+  cycleUsd: 0,
+  dailyLimitUsd: 100,
+  monthlyLimitUsd: 1000,
+  cycleStart: expect.any(String),
+};
+
+function gatewayForX(x: NonNullable<OpenClawConfig["channels"]>["x"]) {
+  return gateway(undefined, { channels: { x } });
+}
+
+function expectSnapshot(response: Request["respond"], fields: Record<string, unknown>) {
+  expect(response).toHaveBeenCalledWith(true, expect.objectContaining(fields));
+}
+
+function expectGuests(response: Request["respond"], fields: Record<string, unknown>) {
+  expectSnapshot(response, { guests: expect.objectContaining(fields) });
+}
+
+function expectError(response: Request["respond"], code: string) {
+  expect(response).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code }));
+}
+
 function gateway(beforeWrite?: () => Promise<void>, configOverride?: OpenClawConfig) {
   const handlers = new Map<string, Handler>();
   const scopes = new Map<string, string | undefined>();
@@ -99,18 +127,14 @@ beforeEach(() => {
 
 describe("X allowlist Gateway methods", () => {
   it("includes the selected account's recorded spend and limits without an X API lookup", async () => {
-    const { invoke, runtime } = gateway(undefined, {
-      channels: {
-        x: {
-          accounts: {
-            small: {
-              userId: "101",
-              username: "small_bot",
-              costLimits: { dailyUsd: 5, monthlyUsd: 25, cycleStartDay: 20 },
-            },
-            other: { userId: "102", username: "other_bot" },
-          },
+    const { invoke, runtime } = gatewayForX({
+      accounts: {
+        small: {
+          userId: "101",
+          username: "small_bot",
+          costLimits: { dailyUsd: 5, monthlyUsd: 25, cycleStartDay: 20 },
         },
+        other: { userId: "102", username: "other_bot" },
       },
     });
     await openXSpend(runtime, "small", () => ({
@@ -118,23 +142,19 @@ describe("X allowlist Gateway methods", () => {
       monthlyUsd: 25,
       cycleStartDay: 20,
     })).charge(250_000);
-    expect(await invoke("x.allowlist.list", { accountId: "small" })).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        accountId: "small",
-        spend: {
-          dayUsd: 0.25,
-          cycleUsd: 0.25,
-          dailyLimitUsd: 5,
-          monthlyLimitUsd: 25,
-          cycleStart: expect.stringMatching(/^\d{4}-\d{2}-20$/),
-        },
-      }),
-    );
-    expect(await invoke("x.allowlist.list", { accountId: "other" })).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ spend: expect.objectContaining({ dayUsd: 0, cycleUsd: 0 }) }),
-    );
+    expectSnapshot(await invoke("x.allowlist.list", { accountId: "small" }), {
+      accountId: "small",
+      spend: {
+        dayUsd: 0.25,
+        cycleUsd: 0.25,
+        dailyLimitUsd: 5,
+        monthlyLimitUsd: 25,
+        cycleStart: expect.stringMatching(/^\d{4}-\d{2}-20$/),
+      },
+    });
+    expectSnapshot(await invoke("x.allowlist.list", { accountId: "other" }), {
+      spend: expect.objectContaining({ dayUsd: 0, cycleUsd: 0 }),
+    });
     expect(getUserByUsername).not.toHaveBeenCalled();
   });
 
@@ -158,49 +178,42 @@ describe("X allowlist Gateway methods", () => {
     async (selection) => {
       const accountId = selection === "named account" ? "second" : "default";
       const key = selection === "mixed-case default" ? "Default" : accountId;
-      const { invoke, getConfig } = gateway(undefined, {
-        channels: {
-          x: {
-            userId: "100",
-            username: "example_bot",
-            guests: { enabled: false, maxMentionsPerAuthorPerDay: 7 },
-            costLimits: { dailyUsd: 100, monthlyUsd: 1000, cycleStartDay: 20 },
-            accounts: {
-              ...(selection === "explicit default" || selection === "mixed-case default"
-                ? { [key]: {} }
-                : {}),
-              second: {
-                userId: "101",
-                username: "second_bot",
-                guests: { threadContextMaxPosts: 4 },
-                costLimits: { dailyUsd: 5 },
-              },
-            },
+      const { invoke, getConfig } = gatewayForX({
+        userId: "100",
+        username: "example_bot",
+        guests: { enabled: false, maxMentionsPerAuthorPerDay: 7 },
+        costLimits: { dailyUsd: 100, monthlyUsd: 1000, cycleStartDay: 20 },
+        accounts: {
+          ...(selection === "explicit default" || selection === "mixed-case default"
+            ? { [key]: {} }
+            : {}),
+          second: {
+            userId: "101",
+            username: "second_bot",
+            guests: { threadContextMaxPosts: 4 },
+            costLimits: { dailyUsd: 5 },
           },
         },
       });
       const enabled = await invoke("x.guests.set", { accountId, enabled: true });
-      expect(enabled).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          accountId,
-          accounts: [
-            { accountId: "default", username: "example_bot" },
-            { accountId: "second", username: "second_bot" },
-          ],
-          spend: expect.objectContaining({
-            dailyLimitUsd: selection === "named account" ? 5 : 100,
-            monthlyLimitUsd: 1000,
-            cycleStart: expect.stringMatching(/^\d{4}-\d{2}-20$/),
-          }),
-          guests: expect.objectContaining({
-            enabled: true,
-            maxMentionsPerAuthorPerDay: 7,
-            admittedToday: 0,
-            rateLimitedToday: 0,
-          }),
+      expectSnapshot(enabled, {
+        accountId,
+        accounts: [
+          { accountId: "default", username: "example_bot" },
+          { accountId: "second", username: "second_bot" },
+        ],
+        spend: expect.objectContaining({
+          dailyLimitUsd: selection === "named account" ? 5 : 100,
+          monthlyLimitUsd: 1000,
+          cycleStart: expect.stringMatching(/^\d{4}-\d{2}-20$/),
         }),
-      );
+        guests: expect.objectContaining({
+          enabled: true,
+          maxMentionsPerAuthorPerDay: 7,
+          admittedToday: 0,
+          rateLimitedToday: 0,
+        }),
+      });
       const channel = getConfig().channels!.x;
       const selected = selection === "implicit default" ? channel : channel.accounts[key];
       expect(selected.guests.enabled).toBe(true);
@@ -210,24 +223,10 @@ describe("X allowlist Gateway methods", () => {
       expect(channel.accounts.second.costLimits).toEqual({ dailyUsd: 5 });
       expect(channel.guests.enabled).toBe(selection === "implicit default");
       expect(mutateConfigFile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          afterWrite: { mode: "auto" },
-        }),
+        expect.objectContaining({ afterWrite: { mode: "auto" } }),
       );
-      const disabled = await invoke("x.guests.set", { accountId, enabled: false });
-      expect(disabled).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          guests: expect.objectContaining({ enabled: false }),
-        }),
-      );
-      const listed = await invoke("x.allowlist.list", { accountId });
-      expect(listed).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          guests: expect.objectContaining({ enabled: false }),
-        }),
-      );
+      expectGuests(await invoke("x.guests.set", { accountId, enabled: false }), { enabled: false });
+      expectGuests(await invoke("x.allowlist.list", { accountId }), { enabled: false });
     },
   );
 
@@ -256,29 +255,14 @@ describe("X allowlist Gateway methods", () => {
         ],
         channels: { x: { userId: "100", username: "example_bot" } },
       });
-      const enabled = await invoke("x.guests.set", { enabled: true });
-      expect(enabled).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          guests: expect.objectContaining({
-            enabled: true,
-            blockedReason: expect.stringContaining(
-              `agents.entries.${blockedAgent}.tools.fs.workspaceOnly=true`,
-            ),
-          }),
-        }),
+      const blockedReason = expect.stringContaining(
+        `agents.entries.${blockedAgent}.tools.fs.workspaceOnly=true`,
       );
-      const listed = await invoke("x.allowlist.list");
-      expect(listed).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          guests: expect.objectContaining({
-            blockedReason: expect.stringContaining(
-              `agents.entries.${blockedAgent}.tools.fs.workspaceOnly=true`,
-            ),
-          }),
-        }),
-      );
+      expectGuests(await invoke("x.guests.set", { enabled: true }), {
+        enabled: true,
+        blockedReason,
+      });
+      expectGuests(await invoke("x.allowlist.list"), { blockedReason });
       getConfig().agents!.entries![blockedAgent]!.tools = { fs: { workspaceOnly: true } };
       const repaired = await invoke("x.allowlist.list");
       expect(repaired.mock.calls[0]?.[1].guests.blockedReason).toBeUndefined();
@@ -331,123 +315,80 @@ describe("X allowlist Gateway methods", () => {
       await invoke("x.guests.set", { enabled: true }),
       await invoke("x.allowlist.list"),
     ]) {
-      expect(response).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          guests: expect.objectContaining({
-            enabled: true,
-            blockedReason: expect.stringContaining("X agent bindings"),
-          }),
-        }),
-      );
+      expectGuests(response, {
+        enabled: true,
+        blockedReason: expect.stringContaining("X agent bindings"),
+      });
     }
-    const disabled = await invoke("x.guests.set", { enabled: false });
-    expect(disabled).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        guests: expect.objectContaining({ enabled: false }),
-      }),
-    );
+    expectGuests(await invoke("x.guests.set", { enabled: false }), { enabled: false });
   });
 
   it("rejects invalid guest toggles before attempting a config write", async () => {
     const { invoke } = gateway();
     for (const params of [{ enabled: "true" }, { enabled: true, accountId: "missing" }]) {
-      const response = await invoke("x.guests.set", params);
-      expect(response).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "INVALID_REQUEST",
-        }),
-      );
+      expectError(await invoke("x.guests.set", params), "INVALID_REQUEST");
     }
     expect(mutateConfigFile).not.toHaveBeenCalled();
   });
 
-  it("rechecks administrator authority before committing a queued guest toggle", async () => {
-    const ready = Promise.withResolvers<void>();
-    const resume = Promise.withResolvers<void>();
-    const { invoke, getConfig } = gateway(async () => {
-      ready.resolve();
-      await resume.promise;
-    });
-    let active = true;
-    const response = invoke(
-      "x.guests.set",
-      { enabled: true },
-      {
-        hasCurrentClientAuthority: () => active,
-      },
-    );
-    await ready.promise;
-    active = false;
-    resume.resolve();
-    expect(await response).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "FORBIDDEN",
-      }),
-    );
-    expect(getConfig().channels?.x.guests).toBeUndefined();
-  });
+  it.each(["x.guests.set", "x.allowlist.add"])(
+    "rechecks administrator authority before committing a queued %s write",
+    async (method) => {
+      const ready = Promise.withResolvers<void>();
+      const resume = Promise.withResolvers<void>();
+      const { invoke, getConfig } = gateway(async () => {
+        ready.resolve();
+        await resume.promise;
+      });
+      let active = true;
+      const response = invoke(
+        method,
+        method === "x.guests.set" ? { enabled: true } : { username: "maintainer" },
+        { hasCurrentClientAuthority: () => active },
+      );
+      await ready.promise;
+      active = false;
+      resume.resolve();
+      expectError(await response, "FORBIDDEN");
+      expect(getConfig().channels?.x.guests).toBeUndefined();
+      expectSnapshot(await invoke("x.allowlist.list"), { entries: configuredEntries });
+    },
+  );
 
   it("selects a named account when no default account exists", async () => {
-    const { invoke } = gateway(undefined, {
-      channels: {
-        x: {
-          accounts: {
-            maintainers: { userId: "101", username: "maintainers_bot", allowFrom: ["x:40"] },
-          },
-        },
+    const { invoke } = gatewayForX({
+      accounts: {
+        maintainers: { userId: "101", username: "maintainers_bot", allowFrom: ["x:40"] },
       },
     });
-    const listed = await invoke("x.allowlist.list");
-    expect(listed).toHaveBeenCalledWith(true, {
+    expect(await invoke("x.allowlist.list")).toHaveBeenCalledWith(true, {
       accountId: "maintainers",
       guests: expect.objectContaining({ enabled: false }),
-      spend: {
-        dayUsd: 0,
-        cycleUsd: 0,
-        dailyLimitUsd: 100,
-        monthlyLimitUsd: 1000,
-        cycleStart: expect.any(String),
-      },
+      spend: emptySpend,
       accounts: [{ accountId: "maintainers", username: "maintainers_bot" }],
       entries: [{ userId: "40", configured: true, editable: false }],
     });
   });
 
   it("manages an account whose config key is mixed case", async () => {
-    const { invoke, getConfig } = gateway(undefined, {
-      channels: {
-        x: { accounts: { Work: { userId: "101", username: "work_bot", allowFrom: [] } } },
-      },
+    const { invoke, getConfig } = gatewayForX({
+      accounts: { Work: { userId: "101", username: "work_bot", allowFrom: [] } },
     });
-    expect(await invoke("x.allowlist.list")).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        accountId: "work",
-        accounts: [{ accountId: "work", username: "work_bot" }],
-      }),
-    );
-    expect(
-      await invoke("x.allowlist.add", { accountId: "Work", username: "maintainer" }),
-    ).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        accountId: "work",
-        entries: [expect.objectContaining({ userId: "30", editable: true })],
-      }),
-    );
-    expect(
-      await invoke("x.allowlist.remove", { accountId: "work", userId: "30" }),
-    ).toHaveBeenCalledWith(true, expect.objectContaining({ accountId: "work", entries: [] }));
-    expect(await invoke("x.guests.set", { accountId: "Work", enabled: true })).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ guests: expect.objectContaining({ enabled: true }) }),
-    );
+    expectSnapshot(await invoke("x.allowlist.list"), {
+      accountId: "work",
+      accounts: [{ accountId: "work", username: "work_bot" }],
+    });
+    expectSnapshot(await invoke("x.allowlist.add", { accountId: "Work", username: "maintainer" }), {
+      accountId: "work",
+      entries: [expect.objectContaining({ userId: "30", editable: true })],
+    });
+    expectSnapshot(await invoke("x.allowlist.remove", { accountId: "work", userId: "30" }), {
+      accountId: "work",
+      entries: [],
+    });
+    expectGuests(await invoke("x.guests.set", { accountId: "Work", enabled: true }), {
+      enabled: true,
+    });
     expect(getConfig().channels?.x).toEqual({
       accounts: {
         Work: { userId: "101", username: "work_bot", allowFrom: [], guests: { enabled: true } },
@@ -457,13 +398,14 @@ describe("X allowlist Gateway methods", () => {
 
   it("never writes a named account's guest mode to the channel root", async () => {
     // Root guest settings apply to every account; an id without a config entry must fail instead.
-    const { invoke, getConfig } = gateway(undefined, {
-      channels: { x: { accounts: { "Work Bot": { userId: "101", username: "work_bot" } } } },
+    const { invoke, getConfig } = gatewayForX({
+      accounts: { "Work Bot": { userId: "101", username: "work_bot" } },
     });
     const before = structuredClone(getConfig());
-    expect(
+    expectError(
       await invoke("x.guests.set", { accountId: "work-bot", enabled: true }),
-    ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "INVALID_REQUEST" }));
+      "INVALID_REQUEST",
+    );
     expect(getConfig()).toEqual(before);
   });
 
@@ -477,20 +419,13 @@ describe("X allowlist Gateway methods", () => {
     expect(added).toHaveBeenCalledWith(true, {
       accountId: "default",
       guests: expect.objectContaining({ enabled: false }),
-      spend: {
-        dayUsd: 0,
-        cycleUsd: 0,
-        dailyLimitUsd: 100,
-        monthlyLimitUsd: 1000,
-        cycleStart: expect.any(String),
-      },
+      spend: emptySpend,
       accounts: [
         { accountId: "default", username: "roboclawbot" },
         { accountId: "second", username: "anotherbot" },
       ],
       entries: [
-        { userId: "10", configured: true, editable: false },
-        { userId: "20", configured: true, editable: false },
+        ...configuredEntries,
         {
           userId: "30",
           username: "maintainer",
@@ -502,36 +437,20 @@ describe("X allowlist Gateway methods", () => {
         },
       ],
     });
-    const sibling = await invoke("x.allowlist.list", { accountId: "second" });
-    expect(sibling).toHaveBeenCalledWith(true, expect.objectContaining({ entries: [] }));
-    const removed = await invoke("x.allowlist.remove", { userId: "x:30" });
-    expect(removed).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        entries: [
-          { userId: "10", configured: true, editable: false },
-          { userId: "20", configured: true, editable: false },
-        ],
-      }),
-    );
+    expectSnapshot(await invoke("x.allowlist.list", { accountId: "second" }), { entries: [] });
+    expectSnapshot(await invoke("x.allowlist.remove", { userId: "x:30" }), {
+      entries: configuredEntries,
+    });
 
     getUserByUsername.mockResolvedValue({ id: "10", username: "configured", name: "Configured" });
-    const duplicate = await invoke("x.allowlist.add", { username: "configured" });
-    expect(duplicate).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        entries: expect.arrayContaining([
-          expect.objectContaining({ userId: "10", configured: true, editable: true }),
-        ]),
-      }),
-    );
-    const stillConfigured = await invoke("x.allowlist.remove", { userId: "10" });
-    expect(stillConfigured).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        entries: expect.arrayContaining([{ userId: "10", configured: true, editable: false }]),
-      }),
-    );
+    expectSnapshot(await invoke("x.allowlist.add", { username: "configured" }), {
+      entries: expect.arrayContaining([
+        expect.objectContaining({ userId: "10", configured: true, editable: true }),
+      ]),
+    });
+    expectSnapshot(await invoke("x.allowlist.remove", { userId: "10" }), {
+      entries: expect.arrayContaining([{ userId: "10", configured: true, editable: false }]),
+    });
   });
 
   it.each(["x.allowlist.list", "x.allowlist.add", "x.allowlist.remove", "x.guests.set"])(
@@ -597,24 +516,13 @@ describe("X allowlist Gateway methods", () => {
         policy.abort();
       }
       resume.resolve();
-      expect(await response).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: retirement === "administrator retirement" ? "FORBIDDEN" : "UNAVAILABLE",
-        }),
+      expectError(
+        await response,
+        retirement === "administrator retirement" ? "FORBIDDEN" : "UNAVAILABLE",
       );
       expect(fetcher.mock.calls.map(([url]) => new URL(url).pathname)).toEqual(["/2/oauth2/token"]);
       expect(await api.spend.status()).toMatchObject({ dayUsd: 0, cycleUsd: 0 });
-      expect(await invoke("x.allowlist.list")).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          entries: [
-            { userId: "10", configured: true, editable: false },
-            { userId: "20", configured: true, editable: false },
-          ],
-        }),
-      );
+      expectSnapshot(await invoke("x.allowlist.list"), { entries: configuredEntries });
     },
   );
 
@@ -628,58 +536,10 @@ describe("X allowlist Gateway methods", () => {
     const response = await invoke(
       "x.allowlist.add",
       { username: "maintainer" },
-      {
-        hasCurrentClientAuthority: () => active,
-      },
-    );
-    expect(response).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "FORBIDDEN" }),
-    );
-    const listed = await invoke("x.allowlist.list");
-    expect(listed).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        entries: [
-          { userId: "10", configured: true, editable: false },
-          { userId: "20", configured: true, editable: false },
-        ],
-      }),
-    );
-  });
-
-  it("rechecks operator authority when a queued state write is admitted", async () => {
-    const ready = Promise.withResolvers<void>();
-    const resume = Promise.withResolvers<void>();
-    const { invoke } = gateway(async () => {
-      ready.resolve();
-      await resume.promise;
-    });
-    let active = true;
-    const response = invoke(
-      "x.allowlist.add",
-      { username: "maintainer" },
       { hasCurrentClientAuthority: () => active },
     );
-    await ready.promise;
-    active = false;
-    resume.resolve();
-    expect(await response).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "FORBIDDEN" }),
-    );
-    const listed = await invoke("x.allowlist.list");
-    expect(listed).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        entries: [
-          { userId: "10", configured: true, editable: false },
-          { userId: "20", configured: true, editable: false },
-        ],
-      }),
-    );
+    expectError(response, "FORBIDDEN");
+    expectSnapshot(await invoke("x.allowlist.list"), { entries: configuredEntries });
   });
 
   it("rejects invalid handles and unknown accounts without making paid lookups", async () => {
@@ -688,12 +548,7 @@ describe("X allowlist Gateway methods", () => {
       { username: "https://x.com/person" },
       { username: "person", accountId: "missing" },
     ]) {
-      const response = await invoke("x.allowlist.add", params);
-      expect(response).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
+      expectError(await invoke("x.allowlist.add", params), "INVALID_REQUEST");
     }
     expect(getUserByUsername).not.toHaveBeenCalled();
   });

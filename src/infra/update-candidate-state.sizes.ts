@@ -4,6 +4,7 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { z } from "zod";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { ignoreMissingPath } from "./errno.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import { prepareRuntimeProcessScriptInvocation } from "./runtime-process-url.js";
@@ -97,7 +98,7 @@ export async function readUpdateStateDatabaseSizes(
     paths: files,
   });
   const deadline =
-    Date.now() + resolveTimerTimeoutMs(Math.max(options.timeoutMs ?? 0, budget), budget);
+    monotonicNow() + resolveTimerTimeoutMs(Math.max(options.timeoutMs ?? 0, budget), budget);
   const entries: Array<{ path: string; sizeBytes: bigint | undefined }> = [];
   let dispose: (() => void) | undefined;
   let cleanupUncertain = false;
@@ -111,7 +112,7 @@ export async function readUpdateStateDatabaseSizes(
     dispose = () => script.dispose();
     for (const batch of inventoryBatches(files)) {
       options.signal?.throwIfAborted();
-      const remainingMs = deadline - Date.now();
+      const remainingMs = deadline - monotonicNow();
       if (remainingMs <= 0) {
         termination = "timeout";
         throw new Error("Aggregate metadata inventory deadline exceeded");

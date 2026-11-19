@@ -1,6 +1,9 @@
 import type { Tool as SdkTool } from "@github/copilot-sdk";
-import type { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  activatePluginForTest,
+  type createMockPluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { beforeEach, describe, expect, it, onTestFinished, vi, type Mock } from "vitest";
 import type { AttemptParamsLike } from "./attempt-types.js";
 import type { FakeSdk, FakeSession } from "./attempt.test-support.js";
 import type { createCopilotToolBridge } from "./tool-bridge.js";
@@ -73,6 +76,13 @@ export function registerCopilotPromptTests({
     });
 
     it("sends the final appended developer instructions to the SDK and llm_input", async () => {
+      // The skill-workshop plugin's tool registers the Workshop prompt section.
+      onTestFinished(
+        await activatePluginForTest({
+          config: { plugins: { enabled: true, allow: ["skill-workshop"] } },
+          pluginId: "skill-workshop",
+        }),
+      );
       const rendered = "# Project Context\nSoul voice goes here.";
       workspaceBootstrapMock.loadCopilotWorkspaceInstructions.mockResolvedValueOnce(rendered);
       const { sdk, run } = makeAttempt();

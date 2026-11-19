@@ -1,15 +1,22 @@
+import fs from "node:fs/promises";
 import type { HeapProfiler, Runtime } from "node:inspector";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import type { HeapSpaceInfo } from "node:v8";
 import type { DiagnosticsHeapProfileParams } from "../../packages/gateway-protocol/src/schema/diagnostics.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { observeRuntimeProfileCapability } from "../infra/runtime-capabilities.js";
+import { reserveDiagnosticProfileFile } from "./diagnostic-profile-file.js";
 import {
   captureDiagnosticProfile,
   createInspectorProfileCapture,
   DIAGNOSTIC_PROFILE_MAX_BYTES,
+  ProfileFailure,
   sanitizeDiagnosticProfileFrame,
 } from "./diagnostic-profile.js";
+
+const SUMMARY_STACK_DEPTH = 32;
+const MAX_FILE_BYTES = 64 * 1024 * 1024;
+const WRITE_CHUNK_BYTES = 64 * 1024;
 
 // Node's inspector declarations omit these fields from the current V8 protocol.
 type SamplingNode = Omit<HeapProfiler.SamplingHeapProfileNode, "children"> & {
@@ -47,7 +54,36 @@ type HeapProfileResult = Metadata & {
   unattributedSampleCount: number;
   unattributedSampleBytes: number;
   truncated: boolean;
-} & ({ profile: SamplingProfile } | { summary: AllocationSummary[] });
+} & (
+    | { profile: SamplingProfile }
+    | { summary: AllocationSummary[]; path?: string; sizeBytes?: number }
+  );
+
+function* heapProfileParts(profile: SamplingProfile): Generator<string> {
+  yield '{"head":';
+  // Native sampling trees can exceed JSON.stringify's recursion limit.
+  const pending: (SamplingNode | string)[] = [profile.head];
+  while (pending.length) {
+    const entry = pending.pop()!;
+    if (typeof entry === "string") {
+      yield entry;
+      continue;
+    }
+    yield `{"id":${entry.id},"callFrame":${JSON.stringify(entry.callFrame)},"selfSize":${entry.selfSize},"children":[`;
+    pending.push("]}");
+    for (let index = entry.children.length - 1; index >= 0; index--) {
+      pending.push(entry.children[index]!);
+      if (index > 0) {
+        pending.push(",");
+      }
+    }
+  }
+  yield ',"samples":[';
+  for (let index = 0; index < profile.samples.length; index += 1024) {
+    yield `${index ? "," : ""}${JSON.stringify(profile.samples.slice(index, index + 1024)).slice(1, -1)}`;
+  }
+  yield "]}";
+}
 
 async function sortAllocationSummaries(groups: Iterable<AllocationSummary>) {
   const compare = (a: AllocationSummary, b: AllocationSummary) =>
@@ -99,6 +135,7 @@ export async function sanitizeDiagnosticHeapProfile(
   profile: SamplingProfile,
   packageRoot: string | null,
   metadata: Metadata,
+  persistOverflow?: (profile: SamplingProfile) => Promise<{ path: string; sizeBytes: number }>,
 ): Promise<HeapProfileResult> {
   const samples = profile.samples;
   type Row = {
@@ -107,6 +144,9 @@ export async function sanitizeDiagnosticHeapProfile(
     totalBytes: number;
     count: number;
     frameId: number;
+    app?: Row;
+    owner?: Row;
+    cycle?: { width: number; count: number; next?: Row };
   };
   const rows = new Map<number, Row>();
   const pending: Array<{ source: SamplingNode; parent?: Row }> = [{ source: profile.head }];
@@ -185,12 +225,15 @@ export async function sanitizeDiagnosticHeapProfile(
   if (boundedJsonUtf8Bytes(raw, DIAGNOSTIC_PROFILE_MAX_BYTES).complete) {
     return raw;
   }
+  const artifact = await persistOverflow?.(raw.profile);
 
-  // Collapse repeated leaf-first call stacks, retaining eight frames per entry.
+  // Collapse repeated leaf-first call stacks, retaining bounded owner context per entry.
   // Intern exact sanitized frames so each stack key need not repeat their JSON.
   const frameIds = new Map<string, number>();
   const groups = new Map<string, AllocationSummary>();
-  const stackIds: number[] = [];
+  const stackIds: (string | number)[] = [];
+  const stackRows: (Row | undefined)[] = [];
+  const repetitions: number[] = [];
   for (const row of ordered) {
     if (++work % 1024 === 0) {
       await nextTurn();
@@ -207,12 +250,65 @@ export async function sanitizeDiagnosticHeapProfile(
       continue;
     }
     const selfBytes = row.node.selfSize;
-    const stack: AllocationSummary["stack"] = [row.node.callFrame];
-    stackIds.length = 0;
+    row.app = row.node.callFrame.url.startsWith("openclaw:") ? row : row.parent?.app;
+    row.owner = row.parent?.owner ?? row.app;
+    // Reuse the preceding cycle's endpoint instead of rescanning recursive ancestors.
+    let previous = row.parent;
+    for (
+      let width = 1;
+      previous && width <= SUMMARY_STACK_DEPTH;
+      width++, previous = previous.parent
+    ) {
+      if (previous.frameId !== frameId) {
+        continue;
+      }
+      let left = row.parent;
+      let right = previous.parent;
+      let matched = 1;
+      while (matched < width && left && right && left.frameId === right.frameId) {
+        left = left.parent;
+        right = right.parent;
+        matched++;
+      }
+      if (matched === width) {
+        const cycle = previous.cycle;
+        row.cycle = {
+          width,
+          count: cycle?.width === width ? cycle.count + 1 : 2,
+          next: cycle?.width === width ? cycle.next : right,
+        };
+        break;
+      }
+    }
+    stackRows.length = repetitions.length = stackIds.length = 0;
+    stackRows.push(row);
+    repetitions.push(1);
     stackIds.push(frameId);
-    for (let parent = row.parent; parent && stack.length < 8; parent = parent.parent) {
-      stack.push(parent.node.callFrame);
-      stackIds.push(parent.frameId);
+    let cursor = row.parent;
+    while (cursor && stackRows.length < SUMMARY_STACK_DEPTH) {
+      const cycle = cursor.cycle;
+      const width =
+        cycle && cycle.width <= SUMMARY_STACK_DEPTH - stackRows.length ? cycle.width : 1;
+      const repeatCount = width === cycle?.width ? cycle.count : 1;
+      const next = repeatCount > 1 ? cycle!.next : cursor.parent;
+      for (let index = 0; index < width; index++) {
+        const entry: Row = cursor!;
+        const repeated = index === width - 1 && repeatCount > 1;
+        stackRows.push(entry);
+        repetitions.push(repeated ? repeatCount : 1);
+        stackIds.push(repeated ? `${entry.frameId}x${repeatCount}` : entry.frameId);
+        cursor = entry.parent;
+      }
+      cursor = next;
+    }
+    if (cursor) {
+      // Reserve two slots for the closest omitted app frame and its outer owner.
+      const nearest = stackRows[SUMMARY_STACK_DEPTH - 3]!.app;
+      const tail = nearest ? (nearest === row.owner ? [nearest] : [nearest, row.owner!]) : [];
+      stackRows.length = repetitions.length = stackIds.length = SUMMARY_STACK_DEPTH - 3;
+      stackRows.push(undefined, ...tail);
+      repetitions.push(1, 1, 1);
+      stackIds.push("...", ...tail.map((entry) => entry.frameId));
     }
     const key = stackIds.join(",");
     const group = groups.get(key);
@@ -221,12 +317,30 @@ export async function sanitizeDiagnosticHeapProfile(
       group.totalBytes += totalBytes;
       group.count += count;
     } else {
+      const stack: AllocationSummary["stack"] = [row.node.callFrame];
+      for (let index = 1; index < stackRows.length; index++) {
+        const frame = stackRows[index]?.node.callFrame;
+        stack.push(
+          !frame
+            ? {
+                functionName: "[...]",
+                url: "",
+                scriptId: "0",
+                lineNumber: -1,
+                columnNumber: -1,
+              }
+            : repetitions[index]! > 1
+              ? { ...frame, functionName: `${frame.functionName} ×${repetitions[index]}` }
+              : frame,
+        );
+      }
       groups.set(key, { stack, selfBytes, totalBytes, count });
     }
   }
   frameIds.clear();
+  stackRows.length = 0;
   ordered.length = 0;
-  const result: HeapProfileResult = { ...common, truncated: true, summary: [] };
+  const result: HeapProfileResult = { ...common, ...artifact, truncated: true, summary: [] };
   let bytes = Buffer.byteLength(JSON.stringify(result));
   for (const row of await sortAllocationSummaries(groups.values())) {
     if (++work % 1024 === 0) {
@@ -242,8 +356,8 @@ export async function sanitizeDiagnosticHeapProfile(
   return result;
 }
 
-/** Samples allocations in the main isolate without a snapshot or disk output. */
-export function captureDiagnosticHeapProfile(
+/** Samples main-isolate allocations, preserving oversized sanitized profiles on disk. */
+export async function captureDiagnosticHeapProfile(
   options: DiagnosticsHeapProfileParams & {
     signal: AbortSignal;
     hasAuthority: () => boolean;
@@ -263,7 +377,43 @@ export function captureDiagnosticHeapProfile(
       : 900_000;
   const requestedDurationMs = options.durationMs ?? 5_000;
   const durationMs = Math.min(maxDurationMs, Math.max(1, requestedDurationMs));
-  return observeRuntimeProfileCapability(
+  let artifact: Awaited<ReturnType<typeof reserveDiagnosticProfileFile>> | undefined;
+  const assertActive = () => {
+    if (options.signal.aborted || !options.hasAuthority()) {
+      throw new ProfileFailure("cancelled");
+    }
+  };
+  const persistOverflow = async (profile: SamplingProfile) => {
+    try {
+      artifact = await reserveDiagnosticProfileFile("heap-profile", assertActive, MAX_FILE_BYTES);
+      let sizeBytes = 0;
+      let chunk = "";
+      let chunkBytes = 0;
+      for (const part of heapProfileParts(profile)) {
+        const bytes = Buffer.byteLength(part);
+        sizeBytes += bytes;
+        if (sizeBytes > MAX_FILE_BYTES) {
+          throw new ProfileFailure("profile-too-large");
+        }
+        chunk += part;
+        chunkBytes += bytes;
+        if (chunkBytes >= WRITE_CHUNK_BYTES) {
+          assertActive();
+          await artifact.handle.writeFile(chunk, "utf8");
+          chunk = "";
+          chunkBytes = 0;
+        }
+      }
+      if (chunk) {
+        assertActive();
+        await artifact.handle.writeFile(chunk, "utf8");
+      }
+      return { path: artifact.path, sizeBytes };
+    } catch (error) {
+      throw error instanceof ProfileFailure ? error : new ProfileFailure("capture-failed");
+    }
+  };
+  const outcome = await observeRuntimeProfileCapability(
     "heapSampling",
     captureDiagnosticProfile({
       signal: options.signal,
@@ -281,27 +431,54 @@ export function captureDiagnosticHeapProfile(
           disable: (session) => session.post("HeapProfiler.disable"),
         }),
       sanitize: (profile, packageRoot, measurement) =>
-        // SAFETY: The native protocol includes IDs and samples omitted by Node's declarations.
-        sanitizeDiagnosticHeapProfile(profile as SamplingProfile, packageRoot, {
-          durationMs: measurement.durationMs,
-          requestedDurationMs,
-          effectiveDurationMs: durationMs,
-          actualDurationMs: measurement.durationMs,
-          durationLimitReason:
-            requestedDurationMs <= maxDurationMs
-              ? null
-              : maxDurationMs === 30_000
-                ? "collected-samples"
-                : "maximum-duration",
-          samplingIntervalBytes,
-          ...collectionOptions,
-          heapUsedBefore: measurement.before.heapUsed,
-          heapUsedAfter: measurement.after.heapUsed,
-          heapSpacesBefore: measurement.before.heapSpaces,
-          heapSpacesAfter: measurement.after.heapSpaces,
-          rssBefore: measurement.before.rss,
-          rssAfter: measurement.after.rss,
-        }),
+        sanitizeDiagnosticHeapProfile(
+          // SAFETY: The native protocol includes IDs and samples omitted by Node's declarations.
+          profile as SamplingProfile,
+          packageRoot,
+          {
+            durationMs: measurement.durationMs,
+            requestedDurationMs,
+            effectiveDurationMs: durationMs,
+            actualDurationMs: measurement.durationMs,
+            durationLimitReason:
+              requestedDurationMs <= maxDurationMs
+                ? null
+                : maxDurationMs === 30_000
+                  ? "collected-samples"
+                  : "maximum-duration",
+            samplingIntervalBytes,
+            ...collectionOptions,
+            heapUsedBefore: measurement.before.heapUsed,
+            heapUsedAfter: measurement.after.heapUsed,
+            heapSpacesBefore: measurement.before.heapSpaces,
+            heapSpacesAfter: measurement.after.heapSpaces,
+            rssBefore: measurement.before.rss,
+            rssAfter: measurement.after.rss,
+          },
+          persistOverflow,
+        ),
     }),
   );
+  const closeFailed = artifact
+    ? await artifact.handle.close().then(
+        () => false,
+        () => true,
+      )
+    : false;
+  if (artifact && (outcome.status === "unavailable" || closeFailed)) {
+    const removalFailed = await fs.unlink(artifact.path).then(
+      () => false,
+      () => true,
+    );
+    if (outcome.status === "unavailable") {
+      outcome.cleanupFailed ||= closeFailed || removalFailed;
+    } else {
+      return {
+        status: "unavailable" as const,
+        reason: "cleanup-failed" as const,
+        cleanupFailed: true,
+      };
+    }
+  }
+  return outcome;
 }

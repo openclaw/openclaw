@@ -6,6 +6,7 @@ import type {
   ControlUiReplacement,
   ControlUiSurface,
 } from "../../../../src/plugin-sdk/control-ui.js";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInertViewHost } from "../../plugins/control-ui-view.test-support.ts";
 import {
@@ -64,6 +65,7 @@ function createPluginChat(
   const listeners = new Set<() => void>();
   const context = {
     gateway: createApplicationGateway().gateway,
+    chatSubmissions: createChatSubmissions(),
     agentSelection: { state: { selectedId: "main" }, subscribe: () => () => undefined },
     plugins: {
       registrations: () => [],
@@ -201,6 +203,9 @@ it.each([
         expect(submit).not.toHaveBeenCalled();
       }
       expect(provider.querySelector("openclaw-chat-question-panel")).toBeNull();
+      expect(count(".agent-chat__composer-combobox textarea")).toBe(
+        mode === "nondelegating" ? 0 : 1,
+      );
       expect(provider.querySelector(".chat-question-summary")?.textContent).toContain(
         action === "submit" ? "New contributors" : "Dismissed",
       );
@@ -271,8 +276,8 @@ it.each(["native", "delegated"] as const)(
     render(initial);
     await waitForSolid(() => {
       expect(provider.querySelector(".chat-conversation-loading")).not.toBeNull();
-      expect(provider.querySelector(".chat-error--mobile")?.textContent).toContain(
-        "Couldn’t finish this reply",
+      expect(provider.querySelector(".chat-error.app-toast")?.textContent).toContain(
+        "Couldn't finish this reply.",
       );
     });
     const textarea = provider.querySelector<HTMLTextAreaElement>("textarea")!;
@@ -280,10 +285,11 @@ it.each(["native", "delegated"] as const)(
     provider.querySelector<HTMLButtonElement>(".chat-error__refresh")!.click();
     expect(onRefresh).toHaveBeenCalledOnce();
 
+    const notice = provider.querySelector(".chat-error.app-toast");
     render({ ...initial, mobileComposer: false });
     await waitForSolid(() => {
       expect(provider.querySelector(".chat-conversation-loading")).toBeNull();
-      expect(provider.querySelector(".chat-error--mobile")).toBeNull();
+      expect(provider.querySelector(".chat-error.app-toast")).toBe(notice);
       expect(provider.querySelector(".chat-error")?.textContent).toContain(
         "Couldn't finish this reply. Check the conversation before trying again.",
       );

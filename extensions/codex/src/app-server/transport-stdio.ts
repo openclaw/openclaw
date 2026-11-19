@@ -1,4 +1,3 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import { resolveLaunchableNodePath } from "openclaw/plugin-sdk/process-runtime";
@@ -13,6 +12,7 @@ import { normalizeCodexAppServerArgs } from "./launch-args.js";
 import { resolveManagedCodexNativeCommand } from "./managed-binary.js";
 import { observeManagedCodexLauncherFailure } from "./managed-launcher-failure.js";
 import { getCodexAppServerSpawnFailure, recordCodexAppServerSpawnFailure } from "./spawn-error.js";
+import { spawnCodexStdio, type CodexStdioChild } from "./stdio-worker.js";
 import { prepareCodexAppServerProcessRegistration } from "./transport-process-registration.js";
 import { closeCodexAppServerTransportAndWait, type CodexAppServerTransport } from "./transport.js";
 
@@ -117,8 +117,8 @@ export async function createStdioTransport(
   options: CodexAppServerStartOptions,
   baseEnv: NodeJS.ProcessEnv = process.env,
   assertCurrent?: () => void | Promise<void>,
-  onSpawn?: (child: ChildProcessWithoutNullStreams) => void,
-): Promise<ChildProcessWithoutNullStreams> {
+  onSpawn?: (child: CodexStdioChild) => void,
+): Promise<CodexStdioChild> {
   const isHostedGateway = baseEnv.OPENCLAW_GATEWAY_HOST_LIFELINE?.trim() === "stdin";
   const env = resolveCodexAppServerSpawnEnv(options, baseEnv);
   const invocation = resolveCodexAppServerSpawnInvocation(options, env);
@@ -148,19 +148,23 @@ export async function createStdioTransport(
     platform: process.platform,
     arch: process.arch,
   });
-  let child: ChildProcessWithoutNullStreams & Pick<CodexAppServerTransport, "startupFailure">;
+  let child: CodexStdioChild & Pick<CodexAppServerTransport, "startupFailure">;
   try {
-    child = spawn(invocation.command, invocation.argv, {
-      // Preserve the shipped Supervisor endpoint contract: relative commands and
-      // config discovery may depend on the endpoint's process working directory.
-      ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
-      env,
-      // Child environment overrides cannot change the Gateway's containment boundary.
-      detached: process.platform !== "win32" && !isHostedGateway,
-      shell: invocation.shell,
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: invocation.windowsHide,
-    });
+    child = spawnCodexStdio(
+      invocation.command,
+      invocation.argv,
+      {
+        // Preserve the shipped Supervisor endpoint contract: relative commands and
+        // config discovery may depend on the endpoint's process working directory.
+        ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+        env,
+        // Child environment overrides cannot change the Gateway's containment boundary.
+        detached: process.platform !== "win32" && !isHostedGateway,
+        shell: invocation.shell,
+        windowsHide: invocation.windowsHide,
+      },
+      assertCurrent,
+    );
   } catch (error) {
     throw recordCodexAppServerSpawnFailure(error, invocation.command, launchKey);
   }

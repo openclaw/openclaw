@@ -26,6 +26,7 @@ import {
   normalizeCodexContextFilePath,
   type CodexWorkspaceBootstrapContext,
 } from "./attempt-workspace-context.js";
+import type { CodexAgentsMdSnapshot, CodexNativeModelContext } from "./client-workspace-state.js";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions, isJsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
@@ -157,6 +158,8 @@ export function buildCodexSystemPromptReport(params: {
   skillsPrompt: string;
   tools: CodexDynamicToolSpec[];
   sourceTools?: readonly AnyAgentTool[];
+  /** What Codex recorded after the turn; absent before the first turn or off-host. */
+  nativeModelContext?: CodexNativeModelContext;
 }): CodexSystemPromptReport {
   const tools = flattenCodexDynamicToolFunctions(params.tools);
   const sources = new Map((params.sourceTools ?? []).map((tool) => [tool.name, tool]));
@@ -179,6 +182,11 @@ export function buildCodexSystemPromptReport(params: {
   const skillsPrompt = params.skillsPrompt.trim();
   const bootstrapMaxChars = params.attempt.config?.agents?.defaults?.bootstrapMaxChars;
   const bootstrapTotalMaxChars = params.attempt.config?.agents?.defaults?.bootstrapTotalMaxChars;
+  // Codex sends its base instructions and native AGENTS.md fragment beside OpenClaw's
+  // developer instructions, so the reported system prompt covers all three.
+  const baseInstructionsChars = params.nativeModelContext?.baseInstructions?.length ?? 0;
+  const agentsMdChars = renderedCodexAgentsMdChars(params.nativeModelContext?.agentsMd);
+  const nonProjectContextChars = params.developerInstructions.length + baseInstructionsChars;
   return {
     source: "run",
     generatedAt: Date.now(),
@@ -190,9 +198,12 @@ export function buildCodexSystemPromptReport(params: {
     ...(bootstrapMaxChars ? { bootstrapMaxChars } : {}),
     ...(bootstrapTotalMaxChars ? { bootstrapTotalMaxChars } : {}),
     systemPrompt: {
-      chars: params.developerInstructions.length,
-      projectContextChars: 0,
-      nonProjectContextChars: params.developerInstructions.length,
+      chars: nonProjectContextChars + agentsMdChars,
+      projectContextChars: agentsMdChars,
+      nonProjectContextChars,
+      ...(params.nativeModelContext?.baseInstructionsEstimated && baseInstructionsChars
+        ? { estimatedChars: baseInstructionsChars }
+        : {}),
       hash: sha256Text(params.developerInstructions),
     },
     injectedWorkspaceFiles: buildCodexBootstrapInjectionStats(params),
@@ -211,6 +222,16 @@ export function buildCodexSystemPromptReport(params: {
       },
     },
   };
+}
+
+/** Codex renders AGENTS.md as one user fragment (codex-rs/core/src/context/user_instructions.rs). */
+function renderedCodexAgentsMdChars(agentsMd: CodexAgentsMdSnapshot | undefined): number {
+  if (agentsMd?.text == null) {
+    return 0;
+  }
+  const directory = agentsMd.directory ? ` for ${agentsMd.directory}` : "";
+  return `# AGENTS.md instructions${directory}\n\n<INSTRUCTIONS>\n${agentsMd.text}\n</INSTRUCTIONS>`
+    .length;
 }
 
 function buildCodexSkillReportEntries(
@@ -290,7 +311,8 @@ function buildCodexBootstrapInjectionStats(
     const pathValue = readNonEmptyString(file.path) ?? fileName ?? "";
     const displayName = (fileName ?? getCodexContextFileDisplayBasename(pathValue)) || pathValue;
     const baseName = getCodexContextFileBasename(pathValue || fileName || "");
-    const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
+    const content = file.missing ? "" : (file.content ?? "").trimEnd();
+    const rawChars = content.length;
     const memoryToolRoutedFile =
       baseName === CODEX_MEMORY_CONTEXT_BASENAME &&
       context.memoryToolRouted === true &&
@@ -303,6 +325,21 @@ function buildCodexBootstrapInjectionStats(
       injected === undefined &&
       CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName)
     ) {
+      // Codex's recorded AGENTS.md state confirms native injection; anything else
+      // (changed, truncated, or not yet recorded content) stays unverified.
+      const nativeText = params.nativeModelContext?.agentsMd?.text;
+      if (nativeText === null || (nativeText && content && nativeText.includes(content))) {
+        const injectedChars = nativeText ? rawChars : 0;
+        return {
+          name: displayName,
+          path: pathValue,
+          origin: file.origin,
+          missing: false,
+          rawChars,
+          injectedChars,
+          truncated: false,
+        };
+      }
       return {
         name: displayName,
         path: pathValue,
@@ -410,10 +447,53 @@ export async function prepareCodexWatchedSessionsContext(params: {
   });
 }
 
+/**
+ * Skill Library pins live in the Gateway state directory, which a remote app-server's
+ * own file tools cannot open; copies already delivered under its workspace root stay.
+ * The catalog arrives rendered (with compacted paths), so entries are matched by name.
+ */
+function withoutGatewayOnlySkillLocations(
+  prompt: string,
+  skills: readonly { name: string; source: string; filePath: string }[],
+  remoteRoot: string,
+  readable: boolean,
+): string {
+  const escape = (value: string) =>
+    value
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&apos;");
+  const names = new Set(
+    skills
+      .filter(
+        (skill) =>
+          skill.source === "openclaw-library" &&
+          !skill.filePath.startsWith(`${remoteRoot.replace(/\/+$/u, "")}/`),
+      )
+      .map((skill) => `    <name>${escape(skill.name)}</name>`),
+  );
+  const note = readable
+    ? "Stored on the Gateway: read it with skills_read by name."
+    : "Stored on the Gateway: its instructions cannot be read on this machine.";
+  return names.size === 0
+    ? prompt
+    : prompt.replace(/^ {2}<skill>\n[\s\S]*?\n {2}<\/skill>$/gmu, (block) =>
+        block.split("\n").some((line) => names.has(line))
+          ? block.replace(
+              /^ {4}<location>.*<\/location>$/mu,
+              `    <location_note>${note}</location_note>`,
+            )
+          : block,
+      );
+}
+
 export function renderCodexSkillsInstructions(params: {
   attempt: EmbeddedRunAttemptParams;
   skillsPrompt?: string;
   dynamicTools?: readonly CodexDynamicToolSpec[];
+  remoteWorkspaceRoot?: string;
 }): string | undefined {
   if (!shouldIncludeAgentHarnessRuntimeContext(params.attempt)) {
     return undefined;
@@ -423,9 +503,18 @@ export function renderCodexSkillsInstructions(params: {
       normalizeLowercaseStringOrEmpty(tool.name),
     ),
   );
-  const prompt = params.skillsPrompt?.trim();
   const search = names.has("skills_search");
   const read = names.has("skills_read");
+  const trimmed = params.skillsPrompt?.trim();
+  const prompt =
+    trimmed && params.remoteWorkspaceRoot
+      ? withoutGatewayOnlySkillLocations(
+          trimmed,
+          params.attempt.skillsSnapshot?.resolvedSkills ?? [],
+          params.remoteWorkspaceRoot,
+          read,
+        )
+      : trimmed;
   if (!prompt && !search) {
     return undefined;
   }
@@ -433,14 +522,10 @@ export function renderCodexSkillsInstructions(params: {
     "## OpenClaw Skills",
     ...(search
       ? [
-          "The directory is bounded. Use OpenClaw's skills_search tool to find relevant installed skills omitted from it. Search does not install skills.",
+          "The OpenClaw skills list may omit installed skills. Use OpenClaw's skills_search to discover relevant installed skills. Search does not install anything.",
         ]
       : []),
-    ...(read
-      ? [
-          "Use OpenClaw's skills_read tool with an exact name for complete instructions; a known name does not require search first.",
-        ]
-      : []),
+    ...(read ? ["Use OpenClaw's skills_read with a known exact name for full instructions."] : []),
     ...(prompt ? [prompt] : []),
   ].join("\n");
 }

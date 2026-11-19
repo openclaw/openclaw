@@ -54,7 +54,7 @@ function mountBuildChip() {
 describe("sidebar build commit copy", () => {
   it.each([
     [true, "Commit hash copied", "1"],
-    [false, "Copy failed", "0"],
+    [false, "Couldn’t copy. Try again.", "0"],
   ] as const)(
     "keeps settled copy=%s feedback for a full 1,500 ms after retry",
     async (copied, label, value) => {

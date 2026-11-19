@@ -1,17 +1,10 @@
-import { Show } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
-import type { IconName } from "../../components/solid/icon.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import {
-  isCronJobActiveFailure,
-  isCronJobRunning,
-  resolveCronJobLastRunStatus,
-} from "../../lib/cron-status.ts";
+import { isCronJobRunning } from "../../lib/cron-status.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { runStatusLabel } from "./view-runs.tsx";
 export function describeJobSchedule(job: CronJob): string {
   if (job.schedule.kind !== "event") {
     return formatCronSchedule(job);
@@ -30,8 +23,18 @@ export function describeJobNextRun(job: CronJob, absolute = false): string {
   if (isCronJobRunning(job)) {
     return t("cron.runs.runStatusRunning");
   }
+  if (job.state?.autoDisabled) {
+    return t("cron.attention.noNextRun");
+  }
   if (!job.enabled) {
     return t("cron.list.paused");
+  }
+  const waiting = job.state?.admissionDeferred;
+  if (waiting) {
+    return t("cron.jobState.waiting", {
+      reason: formatUiExternalText(waiting.reason),
+      since: formatMs(waiting.sinceMs),
+    });
   }
   const next = job.state?.nextRunAtMs;
   return next === undefined
@@ -41,32 +44,6 @@ export function describeJobNextRun(job: CronJob, absolute = false): string {
       : t("cron.jobState.nextRelative", { at: formatRelativeTimestamp(next) });
 }
 
-export function JobStateIndicator(props: { job: CronJob }) {
-  const presentation = (): [string, IconName | null, string] => {
-    const autoDisabled = props.job.state?.autoDisabled;
-    return isCronJobRunning(props.job)
-      ? ["running", "loader", t("cron.runs.runStatusRunning")]
-      : autoDisabled
-        ? ["error", "lock", disabledNoteLabel(autoDisabled)]
-        : isCronJobActiveFailure(props.job)
-          ? ["error", "alertTriangle", t("cron.runs.runStatusError")]
-          : !props.job.enabled
-            ? ["paused", "pause", t("cron.list.paused")]
-            : ["active", null, t("cron.detail.active")];
-  };
-  return (
-    <span
-      class={["cron-table__state", `cron-table__state--${presentation()[0]}`]}
-      role="img"
-      aria-label={presentation()[2]}
-      title={presentation()[2]}
-    >
-      <Show when={presentation()[1]} fallback={<span class="cron-table__state-dot" />}>
-        {(name) => <Icon name={name()} />}
-      </Show>
-    </span>
-  );
-}
 export function TriggerIndicator() {
   return (
     <span
@@ -77,74 +54,5 @@ export function TriggerIndicator() {
     >
       <Icon name="gitBranch" />
     </span>
-  );
-}
-/** Auto-disabled is an escalated failure, not an operator pause. */
-export function DisabledNote(props: { job: CronJob }) {
-  const label = () => {
-    const autoDisabled = props.job.state?.autoDisabled;
-    return autoDisabled ? disabledNoteLabel(autoDisabled) : t("cron.list.paused");
-  };
-  return (
-    <span
-      class={[
-        "cron-table__paused-note",
-        props.job.state?.autoDisabled ? "cron-table__auto-disabled" : "muted",
-      ]}
-      data-test-id={
-        props.job.state?.autoDisabled ? `cron-row-auto-disabled-${props.job.id}` : undefined
-      }
-      title={
-        props.job.state?.autoDisabled
-          ? formatUiExternalText(props.job.state.lastError?.trim()) || label()
-          : undefined
-      }
-    >
-      {label()}
-    </span>
-  );
-}
-function disabledNoteLabel(data: NonNullable<NonNullable<CronJob["state"]>["autoDisabled"]>) {
-  return t(
-    data.reason === "schedule-errors"
-      ? "cron.list.autoDisabledScheduleErrors"
-      : "cron.list.autoDisabledRunFailures",
-    { count: String(data.consecutiveErrors) },
-  );
-}
-export function LastRunCell(props: { job: CronJob }) {
-  const status = () => resolveCronJobLastRunStatus(props.job);
-  const relative = () => {
-    const time = props.job.state?.lastRunAtMs;
-    return time === undefined ? null : formatRelativeTimestamp(time);
-  };
-  return (
-    <>
-      {status() === "unknown" || !relative() ? (
-        <span class="muted">{t("common.na")}</span>
-      ) : (
-        <span
-          class="cron-table__last-run"
-          role="img"
-          aria-label={runStatusLabel(status())}
-          title={runStatusLabel(status())}
-        >
-          <span
-            class={[
-              "cron-last-glyph",
-              {
-                "cron-last-glyph--ok": status() === "ok",
-                "cron-last-glyph--error": status() === "error",
-              },
-            ]}
-          >
-            <Icon
-              name={status() === "ok" ? "check" : status() === "error" ? "x" : "cornerDownRight"}
-            />
-          </span>
-          <span class="cron-table__last-time">{relative()}</span>
-        </span>
-      )}
-    </>
   );
 }

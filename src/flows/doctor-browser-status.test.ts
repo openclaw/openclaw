@@ -39,13 +39,22 @@ beforeEach(() => {
 it.each(["info", "warning"] as const)(
   "filters %s advice only in interactive Doctor",
   async (severity) => {
-    const expected = { ...finding, severity };
-    capture.load.mockReturnValue({ collectBrowserReadinessFindings: async () => [expected] });
-    const ctx = createDoctorHealthFlowContext();
+    const expected = { ...finding, severity, fixHint: "Inspect setup" };
+    const delegate = vi.fn().mockResolvedValue([expected]);
+    capture.load.mockReturnValue({ collectBrowserReadinessFindings: delegate });
+    const cfg = { browser: { defaultProfile: "user" } };
+    const ctx = createDoctorHealthFlowContext({ cfg });
     await runBrowserHealth(ctx);
     expect(ctx.healthFindings).toEqual(severity === "info" ? [] : [expected]);
     expect(capture.note).not.toHaveBeenCalled();
-    expect(await check.detect(context())).toEqual([expected]);
+    expect(capture.load).toHaveBeenCalledWith({
+      dirName: "browser",
+      artifactBasename: "browser-doctor.js",
+    });
+    expect(delegate).toHaveBeenCalledWith(cfg);
+    delegate.mockClear();
+    expect(await check.detect({ ...context(), cfg })).toEqual([expected]);
+    expect(delegate).toHaveBeenCalledWith(cfg);
   },
 );
 
@@ -58,10 +67,11 @@ it("retains an actionable inspection gap when the bundled browser surface cannot
   expect(ctx.healthFindings).toEqual([
     expect.objectContaining({
       category: "fix-now",
-      message: expect.stringContaining("synthetic browser unavailable"),
+      message: "Doctor could not inspect browser readiness: synthetic browser unavailable",
       fixHint: expect.stringContaining("bundled browser plugin"),
     }),
   ]);
+  expect(ctx.healthFindings?.[0]?.fixHint).toContain("rerun openclaw doctor");
   const run = await runDoctorHealthRepairs(context(), { checks: [check] });
   expect(run.remainingFindings).toEqual(ctx.healthFindings);
   expect(run.warnings.join("\n")).toContain("repair failed:");

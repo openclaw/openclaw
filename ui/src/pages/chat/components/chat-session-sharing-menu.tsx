@@ -10,6 +10,7 @@ import {
 } from "solid-js";
 import { PersonAvatarLink, PersonName } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
+import { HeaderSearch } from "../../../components/solid/header-search.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuControls, MenuEntry, MenuItem } from "../../../components/solid/menu.tsx";
 import { SessionOwnerChip } from "../../../components/solid/session-owner-chip.tsx";
@@ -61,10 +62,14 @@ export function useChatSessionSharingMenu(
     return "";
   });
   const matches = () => {
-    const terms = query().trim().toLocaleLowerCase().split(/\s+/u);
+    const terms = query().trim().toLocaleLowerCase().normalize("NFC").split(/\s+/u);
     return people().filter(({ identity }) =>
       terms.every((term) =>
-        [identity.label, identity.id, identity.type].join(" ").toLocaleLowerCase().includes(term),
+        [identity.label, identity.id, identity.type]
+          .join(" ")
+          .toLocaleLowerCase()
+          .normalize("NFC")
+          .includes(term),
       ),
     );
   };
@@ -74,16 +79,12 @@ export function useChatSessionSharingMenu(
       id: "members-search",
       content: (
         <div class="people-menu__search" onClick={(event) => event.stopPropagation()}>
-          <input
-            ref={controls?.ref()}
-            type="search"
-            data-search=""
-            data-form-control=""
-            autocomplete="off"
-            aria-label={t("sessionsView.searchPeople")}
-            placeholder={t("sessionsView.searchPeople")}
-            value={query()}
-            onInput={(event) => setQuery(event.currentTarget.value)}
+          <HeaderSearch
+            label={t("sessionsView.searchPeople")}
+            query={query()}
+            controlRef={() => controls?.ref()}
+            inputProps={{ "data-search": "", "data-form-control": "" }}
+            onQueryChange={setQuery}
           />
         </div>
       ),

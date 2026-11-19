@@ -9,7 +9,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForDead, waitForFile } from "../../test/helpers/process-wait.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { updateExecutorEntrypoints } from "../cli/cli-entrypoint.test-support.js";
+import {
+  cliRecoveryEntrypoints,
+  updateExecutorEntrypoints,
+} from "../cli/cli-entrypoint.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -18,7 +21,7 @@ import { installDatabaseEngineSelection } from "./database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
 import { getPostgresPhysicalFacts } from "./database-engine/physical-facts.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
-import { writeRestartSentinel } from "./restart-sentinel.js";
+import { readRestartSentinelSnapshot, writeRestartSentinel } from "./restart-sentinel.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { readManagedHandoffArtifacts } from "./update-managed-service-handoff-artifacts.test-support.js";
 // Register the real-process fixture before importing its consumers.
@@ -31,11 +34,6 @@ const connection =
   typeof configured === "string" ? configured : process.env.OPENCLAW_HANDOFF_TEST_CONNECTION;
 const { runManagedServiceManagerBoundary, resolvePreferredOpenClawTmpDirMock, spawnMock } =
   useManagedServiceHandoffLifecycleFixture();
-const sentinelRuntimeUrl = resolveRuntimeWorkerUrl({
-  currentModuleUrl: import.meta.url,
-  sourceWorkerName: "update-managed-service-handoff-sentinel",
-  distWorkerPath: "infra/update-managed-service-handoff-sentinel.js",
-});
 const postgresClientPath = createRequire(import.meta.url).resolve("pg");
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
 
@@ -126,7 +124,8 @@ itUnix.for(["transfer", "cancel"] as const)(
     const identity = { kind: "managed-update-handoff", ...result };
     if (mode === "cancel") assert.equal(await handoff.cancelManagedServiceUpdateHandoff(identity), "restored-in-process");
     else assert(await handoff.transferManagedServiceUpdateHandoff(identity));
-    fs.writeFileSync(${JSON.stringify(transferred)}, JSON.stringify(result));
+    fs.writeFileSync(${JSON.stringify(transferred + ".tmp")}, JSON.stringify(result));
+    fs.renameSync(${JSON.stringify(transferred + ".tmp")}, ${JSON.stringify(transferred)});
   `,
     );
     const { spawn } =
@@ -265,7 +264,7 @@ describe.skipIf(!connection || process.platform === "win32")(
             helperExitCode: outcome === "completed" ? 0 : 7,
             updaterResult: outcome === "completed" ? { status: "ok", mode: "npm" } : failedUpdate,
             ...(outcome === "completed" ? { updaterExitCode: 0 } : {}),
-            async prepareState({ env, recoveryModulePath, sourceRuntimeImport }) {
+            async prepareState({ env, recoveryModulePath }) {
               fixtureEnv = env;
               const root = env.OPENCLAW_STATE_DIR!;
               // The installed child resolves exactly the same canonical local lease store.
@@ -313,7 +312,7 @@ describe.skipIf(!connection || process.platform === "win32")(
               }
               await fs.appendFile(
                 recoveryModulePath,
-                `${sourceRuntimeImport}\nconst sentinelRuntime = await import(${JSON.stringify(sentinelRuntimeUrl.href)});\nexport const runManagedHandoffSentinelChild = sentinelRuntime.executeInstalledHandoffSentinelOperation;\n`,
+                `\nexport { runManagedHandoffSentinelChild } from ${JSON.stringify(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.daemon).href)};\n`,
               );
               if (outcome === "consumed") {
                 // Model the restored Gateway consuming the first failure notice while
@@ -355,8 +354,8 @@ export async function waitForGatewayUpdateRecovery(...args) {
               }
               expect(JSON.stringify(args)).not.toContain(connection);
             },
-            readSentinel(env) {
-              return withEngineStoreAdmission(() => readRestartSentinelPayload(env));
+            async readSentinel(env) {
+              return (await readRestartSentinelSnapshot(env)).sentinel;
             },
           });
           expectNoConnection(result.log);

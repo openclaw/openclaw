@@ -447,7 +447,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     createOpenClawCodingToolsMock.mockReturnValue(
       ["read", "exec"].map((name) => compactionTool(name, {})),
     );
-    buildConfiguredAgentSystemPromptMock.mockImplementation((params) =>
+    buildConfiguredAgentSystemPromptMock.mockImplementation(async (params) =>
       JSON.stringify({
         promptMode: params.promptMode,
         skillsPrompt: params.skillsPrompt ?? null,
@@ -650,7 +650,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         compacted: false,
         reason: expect.stringContaining("timed out"),
       });
-      expect(policies).toEqual([undefined]);
+      expect(policies).toEqual(["retry-invalid-once"]);
     } finally {
       vi.useRealTimers();
     }

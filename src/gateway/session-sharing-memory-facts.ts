@@ -4,6 +4,7 @@ import {
   captureSessionSharingMemoryFacts,
   SessionMutationFactsUnavailableError,
 } from "./session-sharing-incognito.js";
+import type { SessionFactsRequest } from "./session-sharing-target.types.js";
 
 export function prepareMemorySessionMutationFacts(
   params: {
@@ -11,7 +12,7 @@ export function prepareMemorySessionMutationFacts(
     agentId: string;
     canonicalKey: string;
     allowMissing?: true;
-    storageReady?: Promise<void>;
+    storageReady?: SessionFactsRequest["storageReady"];
   },
   assertRoutingCurrent: (cfg: OpenClawConfig) => void,
 ) {
@@ -50,7 +51,9 @@ export function prepareMemorySessionMutationFacts(
   };
   const prepare = async () => {
     if (params.storageReady) {
-      await params.storageReady;
+      const ready = params.storageReady;
+      const prepared = await ("ready" in ready ? ready.ready : ready);
+      prepared?.assertCurrent();
     }
     read.readCurrent(params.cfg);
     return read;

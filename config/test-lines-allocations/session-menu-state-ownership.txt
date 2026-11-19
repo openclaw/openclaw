@@ -1,2 +1,0 @@
-126
-# Prove canonical and plain menu states in both stylesheet orders and themes.

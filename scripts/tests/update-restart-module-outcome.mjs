@@ -16,7 +16,10 @@ import {
 } from "../../packages/normalization-core/src/error-coercion.ts";
 import { expectDefined } from "../../packages/normalization-core/src/expect.ts";
 import { MAX_TIMER_TIMEOUT_MS } from "../../packages/normalization-core/src/number-coercion.ts";
-import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.ts";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../packages/normalization-core/src/string-coerce.ts";
 import {
   sliceUtf16Safe,
   truncateUtf16Safe,
@@ -145,6 +148,7 @@ async function fixture({
   const values = {
     theme: new Proxy({}, { get: () => (value) => value }),
     normalizeOptionalString,
+    normalizeLowercaseStringOrEmpty,
     expectDefined,
     resolveServiceRefreshEnv: (env) => env,
     resolveGatewayServiceManagementBlockMessageForUpdate: () => undefined,
@@ -179,6 +183,8 @@ async function fixture({
       return { verification: { ...observed.verification, recovery: observed.recovery } };
     },
     recordUpdateRunStep: () => {},
+    // No earlier run owes a step. Recording or settling one would be an unexpected call.
+    readOwedUpdateSteps: () => [],
     async runUpdatedInstallGatewayCommand(activation, command) {
       commandCalls++;
       events.push("command:" + command);
@@ -251,6 +257,7 @@ async function fixture({
     sliceUtf16Safe,
     truncateUtf16Safe,
     withCommandProcessScope: async (action) => action(),
+    getCliPluginInvocationResources: () => undefined,
     readPackageVersion: async (packageRoot) => {
       assert.equal(packageRoot, installRoot);
       return "2026.9.4";
@@ -312,6 +319,8 @@ async function fixture({
     "../daemon-cli/restart-health-probe",
     "../../utils/absolute-deadline",
     "update-command-post-update-maintenance",
+    "update-command-owed",
+    "../../infra/update-run-owed-step",
     "../../infra/update-candidate-predecessor-stop",
     // Recovery and reporting stay real; only their I/O uses finite fixture facts.
     "update-command-failure-recovery",
@@ -320,6 +329,7 @@ async function fixture({
     "../../process/exec-result",
     "../../shared/null-writer",
     "../../shared/state-lease-loss",
+    "../../shared/state-lease-loss-format",
     "../../shared/update-outcome",
     "../../state/openclaw-state-lease-error",
     "../../infra/update-run-report",
@@ -332,6 +342,11 @@ async function fixture({
     "../../logging/redact-performance",
     "../../logging/redact-prefilter",
     "../../logging/redact-bounded",
+    "../../../packages/net-policy/src/redact-sensitive-url",
+    "../../logging/redact-mask",
+    "../../logging/redact-edit-composition",
+    "../../logging/redact-json",
+    "../../logging/redact-json-tokens",
     "../../logging/secret-redaction-registry",
     "../../shared/global-singleton",
     "../../shared/regexp",
@@ -364,6 +379,7 @@ async function fixture({
     }).code;
     const mod = new vm.SourceTextModule(code, { context, identifier: filename });
     modules.set(path.basename(name) + ".js", mod);
+    modules.set(path.basename(name), mod);
     const imports = new Map();
     for (const match of code.matchAll(
       /(?:import|export)\s*\{([^}]+)\}\s*from\s*["']([^"']+)["']/gs,

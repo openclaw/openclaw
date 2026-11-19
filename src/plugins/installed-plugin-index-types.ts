@@ -9,6 +9,10 @@ import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-re
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { OpenClawPackageBuild, PluginPackageChannel } from "./package-manifest.types.js";
 import type { PluginSourceAdmissionReceipt } from "./plugin-source-admission.types.js";
+import type {
+  PluginSourceSnapshotChanges,
+  PluginSourceSnapshotWarning,
+} from "./plugin-source-snapshot.types.js";
 
 /** Schema version for installed plugin index files. */
 export const INSTALLED_PLUGIN_INDEX_VERSION = 1;
@@ -65,6 +69,9 @@ export type InstalledPluginIndexRecord = {
   installRecordHash?: string;
   /** Native source admissions survive process restarts while the install owner is unchanged. */
   sourceAdmissions?: Record<string, PluginSourceAdmissionReceipt>;
+  /** Named snapshots remain present even if malformed; the artifact owner validates them. */
+  sourceSnapshot?: unknown;
+  sourceSnapshotWarning?: PluginSourceSnapshotWarning;
   /**
    * Package-authored openclaw.install metadata. This describes catalog/package
    * install intent and must not be treated as the durable install record.
@@ -111,6 +118,8 @@ export type InstalledPluginIndex = {
   workspaceDir?: string;
   refreshReason?: InstalledPluginIndexRefreshReason;
   installRecords: Readonly<Record<string, InstalledPluginInstallRecordInfo>>;
+  /** Original descriptors retained until their exact artifact and reader token can be retired. */
+  retiredSourceSnapshots?: readonly unknown[];
   plugins: readonly InstalledPluginIndexRecord[];
   diagnostics: readonly PluginDiagnostic[];
 };
@@ -157,7 +166,8 @@ export type LoadInstalledPluginIndexParams = {
   artifactPreservingReadOnly?: boolean;
 };
 
-export type RefreshInstalledPluginIndexParams = LoadInstalledPluginIndexParams & {
-  reason: InstalledPluginIndexRefreshReason;
-  policyPluginIds?: readonly string[];
-};
+export type RefreshInstalledPluginIndexParams = LoadInstalledPluginIndexParams &
+  PluginSourceSnapshotChanges & {
+    reason: InstalledPluginIndexRefreshReason;
+    policyPluginIds?: readonly string[];
+  };

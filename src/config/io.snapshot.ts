@@ -13,7 +13,6 @@ import {
   includeContributionOwnsBindings,
 } from "./agent-roster-provenance.js";
 import { captureConfigReadEnvMutation, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
-import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
 import { applyImplicitAgentRosterDefaults } from "./implicit-agent-roster.js";
 import { ConfigIncludeError, ConfigIncludeReadError } from "./includes.js";
 import { createConfigIoContext, type ConfigIoContext } from "./io.context.js";
@@ -490,6 +489,7 @@ export async function prepareConfigRecoveryFromContext(
       raw: current.raw,
       parsed: current.parsed,
       prepareBackup: previewContext.prepareRecoveryBackupCandidate,
+      prepareBackupAsync: previewContext.prepareRecoveryBackupCandidateAsync,
     });
     if (!plan) {
       return null;
@@ -608,7 +608,6 @@ export async function readConfigFileSnapshotForWriteFromContext(
       ownedConfigPathForWrite: context.configPath,
       includeFileHashesForWrite: result.includeFileHashesForWrite,
       includeFileTargetsForWrite: result.includeFileTargetsForWrite,
-      unsetPaths: resolveManagedUnsetPathsForWrite(undefined),
     },
   };
 }

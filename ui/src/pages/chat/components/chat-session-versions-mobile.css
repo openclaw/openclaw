@@ -70,21 +70,6 @@
   outline-offset: -3px;
 }
 
-.chat-session-versions-mobile__radio {
-  box-sizing: border-box;
-  width: 19px;
-  height: 19px;
-  flex: none;
-  border: 1.5px solid var(--muted);
-  border-radius: 50%;
-}
-
-.chat-session-versions-mobile__select[aria-checked="true"] .chat-session-versions-mobile__radio {
-  border-color: var(--accent);
-  background: var(--accent);
-  box-shadow: inset 0 0 0 4px var(--bg-hover);
-}
-
 .chat-session-versions-mobile__copy {
   min-width: 0;
   flex: 1;

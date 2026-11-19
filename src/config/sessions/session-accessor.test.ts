@@ -457,8 +457,8 @@ describe("session accessor seam", () => {
   });
 
   it("rejects alias targets and keeps canonical lifecycle mutations explicit", async () => {
-    await replaceEntry(entryScope("agent:main:work"), makeEntry("canonical-session", 10));
-    await replaceEntry(entryScope("agent:main:main"), makeEntry("legacy-session", 20));
+    await replaceEntry(entryScope("agent:main:work"), makeEntry("canonical-session", Date.now()));
+    await replaceEntry(entryScope("agent:main:main"), makeEntry("legacy-session", Date.now()));
     const notify = vi.fn();
     onTestFinished(onSessionIdentityMutation(notify));
     for (const storeKeys of [["agent:main:work", "agent:main:main"], ["agent:main:main"]]) {
@@ -472,12 +472,12 @@ describe("session accessor seam", () => {
     await patchSessionEntryTarget(lifecycleTarget("agent:main:work"), () => ({ label: "patched" }));
     const sessionKey = "agent:main:other";
     const scope = entryScope(sessionKey);
-    await replaceEntry(scope, makeEntry("created", 10));
+    await replaceEntry(scope, makeEntry("created", Date.now()));
     await patchSessionEntryCore(scope, () => ({ label: "same identity" }));
-    await replaceEntry(scope, makeEntry("replaced", 20));
+    await replaceEntry(scope, makeEntry("replaced", Date.now()));
     const target = lifecycleTarget(sessionKey);
     await resetSessionEntryLifecycle({
-      buildNextEntry: () => ({ sessionId: "reset", updatedAt: 30 }),
+      buildNextEntry: () => ({ sessionId: "reset", updatedAt: Date.now() }),
       ...target,
     });
     await deleteLifecycle({ archiveTranscript: false, ...target });

@@ -69,7 +69,7 @@ private fun DreamingPanel(summary: GatewayDreamingSummary) {
         HealthStatus(nativeString("Signal Index"), if (summary.phaseSignalHealthy) nativeString("Healthy") else nativeString("Needs attention"), summary.phaseSignalHealthy),
         HealthStatus(nativeString("Promoted"), nativeString("\${summary.promotedToday} today · \${summary.promotedTotal} total", summary.promotedToday, summary.promotedTotal), true),
       )
-    ClawListPanel(items = healthRows, contentPadding = PaddingValues(0.dp), dividerColor = ClawTheme.colors.border) { row ->
+    ClawListPanel(items = healthRows, dividerColor = ClawTheme.colors.border) { row ->
       ClawStatusRow(title = row.title, value = row.value, healthy = row.healthy)
     }
     DreamDiaryPanel(summary = summary)
@@ -122,7 +122,7 @@ private fun DreamDiaryRow(entry: GatewayDreamDiaryEntry) {
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
       )
-      Text(text = entry.text, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+      Text(text = entry.text, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
     }
   }
 }

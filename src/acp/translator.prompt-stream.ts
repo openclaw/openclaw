@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import type {
-  AgentSideConnection,
+  AgentContext,
   CancelNotification,
   PromptRequest,
   PromptResponse,
@@ -74,7 +74,7 @@ export class AcpTranslatorPromptStream {
   private stopped = false;
 
   constructor(
-    connection: AgentSideConnection,
+    connection: Pick<AgentContext, "request">,
     private readonly gateway: GatewayClient,
     private readonly opts: AcpServerOptions,
     private readonly sessionStore: AcpSessionStore,

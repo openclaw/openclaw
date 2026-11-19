@@ -1,6 +1,8 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import type { HumanMention } from "../../../packages/gateway-protocol/src/index.js";
+import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 
 const INVALID_MENTIONS = "Selected mentions no longer match the message. Select the people again.";
@@ -9,6 +11,35 @@ function splitsSurrogate(text: string, offset: number): boolean {
   const before = text.charCodeAt(offset - 1);
   const after = text.charCodeAt(offset);
   return before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff;
+}
+
+/**
+ * A message that starts with a selected person and never names the agent is
+ * addressed to people. Incidental mentions (including cc) still run the agent.
+ * The agent's group-chat mention patterns (identity name, emoji, or
+ * configured `mentionPatterns`) decide whether it was named; the selected
+ * tokens are excluded so a person whose handle contains the agent's name does
+ * not address it.
+ */
+export function isHumanAddressedChatMessage(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  text: string;
+  mentions: readonly HumanMention[] | undefined;
+}): boolean {
+  const mentions = params.mentions ?? [];
+  const firstMention = mentions[0];
+  if (!firstMention || params.text.slice(0, firstMention.start).trim()) {
+    return false;
+  }
+  let remaining = "";
+  let cursor = 0;
+  for (const mention of mentions) {
+    remaining += params.text.slice(cursor, mention.start);
+    cursor = mention.end;
+  }
+  remaining += params.text.slice(cursor);
+  return !matchesMentionPatterns(remaining, buildMentionRegexes(params.cfg, params.agentId));
 }
 
 /** Normalize raw selected spans against the request boundary's sanitized message. */

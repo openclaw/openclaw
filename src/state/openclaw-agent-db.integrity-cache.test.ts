@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync as NativeDatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
@@ -88,7 +89,7 @@ it.each([false, true])("defers seal-less Doctor reopens (pinned WAL: %s)", async
       checks += 1;
       yield check;
     }
-    diagnostics.push({ ...args[3] });
+    diagnostics.push({ ...args[3]?.diagnostics });
     return false;
   });
   const maintenance = createOpenClawDatabaseMaintenanceScope({ sqliteIntegrityCheck: "quick" });
@@ -101,6 +102,10 @@ it.each([false, true])("defers seal-less Doctor reopens (pinned WAL: %s)", async
         reader.exec("BEGIN");
         reader.prepare("SELECT * FROM auth_profile_state").all();
         first.db.exec("INSERT INTO auth_profile_state VALUES ('pinned', '{}', 1)");
+      }
+      const walBytes = pinned ? fs.statSync(`${first.path}-wal`).size : undefined;
+      if (pinned) {
+        expect(walBytes).toBeGreaterThan(0);
       }
       closeCachedOpenClawAgentDatabase(first);
       expect(readSqliteDatabaseCleanClose(first.path)).toBe(false);
@@ -118,12 +123,139 @@ it.each([false, true])("defers seal-less Doctor reopens (pinned WAL: %s)", async
       expect(diagnostics.every((record) => record.integrityCheckSyncMs === undefined)).toBe(true);
       expect(logger.info).toHaveBeenCalledWith(
         `agent database clean-close receipt: ${pinned ? "checkpoint-incomplete" : "verification-missing"}; agent=doctor`,
-        expect.anything(),
+        pinned
+          ? expect.objectContaining({
+              checkpoint: expect.objectContaining({
+                alreadyClosed: false,
+                pathCurrent: true,
+                walBytes,
+              }),
+            })
+          : expect.anything(),
       );
     });
   } finally {
     reader?.close();
     await maintenance.close();
+  }
+});
+
+it.each([
+  "missing",
+  "doctor",
+  "unique",
+  "missing-unique",
+  "pending-column",
+  "trigger",
+  "full",
+] as const)("limits additive index admission to non-unique repairs (%s)", async (difference) => {
+  const options = {
+    agentId: "index-upgrade",
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("agent-index-upgrade-") },
+  };
+  const original = openOpenClawAgentDatabase(options);
+  original.db.exec("INSERT INTO auth_profile_state VALUES ('preserved', '{}', 1)");
+  closeOpenClawAgentDatabasesForTest();
+  const seal = readSqliteCleanCloseSeal(
+    original.path,
+    fs.statSync(original.path, { bigint: true }),
+  )!;
+  retireSqliteDatabaseAdmissionForPath(original.path);
+  const indexes = [
+    "idx_agent_conversation_deliveries_source_session",
+    "idx_agent_session_input_completions_session_key",
+  ];
+  {
+    using previous = new NativeDatabaseSync(original.path);
+    for (const index of difference === "missing" ? indexes.slice(0, 1) : indexes) {
+      previous.exec(`DROP INDEX ${index}`);
+    }
+    if (difference === "missing-unique") {
+      previous.exec("DROP INDEX idx_agent_conversations_identity");
+    }
+    if (difference === "unique") {
+      previous.exec("CREATE UNIQUE INDEX unexpected ON auth_profile_state(updated_at)");
+    }
+    if (difference === "pending-column") {
+      previous.exec("ALTER TABLE session_windows DROP COLUMN row_transcript_updated_at");
+    }
+    if (difference === "trigger") {
+      previous.exec(
+        "CREATE TRIGGER unexpected AFTER INSERT ON auth_profile_state BEGIN SELECT 1; END",
+      );
+    }
+    previous.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  }
+  // Model a clean prior-build close whose canonical catalog predates the indexes.
+  expect(
+    writeSqliteCleanCloseSeal(
+      original.path,
+      "prior-index-catalog",
+      fs.statSync(original.path, { bigint: true }),
+      {
+        ...seal,
+        identity: {
+          ...sqliteDatabaseSealSchemaFor("agent")!.identity,
+          schema: "prior-index-catalog",
+        },
+      },
+    ),
+  ).toBe(true);
+  const priorSealBytes = fs.readFileSync(`${original.path}.seal`, "utf8");
+  const gate = schema.agentDatabaseIntegrityBeforeMutationSteps;
+  let checks = 0;
+  let diagnostics: SqliteIntegrityDiagnostics | undefined;
+  vi.spyOn(schema, "agentDatabaseIntegrityBeforeMutationSteps").mockImplementation(function* (
+    ...args
+  ) {
+    const operation = gate(...args);
+    let step = operation.next();
+    while (!step.done) {
+      checks++;
+      yield step.value;
+      step = operation.next();
+    }
+    diagnostics = args[3]?.diagnostics;
+    return step.value;
+  });
+  const reopen = () => openOpenClawAgentDatabase(options);
+  if (difference === "unique" || difference === "trigger") {
+    expect(reopen).toThrow();
+  } else if (difference === "full" || difference === "doctor") {
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      sqliteIntegrityCheck: difference === "full" ? "full" : "quick",
+    });
+    try {
+      maintenance.run(reopen);
+    } finally {
+      await maintenance.close();
+    }
+  } else {
+    const opened = reopen();
+    expect(
+      opened.db
+        .prepare("SELECT state_json FROM auth_profile_state WHERE state_key='preserved'")
+        .get(),
+    ).toEqual({ state_json: "{}" });
+    expect(
+      opened.db
+        .prepare("SELECT name FROM sqlite_schema WHERE name IN (?, ?) ORDER BY name")
+        .all(...indexes),
+    ).toEqual(indexes.map((name) => ({ name })));
+  }
+  const bounded = difference === "missing" || difference === "doctor";
+  expect(checks).toBe(bounded ? 0 : 1);
+  if (bounded) {
+    expect(diagnostics).toMatchObject({
+      integrityGateMode: "deferred",
+      integrityGateOutcome: "pending",
+      repairedIndexCount: difference === "missing" ? 1 : 2,
+    });
+    expect(diagnostics?.integrityCheckSyncMs).toBeUndefined();
+    expect(readSqliteDatabaseIntegrityVerification(original.path)).toBeUndefined();
+    closeOpenClawAgentDatabasesForTest();
+    expect(readSqliteDatabaseCleanClose(original.path)).toBe(false);
+    expect(fs.readFileSync(`${original.path}.seal`, "utf8")).toBe(priorSealBytes);
   }
 });
 
@@ -281,7 +413,7 @@ it.each([
   ) {
     expect(statements.filter((sql) => /PRAGMA (?:integrity|quick)_check/i.test(sql))).toEqual([]);
     expect(logger.info).not.toHaveBeenCalledWith(
-      "agent database integrity gate",
+      expect.stringContaining("agent database integrity gate"),
       expect.anything(),
     );
     expect(readSqliteDatabaseCleanClose(first.path)).toBe(true);
@@ -299,14 +431,16 @@ it.each([
     expect(statements.filter((sql) => /PRAGMA (?:integrity|quick)_check/i.test(sql))).toEqual([]);
   } else {
     expect(logger.info).toHaveBeenCalledWith(
-      "agent database integrity gate",
+      expect.stringContaining("outcome=pending"),
       expect.objectContaining({
         agentId: "receipt-agent",
         integrityGateReason: outcome === "malformed-identity" ? "malformed-proof" : outcome,
-        integrityGateMode: outcome === "no-proof" ? "deferred" : "full",
-        integrityGateOutcome: outcome === "no-proof" ? "pending" : "healthy",
+        integrityGateMode: "deferred",
+        integrityGateOutcome: "pending",
       }),
     );
+    expect(readSqliteDatabaseIntegrityVerification(reopened.path)).toBeUndefined();
+    expect(readSqliteDatabaseCleanClose(first.path)).toBe(false);
   }
 });
 
@@ -410,7 +544,7 @@ it("checks once across writes and physical admitted reopens, including after lif
   expect(checks).toEqual(["PRAGMA integrity_check;", "PRAGMA foreign_key_check;"]);
 });
 
-it("refuses an orphan allocated page before admitting a dirty database", async () => {
+it("explicit full maintenance refuses an orphan allocated page before admission", async () => {
   const expected = /never used/iu;
   const options = {
     agentId: "integrity-pages",
@@ -450,16 +584,27 @@ it("refuses an orphan allocated page before admitting a dirty database", async (
   }
 
   const admitted = vi.fn();
-  await expect(
-    withOpenClawAgentDatabaseAdmission(options, (run) => Promise.resolve(run(() => {})), admitted),
-  ).rejects.toMatchObject({
-    name: "SqliteIntegrityError",
-    message: expect.stringMatching(expected),
-  });
-  expect(admitted).not.toHaveBeenCalled();
+  const maintenance = createOpenClawDatabaseMaintenanceScope({ sqliteIntegrityCheck: "full" });
+  try {
+    await expect(
+      maintenance.run(() =>
+        withOpenClawAgentDatabaseAdmission(
+          options,
+          (run) => Promise.resolve(run(() => {})),
+          admitted,
+        ),
+      ),
+    ).rejects.toMatchObject({
+      name: "SqliteIntegrityError",
+      message: expect.stringMatching(expected),
+    });
+    expect(admitted).not.toHaveBeenCalled();
+  } finally {
+    await maintenance.close();
+  }
 });
 
-it("does not lend remembered integrity to another file at the same path", () => {
+it("does not lend remembered integrity to explicit verification of a replacement file", async () => {
   const options = {
     agentId: "integrity-cache",
     env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-integrity-replacement-") },
@@ -470,9 +615,14 @@ it("does not lend remembered integrity to another file at the same path", () => 
   fs.copyFileSync(database.path, replacement);
   createUnsafeIndexDrift(replacement);
   fs.renameSync(replacement, database.path);
-  expect(() => openOpenClawAgentDatabase(options)).toThrow(
-    /integrity_check failed.*missing from index unsafe_index_records_value/iu,
-  );
+  const maintenance = createOpenClawDatabaseMaintenanceScope({ sqliteIntegrityCheck: "full" });
+  try {
+    expect(() => maintenance.run(() => openOpenClawAgentDatabase(options))).toThrow(
+      /integrity_check failed.*missing from index unsafe_index_records_value/iu,
+    );
+  } finally {
+    await maintenance.close();
+  }
 });
 
 it("rechecks the media version guard after a validated handle is replaced by a populated v0 store", () => {
@@ -499,7 +649,7 @@ it("rechecks the media version guard after a validated handle is replaced by a p
 });
 
 it.each(["invalid seal", "foreign lease"] as const)(
-  "reuses physical proof only without a foreign lease (%s)",
+  "keeps current-schema admission bounded with an invalid seal or foreign lease (%s)",
   (change) => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-integrity-policy-") };
     const options = { agentId: "policy", env };
@@ -527,7 +677,7 @@ it.each(["invalid seal", "foreign lease"] as const)(
         ...args
       ) {
         const result = yield* gate(...args);
-        diagnostics = args[3];
+        diagnostics = args[3]?.diagnostics;
         return result;
       });
       logger.info.mockClear();
@@ -537,7 +687,7 @@ it.each(["invalid seal", "foreign lease"] as const)(
           .prepare("SELECT state_json FROM auth_profile_state WHERE state_key='preserved'")
           .get(),
       ).toEqual({ state_json: '{"ok":true}' });
-      expect(diagnostics?.integrityGateOutcome).toBe(lease ? "healthy" : "cached");
+      expect(diagnostics?.integrityGateOutcome).toBe(lease ? "pending" : "cached");
       reopened.db.exec("UPDATE auth_profile_state SET updated_at=2 WHERE state_key='preserved'");
       expect(readSqliteDatabaseCleanClose(original.path)).toBe(false);
     } finally {

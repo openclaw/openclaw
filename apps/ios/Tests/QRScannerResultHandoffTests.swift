@@ -4,6 +4,15 @@ import Testing
 
 @MainActor
 struct QRScannerResultHandoffTests {
+    @Test func `scanner purposes keep device discovery out of Gateway setup`() throws {
+        let payload = #"{"ver":"v1","name":"PROV_OC_1234ABCD","username":"openclaw","pop":"00112233445566778899AABBCCDDEEFF","transport":"ble"}"#
+        let discovery = try #require(ESPSetupDiscovery.parse(payload))
+        #expect(QRScannerPurpose.gateway.parse(payload) == nil)
+        #expect(QRScannerPurpose.espDevice.parse("wss://gateway.example.com:443") == nil)
+        #expect(QRScannerPurpose.gateway.parse("wss://gateway.example.com:443") != nil)
+        #expect(QRScannerPurpose.espDevice.parse(payload) == .espDevice(discovery))
+    }
+
     @Test func `queued result is delivered once after dismissal`() async throws {
         let handoff = QRScannerResultHandoff(settlingNanoseconds: 0)
         var deliveredResult: QRScannerResult?

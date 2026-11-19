@@ -1,11 +1,9 @@
 import type { ControlUiLinkReaderPreview } from "../../../src/shared/control-ui-link-reader.js";
 import type { ChatLinkDisplay, ChatRowDisplay } from "../lib/chat/row-display-facts.ts";
-import { SESSION_TITLE_TARGET_SELECTOR } from "./session-progress-hovercard-target.ts";
-
-export type SessionTitleDisplay = {
-  title?: string;
-  onTitle: (title: string | undefined) => void;
-};
+import {
+  SESSION_TITLE_TARGET_SELECTOR,
+  sessionTitleRegistrar,
+} from "./session-progress-hovercard-target.ts";
 
 /** An absent title prepares the link while leaving its producer-owned label intact. */
 export function stampSessionTitleLabel(
@@ -51,14 +49,6 @@ export function stampSessionTitleLabel(
   }
   return anchor;
 }
-
-// Producers can mount before the app's lazy hovercard bootstrap has loaded.
-const { promise: registrar, resolve: installSessionTitleRegistrar } =
-  Promise.withResolvers<
-    (target: HTMLElement, label: HTMLElement, display?: SessionTitleDisplay) => () => void
-  >();
-
-export { installSessionTitleRegistrar };
 
 export const MARKDOWN_LINK_DISPLAY_TARGET_SELECTOR = `${SESSION_TITLE_TARGET_SELECTOR}, a.markdown-github-item`;
 
@@ -124,7 +114,7 @@ export function registerSessionTitleTarget(
   const registeredTarget = title ? stampSessionTitleLabel(target, label, title) : target;
   let active = true;
   let release: (() => void) | undefined;
-  void registrar.then((register) => {
+  void sessionTitleRegistrar.then((register) => {
     if (active) {
       release = display
         ? register(registeredTarget, label, {

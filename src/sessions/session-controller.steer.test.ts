@@ -1,10 +1,14 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   attachActiveEmbeddedRun,
   detachActiveEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.js";
 import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
+import { MessageInjectionWithdrawnError } from "../auto-reply/reply/message-injection-authority.js";
+import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
+import { diagnosticLogger } from "../logging/diagnostic-runtime.js";
 import type { AgentHarnessAttemptParams } from "../plugin-sdk/agent-harness-runtime.js";
 import {
   markGatewayRestartDraining,
@@ -19,6 +23,7 @@ import type {
 import {
   abortSessionControllerInput,
   clearSessionControllerMailbox,
+  releaseSessionControllerClaim,
   reserveSessionControllerSource,
   retireSessionControllerInput,
   tryClaimSessionControllerTask,
@@ -57,7 +62,7 @@ type Preparation = NonNullable<ReplyMessageInjectionOptions["toolAuthorityPrepar
 type Injection = NonNullable<ReplyBackendHandle["messageInjectionV2"]>;
 const acceptQueue: QueueMessage = async ({ onQueueAccepted }) => onQueueAccepted?.(true);
 const rejectQueue = async () => {
-  throw new Error("backend rejected");
+  throw new Error(`backend rejected ${"x".repeat(600)}`);
 };
 const nextTask = () =>
   new Promise<void>((resolve) => {
@@ -205,12 +210,44 @@ function revocableAuthority(message: string) {
   const controller = new AbortController();
   return {
     error,
+    signal: controller.signal,
     revoke: () => controller.abort(error),
     assertCurrent: () => controller.signal.throwIfAborted(),
   };
 }
 
 describe("submitSessionControllerSteer", () => {
+  it.each([
+    [1, new GatewayOperatorAccessUnavailableError()],
+    [1, new Error("internal SDK assertion failure")],
+    [2, new Error("internal SDK assertion failure")],
+  ] as const)(
+    "retains unaccepted input after assertion %s refuses without revocation (%s)",
+    async (at, error) => {
+      let checks = 0;
+      let refusing = false;
+      const assertCurrent = () => {
+        if (refusing && ++checks >= at) {
+          throw error;
+        }
+      };
+      const { input, injected, operation } = startTurn({
+        adapter: { authority: { assertCurrent } },
+      });
+      refusing = true;
+      await expect(steer(input)).rejects.toBe(error);
+      expect(input.retirementRequested).toBeUndefined();
+      expect(input.abortSignal.aborted).toBe(false);
+      expect(operation.abortSignal.aborted).toBe(false);
+      expect(injected).toEqual([]);
+      refusing = false;
+      expect(assertCurrent).not.toThrow();
+      operation.complete();
+      const claim = expectDefined(tryClaimSessionControllerTask(input), "retained fallback input");
+      releaseSessionControllerClaim(claim);
+    },
+  );
+
   it.each([
     [undefined, "required"],
     [undefined, "optional"],
@@ -298,6 +335,7 @@ describe("submitSessionControllerSteer", () => {
     [true, "accepted"],
     [true, "rejected"],
   ] as const)("settles a %s direct steer that is %s", async (direct, status) => {
+    using warning = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
     const { input, operation } = startTurn({
       direct,
       queueMessage: status === "accepted" ? acceptQueue : rejectQueue,
@@ -309,6 +347,13 @@ describe("submitSessionControllerSteer", () => {
       expect(input.phase).toBe("consumed");
     } else {
       await expectRejected(result, "runtime_rejected");
+      expect(warning).toHaveBeenCalledWith("steering runtime rejected input", {
+        sessionKey: key,
+        activeRunId: "steer-run",
+        reason: "runtime_rejected",
+        error: expect.stringMatching(/^Error: backend rejected x+$/),
+      });
+      expect(warning.mock.calls[0]?.[1]?.error).toHaveLength(512);
       if (!direct) {
         expectQueued(input);
       }
@@ -708,4 +753,28 @@ describe("steerSessionControllerOperation", () => {
     });
     expectNoInput(input);
   });
+});
+
+it("returns a proven withdrawn accepted steer to runnable followup custody", async () => {
+  using warning = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
+  const { operation, input } = startTurn({
+    queueMessage: async ({ onQueueAccepted }) => {
+      onQueueAccepted?.(true);
+      throw new MessageInjectionWithdrawnError("exact queued input removed at delivery deadline");
+    },
+  });
+  await expect(steer(input, { waitForTranscriptCommit: true })).resolves.toMatchObject({
+    status: "rejected",
+    reason: "injection_unavailable",
+  });
+  expect(warning).toHaveBeenCalledWith("steering runtime rejected input", {
+    sessionKey: key,
+    activeRunId: "steer-run",
+    reason: "injection_unavailable",
+    error: "exact queued input removed at delivery deadline",
+  });
+  operation.complete();
+  const claim = expectDefined(tryClaimSessionControllerTask(input), "withdrawn followup claim");
+  releaseSessionControllerClaim(claim);
+  await claim.settlement.promise;
 });

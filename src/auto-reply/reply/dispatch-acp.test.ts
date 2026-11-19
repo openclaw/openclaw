@@ -208,12 +208,10 @@ vi.mock("../../tts/captioned-final.js", async () => {
   };
 });
 
-vi.mock("../../tts/status-config.js", () => ({
-  resolveStatusTtsSnapshot: () => ({
+vi.mock("../../tts/tts-settings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../tts/tts-settings.js")>()),
+  resolveTtsSettingsSnapshot: () => ({
     autoMode: "always",
-    provider: "auto",
-    maxLength: 1500,
-    summarize: true,
   }),
 }));
 

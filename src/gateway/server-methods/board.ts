@@ -21,7 +21,10 @@ import {
 import { BoardValidationError } from "../../boards/board-layout.js";
 import { appendBoardEventNotice } from "../../boards/board-notices.js";
 import type { BoardSessionTarget, BoardStore } from "../../boards/board-store.js";
-import { GITHUB_ACTIONS_GRANT_PREFIX } from "../../boards/github-actions-capability.js";
+import {
+  boardWidgetDataQueryParams,
+  GITHUB_ACTIONS_GRANT_PREFIX,
+} from "../../boards/github-actions-capability.js";
 import { readCanvasDocumentHtmlSource } from "../../canvas/documents.js";
 import { buildWidgetDocument } from "../../canvas/wrap.js";
 import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
@@ -54,6 +57,7 @@ import {
 } from "../mcp-app-operations.js";
 import { mintMcpAppViewFromTranscript } from "../mcp-app-reconstruction.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { resolveSandboxView } from "../sandbox-view.js";
 import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
 import {
   defineBoardMethod,
@@ -82,7 +86,6 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
       authority.assertActive();
       const projectedSnapshot = projectBoardSnapshot(snapshot, boardSession.agentId);
       let sandboxPort = context.getMcpAppSandboxPort?.();
-      let sandboxOrigin: string | undefined | null = null;
       for (const widget of snapshot.widgets) {
         if (widget.grantState !== "none" && widget.grantState !== "granted") {
           continue;
@@ -118,19 +121,15 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
         widget.viewTicketTtlMs = BOARD_VIEW_TICKET_TTL_MS;
         widget.viewGeneration = viewMetadata.viewGeneration;
         if (sandboxPort !== undefined) {
-          widget.sandboxUrl = buildBoardWidgetSandboxPath(viewMetadata);
-          if (ingress) {
-            widget.sandboxUrl = new URL(widget.sandboxUrl, ingress.sandboxOrigin).href;
-          }
+          Object.assign(
+            widget,
+            resolveSandboxView(
+              buildBoardWidgetSandboxPath(viewMetadata),
+              client,
+              context.getRuntimeConfig?.().mcp?.apps?.sandboxOrigin,
+            ),
+          );
           widget.sandboxPort = sandboxPort;
-          if (sandboxOrigin === null) {
-            const configuredOrigin =
-              ingress?.sandboxOrigin ?? context.getRuntimeConfig?.().mcp?.apps?.sandboxOrigin;
-            sandboxOrigin = configuredOrigin ? new URL(configuredOrigin).origin : undefined;
-          }
-          if (sandboxOrigin) {
-            widget.sandboxOrigin = sandboxOrigin;
-          }
         }
       }
       authority.assertActive();
@@ -337,7 +336,8 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
             | undefined;
           if (
             content.kind === "html" &&
-            declared?.tools?.some((tool) => tool.startsWith(GITHUB_ACTIONS_GRANT_PREFIX))
+            (declared?.tools?.some((tool) => tool.startsWith(GITHUB_ACTIONS_GRANT_PREFIX)) ||
+              (declared?.queries?.length ?? 0) > 0)
           ) {
             const { prepareBoardGitHubIdentity } = await import("../github-actions-read.js");
             identity = await prepareBoardGitHubIdentity(context, {
@@ -613,6 +613,39 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
       validateBoardDataReadParams,
       async (invocation) => {
         const { params: boardParams, respond } = invocation;
+        if ("queryName" in boardParams) {
+          const query = await withAuthorizedBoardWidgetView(
+            store,
+            boardParams.ticket,
+            ({ document }) => {
+              const definition = document.declared?.queries?.find(
+                (item) => item.name === boardParams.queryName,
+              );
+              if (!definition) {
+                throw new BoardValidationError(
+                  "invalid_operation",
+                  `board widget query is not declared: ${boardParams.queryName}`,
+                );
+              }
+              return definition;
+            },
+            { gatewayContext: invocation.context },
+          );
+          const authority = captureBoardCapabilityAuthority(
+            store,
+            boardParams.ticket,
+            invocation,
+            query,
+          );
+          await readBoardDataBinding(
+            query.bindingId,
+            boardWidgetDataQueryParams(query),
+            invocation,
+            authority,
+            respond,
+          );
+          return;
+        }
         const bindingParams = boardParams.params ?? {};
         assertBoardCapabilityParamsSize(bindingParams, "data binding");
         const authority = captureBoardCapabilityAuthority(

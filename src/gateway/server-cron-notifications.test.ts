@@ -209,11 +209,12 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     { name: "quiet trigger", status: "skipped", quietTrigger: true, notice: false },
     { name: "unstarted skip", status: "skipped", quietTrigger: false, notice: true },
     { name: "unstarted error", status: "error", quietTrigger: false, notice: true },
+    { name: "active-hours", status: "skipped", deferred: "active-hours", notice: false },
+    { name: "busy", status: "skipped", deferred: "busy", notice: false },
   ] as const)(
     "keeps the $name conversation outcome separate from its completion webhook",
-    async ({ status, quietTrigger, notice }) => {
-      const job = createCompletionWebhookJob();
-      job.sessionKey = "agent:main:owner";
+    async ({ status, notice, ...admission }) => {
+      const job = { ...createCompletionWebhookJob(), sessionKey: "agent:main:owner" };
       const logger = { warn: vi.fn() };
       const evt = {
         jobId: job.id,
@@ -226,11 +227,10 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       dispatchCompletion(job, {
         evt,
         runNotStarted: true,
-        quietTrigger,
+        ...("deferred" in admission ? { admissionDeferredReason: admission.deferred } : admission),
         resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
         logger,
       });
-
       await waitForFast(() => {
         expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
         expect(getActiveGatewayRootWorkCount()).toBe(0);
@@ -240,7 +240,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       if (notice) {
         expect(mocks.commitCronConversationResult).toHaveBeenCalledWith(
           expect.objectContaining({
-            conversation: { sessionKey: "agent:main:owner", sessionId: "owner-session" },
+            conversation: { sessionKey: "agent:main:owner", lifecycleRevision: undefined },
             payloads: [{ text: expect.stringContaining("did not start") }],
           }),
         );
@@ -250,15 +250,16 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
   );
 
   it.each([
-    ["captured default", undefined, "alpha", "alpha"],
-    ["explicit job owner", "gamma", "alpha", "gamma"],
-    ["captured absence", undefined, undefined, undefined],
+    ["captured default", undefined, undefined, "alpha", "alpha"],
+    ["explicit job owner", "gamma", "agent:session-owner:main", "alpha", "gamma"],
+    ["session owner", undefined, "agent:session-owner:main", "alpha", "session-owner"],
+    ["captured absence", undefined, undefined, undefined, undefined],
   ])(
     "routes a failure alert using %s instead of the live default",
-    async (_name, jobAgentId, defaultAgentId, recipient) => {
+    async (_name, jobAgentId, sessionKey, defaultAgentId, recipient) => {
       const job = announceJob();
       job.agentId = jobAgentId;
-      job.sessionKey = "agent:session-owner:main";
+      job.sessionKey = sessionKey;
       const resolveCronAgent = vi.fn((requested?: string | null) => ({
         agentId: requested ?? "beta",
         cfg: {},

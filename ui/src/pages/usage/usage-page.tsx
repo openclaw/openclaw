@@ -1,12 +1,13 @@
 import { Show, createEffect, createMemo, createProjection } from "solid-js";
 import type { SessionsUsageResult } from "../../api/types.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
-import { formatMissingOperatorReadScopeMessage } from "../../lib/gateway-errors.ts";
+import { formatMissingOperatorReadScopeMessage } from "../../lib/permission-error.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { UsagePageShell } from "./page-shell.tsx";
+import { UsageAgentScope, UsagePageShell } from "./page-shell.tsx";
 import type { UsageProps, UsageRouteData } from "./types.ts";
 import { createUsagePage } from "./usage-page-state.ts";
+import { UsagePhoneActions } from "./view-actions.tsx";
 import { renderUsage as UsageView } from "./view.tsx";
 
 export function UsagePage(props: { routeData?: UsageRouteData }) {
@@ -39,8 +40,8 @@ export function UsagePageContent(props: { state: UsageProps; result: SessionsUsa
     key: (entry: { key?: unknown; id?: unknown }) => entry.key ?? entry.id,
   });
   return (
-    <UsagePageShell result={props.result}>
-      <UsageView {...state} />
+    <UsagePageShell result={props.result} phoneActions={<UsagePhoneActions {...state} />}>
+      <UsageView {...state} agentScope={() => <UsageAgentScope result={props.result} />} />
     </UsagePageShell>
   );
 }

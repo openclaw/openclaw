@@ -21,6 +21,7 @@ import {
 } from "../../../plugins/test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "../../../plugins/test-helpers/managed-npm-plugin.js";
 import { runPluginUpdateAttempt } from "../../../plugins/update-attempt.js";
+import { runPluginUpdateWithClawHubLease } from "../../../plugins/update-template-lifecycle.js";
 import * as pluginUpdates from "../../../plugins/update.js";
 import {
   withOpenClawTestState,
@@ -99,9 +100,9 @@ it.for(["managed", "registered"] as const)(
         rowAtRevocation = readRow({ env: state.env });
         controller.abort(refusal);
       };
-      const unlink = fs.unlinkSync.bind(fs);
-      const unlinkSpy = vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
-        unlink(file);
+      const unlink = fs.promises.unlink.bind(fs.promises);
+      const unlinkSpy = vi.spyOn(fs.promises, "unlink").mockImplementation(async (file) => {
+        await unlink(file);
         if (layout === "managed" && file === linkPath) {
           revoke();
         }
@@ -114,7 +115,7 @@ it.for(["managed", "registered"] as const)(
         }
         return result;
       });
-      const symlinkSpy = vi.spyOn(fs, "symlinkSync");
+      const symlinkSpy = vi.spyOn(fs.promises, "symlink");
       syncBuiltinESMExports();
       const params = {
         ...peer.params,
@@ -236,6 +237,7 @@ it("keeps restored indexed packages usable under a fresh owner after marker comp
   await cleanupGatewayRetiredPluginArtifacts({
     log,
     startupInstallPaths: [],
+    startupConfig: cfg,
     signal: new AbortController().signal,
     assertCurrent: () => {},
   });
@@ -283,21 +285,26 @@ it("retains an initiating-owner read failure across install error normalization"
   const refusal = new Error("initiating-owner store read failed");
   let checks = 0;
   vi.spyOn(pluginUpdates, "updateNpmInstalledPlugins").mockImplementationOnce(async (params) => {
-    // The real attempt owner catches installer exceptions. No package child is launched here.
+    // Use the update error boundary without launching a package child.
     vi.spyOn(pluginInstaller, "installPluginFromNpmSpec").mockImplementationOnce(async () => {
       await Promise.resolve();
       await params.beforePersistentEffect?.();
       return { ok: false, error: "fixture installer did not publish" };
     });
-    const attempt = await runPluginUpdateAttempt({
+    const attempt = await runPluginUpdateWithClawHubLease({
       pluginId: "peerplugin",
-      record,
-      config: params.config,
       dryRun: false,
-      effectiveSpec: record.spec,
-      trustedSourceLinkedOfficialInstall: false,
-      logger: {},
-      onNpmInstall: () => {},
+      run: () =>
+        runPluginUpdateAttempt({
+          pluginId: "peerplugin",
+          record,
+          config: params.config,
+          dryRun: false,
+          effectiveSpec: record.spec,
+          trustedSourceLinkedOfficialInstall: false,
+          logger: {},
+          onNpmInstall: () => {},
+        }),
     });
     if (attempt.kind !== "exception") {
       throw new Error("fixture expected normalized refusal");
@@ -339,8 +346,8 @@ it.for(["missing-modules", "stale-link", "package-copy"] as const)(
       observe("mkdir", args[0]);
       return mkdir(...args);
     });
-    const unlink = fs.unlinkSync.bind(fs);
-    vi.spyOn(fs, "unlinkSync").mockImplementation((...args) => {
+    const unlink = fs.promises.unlink.bind(fs.promises);
+    vi.spyOn(fs.promises, "unlink").mockImplementation((...args) => {
       observe("unlink", args[0]);
       return unlink(...args);
     });
@@ -349,8 +356,8 @@ it.for(["missing-modules", "stale-link", "package-copy"] as const)(
       observe("rm", args[0]);
       return rm(...args);
     });
-    const symlink = fs.symlinkSync.bind(fs);
-    vi.spyOn(fs, "symlinkSync").mockImplementation((...args) => {
+    const symlink = fs.promises.symlink.bind(fs.promises);
+    vi.spyOn(fs.promises, "symlink").mockImplementation((...args) => {
       observe("symlink", args[1]);
       return symlink(...args);
     });

@@ -438,7 +438,6 @@ describe("cron batch outcome finalization", () => {
     state.stopped = true;
     expect(
       await finalizeError(state, job, "setup timed out before runner start", {
-        clearOnFailure: false,
         discardWhenStopped: true,
       }),
     ).toEqual([]);

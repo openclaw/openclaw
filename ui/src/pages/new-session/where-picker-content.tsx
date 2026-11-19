@@ -1,7 +1,9 @@
-import { action, createMemo, createOptimistic, For, Loading, onSettled, Show } from "solid-js";
-import { resolveCloudProfileIconData } from "../../components/provider-icon-data.ts";
+import { action, createMemo, createOptimistic, For, Loading, Show, useContext } from "solid-js";
+import { resolveCloudProfileIconData } from "../../components/cloud-profile-icon-data.ts";
+import { CloudProfileIcon } from "../../components/solid/cloud-profile-icon.tsx";
+import { HeaderSearch } from "../../components/solid/header-search.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { CloudProfileIcon } from "../../components/solid/provider-icon.tsx";
+import { MenuHeading } from "../../components/solid/menu-heading.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -12,6 +14,8 @@ import {
   environmentPlacementRuntime,
   environmentCloudDisabledReason,
 } from "./hosted-environments.ts";
+import { PickerNavigation, pickerOptionRef } from "./picker-navigation.ts";
+import { createPickerScrollRef, PickerSkeleton } from "./picker.tsx";
 import { environmentCapabilityLabels } from "./place-facts.ts";
 import { DevicePoolIcon, EnvironmentDeviceIcon } from "./where-chip-icons.tsx";
 import type { WhereChipProps } from "./where-chip.tsx";
@@ -24,21 +28,6 @@ function ConnectDeviceIcon() {
     </StrokeIcon>
   );
 }
-function renderEnvironmentSkeletons(section: "devices" | "cloud") {
-  return (
-    <div
-      class="new-session-page__environment-skeletons"
-      role="status"
-      aria-label={t("common.loading")}
-      aria-busy="true"
-      data-section={section}
-    >
-      <span class="skeleton new-session-page__environment-skeleton-row" aria-hidden="true" />
-      <span class="skeleton new-session-page__environment-skeleton-row" aria-hidden="true" />
-    </div>
-  );
-}
-
 function EnvironmentHeading(props: {
   label: string;
   action: "connect-machine" | "manage-cloud-workers";
@@ -46,35 +35,35 @@ function EnvironmentHeading(props: {
   onAction: (() => void) | undefined;
 }) {
   return (
-    <div class="new-session-page__environment-heading new-session-page__devices-heading">
-      <span>{props.label}</span>
-      <Show when={props.onAction}>
-        <button
-          type="button"
-          class="new-session-page__connect-device"
-          data-action={props.action}
-          aria-label={t(
-            props.action === "connect-machine"
-              ? "newSession.connectMachine"
-              : "newSession.manageCloudWorkers",
-          )}
-          disabled={props.disabled}
-          ref={nativeListener("click", () => props.onAction?.())}
-        >
-          <ConnectDeviceIcon />
-        </button>
-      </Show>
-    </div>
+    <MenuHeading
+      class="new-session-page__environment-heading"
+      label={props.label}
+      trailing={
+        <Show when={props.onAction}>
+          <button
+            type="button"
+            class="oc-menu-heading__action"
+            data-action={props.action}
+            aria-label={t(
+              props.action === "connect-machine"
+                ? "newSession.connectMachine"
+                : "newSession.manageCloudWorkers",
+            )}
+            disabled={props.disabled}
+            ref={nativeListener("click", () => props.onAction?.())}
+          >
+            <ConnectDeviceIcon />
+          </button>
+        </Show>
+      }
+    />
   );
 }
 
-export function WherePickerContent(
-  props: Omit<WhereChipProps, "ref"> & {
-    onReady: (search: HTMLInputElement) => void;
-  },
-) {
-  let search!: HTMLInputElement;
-  onSettled(() => props.onReady(search));
+export function WherePickerContent(props: Omit<WhereChipProps, "ref">) {
+  const navigation = useContext(PickerNavigation);
+  const autoRef = pickerOptionRef();
+  const setupRef = pickerOptionRef();
   const [saving, setSaving] = createOptimistic(false);
   const presentAdoption = action(function* (request: SuggestedProfileAdoption) {
     if (request.isCurrent()) {
@@ -107,9 +96,12 @@ export function WherePickerContent(
   const cloudProfilesRead = createMemo(() => cloudProfilesCompletion().promise?.then(() => null));
   const view = createMemo(() => {
     const localName = props.params.gateway.gatewayName.trim() || t("newSession.local");
-    const query = props.params.place.browser.environmentQuery.trim().toLocaleLowerCase();
+    const query = props.params.place.browser.environmentQuery
+      .trim()
+      .toLocaleLowerCase()
+      .normalize("NFC");
     const matches = (...values: (string | undefined)[]) =>
-      values.some((value) => value?.toLocaleLowerCase().includes(query));
+      values.some((value) => value?.toLocaleLowerCase().normalize("NFC").includes(query));
     const showLocal = matches(
       t("newSession.local"),
       t("newSession.gatewayHost"),
@@ -198,6 +190,10 @@ export function WherePickerContent(
       busy,
     };
   });
+  const scrollRef = createPickerScrollRef(
+    () => props.params.place.browser.popoverOpen("where"),
+    view,
+  );
   const busy = () => saving() || view().busy;
   function CloudHeading(heading: { pending?: boolean }) {
     return (
@@ -217,30 +213,24 @@ export function WherePickerContent(
     );
   }
   return (
-    <div class="new-session-page__environment-layout">
+    <div class="new-session-page__environment-layout new-session-page__picker-navigation">
       <div class="new-session-page__picker-root new-session-page__environment-picker">
-        <label class="new-session-page__environment-search">
-          <span aria-hidden="true">
-            <Icon name="search" />
-          </span>
-          <input
-            ref={(element) => {
-              search = element;
-            }}
-            type="search"
-            autofocus
-            aria-label={t("newSession.environmentSearchPlaceholder")}
-            placeholder={t("newSession.environmentSearchPlaceholder")}
-            value={props.params.place.browser.environmentQuery}
-            disabled={busy()}
-            onInput={(event: Event) => {
-              if (event.currentTarget instanceof HTMLInputElement) {
-                props.params.place.browser.changeEnvironmentQuery(event.currentTarget.value);
-              }
-            }}
-          />
-        </label>
-        <div class="new-session-page__environment-list">
+        <HeaderSearch
+          label={t("newSession.environmentSearchPlaceholder")}
+          query={props.params.place.browser.environmentQuery}
+          autofocus="popover"
+          disabled={busy()}
+          inputRef={(node) => navigation?.inputRef(node)}
+          onInputKeyDown={(event) => navigation?.keydown(event)}
+          onQueryChange={(query) => {
+            navigation?.clear();
+            props.params.place.browser.changeEnvironmentQuery(query);
+          }}
+        />
+        <div
+          class="new-session-page__environment-list new-session-page__picker-scroll"
+          ref={scrollRef}
+        >
           <Show when={view().showLocal || view().devices.length || view().showAuto}>
             <EnvironmentHeading
               label={t("newSession.yourDevices")}
@@ -262,7 +252,10 @@ export function WherePickerContent(
                   busy() ||
                   (!props.params.place.autoDevice && Boolean(props.state.autoDeviceDisabledReason))
                 }
-                ref={nativeListener("click", () => props.params.place.selectDevice("", true))}
+                ref={[
+                  autoRef,
+                  nativeListener("click", () => props.params.place.selectDevice("", true)),
+                ]}
               >
                 <span class="session-menu__icon" aria-hidden="true">
                   <DevicePoolIcon />
@@ -335,17 +328,18 @@ export function WherePickerContent(
           <Loading
             on={cloudProfilesCompletion()}
             fallback={
-              props.params.place.canWrite() && view().devices.length === 0
-                ? renderEnvironmentSkeletons("devices")
-                : undefined
+              props.params.place.canWrite() && view().devices.length === 0 ? (
+                <PickerSkeleton section="devices" />
+              ) : undefined
             }
           >
             {cloudProfilesRead()}
           </Loading>
           {view().hosted.length || view().showHostedSetup ? (
-            <div class="new-session-page__environment-heading">
-              <span>{t("newSession.hosted")}</span>
-            </div>
+            <MenuHeading
+              class="new-session-page__environment-heading"
+              label={t("newSession.hosted")}
+            />
           ) : undefined}
           {
             <For each={view().hosted} keyed={(entry) => entry.id}>
@@ -369,12 +363,11 @@ export function WherePickerContent(
             </For>
           }
           {view().showHostedSetup && view().hostedLoading ? (
-            <div role="status" class="new-session-page__environment-empty">
-              {t("common.loading")}
-            </div>
+            <PickerSkeleton />
           ) : view().showHostedSetup && !view().hosted.some((entry) => entry.id === "agentsapi") ? (
             <a
               class="session-menu__item new-session-page__environment-option"
+              ref={setupRef}
               href="https://docs.openclaw.ai/plugins/agentsapi"
               target="_blank"
               rel="noreferrer"
@@ -449,9 +442,9 @@ export function WherePickerContent(
             fallback={
               props.params.place.isAdmin() &&
               props.params.place.canWrite() &&
-              view().cloudProfiles.length === 0
-                ? renderEnvironmentSkeletons("cloud")
-                : undefined
+              view().cloudProfiles.length === 0 ? (
+                <PickerSkeleton section="cloud" />
+              ) : undefined
             }
           >
             {cloudProfilesRead()}

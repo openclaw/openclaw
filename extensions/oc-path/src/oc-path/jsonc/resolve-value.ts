@@ -24,7 +24,8 @@ export function resolveJsoncValueOcPath(root: JsoncValue, segments: readonly str
       }
     }
     if (current.kind === "object") {
-      const entry = current.entries.find((e) => e.key === seg);
+      // Duplicate keys: the last occurrence wins, matching JSON.parse/JSON5.
+      const entry = current.entries.findLast((e) => e.key === seg);
       if (entry === undefined) {
         return null;
       }

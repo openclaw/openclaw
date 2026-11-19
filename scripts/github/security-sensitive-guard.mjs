@@ -3,6 +3,7 @@
 import { appendFile } from "node:fs/promises";
 import {
   ObsoleteReviewError,
+  failGuard,
   finishGuard,
   openGuard,
   securityReviewContracts,
@@ -102,8 +103,11 @@ function renderComment({ changes, pullRequest, approval }) {
   return lines.join("\n");
 }
 
+let currentGuard;
+
 export async function reviewSecuritySensitiveChanges(prepared) {
   const guard = await openGuard(securityReviewContracts.sensitive, prepared);
+  currentGuard = guard;
   if (!guard) {
     return true;
   }
@@ -158,7 +162,10 @@ export async function reviewSecuritySensitiveChanges(prepared) {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   reviewSecuritySensitiveChanges().catch(
-    /** @param {unknown} error */ (error) => {
+    /** @param {unknown} error */ async (error) => {
+      if (currentGuard) {
+        await failGuard(currentGuard, error, { terminal: true });
+      }
       if (error instanceof ObsoleteReviewError) {
         console.log(error.message);
         return;

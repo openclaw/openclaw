@@ -70,6 +70,15 @@ export const UserProfileSchema = closedObject({
   emails: Type.Array(NonEmptyString),
   // Display primary only; null does not disable profile-wide consent or host-selected credit.
   githubIdentity: Type.Union([UserProfileGitHubIdentitySchema, Type.Null()]),
+  // users.self only: verified GitHub credit for the configured host, independent of supplied pairs/consent.
+  gitCoauthorAvailable: Type.Optional(Type.Boolean()),
+  // users.self only: public-GitHub credit details; never an Enterprise commit address.
+  gitCoauthorIdentity: Type.Optional(
+    closedObject({
+      name: Type.String({ minLength: 1, maxLength: 256 }),
+      email: Type.String({ minLength: 1, maxLength: 254 }),
+    }),
+  ),
   hasAvatar: Type.Boolean(),
   role: Type.Optional(UserProfileRoleSchema),
   effectiveRole: Type.Optional(UserProfileRoleSchema),
@@ -458,3 +467,53 @@ export type PersonalGitHubStatus = Static<typeof PersonalGitHubStatusSchema>;
 export type UsersGitHubStatusResult = Static<typeof UsersGitHubStatusResultSchema>;
 export type UsersGitHubAuthorizeStartResult = Static<typeof UsersGitHubAuthorizeStartResultSchema>;
 export type UsersGitHubAuthorizePollResult = Static<typeof UsersGitHubAuthorizePollResultSchema>;
+
+// Self-service proof never accepts a target profile or a claimed provider user ID.
+const ChannelIdentityTarget = {
+  channelId: Type.String({ minLength: 1, maxLength: 64 }),
+  accountId: Type.String({ minLength: 1, maxLength: 128 }),
+};
+export const UsersChannelIdentityParamsSchema = Type.Union([
+  closedObject({ action: Type.Literal("status"), channelId: ChannelIdentityTarget.channelId }),
+  closedObject({
+    action: Type.Literal("start"),
+    ...ChannelIdentityTarget,
+    browserNonce: Type.String({
+      pattern: "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$",
+    }),
+  }),
+  closedObject({
+    action: Type.Literal("poll"),
+    ...ChannelIdentityTarget,
+    requestId: NonEmptyString,
+  }),
+  closedObject({
+    action: Type.Literal("cancel"),
+    ...ChannelIdentityTarget,
+    requestId: NonEmptyString,
+  }),
+  closedObject({ action: Type.Literal("disconnect"), ...ChannelIdentityTarget }),
+]);
+export const UsersChannelIdentityResultSchema = closedObject({
+  status: Type.Union([
+    Type.Literal("ready"),
+    Type.Literal("pending"),
+    Type.Literal("linked"),
+    Type.Literal("failed"),
+    Type.Literal("cancelled"),
+  ]),
+  accounts: Type.Optional(
+    Type.Array(
+      closedObject({
+        accountId: NonEmptyString,
+        available: Type.Boolean(),
+        senderIds: Type.Array(NonEmptyString),
+      }),
+    ),
+  ),
+  requestId: Type.Optional(NonEmptyString),
+  authorizationUrl: Type.Optional(NonEmptyString),
+  message: Type.Optional(NonEmptyString),
+});
+export type UsersChannelIdentityParams = Static<typeof UsersChannelIdentityParamsSchema>;
+export type UsersChannelIdentityResult = Static<typeof UsersChannelIdentityResultSchema>;

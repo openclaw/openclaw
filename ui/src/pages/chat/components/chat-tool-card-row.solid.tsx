@@ -1,7 +1,6 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { dynamic } from "@solidjs/web";
-import { createMemo, Match, Show, Switch } from "solid-js";
-import { stripShellPreamble } from "../../../../../src/agents/tool-display-exec-shell.js";
+import { createMemo, For, Match, Show, Switch } from "solid-js";
+import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
@@ -10,23 +9,30 @@ import {
   formatDistinctCollapsedToolSummaryText as distinctSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
-  resolveCollapsedToolArgumentPreview as toolArgumentPreview,
   resolveToolCardOutcome,
+  type ToolCardOutput,
 } from "../../../lib/chat/tool-cards.ts";
+import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
-import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
-import { resolveSpawnedSubagent, type SpawnedSubagent } from "../chat-spawned-subagent.ts";
-import { HighlightedCommand } from "./chat-command-highlight.solid.tsx";
+import {
+  addressedSession,
+  resolveSessionLaunchPresentation,
+  resolveSpawnedSubagent,
+  readSubagentCancellation,
+  type SpawnedSubagent,
+} from "../chat-spawned-subagent.ts";
+import { HighlightedCommand, shellCommandPreview } from "./chat-command-highlight.solid.tsx";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import type { GroupedMessagePresentation } from "./chat-message-bubble-presentation.ts";
+import { ExpandedToolCardContent } from "./chat-message-deferred.tsx";
 import { ChatToolIcon, ToolIcon, syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
 import type { ToolCardProps } from "./chat-tool-card-types.ts";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import { toolWorkspacePath, type ToolRenderOptions } from "./chat-tool-render-model.ts";
-import { resolveToolRowVerb } from "./chat-tool-row-presentation.ts";
+import { resolveToolOperationLabel, resolveToolRowVerb } from "./chat-tool-row-presentation.ts";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
@@ -39,13 +45,6 @@ const TOOL_ROW_ICONS: Partial<Record<ToolCallView["kind"], string>> = {
   fetch: "globe",
 };
 
-function commandPreview(command: string): string {
-  return truncateUtf16Safe(
-    (stripShellPreamble(command).command || command).replace(/\s+/gu, " ").trim(),
-    200,
-  );
-}
-
 function resolveCollapsedToolDetail(card: ToolCard, displayDetail: string | undefined) {
   if (displayDetail?.trim()) {
     return displayDetail;
@@ -55,44 +54,37 @@ function resolveCollapsedToolDetail(card: ToolCard, displayDetail: string | unde
     : undefined;
 }
 
-function resolveCollapsedToolSummaryParts(card: ToolCard): { label: string; name?: string } {
-  const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  const displayDetail = display.detail?.trim();
-  // Message captions belong to the canonical publication, not the original tool input.
-  if (card.name.trim().toLowerCase() === "message") {
-    return { label: display.label, name: displayDetail || undefined };
-  }
-  const name = toolArgumentPreview(card.args) || displayDetail;
-  if (name) {
-    return { label: display.label, name };
-  }
-
-  return {
-    label: resolveCollapsedToolDetail(card, undefined) ?? display.label,
-  };
-}
-
-function resolveToolRowText(card: ToolCard, view: ToolCallView, outcome: ToolCardOutcome): string {
-  if (view.title) {
-    return view.title;
-  }
-  if (view.kind === "command" && view.command) {
-    return `$ ${commandPreview(view.command)}`;
-  }
+function resolveToolRowText(
+  card: ToolCard,
+  view: ToolCallView,
+  outcome: ToolCardOutcome,
+  addressed?: { name?: string; names?: string[] },
+): string {
   const verb = resolveToolRowVerb(view, outcome);
-  if (verb && view.target) {
-    return `${verb} ${view.target}`;
-  }
-  const summary = resolveCollapsedToolSummaryParts(card);
-  return [summary.label, summary.name].filter(Boolean).join(" ");
+  return verb && view.target
+    ? `${verb} ${view.target}`
+    : resolveToolOperationLabel(
+        card,
+        outcome,
+        addressed,
+        resolveToolDisplay({ name: card.name, args: card.args, detailMode: "raw" }).detail,
+      );
 }
 
-function ToolRowLink(props: { kind: "file" | "subagent"; label: string; onOpen: () => void }) {
+function ToolRowLink(props: {
+  kind: "file" | "subagent";
+  label: string;
+  onOpen: () => void;
+  openLabel?: string;
+}) {
   return (
     <button
       class={`chat-tool-row__${props.kind}-link`}
       type="button"
-      title={t(props.kind === "file" ? "chat.toolCards.openFile" : "chat.toolCards.openSubagent")}
+      title={
+        props.openLabel ??
+        t(props.kind === "file" ? "chat.toolCards.openFile" : "chat.toolCards.openSubagent")
+      }
       onClick={(event) => {
         event.stopPropagation();
         props.onOpen();
@@ -107,7 +99,8 @@ function ToolRowContent(props: {
   card: ToolCard;
   view: ToolCallView;
   outcome: ToolCardOutcome;
-  toolLabel: string;
+  running: boolean;
+  addressed?: { name?: string; names?: string[] };
   workspaceFilePath: string | null;
   onOpenWorkspaceFile?: ToolRenderOptions["onOpenWorkspaceFile"];
 }) {
@@ -122,35 +115,39 @@ function ToolRowContent(props: {
       : props.outcome === "running" && (props.view.kind === "edit" || props.view.kind === "write")
         ? props.card.liveDiffStat
         : undefined;
-  const summary = createMemo(() => resolveCollapsedToolSummaryParts(props.card));
-  const displayLabel = () => formatCollapsedToolSummaryText(summary().label) ?? summary().label;
-  const displayName = () => distinctSummaryText(summary().name, displayLabel());
   return (
     <Switch
       fallback={
-        <>
-          <Show when={!displayName() || summary().label !== props.toolLabel}>
-            <span class="chat-tool-msg-summary__label">{displayLabel()}</span>
-          </Show>
-          <Show when={displayName()}>
-            <span class="chat-tool-msg-summary__names">{displayName()}</span>
-          </Show>
-        </>
+        <span class={["chat-tool-row__title", { "text-shimmer": props.running }]}>
+          {resolveToolRowText(props.card, props.view, props.outcome, props.addressed)}
+        </span>
       }
     >
-      <Match when={props.view.title}>
-        <span class="chat-tool-row__title">{props.view.title}</span>
+      <Match when={readSubagentCancellation(props.card) && props.addressed?.name}>
+        <span class={["chat-tool-row__title", { "text-shimmer": props.running }]}>
+          <span class="chat-tool-row__verb">
+            {resolveToolOperationLabel(props.card, props.outcome)}
+          </span>{" "}
+          <span class="chat-tool-row__subagent-name">{props.addressed?.name}</span>
+        </span>
       </Match>
       <Match when={props.view.kind === "command" && props.view.command}>
-        <span class="chat-tool-row__prompt" aria-hidden="true">
-          $
+        <span class="chat-tool-row__prompt">
+          {t(
+            props.outcome === "running"
+              ? "chat.toolCards.running"
+              : props.outcome === "succeeded" ||
+                  (props.outcome === "failed" && props.card.exitCode !== undefined)
+                ? "chat.toolCards.ran"
+                : "chat.toolCards.run",
+          )}
         </span>
-        <code class="chat-tool-row__cmd">
-          <HighlightedCommand command={commandPreview(props.view.command!)} />
+        <code class={["chat-tool-row__cmd", { "text-shimmer": props.running }]}>
+          <HighlightedCommand command={shellCommandPreview(props.view.command!)} />
         </code>
       </Match>
       <Match when={verb() && props.view.target}>
-        <span class="chat-tool-row__verb">{verb()}</span>
+        <span class={["chat-tool-row__verb", { "text-shimmer": props.running }]}>{verb()}</span>
         <Show
           when={props.workspaceFilePath && props.onOpenWorkspaceFile}
           fallback={<span class="chat-tool-row__target">{target()}</span>}
@@ -177,32 +174,36 @@ function ToolRowContent(props: {
   );
 }
 
-function SubagentRowContent(props: { subagent: SpawnedSubagent; onOpen?: () => void }) {
-  const state = () =>
-    props.subagent.session?.running
-      ? t("chat.toolCards.subagentRunning")
-      : props.subagent.session?.ended === "failed"
-        ? t("chat.toolCards.failed")
-        : props.subagent.session?.ended === "stopped"
-          ? t("chat.toolCards.subagentStopped")
-          : formatDurationCompact(props.subagent.session?.runtimeMs);
+function SessionLaunchRowContent(props: {
+  launch: NonNullable<ReturnType<typeof resolveSessionLaunchPresentation>>;
+  subagent: SpawnedSubagent | null;
+  onOpen?: () => void;
+}) {
   return (
     <>
-      <Show
-        when={props.onOpen}
-        fallback={<span class="chat-tool-row__title">{props.subagent.label}</span>}
-      >
-        <ToolRowLink kind="subagent" label={props.subagent.label} onOpen={() => props.onOpen?.()} />
-      </Show>
-      <Show when={state()}>
-        <span
-          class={[
-            "chat-tool-row__subagent-state",
-            { "chat-tool-row__subagent-state--failed": props.subagent.session?.ended === "failed" },
-          ]}
+      <span class="chat-tool-row__verb">
+        {t(`chat.toolCards.launch.${props.launch.kind}.${props.launch.phase}`)}
+      </span>
+      <Show when={props.launch.label}>
+        <Show
+          when={props.onOpen}
+          fallback={
+            <span class="chat-tool-row__title chat-tool-row__subagent-name">
+              {props.launch.label}
+            </span>
+          }
         >
-          {state()}
-        </span>
+          <ToolRowLink
+            kind="subagent"
+            label={props.launch.label!}
+            openLabel={t(
+              props.launch.kind === "chat"
+                ? "chat.toolCards.openChildChat"
+                : "chat.toolCards.openSubagent",
+            )}
+            onOpen={() => props.onOpen?.()}
+          />
+        </Show>
       </Show>
     </>
   );
@@ -212,12 +213,15 @@ export function ToolCardRow(props: ToolCardProps) {
   let disclosureContent: HTMLSpanElement | undefined;
   const syncOverflow = (event: Event) => syncToolDisclosureOverflow(event, disclosureContent);
   const card = () => props.card;
+  const inline = () =>
+    props.options.inlineCommands &&
+    (view().kind === "command" || view().kind === "read" || view().kind === "search");
   const outcome = () => resolveToolCardOutcome(card(), props.options.runActive);
   const view = createMemo(() =>
     resolveToolCallView({ name: card().name, args: card().args, details: card().details }),
   );
   const display = createMemo(() =>
-    resolveToolDisplay({ name: card().name, args: card().args, detailMode: "explain" }),
+    resolveToolDisplayIdentity(unwrapToolCallForDisplay(card()).name),
   );
   const activityCards = () => props.options.activityCards ?? [card()];
   const running = () =>
@@ -228,14 +232,17 @@ export function ToolCardRow(props: ToolCardProps) {
   const subagent = createMemo(() =>
     resolveSpawnedSubagent(card(), props.options.subagents?.subagentSessions),
   );
+  const launch = createMemo(() =>
+    resolveSessionLaunchPresentation(card(), outcome(), props.options.subagents?.subagentSessions),
+  );
   const onOpenSubagent = () =>
     (subagent()?.session?.listed && props.options.subagents?.onOpenSubagent) ||
     props.options.subagents?.onOpenSession;
-  const canOpenSubagent = () => Boolean(subagent()?.session && onOpenSubagent());
+  const canOpenSubagent = () => Boolean(launch()?.childKey && onOpenSubagent());
   const handleOpenSubagent = () => {
-    const session = subagent()?.session;
-    if (session) {
-      onOpenSubagent()?.(session.key);
+    const childKey = launch()?.childKey;
+    if (childKey) {
+      onOpenSubagent()?.(childKey);
     }
   };
   const linkedRow = () => (workspaceFilePath() ? "file" : canOpenSubagent() ? "subagent" : null);
@@ -250,32 +257,65 @@ export function ToolCardRow(props: ToolCardProps) {
         title={display().name}
       >
         <ToolIcon
-          name={TOOL_ROW_ICONS[view().kind] ?? display().icon}
+          name={
+            readSubagentCancellation(card())
+              ? "bot"
+              : (TOOL_ROW_ICONS[view().kind] ?? display().icon)
+          }
           tool={{ toolName: display().name, pluginToolIcons: props.options.pluginToolIcons }}
         />
       </span>
       <span ref={(element) => (disclosureContent = element)} class="chat-tool-disclosure__content">
         <Show
-          when={subagent()}
+          when={launch()}
           fallback={
             <ToolRowContent
               card={card()}
               view={view()}
               outcome={outcome()}
-              toolLabel={display().label}
+              running={running()}
+              addressed={addressedSession(
+                card(),
+                props.options.subagents?.subagentSessions,
+                props.options.subagents?.recordedStopNames,
+              )}
               workspaceFilePath={workspaceFilePath()}
               onOpenWorkspaceFile={props.options.onOpenWorkspaceFile}
             />
           }
         >
           {(spawned) => (
-            <SubagentRowContent
-              subagent={spawned()}
+            <SessionLaunchRowContent
+              launch={spawned()}
+              subagent={subagent()}
               onOpen={canOpenSubagent() ? handleOpenSubagent : undefined}
             />
           )}
         </Show>
       </span>
+      <Show
+        when={
+          inline() &&
+          outcome() !== "failed" &&
+          outcome() !== "skipped" &&
+          !(view().command && outcome() === "running")
+        }
+      >
+        <span class="chat-command-trail__status" role="status">
+          {t(
+            outcome() === "running"
+              ? "chat.toolCards.running"
+              : outcome() === "succeeded"
+                ? "chat.toolCards.completed"
+                : outcome() === "blocked"
+                  ? "chat.toolCards.blocked"
+                  : "chat.toolCards.outcomeUnknown",
+          )}
+        </span>
+      </Show>
+      <Show when={props.options.interrupted && outcome() === "unrecorded"}>
+        <span class="muted">{t("chat.toolCards.interrupted")}</span>
+      </Show>
       <Show when={!props.options.expanded}>
         <ToolOutcomeSummary card={card()} />
       </Show>
@@ -290,6 +330,7 @@ export function ToolCardRow(props: ToolCardProps) {
         "chat-inline-disclosure chat-tool-msg-summary chat-tool-row",
         {
           "chat-tool-row--running": running(),
+          "chat-tool-row--command": view().kind === "command",
           [`chat-tool-row--${linkedRow()}`]: Boolean(linkedRow()),
         },
       ]}
@@ -305,11 +346,7 @@ export function ToolCardRow(props: ToolCardProps) {
           class="chat-tool-row__toggle"
           type="button"
           aria-expanded={props.options.expanded ? "true" : "false"}
-          aria-label={
-            subagent()
-              ? `${display().label} ${subagent()!.label}`
-              : resolveToolRowText(card(), view(), outcome())
-          }
+          aria-label={resolveToolRowText(card(), view(), outcome())}
           onClick={toggle}
         />
       </Show>
@@ -335,12 +372,23 @@ export function ToolMessageSummary(props: {
           detailMode: "explain",
         })
       : null;
+    if (singleToolCard && unwrapToolCallForDisplay(singleToolCard).name === "view_image") {
+      return {
+        singleToolDisplay,
+        toolMessageLabel: resolveToolOperationLabel(
+          singleToolCard,
+          resolveToolCardOutcome(singleToolCard, props.options.runActive),
+        ),
+        toolSummaryLabel: undefined,
+        toolPreview: "",
+      };
+    }
     const singleToolDisplayDetail =
       singleToolCard && singleToolDisplay
         ? resolveCollapsedToolDetail(singleToolCard, singleToolDisplay.detail)
         : undefined;
     const toolSummaryLabelRaw = singleToolDisplayDetail
-      ? !markdown && !hasImages
+      ? !markdown || hasImages
         ? singleToolDisplayDetail
         : singleToolCard?.outputText?.trim()
           ? "output"
@@ -351,7 +399,7 @@ export function ToolMessageSummary(props: {
     const toolPreview =
       isStandaloneToolMessage && markdown ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
     const toolMessageLabelRaw =
-      singleToolDisplay && !markdown && !hasImages
+      singleToolDisplay && (!markdown || hasImages)
         ? singleToolDisplay.label
         : t("chat.toolCards.toolOutput");
     const toolMessageLabel =
@@ -402,5 +450,87 @@ export function ToolMessageSummary(props: {
         <Icon name="chevronRight" />
       </span>
     </button>
+  );
+}
+
+/** The existing row import also supplies its ordinary card body. */
+export function ToolCardBody(
+  props: ToolCardProps & { displayCard: ToolCard; output?: ToolCardOutput },
+) {
+  const InlineToolPreview = dynamic(() => props.options.inlineCommands?.InlineToolPreview);
+  return (
+    <>
+      <Show when={!props.options.hideSummary}>
+        <ToolCardRow
+          card={props.displayCard}
+          options={props.options}
+          hasChildren={props.hasChildren}
+        />
+      </Show>
+      <Show when={props.options.inlineCommands && !props.options.expanded && !props.hasChildren}>
+        <InlineToolPreview card={props.displayCard} output={props.output} options={props.options} />
+      </Show>
+      <Show when={props.options.expanded}>
+        <Show
+          when={props.hasChildren}
+          fallback={
+            <div class="chat-tool-msg-body">
+              <ExpandedToolCardContent
+                card={props.card}
+                output={props.output}
+                options={props.options}
+                commandInRow
+              />
+            </div>
+          }
+        >
+          <div class="chat-tool-children">
+            {props.children}
+            <details class="chat-tool-wrapper-details">
+              <summary>{t("chat.toolCards.toolInput")}</summary>
+              <div class="chat-tool-msg-body">
+                <ExpandedToolCardContent
+                  card={props.card}
+                  output={props.output}
+                  options={props.options}
+                />
+              </div>
+            </details>
+          </div>
+        </Show>
+        <Show when={props.options.executionCards?.length}>
+          <For each={props.options.executionCards}>
+            {(execution) => (
+              <Show
+                when={props.options.onOpenSidebar}
+                fallback={
+                  <details class="chat-tool-wrapper-details">
+                    <summary>{t("chat.toolCards.executionDetails")}</summary>
+                    <div class="chat-tool-msg-body">
+                      <ExpandedToolCardContent card={execution} options={props.options} />
+                    </div>
+                  </details>
+                }
+              >
+                <button
+                  class="btn btn--sm"
+                  type="button"
+                  onClick={() =>
+                    props.options.onOpenSidebar?.({
+                      kind: "tool-output",
+                      card: execution,
+                      sessionKey: props.options.sessionKey,
+                      agentId: props.options.agentId,
+                    })
+                  }
+                >
+                  {t("chat.toolCards.executionDetails")}
+                </button>
+              </Show>
+            )}
+          </For>
+        </Show>
+      </Show>
+    </>
   );
 }

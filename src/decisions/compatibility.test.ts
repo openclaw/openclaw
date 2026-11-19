@@ -7,14 +7,11 @@ import {
   decisionResultV1ToV2,
   decisionResultV2ToV1,
 } from "./compatibility.js";
+import { DecisionContractError } from "./contract-error.js";
+import { validateDecisionResultV2 } from "./result-validation.js";
 import type { DecisionAnswerV2, DecisionBatchV2 } from "./types-v2.js";
 import type { DecisionAnswer, DecisionBatch, DecisionBatchResult } from "./types.js";
-import { validateDecisionResultV2 } from "./validation-v2.js";
-import {
-  DecisionContractError,
-  validateDecisionBatch,
-  validateDecisionResult,
-} from "./validation.js";
+import { validateDecisionBatch, validateDecisionResult } from "./validation.js";
 
 const batch: DecisionBatch = {
   state: "synthetic evidence",

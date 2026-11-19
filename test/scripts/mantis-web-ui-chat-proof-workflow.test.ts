@@ -14,13 +14,13 @@ function readWorkflow(file: string) {
   };
 }
 const jobs = readWorkflow("mantis-web-ui-chat-proof").jobs;
+const script = readWorkflow("mantis-resolve-request").jobs.resolve!.steps!.find(
+  (step) => step.name === "Resolve refs and target PR",
+)!.with!.script!;
 
 async function resolveCandidateRef(body: string, pullRequestHead: string) {
   const request = jobs.resolve_request!.with!;
   const outputs = new Map<string, string>();
-  const script = readWorkflow("mantis-resolve-request").jobs.resolve!.steps!.find(
-    (step) => step.name === "Resolve refs and target PR",
-  )!.with!.script!;
   await runInNewContext(`(async () => {\n${script}\n})()`, {
     context: {
       eventName: "issue_comment",

@@ -63,7 +63,13 @@ export function pluginInlineViewItems(item: MessageItem, seen: Set<string>): Mes
           id: key,
           timestamp: entry.timestamp,
           runId,
-          content: [{ type: "text", text: block.summary }, block],
+          content:
+            block.pluginId === "openclaw" &&
+            block.viewId === "template-review" &&
+            block.version === 1 &&
+            block.toolName === "screen"
+              ? [block]
+              : [{ type: "text", text: block.summary }, block],
         },
       });
     }

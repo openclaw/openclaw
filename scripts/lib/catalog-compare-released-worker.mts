@@ -22,6 +22,8 @@ type Args = {
   key: string;
   out: string;
   filter?: string;
+  /** Publish gate: only the release's own refresh verdict, no row behavior. */
+  refreshOnly?: boolean;
 };
 
 const args = JSON.parse(process.argv[2] ?? "{}") as Args;
@@ -474,7 +476,11 @@ const READERS: Array<[keyof Readers, string?]> = [
   ["mapThinkingLevel"],
 ];
 const found: Partial<Record<keyof Readers, unknown>> = {};
-for (const [name, marker] of READERS) {
+for (const [name, marker] of args.refreshOnly
+  ? READERS.filter(([reader]) =>
+      ["refreshRemoteModelCatalog", "captureRuntimeConfigAsyncReader"].includes(reader),
+    )
+  : READERS) {
   found[name] = await releasedExport(name, marker);
 }
 // SAFETY: each entry is the release's own function of that source name; released dist ships no types.
@@ -488,6 +494,13 @@ fs.writeFileSync(configPath, JSON.stringify(config));
 await reader.captureRuntimeConfigAsyncReader()();
 // The release's own fetch, parse, minVersion and freshness rules decide what it accepts.
 const refresh = await reader.refreshRemoteModelCatalog({ config, force: true });
+const version = (
+  JSON.parse(fs.readFileSync(path.join(packageDir, "package.json"), "utf8")) as { version: string }
+).version;
+if (args.refreshOnly) {
+  fs.writeFileSync(args.out, JSON.stringify({ version, refresh, rows: [] } satisfies ReleaseRun));
+  process.exit(0);
+}
 await reader.prepareRemoteModelCatalogStartupSnapshot();
 await reader.ensurePluginRegistryLoaded({ config, scope: "all" });
 const [filterProvider, ...filterModel] = (args.filter ?? "").split("/");
@@ -611,9 +624,6 @@ for (const entry of catalog) {
   rows.push(row);
 }
 
-const version = (
-  JSON.parse(fs.readFileSync(path.join(packageDir, "package.json"), "utf8")) as { version: string }
-).version;
 const run: ReleaseRun = { version, refresh, rows };
 fs.writeFileSync(args.out, JSON.stringify(run));
 plainServer.close();

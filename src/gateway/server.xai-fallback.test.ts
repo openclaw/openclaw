@@ -10,7 +10,8 @@ import {
 } from "../../test/helpers/gateway/chat-display-replay.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { loadPreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import * as backoff from "../infra/backoff.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -35,7 +36,7 @@ const rejections = new Map<
     code?: string;
     type?: string;
     message: string;
-    reason: "auth" | "billing" | "rate_limit";
+    reason: "auth" | "billing" | "rate_limit" | "server_error";
   }
 >([
   ...[400, 401, 403, 404, 410, 422].map(
@@ -44,6 +45,11 @@ const rejections = new Map<
   ["auth-code", { code: "credential_rejected", message: authError, reason: "auth" }],
   ["auth-type", { type: "upstream_error", message: authError, reason: "auth" }],
   ["auth-text", { message: authError, reason: "auth" }],
+  [
+    "token-generation-event",
+    { type: "error", message: tokenGenerationError, reason: "server_error" },
+  ],
+  ["auth-event", { type: "error", message: authError, reason: "auth" }],
   [
     "billing",
     {
@@ -151,7 +157,7 @@ it(
         const payload: { model: string } = JSON.parse(body);
         requests.push(payload.model);
         const rejection = rejections.get(scenario);
-        if (payload.model === primaryModel && rejection) {
+        if (payload.model === primaryModel && rejection && rejection.type !== "error") {
           const error = {
             message: rejection.message,
             code: rejection.code,
@@ -186,16 +192,25 @@ it(
             writeEvent("response.output_item.done", { output_index: 0, item });
           }
           response.end(
-            encodeEvent({
-              type: "response.failed",
-              response: {
-                id: `failure-${requests.length}`,
-                status: "failed",
-                error: { code: null, message: tokenGenerationError },
-                output: scenario === "fallback" ? [] : [item],
-                usage: { input_tokens: 21, output_tokens: 4, total_tokens: 25 },
-              },
-            }),
+            encodeEvent(
+              rejection?.type === "error"
+                ? {
+                    type: "error",
+                    code: null,
+                    sequence_number: 2,
+                    message: rejection.message,
+                  }
+                : {
+                    type: "response.failed",
+                    response: {
+                      id: `failure-${requests.length}`,
+                      status: "failed",
+                      error: { code: null, message: tokenGenerationError },
+                      output: scenario === "fallback" ? [] : [item],
+                      usage: { input_tokens: 21, output_tokens: 4, total_tokens: 25 },
+                    },
+                  },
+            ),
           );
           return;
         }
@@ -254,13 +269,14 @@ it(
                 baseUrl,
                 apiKey: "test",
                 api: "openai-responses",
-                models: [buildOpenAiResponsesTestModel(primaryModel, 16_000, 256)],
+                // The fixture's full prompt/tool surface estimates 18k tokens.
+                models: [buildOpenAiResponsesTestModel(primaryModel, 128_000, 256)],
               },
               openai: {
                 baseUrl,
                 apiKey: "test",
                 api: "openai-responses",
-                models: [buildOpenAiResponsesTestModel(fallbackModel, 16_000, 256)],
+                models: [buildOpenAiResponsesTestModel(fallbackModel, 128_000, 256)],
               },
             },
           },
@@ -307,6 +323,16 @@ it(
       );
       expect(installed?.pluginId).toBe("xai");
       expect(typeof installed?.provider.classifyFailoverReason).toBe("function");
+      // Settle catalog persistence before chat retains the initially absent session store.
+      const cfg = loadConfig();
+      for (const agentId of scenarios) {
+        const owner = await loadPreparedModelRuntimeSnapshot({
+          config: cfg,
+          agentId,
+          agentDir: path.join(state, "agents", agentId, "agent"),
+        });
+        await owner.loadFullModelCatalog?.({ refresh: true, wait: true });
+      }
       for (const selected of scenarios) {
         scenario = selected;
         const check = (actual: unknown) => expect.soft(actual, scenario);
@@ -321,13 +347,10 @@ it(
           idempotencyKey: `xai-${scenario}`,
         });
         const terminalReceived = createDeferred();
-        const expectsSuccess = selected !== "no-fallback" && selected !== "exhausted";
         const receiveTerminal = (event: ChatEvent) => {
           if (
             event.sessionKey === sessionKey &&
-            (expectsSuccess
-              ? event.state === "final" && event.stopReason === "stop"
-              : event.state === "error")
+            ((event.state === "final" && event.stopReason === "stop") || event.state === "error")
           ) {
             terminalReceived.resolve();
           }
@@ -362,7 +385,9 @@ it(
         const runEvents = events.filter((event) => event.runId === started.runId);
         check(requests[0]).toBe(primaryModel);
         check(requests.filter((requested) => requested === primaryModel)).toHaveLength(
-          rejection && rejection.reason !== "rate_limit" ? 1 : 2,
+          rejection && rejection.reason !== "rate_limit" && rejection.reason !== "server_error"
+            ? 1
+            : 2,
         );
         const terminal = runEvents
           .filter((event) => event.state === "final")

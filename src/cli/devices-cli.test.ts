@@ -1,11 +1,12 @@
 import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { expectText } from "../test-utils/text-assertions.js";
 import { registerDevicesCli } from "./devices-cli.js";
-import { ExpectedCliError } from "./failure-output.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 
 const mocks = vi.hoisted(() => ({
   runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn(), writeJson: vi.fn() },
@@ -337,6 +338,25 @@ describe("mutations", () => {
     await run("reject", "  req-1  ", "--timeout", "15000");
     expectCall(0, "device.pair.reject", { params: { requestId: "req-1" }, timeoutMs: 15000 });
   });
+  it.each([
+    ["remove", "unknown deviceId", "No paired device matches ghost."],
+    ["reject", "unknown requestId", "No pending device request matches ghost."],
+  ])("explains %s unknown ids instead of the generic failure", async (command, reason, text) => {
+    callGateway.mockRejectedValue(
+      Object.assign(new Error(reason), { gatewayCode: "INVALID_REQUEST" }),
+    );
+    await run(command, "ghost");
+    expectCall(0, `device.pair.${command}`);
+    expectText(errors(), [text, "devices list"]);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    runtime.error.mockClear();
+    runtime.exit.mockClear();
+    expect(await refusal(command, "ghost", "--json")).toContain(text);
+  });
+  it("keeps other remove failures on the root handler", async () => {
+    callGateway.mockRejectedValueOnce(new Error("gateway closed"));
+    await expect(run("remove", "device-1")).rejects.toThrow("gateway closed");
+  });
   it("clears every paired device and pending request", async () => {
     list([{ requestId: "req-1" }], [{ deviceId: "device-1" }, { deviceId: "device-2" }])
       .mockResolvedValueOnce({ deviceId: "device-1" })
@@ -347,6 +367,16 @@ describe("mutations", () => {
     expectCall(1, "device.pair.remove", { params: { deviceId: "device-1" } });
     expectCall(2, "device.pair.remove", { params: { deviceId: "device-2" } });
     expectCall(3, "device.pair.reject", { params: { requestId: "req-1" } });
+  });
+  it("clears around OpenClaw ID browsers, which the Access page manages", async () => {
+    list(
+      [],
+      [paired({ deviceId: "ocid-1", managedBy: "openclaw-id" }), paired()],
+    ).mockResolvedValueOnce({ deviceId: "device-1" });
+    await run("clear", "--yes");
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    expectCall(1, "device.pair.remove", { params: { deviceId: "device-1" } });
+    expect(stripAnsi(output())).toContain("Kept 1 OpenClaw ID browser");
   });
   it.each([
     { name: "omitted", flags: [], scopes: undefined },
@@ -401,10 +431,19 @@ describe("mutations", () => {
       ["opaque"],
     );
   });
-  it("returns Gateway commands without a version note or text in JSON mode", async () => {
+  it("returns JSON join commands unless Ctrl+C lands while the request is pending", async () => {
     callGateway.mockResolvedValueOnce({ joinUrl, ...joinCommands });
     await run("join-code", "--json");
-    expect(runtime.writeJson).toHaveBeenCalledWith({ joinUrl, ...joinCommands });
+    for (const rejected of [false, true]) {
+      const scope = new AsyncWorkScope();
+      callGateway.mockImplementationOnce(async ({ signal }: { signal?: AbortSignal }) => {
+        expect(signal).toBe(scope.signal);
+        scope.beginClose();
+        return rejected ? Promise.reject(new Error("aborted")) : { joinUrl, ...joinCommands };
+      });
+      await scope.run(() => run("join-code", "--json"));
+    }
+    expect(runtime.writeJson.mock.calls).toEqual([[{ joinUrl, ...joinCommands }]]);
     expect(runtime.log).not.toHaveBeenCalled();
   });
 });
@@ -566,6 +605,11 @@ describe("list output", () => {
     expect(text.split("\n")).toContain(`  ${secondId}  Kitchen Mac`);
     expect(text).not.toMatch(/MacBook Pro|openclaw-macos|openclaw-ios/);
     expect(output()).not.toMatch(connectionSecrets);
+  });
+  it("marks OpenClaw ID browsers as managed on the Access page", async () => {
+    list([], [paired({ deviceId: "ocid-1", displayName: "Remote", managedBy: "openclaw-id" })]);
+    await run("list");
+    expectText(stripAnsi(output()), ["Remote (OpenClaw ID)", "Manage them on the Access page"], []);
   });
   it("emits transport failures as JSON", async () => {
     const error = new Error("gateway closed (1006)");

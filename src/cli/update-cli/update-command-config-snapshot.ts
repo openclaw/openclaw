@@ -113,7 +113,13 @@ export async function createUpdateConfigSnapshot(
 ): Promise<void> {
   await createPreUpdateConfigSnapshot({
     configPath: resolveConfigPath(env),
-    fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+    fs: {
+      writeFile: fs.writeFile,
+      rename: fs.rename,
+      rm: fs.rm,
+      readFile: fs.readFile,
+      existsSync,
+    },
   });
 }
 

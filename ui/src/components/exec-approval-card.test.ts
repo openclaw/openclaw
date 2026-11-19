@@ -127,6 +127,21 @@ describe("exec approval card", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["Win32", "Linux x86_64", "MacIntel"])(
+    "uses compact non-Mac approval hints on %s",
+    (platform) => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      renderCard(approval());
+      const shortcuts =
+        platform === "MacIntel"
+          ? ["Ctrl/Cmd+Enter", "Ctrl/Cmd+Shift+Enter", "Ctrl/Cmd+D"]
+          : ["CtrlEnter", "Ctrl⇧Enter", "CtrlD"];
+      for (const shortcut of shortcuts) {
+        expect(container.querySelector(`button[title$="(${shortcut})"]`)).not.toBeNull();
+      }
+    },
+  );
+
   it("retires a held decision when the displayed approval changes", async () => {
     const pending = createDeferred();
     const request = approval({ expiresAtMs: Date.now() + 60_000 });
@@ -414,7 +429,7 @@ describe("exec approval card", () => {
       }),
       "inline",
     );
-    expect(card?.textContent).toContain("gateway");
+    expect(card?.textContent).toContain("This computer");
     expect(card?.textContent).toContain("/workspace");
     expect(card?.textContent).toContain("/usr/bin/pnpm");
     expect(card?.textContent).toContain("allowlist");

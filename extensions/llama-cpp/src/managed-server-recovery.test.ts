@@ -74,10 +74,11 @@ async function createFixture() {
     params: { modelCacheDir: root },
     models: [],
   };
-  const prepare = () =>
+  const prepare = (signal?: AbortSignal) =>
     ensureManagedLlamaServerForChat({
       model: { id: "chat", maxTokens: 2048, params: { modelPath } },
       provider,
+      signal,
     });
   const embed = (localService = provider.localService) =>
     llamaCppEmbeddingProviderAdapter.create({
@@ -88,6 +89,74 @@ async function createFixture() {
     });
   return { root, command, presetPath, modelPath, provider, prepare, embed };
 }
+
+it.each(["cancellation", "cleanup failure"])(
+  "handles a recovery owner's %s during concurrent chat preparation",
+  async (outcome) => {
+    const { command, presetPath, prepare } = await createFixture();
+    await fs.mkdir(path.dirname(command), { recursive: true });
+    await fs.writeFile(command, "existing executable");
+    const started = Promise.withResolvers<void>();
+    const cleanup = Promise.withResolvers<void>();
+    const joined = Promise.withResolvers<void>();
+    const controller = new AbortController();
+    const cancelled = new Error("first chat cancelled");
+    const failure = new AggregateError([new Error("cannot stop tree")], "cleanup failed");
+    mocks.reap.mockImplementationOnce(async ({ signal }) => {
+      started.resolve();
+      // The process owner joins captured-tree cleanup after TERM before reporting cancellation.
+      await cleanup.promise;
+      if (outcome === "cleanup failure") {
+        throw failure;
+      }
+      signal.throwIfAborted();
+      return [];
+    });
+    const stat = fs.stat;
+    let inspections = 0;
+    vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      const result = await stat(...args);
+      if (args[0] === command && ++inspections === 3) {
+        joined.resolve();
+      }
+      return result;
+    });
+    const first = prepare(controller.signal);
+    const firstResult = Promise.allSettled([first]);
+    await started.promise;
+    let settled = false;
+    const waiters = Promise.allSettled([prepare(), prepare()]).then((results) => {
+      settled = true;
+      return results;
+    });
+    await joined.promise;
+    await Promise.resolve(); // Both preparations have passed stat and joined recovery.
+    controller.abort(cancelled);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(settled).toBe(false);
+    cleanup.resolve();
+    expect(await firstResult).toEqual([
+      { status: "rejected", reason: outcome === "cancellation" ? cancelled : failure },
+    ]);
+    expect(await waiters).toEqual(
+      outcome === "cancellation"
+        ? [
+            { status: "fulfilled", value: undefined },
+            { status: "fulfilled", value: undefined },
+          ]
+        : [
+            { status: "rejected", reason: failure },
+            { status: "rejected", reason: failure },
+          ],
+    );
+    expect(mocks.reap).toHaveBeenCalledTimes(outcome === "cancellation" ? 2 : 1);
+    await prepare();
+    expect(mocks.reap).toHaveBeenCalledTimes(2);
+    expect(await fs.readFile(presetPath, "utf8")).toContain("[chat]");
+  },
+);
 
 it.each([
   ["missing host", (args: string[]) => args.splice(0, 2)],

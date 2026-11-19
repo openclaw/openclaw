@@ -108,6 +108,6 @@ it("uses localized copy when the browser cannot create a canvas context", () => 
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
   const image = document.createElement("img");
   expect(() => composeAnnotatedImage({ image, width: 1, height: 1, strokes: [] })).toThrow(
-    "Canvas 2D context unavailable.",
+    "Couldn’t annotate the page. Canvas 2D is unavailable. Try again.",
   );
 });

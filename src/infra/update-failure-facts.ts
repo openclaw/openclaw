@@ -202,6 +202,44 @@ export function createUpdateErrorFact(
   );
 }
 
+/** Package exceptions keep OS metadata in existing bounded diagnostic text, including two causes. */
+export function createPackageUpdateErrorFacts(
+  check: string,
+  error: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+): UpdateFailureFact[] {
+  const facts: UpdateFailureFact[] = [];
+  const seen = new Set<unknown>();
+  for (let current = error; current != null && facts.length < 3 && !seen.has(current);) {
+    seen.add(current);
+    const fact = createUpdateErrorFact(check, current, env);
+    const record = isRecord(current) ? current : {};
+    const metadata = (["errno", "syscall", "path"] as const).map((key) => {
+      const value = readErrorMetadata(
+        () => record[key] ?? (key === "path" ? record.dest : undefined),
+      );
+      const scalar =
+        typeof value === "string" || typeof value === "number" ? String(value) : "unknown";
+      const sanitized = createUpdateFailureFact(
+        { check, code: fact.code, message: scalar },
+        env,
+      ).message;
+      return `${key}=${truncateUtf16Safe(sanitized ?? "unknown", 32)}`;
+    });
+    facts.push(
+      createUpdateFailureFact(
+        {
+          ...fact,
+          message: [...metadata, truncateUtf16Safe(fact.message ?? "", 90)].join("; "),
+        },
+        env,
+      ),
+    );
+    current = readErrorMetadata(() => record.cause);
+  }
+  return facts;
+}
+
 /** Capture diagnostics before output is reduced to a command tail. */
 export function createUpdateFailureFact(
   fact: UpdateFailureFact,
@@ -289,43 +327,6 @@ export function normalizeUpdateFailureFacts(
   env: NodeJS.ProcessEnv = process.env,
 ): UpdateFailureFact[] {
   return facts.slice(0, 5).map((fact) => createUpdateFailureFact(fact, env));
-}
-
-export function createUpdateCanaryFailureFacts(params: {
-  phase: string;
-  name: string;
-  signal: NodeJS.Signals | null;
-  timedOut: boolean;
-  exitWarning?: string;
-  failureMessage: string;
-  diagnostic?: string;
-  findings?: UpdateFailureFact[];
-  env: NodeJS.ProcessEnv;
-}): UpdateFailureFact[] {
-  const { phase, signal, timedOut, exitWarning, failureMessage, diagnostic, findings, env } =
-    params;
-  if (!signal && findings?.length) {
-    return findings;
-  }
-  const fact = createUpdateFailureFact(
-    {
-      check: phase,
-      code: signal
-        ? "signal"
-        : timedOut && !exitWarning
-          ? "candidate-checks-timeout"
-          : phase === "doctor" || phase === "lint"
-            ? "doctor-failed"
-            : `candidate-${phase}-failed`,
-      message: signal
-        ? `${phase === "doctor" ? "Checking data migrations" : params.name}: terminated by ${signal}`
-        : timedOut
-          ? failureMessage
-          : (diagnostic ?? failureMessage),
-    },
-    env,
-  );
-  return signal ? [fact, ...(findings ?? []).slice(0, 4)] : [fact];
 }
 
 /** Config validation issues are more specific than the CLI's failure envelope. */

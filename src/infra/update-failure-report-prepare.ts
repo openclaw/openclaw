@@ -35,6 +35,7 @@ import {
   updatePreflightDetailMessage,
   UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL,
 } from "./update-preflight-details.js";
+import { classifyUpdateRunCause } from "./update-run-cause.js";
 import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
@@ -141,24 +142,21 @@ function resolveFailedSteps(input: UpdateFailureReportInput): ReportedFailedStep
     ),
     ...recorded.flatMap((step): ReportedFailedStep[] => {
       const measured = direct.get(updateRunStepKey(step.step));
-      if (measured) {
-        return isFailedUpdateStep(measured)
-          ? [{ ...measured, failureFacts: measured.failureFacts ?? step.failureFacts }]
-          : [];
+      if (measured ? !isFailedUpdateStep(measured) : step.status !== "failed") {
+        return [];
       }
-      return step.status === "failed"
-        ? [
-            {
-              name: step.step,
-              exitCode: step.exitCode ?? null,
-              failureFacts: step.failureFacts,
-              detail: step.detail,
-              termination: step.termination,
-              signal: step.signal,
-              stderrTail: step.stderrTail,
-            },
-          ]
-        : [];
+      // Compact sentinel steps must not erase diagnostics already recorded by the run owner.
+      return [
+        {
+          name: measured?.name ?? step.step,
+          exitCode: measured?.exitCode ?? step.exitCode ?? null,
+          failureFacts: measured?.failureFacts?.length ? measured.failureFacts : step.failureFacts,
+          detail: step.detail,
+          termination: measured?.termination ?? step.termination,
+          signal: measured?.signal ?? step.signal,
+          stderrTail: measured?.stderrTail?.trim() ? measured.stderrTail : step.stderrTail,
+        },
+      ];
     }),
   ];
 }
@@ -247,7 +245,18 @@ async function renderBoundedDiagnostics(
     `Result: ${input.result.status}`,
     `Update mode: ${sanitizeReportField(resolveUpdateMode(input), context)}`,
     `Reason code: ${sanitizeReportField(input.result.reason ?? "unknown", context)}`,
+    // A closed enum: the one diagnostic line that redaction never hides.
+    `Cause: ${classifyUpdateRunCause({
+      status: input.result.status === "error" ? "failed" : "succeeded",
+      reason: input.result.reason,
+      facts: steps.flatMap((step) => step.failureFacts ?? []),
+    })}`,
   ];
+  if (input.error?.trim()) {
+    diagnostics.push(
+      `Error: ${truncateUtf8Prefix(redactPublicSupportDiagnosticLine(input.error, context), 200)}`,
+    );
+  }
   if (input.result.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON) {
     diagnostics.push(`Advisory: ${LEGACY_UPDATE_RUN_ADVISORY}`);
   }
@@ -365,6 +374,14 @@ async function renderBoundedDiagnostics(
         .filter((fact) => fact.check !== "npm" && fact.check !== "bun")
         .map(formatUpdateFailureFact),
     );
+    if (
+      !refused &&
+      publicFacts.some(
+        (fact, index) => facts[index]?.message && fact.message !== facts[index]?.message,
+      )
+    ) {
+      diagnostics.push("Details retained locally in `openclaw update status --json`.");
+    }
   }
   return diagnostics;
 }

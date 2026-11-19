@@ -9,6 +9,7 @@ import {
 } from "../agents/agent-scope-config.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { ExitError } from "../runtime.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SkillStatusEntry, SkillStatusReport } from "../skills/discovery/status.js";
 import { registerSkillsCli } from "./skills-cli.js";
 import { createCliTtyMock } from "./test-runtime-capture.js";
@@ -26,6 +27,7 @@ const mocks = await vi.hoisted(async () => {
     report,
     gateway: vi.fn(),
     config: vi.fn((_options?: unknown) => ({})),
+    bestEffortConfig: vi.fn((_options?: unknown) => ({})),
     defaultAgent: vi.fn((_config: unknown, _context?: AgentSelectionContext) => "main"),
     inferredAgent: vi.fn((_config: unknown, _cwd: string): string | undefined => undefined),
     explicitAgent: vi.fn((_config: unknown, agent: string) => agent),
@@ -65,6 +67,7 @@ vi.mock("../config/config.js", async () => {
   const { createTestConfigReadMocks } = await import("../commands/test-runtime-config-helpers.js");
   return {
     ...createTestConfigReadMocks(mocks, "config"),
+    readBestEffortConfig: mocks.bestEffortConfig,
   };
 });
 // mock-isolation: Skill CLI fixtures own agent and workspace selection without host configuration.
@@ -124,11 +127,11 @@ function primeVerification(overrides: Record<string, unknown> = {}) {
     },
   });
 }
-function run(input: string | string[]) {
+async function run(input: string | string[]) {
   const argv = typeof input === "string" ? input.split(" ") : input;
   const program = new Command().exitOverride();
-  registerSkillsCli(program);
-  return program.parseAsync(["skills", ...argv], { from: "user" });
+  await registerSkillsCli(program);
+  return await program.parseAsync(["skills", ...argv], { from: "user" });
 }
 
 async function expectFailure(argv: string | string[], message?: string) {
@@ -137,11 +140,8 @@ async function expectFailure(argv: string | string[], message?: string) {
     expect(errors).toContain(message);
   }
 }
-function expectUnused(...functions: unknown[]) {
-  for (const fn of functions) {
-    expect(fn).not.toHaveBeenCalled();
-  }
-}
+const expectUnused = (...functions: unknown[]) =>
+  functions.forEach((fn) => expect(fn).not.toHaveBeenCalled());
 function expectOptions(fn: unknown, options: Record<string, unknown>) {
   expect(fn).toHaveBeenCalledWith(expect.objectContaining(options));
 }
@@ -160,6 +160,18 @@ function installedCalendar(targetDir = "/tmp/workspace/skills/calendar") {
 }
 
 describe("skills cli commands", () => {
+  it.each(["check --json", "info calendar"])("keeps interrupted %s quiet", async (args) => {
+    const work = new AsyncWorkScope();
+    mocks.gateway.mockImplementation(async (options) => {
+      work.beginClose();
+      options.signal?.throwIfAborted();
+      return mocks.report;
+    });
+    await work.run(() => run(args));
+    expect([...stdout, ...errors]).toEqual([]);
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["install skills-sh/invalid", "Invalid skills.sh skill reference: skills-sh/invalid", false],
     ["update", "Provide a skill slug or use --all.", false],
@@ -189,6 +201,8 @@ describe("skills cli commands", () => {
       }
     }
     Object.values(runtime).forEach((mock) => mock.mockClear());
+    vi.stubEnv("OPENCLAW_PROFILE", "");
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
     mocks.gateway.mockRejectedValue(transportError());
     mocks.install.mockResolvedValue({ ok: false, error: "install disabled in test" });
     mocks.sourceInstall.mockRejectedValue(new Error("source install disabled in test"));
@@ -339,6 +353,7 @@ describe("skills cli commands", () => {
     { label: "default", argv: ["--json"] },
     { label: "check", argv: ["check", "--json"] },
   ])("writes $label JSON from the selected workspace to stdout", async ({ label, argv }) => {
+    mocks.config.mockRejectedValue(new Error("Invalid config: unrelated setting"));
     mocks.inferredAgent.mockReturnValue("main");
     mocks.workspace.mockImplementation((_config, id) => `/tmp/workspace-${id}`);
     await run(argv);
@@ -358,8 +373,6 @@ describe("skills cli commands", () => {
     }
   });
   it.each([false, true])("exits nonzero for missing skill info (JSON: %s)", async (json) => {
-    vi.stubEnv("OPENCLAW_PROFILE", "");
-    vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
     await expectFailure(["info", "missing-skill", ...(json ? ["--json"] : [])]);
     const error = { type: "cli_error", message: 'Skill "missing-skill" not found.' };
     expect(stdout).toEqual([
@@ -394,8 +407,6 @@ describe("skills cli commands", () => {
     ["weather", "skills.entries.weather.apiKey"],
     ["acme.weather", `'skills.entries["acme.weather"].apiKey'`],
   ])("prints a copyable API-key setup path for %s", async (skillKey, configPath) => {
-    vi.stubEnv("OPENCLAW_PROFILE", "");
-    vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
     setUnreadySkill({
       skillKey,
       missing: { ...mocks.report.skills[0]!.missing, env: ["CALENDAR_API_KEY"] },
@@ -432,18 +443,18 @@ describe("skills cli commands", () => {
     expect(stdout[1]).toBe(JSON.stringify(report.skills[0], null, 2));
   });
 
-  it("uses Gateway skills.status instead of local status when reachable", async () => {
+  it("uses Gateway skills.status for a canonical --agent instead of local status", async () => {
+    mocks.explicitAgent.mockImplementation((_config, agent) =>
+      resolveConfiguredAgentId({ agents: { entries: { main: {}, writer: {} } } }, agent),
+    );
     mocks.gateway.mockResolvedValue({
       ...mocks.report,
       agentId: "writer",
       workspaceDir: "/gateway/workspace-writer",
     });
-    await run("check --agent writer --json");
-    expectOptions(mocks.gateway, {
-      method: "skills.status",
-      params: { agentId: "writer" },
-    });
-    expect(mocks.status).not.toHaveBeenCalled();
+    await run(["check", "--agent", " Writer ", "--json"]);
+    expect(mocks.explicitAgent).toHaveBeenCalledWith({}, "writer");
+    expectOptions(mocks.gateway, { method: "skills.status", params: { agentId: "writer" } });
     expect(JSON.parse(stdout.at(-1) ?? "{}")).toMatchObject({
       workspaceDir: "/gateway/workspace-writer",
       eligible: ["calendar"],
@@ -465,7 +476,7 @@ describe("skills cli commands", () => {
     "never replaces failed Gateway data with local skills: %s",
     async (error, root, remote) => {
       if (remote) {
-        mocks.config.mockReturnValue({
+        mocks.bestEffortConfig.mockReturnValue({
           gateway: { mode: "remote", remote: { url: "ws://127.0.0.1:9" } },
         });
       }
@@ -491,18 +502,6 @@ describe("skills cli commands", () => {
       'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
     ]);
     expect(mocks.workspace).not.toHaveBeenCalled();
-  });
-  it("canonicalizes a mixed-case --agent before selecting the configured agent", async () => {
-    mocks.explicitAgent.mockImplementation((_config, agent) =>
-      resolveConfiguredAgentId({ agents: { entries: { main: {}, writer: {} } } }, agent),
-    );
-    mocks.gateway.mockResolvedValue(mocks.report);
-    await run(["check", "--agent", " Writer ", "--json"]);
-    expect(errors).toEqual([]);
-    expect(mocks.explicitAgent).toHaveBeenCalledWith({}, "writer");
-    expect(mocks.gateway).toHaveBeenCalledWith(
-      expect.objectContaining({ method: "skills.status", params: { agentId: "writer" } }),
-    );
   });
   it("redacts secrets from rendered skills CLI errors", async () => {
     const secret = "sk-abcdefghijklmnopqrstuv";

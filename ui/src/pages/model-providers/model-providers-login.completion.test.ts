@@ -73,7 +73,7 @@ it("shows distinct verification and activation phases before offering the named 
     await waitForSolid(() =>
       expect(starter()?.textContent).toBe("Start a new chat with Muse Spark 1.3"),
     );
-    expect(text(".model-setup-wizard__success-title")).toBe("Muse Code is connected");
+    expect(text(".model-setup-wizard__success-title")).toBe("Muse Code is ready");
     expect(text(".model-setup-wizard__success-description")).toBe(
       "Muse Spark 1.3 is ready for your agent.",
     );

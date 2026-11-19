@@ -154,7 +154,14 @@ export function buildAssignableAgentPickerOptions(
     })),
     ...(hasCurrent
       ? []
-      : [{ id: currentId, label: t("workboard.agentCurrentUnconfigured", { agent: currentId }) }]),
+      : [
+          {
+            id: currentId,
+            label: agentsList
+              ? t("workboard.agentCurrentUnconfigured", { agent: currentId })
+              : currentId,
+          },
+        ]),
   ].map((option) => {
     const effectiveId = option.id || defaultAgentId;
     const agent = agentsList?.agents.find((entry) => entry.id === effectiveId);

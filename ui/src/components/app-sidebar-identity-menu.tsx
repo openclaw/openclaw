@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
@@ -9,6 +9,8 @@ import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import type { PresenceViewer } from "../lib/presence-users.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
+import { createMediaQuery } from "../lib/reactive/platform.ts";
 import { requestDebugOverlayToggle } from "../pages/debug/debug-overlay-contract.ts";
 import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-dropdown.tsx";
 import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
@@ -19,14 +21,16 @@ import {
 } from "./sidebar-identity-menu-links.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd, KeyboardShortcut } from "./solid/kbd.tsx";
+import { MenuHeading } from "./solid/menu-heading.tsx";
+import "./solid/viewer-facepile.tsx";
+import "./tooltip.ts";
 import {
   createMenuControls,
   type MenuEntry,
+  type MenuHandle,
   type MenuItem,
   type MenuItemBindings,
 } from "./solid/menu.tsx";
-import "./solid/viewer-facepile.tsx";
-import "./tooltip.ts";
 
 function ThemeModeToggle(props: {
   mode: ThemeMode;
@@ -74,7 +78,7 @@ declare module "@solidjs/web" {
 
 registerEnglishCatalog(registerUpdateActionsEnglish);
 
-type SidebarIdentityMenuParams = {
+export type SidebarIdentityMenuParams = {
   position: { x: number; bottom: number; width: number; placement?: "right-end" };
   anchor?: HTMLElement;
   nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
@@ -91,6 +95,13 @@ type SidebarIdentityMenuParams = {
   onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   onPairMobile: () => void;
   onRetryConnect?: () => void;
+  /** Optional feature-owned extension; the ordinary menu has no feature runtime. */
+  extension?: {
+    identity: { name: string; detail: string | null } | null;
+    entries: MenuEntry[];
+    signOut: MenuEntry[];
+    onSelect: (value: string) => boolean;
+  };
 };
 
 // The slot shares the command icon column so dots, glyphs, and labels line up.
@@ -184,36 +195,130 @@ function renderIdentityGateways(
 
 export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): SolidJSX.Element {
   const controls = createMenuControls();
+  const reducedMotion = createMediaQuery("(prefers-reduced-motion: reduce)");
+  let menu: MenuHandle | undefined;
+  let previousContent: string | undefined;
+  let previousHeight = 0;
+  let heightAnimation: Animation | undefined;
+  let fades: Animation[] = [];
+  const stopMotion = () => {
+    heightAnimation?.cancel();
+    heightAnimation = undefined;
+    fades.forEach((animation) => animation.cancel());
+    fades = [];
+    if (menu) {
+      menu.overlay.surface.style.overflow = "";
+    }
+  };
+  const measureMenu = createLayoutMeasurement(
+    () => ({ reduced: reducedMotion(), entries: params.extension?.entries }),
+    (state) => {
+      if (!menu || !state) {
+        return undefined;
+      }
+      const surface = menu.overlay.surface;
+      // The extension occupies the existing rows immediately after the profile.
+      // Measure those nodes without adding a wrapper to the menu's focus tree.
+      const rows: Element[] = [];
+      let row = menu.itemElement("command:profile")?.nextElementSibling;
+      for (let i = 0; row && i < (state.entries?.length ?? 0); i++, row = row.nextElementSibling) {
+        rows.push(row);
+      }
+      const content = rows.map((element) => element.textContent).join("\n");
+      const changed = previousContent !== undefined && content !== previousContent;
+      if (!changed) {
+        previousContent = content;
+        if (state.reduced) {
+          stopMotion();
+        }
+        if (!heightAnimation) {
+          previousHeight = surface.getBoundingClientRect().height;
+        }
+        return undefined;
+      }
+      const from = heightAnimation ? surface.getBoundingClientRect().height : previousHeight;
+      // Release the animated height before measuring the new intrinsic size.
+      stopMotion();
+      const to = surface.getBoundingClientRect().height;
+      const animate = changed && surface.dataset.phase === "open" && !state.reduced;
+      previousContent = content;
+      previousHeight = to;
+      return () => {
+        if (!animate) {
+          return;
+        }
+        fades = rows.map((element) =>
+          element.animate([{ opacity: 0 }, { opacity: 1 }], {
+            duration: 220,
+            delay: 80,
+            fill: "backwards",
+          }),
+        );
+        if (Math.abs(to - from) < 1) {
+          return;
+        }
+        surface.style.overflow = "hidden";
+        heightAnimation = surface.animate([{ height: `${from}px` }, { height: `${to}px` }], {
+          duration: 240,
+          easing: "cubic-bezier(.2,.8,.2,1)",
+        });
+        heightAnimation.onfinish = () => {
+          heightAnimation = undefined;
+          surface.style.overflow = "";
+        };
+      };
+    },
+    { targets: () => (menu ? [menu.overlay.surface] : []) },
+  );
+  onSettled(() => stopMotion);
   // Rebuilt entries reuse these nodes. Replacing the content on both sides of an
-  // open submenu makes the keyed list re-insert it, which closes its popover.
+  // open submenu makes the keyed list re-insert it, which closes its popover, and
+  // replacing the avatar would reload its image on every Gateway update.
   const separator = (id: string): MenuEntry => ({
     kind: "content",
     id,
-    content: <div class="sidebar-customize-menu__separator" role="separator" />,
+    content: <div class="sidebar-identity-menu__space" aria-hidden="true" />,
   });
   const gatewayTitle: MenuEntry = {
     kind: "content",
     id: "gateway-title",
-    content: <div class="sidebar-customize-menu__title">{t("nav.gateway.sectionLabel")}</div>,
+    content: <MenuHeading label={t("nav.gateway.sectionLabel")} />,
   };
-  const profileSeparator = separator("profile-separator");
+  const appSeparator = separator("app-separator");
+  const signOutSeparator = separator("sign-out-separator");
   const gatewaySeparator = separator("gateway-separator");
-  const usageSeparator = separator("usage-separator");
-  const helpSeparator = separator("help-separator");
   const retrySeparator = separator("retry-separator");
-  const footerSeparator = separator("footer-separator");
+  const footerSeparator: MenuEntry = {
+    kind: "content",
+    id: "footer-separator",
+    content: <div class="sidebar-customize-menu__separator" role="separator" />,
+  };
+  const openclawIdentity = () => params.extension?.identity;
   const profileName = () =>
-    params.profileViewer?.name ?? params.profileViewer?.email ?? t("nav.owner");
+    openclawIdentity()?.name ??
+    params.profileViewer?.name ??
+    params.profileViewer?.email ??
+    t("nav.owner");
   const avatarUser = createMemo(() => ({
     id: "owner",
     watchedSessions: [],
     ...params.profileViewer,
     name: profileName(),
   }));
+  const profileAvatar = (
+    <span class="sidebar-identity-menu__avatar" aria-hidden="true">
+      {openclawIdentity() ? (
+        <span class="sidebar-openclaw-id__initial">{profileName().slice(0, 1).toUpperCase()}</span>
+      ) : (
+        <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
+      )}
+    </span>
+  );
   const profileEmail = () =>
-    params.profileViewer?.email && params.profileViewer.email !== profileName()
+    openclawIdentity()?.detail ??
+    (params.profileViewer?.email && params.profileViewer.email !== profileName()
       ? params.profileViewer.email
-      : null;
+      : null);
   const items = createMemo<MenuEntry[]>(() => {
     const help = renderSidebarHelpMenu();
     const gateways = renderIdentityGateways(params.nativeGatewaySnapshot, params.onClose);
@@ -222,11 +327,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
         id: "command:profile",
         label: profileName(),
         class: "sidebar-customize-menu__item sidebar-identity-menu__header",
-        icon: (
-          <span class="sidebar-identity-menu__avatar" aria-hidden="true">
-            <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
-          </span>
-        ),
+        icon: profileAvatar,
         content: (
           <span class="sidebar-identity-menu__identity">
             <span class="sidebar-identity-menu__name" title={profileName()}>
@@ -240,8 +341,17 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
           </span>
         ),
       },
-      profileSeparator,
+      ...(params.extension?.entries ?? []),
       ...(gateways ? [gatewayTitle, gateways, gatewaySeparator] : []),
+      renderSidebarMenuAction("command:pair-mobile", t("devices.pairing.button"), "smartphone", {
+        className: "sidebar-pair-mobile",
+        disabled: !params.canPairDevice,
+        title: params.canPairDevice ? undefined : t("devices.pairing.adminRequired"),
+      }),
+      ...(!document.documentElement.classList.contains("openclaw-native-macos")
+        ? [renderSidebarMenuAction("command:apps", t("agentChip.getApps"), "layoutGrid")]
+        : []),
+      appSeparator,
       renderSidebarMenuAction("command:settings", t("nav.settings"), "settings", {
         details: (
           <KeyboardShortcut
@@ -267,15 +377,6 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
           : titleForRoute("updates"),
       },
       renderSidebarMenuAction("command:usage", titleForRoute("usage"), "coins"),
-      usageSeparator,
-      renderSidebarMenuAction("command:pair-mobile", t("devices.pairing.button"), "smartphone", {
-        className: "sidebar-pair-mobile",
-        disabled: !params.canPairDevice,
-        title: params.canPairDevice ? undefined : t("devices.pairing.adminRequired"),
-      }),
-      ...(!document.documentElement.classList.contains("openclaw-native-macos")
-        ? [renderSidebarMenuAction("command:apps", t("agentChip.getApps"), "layoutGrid")]
-        : []),
       renderSidebarMenuAction("command:debug-overlay", t("debug.overlay.title"), "activity", {
         details: (
           <KeyboardShortcut
@@ -285,7 +386,6 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
           />
         ),
       }),
-      helpSeparator,
       ...(help ? [help] : []),
       ...(params.canRetryConnection
         ? [
@@ -298,6 +398,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
             },
           ]
         : []),
+      ...(params.extension?.signOut.length ? [signOutSeparator, ...params.extension.signOut] : []),
       footerSeparator,
       {
         kind: "group",
@@ -337,6 +438,11 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
   });
   return (
     <SidebarDropdown
+      ref={(handle) => {
+        menu = handle;
+        measureMenu();
+      }}
+      onAfterShow={() => measureMenu()}
       controls={controls}
       class="sidebar-customize-menu sidebar-identity-menu"
       position={params.position}
@@ -347,6 +453,9 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
       onClose={params.onClose}
       onSelect={(value) => {
         if (value === "command:theme") {
+          return;
+        }
+        if (params.extension?.onSelect(value)) {
           return;
         }
         params.onClose(false);

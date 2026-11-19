@@ -2,7 +2,6 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import { beforeEach, expect, it, vi } from "vitest";
 import {
   programGatewayCallMock as gateway,
-  configureCommand,
   ensureConfigReadyMock,
   runtime,
   setupCommandMock,
@@ -11,16 +10,6 @@ import {
   tuiRunMock as tui,
 } from "./program.test-mocks.js";
 import { buildProgram } from "./program/build-program.js";
-
-vi.mock("./config-cli.js", () => ({
-  registerConfigCli: (program: {
-    command: (name: string) => { action: (fn: () => unknown) => void };
-  }) => {
-    program.command("config").action(() => configureCommand({}, runtime));
-  },
-  runConfigGet: vi.fn(),
-  runConfigUnset: vi.fn(),
-}));
 
 let program: ReturnType<typeof buildProgram>;
 const run = (...argv: string[]) => program.parseAsync(argv, { from: "user" });

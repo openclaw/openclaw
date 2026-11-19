@@ -53,26 +53,30 @@ export function ensureKnowledgeSchema(db: DatabaseSync, schema: KnowledgeSchema)
   if (current !== undefined && current > latest) {
     throw new UnrecognizedSchema(`Knowledge ${schema.store} database uses a newer schema.`);
   }
-  runSqliteImmediateTransactionSync(db, () => {
-    // Another connection may have migrated while this one waited for the write lock.
-    const version = stampedVersion(db, schema.store) ?? schema.detect(db);
-    if (version === undefined || version > latest) {
-      throw new UnrecognizedSchema(`Not a recognized Knowledge ${schema.store} database.`);
-    }
-    for (const step of schema.steps) {
-      if (step.version > version) {
-        step.apply(db);
+  runSqliteImmediateTransactionSync(
+    db,
+    () => {
+      // Another connection may have migrated while this one waited for the write lock.
+      const version = stampedVersion(db, schema.store) ?? schema.detect(db);
+      if (version === undefined || version > latest) {
+        throw new UnrecognizedSchema(`Not a recognized Knowledge ${schema.store} database.`);
       }
-    }
-    db.exec(
-      "CREATE TABLE IF NOT EXISTS knowledge_schema (store TEXT PRIMARY KEY, version INTEGER NOT NULL) STRICT",
-    );
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<SchemaTables>(db)
-        .insertInto("knowledge_schema")
-        .values({ store: schema.store, version: latest })
-        .onConflict((oc) => oc.column("store").doUpdateSet({ version: latest })),
-    );
-  });
+      for (const step of schema.steps) {
+        if (step.version > version) {
+          step.apply(db);
+        }
+      }
+      db.exec(
+        "CREATE TABLE IF NOT EXISTS knowledge_schema (store TEXT PRIMARY KEY, version INTEGER NOT NULL) STRICT",
+      );
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<SchemaTables>(db)
+          .insertInto("knowledge_schema")
+          .values({ store: schema.store, version: latest })
+          .onConflict((oc) => oc.column("store").doUpdateSet({ version: latest })),
+      );
+    },
+    { operationLabel: `knowledge.schema.${schema.store}` },
+  );
 }

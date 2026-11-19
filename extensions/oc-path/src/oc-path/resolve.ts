@@ -23,10 +23,13 @@ import {
 /**
  * Resolve. Slugs match case-insensitively. `[frontmatter]` is a
  * literal section sentinel; the frontmatter key sits at `item` (or
- * `field` for 4-segment callers).
+ * `field` when `item` is absent).
  */
 export function resolveMdOcPath(ast: MdAst, path: OcPath) {
   if (path.section === "[frontmatter]") {
+    if (path.item !== undefined && path.field !== undefined) {
+      return null;
+    }
     const key = path.item ?? path.field;
     if (key === undefined) {
       return null;

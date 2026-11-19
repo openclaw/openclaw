@@ -68,6 +68,7 @@ export function buildSystemPromptToolLines(params: SystemPromptToolListParams): 
     subagents: "Subagent status; never wait-loop",
     session_status: "Session/model/usage/time/status; model override",
     skill_workshop: "Author reusable skills",
+    skill_library: "Author personal-library skills",
     view_image: "",
     image_generate: "Generate/edit images",
   };

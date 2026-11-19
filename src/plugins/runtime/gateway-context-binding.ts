@@ -2,53 +2,72 @@ import type {
   GatewayContextResolver,
   GatewayRequestContext,
 } from "../../gateway/server-methods/types.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   getGatewayContextBindingSlot,
   prepareGatewayContextBindingOwner,
 } from "./gateway-context-binding-owner.js";
 
-const gatewayContextBindingKey = Symbol("gatewayContextBinding");
-const gatewayContextLifetimeKey = Symbol("gatewayContextLifetime");
+// The SDK host and execution frame survive module reloads; their bindings must share that identity.
+const {
+  gatewayContextBindingKey,
+  gatewayContextLifetimeKey,
+  GatewayContextBinding,
+  GatewayContextLifetime,
+} = resolveGlobalSingleton(Symbol.for("openclaw.gatewayContextBindings"), () => {
+  class Binding {
+    readonly #owner: object;
+    #resolver: GatewayContextResolver | undefined;
 
-class GatewayContextBinding {
-  readonly #owner: object;
-  #resolver: GatewayContextResolver | undefined;
+    constructor(owner: object) {
+      this.#owner = owner;
+      Object.setPrototypeOf(this, null);
+    }
 
-  constructor(owner: object) {
-    this.#owner = owner;
-    Object.setPrototypeOf(this, null);
+    static read(value: unknown, owner: object): Binding | undefined {
+      return typeof value === "object" &&
+        value !== null &&
+        #owner in value &&
+        value.#owner === owner
+        ? value
+        : undefined;
+    }
+
+    static get(binding: Binding): GatewayContextResolver | undefined {
+      return binding.#resolver;
+    }
+
+    static set(binding: Binding, resolver: GatewayContextResolver | undefined): void {
+      binding.#resolver = resolver;
+    }
   }
 
-  static read(value: unknown, owner: object): GatewayContextBinding | undefined {
-    return typeof value === "object" && value !== null && #owner in value && value.#owner === owner
-      ? value
-      : undefined;
-  }
+  class Lifetime {
+    readonly #owner: GatewayContextResolver;
+    readonly #controller = new AbortController();
 
-  static get(binding: GatewayContextBinding): GatewayContextResolver | undefined {
-    return binding.#resolver;
-  }
+    constructor(owner: GatewayContextResolver) {
+      this.#owner = owner;
+      Object.setPrototypeOf(this, null);
+    }
 
-  static set(binding: GatewayContextBinding, resolver: GatewayContextResolver | undefined): void {
-    binding.#resolver = resolver;
+    static read(value: unknown, owner: GatewayContextResolver): AbortController | undefined {
+      return typeof value === "object" &&
+        value !== null &&
+        #owner in value &&
+        value.#owner === owner
+        ? value.#controller
+        : undefined;
+    }
   }
-}
-
-class GatewayContextLifetime {
-  readonly #owner: GatewayContextResolver;
-  readonly #controller = new AbortController();
-
-  constructor(owner: GatewayContextResolver) {
-    this.#owner = owner;
-    Object.setPrototypeOf(this, null);
-  }
-
-  static read(value: unknown, owner: GatewayContextResolver): AbortController | undefined {
-    return typeof value === "object" && value !== null && #owner in value && value.#owner === owner
-      ? value.#controller
-      : undefined;
-  }
-}
+  return {
+    gatewayContextBindingKey: Symbol("gatewayContextBinding"),
+    gatewayContextLifetimeKey: Symbol("gatewayContextLifetime"),
+    GatewayContextBinding: Binding,
+    GatewayContextLifetime: Lifetime,
+  };
+});
+type GatewayContextBinding = InstanceType<typeof GatewayContextBinding>;
 
 function getGatewayContextBinding(owner: object): GatewayContextBinding | undefined {
   const slot = getGatewayContextBindingSlot(owner);
