@@ -4,7 +4,14 @@ import { t } from "../../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
+import {
+  buildAgentMainSessionKey,
+  isUiGlobalSessionKey,
+  resolveUiConfiguredMainKey,
+} from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import {
   templateCreatorOwner,
   type CreatorOwner,
@@ -120,4 +127,59 @@ export function templateCreatorAction(context: ApplicationContext, agentId: stri
     return undefined;
   }
   return () => requestTemplateCreator(context, agentId);
+}
+
+/** An ordinary chat request in the agent's main session; the create-template skill owns the rest. */
+export async function shareAgentAsTemplate(context: ApplicationContext, agentId: string) {
+  const client = context.gateway.snapshot.client;
+  if (!client) {
+    return;
+  }
+  const sessionKey = buildAgentMainSessionKey({
+    agentId,
+    mainKey: resolveUiConfiguredMainKey({
+      agentsList: context.agents.state.agentsList,
+      hello: context.gateway.snapshot.hello,
+    }),
+  });
+  const idempotencyKey = generateUUID();
+  // Retry repeats this request on this connection, so an accepted send is not sent twice.
+  // After the connection is replaced Retry does nothing; Share again starts a new request.
+  const send = async () => {
+    if (context.gateway.snapshot.client !== client) {
+      return;
+    }
+    try {
+      await client.request("chat.send", {
+        sessionKey,
+        ...(isUiGlobalSessionKey(sessionKey) ? { agentId } : {}),
+        message: t("agentChip.shareTemplatePrompt"),
+        deliver: false,
+        idempotencyKey,
+      });
+    } catch (error) {
+      if (context.gateway.snapshot.client === client) {
+        showToast({
+          severity: "error",
+          message: formatUiError(error),
+          actionLabel: t("common.retry"),
+          onAction: () => void send(),
+        });
+      }
+      return;
+    }
+    if (context.gateway.snapshot.client === client) {
+      context.navigate(
+        "chat",
+        sessionNavigationTarget({
+          context,
+          face: "chat",
+          sessionKey,
+          agentId,
+          navigationKey: sessionKey,
+        }).options,
+      );
+    }
+  };
+  await send();
 }

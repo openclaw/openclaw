@@ -714,6 +714,9 @@ function authenticatedParentRecoveryFixture(mode: "full" | "selected" | "omitted
   };
   const evidenceClient = {
     ...qualification.client,
+    verifyRetainedPublicationArtifacts() {
+      throw new Error("Unexpected retained publication verification");
+    },
     downloadArtifactArchive() {
       throw new Error("Unexpected publication artifact download");
     },

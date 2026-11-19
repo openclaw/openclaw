@@ -16,6 +16,7 @@ import {
 } from "../plugins/overview.tsx";
 import { TemplateArtwork } from "./template-artwork.tsx";
 import { createTemplateAutomationSummary } from "./template-automation-summary.ts";
+import { TemplatePluginIcon } from "./template-plugin-icon.tsx";
 import type { TemplateCatalogDetail, TemplateCatalogEntry } from "./templates-catalog-client.ts";
 import "../../styles/templates-catalog.css";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
@@ -109,13 +110,6 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
         contents().skills.map((item) => ({
           name: item.name,
           description: item.excerpt,
-          trailing: (
-            <span class="muted">
-              {item.source === "bundled"
-                ? t("templatesCatalog.dependencyBundled")
-                : t("templatesCatalog.dependencyClawHub", { version: item.version })}
-            </span>
-          ),
           onOpen: () => props.view.onOpenPreview("skill", item.name),
         })),
         () => (
@@ -125,13 +119,15 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
       {renderPluginCapabilitySection(
         t("templatesCatalog.integrations"),
         contents().integrations.map((item) => ({
-          name: item.name,
-          description:
+          name:
             item.kind === "plugin"
-              ? item.source === "bundled"
-                ? t("templatesCatalog.dependencyBundled")
-                : t("templatesCatalog.dependencyClawHub", { version: item.version })
-              : t("tabs.mcp"),
+              ? (props.view.pluginPresentation?.[item.name]?.name ?? item.name)
+              : item.name,
+          icon:
+            item.kind === "plugin"
+              ? () => <TemplatePluginIcon plugin={props.view.pluginPresentation?.[item.name]} />
+              : undefined,
+          description: item.kind === "plugin" ? undefined : t("tabs.mcp"),
           trailing:
             item.kind === "plugin" &&
             item.source === "clawhub" &&
@@ -166,19 +162,19 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
         {(item) => (
           <ModalDialog label={item().name} open onModal-cancel={() => setAutomation(null)}>
             <article class="oc-dialog">
-              <header class="template-automation-dialog__header">
-                <span class="plugin-capability__icon" aria-hidden="true">
-                  <Icon name="clock" />
-                </span>
-                <DialogHeader
-                  title={item().name}
-                  description={automationSummary(item())}
-                  onClose={() => setAutomation(null)}
-                />
-              </header>
-              <div class="oc-dialog__body">
-                <p class="template-automation-dialog__message">{item().message}</p>
-              </div>
+              <DialogHeader
+                title={
+                  <>
+                    <span class="plugin-capability__icon" aria-hidden="true">
+                      <Icon name="clock" />
+                    </span>
+                    {item().name}
+                  </>
+                }
+                description={automationSummary(item())}
+                onClose={() => setAutomation(null)}
+              />
+              <div class="oc-dialog__body template-automation-message">{item().message}</div>
             </article>
           </ModalDialog>
         )}

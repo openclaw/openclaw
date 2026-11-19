@@ -5,7 +5,7 @@ import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-
 import { ignoreMissingPath } from "./errno.js";
 import {
   PACKAGE_RELEASES_DIR,
-  packageReleaseGlobalRoot,
+  packageReleasePrefixOfRoot,
   resolvePackageReleaseSlotForRootSync,
 } from "./package-release-slot-path.js";
 
@@ -50,18 +50,16 @@ export function readPackageReleaseLeases(
  * function releases the lease; a lease left by a dead process is ignored.
  */
 export function acquirePackageReleaseLease(runningRoot: string): () => void {
-  const releaseGlobalRoot = path.dirname(fsSync.realpathSync.native(runningRoot));
-  const releasePrefix = path.dirname(path.dirname(releaseGlobalRoot));
-  const releasesDir = path.dirname(releasePrefix);
+  const releasePrefix = packageReleasePrefixOfRoot(fsSync.realpathSync.native(runningRoot));
   // Only a release that a package link has selected; other `releases/` trees have their own owners.
   if (
     process.platform === "win32" ||
-    path.basename(releasesDir) !== PACKAGE_RELEASES_DIR ||
-    packageReleaseGlobalRoot(releasePrefix) !== releaseGlobalRoot ||
+    !releasePrefix ||
     !resolvePackageReleaseSlotForRootSync(runningRoot)
   ) {
     return () => {};
   }
+  const releasesDir = path.dirname(releasePrefix);
   const dir = packageReleaseLeaseDir(releasesDir, path.basename(releasePrefix));
   // One process can register more than once; each registration owns its own file.
   const lease = path.join(

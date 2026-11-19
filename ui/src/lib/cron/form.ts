@@ -63,9 +63,6 @@ function parsesAsCron(expr: string, timezone?: string): boolean {
 
 export function validateCronForm(form: CronFormState): CronFieldErrors {
   const errors: CronFieldErrors = {};
-  if (!form.name.trim()) {
-    errors.name = "cron.errors.nameRequired";
-  }
   if (form.scheduleKind === "event" && form.payloadKind !== "agentTurn") {
     errors.payloadText = "cron.events.agentTurnRequired";
   }

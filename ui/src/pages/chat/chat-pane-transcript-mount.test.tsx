@@ -53,6 +53,7 @@ it("defers hidden transcripts, retains revealed content, and cancels a closed pa
     const chat = createChatProps({
       paneId,
       sessionKey: `agent:main:${paneId}`,
+      selectedSession: { key: `agent:main:${paneId}`, kind: "direct", hasMessages: true },
       messages: [{ role: "assistant", content: "Initial history", timestamp: 1 }],
       restoring,
       initialSubmission,
