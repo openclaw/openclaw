@@ -893,6 +893,7 @@ extension GatewayNodeSession {
         credentials: GatewayNodeSessionCredentials = .init(),
         options: GatewayConnectOptions,
         session: FakeGatewayWebSocketSession,
+        workerTransportURL: String? = nil,
         extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
         onConnected: @escaping @Sendable () async -> Void = {},
         onDisconnected: @escaping @Sendable (String) async -> Void = { _ in },
@@ -908,6 +909,7 @@ extension GatewayNodeSession {
             credentials: credentials,
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
+            workerTransportURL: workerTransportURL,
             extraHeadersProvider: extraHeadersProvider,
             onConnected: onConnected,
             onDisconnected: onDisconnected,
@@ -1175,6 +1177,44 @@ struct GatewayNodeSessionTests {
         #expect(connection["Authorization"] == nil)
         await gateway.disconnect()
         #expect(await gateway.workerConnectionData(ifCurrentRoute: route) == nil)
+    }
+
+    @Test func `private worker bridge belongs to its admitted route and expires on replacement`() async throws {
+        let gateway = GatewayNodeSession()
+        let session = FakeGatewayWebSocketSession(helloCapabilities: [
+            "node-worker-portal-stream-v1", "node-worker-bundle-status-v1",
+        ])
+        let url = try testURL("wss://claw.example.invalid/")
+        let options = nodeConnectOptions(allowStoredDeviceAuth: false)
+        var previousRoute: GatewayNodeSessionRoute?
+        for bridge in ["ws+unix:/tmp/test-node-a/gateway.sock:/", "ws+unix:/tmp/test-node-b/gateway.sock:/"] {
+            try await gateway.connectForTest(
+                url, options: options, session: session, workerTransportURL: bridge)
+            let route = try #require(await gateway.currentRoute())
+            if let previousRoute {
+                #expect(route != previousRoute)
+                #expect(await gateway.workerConnectionData(ifCurrentRoute: previousRoute) == nil)
+            }
+            let data = try #require(await gateway.workerConnectionData(ifCurrentRoute: route))
+            let connection = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            #expect(connection["url"] as? String == bridge)
+            #expect(connection["capabilities"] as? [String] == ["node-worker-bundle-status-v1"])
+            #expect(Set(connection.keys) == ["url", "protocol", "capabilities"])
+            previousRoute = route
+        }
+        #expect(session.snapshotMakeCount() == 2)
+        let retiredRoute = try #require(previousRoute)
+        await gateway.disconnect()
+        #expect(await gateway.workerConnectionData(ifCurrentRoute: retiredRoute) == nil)
+        try await gateway.connectForTest(url, options: options, session: session)
+        let directRoute = try #require(await gateway.currentRoute())
+        let directData = try #require(await gateway.workerConnectionData(ifCurrentRoute: directRoute))
+        let directConnection = try #require(JSONSerialization.jsonObject(with: directData) as? [String: Any])
+        #expect(directConnection["url"] as? String == url.absoluteString)
+        #expect(directConnection["capabilities"] as? [String] == [
+            "node-worker-bundle-status-v1", "node-worker-portal-stream-v1",
+        ])
+        await gateway.disconnect()
     }
 
     @Test func `changed connection options renegotiate the advertised handshake`() async throws {
@@ -4456,21 +4496,44 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
-    func `server event subscription filters before buffering`() async {
+    func `server event overflow counts only admitted drops until cancellation`() async {
         let gateway = GatewayNodeSession()
         let subscription = await gateway.makeServerEventSubscription(
             bufferingNewest: 1,
             matching: { $0.event == "target" })
-        defer { subscription.cancel() }
-        let stream = subscription.events
+        let fast = await gateway.makeServerEventSubscription(bufferingNewest: 1)
+        defer {
+            subscription.cancel()
+            fast.cancel()
+        }
+        var fastIterator = fast.events.makeAsyncIterator()
+        for sequence in 1...8 {
+            let counts = await gateway._test_broadcastServerEvent(
+                EventFrame(type: "event", event: "target", seq: sequence))
+            #expect(counts == [0, sequence - 1])
+            #expect(await fastIterator.next()?.seq == sequence)
+            let afterNoise = await gateway._test_broadcastServerEvent(EventFrame(type: "event", event: "noise"))
+            #expect(afterNoise == counts)
+            #expect(await fastIterator.next()?.event == "noise")
+        }
 
-        await gateway._test_broadcastServerEvent(EventFrame(type: "event", event: "noise"))
-        await gateway._test_broadcastServerEvent(EventFrame(type: "event", event: "target"))
-        await gateway._test_broadcastServerEvent(EventFrame(type: "event", event: "noise"))
+        subscription.cancel()
+        // Exercise .terminated as well as the scheduled onTermination cleanup.
+        // Either path must discard the old counter without recording another drop.
+        let afterCancel = await gateway._test_broadcastServerEvent(
+            EventFrame(type: "event", event: "target", seq: 9))
+        #expect(afterCancel == [0])
+        #expect(await fastIterator.next()?.seq == 9)
+        var iterator = subscription.events.makeAsyncIterator()
+        #expect(await iterator.next()?.seq == 8)
+        #expect(await iterator.next() == nil)
 
-        var iterator = stream.makeAsyncIterator()
-        let event = await iterator.next()
-        #expect(event?.event == "target")
+        let replacement = await gateway.makeServerEventSubscription(bufferingNewest: 1)
+        defer { replacement.cancel() }
+        let afterReplacement = await gateway._test_broadcastServerEvent(
+            EventFrame(type: "event", event: "target", seq: 10))
+        #expect(afterReplacement == [0, 0])
+        #expect(await fastIterator.next()?.seq == 10)
     }
 
     @Test

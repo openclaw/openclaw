@@ -43,8 +43,6 @@ function prepare(
     cfg,
     requestedSessionKey: sessionKey,
     request: { message: "continue", idempotencyKey: "reuse-proof" },
-    canUseCronRunContinuation: false,
-    lifecycleGeneration: "reuse-proof",
     respond: () => {
       throw new Error("Unexpected preparation rejection");
     },
@@ -62,7 +60,6 @@ function buildReusePatch(input: Partial<PatchParams>) {
     storePath: "/synthetic/session-reuse.sqlite",
     normalizedSpawned: {},
     requestDeliveryHint: undefined,
-    hasRestoredCronContinuation: false,
     resetPolicy,
     now,
     isSystemGatewayRun: false,
@@ -160,7 +157,6 @@ it.each<[Partial<PatchParams>, string, boolean, boolean?]>([
   [{ freshEntry }, "original", false],
   [{ expectedExistingSessionId: "original" }, "original", false],
   [{ requestedSessionId: "original" }, "original", true],
-  [{ hasRestoredCronContinuation: true }, "original", false],
   [{ freshEntry: failedEntry }, "original", false],
   [{ freshEntry: failedEntry, visibleRequest: false }, "original", true],
   [{ freshEntry: { ...freshEntry, status: "failed" } }, "replacement", true, true],

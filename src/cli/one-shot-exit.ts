@@ -1,3 +1,4 @@
+import { ChildProcess } from "node:child_process";
 import { writeSync } from "node:fs";
 import { drainProcessOutput } from "../process/output-drain.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -6,7 +7,7 @@ import { waitForPendingCliDisposers } from "./runtime-cleanup.js";
 import { waitForCliSignalExit } from "./signal-exit-barrier.js";
 
 let requestedExitCode: number | "process" | undefined;
-let settledExitWatchdog: { delayMs: number; terminateFailedExit: boolean } | undefined;
+let settledExitWatchdog: { delayMs: number; failedExitSignal?: "SIGTERM" | "SIGUSR2" } | undefined;
 
 function resolveProcessExitCode(fallback = 0): number {
   const value = process.exitCode;
@@ -116,8 +117,11 @@ export function requestExitAfterOneShotOutput(
  * Long-lived owners retire their deadline watchdogs once shutdown settles. Ask the CLI to bound
  * a referenced handle nobody closed after every command-owned job, disposer and finalizer ends.
  */
-export function requestSettledExitWatchdog(delayMs: number): void {
-  settledExitWatchdog = { delayMs, terminateFailedExit: false };
+export function requestSettledExitWatchdog(
+  delayMs: number,
+  failedExitSignal?: "SIGTERM" | "SIGUSR2",
+): void {
+  settledExitWatchdog = { delayMs, failedExitSignal };
 }
 
 /**
@@ -125,13 +129,14 @@ export function requestSettledExitWatchdog(delayMs: number): void {
  * waiting on them, so a referenced handle nobody closed cannot hold a failed outcome open either.
  */
 export function requestOneShotSettledExitWatchdog(delayMs = 10_000): void {
-  settledExitWatchdog = { delayMs, terminateFailedExit: true };
+  requestSettledExitWatchdog(delayMs, "SIGTERM");
 }
 
-function armSettledExitWatchdog(params: { delayMs: number; terminateFailedExit: boolean }): void {
-  const { delayMs, terminateFailedExit } = params;
+function armSettledExitWatchdog(params: NonNullable<typeof settledExitWatchdog>): void {
+  const { delayMs, failedExitSignal } = params;
   // Unref'd: a natural exit is never delayed.
   setTimeout(() => {
+    const { TLSSocket } = process.getBuiltinModule("node:tls");
     const summarize = (names: string[]) => {
       const counts = new Map<string, number>();
       for (const name of names) {
@@ -144,20 +149,32 @@ function armSettledExitWatchdog(params: { delayMs: number; terminateFailedExit: 
       (process as NodeJS.Process & { _getActiveHandles?: () => object[] })["_getActiveHandles"]?.();
     const resources = summarize(process.getActiveResourcesInfo());
     const handleTypes = summarize(handles?.map((handle) => handle.constructor.name) ?? []);
+    const handleDetails = handles?.slice(0, 8).map((handle) => {
+      if (handle === process.stdout || handle === process.stderr) {
+        return handle === process.stdout ? "stdout" : "stderr";
+      }
+      if (handle instanceof TLSSocket) {
+        return { tls: (handle.servername || "").slice(0, 255), remote: handle.remoteAddress };
+      }
+      if (handle instanceof ChildProcess) {
+        return { argv0: handle.spawnargs[0]?.slice(0, 255) };
+      }
+      return handle.constructor.name;
+    });
     // Only a clean POSIX outcome is ended here unless the caller opted out; a non-zero status
     // can be a supervisor's restart instruction that no signal can carry, so it stays with the
     // supervisor.
-    const terminate =
-      process.platform !== "win32" && (terminateFailedExit || resolveProcessExitCode() === 0);
+    const signal = resolveProcessExitCode() === 0 ? "SIGTERM" : failedExitSignal;
+    const terminate = process.platform !== "win32" && signal !== undefined;
     writeSync(
       2,
-      `command settled but the process is still alive after ${delayMs}ms; active resources: ${resources}; active handles: ${handleTypes}${terminate ? "; terminating" : ""}\n`,
+      `command settled but the process is still alive after ${delayMs}ms; active resources: ${resources}; active handles: ${handleTypes}; handle details: ${JSON.stringify(handleDetails ?? [])}${terminate ? "; terminating" : ""}\n`,
     );
     if (terminate) {
-      // Re-raise the stop signal with its default action: no Node exit teardown
-      // (process.exit is banned) and supervisors record a clean stop.
-      process.removeAllListeners("SIGTERM");
-      process.kill(process.pid, "SIGTERM");
+      // Default signal action avoids Node teardown. SIGUSR2 preserves a failed stop
+      // for supervisors; SIGTERM represents a clean stop or a finite command exit.
+      process.removeAllListeners(signal);
+      process.kill(process.pid, signal);
     }
   }, delayMs).unref();
 }

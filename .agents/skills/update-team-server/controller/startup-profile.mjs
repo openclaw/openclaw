@@ -236,7 +236,8 @@ async function runPreload() {
     assert.deepEqual(process.argv.slice(2), ["gateway", "--port", "18789"]);
     assert.equal(fs.realpathSync(process.argv[1]), intent.entry);
     assert.equal(fs.realpathSync(process.cwd()), intent.release);
-    assert.equal(fs.readFileSync("/proc/self/cgroup", "utf8"), `0::${intent.cgroup}\n`);
+    assert.equal(intent.cgroup, "/system.slice/openclaw-gateway.service");
+    assert([`0::${intent.cgroup}\n`, `0::${intent.cgroup}/gateway\n`].includes(fs.readFileSync("/proc/self/cgroup", "utf8")));
     assert(
       Number.isSafeInteger(intent.expiresMicros) && intent.expiresMicros - mono() <= 120000000,
     );

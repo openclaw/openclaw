@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { Show, createSignal, createUniqueId, lazy, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { Kbd } from "../../../components/solid/kbd.tsx";
+import { Kbd, KeyboardShortcut, ShortcutHint } from "../../../components/solid/kbd.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { registerSessionNavigationEnglish } from "../../../i18n/locales/en-session-navigation.ts";
 import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
@@ -299,7 +299,13 @@ export function renderChatAbortActionSolid(
   return (
     <>
       {props.canAbort ? (
-        <openclaw-tooltip prop:content={t("chat.runControls.stopWithShortcut")}>
+        <openclaw-tooltip>
+          <span slot="content">
+            <ShortcutHint
+              label={t("chat.runControls.stop")}
+              combo={KEYBOARD_SHORTCUT_COMBOS.escape}
+            />
+          </span>
           <button
             class="chat-send-btn chat-send-btn--stop"
             ref={primaryPointerDownRef(() => props.onPrimaryActionPointerDown)}
@@ -352,10 +358,7 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
   const hasSendableContent = () =>
     hasComposedContent() && props.canSend && !props.sending && !sendDisabledReason();
   const showShortcutTooltip = () =>
-    !isMobileBrowserPlatform() &&
-    !props.preparingAttachments &&
-    sendStatus() == null &&
-    alternateAvailable();
+    !isMobileBrowserPlatform() && !props.preparingAttachments && sendStatus() == null;
   const SendAction = () => (
     <openclaw-tooltip
       prop:content={
@@ -368,17 +371,27 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
     >
       <Show when={showShortcutTooltip()}>
         <span slot="content">
-          {label()} <Kbd keys="⏎" inline />
-          {" · "}
-          {alternateLabel()}{" "}
-          <Kbd
-            keys={
-              isApplePlatform()
-                ? t("chat.sendShortcutModifierEnter")
-                : formatKeyboardShortcutParts(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, false)
+          {label()}{" "}
+          <KeyboardShortcut
+            combo={
+              props.sendShortcut === "modifier-enter"
+                ? KEYBOARD_SHORTCUT_COMBOS.modifiedEnter
+                : KEYBOARD_SHORTCUT_COMBOS.sendMessage
             }
             inline
           />
+          <Show when={alternateAvailable()}>
+            {" · "}
+            {alternateLabel()}{" "}
+            <Kbd
+              keys={
+                isApplePlatform()
+                  ? t("chat.sendShortcutModifierEnter")
+                  : formatKeyboardShortcutParts(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, false)
+              }
+              inline
+            />
+          </Show>
         </span>
       </Show>
       <button

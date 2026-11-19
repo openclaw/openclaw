@@ -491,7 +491,7 @@ async function runSetupWizardOnce(
     workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE,
   );
 
-  const { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } =
+  const { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig, describeSetupToolProfile } =
     await import("../commands/onboard-config.js");
   const { workspaceDir, allowWorkspaceChange } = await resolveSetupWorkspaceSelection({
     baseConfig,
@@ -714,6 +714,10 @@ async function runSetupWizardOnce(
   nextConfig = committed.nextConfig;
   onboardingTarget = resolveOnboardingSetupTarget(nextConfig);
   await commitAppRecommendationResult?.();
+  const toolProfileLine = describeSetupToolProfile(nextConfig, onboardingTarget.agentId);
+  if (toolProfileLine) {
+    await prompter.note(toolProfileLine, "Tool profile");
+  }
 
   const { finalizeSetupWizard } = await import("./setup.finalize.js");
   const finalizeResult = await finalizeSetupWizard({

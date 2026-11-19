@@ -7,7 +7,7 @@ import { scanParenAwareBreakpoints } from "./text-breakpoints.js";
 
 export { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 
-function normalizeChunkLimit(limit: number): number {
+export function normalizeChunkLimit(limit: number): number {
   if (Number.isNaN(limit)) {
     return 0;
   }

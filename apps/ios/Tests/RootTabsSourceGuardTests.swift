@@ -67,6 +67,38 @@ struct RootTabsSourceGuardTests {
             gatewayStableID: secondID).token == "second-token")
     }
 
+    @Test @MainActor func `a credential typed after onboarding pairing saves to the active gateway`() {
+        let instanceID = "credential-active-\(UUID().uuidString)"
+        defer { GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: instanceID) }
+        let activeID = "manual|gateway.example.ts.net|443"
+        let registry = GatewaySettingsStore.GatewayRegistry(
+            activeStableID: activeID,
+            connectedStableIDs: [activeID],
+            entries: [GatewaySettingsStore.GatewayRegistryEntry(
+                stableID: activeID,
+                kind: .manual,
+                name: "gateway.example.ts.net:443",
+                host: "gateway.example.ts.net",
+                port: 443,
+                useTLS: true,
+                lastConnectedAtMs: nil)])
+        #expect(GatewaySettingsStore.saveGatewayCredentials(
+            token: "kept-token",
+            bootstrapToken: nil,
+            password: nil,
+            gatewayStableID: activeID,
+            suppressStoredDeviceAuth: false,
+            instanceId: instanceID))
+        // Onboarding pairing leaves Settings' manual host empty and the fields unbound.
+        let defaultTarget = SettingsProTab.defaultCredentialTargetStableID(manualStableID: nil, registry: registry)
+        var fields = GatewayConnectionController.ManualAuthOverride.Fields()
+        fields.edit(\.password, to: "rotated-password", instanceId: instanceID, defaultTarget: defaultTarget)
+
+        let saved = GatewaySettingsStore.loadGatewayCredentials(instanceId: instanceID, gatewayStableID: activeID)
+        #expect(saved.password == "rotated-password")
+        #expect(saved.token == "kept-token")
+    }
+
     private static func source(_ path: String) throws -> String {
         try String(contentsOf: self.iOSRoot.appendingPathComponent(path), encoding: .utf8)
     }

@@ -87,6 +87,9 @@ openclaw-file-preview-modal {
     font-size: 14px;
     line-height: 1.65;
     overflow-wrap: anywhere;
+    /* Reading text keeps macOS stem darkening; app chrome stays antialiased via body. */
+    -webkit-font-smoothing: auto;
+    -moz-osx-font-smoothing: auto;
   }
   .markdown > :first-child {
     margin-top: 0;

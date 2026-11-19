@@ -501,9 +501,13 @@ describe("headless Code Mode", () => {
         additionalProperties: false,
       },
     };
-    const result = await fail([strict], "return await headless_strict({ value: 42 });", {
-      wallClockMs: 120_000,
-    });
+    const result = await fail(
+      [strict],
+      "return await headless_strict({ value: { invalid: true } });",
+      {
+        wallClockMs: 120_000,
+      },
+    );
     expect(result.error).toContain("value");
     expect(result.toolCallCount).toBe(1);
     expect(strict.execute).not.toHaveBeenCalled();

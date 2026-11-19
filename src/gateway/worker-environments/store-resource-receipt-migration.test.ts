@@ -85,6 +85,7 @@ it.each(["runtime", "doctor"] as const)(
         ...before,
         resource_receipt_json: null,
         retention_json: null,
+        provision_source_json: '{"kind":"unavailable"}',
       });
       const store = await createWorkerEnvironmentStore({ database });
       expect(store.get("environment")?.resourceReceipt).toBeNull();

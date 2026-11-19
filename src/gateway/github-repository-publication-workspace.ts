@@ -114,6 +114,7 @@ export async function captureCheckpoint<T>(
     prepared: {
       snapshot: GitHubRepositoryPublicationSnapshot;
       snapshotRoot: string;
+      history?: import("./worker-environments/session-repository-checkpoints.types.js").RepositoryGitHistory;
       authority: GitHubPublicationTransitionAuthority;
     },
   ) => Promise<T>,
@@ -223,7 +224,12 @@ export async function captureCheckpoint<T>(
           source_index_tree: snapshot.baseTree,
           workspace_tree: snapshot.workspaceTree,
         },
-        { snapshot, snapshotRoot: payload.publicationStagingRoot, authority: selectedAuthority },
+        {
+          snapshot,
+          snapshotRoot: payload.publicationStagingRoot,
+          history: payload,
+          authority: selectedAuthority,
+        },
       );
     },
   );

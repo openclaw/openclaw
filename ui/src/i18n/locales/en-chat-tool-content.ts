@@ -5,6 +5,9 @@ import { en } from "./en.ts";
 const enChatToolContent = {
   chat: {
     toolCards: {
+      previewMore: "Expand for more output",
+      previewCaptured: "View captured beginning",
+      previewTruncated: "Captured output is truncated",
       providerResponse: "Provider tool response",
       executionOutput: "Execution output",
       showFullOutput: "Show full output",
@@ -18,6 +21,7 @@ const enChatToolContent = {
       diff: "Diff",
       raw: "Raw",
       openDetails: "Open tool details in side panel",
+      openDetailsTooltip: "Open details",
       noOutputFailed: "The tool failed without output.",
     },
   },

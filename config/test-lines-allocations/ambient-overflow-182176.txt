@@ -1,3 +1,0 @@
-# Issue #182176: overflow priority, receipts, bursts, steering, and bounded
-# context preservation across routing, redaction, retries, and cancellation.
-191

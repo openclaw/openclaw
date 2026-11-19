@@ -67,13 +67,22 @@ function timingKey(log: string): string {
     /^\d{4}-\d\d-\d\dT[\d:.]+Z\s+OPENCLAW_CI_TEST_RUNTIME_POLICY: (bun-all|dual-all)\s*$/mu.exec(
       stripVTControlCharacters(log),
     )?.[1];
-  const prefix = policy ? `${policy}:` : "";
+  const runtime = /^\d{4}-\d\d-\d\dT[\d:.]+Z\s+OPENCLAW_CI_TEST_RUNTIME: (node|bun)\s*$/mu.exec(
+    stripVTControlCharacters(log),
+  )?.[1];
+  const prefix = policy
+    ? runtime
+      ? policy === "dual-all" && runtime === "node"
+        ? ""
+        : `${policy}:${runtime}:`
+      : `${policy}:`
+    : "";
   const spans = ["", "bun:", "bun-native:", "node-subset:"]
-    .map((runtime) => runtime + observedKey)
+    .map((spanPrefix) => spanPrefix + observedKey)
     .filter((key) => log.includes(`[shard:${key}] begin`));
   if (
     spans.length === 0 ||
-    (policy === "dual-all" && !spans.includes(observedKey)) ||
+    (policy === "dual-all" && runtime !== "bun" && !spans.includes(observedKey)) ||
     spans.some((key) => !log.includes(`[shard:${key}] end (exit 0)`))
   ) {
     throw new Error("Hosted timing job lacks a successful matching shard span");

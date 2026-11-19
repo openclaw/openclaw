@@ -9,6 +9,7 @@ import {
 import {
   ConnectErrorDetailCodes,
   readConnectErrorDetailCode,
+  readGatewayOperatorAccessClose,
 } from "@openclaw/gateway-protocol/connect-error-details";
 import type { ConnectParams, EventFrame, HelloOk } from "@openclaw/gateway-protocol/frame-guards";
 import { resolveGatewayStartupRetryAfterMs } from "@openclaw/gateway-protocol/startup-unavailable";
@@ -49,9 +50,10 @@ import {
   shouldNegotiateLegacyNodeProtocol,
 } from "./node-protocol.js";
 import type { GatewayProtocolRequestTiming } from "./pending-request.js";
-import type {
-  GatewayClientCloseInfo,
-  GatewayClientConnectionMetadata,
+import {
+  describeGatewayClientClose,
+  type GatewayClientCloseInfo,
+  type GatewayClientConnectionMetadata,
 } from "./protocol-client-contract.js";
 import {
   GatewayProtocolClient,
@@ -577,7 +579,16 @@ export class GatewayClient {
         clearInterval(this.tickTimer ?? undefined);
         this.tickTimer = null;
         if (decision.notify) {
-          this.opts.onClose?.(context.code, context.reason, this.closeInfo(context));
+          // Internal flush errors must not turn a clean pre-hello retry into a connect failure.
+          const connectError =
+            decision.pendingError instanceof GatewayClientRequestError
+              ? decision.pendingError
+              : undefined;
+          this.opts.onClose?.(
+            context.code,
+            context.reason,
+            describeGatewayClientClose(context, this.transportValidated, connectError),
+          );
         }
       },
       notifyStoppedClose: true,
@@ -976,15 +987,14 @@ export class GatewayClient {
   }
 
   private resolveClose(context: GatewayProtocolCloseContext) {
-    const info = this.closeInfo(context);
-    const detailCode =
-      context.connectFailure?.error instanceof GatewayClientRequestError
-        ? readConnectErrorDetailCode(context.connectFailure.error.details)
-        : null;
+    const accessDenial = readGatewayOperatorAccessClose(context.code, context.reason);
+    const closeError = accessDenial
+      ? new GatewayClientRequestError(accessDenial)
+      : context.connectFailure?.error;
     const details =
-      context.connectFailure?.error instanceof GatewayClientRequestError
-        ? context.connectFailure.error.details
-        : undefined;
+      closeError instanceof GatewayClientRequestError ? closeError.details : undefined;
+    const detailCode = readConnectErrorDetailCode(details);
+    const info = describeGatewayClientClose(context, this.transportValidated, closeError);
     if (context.code === 1013 && context.connectFailure?.reconnectDelayMs !== undefined) {
       return {
         retry: true,
@@ -1022,24 +1032,13 @@ export class GatewayClient {
       })
     ) {
       this.notifyReconnectPaused({ code: context.code, reason: context.reason, detailCode });
-      return { retry: false, notify: true };
+      return { retry: false, notify: true, pendingError: closeError };
     }
     return {
       retry: true,
       notify: true,
       reconnectDelayMs: context.connectFailure?.reconnectDelayMs,
-    };
-  }
-
-  private closeInfo(context: GatewayProtocolCloseContext): GatewayClientCloseInfo {
-    return {
-      phase: context.helloReceived ? "post-hello" : "pre-hello",
-      socketOpened: context.socketOpened,
-      transportValidated: this.transportValidated,
-      connectRequestSent: context.connectRequestSent,
-      transientPreHelloCleanClose:
-        !context.helloReceived && context.code === 1000 && context.reason === "",
-      ...(context.connectFailure?.error ? { connectError: context.connectFailure.error } : {}),
+      pendingError: closeError,
     };
   }
 

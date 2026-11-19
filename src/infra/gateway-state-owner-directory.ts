@@ -4,11 +4,11 @@ import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { resolveGatewayLockDirForCanonicalStateDir } from "../config/paths.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
+import { sha256HexPrefixCore } from "./crypto-digest.js";
 import {
   resolveIdentityPathViaExistingAncestor,
   resolveIdentityPathViaExistingAncestorSync,
-} from "./boundary-path.js";
-import { sha256HexPrefixCore } from "./crypto-digest.js";
+} from "./path-existence.js";
 import { normalizeWindowsPathForComparison } from "./path-guards.js";
 import { applyPrivateModeSync } from "./private-mode.js";
 

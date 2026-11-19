@@ -110,6 +110,42 @@ function fixture() {
 }
 
 describe("release approval receipt", () => {
+  it("binds explicit beta deferrals to source, version, package and failure job", () => {
+    const deferred = {
+      packageName: "@openclaw/demo",
+      version: releaseTag.slice(1),
+      sourceSha: targetSha,
+      reason: "npm-trusted-publisher-exchange-http-404",
+      evidence: "https://github.com/openclaw/openclaw/actions/runs/12/job/34",
+    };
+    const create = (entries: unknown, override = {}) =>
+      createReleaseApprovalReceipt(
+        {
+          ...env,
+          PUBLISH_OPENCLAW_NPM: "true",
+          PLUGIN_PUBLISH_SCOPE: "all-publishable",
+          PREPARED_NPM_ARTIFACT: "original-qualified-artifact",
+          PREPARED_PUBLICATION_INPUT: JSON.stringify({ corePluginDeferrals: entries }),
+          ...override,
+        },
+        () => [approved()],
+      );
+    expect(create([deferred])).toMatchObject({ version: 3, corePluginDeferrals: [deferred] });
+    for (const entries of [
+      [],
+      [deferred, deferred],
+      [{ ...deferred, sourceSha: sha }],
+      [{ ...deferred, reason: "HTTP 404" }],
+      [{ ...deferred, evidence: "https://example.com" }],
+    ]) {
+      expect(() => create(entries)).toThrow();
+    }
+    expect(() => create([deferred], { RELEASE_NPM_DIST_TAG: "latest" })).toThrow();
+    expect(() => create([deferred], { PUBLISH_OPENCLAW_NPM: "false" })).toThrow();
+    expect(() => create([deferred], { PLUGIN_PUBLISH_SCOPE: "selected" })).toThrow();
+    expect(() => create([deferred], { PREPARED_NPM_ARTIFACT: "" })).toThrow();
+  });
+
   it("carries a retirement decision only in an authenticated extended-stable v2 receipt", () => {
     const create = (override = {}) =>
       createReleaseApprovalReceipt(

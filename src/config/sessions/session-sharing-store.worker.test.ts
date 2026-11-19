@@ -268,7 +268,7 @@ it("commits aliased worker membership and participant facts before publishing, a
       },
     };
     const authority = { assertCurrent() {}, assertReadable() {}, authorize() {} };
-    let actor: ReturnType<typeof captureDurableSessionActor> | undefined;
+    let actor: Awaited<ReturnType<typeof captureDurableSessionActor>> | undefined;
     const expectedEntry = {
       sessionId: entry.sessionId,
       createdActor: entry.createdActor,
@@ -304,7 +304,7 @@ it("commits aliased worker membership and participant facts before publishing, a
         kind: "participants",
         projection: { participants: [{ identity: peer }], participantCount: 1 },
       });
-      actor = captureDurableSessionActor({
+      actor = await captureDurableSessionActor({
         database: { agentId: "main", path: database.path },
         target: actorTarget,
         lifetime: authority,

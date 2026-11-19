@@ -14,7 +14,6 @@ import {
   resolveDefaultModelMaxTokens,
   selectPreferredLocalModelId,
   type ModelDefinitionConfig,
-  type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { withAgentModelAliases } from "openclaw/plugin-sdk/provider-onboard";
 import {
@@ -63,6 +62,7 @@ import {
   type ProviderPromptText,
   validateLmstudioSetupUrl,
 } from "./setup-prompts.js";
+import { buildLmstudioSetupProviderConfig } from "./setup-provider-config.js";
 type LmstudioDiscoveryResult = Awaited<ReturnType<typeof fetchLmstudioModels>>;
 const LMSTUDIO_APP_GUIDED_MIN_CONTEXT_TOKENS = 16_384;
 
@@ -117,34 +117,6 @@ function resolvePositiveInteger(value: string | undefined): number | undefined {
     return undefined;
   }
   return parseStrictPositiveInteger(trimmed);
-}
-
-function buildLmstudioSetupProviderConfig(params: {
-  existingProvider: ModelProviderConfig | undefined;
-  sharedProvider?: ModelProviderConfig;
-  baseUrl: string;
-  apiKey?: ModelProviderConfig["apiKey"];
-  headers: ModelProviderConfig["headers"] | undefined;
-  models: ModelDefinitionConfig[];
-}): ModelProviderConfig {
-  const {
-    auth: _auth,
-    apiKey: _apiKey,
-    ...provider
-  } = {
-    ...params.existingProvider,
-    ...params.sharedProvider,
-  };
-  const resolvedAuth = resolveLmstudioProviderAuthMode(params.apiKey);
-  return {
-    ...provider,
-    baseUrl: params.baseUrl,
-    api: params.sharedProvider?.api ?? params.existingProvider?.api ?? "openai-completions",
-    ...(resolvedAuth ? { auth: resolvedAuth } : {}),
-    ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {}),
-    headers: params.headers,
-    models: params.models,
-  };
 }
 
 function applyRequestedContextWindowToAllModels(params: {

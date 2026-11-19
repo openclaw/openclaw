@@ -7,7 +7,8 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import * as gatewayLock from "../../infra/gateway-lock.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
-import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { toPublicUpdateRun } from "../../infra/update-run-record.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -289,7 +290,7 @@ describe("mutable update execution", () => {
         packageTargetVersion: "2026.9.2",
       });
 
-      expect(mocks.validateCanary).toHaveBeenCalledOnce();
+      expect(mocks.checkCandidate).toHaveBeenCalledOnce();
       expect(execution).toMatchObject({
         mutationStarted: false,
         result: { status: "error", reason: "database-schema-preflight" },
@@ -583,7 +584,7 @@ describe("mutable update execution", () => {
           },
         );
 
-        expect(mocks.validateCanary).not.toHaveBeenCalled();
+        expect(mocks.checkCandidate).not.toHaveBeenCalled();
         expect(events).toEqual([]);
         expect(execution, JSON.stringify(execution?.failure)).toMatchObject({
           mutationStarted: false,
@@ -635,6 +636,41 @@ describe("mutable update execution", () => {
 
         expect(events, JSON.stringify(execution?.failure)).toEqual(["validated"]);
         expect(execution?.result.reason).not.toBe("database-engine-preflight");
+      }),
+  );
+
+  it.each([true, false])(
+    "records a checkout activation on its run before reserving plugin recovery (%s)",
+    async (checkout) =>
+      withTestDir({ prefix: "git-activation-record-" }, async (root) => {
+        const params = await runParams(root, "git");
+        const activation = { sha: "a".repeat(40), buildId: "build-new", previousBuildId: null };
+        let reservation: unknown;
+        mocks.runGitUpdate.mockImplementation(
+          async (options: Parameters<typeof updateGitInstall>[0]) => {
+            const transaction = {
+              backupRoot: root,
+              ...(checkout ? { readGitActivation: async () => activation } : {}),
+              rollback: async () => {
+                throw new Error("unused");
+              },
+              complete: async () => undefined,
+            };
+            // The fixture admitted no core identities, so the cohort reservation refuses.
+            reservation = await Promise.resolve(options.onTransaction?.(transaction)).catch(String);
+            return { ...successfulUpdate, mode: "git" };
+          },
+        );
+        await withUpdateCommandExecutor(params.opts.run.runId, async (executor) => {
+          params.opts.run.executorFence = await executor.enter(root);
+          return execute(params);
+        });
+
+        expect(reservation).toMatch(/Plugin cohort rollback requires the admitted core/);
+        const run = getUpdateRun(params.opts.run.runId, params.opts.run);
+        expect(run?.origin.gitActivation).toEqual(checkout ? activation : undefined);
+        // Public history projections keep their shape.
+        expect(run && toPublicUpdateRun(run).origin).not.toHaveProperty("gitActivation");
       }),
   );
 });

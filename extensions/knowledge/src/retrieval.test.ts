@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile, readFile, rm, rename, link, symlink } from "node:fs/promises";
 import path from "node:path";
-import { constants } from "node:sqlite";
+import { constants, DatabaseSync } from "node:sqlite";
 import { Check } from "typebox/value";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { stringify } from "yaml";
 import { contract } from "./contract.js";
 import { SqliteIdentityStore } from "./identity-store.js";
-import { keywordExpression, keywordSearch } from "./retrieval.js";
+import { keywordExpression, keywordSearch, verifyKeywordIndex } from "./retrieval.js";
 import { createKnowledgeService } from "./service.js";
 import { KnowledgeStorage } from "./storage.js";
 import {
@@ -20,7 +20,7 @@ import {
   operatorContext,
 } from "./test-support.js";
 import { COMPACT_SNIPPET_CHARS } from "./tool-result-contract.js";
-import { AGENT_HIT_LIMIT, leanToolResults } from "./tool-results.js";
+import { leanToolResults } from "./tool-results.js";
 
 const tempDirs = useTestTempDirs();
 
@@ -379,11 +379,140 @@ it("FTS operators are literal words, malformed/oversized input is rejected, Unic
   }
 });
 
+it("keyword search matches canonically equivalent Unicode spellings without rewriting stored text", async () => {
+  const f = await fixture();
+  const composed = "\u03AC\u03BB\u03C6\u03B1"; // άλφα, NFC (U+03AC)
+  const decomposed = "\u03B1\u0301\u03BB\u03C6\u03B1"; // άλφα, NFD (U+03B1 U+0301)
+  const unaccented = "\u03B1\u03BB\u03C6\u03B1"; // αλφα
+
+  const nfcPath = await f.put("nfc_note", "Greek", `The word ${composed} is saved composed.`);
+  const nfdPath = await f.put("nfd_note", "Greek", `The word ${decomposed} is decomposed.`);
+  await f.put("plain_note", "Greek", `The word ${unaccented} is unaccented.`);
+
+  // Capture full records (body, hash, revision) through the real service
+  // record_detail API before searching; a query that rewrote stored text would
+  // change these fields.
+  const recordOf = async (id: string) => (await f.service.record_detail({ id }, f.owner)).record!;
+  const fields = (record: any) => ({
+    body: record.body,
+    hash: record.hash,
+    revision: record.revision,
+  });
+  const canonicalWords: Record<string, { word: string; otherSpelling?: string }> = {
+    nfc_note: { word: composed, otherSpelling: decomposed },
+    nfd_note: { word: decomposed, otherSpelling: composed },
+    plain_note: { word: unaccented },
+  };
+  const before: Record<string, any> = {};
+  for (const id of Object.keys(canonicalWords)) {
+    before[id] = await recordOf(id);
+  }
+
+  // The service grep already returns full hits (snippets and citations); the
+  // compact projection is only produced by the agent surface.
+  const fullComposed = await f.service.grep({ query: composed }, f.owner);
+  const fullDecomposed = await f.service.grep({ query: decomposed }, f.owner);
+  const sorted = (result: any) => ids(result).toSorted();
+  const byComposed = sorted(fullComposed);
+  const byDecomposed = sorted(fullDecomposed);
+  // Red on the base: the composed query found only the composed note. Canonically
+  // equivalent spellings must retrieve the same records, in either direction.
+  expect(byComposed).toStrictEqual(byDecomposed);
+  expect(byComposed).toContain("nfc_note");
+  expect(byComposed).toContain("nfd_note");
+  // No broad accent folding: an unaccented query is a separate feature and must
+  // not reach the composed accented note.
+  expect(sorted(await f.service.grep({ query: unaccented }, f.owner))).not.toContain("nfc_note");
+
+  // Every full hit's snippet offsets slice the exact original record body (the
+  // bounded-snippet contract: snippet.text === body.slice(start, end)) and identify
+  // the canonical word each note authored, in its own verbatim normalization.
+  for (const result of [fullComposed, fullDecomposed]) {
+    for (const hit of result.hits) {
+      const { word, otherSpelling } = canonicalWords[hit.record.id]!;
+      const originalBody = before[hit.record.id]!.body as string;
+      expect(hit.snippet.text).toBe(originalBody.slice(hit.snippet.start, hit.snippet.end));
+      expect(hit.snippet.text).toContain(word);
+      if (otherSpelling) {
+        expect(hit.snippet.text).not.toContain(otherSpelling);
+      }
+    }
+  }
+
+  // Re-read the authored notes after searching: body, hash and revision of both the
+  // NFC- and NFD-authored records are unchanged by either canonical search.
+  expect(fields(await recordOf("nfc_note"))).toStrictEqual(fields(before.nfc_note));
+  expect(fields(await recordOf("nfd_note"))).toStrictEqual(fields(before.nfd_note));
+
+  // Stored text stays verbatim, in its authored normalization.
+  const nfcRaw = await readFile(nfcPath, "utf8"),
+    nfdRaw = await readFile(nfdPath, "utf8");
+  expect(nfcRaw).toContain(composed);
+  expect(nfdRaw).toContain(decomposed);
+  expect(nfdRaw).not.toContain(composed);
+
+  // A partially normalized Hangul token (neither fully NFC nor fully NFD) must
+  // still match through its original literal spelling: the unchanged index holds
+  // exactly the authored term, and replacing it with a canonical spelling would
+  // lose an existing exact match.
+  const mixed = "\uAC00\u1102\u1161"; // 가나: U+AC00 U+1102 U+1161
+  const nfcHangul = mixed.normalize("NFC"); // 가나
+  const nfdHangul = mixed.normalize("NFD"); // 가나
+  await f.put("hangul_note", "Hangul", `Saved verbatim: ${mixed}.`);
+  await f.put("hangul_nfc_note", "Hangul", `Saved composed: ${nfcHangul}.`);
+  const fullHangul = await f.service.grep({ query: mixed }, f.owner);
+  expect(sorted(fullHangul)).toStrictEqual(["hangul_nfc_note", "hangul_note"]);
+  // The hit cites the record's own spelling, not a canonical replacement.
+  const hangulHit = fullHangul.hits.find((h) => h.record.id === "hangul_note");
+  expect(hangulHit!.snippet.text).toContain(mixed);
+  // Canonical query directions of the same word stay equivalent; both reach the
+  // composed note, and only the literal query reaches the mixed stored token.
+  expect(sorted(await f.service.grep({ query: nfcHangul }, f.owner))).toStrictEqual(
+    sorted(await f.service.grep({ query: nfdHangul }, f.owner)),
+  );
+  expect(sorted(await f.service.grep({ query: nfcHangul }, f.owner))).toContain("hangul_nfc_note");
+
+  // The reported multi-token regression: a query mixing NFC and NFD across its
+  // words must still match the record storing exactly that mixed spelling; the
+  // whole-query canonical alternatives alone would drop the literal form.
+  const betaDecomposed = "\u03B2\u03B7\u0301\u03C4\u03B1"; // βήτα, NFD (U+03B7 U+0301)
+  await f.put("mixed_greek_note", "Mixed", `${composed} ${betaDecomposed} reported verbatim.`);
+  const mixedGreekQuery = `${composed} ${betaDecomposed}`;
+  expect(sorted(await f.service.grep({ query: mixedGreekQuery }, f.owner))).toStrictEqual([
+    "mixed_greek_note",
+  ]);
+  expect(
+    sorted(await f.service.grep({ query: mixedGreekQuery, mode: "phrase" }, f.owner)),
+  ).toStrictEqual(["mixed_greek_note"]);
+  // In any mode the mixed query reaches every row through its own word: each
+  // word's spelling group matches independently. The mixed record and both
+  // uniformly spelled άλφα notes surface; the unaccented note surfaces through
+  // the decomposed alternative (its combining marks fold away, the composed
+  // token does not), which the composed alternative alone would never reach.
+  expect(
+    sorted(await f.service.grep({ query: mixedGreekQuery, mode: "any" }, f.owner)),
+  ).toStrictEqual(["mixed_greek_note", "nfc_note", "nfd_note", "plain_note"]);
+
+  // A uniformly spelled query must reach the mixed record word by word: per-word
+  // spelling alternatives in all/any modes match each word in any canonical form,
+  // so the same row is found from every spelling of the query. Phrase mode stays
+  // whole-phrase (documented accepted gap): a uniformly spelled phrase cannot
+  // match a record mixing NFC and NFD across its words.
+  const uniformGreekQuery = `${composed} ${betaDecomposed.normalize("NFC")}`;
+  expect(sorted(await f.service.grep({ query: uniformGreekQuery }, f.owner))).toStrictEqual([
+    "mixed_greek_note",
+  ]);
+  expect(
+    sorted(await f.service.grep({ query: uniformGreekQuery, mode: "any" }, f.owner)),
+  ).toContain("mixed_greek_note");
+  expect(await f.total({ query: uniformGreekQuery, mode: "phrase" })).toBe(0);
+});
+
 it("ranking preserves pagination and scope without rereading the filtered corpus", async () => {
   const f = await fixture();
   await f.put("title_record", "Needle", "text", { tags: ["chosen"] });
   await f.put("body_record", "Other", "needle", { tags: ["chosen"] });
-  for (let n = 0; n <= AGENT_HIT_LIMIT; n++) {
+  for (let n = 0; n <= 10; n++) {
     await f.put(`haystack_${n}`, "Other", "haystack");
   }
   const first = await f.service.grep({ query: "needle", limit: 1 }, f.owner);
@@ -397,8 +526,8 @@ it("ranking preserves pagination and scope without rereading the filtered corpus
   expect(next.freshness.indexedAt).toBe(first.freshness.indexedAt);
   // Agent calls that omit limit get the agent page size, not the storage default.
   const agentPage = await f.agent.grep({ query: "haystack" }, f.owner);
-  expect(agentPage.hits.length).toBe(AGENT_HIT_LIMIT);
-  expect(agentPage.nextOffset).toBe(AGENT_HIT_LIMIT);
+  expect(agentPage.hits.length).toBe(10);
+  expect(agentPage.nextOffset).toBe(10);
   await f.put("outside_record", "Needle", "needle ".repeat(100));
   const storage = new KnowledgeStorage(f.config, f.store);
   const data = await storage.run(plainAccess(), (vault) => vault.scan());
@@ -615,4 +744,89 @@ it("superseded-record edits update the persistent history index and the search s
     db.exec(`DROP TABLE ${String(fts.name)}`);
   });
   expect(ids(await f.service.grep({ query: "inkword" }, f.owner))).toStrictEqual(["plan_two"]);
+});
+
+it("filtered ranking leaves the main writer available and preserves complete results", async () => {
+  const f = await fixture();
+  await f.put("writer_direct", "Orchid", "orchid flower", { tags: ["selected"] });
+  await f.put("writer_old", "Earlier", "orchid flower", superseded("writer_current"));
+  await f.put("writer_current", "Current", "replacement", { tags: ["selected"] });
+  await f.put("writer_outside", "Orchid", "orchid flower");
+  const storage = new KnowledgeStorage(f.config, f.store);
+  const data = await storage.run(plainAccess(), (vault) => vault.scan());
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-01T00:00:00Z"));
+  try {
+    f.store.withDatabase((db) => {
+      const input = { query: "orchid", tag: "selected", limit: 1, offset: 1 };
+      const expected = keywordSearch(db, data, input, "writer-test", "1");
+      expect(expected.index.state).toBe("ready");
+      expect(expected.hits[0]?.via?.id).toBe("writer_old");
+      const writer = new DatabaseSync(db.location()!);
+      try {
+        writer.exec("BEGIN IMMEDIATE");
+        try {
+          expect(verifyKeywordIndex(db, data, "writer-test", "1")?.has("writer_current")).toBe(
+            true,
+          );
+          expect(JSON.stringify(keywordSearch(db, data, input, "writer-test", "1"))).toBe(
+            JSON.stringify(expected),
+          );
+        } finally {
+          writer.exec("ROLLBACK");
+        }
+        let attempted = false;
+        let writerError: unknown;
+        db.setAuthorizer((action, _table, _column, schema) => {
+          if (!attempted && schema === "temp" && action === constants.SQLITE_CREATE_VTABLE) {
+            attempted = true;
+            try {
+              writer.exec(
+                "BEGIN IMMEDIATE; INSERT INTO keyword_state_v1 VALUES ('other-writer','snapshot','now'); COMMIT",
+              );
+            } catch (error) {
+              writerError = error;
+            }
+          }
+          return constants.SQLITE_OK;
+        });
+        try {
+          const actual = keywordSearch(db, data, input, "writer-test", "1");
+          expect(attempted).toBe(true);
+          expect(writerError).toBeUndefined();
+          expect(JSON.stringify(actual)).toBe(JSON.stringify(expected));
+          expect(
+            writer
+              .prepare("SELECT snapshot FROM keyword_state_v1 WHERE binding='other-writer'")
+              .get()?.snapshot,
+          ).toBe("snapshot");
+        } finally {
+          db.setAuthorizer(null);
+        }
+        // A sibling WAL commit between index inspection and a required update
+        // must not strand reconciliation on an obsolete read snapshot.
+        db.exec("PRAGMA journal_mode=WAL");
+        let intervened = false;
+        db.setAuthorizer((action, table) => {
+          if (!intervened && action === constants.SQLITE_READ && table === "keyword_state_v1") {
+            intervened = true;
+            writer.exec(
+              "INSERT INTO keyword_state_v1 VALUES ('intervening-writer','snapshot','now')",
+            );
+          }
+          return constants.SQLITE_OK;
+        });
+        const refreshed = keywordSearch(db, data, input, "writer-test", "2");
+        expect(intervened).toBe(true);
+        expect(refreshed.index.state).toBe("ready");
+        expect(refreshed.index.snapshot).not.toBe(expected.index.snapshot);
+        expect(refreshed.hits).toEqual(expected.hits);
+      } finally {
+        db.setAuthorizer(null);
+        writer.close();
+      }
+    });
+  } finally {
+    vi.useRealTimers();
+  }
 });

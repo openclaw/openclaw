@@ -6,15 +6,16 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import { withinTest } from "../../test/helpers/promise.js";
-import { addSession } from "../agents/bash-process-registry.js";
-import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
-import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  loadExactSessionEntry,
+  loadTranscriptEvents,
+} from "../config/sessions/session-accessor.js";
 import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -26,6 +27,7 @@ import {
 import * as pendingInputWithdrawal from "../config/sessions/session-pending-input-withdrawal.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -74,15 +76,12 @@ it("requests original recorded custody only at the actual marked restart admissi
         data: { phase: "start", startedAt: Date.now() },
       },
     });
-    const background = createProcessSessionFixture({
-      id: "restart-source-background",
-      backgrounded: true,
+    const claim = claimAgentRunContext("restart-source-live", target, {
+      trackOwner: true,
+      ownsContext: true,
     });
-    background.agentId = target.agentId;
-    background.sessionKey = target.sessionKey;
-    addSession(background);
     await persistRunningSessionsForRestart({ cfg });
-    resetProcessRegistryForTests();
+    releaseAgentRunContext("restart-source-live", claim);
     expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeDefined();
     const context = createContext([], () => cfg);
     const admission = vi
@@ -117,9 +116,7 @@ it.for(["prepared", "managed", "crash", "slow-crash", "failed"] as const)(
       replaceSessionEntrySync(target, { sessionId: "prepared", updatedAt: 110 });
       replaceSessionEntrySync(target, {
         ...loadExactSessionEntry(target)!.entry,
-        ...(crash
-          ? { lifecycleRunId: "predecessor", startedAt: 110 }
-          : { resumeAfterRestart: { queuedInputIds: [] } }),
+        ...(crash ? { lifecycleRunId: "predecessor", startedAt: 110 } : { resumeAfterRestart: {} }),
       });
       const database = openOpenClawAgentDatabase({ agentId: "main" });
       const open = createDeferredCore();
@@ -202,9 +199,7 @@ it.for(["prepared", "managed", "crash", "slow-crash", "failed"] as const)(
           try {
             await withinTest(opened.promise, test.signal);
             expect(await readSessionEntryReadOnlyInWorker(target)).toMatchObject(
-              crash
-                ? { lifecycleRunId: "predecessor" }
-                : { resumeAfterRestart: { queuedInputIds: [] } },
+              crash ? { lifecycleRunId: "predecessor" } : { resumeAfterRestart: {} },
             );
             expect(admission.observation.isAgentInputRecoveryPending("main")).toBe(false);
             if (mode === "prepared") {
@@ -312,7 +307,7 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
         ["live", {}, false],
         ...(mode === "markers"
           ? [
-              ["marked", { resumeAfterRestart: { queuedInputIds: [] } }, true] as [
+              ["marked", { resumeAfterRestart: {} }, true] as [
                 string,
                 Partial<InternalSessionEntry>,
                 boolean,
@@ -483,9 +478,7 @@ it("marks the active execution when an older message wait remains in the same se
     const claim = claimAgentRunContext(runId, target, { trackOwner: true, ownsContext: true });
     try {
       await persistRunningSessionsForRestart({ cfg: {} });
-      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
-        queuedInputIds: [],
-      });
+      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({});
     } finally {
       releaseAgentRunContext(runId, claim);
       subagentRuns.delete(oldRunId);
@@ -518,7 +511,7 @@ it.each(["restart", "user", "completed"] as const)(
         }
         await persistRunningSessionsForRestart({ cfg: {} });
         expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual(
-          ending === "restart" ? { queuedInputIds: [] } : undefined,
+          ending === "restart" ? {} : undefined,
         );
       } finally {
         release();
@@ -527,159 +520,7 @@ it.each(["restart", "user", "completed"] as const)(
     }),
 );
 
-it.for([
-  "message",
-  "nested-message",
-  "nested-lost",
-  "stale-requester",
-  "current-completed",
-  "retired-completed",
-  "stopped",
-  "interrupted",
-] as const)("recovers a parked dashboard root from its recorded wake source (%s)", (source) =>
-  withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { entries: { main: {} } } };
-    setRuntimeConfigSnapshot(cfg);
-    const target = {
-      agentId: "main",
-      sessionKey: "agent:main:dashboard:parked-root",
-      sessionId: "parked-root",
-    };
-    const runId = "parked-root-run";
-    const lifecycleRevision = "parked-root-revision";
-    replaceSessionEntrySync(target, {
-      sessionId: target.sessionId,
-      lifecycleRevision,
-      activeWriterRunId: runId,
-      updatedAt: 100,
-    });
-    for (const event of [
-      { ts: 100, data: { phase: "start", startedAt: 100 } },
-      {
-        ts: 120,
-        data: {
-          phase: "end",
-          yielded: true,
-          livenessState: "paused",
-          stopReason: "end_turn",
-        },
-      },
-    ]) {
-      await persistGatewaySessionLifecycleEvent({
-        sessionKey: target.sessionKey,
-        event: { ...event, runId, sessionId: target.sessionId },
-      });
-    }
-    const childRunId = "parked-child-run";
-    const childSessionKey = "agent:main:dashboard:parked-child";
-    const childSessionId = "parked-child";
-    const childRevision = "parked-child-revision";
-    const recovery = ["retired-completed", "stopped", "interrupted"].includes(source);
-    const completed = source === "current-completed" || source === "retired-completed";
-    const child = createSubagentRunRecord({
-      runId: childRunId,
-      childSessionKey,
-      childAgentId: "main",
-      childSessionIdentity: { sessionId: childSessionId, lifecycleRevision: childRevision },
-      requesterSessionKey: target.sessionKey,
-      requesterAgentId: target.agentId,
-      completionRequesterSessionId: target.sessionId,
-      completionRequesterLifecycleRevision: lifecycleRevision,
-      expectsCompletionMessage: true,
-      endedAt: source === "interrupted" ? undefined : 110,
-      outcome: completed ? { status: "ok" } : undefined,
-      endedReason:
-        source === "stopped" ? "subagent-killed" : completed ? "subagent-complete" : undefined,
-      pauseReason: completed || recovery ? undefined : "sessions_yield",
-      waitForMessage: source === "message" || source === "stale-requester" ? true : undefined,
-      requesterSettleWake: {
-        status: "pending",
-        attemptCount: 0,
-        requesterYieldBatch: true,
-        requesterRunId: source === "stale-requester" ? "older-root-run" : runId,
-        batchRunIds: [childRunId],
-      },
-    });
-    subagentRuns.set(childRunId, child);
-    if (source === "retired-completed") {
-      subagentRuns.retireCompletionAuthority(child);
-    }
-    const grandchildRunId = "parked-grandchild-run";
-    if (source === "nested-message") {
-      subagentRuns.set(
-        grandchildRunId,
-        createSubagentRunRecord({
-          runId: grandchildRunId,
-          childSessionKey: "agent:main:dashboard:parked-grandchild",
-          childAgentId: "main",
-          requesterSessionKey: childSessionKey,
-          requesterAgentId: "main",
-          completionRequesterSessionId: childSessionId,
-          completionRequesterLifecycleRevision: childRevision,
-          expectsCompletionMessage: true,
-          endedAt: 105,
-          pauseReason: "sessions_yield",
-          waitForMessage: true,
-          requesterSettleWake: {
-            status: "pending",
-            attemptCount: 0,
-            requesterYieldBatch: true,
-            requesterRunId: childRunId,
-            batchRunIds: [grandchildRunId],
-          },
-        }),
-      );
-    }
-    const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockReturnValue({
-      accepted: Promise.resolve({ ok: true }),
-      id: "restart-input",
-      settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
-      cancel: () => false,
-    });
-    try {
-      await persistRunningSessionsForRestart({ cfg });
-      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
-        queuedInputIds: [],
-      });
-      for (let boot = 0; boot < 2; boot++) {
-        const warn = vi.fn();
-        await resumeMarkedSessions({
-          context: createContext([], () => cfg),
-          signal: new AbortController().signal,
-          log: { warn },
-        });
-        const parked = warn.mock.calls.filter(([message]) => message.includes("(yield-waiting)"));
-        expect(parked).toEqual(
-          ["message", "nested-message", "current-completed"].includes(source)
-            ? [[expect.stringContaining(target.sessionKey)]]
-            : [],
-        );
-        const restored = (await readSessionEntryReadOnlyInWorker(target))!;
-        expect(restored.resumeAfterRestart).toBeUndefined();
-        expect(restored.activeWriterRunId).toBe(runId);
-        if (source === "message" || source === "nested-message" || source === "current-completed") {
-          expect(restored.lifecycleRunId).toBe(runId);
-          expect(restored.status).toBeUndefined();
-          expect(restored.endedAt).toBe(120);
-        } else if (recovery) {
-          expect(restored.lifecycleRunId).toBeUndefined();
-          expect(restored.status).toBe("killed");
-        } else {
-          expect(restored.lifecycleRunId).toBeUndefined();
-          expect(restored.status).toBe("failed");
-          expect(restored.lastRunError).toMatch(/wait|child|restart/i);
-        }
-      }
-      expect(resume).toHaveBeenCalledTimes(recovery ? 1 : 0);
-    } finally {
-      resume.mockRestore();
-      subagentRuns.delete(childRunId);
-      subagentRuns.delete(grandchildRunId);
-    }
-  }),
-);
-
-it("marks completed reply settlement only when accepted inputs remain queued", () =>
+it("keeps completed reply roots unmarked while accepted inputs remain durable", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
     const target = {
@@ -713,17 +554,11 @@ it("marks completed reply settlement only when accepted inputs remain queued", (
       });
       assert(queued, "Queued fixture input was not admitted");
       await persistRunningSessionsForRestart({ cfg: {} });
-      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
-        queuedInputIds: [queued.inputId],
-        queuedInputSources: {
-          [queued.inputId]: {
-            runId: "queued-behind-completed-reply",
-            source: { kind: "unavailable" },
-          },
-        },
-      });
+      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeUndefined();
+      const captured = await captureSessionQueuedInputsForRestart(target);
+      expect(captured.queuedInputIds).toEqual([queued.inputId]);
     } finally {
-      queued?.finish("interrupted");
+      queued?.finish("interrupted", "failed");
       await queued?.settled?.();
       releaseExecution();
       await operation.ownerSettlement;
@@ -754,6 +589,7 @@ it("marks ordinary conversations without inheriting cron or external execution o
       },
       { sessionKey: "agent:main:external-harness", entry: { modelSelectionLocked: true } },
     ];
+    const claims: Array<[string, string | undefined]> = [];
     try {
       for (const { sessionKey, entry, resumable } of cases) {
         const agentId = resumable ? "other" : "main";
@@ -773,10 +609,15 @@ it("marks ordinary conversations without inheriting cron or external execution o
             }),
           );
         }
-        const process = createProcessSessionFixture({ id: sessionKey, backgrounded: true });
-        process.agentId = agentId;
-        process.sessionKey = sessionKey;
-        addSession(process);
+        const runId = `live:${sessionKey}`;
+        claims.push([
+          runId,
+          claimAgentRunContext(
+            runId,
+            { agentId, sessionKey, sessionId: sessionKey },
+            { trackOwner: true, ownsContext: true },
+          ),
+        ]);
       }
       await persistRunningSessionsForRestart({ cfg: {} });
       for (const { sessionKey, resumable } of cases) {
@@ -785,21 +626,21 @@ it("marks ordinary conversations without inheriting cron or external execution o
           sessionKey,
         })?.entry;
         expect(entry).toBeDefined();
-        expect(entry?.resumeAfterRestart, sessionKey).toEqual(
-          resumable ? { queuedInputIds: [], hadBackgroundExec: true } : undefined,
-        );
+        expect(entry?.resumeAfterRestart, sessionKey).toEqual(resumable ? {} : undefined);
       }
     } finally {
+      for (const [runId, claim] of claims) {
+        releaseAgentRunContext(runId, claim);
+      }
       for (const { sessionKey, resumable } of cases) {
         if (resumable) {
           subagentRuns.delete(sessionKey);
         }
       }
-      resetProcessRegistryForTests();
     }
   }));
 
-it("settles source-less queued sends even when the recorded owner cannot resume", () =>
+it("records a visible refusal for consumed and queued inputs when their owner cannot resume", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg: OpenClawConfig = {
       gateway: {
@@ -836,14 +677,24 @@ it("settles source-less queued sends even when the recorded owner cannot resume"
       assertCurrent() {},
     });
     assert(receipt, "Queued fixture input was not admitted");
-    const process = createProcessSessionFixture({ id: "revoked-owner-work", backgrounded: true });
-    process.agentId = target.agentId;
-    process.sessionKey = target.sessionKey;
-    addSession(process);
+    const consumed = await stageSessionPendingInput(target, {
+      runId: "consumed-before-revocation",
+      message: { ...receipt.message, idempotencyKey: "consumed-before-revocation:user" },
+      assertCurrent() {},
+    });
+    assert(consumed, "Consumed fixture input was not admitted");
+    const claim = claimAgentRunContext("revoked-owner-work", target, {
+      trackOwner: true,
+      ownsContext: true,
+    });
     try {
       await persistRunningSessionsForRestart({ cfg });
-      receipt.finish("interrupted");
+      await consumed.runAsync!(() =>
+        appendTranscriptMessage(target, { message: consumed.message }),
+      );
+      receipt.finish("interrupted", "failed");
       await receipt.settled?.();
+      rotateAgentEventLifecycleGeneration();
       setUserProfileRole(profile.id, "reader");
       const warn = vi.fn();
       await resumeMarkedSessions({
@@ -855,12 +706,26 @@ it("settles source-less queued sends even when the recorded owner cannot resume"
       expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeUndefined();
       expect(await readSessionPendingInput(target, receipt.inputId)).toMatchObject({
         state: "cancelled",
+        endCause: "restart-unrecoverable",
         message: { content: "Accepted before restart" },
       });
+      expect(await readSessionPendingInput(target, consumed.inputId)).toBeUndefined();
+      expect(await loadTranscriptEvents(target)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "custom_message",
+            customType: "run-failed-before-reply",
+            display: true,
+            content: expect.stringContaining("this run could not resume"),
+          }),
+        ]),
+      );
     } finally {
-      receipt?.finish("interrupted");
+      receipt?.finish("interrupted", "failed");
       await receipt?.settled?.();
-      resetProcessRegistryForTests();
+      consumed.finish("interrupted", "failed");
+      await consumed.settled?.();
+      releaseAgentRunContext("revoked-owner-work", claim);
     }
   }));
 
@@ -901,16 +766,16 @@ it("fails a captured browser-copilot send instead of running without its live bi
     try {
       const captured = await captureSessionQueuedInputsForRestart(target);
       captured.preserve();
-      receipt.finish("interrupted");
+      receipt.finish("interrupted", "failed");
       await receipt.settled?.();
       await continueSessionQueuedInputs(context, target, {
         signal: new AbortController().signal,
-        queuedInputIds: [receipt.inputId],
         assertCurrent() {},
       });
       expect(send.mock.calls.length).toBe(0);
       expect(await readSessionPendingInput(target, receipt.inputId)).toMatchObject({
         state: "cancelled",
+        endCause: "restart-unrecoverable",
         message: { content: "Inspect the selected tab" },
       });
       expect(context.logGateway.warn).toHaveBeenCalledWith(
@@ -918,7 +783,7 @@ it("fails a captured browser-copilot send instead of running without its live bi
       );
     } finally {
       send.mockRestore();
-      receipt.finish("cancelled");
+      receipt.finish("cancelled", "failed");
       await receipt.settled?.();
     }
   }));
@@ -971,7 +836,7 @@ it("resumes recent interrupted legacy cycles once and settles crash inputs", () 
     const [crashed, live] = receipts;
     const dispatch = vi.spyOn(gatewayDispatch, "dispatchGatewayRequestInProcess");
     try {
-      crashed!.finish("interrupted");
+      crashed!.finish("interrupted", "failed");
       await crashed!.settled?.();
       database.db
         .prepare(
@@ -987,7 +852,12 @@ it("resumes recent interrupted legacy cycles once and settles crash inputs", () 
         });
         expect(discover).toHaveBeenCalledTimes(boot + 1);
         expect((await listSessionPendingInputs(target)).items).toMatchObject([
-          { runId: "crashed", state: "cancelled", message: { content: "crashed" } },
+          {
+            runId: "crashed",
+            state: "cancelled",
+            endCause: "restart-unrecoverable",
+            message: { content: "crashed" },
+          },
           { runId: "live", state: "queued" },
         ]);
       }
@@ -1007,7 +877,120 @@ it("resumes recent interrupted legacy cycles once and settles crash inputs", () 
       resume.mockRestore();
       discover.mockRestore();
       dispatch.mockRestore();
-      live!.finish("cancelled");
+      live!.finish("cancelled", "failed");
       await live!.settled?.();
     }
   }));
+
+// A supervisor that ends work on purpose (for example an explicit operator stop
+// followed by a new deployment) starts the next Gateway with a new scope token. Work
+// interrupted under the old token must not run again, and the message queued
+// behind it ends instead of being replayed; a restart within the same scope still
+// resumes.
+it.for([
+  { live: "run", written: "token-a", startup: "token-a", resumes: true },
+  { live: "turn", written: "token-a", startup: "token-a", resumes: true },
+  { live: "run", written: "token-a", startup: "token-b", resumes: false },
+  { live: "turn", written: "token-a", startup: "token-b", resumes: false },
+  { live: "run", written: undefined, startup: "token-b", resumes: false },
+  { live: "run", written: "token-a", startup: undefined, resumes: false },
+  // Without a supervisor scope the behavior is unchanged.
+  { live: "run", written: undefined, startup: undefined, resumes: true },
+  { live: "turn", written: undefined, startup: undefined, resumes: true },
+] as const)(
+  "resumes a $live interrupted under scope $written only at startup scope $startup",
+  ({ live, written, startup, resumes }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const name = `scoped-${live}-${written ?? "none"}-${startup ?? "none"}`;
+      const target = { agentId: "main", sessionKey: `agent:main:${name}`, sessionId: name };
+      replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: Date.now() });
+      const setScope = (scope: string | undefined) =>
+        vi.stubEnv("OPENCLAW_GATEWAY_RESTART_RESUME_SCOPE", scope);
+      // The live work at shutdown: a claimed agent run, or a session turn.
+      const runId = `${name}-run`;
+      const claim =
+        live === "run"
+          ? claimAgentRunContext(runId, target, { trackOwner: true, ownsContext: true })
+          : undefined;
+      const turn =
+        live === "turn"
+          ? await withSessionTurn(target, async (active) => {
+              assert(active, "Expected a real session turn");
+              return { operation: active, release: active.retainExecution() };
+            })
+          : undefined;
+      const queued = await stageSessionPendingInput(target, {
+        runId: `${name}-queued`,
+        message: {
+          role: "user",
+          content: "Sent while the turn was running",
+          timestamp: Date.now(),
+          idempotencyKey: `${name}-queued:user`,
+        },
+        assertCurrent() {},
+      });
+      assert(queued, "Queued fixture input was not admitted");
+      // Resume admission starts with the session principal's authority. Stop there:
+      // reaching it is the resume decision under test.
+      const admission = vi
+        .spyOn(systemTurnAuthority, "prepareSessionSystemTurnAuthority")
+        .mockRejectedValue(new Error("Stop after observing restart admission"));
+      const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost");
+      const dispatch = vi
+        .spyOn(gatewayDispatch, "dispatchGatewayRequestInProcess")
+        .mockResolvedValue({});
+      try {
+        setScope(written);
+        await persistRunningSessionsForRestart({ cfg });
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual(
+          written ? { scope: written } : {},
+        );
+        // The process ends: its run, turn and queued sender are gone.
+        if (claim !== undefined) {
+          releaseAgentRunContext(runId, claim);
+        }
+        turn?.release();
+        await turn?.operation.ownerSettlement;
+        queued.finish("interrupted", "failed");
+        await queued.settled?.();
+        openOpenClawAgentDatabase({ agentId: "main" })
+          .db.prepare(
+            "UPDATE session_pending_inputs SET state = 'queued', lifecycle_generation = 'previous-process' WHERE input_id = ?",
+          )
+          .run(queued.inputId);
+
+        setScope(startup);
+        const context = createContext([], () => cfg);
+        await resumeMarkedSessions({
+          context,
+          signal: new AbortController().signal,
+          log: { warn: vi.fn() },
+        });
+        expect(admission.mock.calls.length > 0).toBe(resumes);
+        expect(resume).not.toHaveBeenCalled();
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeUndefined();
+        expect(dispatch).not.toHaveBeenCalled();
+        // In scope, startup replays the queued input (which fails here without a sender);
+        // out of scope, it ends without a replay attempt.
+        expect(
+          vi
+            .mocked(context.logGateway.warn)
+            .mock.calls.some(([line]) => line.includes("was not sent after restart")),
+        ).toBe(resumes);
+        expect(await readSessionPendingInput(target, queued.inputId)).toMatchObject({
+          state: "cancelled",
+          endCause: "restart-unrecoverable",
+          message: { content: "Sent while the turn was running" },
+        });
+      } finally {
+        vi.unstubAllEnvs();
+        admission.mockRestore();
+        resume.mockRestore();
+        dispatch.mockRestore();
+        queued.finish("interrupted", "failed");
+        await queued.settled?.();
+      }
+    }),
+);

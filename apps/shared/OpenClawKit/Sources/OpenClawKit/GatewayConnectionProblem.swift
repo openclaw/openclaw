@@ -212,18 +212,6 @@ public enum GatewayConnectionProblemMapper {
         return false
     }
 
-    public static func shouldPreserve(
-        previousProblem: GatewayConnectionProblem,
-        overDisconnectReason reason: String) -> Bool
-    {
-        let normalized = reason.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !normalized.isEmpty else { return false }
-        if normalized.contains("cancelled") || normalized.contains("canceled") {
-            return previousProblem.pauseReconnect || previousProblem.requestId != nil
-        }
-        return false
-    }
-
     private static func rawMap(_ error: Error) -> GatewayConnectionProblem? {
         if error is GatewayExternalAuthorizationError {
             return GatewayConnectionProblem(

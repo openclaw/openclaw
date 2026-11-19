@@ -10,7 +10,7 @@ export type AgentRuntimeSpawnModelAutoSelection = {
 };
 
 export type AgentRuntimeSessionSpawnContext = {
-  /** Host-verified human requester; inherited ownership still requires a matching parent owner. */
+  /** Host-verified human requester for new work; never taken from public tool arguments. */
   requesterProfileId?: string;
   /** Attribution only; never used to grant operator authority or ownership. */
   gitContributorProfileId?: string;

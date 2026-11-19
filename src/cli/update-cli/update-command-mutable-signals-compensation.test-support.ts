@@ -135,6 +135,20 @@ export function mutableCompensationFixtureSource(): string {
       const lateRollback = mode === 'rollback-compensation';
       const publishing = mode === 'publishing-compensation' || lateRollback;
       let packageFixture;
+      let restoreExchangeTools = () => {};
+      if(mode === 'publishing-compensation') {
+        // No exchange tool starts, so publication takes its two moves. The signal lands
+        // between them, the only instant that leaves the package path empty.
+        const childProcess = (await import('node:child_process')).default;
+        const execFile = childProcess.execFile;
+        const exchangeTool = (file, args) => ['/usr/bin/osascript','/usr/bin/perl'].includes(file) || args?.[0] === '--experimental-ffi';
+        childProcess.execFile = Object.defineProperties((file, args, ...rest) => {
+          if(!exchangeTool(file, args)) return execFile(file, args, ...rest);
+          queueMicrotask(() => rest.at(-1)(Object.assign(new Error('spawn ' + file + ' ENOENT'),{code:'ENOENT'}),'',''));
+        }, Object.getOwnPropertyDescriptors(execFile));
+        syncBuiltinESMExports();
+        restoreExchangeTools = () => {childProcess.execFile = execFile; syncBuiltinESMExports();};
+      }
       if(publishing) {
         const {createPackageSwapFixture} = await import(${url("packageSwapFixture")});
         packageFixture = await createPackageSwapFixture(root + '/pair');
@@ -264,7 +278,7 @@ export function mutableCompensationFixtureSource(): string {
               },
               onTransaction:retained=>{transaction=retained;},
             });
-          } finally {nativeFs.default.rename=rename;}
+          } finally {nativeFs.default.rename=rename;restoreExchangeTools();}
           assert.equal(swapped.status,'committed',JSON.stringify(swapped));
           assert.equal(stopped.stopped,true);
           const verificationFailure={name:'candidate verification',command:'openclaw update',cwd:installRoot,durationMs:0,exitCode:1,stderrTail:'Synthetic candidate verification failed.'};

@@ -46,6 +46,10 @@ export function createStore(
     ApplicationContext["config"],
     "current" | "subscribe"
   > = createApplicationConfigCapability({ resourceBasePath: "" }),
+  overlays = {
+    snapshot: { approvalQueue: [] },
+    subscribe: () => () => undefined,
+  } as unknown as ApplicationContext["overlays"],
 ) {
   const agentSelection =
     selection ??
@@ -61,10 +65,7 @@ export function createStore(
       state: { agentsList: null },
       subscribe: () => () => undefined,
     } as unknown as ApplicationContext["agents"],
-    overlays: {
-      snapshot: { approvalQueue: [] },
-      subscribe: () => () => undefined,
-    } as unknown as ApplicationContext["overlays"],
+    overlays,
     scopeUpgrade: hiddenScopeUpgradeCapability,
     connectionBootstrap,
   });

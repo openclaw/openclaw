@@ -107,24 +107,27 @@ type Block = {
 
 /** Long fences keep their full plain text while visible syntax arrives in bounded pieces. */
 export class MarkdownCodeHighlights {
-  private readonly blocks = new Map<HTMLElement, Block>();
-  private active = true;
-  private stopClick: (() => void) | undefined;
+  readonly #blocks = new Map<HTMLElement, Block>();
+  #active = true;
+  #stopClick: (() => void) | undefined;
 
-  constructor(private readonly root: HTMLElement) {
+  readonly #root: HTMLElement;
+
+  constructor(root: HTMLElement) {
+    this.#root = root;
     this.resume();
   }
 
   sync(wrapper: HTMLElement, viewport: HTMLElement, code: HTMLElement): void {
-    const current = this.blocks.get(wrapper);
+    const current = this.#blocks.get(wrapper);
     // The reconciler replaces this opaque code node whenever its source changes.
     if (current?.code === code) {
-      this.observe(current);
-      this.schedule(current);
+      this.#observe(current);
+      this.#schedule(current);
       return;
     }
     if (current) {
-      this.retire(current);
+      this.#retire(current);
     }
     const tail =
       code.firstChild instanceof Text && code.childNodes.length === 1
@@ -145,56 +148,56 @@ export class MarkdownCodeHighlights {
       next: 0,
       complete: false,
     };
-    this.blocks.set(wrapper, block);
-    this.observe(block);
+    this.#blocks.set(wrapper, block);
+    this.#observe(block);
   }
 
   prune(): void {
-    for (const block of this.blocks.values()) {
-      if (!this.root.contains(block.code)) {
-        this.retire(block);
-        this.blocks.delete(block.wrapper);
+    for (const block of this.#blocks.values()) {
+      if (!this.#root.contains(block.code)) {
+        this.#retire(block);
+        this.#blocks.delete(block.wrapper);
       } else if (isMarkdownBlockParked(block.wrapper)) {
-        this.retire(block);
+        this.#retire(block);
       }
     }
   }
 
   resume(): void {
-    this.active = true;
-    this.stopClick ??= listen(this.root, "click", (event) => {
+    this.#active = true;
+    this.#stopClick ??= listen(this.#root, "click", (event) => {
       const target = event.target;
       const wrapper =
         target instanceof Element && target.closest<HTMLElement>(".code-block-wrapper");
-      const block = wrapper && this.blocks.get(wrapper);
+      const block = wrapper && this.#blocks.get(wrapper);
       if (block) {
-        this.schedule(block);
+        this.#schedule(block);
       }
     });
-    for (const block of this.blocks.values()) {
-      this.observe(block);
+    for (const block of this.#blocks.values()) {
+      this.#observe(block);
     }
   }
 
   pause(): void {
-    this.active = false;
-    this.stopClick?.();
-    this.stopClick = undefined;
-    for (const block of this.blocks.values()) {
-      this.retire(block);
+    this.#active = false;
+    this.#stopClick?.();
+    this.#stopClick = undefined;
+    for (const block of this.#blocks.values()) {
+      this.#retire(block);
     }
   }
 
   dispose(): void {
     this.pause();
-    this.blocks.clear();
+    this.#blocks.clear();
   }
 
-  private retire(block: Block): void {
+  #retire(block: Block): void {
     block.stopObserving?.();
     block.stopObserving = undefined;
     block.visible = false;
-    this.cancel(block);
+    this.#cancel(block);
     const result = block.result;
     if (!result?.chunks) {
       return;
@@ -219,7 +222,7 @@ export class MarkdownCodeHighlights {
     }
   }
 
-  private cancel(block: Block): void {
+  #cancel(block: Block): void {
     if (block.frame !== undefined) {
       cancelAnimationFrame(block.frame);
       block.frame = undefined;
@@ -232,9 +235,9 @@ export class MarkdownCodeHighlights {
     block.stopSelection = undefined;
   }
 
-  private observe(block: Block): void {
+  #observe(block: Block): void {
     if (
-      !this.active ||
+      !this.#active ||
       block.stopObserving ||
       block.complete ||
       isMarkdownBlockParked(block.wrapper)
@@ -246,9 +249,9 @@ export class MarkdownCodeHighlights {
       (entries) => {
         block.visible = entries.at(-1)?.isIntersecting === true;
         if (!block.visible || isMarkdownBlockParked(block.wrapper)) {
-          this.cancel(block);
+          this.#cancel(block);
         } else if (block.reply) {
-          this.schedule(block);
+          this.#schedule(block);
         } else if (!block.cancel) {
           block.releaseWorker ??= retainWorker();
           try {
@@ -256,13 +259,13 @@ export class MarkdownCodeHighlights {
               block.cancel = undefined;
               block.releaseWorker?.();
               block.releaseWorker = undefined;
-              if (!this.current(block)) {
+              if (!this.#current(block)) {
                 return;
               }
               // Keep completed data after its application cursor is exhausted; failures retry.
               block.result = reply.chunks === null ? undefined : reply;
               if (!reply.highlighted || !reply.chunks?.length) {
-                this.finish(block);
+                this.#finish(block);
                 return;
               }
               block.reply = reply;
@@ -272,10 +275,10 @@ export class MarkdownCodeHighlights {
               if (reply.highlighted) {
                 block.code.classList.add("hljs");
               }
-              this.schedule(block);
+              this.#schedule(block);
             });
           } catch {
-            this.finish(block);
+            this.#finish(block);
           }
         }
       },
@@ -283,27 +286,27 @@ export class MarkdownCodeHighlights {
     );
   }
 
-  private current(block: Block): boolean {
+  #current(block: Block): boolean {
     return (
-      this.active &&
+      this.#active &&
       block.visible &&
       !isMarkdownBlockParked(block.wrapper) &&
-      this.blocks.get(block.wrapper) === block &&
-      this.root.contains(block.code)
+      this.#blocks.get(block.wrapper) === block &&
+      this.#root.contains(block.code)
     );
   }
 
-  private finish(block: Block): void {
+  #finish(block: Block): void {
     block.complete = true;
     block.stopObserving?.();
     block.stopObserving = undefined;
-    this.cancel(block);
+    this.#cancel(block);
   }
 
-  private schedule(block: Block): void {
+  #schedule(block: Block): void {
     const reply = block.reply;
     if (
-      !this.current(block) ||
+      !this.#current(block) ||
       block.frame !== undefined ||
       !reply ||
       !reply.chunks?.[block.next]
@@ -312,18 +315,18 @@ export class MarkdownCodeHighlights {
     }
     block.frame = requestAnimationFrame(() => {
       block.frame = undefined;
-      if (!this.current(block)) {
+      if (!this.#current(block)) {
         return;
       }
-      const selection = this.root.ownerDocument.getSelection();
+      const selection = this.#root.ownerDocument.getSelection();
       if (selection && !selection.isCollapsed) {
         for (let index = 0; index < selection.rangeCount; index += 1) {
           if (selection.getRangeAt(index).intersectsNode(block.code)) {
             // Moving selected text into syntax spans would collapse its live Range.
-            block.stopSelection ??= listen(this.root.ownerDocument, "selectionchange", () => {
+            block.stopSelection ??= listen(this.#root.ownerDocument, "selectionchange", () => {
               block.stopSelection?.();
               block.stopSelection = undefined;
-              this.schedule(block);
+              this.#schedule(block);
             });
             return;
           }
@@ -352,11 +355,11 @@ export class MarkdownCodeHighlights {
         if (block.next === reply.chunks!.length) {
           block.reply = undefined;
           block.tail.remove();
-          this.finish(block);
+          this.#finish(block);
           return;
         }
       } while (performance.now() < deadline);
-      this.schedule(block);
+      this.#schedule(block);
     });
   }
 }

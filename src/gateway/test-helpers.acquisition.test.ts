@@ -480,7 +480,7 @@ export async function verifyCompositeAcquisition(
 
 describe("raw Gateway helper acquisition ownership", async () => {
   // Prepare during collection; each isolated child keeps its own shutdown deadline.
-  const fixtureWorkers = createVitestWorkerRun();
+  const fixtureWorkers = createVitestWorkerRun(process.env, undefined, "runtime");
   afterAll(() => fixtureWorkers.dispose());
   try {
     await fixtureWorkers.prepare();

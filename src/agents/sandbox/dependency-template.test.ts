@@ -102,6 +102,40 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
+it("changes dependency identity when a mutable image is rebuilt or the engine target changes", async () => {
+  const config = { ...cfg, backend: "podman" };
+  const target = { key: "first", globalArgs: ["--url", "unix:///first.sock"] };
+  vi.mocked(resolvePodmanSandboxRuntimeInfo).mockResolvedValue({
+    machine: false,
+    rootless: true,
+    version: "5.7.0",
+    target,
+  });
+  vi.mocked(bindPodmanSandboxEngine).mockImplementation((selected) => ({
+    id: "podman",
+    command: "podman",
+    displayName: "Podman",
+    globalArgs: selected.globalArgs,
+  }));
+  const options = { assertCurrent: () => {} };
+  const first = await resolveSandboxDependencyTemplateIdentity(config, options);
+  const rebuilt = `sha256:${"c".repeat(64)}`;
+  mocks.exec.mockResolvedValue({ code: 0, stdout: rebuilt, stderr: "" });
+  const second = await resolveSandboxDependencyTemplateIdentity(config, options);
+  expect(first?.image).toBe(image);
+  expect(second?.image).toBe(rebuilt);
+  expect(second?.key).not.toBe(first?.key);
+  vi.mocked(resolvePodmanSandboxRuntimeInfo).mockResolvedValue({
+    machine: false,
+    rootless: true,
+    version: "5.7.0",
+    target: { key: "second", globalArgs: ["--url", "unix:///second.sock"] },
+  });
+  const third = await resolveSandboxDependencyTemplateIdentity(config, options);
+  expect(third?.key).not.toBe(second?.key);
+  expect(mocks.exec.mock.lastCall?.[0].globalArgs).toEqual(["--url", "unix:///second.sock"]);
+});
+
 async function prepare(config = cfg, signal?: AbortSignal, rollbackGuard = vi.fn()) {
   const identity = await resolveSandboxDependencyTemplateIdentity(config, {
     assertCurrent: () => {},

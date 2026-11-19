@@ -1451,6 +1451,7 @@
                   {
                     "group": "App platforms",
                     "pages": [
+                      "install/boat",
                       "install/cloudflare",
                       "install/daytona",
                       "install/exe-dev",
@@ -1674,6 +1675,7 @@
               {
                 "group": "Agent runtime",
                 "pages": [
+                  "concepts/agents-and-templates",
                   "concepts/architecture",
                   "concepts/agent",
                   "concepts/agent-loop",
@@ -1849,6 +1851,7 @@
                     "group": "Models and memory",
                     "pages": [
                       "plugins/apple-fm",
+                      "plugins/gbrain",
                       "plugins/knowledge",
                       {
                         "group": "Knowledge",
@@ -2304,7 +2307,7 @@
                   },
                   {
                     "group": "Decision models",
-                    "pages": ["providers/liquid-ai", "providers/rerank"]
+                    "pages": ["providers/celeris", "providers/fastino", "providers/liquid-ai", "providers/nace", "providers/rerank"]
                   },
                   {
                     "group": "Speech and audio",
@@ -3268,6 +3271,8 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.11.5",
+                  "releases/2026.11.4",
                   "releases/2026.11.3",
                   "releases/2026.11.2",
                   "releases/2026.11.1",

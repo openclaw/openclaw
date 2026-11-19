@@ -85,7 +85,7 @@ function mockReferencedStoreSnapshot() {
   });
 }
 
-async function sharingFixture(others: "none" | "suggest" = "none") {
+async function sharingFixture(others: "none" | "suggest" | "invited" = "none") {
   const owner = ensureProfileForEmail("owner@example.test");
   const guest = ensureProfileForEmail("guest@example.test");
   const cfg: OpenClawConfig = {
@@ -171,7 +171,12 @@ it("requires membership to resolve a suggest-capped guest question", async () =>
   });
 });
 
-it.each([{ others: "none", member: false, revoke: false }] as const)(
+it.each([
+  { others: "none", member: false, revoke: false },
+  { others: "invited", member: false, revoke: false },
+  { others: "invited", member: true, revoke: false },
+  { others: "invited", member: true, revoke: true },
+] as const)(
   "scopes question reads and events to current membership ($others, member: $member, revoke: $revoke)",
   async ({ others, member, revoke }) => {
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {

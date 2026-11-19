@@ -454,7 +454,7 @@ describe("worker environment service", () => {
   });
 
   it.each([false, true])(
-    "settles provisioning before reporting a timeout (committed=%s)",
+    "settles the pending transition before failing an unallocated timeout (committed=%s)",
     async (committed) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const transitionEntered = createDeferred();
@@ -465,16 +465,12 @@ describe("worker environment service", () => {
         if (input.from !== "requested" || input.to !== "provisioning") {
           return transition(input);
         }
-        if (committed) {
-          const record = await transition(input);
-          transitionEntered.resolve();
-          await releaseTransition.promise;
-          return record;
-        }
+        const record = committed ? await transition(input) : undefined;
         transitionEntered.resolve();
         await releaseTransition.promise;
-        return transition(input);
+        return record ?? transition(input);
       });
+      const settled = vi.fn();
       const provision = vi.fn(support.createProvider().provision);
       const workerService = support.createService(support.createProvider({ provision }), {
         providerCallTimeoutMs: 5,
@@ -487,7 +483,8 @@ describe("worker environment service", () => {
         .then(
           (value) => ({ ok: true as const, value }),
           (error: unknown) => ({ ok: false as const, error }),
-        );
+        )
+        .finally(settled);
       try {
         await Promise.race([
           transitionEntered.promise,
@@ -495,7 +492,9 @@ describe("worker environment service", () => {
             throw new Error("Creation ended before provisioning transition", { cause: result });
           }),
         ]);
+        expect(store.list()[0]?.state).toBe(committed ? "provisioning" : "requested");
         await vi.advanceTimersByTimeAsync(5);
+        expect(settled).not.toHaveBeenCalled();
       } finally {
         releaseTransition.resolve();
         await creationResult;
@@ -507,7 +506,7 @@ describe("worker environment service", () => {
       });
       expect(provision).not.toHaveBeenCalled();
       expect(store.list()[0]).toMatchObject({
-        state: committed ? "provisioning" : "failed",
+        state: "failed",
         lastError: "Worker provider operation timed out after 5ms",
       });
     },

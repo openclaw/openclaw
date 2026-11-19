@@ -330,7 +330,7 @@ export async function prepareDoctorRuntimeChecks(
   const maintenance = getOpenClawDatabaseMaintenanceScope();
   if (maintenance?.ownsSchemaMaintenance) {
     const { hasUpdateDoctorMigrationCapture } =
-      await import("../infra/update-doctor-migration-attribution.js");
+      await import("../infra/update-doctor-migration-context.js");
     const { resolveOpenClawStateSqlitePath } = await import("../state/openclaw-state-db.paths.js");
     if (hasUpdateDoctorMigrationCapture() && fs.existsSync(resolveOpenClawStateSqlitePath())) {
       const { openOpenClawStateDatabaseForDoctor } = await import("../state/openclaw-state-db.js");

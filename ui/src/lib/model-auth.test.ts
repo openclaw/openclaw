@@ -4,6 +4,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelAuthStatusResult } from "../api/types.ts";
 import { invalidateModelAuthStatusRequests } from "./model-auth-request-state.ts";
 import { listEffectiveModelAuthProviders, loadModelAuthStatus } from "./model-auth.ts";
+import { describeModelProviderAuth } from "./model-provider-auth-label.ts";
 
 type Options = Parameters<typeof loadModelAuthStatus>[1];
 const status = (ts: number): ModelAuthStatusResult => ({ ts, providers: [] });
@@ -201,4 +202,15 @@ it("keeps an alias's API key when the worst-status record lacks one", () => {
     provider({ provider: "google-gemini-cli", status: "missing" }),
   ]);
   expect(merged?.apiKey).toEqual(apiKey);
+});
+
+it("does not present a native CLI subscription as the direct API's billing label", () => {
+  const [merged] = listEffectiveModelAuthProviders([
+    provider({ provider: "claude-cli", nativeAuth: { kind: "subscription", plan: "Max" } }),
+    provider({ provider: "anthropic", status: "static", apiKey: { source: "config" } }),
+  ]);
+  expect(merged?.provider).toBe("anthropic");
+  expect(
+    merged && describeModelProviderAuth(merged, { projection: "available-credentials" }),
+  ).toEqual({ kind: "api", label: "API" });
 });

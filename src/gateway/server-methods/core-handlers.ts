@@ -167,6 +167,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "talk-mode": () => import("../talk/handlers/mode.js").then((module) => module.talkModeHandlers),
   "task-suggestions": () =>
     import("./task-suggestions.js").then((module) => module.taskSuggestionsHandlers),
+  "tool-usage": () => import("./tool-usage.js").then((module) => module.toolUsageHandlers),
   "tools-catalog": () => import("./tools-catalog.js").then((module) => module.toolsCatalogHandlers),
   "tools-github": () => import("./tools-github.js").then((module) => module.toolsGitHubHandlers),
   "tools-effective": () =>

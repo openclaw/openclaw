@@ -1,4 +1,5 @@
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   mkdirSync,
@@ -25,9 +26,10 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
-function coldFixture(perWorktreeConfig = true) {
+function coldFixture(perWorktreeConfig = true, partialCloneFilter?: string) {
   const f = createMainRefreshFixture(tempDirs.make("openclaw-pr-provision-"), {
     perWorktreeConfig,
+    partialCloneFilter,
     precreateWorktree: false,
   });
   f.env.OPENCLAW_STATE_DIR = join(f.root, "state");
@@ -65,6 +67,31 @@ function nextPr(f: ReturnType<typeof coldFixture>, pr: number) {
 }
 
 describePosix("native PR source provisioning", () => {
+  it("hydrates a cold native PR checkout with 20,000 unrelated config entries", () => {
+    const f = coldFixture(true, "blob:none");
+    f.git(f.origin, "update-ref", "refs/heads/main", f.movedMain);
+    const blob = f.git(f.origin, "rev-parse", `${f.movedMain}:src/subject.ts`);
+    expect(
+      f.git(f.canonical, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)"),
+    ).not.toContain(blob);
+    appendFileSync(
+      join(f.canonical, ".git", "config"),
+      Array.from(
+        { length: 20_000 },
+        (_, index) =>
+          `[branch "session-${index}-task-owned-workspace-checkout"]\n\tremote = origin\n`,
+      ).join(""),
+    );
+    const result = f.run("review-init");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("PR source checkout: Git checkout.");
+    expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.movedMain);
+    expect(readFileSync(join(f.worktree, "src", "subject.ts"), "utf8")).toBe(
+      "export const subject = 'main moved';\n",
+    );
+    expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
+  });
+
   it("keeps disabled-acceleration seed, private checkpoint, and cleanup custody", () => {
     const f = coldFixture(false);
     writeFileSync(f.env.OPENCLAW_CONFIG_PATH!, '{"worktreeAcceleration":false}\n');

@@ -1,2 +1,0 @@
-# Socket-level regression covers explicit empty channel sender lists with both group policies.
-31

@@ -662,10 +662,12 @@ it("installs captured raw postimages and runtime custody before notifying every 
       expect(read(new Map()).has("removed")).toBe(false);
     }
   });
+  const required = ["captured"];
   const draft = entry("changed", {
     label: "captured",
     cleanupHandled: true,
     execution: { status: "terminal" as const, endedAt: 2 },
+    outputSchema: Object.freeze({ required }),
   });
   const pending = mutateSubagentRuns(
     ["changed", "removed"],
@@ -683,12 +685,19 @@ it("installs captured raw postimages and runtime custody before notifying every 
   try {
     await awaitGateBeforeSettlement(reached.promise, pending, "publication missed ACK gate");
     draft.label = "uncommitted caller edit";
+    draft.execution.endedAt = 3;
+    required.push("uncommitted");
     expect(events).toEqual([]);
     expect(subagentRuns.has("removed")).toBe(true);
     release.resolve();
     await pending;
     expect(events).toEqual(["custody", "observer"]);
-    expect(subagentRuns.get("changed")).toMatchObject({ label: "captured", cleanupHandled: true });
+    expect(subagentRuns.get("changed")).toMatchObject({
+      label: "captured",
+      cleanupHandled: true,
+      execution: { endedAt: 2 },
+      outputSchema: { required: ["captured"] },
+    });
     expect(stored("changed")?.cleanupHandled).toBe(false);
   } finally {
     release.resolve();
@@ -833,7 +842,20 @@ it("retains the execution's Gateway binding through immutable metadata publicati
   expect(getGatewayContextResolver(initial)).toBe(resolver);
   expect(isSameSubagentRunOwner(initial, alias)).toBe(true);
 
+  using clone = vi.spyOn(globalThis, "structuredClone");
   await change(child.runId, { label: "updated metadata" });
+
+  // Metadata commits must not traverse the owner's already immutable payloads.
+  expect(
+    clone.mock.calls.some(
+      ([value]) =>
+        value === initial ||
+        (value &&
+          typeof value === "object" &&
+          "execution" in value &&
+          value.execution === initial.execution),
+    ),
+  ).toBe(false);
 
   const published = subagentRuns.get(child.runId)!;
   expect(published).not.toBe(initial);

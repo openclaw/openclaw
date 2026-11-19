@@ -6,6 +6,10 @@ import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-ru
 import * as questionDispatch from "../harness/gateway-question-dispatch.js";
 import type { AgentHarnessQuestionGatewayCall as GatewayCall } from "../harness/gateway-question-dispatch.js";
 import {
+  captureAgentPluginRuntimeRefresh,
+  createAgentPluginRuntimeRefresh,
+} from "../plugin-runtime-refresh.js";
+import {
   cancelAskUserPromptDelivery,
   createAskUserTool,
   isAskUserPromptPending,
@@ -269,16 +273,27 @@ describe("ask_user", () => {
       "question.request": async (params) => ({ id: params.id, expiresAtMs: Date.now() + 30_000 }),
       "question.waitAnswer": async () => ({ status: "answered", answers }),
     });
-    const tool = createAskUserTool({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      runId: "run-main",
+    const refresh = createAgentPluginRuntimeRefresh();
+    onTestFinished(() => refresh.close());
+    const { tool, owner } = refresh.run(() => {
+      const refreshOwner = captureAgentPluginRuntimeRefresh();
+      refreshOwner.bindConsumer(() => true);
+      return {
+        tool: createAskUserTool({
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          runId: "run-main",
+        }),
+        owner: refreshOwner,
+      };
     });
 
     const result = await tool.execute("call-answered", validArgs);
     const questionId = requestedQuestionId(gateway.mock);
 
     expect(result.details).toEqual({ status: "answered", answers });
+    expect(result.terminate).toBeUndefined();
+    expect(owner.continuesAfterAttempt()).toBe(false);
     expect(result.content).toEqual([
       expect.objectContaining({
         type: "text",
@@ -792,3 +807,65 @@ describe("ask_user", () => {
     await pending;
   });
 });
+
+it.each([
+  ["ready", true],
+  ["ready", false],
+  ["declined", true],
+  ["cancelled", true],
+  ["expired", true],
+  ["pending", true],
+] as const)(
+  "keeps required manual work distinct from optional decisions: %s (refresh=%s)",
+  async (outcome, supported) => {
+    const gateway = registeredGateway({
+      "question.resolve": async () => ({ status: "cancelled" }),
+      "question.waitAnswer": async () =>
+        outcome === "ready" || outcome === "declined"
+          ? {
+              status: "answered",
+              answers: {
+                answers: {
+                  required_action: [outcome === "ready" ? "Ready to recheck" : "Stop this task"],
+                },
+              },
+            }
+          : { status: outcome },
+    });
+    const refresh = createAgentPluginRuntimeRefresh();
+    onTestFinished(() => refresh.close());
+    const { tool, owner } = refresh.run(() => {
+      const refreshOwner = captureAgentPluginRuntimeRefresh();
+      if (supported) {
+        refreshOwner.bindConsumer(() => true);
+      }
+      return {
+        tool: createAskUserTool({ sessionKey: `agent:main:manual-${outcome}` }),
+        owner: refreshOwner,
+      };
+    });
+    // The callback must retain its creating run's refresh owner outside that scope.
+    const result = await tool.execute(`manual-${outcome}`, {
+      requiredAction: {
+        reason: "A manual step is required.",
+        instructions: "Complete it in the existing browser panel.",
+      },
+    });
+    expect(
+      gateway.mock.mock.calls.find(([method]) => method === "question.request")?.[2],
+    ).toMatchObject({
+      questions: [{ questionId: "required_action", isOther: false }],
+    });
+    expect(result.details).toMatchObject(
+      outcome === "ready"
+        ? { status: "ready_to_verify" }
+        : { status: "action_unresolved", reason: outcome === "pending" ? "expired" : outcome },
+    );
+    expect(JSON.stringify(result)).not.toContain("proceed with best judgment");
+    expect(owner.continuesAfterAttempt()).toBe(outcome === "ready" && supported);
+    expect(result.terminate).toBe(outcome === "ready" && supported ? true : undefined);
+    if (outcome === "ready") {
+      expect(JSON.stringify(result)).toContain("not proof");
+    }
+  },
+);

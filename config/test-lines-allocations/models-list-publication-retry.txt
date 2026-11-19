@@ -1,2 +1,0 @@
-38
-# Real models.list remote-publication replacement and retired-replacement regressions.
