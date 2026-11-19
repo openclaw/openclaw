@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { releaseManifestChildEvidence } from "../../scripts/lib/full-release-manifest.mjs";
 import {
   evaluateReleaseBootstrapGate,
   evaluateReleasePublishGates,
@@ -233,6 +234,7 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(responsePath)}, 'utf8'));
     jobName: "synthetic Q-only leaf",
     reason: "Synthetic regression fixture",
     aggregates: [],
+    evidence: { runId: "42", runAttempt: 2 },
   };
   const writePolicy = (waivers: (typeof grant)[], corrupt = false) => {
     const bytes = Buffer.from(
@@ -263,7 +265,15 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(responsePath)}, 'utf8'));
       projection: { packages: [] },
     },
     validationInputs: { coveragePolicy: "full", targetVersion: grant.targetVersion },
-    childEvidence: { normalCi: { runId: "42", runAttempt: 1, jobs: [failedJob] } },
+    childEvidence: {
+      normalCi: releaseManifestChildEvidence({
+        runId: "42",
+        runAttempt: 2,
+        plannedRunAttempt: 1,
+        observedRunAttempts: [1, 2],
+        timing: { jobs: [failedJob] },
+      }),
+    },
     advisoryJobs: [],
     publishInputs: {
       version: 1,
@@ -314,6 +324,10 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(responsePath)}, 'utf8'));
     writePolicy([grant]);
     const accepted = run(args);
     expect(accepted.status, accepted.stderr).toBe(0);
+    writePolicy([{ ...grant, evidence: { runId: "42", runAttempt: 1 } }]);
+    const stale = run(args);
+    expect(stale.status, stale.stderr).toBe(1);
+    expect(stale.stderr).toContain("failed selected job evidence");
     writePolicy([]);
     const unwaived = run(args);
     expect(unwaived.status, unwaived.stderr).toBe(1);

@@ -73,7 +73,7 @@ export function validateReleaseManifestAdvisoryJobs(
     if (
       !deferWaiverPolicy &&
       evaluateReleaseChildPolicy({
-        child: { ...normalCi, key: "normalCi" },
+        child: { ...normalCi, key: "normalCi", runAttempt: normalCi.effectiveRunAttempt },
         targetVersion: manifest.validationInputs?.targetVersion,
         targetSha: manifest.targetSha,
         waiverPolicy,
